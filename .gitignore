@@ -1,0 +1,12 @@
+.vscode/
+obj/
+libccollections.so
+test/*/tests
+test/*/coverage/
+*.gcno
+*.gcda
+*.gcov
+*.c.info
+*.o
+main.c
+main

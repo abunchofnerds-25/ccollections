@@ -558,15 +558,17 @@ TEST(chash_maps, reset) {
 }
 
 TEST(chash_maps, for_each_elem_wr) {
-  chashmap* chmap = chmap_create(1, NULL);
+  // chashmap* chmap = chmap_create(1, NULL);
+  chmap_construct(chmap, char*, int);
   REQUIRE_NE((void*)chmap, NULL);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
 
-  for (chmap_iterator* it = chmap_begin(chmap); it != NULL;
-       it = chmap_iter_next(it)) {
-    *(int*)(it->val_pair->ptr) += 7;
+  chmap_iter_declare(chmap, it);
+  for (it = chmap_begin(chmap); it != NULL; it = chmap_iter_next(it)) {
+    // *(int*)(it->val_pair->ptr) += 7;
+    *chmap_iter_val_ptr(it) += 7;
   }
 
   int val = -1;
@@ -579,7 +581,7 @@ TEST(chash_maps, for_each_elem_wr) {
 }
 
 TEST(chash_maps, for_each_elem_rd) {
-  chashmap* chmap = chmap_create(1, NULL);
+  chmap_construct(chmap, char*, int);
   REQUIRE_NE((void*)chmap, NULL);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
@@ -589,9 +591,9 @@ TEST(chash_maps, for_each_elem_rd) {
 
   // Add 3 and 5 on top of sum. It should be 8
   // when the following statement is completed.
-  for (chmap_iterator* it = chmap_begin(chmap); it != NULL;
-       it = chmap_iter_next(it)) {
-    sum += *(int*)(it->val_pair->ptr);
+  chmap_iter_declare(chmap, it);
+  for (it = chmap_begin(chmap); it != NULL; it = chmap_iter_next(it)) {
+    sum += *chmap_iter_val_ptr(it);
   }
 
   REQUIRE_EQ(sum, 8);
@@ -696,18 +698,18 @@ TEST(chash_maps, iteration) {
 
   int records[6] = {0};  // from 0 to 5, so that 3, 4 and 5 are valid indices
   int counter = 0;
-  for (chmap_iterator* it = chmap_begin(hm); it != NULL;
-       it = chmap_iter_next(it)) {
-    key = *(int*)it->key_pair->ptr;
+  chmap_iter_declare(hm, it);
+  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
+    key = *chmap_iter_key_ptr(it);
     if (key == 3) {
       REQUIRE_EQ(records[3]++, 0);
-      REQUIRE_STREQ((char*)it->val_pair->ptr, "hello");
+      REQUIRE_STREQ(*chmap_iter_val_ptr(it), "hello");
     } else if (key == 4) {
       REQUIRE_EQ(records[4]++, 0);
-      REQUIRE_STREQ((char*)it->val_pair->ptr, "hi");
+      REQUIRE_STREQ(*chmap_iter_val_ptr(it), "hi");
     } else if (key == 5) {
       REQUIRE_EQ(records[5]++, 0);
-      REQUIRE_STREQ((char*)it->val_pair->ptr, "there");
+      REQUIRE_STREQ(*chmap_iter_val_ptr(it), "there");
     } else {
       REQUIRE_TRUE(false);
     }
@@ -741,20 +743,20 @@ TEST(chash_maps, map_string_to_void_ptrs) {
   int records[3] = {0};
   int counter = 0;
 
-  for (chmap_iterator* it = chmap_begin(hm); it != NULL;
-       it = chmap_iter_next(it)) {
-    if (strcmp((char*)it->key_pair->ptr, "d1") == 0) {
+  chmap_iter_declare(hm, it);
+  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
+    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->a, 3);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->b, 4);
-    } else if (strcmp((char*)it->key_pair->ptr, "d2") == 0) {
+      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->a, 3);
+      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->b, 4);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->a, 5);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->b, 6);
-    } else if (strcmp((char*)it->key_pair->ptr, "d3") == 0) {
+      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->a, 5);
+      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->b, 6);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->a, 7);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->b, 8);
+      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->a, 7);
+      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->b, 8);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -788,20 +790,20 @@ TEST(chash_maps, map_string_to_struct_ptrs) {
   int records[3] = {0};
   int counter = 0;
 
-  for (chmap_iterator* it = chmap_begin(hm); it != NULL;
-       it = chmap_iter_next(it)) {
-    if (strcmp((char*)it->key_pair->ptr, "d1") == 0) {
+  chmap_iter_declare(hm, it);
+  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
+    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->a, 3);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->b, 4);
-    } else if (strcmp((char*)it->key_pair->ptr, "d2") == 0) {
+      REQUIRE_EQ((*chmap_iter_val_ptr(it))->a, 3);
+      REQUIRE_EQ((*chmap_iter_val_ptr(it))->b, 4);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->a, 5);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->b, 6);
-    } else if (strcmp((char*)it->key_pair->ptr, "d3") == 0) {
+      REQUIRE_EQ((*chmap_iter_val_ptr(it))->a, 5);
+      REQUIRE_EQ((*chmap_iter_val_ptr(it))->b, 6);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->a, 7);
-      REQUIRE_EQ((*(some_struct**)it->val_pair->ptr)->b, 8);
+      REQUIRE_EQ((*chmap_iter_val_ptr(it))->a, 7);
+      REQUIRE_EQ((*chmap_iter_val_ptr(it))->b, 8);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -832,20 +834,20 @@ TEST(chash_maps, map_string_to_a_struct) {
   int records[3] = {0};
   int counter = 0;
 
-  for (chmap_iterator* it = chmap_begin(hm); it != NULL;
-       it = chmap_iter_next(it)) {
-    if (strcmp((char*)it->key_pair->ptr, "d1") == 0) {
+  chmap_iter_declare(hm, it);
+  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
+    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->a, 3);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->b, 4);
-    } else if (strcmp((char*)it->key_pair->ptr, "d2") == 0) {
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 3);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 4);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->a, 5);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->b, 6);
-    } else if (strcmp((char*)it->key_pair->ptr, "d3") == 0) {
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 5);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 6);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->a, 7);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->b, 8);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 7);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 8);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -864,20 +866,101 @@ TEST(chash_maps, map_string_to_a_struct) {
   memset(records, 0, sizeof(records));
   counter = 0;
 
-  for (chmap_iterator* it = chmap_begin(hm); it != NULL;
-       it = chmap_iter_next(it)) {
-    if (strcmp((char*)it->key_pair->ptr, "d1") == 0) {
+  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
+    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->a, 4);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->b, 3);
-    } else if (strcmp((char*)it->key_pair->ptr, "d2") == 0) {
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 4);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 3);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->a, 6);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->b, 5);
-    } else if (strcmp((char*)it->key_pair->ptr, "d3") == 0) {
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 6);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 5);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->a, 8);
-      REQUIRE_EQ(((some_struct*)it->val_pair->ptr)->b, 7);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 8);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 7);
+    } else {
+      REQUIRE_TRUE(false);
+    }
+    ++counter;
+  }
+
+  REQUIRE_EQ(counter, 3);
+
+  chmap_destroy(hm);
+}
+
+typedef struct helper_struct {
+  int a;
+  short b;
+} helper_struct;
+
+void helper_function(chmap chm) {
+  chmap_enable_local_macros(chm, char*, helper_struct);
+
+  helper_struct d1 = (helper_struct){.a = 3, .b = 4};
+  helper_struct d2 = (helper_struct){.a = 5, .b = 6};
+  helper_struct d3 = (helper_struct){.a = 7, .b = 8};
+
+  chmap_insert(chm, "d1", d1);
+  chmap_insert(chm, "d2", d2);
+  chmap_insert(chm, "d3", d3);
+
+  int records[3] = {0};
+  int counter = 0;
+
+  chmap_iter_declare(chm, it);
+  for (it = chmap_begin(chm); it != NULL; it = chmap_iter_next(it)) {
+    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
+      REQUIRE_EQ(records[0]++, 0);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 3);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 4);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
+      REQUIRE_EQ(records[1]++, 0);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 5);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 6);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
+      REQUIRE_EQ(records[2]++, 0);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 7);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 8);
+    } else {
+      REQUIRE_TRUE(false);
+    }
+    ++counter;
+  }
+
+  REQUIRE_EQ(counter, 3);
+
+  chmap_get_ptr(chm, "d1")->a++;
+  chmap_get_ptr(chm, "d1")->b--;
+  chmap_get_ptr(chm, "d2")->a++;
+  chmap_get_ptr(chm, "d2")->b--;
+  chmap_get_ptr(chm, "d3")->a++;
+  chmap_get_ptr(chm, "d3")->b--;
+}
+
+TEST(chash_maps, re_enabled_local_chm_macros) {
+  chmap_construct(hm, char*, helper_struct);
+
+  helper_function(hm);
+
+  int records[3] = {0};
+  int counter = 0;
+
+  chmap_iter_declare(hm, it);
+  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
+    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
+      REQUIRE_EQ(records[0]++, 0);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 4);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 3);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
+      REQUIRE_EQ(records[1]++, 0);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 6);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 5);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
+      REQUIRE_EQ(records[2]++, 0);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 8);
+      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 7);
     } else {
       REQUIRE_TRUE(false);
     }

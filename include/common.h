@@ -3,7 +3,7 @@
 #include <stddef.h>
 
 typedef enum ccollections_retval_t {
-  ccol_unknown_failure = -8,
+  ccol_unexpected_failure = -8,
   ccol_container_empty,
   ccol_container_full,
   ccol_timed_out,

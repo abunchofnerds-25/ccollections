@@ -265,7 +265,7 @@ int circq_timed_send_zc(circular_queue* cq, void** msg, uint32_t msg_size,
       if ((retval = cond_var_timedwait(cq->write_cond, cq->mutex, abs_time))) {
         if (retval != ETIMEDOUT) {
           mutex_unlock(cq->mutex);
-          return ccol_unknown_failure;
+          return ccol_unexpected_failure;
         }
         mutex_unlock(cq->mutex);
         return ccol_timed_out;
@@ -358,7 +358,7 @@ ccol_retval_t circq_timed_recv_zc(circular_queue* cq, void** target_buf,
       if ((retval = cond_var_timedwait(cq->read_cond, cq->mutex, abs_time))) {
         if (retval != ETIMEDOUT) {
           mutex_unlock(cq->mutex);
-          return ccol_unknown_failure;
+          return ccol_unexpected_failure;
         }
         mutex_unlock(cq->mutex);
         return ccol_timed_out;
@@ -644,7 +644,7 @@ ccol_retval_t dynmq_timed_recv_zc(dynamic_queue* dq, void** target_buf,
       if ((retval = cond_var_timedwait(dq->read_cond, dq->mutex, abs_time))) {
         if (retval != ETIMEDOUT) {
           mutex_unlock(dq->mutex);
-          return ccol_unknown_failure;
+          return ccol_unexpected_failure;
         }
         mutex_unlock(dq->mutex);
         return ccol_timed_out;

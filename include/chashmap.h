@@ -116,11 +116,11 @@ ccol_retval_t chmap_delete_elem(chmap chm, const chmap_pair* key_pair);
 // traverse through a hashed map.
 chmap_iterator* chashmap_begin_iter(chmap chm, char** err);
 
-#define chmap_iter_declare(chm, iter)                             \
-  typeof(__chm_key_type_var_##chm) __chm_iter_key_type_var_##iter \
-      __attribute__((unused));                                    \
-  typeof(__chm_val_type_var_##chm) __chm_iter_val_type_var_##iter \
-      __attribute__((unused));                                    \
+#define chmap_iter_declare(chm, iter)                               \
+  typeof(*__chm_key_type_var_##chm)* __chm_iter_key_type_var_##iter \
+      __attribute__((unused)) = NULL;                               \
+  typeof(*__chm_val_type_var_##chm)* __chm_iter_val_type_var_##iter \
+      __attribute__((unused)) = NULL;                               \
   chmap_iterator* iter = NULL
 
 #define chmap_begin(chm)                                   \
@@ -135,38 +135,38 @@ chmap_iterator* chashmap_begin_iter(chmap chm, char** err);
 
 chmap_iterator* chmap_iter_next(chmap_iterator* iter);
 
-#define chmap_iter_key_ptr(iter)                                    \
-  ({                                                                \
-    bool is_key_string = _Generic((__chm_iter_key_type_var_##iter), \
-        char*: true,                                                \
-        const char*: true,                                          \
-        unsigned char*: true,                                       \
-        const unsigned char*: true,                                 \
-        default: false);                                            \
-    const typeof(__chm_iter_key_type_var_##iter)* key;              \
-    if (is_key_string) {                                            \
-      key = (typeof(key))(&it->key_pair->ptr);                      \
-    } else {                                                        \
-      key = (typeof(key))(it->key_pair->ptr);                       \
-    }                                                               \
-    key;                                                            \
+#define chmap_iter_key_ptr(iter)                                     \
+  ({                                                                 \
+    bool is_key_string = _Generic((*__chm_iter_key_type_var_##iter), \
+        char*: true,                                                 \
+        const char*: true,                                           \
+        unsigned char*: true,                                        \
+        const unsigned char*: true,                                  \
+        default: false);                                             \
+    const typeof(*__chm_iter_key_type_var_##iter)* key;              \
+    if (is_key_string) {                                             \
+      key = (typeof(key))(&it->key_pair->ptr);                       \
+    } else {                                                         \
+      key = (typeof(key))(it->key_pair->ptr);                        \
+    }                                                                \
+    key;                                                             \
   })
 
-#define chmap_iter_val_ptr(iter)                                    \
-  ({                                                                \
-    bool is_val_string = _Generic((__chm_iter_val_type_var_##iter), \
-        char*: true,                                                \
-        const char*: true,                                          \
-        unsigned char*: true,                                       \
-        const unsigned char*: true,                                 \
-        default: false);                                            \
-    typeof(__chm_iter_val_type_var_##iter)* val;                    \
-    if (is_val_string) {                                            \
-      val = (typeof(val))(&it->val_pair->ptr);                      \
-    } else {                                                        \
-      val = (typeof(val))(it->val_pair->ptr);                       \
-    }                                                               \
-    val;                                                            \
+#define chmap_iter_val_ptr(iter)                                     \
+  ({                                                                 \
+    bool is_val_string = _Generic((*__chm_iter_val_type_var_##iter), \
+        char*: true,                                                 \
+        const char*: true,                                           \
+        unsigned char*: true,                                        \
+        const unsigned char*: true,                                  \
+        default: false);                                             \
+    typeof(*__chm_iter_val_type_var_##iter)* val;                    \
+    if (is_val_string) {                                             \
+      val = (typeof(val))(&it->val_pair->ptr);                       \
+    } else {                                                         \
+      val = (typeof(val))(it->val_pair->ptr);                        \
+    }                                                                \
+    val;                                                             \
   })
 
 void __chmap_iterator_destroy(chmap_iterator* iter);
@@ -189,13 +189,13 @@ void __chmap_destroy(chmap chm);
     chm = NULL;            \
   } while (0)
 
-#define chmap_enable_local_macros(hm_name, key_t, val_t)              \
-  typeof(key_t) __chm_key_type_var_##hm_name __attribute__((unused)); \
-  typeof(val_t) __chm_val_type_var_##hm_name __attribute__((unused))
+#define chmap_enable_local_macros(hm_name, key_t, val_t)                      \
+  typeof(key_t)* __chm_key_type_var_##hm_name __attribute__((unused)) = NULL; \
+  typeof(val_t)* __chm_val_type_var_##hm_name __attribute__((unused)) = NULL
 
-#define chmap_declare(hm_name, key_t, val_t)                          \
-  typeof(key_t) __chm_key_type_var_##hm_name __attribute__((unused)); \
-  typeof(val_t) __chm_val_type_var_##hm_name __attribute__((unused)); \
+#define chmap_declare(hm_name, key_t, val_t)                                  \
+  typeof(key_t)* __chm_key_type_var_##hm_name __attribute__((unused)) = NULL; \
+  typeof(val_t)* __chm_val_type_var_##hm_name __attribute__((unused)) = NULL; \
   chmap hm_name
 
 #define chmap_init(hm_name)                                                   \
@@ -208,8 +208,8 @@ void __chmap_destroy(chmap chm);
   } while (0)
 
 #define chmap_construct(hm_name, key_t, val_t)                                \
-  typeof(key_t) __chm_key_type_var_##hm_name __attribute__((unused));         \
-  typeof(val_t) __chm_val_type_var_##hm_name __attribute__((unused));         \
+  typeof(key_t)* __chm_key_type_var_##hm_name __attribute__((unused)) = NULL; \
+  typeof(val_t)* __chm_val_type_var_##hm_name __attribute__((unused)) = NULL; \
   chmap hm_name = NULL;                                                       \
   do {                                                                        \
     char* err = NULL;                                                         \
@@ -258,7 +258,7 @@ void __chmap_destroy(chmap chm);
 
 #define chmap_get(hm_name, key)                                             \
   ({                                                                        \
-    typeof(__chm_val_type_var_##hm_name)* val = NULL;                       \
+    typeof(*__chm_val_type_var_##hm_name)* val = NULL;                      \
     chmap_pair* key_pair = &(chmap_pair){};                                 \
     chmap_pair* val_pair = NULL;                                            \
     _populate_chmap_pair(key_pair, key);                                    \
@@ -266,27 +266,27 @@ void __chmap_destroy(chmap chm);
     if (r != ccol_success) {                                                \
       fatal_err("Failed to get elem ref - r: %d", r);                       \
     }                                                                       \
-    bool is_val_string = _Generic(__chm_val_type_var_##hm_name,             \
+    bool is_val_string = _Generic(*__chm_val_type_var_##hm_name,            \
         char*: true,                                                        \
         const char*: true,                                                  \
         unsigned char*: true,                                               \
         const unsigned char*: true,                                         \
         default: false);                                                    \
     if (is_val_string) {                                                    \
-      val = (typeof(__chm_val_type_var_##hm_name)*)&(val_pair->ptr);        \
+      val = (typeof(*__chm_val_type_var_##hm_name)*)&(val_pair->ptr);       \
     } else if (val_pair->size != sizeof(val)) {                             \
       fatal_err(                                                            \
           "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
           val_pair->size, sizeof(val));                                     \
     } else {                                                                \
-      val = (typeof(__chm_val_type_var_##hm_name)*)(val_pair->ptr);         \
+      val = (typeof(*__chm_val_type_var_##hm_name)*)(val_pair->ptr);        \
     }                                                                       \
     *val;                                                                   \
   })
 
 #define chmap_get_ptr(hm_name, key)                                         \
   ({                                                                        \
-    typeof(__chm_val_type_var_##hm_name)* val = NULL;                       \
+    typeof(*__chm_val_type_var_##hm_name)* val = NULL;                      \
     chmap_pair* key_pair = &(chmap_pair){};                                 \
     chmap_pair* val_pair = NULL;                                            \
     _populate_chmap_pair(key_pair, key);                                    \
@@ -294,20 +294,20 @@ void __chmap_destroy(chmap chm);
     if (r != ccol_success) {                                                \
       fatal_err("Failed to get elem ref - r: %d", r);                       \
     }                                                                       \
-    bool is_val_string = _Generic(__chm_val_type_var_##hm_name,             \
+    bool is_val_string = _Generic(*__chm_val_type_var_##hm_name,            \
         char*: true,                                                        \
         const char*: true,                                                  \
         unsigned char*: true,                                               \
         const unsigned char*: true,                                         \
         default: false);                                                    \
     if (is_val_string) {                                                    \
-      val = (typeof(__chm_val_type_var_##hm_name)*)&(val_pair->ptr);        \
+      val = (typeof(*__chm_val_type_var_##hm_name)*)&(val_pair->ptr);       \
     } else if (val_pair->size != sizeof(val)) {                             \
       fatal_err(                                                            \
           "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
           val_pair->size, sizeof(val));                                     \
     } else {                                                                \
-      val = (typeof(__chm_val_type_var_##hm_name)*)(val_pair->ptr);         \
+      val = (typeof(*__chm_val_type_var_##hm_name)*)(val_pair->ptr);        \
     }                                                                       \
     val;                                                                    \
   })

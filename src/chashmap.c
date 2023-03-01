@@ -79,6 +79,18 @@ typedef struct dllist_ref_node {
   llist_node* host;
 } dllist_ref_node;
 
+typedef struct ext_chmap_iterator {  // extended chmap_iterator
+  // User doesn't need to know about the fields '_handle' and 'parent_map' or
+  // use them directly
+  chmap parent_map;
+  void* _handle;
+  chmap_iterator user_iter;
+} ext_chmap_iterator;
+
+#define usrIter2ExtIter(u_iter)            \
+  (ext_chmap_iterator*)((uint8_t*)u_iter - \
+                        offsetof(ext_chmap_iterator, user_iter))
+
 void attach_node_to_dllist(dllist_ref_node** head, dllist_ref_node* node,
                            llist_node* host) {
   node->prev = NULL;
@@ -719,8 +731,9 @@ chmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
     return NULL;
   }
 
-  chmap_iterator* iter = _mem_calloc(chm->m_procs, 1, sizeof(chmap_iterator));
-  if (!iter) {
+  ext_chmap_iterator* real_iter =
+      _mem_calloc(chm->m_procs, 1, sizeof(ext_chmap_iterator));
+  if (!real_iter) {
     if (err) {
       *err = CERR_STR("Failed to allocate iterator");
     }
@@ -728,26 +741,30 @@ chmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
   }
 
   dllist_ref_node* tracker = chm->head_of_all_elems;
-  iter->parent_map = chm;
-  iter->_handle = tracker;
-  iter->key_pair = tracker->host->data.key_pair;
-  iter->val_pair = tracker->host->data.val_pair;
+  real_iter->parent_map = chm;
+  real_iter->_handle = tracker;
+  real_iter->user_iter.key_pair = tracker->host->data.key_pair;
+  real_iter->user_iter.val_pair = tracker->host->data.val_pair;
 
-  return iter;
+  return &(real_iter->user_iter);
 }
 
 void __chmap_iterator_destroy(chmap_iterator* iter) {
   if (iter) {
-    _mem_free(iter->parent_map->m_procs, iter);
+    ext_chmap_iterator* real_iter = usrIter2ExtIter(iter);
+    _mem_free(real_iter->parent_map->m_procs, real_iter);
   }
 }
 
 chmap_iterator* chmap_iter_next(chmap_iterator* iter) {
-  dllist_ref_node* tracker = (dllist_ref_node*)iter->_handle;
+  ext_chmap_iterator* real_iter = usrIter2ExtIter(iter);
+  dllist_ref_node* tracker = (dllist_ref_node*)real_iter->_handle;
   tracker = tracker->next;
 
   if (tracker) {
-    iter->_handle = tracker;
+    real_iter->_handle = tracker;
+    // iter already points to the correct location, no need to
+    // use real_iter for the following two lines.
     iter->key_pair = tracker->host->data.key_pair;
     iter->val_pair = tracker->host->data.val_pair;
   } else {

@@ -59,10 +59,6 @@ typedef struct chmap_pair {
 } chmap_pair;
 
 typedef struct chmap_iterator {
-  // User doesn't need to tamper with the fields '_handle' and 'parent_map' or
-  // use them directly
-  chmap parent_map;
-  void* _handle;
   chmap_pair* key_pair;
   chmap_pair* val_pair;
 } chmap_iterator;

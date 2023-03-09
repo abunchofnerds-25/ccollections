@@ -194,7 +194,7 @@ ccol_retval_t verify_circq_send_zc_params(circular_queue* cq, void** msg,
   return ccol_success_threshold;
 }
 
-int circq_send_zc(circular_queue* cq, void** msg, uint32_t msg_size) {
+ccol_retval_t circq_send_zc(circular_queue* cq, void** msg, uint32_t msg_size) {
   if (verify_circq_send_zc_params(cq, msg, msg_size) != 0) {
     return ccol_invalid_args;
   }
@@ -217,7 +217,8 @@ int circq_send_zc(circular_queue* cq, void** msg, uint32_t msg_size) {
   return msg_size;
 }
 
-int circq_try_send_zc(circular_queue* cq, void** msg, uint32_t msg_size) {
+ccol_retval_t circq_try_send_zc(circular_queue* cq, void** msg,
+                                uint32_t msg_size) {
   if (verify_circq_send_zc_params(cq, msg, msg_size) != 0) {
     return ccol_invalid_args;
   }
@@ -242,8 +243,9 @@ int circq_try_send_zc(circular_queue* cq, void** msg, uint32_t msg_size) {
   return result;
 }
 
-int circq_timed_send_zc(circular_queue* cq, void** msg, uint32_t msg_size,
-                        struct timespec* timeout_duration) {
+ccol_retval_t circq_timed_send_zc(circular_queue* cq, void** msg,
+                                  uint32_t msg_size,
+                                  struct timespec* timeout_duration) {
   if (verify_circq_send_zc_params(cq, msg, msg_size) != 0) {
     return ccol_invalid_args;
   }
@@ -296,7 +298,8 @@ ccol_retval_t _recvfrom_cq(circular_queue* cq, void** target_buf) {
   return msg_size;
 }
 
-int verify_recvfrom_cq_zc_params(circular_queue* cq, void** target_buf) {
+ccol_retval_t verify_recvfrom_cq_zc_params(circular_queue* cq,
+                                           void** target_buf) {
   if (!cq || !target_buf) {
     return ccol_invalid_args;
   }
@@ -739,7 +742,7 @@ void __channel_destroy(channel* ch) {
   }
 }
 
-int chan_send_zc(channel* ch, void** msg, uint32_t msg_size) {
+ccol_retval_t chan_send_zc(channel* ch, void** msg, uint32_t msg_size) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -751,7 +754,7 @@ int chan_send_zc(channel* ch, void** msg, uint32_t msg_size) {
   return circq_send_zc(ch->workers_to_owner_cq, msg, msg_size);
 }
 
-int chan_try_send_zc(channel* ch, void** msg, uint32_t msg_size) {
+ccol_retval_t chan_try_send_zc(channel* ch, void** msg, uint32_t msg_size) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -763,8 +766,8 @@ int chan_try_send_zc(channel* ch, void** msg, uint32_t msg_size) {
   return circq_try_send_zc(ch->workers_to_owner_cq, msg, msg_size);
 }
 
-int chan_timed_send_zc(channel* ch, void** msg, uint32_t msg_size,
-                       struct timespec* timeout) {
+ccol_retval_t chan_timed_send_zc(channel* ch, void** msg, uint32_t msg_size,
+                                 struct timespec* timeout) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -776,7 +779,7 @@ int chan_timed_send_zc(channel* ch, void** msg, uint32_t msg_size,
   return circq_timed_send_zc(ch->workers_to_owner_cq, msg, msg_size, timeout);
 }
 
-int chan_recv_zc(channel* ch, void** target_buf) {
+ccol_retval_t chan_recv_zc(channel* ch, void** target_buf) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -788,7 +791,7 @@ int chan_recv_zc(channel* ch, void** target_buf) {
   return circq_recv_zc(ch->owner_to_workers_cq, target_buf);
 }
 
-int chan_try_recv_zc(channel* ch, void** target_buf) {
+ccol_retval_t chan_try_recv_zc(channel* ch, void** target_buf) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -800,8 +803,8 @@ int chan_try_recv_zc(channel* ch, void** target_buf) {
   return circq_try_recv_zc(ch->owner_to_workers_cq, target_buf);
 }
 
-int chan_timed_recv_zc(channel* ch, void** target_buf,
-                       struct timespec* timeout) {
+ccol_retval_t chan_timed_recv_zc(channel* ch, void** target_buf,
+                                 struct timespec* timeout) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -813,7 +816,7 @@ int chan_timed_recv_zc(channel* ch, void** target_buf,
   return circq_timed_recv_zc(ch->owner_to_workers_cq, target_buf, timeout);
 }
 
-int chan_disable_sending(channel* ch, channel_direction d) {
+ccol_retval_t chan_disable_sending(channel* ch, channel_direction d) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -826,10 +829,10 @@ int chan_disable_sending(channel* ch, channel_direction d) {
     return ccol_invalid_args;
   }
 
-  return 0;
+  return ccol_success;
 }
 
-int chan_enable_sending(channel* ch, channel_direction d) {
+ccol_retval_t chan_enable_sending(channel* ch, channel_direction d) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -842,7 +845,7 @@ int chan_enable_sending(channel* ch, channel_direction d) {
     return ccol_invalid_args;
   }
 
-  return 0;
+  return ccol_success;
 }
 
 int chan_msg_count(channel* ch, channel_direction d) {

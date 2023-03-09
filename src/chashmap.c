@@ -26,23 +26,6 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-#define mem_alloc(size) malloc(size)
-#define mem_calloc(elem_count, elem_size) calloc(elem_count, elem_size)
-#define mem_realloc(ptr, new_size) realloc(ptr, new_size)
-#define mem_free(ptr) free(ptr)
-
-#define _mem_alloc(m_procs, size) \
-  (m_procs) ? m_procs->malloc(size) : mem_alloc(size)
-#define _mem_calloc(m_procs, e_count, e_size) \
-  (m_procs) ? m_procs->calloc(e_count, e_size) : mem_calloc(e_count, e_size)
-#define _mem_realloc(m_procs, ptr, new_size) \
-  (m_procs) ? m_procs->realloc(ptr, new_size) : mem_realloc(ptr, new_size)
-#define _mem_free(m_procs, ptr) (m_procs) ? m_procs->free(ptr) : mem_free(ptr)
-
-#define stringify(s) #s
-#define x_stringify(s) stringify(s)
-#define CERR_STR(x) (__FILE__ ":" x_stringify(__LINE__) " - " x)
-
 const uint32_t minimum_allowed_bucket_array_size = 64;
 const uint32_t scale_factor = 4;
 const uint32_t minimum_scale_down_threshold =
@@ -64,8 +47,8 @@ static inline void mem_assign(void* dest, void* src, uint32_t size) {
 
 typedef struct chmap_entry {
   unsigned long hash_val;
-  chmap_pair* key_pair;
-  chmap_pair* val_pair;
+  cmap_pair* key_pair;
+  cmap_pair* val_pair;
   ccol_memmgmt_procs_t* m_procs;
 } chmap_entry;
 
@@ -79,17 +62,17 @@ typedef struct dllist_ref_node {
   llist_node* host;
 } dllist_ref_node;
 
-typedef struct ext_chmap_iterator {  // extended chmap_iterator
-  // User doesn't need to know about the fields '_handle' and 'parent_map' or
+typedef struct chmap_cmap_iterator {  // Extended cmap_iterator for chmap
+  // User doesn't need to know about the fields 'tracker' and 'parent_map' or
   // use them directly
   chmap parent_map;
-  void* _handle;
-  chmap_iterator user_iter;
-} ext_chmap_iterator;
+  dllist_ref_node* tracker;
+  cmap_iterator user_iter;
+} chmap_cmap_iterator;
 
-#define usrIter2ExtIter(u_iter)            \
-  (ext_chmap_iterator*)((uint8_t*)u_iter - \
-                        offsetof(ext_chmap_iterator, user_iter))
+#define cmapIter2ChmapIter(u_iter)          \
+  (chmap_cmap_iterator*)((uint8_t*)u_iter - \
+                         offsetof(chmap_cmap_iterator, user_iter))
 
 void attach_node_to_dllist(dllist_ref_node** head, dllist_ref_node* node,
                            llist_node* host) {
@@ -161,14 +144,14 @@ llist_node* create_llist_node(dllist_ref_node** head_of_all_elems,
   new_elem->m_procs = data->m_procs;
 
   new_elem->data.key_pair =
-      (chmap_pair*)_mem_alloc(data->m_procs, sizeof(chmap_pair));
+      (cmap_pair*)_mem_alloc(data->m_procs, sizeof(cmap_pair));
   if (!new_elem->data.key_pair) {
     destroy_llist_node(head_of_all_elems, new_elem);
     return NULL;
   }
 
   new_elem->data.val_pair =
-      (chmap_pair*)_mem_alloc(data->m_procs, sizeof(chmap_pair));
+      (cmap_pair*)_mem_alloc(data->m_procs, sizeof(cmap_pair));
   if (!new_elem->data.val_pair) {
     destroy_llist_node(head_of_all_elems, new_elem);
     return NULL;
@@ -201,7 +184,7 @@ llist_node* create_llist_node(dllist_ref_node** head_of_all_elems,
   return new_elem;
 }
 
-bool reset_val_of_llist_node(llist_node* elem, const chmap_pair* val_pair) {
+bool reset_val_of_llist_node(llist_node* elem, const cmap_pair* val_pair) {
   bool success = false;
 
   if (elem->data.val_pair->size == val_pair->size) {
@@ -258,8 +241,8 @@ llist_node* migrate_llist_node_to_another_llist(llist_node* head,
   return head;
 }
 
-static inline bool compare_key_pairs(const chmap_pair* kp1,
-                                     const chmap_pair* kp2) {
+static inline bool compare_key_pairs(const cmap_pair* kp1,
+                                     const cmap_pair* kp2) {
   if (kp1->size != kp2->size) {
     return false;
   }
@@ -283,7 +266,7 @@ static inline bool compare_key_pairs(const chmap_pair* kp1,
   return false;
 }
 
-llist_node* find_in_llist(llist_node* head, const chmap_pair* key_pair) {
+llist_node* find_in_llist(llist_node* head, const cmap_pair* key_pair) {
   llist_node* tracker = head;
   while (tracker) {
     if (compare_key_pairs(tracker->data.key_pair, key_pair)) {
@@ -310,7 +293,7 @@ llist_node* destroy_the_whole_llist(llist_node* head,
 
 llist_node* delete_from_llist(llist_node* head,
                               dllist_ref_node** head_of_all_elems,
-                              const chmap_pair* key_pair, bool* found) {
+                              const cmap_pair* key_pair, bool* found) {
   *found = false;
   llist_node* tracker = head;
   llist_node* previous = NULL;
@@ -408,7 +391,7 @@ bool verify_chmap_create_inputs(uint32_t initial_bucket_array_size,
                                 ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
   if (initial_bucket_array_size == 0) {
     if (err) {
-      *err = CERR_STR("The initial bucket size is zero");
+      *err = CCOL_ERR_STR("The initial bucket size is zero");
     }
     return false;
   }
@@ -416,7 +399,8 @@ bool verify_chmap_create_inputs(uint32_t initial_bucket_array_size,
   if (mmgmt_procs && (!mmgmt_procs->malloc || !mmgmt_procs->calloc ||
                       !mmgmt_procs->realloc || !mmgmt_procs->free)) {
     if (err) {
-      *err = CERR_STR("Detected at least one NULL memory management function");
+      *err =
+          CCOL_ERR_STR("Detected at least one NULL memory management function");
     }
     return false;
   }
@@ -430,9 +414,8 @@ bool chm_populate_mem_mgmt_procs(chmap chm, ccol_memmgmt_procs_t* mmgmt_procs,
     chm->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t));
     if (!chm->m_procs) {
       if (err) {
-        *err = CERR_STR("Failed to allocate buffer for memory mgmt buffer");
+        *err = CCOL_ERR_STR("Failed to allocate buffer for memory mgmt buffer");
       }
-      mmgmt_procs->free(chm);
       return false;
     }
     memcpy(chm->m_procs, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
@@ -460,12 +443,13 @@ chmap chmap_create_mp(uint32_t initial_bucket_array_size,
   chmap chm = (chmap)_mem_alloc(mmgmt_procs, sizeof(chashmap));
   if (!chm) {
     if (err) {
-      *err = CERR_STR("Failed to allocate buffer");
+      *err = CCOL_ERR_STR("Failed to allocate buffer");
     }
     return NULL;
   }
 
   if (!chm_populate_mem_mgmt_procs(chm, mmgmt_procs, err)) {
+    _mem_free(mmgmt_procs, chm);
     return NULL;
   }
 
@@ -479,7 +463,7 @@ chmap chmap_create_mp(uint32_t initial_bucket_array_size,
   if (!chm->bucket_arr) {
     // Failed to allocate buffer for bucket_arr
     if (err) {
-      *err = CERR_STR("Failed to allocate bucket_arr");
+      *err = CCOL_ERR_STR("Failed to allocate bucket_arr");
     }
     _mem_free(mmgmt_procs, chm->m_procs);
     _mem_free(mmgmt_procs, chm);
@@ -519,7 +503,7 @@ static inline void assign_key_to_hash_id(unsigned long* id_ptr, uint32_t size,
 }
 
 static inline uint32_t calculate_bucket_index(uint32_t bucket_arr_size,
-                                              const chmap_pair* key_pair,
+                                              const cmap_pair* key_pair,
                                               unsigned long* hash_ptr) {
   unsigned long id = 0x0;
 
@@ -608,16 +592,16 @@ void scale_chmap(chmap chm, bool up) {
   set_chmap_scaling_limits(chm);
 }
 
-ccol_retval_t chmap_insert_elem(chmap chm, const chmap_pair* key_pair,
-                                const chmap_pair* val_pair) {
+ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
+                                const cmap_pair* val_pair) {
   if (!chm || !key_pair || !val_pair || !key_pair->ptr || !val_pair->ptr ||
       key_pair->size == 0 || val_pair->size == 0) {
     return ccol_invalid_args;
   }
 
   chmap_entry data = {.hash_val = 0,
-                      .key_pair = (chmap_pair*)key_pair,
-                      .val_pair = (chmap_pair*)val_pair,
+                      .key_pair = (cmap_pair*)key_pair,
+                      .val_pair = (cmap_pair*)val_pair,
                       .m_procs = chm->m_procs};
 
   bool result = false;
@@ -643,7 +627,7 @@ ccol_retval_t chmap_insert_elem(chmap chm, const chmap_pair* key_pair,
   return result ? ccol_success : ccol_not_enough_memory;
 }
 
-ccol_retval_t chmap_get_elem_copy(chmap chm, const chmap_pair* key_pair,
+ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
                                   void* target_buf, uint32_t target_buf_size) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0 ||
       !target_buf || target_buf_size == 0) {
@@ -667,8 +651,8 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const chmap_pair* key_pair,
   return result;
 }
 
-ccol_retval_t chmap_get_elem_ref(chmap chm, const chmap_pair* key_pair,
-                                 chmap_pair** val_pair) {
+ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
+                                 cmap_pair** val_pair) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0 || !val_pair) {
     return ccol_invalid_args;
   }
@@ -686,7 +670,7 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const chmap_pair* key_pair,
   return result;
 }
 
-ccol_retval_t chmap_delete_elem(chmap chm, const chmap_pair* key_pair) {
+ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0) {
     return ccol_invalid_args;
   }
@@ -718,7 +702,7 @@ uint32_t chmap_elem_count(chmap chm) {
   return chm->elem_count;
 }
 
-chmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
+cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
   if (err) {
     *err = NULL;
   }
@@ -731,42 +715,40 @@ chmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
     return NULL;
   }
 
-  ext_chmap_iterator* real_iter =
-      _mem_calloc(chm->m_procs, 1, sizeof(ext_chmap_iterator));
+  chmap_cmap_iterator* real_iter =
+      _mem_calloc(chm->m_procs, 1, sizeof(chmap_cmap_iterator));
   if (!real_iter) {
     if (err) {
-      *err = CERR_STR("Failed to allocate iterator");
+      *err = CCOL_ERR_STR("Failed to allocate iterator");
     }
     return NULL;
   }
 
   dllist_ref_node* tracker = chm->head_of_all_elems;
   real_iter->parent_map = chm;
-  real_iter->_handle = tracker;
+  real_iter->tracker = tracker;
   real_iter->user_iter.key_pair = tracker->host->data.key_pair;
   real_iter->user_iter.val_pair = tracker->host->data.val_pair;
 
   return &(real_iter->user_iter);
 }
 
-void __chmap_iterator_destroy(chmap_iterator* iter) {
+void __chmap_iterator_destroy(cmap_iterator* iter) {
   if (iter) {
-    ext_chmap_iterator* real_iter = usrIter2ExtIter(iter);
+    chmap_cmap_iterator* real_iter = cmapIter2ChmapIter(iter);
     _mem_free(real_iter->parent_map->m_procs, real_iter);
   }
 }
 
-chmap_iterator* chmap_iter_next(chmap_iterator* iter) {
-  ext_chmap_iterator* real_iter = usrIter2ExtIter(iter);
-  dllist_ref_node* tracker = (dllist_ref_node*)real_iter->_handle;
-  tracker = tracker->next;
+cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
+  chmap_cmap_iterator* real_iter = cmapIter2ChmapIter(iter);
+  real_iter->tracker = real_iter->tracker->next;
 
-  if (tracker) {
-    real_iter->_handle = tracker;
+  if (real_iter->tracker) {
     // iter already points to the correct location, no need to
     // use real_iter for the following two lines.
-    iter->key_pair = tracker->host->data.key_pair;
-    iter->val_pair = tracker->host->data.val_pair;
+    iter->key_pair = real_iter->tracker->host->data.key_pair;
+    iter->val_pair = real_iter->tracker->host->data.val_pair;
   } else {
     // The iterator reached to the end of the map, nowhere to
     // advance. Let's destroy it and return NULL.

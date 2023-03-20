@@ -24,17 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 199309L
-#endif
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
+#include <common.h>
 
 // Ordinary mempool declarations
 typedef struct mempool mempool;

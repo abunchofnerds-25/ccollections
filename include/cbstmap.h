@@ -24,16 +24,13 @@ SOFTWARE.
 
 #pragma once
 
-#include <assert.h>
 #include <common.h>
-#include <stdbool.h>
 
 typedef struct cbinarymap cbinarymap;
 typedef cbinarymap* cbmap;
 
-cbmap cbmap_create_mp(ccol_memmgmt_procs_t* mmgmt_procs, char** err);
-
-#define cbmap_create(map_type, err) cbmap_create_mp(map_type, NULL, err)
+cbmap cbmap_create_mp(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
+                      char** err);
 
 uint32_t cbmap_elem_count(cbmap cbm);
 
@@ -51,7 +48,7 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair* key_pair,
 ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair* key_pair);
 
 // The function 'cbmap_begin_iter' can be used to acquire an iterator to
-// traverse through a hashed map.
+// traverse through a binary search tree map.
 cmap_iterator* cbmap_begin_iter(cbmap cbm, char** err);
 
 #define cbmap_iter_declare(cbm, iter)                             \
@@ -136,13 +133,20 @@ void __cbmap_destroy(cbmap cbm);
   typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
   cbmap hm_name
 
-#define cbmap_init(hm_name)                \
-  do {                                     \
-    char* err = NULL;                      \
-    hm_name = cbmap_create_mp(NULL, &err); \
-    if (!hm_name) {                        \
-      fatal_err("%s", err);                \
-    }                                      \
+#define cbmap_init(hm_name)                                        \
+  do {                                                             \
+    char* err = NULL;                                              \
+    bool keys_are_signed = _Generic((hm_name##__cbm_key_type_var), \
+        char*: true,                                               \
+        int8_t*: true,                                             \
+        short*: true,                                              \
+        int*: true,                                                \
+        long*: true,                                               \
+        default: false);                                           \
+    hm_name = cbmap_create_mp(keys_are_signed, NULL, &err);        \
+    if (!hm_name) {                                                \
+      fatal_err("%s", err);                                        \
+    }                                                              \
   } while (0)
 
 #define cbmap_construct(hm_name, key_t, val_t)                               \
@@ -151,7 +155,14 @@ void __cbmap_destroy(cbmap cbm);
   cbmap hm_name = NULL;                                                      \
   do {                                                                       \
     char* err = NULL;                                                        \
-    hm_name = cbmap_create_mp(NULL, &err);                                   \
+    bool keys_are_signed = _Generic((hm_name##__cbm_key_type_var),           \
+        char*: true,                                                         \
+        int8_t*: true,                                                       \
+        short*: true,                                                        \
+        int*: true,                                                          \
+        long*: true,                                                         \
+        default: false);                                                     \
+    hm_name = cbmap_create_mp(keys_are_signed, NULL, &err);                  \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
     }                                                                        \

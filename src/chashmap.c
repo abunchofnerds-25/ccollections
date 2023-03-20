@@ -396,31 +396,8 @@ bool verify_chmap_create_inputs(uint32_t initial_bucket_array_size,
     return false;
   }
 
-  if (mmgmt_procs && (!mmgmt_procs->malloc || !mmgmt_procs->calloc ||
-                      !mmgmt_procs->realloc || !mmgmt_procs->free)) {
-    if (err) {
-      *err =
-          CCOL_ERR_STR("Detected at least one NULL memory management function");
-    }
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
     return false;
-  }
-
-  return true;
-}
-
-bool chm_populate_mem_mgmt_procs(chmap chm, ccol_memmgmt_procs_t* mmgmt_procs,
-                                 char** err) {
-  if (mmgmt_procs) {
-    chm->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t));
-    if (!chm->m_procs) {
-      if (err) {
-        *err = CCOL_ERR_STR("Failed to allocate buffer for memory mgmt buffer");
-      }
-      return false;
-    }
-    memcpy(chm->m_procs, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
-  } else {
-    chm->m_procs = NULL;
   }
 
   return true;
@@ -448,7 +425,7 @@ chmap chmap_create_mp(uint32_t initial_bucket_array_size,
     return NULL;
   }
 
-  if (!chm_populate_mem_mgmt_procs(chm, mmgmt_procs, err)) {
+  if (!ccol_populate_mem_mgmt_procs(chm, mmgmt_procs, err)) {
     _mem_free(mmgmt_procs, chm);
     return NULL;
   }

@@ -1,4 +1,5 @@
 #include <cvector.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <tau/tau.h>
@@ -179,14 +180,14 @@ TEST(cvectors, different_sizes) {
   }
 
   {
-    cvector* cvec = cvector_create(sizeof(short), NULL);
+    cvector* cvec = cvector_create(sizeof(int16_t), NULL);
 
-    REQUIRE_EQ(cvector_push_back(cvec, &(short){1}), ccol_success);
-    REQUIRE_EQ(cvector_push_back(cvec, &(short){2}), ccol_success);
+    REQUIRE_EQ(cvector_push_back(cvec, &(int16_t){1}), ccol_success);
+    REQUIRE_EQ(cvector_push_back(cvec, &(int16_t){2}), ccol_success);
 
     REQUIRE_EQ(cvector_elem_count(cvec), 2);
 
-    short target;
+    int16_t target;
     REQUIRE_EQ(cvector_pop_back(cvec, &target), ccol_success);
     REQUIRE_EQ(target, 2);
     REQUIRE_EQ(cvector_elem_count(cvec), 1);

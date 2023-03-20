@@ -24,19 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 199309L
-#endif
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-
-#include <assert.h>
 #include <common.h>
-#include <stdbool.h>
-#include <stddef.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -109,7 +97,7 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err);
       __attribute__((unused)) = NULL;                             \
   typeof(*chm##__chm_val_type_var)* iter##__chm_iter_val_type_var \
       __attribute__((unused)) = NULL;                             \
-  cmap_iterator* iter
+  cmap_iterator* iter _ccol_destructor(___chmap_iterator_destroy)
 
 cmap_iterator* chmap_iter_next(cmap_iterator* iter);
 
@@ -155,6 +143,13 @@ void __chmap_iterator_destroy(cmap_iterator* iter);
     iter = NULL;                      \
   } while (0)
 
+static inline void ___chmap_iterator_destroy(cmap_iterator** iter) {
+  if (*iter) {
+    __chmap_iterator_destroy(*iter);
+    *iter = NULL;
+  }
+}
+
 // The function '_chmap_destroy' is not meant to be used directly, please
 // use the macro 'chmap_destroy' instead.
 void __chmap_destroy(chmap chm);
@@ -174,7 +169,7 @@ void __chmap_destroy(chmap chm);
 #define chmap_declare(hm_name, key_t, val_t)                                 \
   typeof(key_t)* hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
-  chmap hm_name
+  chmap hm_name _ccol_destructor(___chmap_destroy)
 
 #define chmap_init(hm_name)                                                   \
   do {                                                                        \
@@ -185,10 +180,17 @@ void __chmap_destroy(chmap chm);
     }                                                                         \
   } while (0)
 
+static inline void ___chmap_destroy(chmap* chm) {
+  if (*chm) {
+    __chmap_destroy(*chm);
+    *chm = NULL;
+  }
+}
+
 #define chmap_construct(hm_name, key_t, val_t)                                \
   typeof(key_t)* hm_name##__chm_key_type_var __attribute__((unused)) = NULL;  \
   typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL;  \
-  chmap hm_name = NULL;                                                       \
+  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                    \
   do {                                                                        \
     char* err = NULL;                                                         \
     hm_name = chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, NULL, &err); \

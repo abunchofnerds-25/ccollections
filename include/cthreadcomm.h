@@ -24,17 +24,7 @@ SOFTWARE.
 
 #pragma once
 
-#ifndef _POSIX_C_SOURCE
-#define _POSIX_C_SOURCE 199309L
-#endif
-
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE
-#endif
-
 #include <common.h>
-#include <stdbool.h>
-#include <stdint.h>
 #include <time.h>
 
 typedef struct circular_queue circular_queue;
@@ -72,8 +62,8 @@ int circq_msg_count(circular_queue* cq);
 
 // Dynamic queue related functions
 // Dynamic queues will try to accept messages as much as
-// possible, unlike circular queues which start rejecting new
-// messages once they reach their capacities.
+// possible, unlike circular queues which start blocking the
+// dispacher threads once they reach their capacities.
 // A send call to a dynamic queue should never block,
 // it should directly succeed or fail depending on the
 // availability of memory.

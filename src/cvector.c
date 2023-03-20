@@ -78,31 +78,8 @@ bool verify_cvector_create_inputs(uint32_t elem_size,
     return false;
   }
 
-  if (mmgt_procs && (!mmgt_procs->malloc || !mmgt_procs->calloc ||
-                     !mmgt_procs->realloc || !mmgt_procs->free)) {
-    if (err) {
-      *err = CERR_STR("Detected at least one NULL memory management function");
-    }
+  if (!ccol_verify_memmgmt_procs(mmgt_procs, err)) {
     return false;
-  }
-
-  return true;
-}
-
-bool cvec_populate_mem_mgmt_procs(cvec cvec, ccol_memmgmt_procs_t* mmgmt_procs,
-                                  char** err) {
-  if (mmgmt_procs) {
-    cvec->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t));
-    if (!cvec->m_procs) {
-      if (err) {
-        *err = CERR_STR("failed to allocate memory mgmt procs");
-      }
-      mmgmt_procs->free(cvec);
-      return false;
-    }
-    memcpy(cvec->m_procs, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
-  } else {
-    cvec->m_procs = NULL;
   }
 
   return true;
@@ -123,7 +100,8 @@ cvec cvector_create_with_mprocs(uint32_t elem_size,
     return NULL;
   }
 
-  if (!cvec_populate_mem_mgmt_procs(v, mmgt_procs, err)) {
+  if (!ccol_populate_mem_mgmt_procs(v, mmgt_procs, err)) {
+    _mem_free(mmgt_procs, v);
     return NULL;
   }
 
@@ -189,10 +167,10 @@ static inline void assign(void* dest, const void* src, uint32_t size) {
     *(unsigned int*)dest = *(unsigned int*)src;
   } else if (size == sizeof(unsigned char)) {
     *(unsigned char*)dest = *(unsigned char*)src;
-  } else if (size == sizeof(unsigned long)) {
-    *(unsigned long*)dest = *(unsigned long*)src;
-  } else if (size == sizeof(unsigned short)) {
-    *(unsigned short*)dest = *(unsigned short*)src;
+  } else if (size == sizeof(uint64_t)) {
+    *(uint64_t*)dest = *(uint64_t*)src;
+  } else if (size == sizeof(uint16_t)) {
+    *(uint16_t*)dest = *(uint16_t*)src;
   } else {
     memcpy(dest, src, size);
   }
@@ -206,7 +184,7 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
   ccol_retval_t result = ccol_success;
 
   if (v->elem_count < v->capacity) {
-    assign((void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
+    assign((void*)((uint64_t)v->data_ptr + v->elem_count * v->elem_size),
            new_elem, v->elem_size);
     if (++v->elem_count == v->capacity) {
       // Ignoring the return value of scale_the_cvector_size_up
@@ -215,7 +193,7 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
     }
   } else {
     if (scale_the_cvector_size_up(v)) {
-      assign((void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
+      assign((void*)((uint64_t)v->data_ptr + v->elem_count * v->elem_size),
              new_elem, v->elem_size);
       ++v->elem_count;
     } else {
@@ -238,7 +216,7 @@ ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
     --v->elem_count;
 
     assign(target_elem,
-           (void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
+           (void*)((uint64_t)v->data_ptr + v->elem_count * v->elem_size),
            v->elem_size);
 
     if (v->elem_count < (v->capacity / minimum_capacity)) {
@@ -255,7 +233,7 @@ void* cvector_at(cvec v, uint32_t index) {
   }
 
   if (v->elem_count > 0 && index < v->elem_count) {
-    return (void*)((unsigned long)v->data_ptr + index * v->elem_size);
+    return (void*)((uint64_t)v->data_ptr + index * v->elem_size);
   }
 
   return NULL;

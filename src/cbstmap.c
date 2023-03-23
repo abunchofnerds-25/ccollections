@@ -50,12 +50,8 @@ typedef struct cbinarymap {
 } cbinarymap;
 
 typedef struct cbmap_cmap_iterator {  // Extended cmap_iterator for cbmap
-  // User doesn't need to know about the fields '_handle' and 'parent_map' or
-  // use them directly
   cbmap parent_map;
-  bmap_node* tracker;
-  bmap_node* final;
-  cvec_declare(visited_nodes, bmap_node*);
+  cvec_declare(nodes, bmap_node*);
   cmap_iterator user_iter;
 } cbmap_cmap_iterator;
 
@@ -97,6 +93,35 @@ bmap_node* get_max_node(bmap_node* root, uint32_t* depth) {
   return result;
 }
 
+void push_all_lefts_into_iter_stack(cbmap_cmap_iterator* real_iter,
+                                    bmap_node* node) {
+  cvec vn = real_iter->nodes;
+  cvec_enable_local_macros(vn, bmap_node*);
+  while (node) {
+    cvec_push(vn, node);
+    node = node->left;
+  }
+}
+
+cmap_iterator* cmap_real_iter_next(cbmap_cmap_iterator* real_iter) {
+  cvec vn = real_iter->nodes;
+  cvec_enable_local_macros(vn, bmap_node*);
+  uint32_t size = cvec_size(vn);
+  if (size == 0) {
+    // Nowhere to advance
+    __cbmap_iterator_destroy(&real_iter->user_iter);
+    return NULL;
+  }
+  bmap_node* node = cvec_pop(vn);
+  if (node->right) {
+    push_all_lefts_into_iter_stack(real_iter, node->right);
+  }
+
+  real_iter->user_iter.key_pair = &node->key_pair;
+  real_iter->user_iter.val_pair = &node->val_pair;
+  return &real_iter->user_iter;
+}
+
 cmap_iterator* cbmap_begin_iter(cbmap cbm, char** err) {
   if (!cbm) {
     assert(false);
@@ -119,28 +144,15 @@ cmap_iterator* cbmap_begin_iter(cbmap cbm, char** err) {
     return NULL;
   }
 
-  cvec vn = real_iter->visited_nodes;
+  // Initialize the stack of nodes within the real iterator.
+  cvec vn = real_iter->nodes;
   cvec_enable_local_macros(vn, bmap_node*);
-  cvec_init(vn);
-  real_iter->visited_nodes = vn;
+  cvec_init_with_mprocs(vn, cbm->m_procs);
+  real_iter->nodes = vn;
 
   real_iter->parent_map = cbm;
-  real_iter->tracker = cbm->root;
-
-  real_iter->final = get_max_node(cbm->root, NULL);
-  if (!real_iter->tracker->left) {
-    cvec_push(vn, real_iter->tracker);
-  }
-
-  while (real_iter->tracker && real_iter->tracker->left) {
-    cvec_push(vn, real_iter->tracker);
-    real_iter->tracker = real_iter->tracker->left;
-  }
-
-  real_iter->user_iter.key_pair = &real_iter->tracker->key_pair;
-  real_iter->user_iter.val_pair = &real_iter->tracker->val_pair;
-
-  return &real_iter->user_iter;
+  push_all_lefts_into_iter_stack(real_iter, cbm->root);
+  return cmap_real_iter_next(real_iter);
 }
 
 cmap_iterator* cbmap_iter_next(cmap_iterator* iter) {
@@ -150,84 +162,13 @@ cmap_iterator* cbmap_iter_next(cmap_iterator* iter) {
   }
 
   cbmap_cmap_iterator* real_iter = cmapIter2CbmapIter(iter);
-
-  if (real_iter->final == real_iter->tracker) {
-    __cbmap_iterator_destroy(iter);
-    return NULL;
-  }
-
-  cvec vn = real_iter->visited_nodes;
-  cvec_enable_local_macros(vn, bmap_node*);
-  bmap_node* previous_node = cvec_at(vn, cvec_size(vn) - 1);
-
-  bool dont_go_left = false;
-  bool dont_go_right = false;
-
-  if (previous_node == real_iter->tracker->left) {
-    // We came here from our left child
-    cvec_pop(vn);
-    dont_go_left = true;
-  } else if (previous_node == real_iter->tracker->right) {
-    // We came here from our right child
-    cvec_pop(vn);
-    dont_go_left = true;
-    dont_go_right = true;
-  }
-
-  if (!dont_go_left && real_iter->tracker->left) {
-    // We can go left, so let's go as much as we can.
-    while (real_iter->tracker && real_iter->tracker->left) {
-      cvec_push(vn, real_iter->tracker);
-      real_iter->tracker = real_iter->tracker->left;
-    }
-    iter->key_pair = &real_iter->tracker->key_pair;
-    iter->val_pair = &real_iter->tracker->val_pair;
-    return iter;
-  }
-
-  if (!dont_go_right && real_iter->tracker->right) {
-    // No direct left is available, but there is a right leg
-    if (real_iter->tracker->right->left) {
-      // That right leg itself has a left leg which is less
-      cvec_push(vn, real_iter->tracker->right);
-      real_iter->tracker = real_iter->tracker->right;
-      while (real_iter->tracker && real_iter->tracker->left) {
-        cvec_push(vn, real_iter->tracker);
-        real_iter->tracker = real_iter->tracker->left;
-      }
-    } else {
-      // That right leg itself does not have a left leg
-      cvec_push(vn, real_iter->tracker);
-      real_iter->tracker = real_iter->tracker->right;
-    }
-    iter->key_pair = &real_iter->tracker->key_pair;
-    iter->val_pair = &real_iter->tracker->val_pair;
-    return iter;
-  }
-
-  if (!real_iter->tracker->left && !real_iter->tracker->right) {
-    // No right or left sub node is present, this is a leaf node.
-    cvec_push(vn, real_iter->tracker);
-  }
-  real_iter->tracker = real_iter->tracker->parent;
-
-  // if (!real_iter->tracker) {
-  //   // We are at the root node trying to go to a parent meaning nowhere to
-  //   go.
-  //   // It's time to destroy, we are done.
-  //   __cbmap_iterator_destroy(iter);
-  //   return NULL;
-  // }
-
-  iter->key_pair = &real_iter->tracker->key_pair;
-  iter->val_pair = &real_iter->tracker->val_pair;
-  return iter;
+  return cmap_real_iter_next(real_iter);
 }
 
 void __cbmap_iterator_destroy(cmap_iterator* iter) {
   if (iter) {
     cbmap_cmap_iterator* real_iter = cmapIter2CbmapIter(iter);
-    cvec_destruct(real_iter->visited_nodes);
+    cvec_destruct(real_iter->nodes);
     _mem_free(real_iter->parent_map->m_procs, real_iter);
   }
 }
@@ -297,11 +238,18 @@ void destroy_bmap_node(cbmap cbm, bmap_node* node) {
   }
 }
 
+bmap_node* _clear_nodes_r(cbmap cbm, bmap_node* parent) {
+  if (parent) {
+    parent->left = _clear_nodes_r(cbm, parent->left);
+    parent->right = _clear_nodes_r(cbm, parent->right);
+    destroy_bmap_node(cbm, parent);
+    parent = NULL;
+  }
+  return parent;
+}
+
 void _clear_nodes(cbmap cbm) {
-  // bmap_node* tracker = cbm->root;
-
-  // TODO(danis): Implement!
-
+  cbm->root = _clear_nodes_r(cbm, cbm->root);
   cbm->elem_count = 0;
 }
 
@@ -404,14 +352,6 @@ int absolute(int x) {
 // Implemented not to have a dependency on an external library
 int maximum(int x, int y) {
   if (x >= y) {
-    return x;
-  }
-  return y;
-}
-
-// Implemented not to have a dependency on an external library
-int minimum(int x, int y) {
-  if (x <= y) {
     return x;
   }
   return y;

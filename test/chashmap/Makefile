@@ -22,8 +22,8 @@ generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-$(SRC_FILE_PREFIX) && echo 'GCOV SUCCEEDED, CALLING LCOV' && \
-	lcov --capture --directory . --output-file $(SRC_FILE_PREFIX).c.info && \
-	echo 'LCOV SUCCEEDED, CALLING GENHTML' && \
+	lcov --ignore-errors mismatch --capture --directory . \
+	--output-file $(SRC_FILE_PREFIX).c.info && \
 	genhtml -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info
 

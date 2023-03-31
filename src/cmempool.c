@@ -29,11 +29,6 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-#define mem_alloc(size) malloc(size)
-#define mem_calloc(elem_count, elem_size) calloc(elem_count, elem_size)
-#define mem_realloc(ptr, new_size) realloc(ptr, new_size)
-#define mem_free(ptr) free(ptr)
-
 #define rw_lock_t pthread_rwlock_t
 #define rw_lock_destroy(a) pthread_rwlock_destroy(a)
 #define rw_lock_init(a) pthread_rwlock_init(a, NULL)
@@ -64,6 +59,7 @@ struct mempool {
   uintptr_t lower_addr_limit;
   uintptr_t upper_addr_limit;
   uint32_t free_elem_count;
+  ccol_memmgmt_procs_t *m_procs;
   void *objects;
   bool is_preallocated;
   bool should_use_locks;
@@ -77,13 +73,21 @@ const uint32_t elem_is_not_a_pool_member = 0xfadeface;
 
 void _mempool_destroy(mempool *mp) {
   if (mp) {
-    if (!mp->is_preallocated && mp->objects) {
-      mem_free(mp->objects);
-    }
     if (mp->should_use_locks) {
       rw_lock_destroy(&mp->lock);
     }
-    mem_free(mp);
+
+    if (!mp->is_preallocated && mp->objects) {
+      _mem_free(mp->m_procs, mp->objects);
+    }
+
+    if (mp->m_procs) {
+      void (*free_func)(void *) = mp->m_procs->free;
+      free_func(mp->m_procs);
+      free_func(mp);
+    } else {
+      mem_free(mp);
+    }
   }
 }
 
@@ -116,21 +120,44 @@ void mempool_init_internal_scalars(mempool *mp, uint32_t elem_count,
 
 mempool *mempool_create(uint32_t elem_count, uint32_t elem_size,
                         bool fallback_to_dynamic_memory,
-                        bool will_be_accessed_by_only_one_thread) {
+                        bool will_be_accessed_by_only_one_thread,
+                        ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
+  if (err) {
+    *err = NULL;
+  }
+
   if (elem_count == 0 || elem_size == 0) {
+    if (err) {
+      *err = CCOL_ERR_STR("elem_count or elem_size is zero");
+    }
     return NULL;
   } else if (elem_size < sizeof(addr_t)) {
     elem_size = sizeof(addr_t);
   }
 
-  mempool *mp = (mempool *)mem_calloc(1, sizeof(mempool));
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
+    return NULL;
+  }
+
+  mempool *mp = (mempool *)_mem_calloc(mmgmt_procs, 1, sizeof(mempool));
   if (!mp) {
+    if (err) {
+      *err = CCOL_ERR_STR("failed to allocate memory pool struct");
+    }
+    return NULL;
+  }
+
+  if (!ccol_populate_mem_mgmt_procs(mp, mmgmt_procs, err)) {
+    _mem_free(mmgmt_procs, mp);
     return NULL;
   }
 
   uint32_t ext_elem_size = USER_SIZE_TO_EXT_SIZE(elem_size);
-  mp->objects = mem_calloc(elem_count, ext_elem_size);
+  mp->objects = _mem_calloc(mmgmt_procs, elem_count, ext_elem_size);
   if (!mp->objects) {
+    if (err) {
+      *err = CCOL_ERR_STR("failed to allocate memory pool data area");
+    }
     mempool_destroy(mp);
     return NULL;
   }
@@ -139,6 +166,9 @@ mempool *mempool_create(uint32_t elem_count, uint32_t elem_size,
 
   if (mp->should_use_locks) {
     if (rw_lock_init(&mp->lock) != 0) {
+      if (err) {
+        *err = CCOL_ERR_STR("failed to initialize the rw lock");
+      }
       mempool_destroy(mp);
       return NULL;
     }
@@ -152,22 +182,46 @@ mempool *mempool_create(uint32_t elem_count, uint32_t elem_size,
 
 mempool *mempool_create_from_preallocated_buffer(
     void *buffer, uint32_t buf_size, uint32_t elem_size,
-    bool fallback_to_dynamic_memory, bool will_be_accessed_by_only_one_thread) {
+    bool fallback_to_dynamic_memory, bool will_be_accessed_by_only_one_thread,
+    ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
+  if (err) {
+    *err = NULL;
+  }
+
   if (!buffer || elem_size < sizeof(addr_t) ||
       buf_size < (sizeof(__internal_entry_header))) {
+    if (err) {
+      *err = CCOL_ERR_STR("buffer is not acceptable");
+    }
     return NULL;
   }
 
   uint32_t ext_elem_size = USER_SIZE_TO_EXT_SIZE(elem_size);
   uint32_t elem_count = buf_size / ext_elem_size;
   if (elem_count == 0) {
+    if (err) {
+      *err = CCOL_ERR_STR("calculated elem_count is zero");
+    }
     return NULL;
   }
 
-  mempool *mp = (mempool *)mem_calloc(1, sizeof(mempool));
-  if (!mp) {
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
     return NULL;
   }
+
+  mempool *mp = (mempool *)_mem_calloc(mmgmt_procs, 1, sizeof(mempool));
+  if (!mp) {
+    if (err) {
+      *err = CCOL_ERR_STR("failed to allocate mempool struct");
+    }
+    return NULL;
+  }
+
+  if (!ccol_populate_mem_mgmt_procs(mp, mmgmt_procs, err)) {
+    _mem_free(mmgmt_procs, mp);
+    return NULL;
+  }
+
   mp->is_preallocated = true;
   mp->objects = buffer;
 
@@ -175,6 +229,9 @@ mempool *mempool_create_from_preallocated_buffer(
 
   if (mp->should_use_locks) {
     if (rw_lock_init(&mp->lock) != 0) {
+      if (err) {
+        *err = CCOL_ERR_STR("failed to init the rw lock");
+      }
       mempool_destroy(mp);
       return NULL;
     }
@@ -216,7 +273,7 @@ void *mempool_alloc_entry(mempool *mp) {
     // Seems like we exhausted our buffers and
     // we are asked to fallback to the dynamic
     // memory allocation mechanisms.
-    void *new_buffer = mem_alloc(mp->ext_elem_size);
+    void *new_buffer = _mem_alloc(mp->m_procs, mp->ext_elem_size);
     if (new_buffer) {
       __internal_entry_header *header = (__internal_entry_header *)new_buffer;
       header->elem_status = elem_is_not_a_pool_member;
@@ -271,7 +328,7 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
       assert(false);
     }
     --mp->active_dynamic_memory_buffer_count;
-    mem_free(header);
+    _mem_free(mp->m_procs, header);
     if (mp->should_use_locks) {
       rw_lock_unlock(&mp->lock);
     }
@@ -411,6 +468,7 @@ struct r_mempool {
   mempool pseudo_pool;
   r_memory_fallback_policy_t fb_policy;
   bool should_use_locks;
+  ccol_memmgmt_procs_t *m_procs;
   uint32_t number_of_mempools;
   uint32_t *reverse_size_lookup_array;
   uint32_t reverse_size_lookup_array_length;
@@ -427,10 +485,10 @@ void _r_mempool_destroy(r_mempool *rmp) {
           mempool_destroy(rmp->mem_pools[i]);
         }
       }
-      mem_free(rmp->mem_pools);
+      _mem_free(rmp->m_procs, rmp->mem_pools);
     }
     if (rmp->reverse_size_lookup_array) {
-      mem_free(rmp->reverse_size_lookup_array);
+      _mem_free(rmp->m_procs, rmp->reverse_size_lookup_array);
     }
 
     if (rmp->fb_policy == fallback_at_last_exhaustion) {
@@ -439,7 +497,13 @@ void _r_mempool_destroy(r_mempool *rmp) {
       }
     }
 
-    mem_free(rmp);
+    if (rmp->m_procs) {
+      void (*free_func)(void *) = rmp->m_procs->free;
+      free_func(rmp->m_procs);
+      free_func(rmp);
+    } else {
+      mem_free(rmp);
+    }
   }
 }
 
@@ -448,19 +512,29 @@ bool assess_r_mempool_create_inputs(r_mempool *rmp,
                                     uint8_t largest_size_power_of_two,
                                     uint8_t smallest_elem_count_power_of_two,
                                     r_memory_fallback_policy_t fb_policy,
-                                    bool will_be_accessed_by_only_one_thread) {
+                                    bool will_be_accessed_by_only_one_thread,
+                                    char **err) {
   if (smallest_size_power_of_two == 0 || largest_size_power_of_two == 0 ||
       smallest_elem_count_power_of_two == 0) {
+    if (err) {
+      *err = CCOL_ERR_STR("zero sizes are not acceptable");
+    }
     return false;
   }
 
   if (largest_size_power_of_two <= smallest_size_power_of_two ||
       (smallest_elem_count_power_of_two <
        (largest_size_power_of_two - smallest_size_power_of_two))) {
+    if (err) {
+      *err = CCOL_ERR_STR("inconsistent sizes are not acceptable");
+    }
     return false;
   }
 
   if (fb_policy < 0 || fb_policy >= __fallback_end_place_holder) {
+    if (err) {
+      *err = CCOL_ERR_STR("unknown fallback policy");
+    }
     return false;
   }
 
@@ -470,6 +544,9 @@ bool assess_r_mempool_create_inputs(r_mempool *rmp,
 
   if (largest_size > max_allowed_largest_size ||
       smallest_size < min_allowed_smallest_size) {
+    if (err) {
+      *err = CCOL_ERR_STR("sizes beyond limits are not acceptable");
+    }
     return false;
   }
 
@@ -499,15 +576,21 @@ bool init_r_mempool_pseudo_pool(r_mempool *rmp) {
   return true;
 }
 
-bool init_r_mempool_internal_pools(r_mempool *rmp) {
+bool init_r_mempool_internal_pools(r_mempool *rmp, char **err) {
   if (!init_r_mempool_pseudo_pool(rmp)) {
+    if (err) {
+      *err = CCOL_ERR_STR("failed to initialize the pseudo_pool");
+    }
     return false;
   }
 
-  rmp->mem_pools =
-      (mempool **)mem_alloc(rmp->number_of_mempools * sizeof(mempool));
+  rmp->mem_pools = (mempool **)_mem_alloc(
+      rmp->m_procs, rmp->number_of_mempools * sizeof(mempool));
   if (!rmp->mem_pools) {
     // The cleanup will be performed by the caller.
+    if (err) {
+      *err = CCOL_ERR_STR("failed to allocate mem_pools array");
+    }
     return false;
   }
   memset(rmp->mem_pools, 0, rmp->number_of_mempools * sizeof(mempool));
@@ -520,7 +603,7 @@ bool init_r_mempool_internal_pools(r_mempool *rmp) {
        esize <= last_size; esize *= 2, ecount /= 2, ++index) {
     rmp->mem_pools[index] = mempool_create(
         ecount, esize, rmp->fb_policy == fallback_at_first_exhaustion,
-        !rmp->should_use_locks);
+        !rmp->should_use_locks, rmp->m_procs, err);
     if (!rmp->mem_pools[index]) {
       // The cleanup will be performed by the caller.
       return false;
@@ -530,11 +613,15 @@ bool init_r_mempool_internal_pools(r_mempool *rmp) {
   return true;
 }
 
-bool init_r_mempool_reverse_size_lookup_array(r_mempool *rmp) {
-  rmp->reverse_size_lookup_array = (uint32_t *)mem_alloc(
-      rmp->largest_size / rmp->smallest_size * sizeof(uint32_t));
+bool init_r_mempool_reverse_size_lookup_array(r_mempool *rmp, char **err) {
+  rmp->reverse_size_lookup_array = (uint32_t *)_mem_alloc(
+      rmp->m_procs, rmp->largest_size / rmp->smallest_size * sizeof(uint32_t));
   if (!rmp->reverse_size_lookup_array) {
     // The cleanup will be performed by the caller.
+    if (err) {
+      *err = CCOL_ERR_STR(
+          "failed to allocate r_mempool reverse size lookup array");
+    }
     return false;
   }
 
@@ -555,27 +642,44 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
                             uint8_t largest_size_power_of_two,
                             uint8_t smallest_elem_count_power_of_two,
                             r_memory_fallback_policy_t fb_policy,
-                            bool will_be_accessed_by_only_one_thread) {
-  r_mempool *rmp = (r_mempool *)mem_calloc(1, sizeof(r_mempool));
+                            bool will_be_accessed_by_only_one_thread,
+                            ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
+  if (err) {
+    *err = NULL;
+  }
+
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
+    return NULL;
+  }
+
+  r_mempool *rmp = (r_mempool *)_mem_calloc(mmgmt_procs, 1, sizeof(r_mempool));
   if (!rmp) {
+    if (err) {
+      *err = CCOL_ERR_STR("failed to allocate r_mempool struct");
+    }
+    return NULL;
+  }
+
+  if (!ccol_populate_mem_mgmt_procs(rmp, mmgmt_procs, err)) {
+    _mem_free(mmgmt_procs, rmp);
     return NULL;
   }
 
   if (!assess_r_mempool_create_inputs(
           rmp, smallest_size_power_of_two, largest_size_power_of_two,
           smallest_elem_count_power_of_two, fb_policy,
-          will_be_accessed_by_only_one_thread)) {
+          will_be_accessed_by_only_one_thread, err)) {
     r_mempool_destroy(rmp);
     return NULL;
   }
   rmp->fb_policy = fb_policy;
 
-  if (!init_r_mempool_internal_pools(rmp)) {
+  if (!init_r_mempool_internal_pools(rmp, err)) {
     r_mempool_destroy(rmp);
     return NULL;
   }
 
-  if (!init_r_mempool_reverse_size_lookup_array(rmp)) {
+  if (!init_r_mempool_reverse_size_lookup_array(rmp, err)) {
     r_mempool_destroy(rmp);
     return NULL;
   }
@@ -583,17 +687,23 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
   return rmp;
 }
 
-bool init_static_r_mempool_internal_pools(r_mempool *rmp,
-                                          void *preallocated_buffer,
-                                          uint32_t preallocated_buffer_size) {
+bool init_preallocated_r_mempool_internal_pools(
+    r_mempool *rmp, void *preallocated_buffer,
+    uint32_t preallocated_buffer_size, char **err) {
   if (!init_r_mempool_pseudo_pool(rmp)) {
+    if (err) {
+      *err = CCOL_ERR_STR("failed to initialize the pseudo_pool");
+    }
     return false;
   }
 
-  rmp->mem_pools =
-      (mempool **)mem_calloc(rmp->number_of_mempools, sizeof(mempool));
+  rmp->mem_pools = (mempool **)_mem_calloc(
+      rmp->m_procs, rmp->number_of_mempools, sizeof(mempool));
   if (!rmp->mem_pools) {
     // The cleanup will be performed by the caller.
+    if (err) {
+      *err = CCOL_ERR_STR("failed to allocate mem_pools array");
+    }
     return false;
   }
 
@@ -612,7 +722,8 @@ bool init_static_r_mempool_internal_pools(r_mempool *rmp,
         ecount * (esize + offsetof(__internal_entry_header, next));
     rmp->mem_pools[index] = mempool_create_from_preallocated_buffer(
         sub_buffer, sub_buffer_size, esize,
-        rmp->fb_policy == fallback_at_first_exhaustion, !rmp->should_use_locks);
+        rmp->fb_policy == fallback_at_first_exhaustion, !rmp->should_use_locks,
+        rmp->m_procs, err);
     if (!rmp->mem_pools[index]) {
       // The cleanup will be performed by the caller.
       return false;
@@ -621,6 +732,9 @@ bool init_static_r_mempool_internal_pools(r_mempool *rmp,
   }
 
   if (cumulative_size != preallocated_buffer_size) {
+    if (err) {
+      *err = CCOL_ERR_STR("buffer sizes differ");
+    }
     return false;
   }
 
@@ -631,27 +745,44 @@ r_mempool *r_mempool_create_from_preallocated_buffer(
     void *buffer, uint32_t buf_size, uint8_t smallest_size_power_of_two,
     uint8_t largest_size_power_of_two, uint8_t smallest_elem_count_power_of_two,
     r_memory_fallback_policy_t fb_policy,
-    bool will_be_accessed_by_only_one_thread) {
-  r_mempool *rmp = (r_mempool *)mem_calloc(1, sizeof(r_mempool));
+    bool will_be_accessed_by_only_one_thread, ccol_memmgmt_procs_t *mmgmt_procs,
+    char **err) {
+  if (err) {
+    *err = NULL;
+  }
+
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
+    return NULL;
+  }
+
+  r_mempool *rmp = (r_mempool *)_mem_calloc(mmgmt_procs, 1, sizeof(r_mempool));
   if (!rmp) {
+    if (err) {
+      *err = CCOL_ERR_STR("failed to allocate r_mempool struct");
+    }
+    return NULL;
+  }
+
+  if (!ccol_populate_mem_mgmt_procs(rmp, mmgmt_procs, err)) {
+    _mem_free(mmgmt_procs, rmp);
     return NULL;
   }
 
   if (!assess_r_mempool_create_inputs(
           rmp, smallest_size_power_of_two, largest_size_power_of_two,
           smallest_elem_count_power_of_two, fb_policy,
-          will_be_accessed_by_only_one_thread)) {
+          will_be_accessed_by_only_one_thread, err)) {
     r_mempool_destroy(rmp);
     return NULL;
   }
   rmp->fb_policy = fb_policy;
 
-  if (!init_static_r_mempool_internal_pools(rmp, buffer, buf_size)) {
+  if (!init_preallocated_r_mempool_internal_pools(rmp, buffer, buf_size, err)) {
     r_mempool_destroy(rmp);
     return NULL;
   }
 
-  if (!init_r_mempool_reverse_size_lookup_array(rmp)) {
+  if (!init_r_mempool_reverse_size_lookup_array(rmp, err)) {
     r_mempool_destroy(rmp);
     return NULL;
   }
@@ -672,7 +803,7 @@ void *mempool_pseudo_alloc_entry(mempool *mp, uint32_t elem_size) {
     rw_lock_wrlock(&mp->lock);
   }
 
-  void *new_buffer = mem_alloc(ext_elem_size);
+  void *new_buffer = _mem_alloc(mp->m_procs, ext_elem_size);
   if (new_buffer) {
     __internal_entry_header *header = (__internal_entry_header *)new_buffer;
     header->elem_status = elem_is_not_a_pool_member;

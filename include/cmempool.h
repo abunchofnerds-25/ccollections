@@ -44,7 +44,8 @@ typedef struct __internal_entry_header {
 
 mempool *mempool_create(uint32_t elem_count, uint32_t elem_size,
                         bool fallback_to_dynamic_memory,
-                        bool will_be_accessed_by_only_one_thread);
+                        bool will_be_accessed_by_only_one_thread,
+                        ccol_memmgmt_procs_t *mmgmt_procs, char **err);
 
 #define DECLARE_PREALLOCATED_MEMPOOL_BUFFER(name, elem_count, elem_size) \
   uint8_t                                                                \
@@ -52,7 +53,8 @@ mempool *mempool_create(uint32_t elem_count, uint32_t elem_size,
 
 mempool *mempool_create_from_preallocated_buffer(
     void *buffer, uint32_t buf_size, uint32_t elem_size,
-    bool fallback_to_dynamic_memory, bool will_be_accessed_by_only_one_thread);
+    bool fallback_to_dynamic_memory, bool will_be_accessed_by_only_one_thread,
+    ccol_memmgmt_procs_t *mmgmt_procs, char **err);
 
 void _mempool_destroy(mempool *mp);
 
@@ -108,7 +110,8 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
                             uint8_t largest_size_power_of_two,
                             uint8_t number_of_smallest_size_elems_power_of_two,
                             r_memory_fallback_policy_t fb_policy,
-                            bool will_be_accessed_by_only_one_thread);
+                            bool will_be_accessed_by_only_one_thread,
+                            ccol_memmgmt_procs_t *mmgmt_procs, char **err);
 
 // The macro CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE calculates
 // the required size for a rmempool. It is not meant to be used
@@ -137,7 +140,8 @@ r_mempool *r_mempool_create_from_preallocated_buffer(
     uint8_t largest_size_power_of_two,
     uint8_t number_of_smallest_size_elems_power_of_two,
     r_memory_fallback_policy_t fb_policy,
-    bool will_be_accessed_by_only_one_thread);
+    bool will_be_accessed_by_only_one_thread, ccol_memmgmt_procs_t *mmgmt_procs,
+    char **err);
 
 void _r_mempool_destroy(r_mempool *rmp);
 

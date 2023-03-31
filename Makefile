@@ -36,7 +36,8 @@ main: main.c $(LIBRARY_NAME)
 	-l$(SHORT_LIBRARY_NAME)
 
 clean:
-	rm -rf $(LIBRARY_NAME) $(OBJECT_DIR) test/tests test/coverage
+	rm -rf $(LIBRARY_NAME) $(OBJECT_DIR) main test/*/tests test/*/coverage \
+	test/*/*.gcno test/*/*.gcda test/*/*.gcov test/*/*.c.info
 
 run-in-gdb:
 	@LD_LIBRARY_PATH=. gdb ./main

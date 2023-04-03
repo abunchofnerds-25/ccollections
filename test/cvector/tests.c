@@ -339,7 +339,7 @@ TEST(cvectors, constructive_macros) {
   }
   REQUIRE_EQ(sum, 0);  // All elements were zeroed
 
-  cvec_destruct(vec);
+  cvec_destroy(vec);
 }
 
 TEST(cvectors, declarative_macros) {
@@ -386,7 +386,7 @@ TEST(cvectors, declarative_macros) {
   }
   REQUIRE_EQ(sum, 0);  // All elements were zeroed
 
-  cvec_destruct(vec);
+  cvec_destroy(vec);
 }
 
 TEST(cvectors, constructive_macros_with_mprocs) {
@@ -436,7 +436,7 @@ TEST(cvectors, constructive_macros_with_mprocs) {
   }
   REQUIRE_EQ(sum, 0);  // All elements were zeroed
 
-  cvec_destruct(vec);
+  cvec_destroy(vec);
 }
 
 TEST(cvectors, declarative_macros_with_mprocs) {
@@ -486,5 +486,5 @@ TEST(cvectors, declarative_macros_with_mprocs) {
   }
   REQUIRE_EQ(sum, 0);  // All elements were zeroed
 
-  cvec_destruct(vec);
+  cvec_destroy(vec);
 }

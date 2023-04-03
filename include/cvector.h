@@ -116,7 +116,7 @@ void cvector_reset(cvec v);
     }                                                                   \
   } while (0)
 
-#define cvec_destruct(v) cvector_destroy(v)
+#define cvec_destroy(v) cvector_destroy(v)
 
 #define cvec_push(v, new_elem)                                      \
   do {                                                              \

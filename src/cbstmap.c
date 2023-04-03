@@ -145,10 +145,7 @@ cmap_iterator* cbmap_begin_iter(cbmap cbm, char** err) {
   }
 
   // Initialize the stack of nodes within the real iterator.
-  cvec vn = real_iter->nodes;
-  cvec_enable_local_macros(vn, bmap_node*);
-  cvec_init_with_mprocs(vn, cbm->m_procs);
-  real_iter->nodes = vn;
+  cvec_init_with_mprocs(real_iter->nodes, cbm->m_procs);
 
   real_iter->parent_map = cbm;
   push_all_lefts_into_iter_stack(real_iter, cbm->root);
@@ -168,7 +165,7 @@ cmap_iterator* cbmap_iter_next(cmap_iterator* iter) {
 void __cbmap_iterator_destroy(cmap_iterator* iter) {
   if (iter) {
     cbmap_cmap_iterator* real_iter = cmapIter2CbmapIter(iter);
-    cvec_destruct(real_iter->nodes);
+    cvec_destroy(real_iter->nodes);
     _mem_free(real_iter->parent_map->m_procs, real_iter);
   }
 }
@@ -285,8 +282,8 @@ ccol_retval_t cbmap_reset(cbmap cbm) {
   return ccol_success;
 }
 
-int compare_keys(bool keys_are_signed, const cmap_pair* key_pair1,
-                 const cmap_pair* key_pair2) {
+static inline int compare_keys(bool keys_are_signed, const cmap_pair* key_pair1,
+                               const cmap_pair* key_pair2) {
   if (key_pair1->size == key_pair2->size) {
     if (!keys_are_signed) {
       return memcmp(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
@@ -400,10 +397,10 @@ void cbmap_dump_elements(uint32_t extra_depth, cbmap cbm) {
     for (int i = 0; i < size; ++i) {
       cvec_push(v1, cvec_at(v2, i));
     }
-    cvec_destruct(v2);
+    cvec_destroy(v2);
   }
 
-  cvec_destruct(v1);
+  cvec_destroy(v1);
 
   printf("DUMP - ENDS\n");
 }
@@ -526,39 +523,42 @@ bmap_node* cbmap_detach_extreme_r(bmap_node* parent, bool max,
   return parent;
 }
 
-bmap_node* cbmap_insert_elem_r(cbmap cbm, bmap_node* parent,
-                               const cmap_pair* key_pair,
-                               const cmap_pair* val_pair,
-                               ccol_retval_t* result) {
+typedef struct cbmap_insert_elem_r_arg {
+  cbmap cbm;
+  const cmap_pair* key_pair;
+  const cmap_pair* val_pair;
+  ccol_retval_t result;
+} cbmap_insert_elem_r_arg;
+
+bmap_node* cbmap_insert_elem_r(bmap_node* parent,
+                               cbmap_insert_elem_r_arg* args) {
   if (!parent) {
-    parent = create_new_node(cbm, key_pair, val_pair);
+    parent = create_new_node(args->cbm, args->key_pair, args->val_pair);
     if (!parent) {
       return parent;
     }
 
-    *result = ccol_success;
+    args->result = ccol_success;
     return parent;
   }
 
-  int comparison =
-      compare_keys(cbm->keys_are_signed, key_pair, &parent->key_pair);
+  register int comparison = compare_keys(args->cbm->keys_are_signed,
+                                         args->key_pair, &parent->key_pair);
   if (comparison == 0) {
     // This entry exists
-    update_bmap_node_value(cbm, parent, val_pair, result);
+    update_bmap_node_value(args->cbm, parent, args->val_pair, &args->result);
     return parent;
   }
 
   if (comparison > 0) {
     // We should go right!
-    parent->right =
-        cbmap_insert_elem_r(cbm, parent->right, key_pair, val_pair, result);
+    parent->right = cbmap_insert_elem_r(parent->right, args);
   } else {
     // We should go left!
-    parent->left =
-        cbmap_insert_elem_r(cbm, parent->left, key_pair, val_pair, result);
+    parent->left = cbmap_insert_elem_r(parent->left, args);
   }
 
-  if (*result == ccol_success) {
+  if (args->result == ccol_success) {
     parent = check_node_balance(parent);
   }
 
@@ -571,16 +571,20 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
     assert(false);
   }
 
-  ccol_retval_t result = ccol_not_enough_memory;
-  cbm->root = cbmap_insert_elem_r(cbm, cbm->root, key_pair, val_pair, &result);
-  if (result == ccol_success) {
+  cbmap_insert_elem_r_arg args = {.cbm = cbm,
+                                  .key_pair = key_pair,
+                                  .val_pair = val_pair,
+                                  .result = ccol_not_enough_memory};
+
+  cbm->root = cbmap_insert_elem_r(cbm->root, &args);
+  if (args.result == ccol_success) {
     // That was an insertion
     ++(cbm->elem_count);
-  } else if (result == ccol_key_already_present) {
+  } else if (args.result == ccol_key_already_present) {
     // That was an update
-    result = ccol_success;
+    args.result = ccol_success;
   }
-  return result;
+  return args.result;
 }
 
 ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair* key_pair,
@@ -591,7 +595,7 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair* key_pair,
 
   bmap_node* tracker = cbm->root;
   while (tracker) {
-    int comparison =
+    register int comparison =
         compare_keys(cbm->keys_are_signed, key_pair, &tracker->key_pair);
     if (comparison == 0) {
       if (target_buf_size != tracker->val_pair.size) {
@@ -619,7 +623,7 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair* key_pair,
 
   bmap_node* tracker = cbm->root;
   while (tracker) {
-    int comparison =
+    register int comparison =
         compare_keys(cbm->keys_are_signed, key_pair, &tracker->key_pair);
     if (comparison == 0) {
       *val_pair = &tracker->val_pair;
@@ -667,32 +671,37 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
   return parent;
 }
 
-bmap_node* cbmap_delete_elem_r(cbmap cbm, bmap_node* parent,
-                               const cmap_pair* key_pair,
-                               ccol_retval_t* result) {
+typedef struct cbmap_delete_elem_r_args {
+  cbmap cbm;
+  const cmap_pair* key_pair;
+  ccol_retval_t result;
+} cbmap_delete_elem_r_args;
+
+bmap_node* cbmap_delete_elem_r(bmap_node* parent,
+                               cbmap_delete_elem_r_args* args) {
   if (!parent) {
     // The key is not present within the map
     return parent;
   }
 
-  int comparison =
-      compare_keys(cbm->keys_are_signed, key_pair, &parent->key_pair);
+  register int comparison = compare_keys(args->cbm->keys_are_signed,
+                                         args->key_pair, &parent->key_pair);
   if (comparison == 0) {
     // Found the entry!
-    parent = perform_element_removal(cbm, parent);
-    *result = ccol_success;
+    parent = perform_element_removal(args->cbm, parent);
+    args->result = ccol_success;
     return parent;
   }
 
   if (comparison > 0) {
     // We should go right!
-    parent->right = cbmap_delete_elem_r(cbm, parent->right, key_pair, result);
+    parent->right = cbmap_delete_elem_r(parent->right, args);
   } else {
     // We should go left!
-    parent->left = cbmap_delete_elem_r(cbm, parent->left, key_pair, result);
+    parent->left = cbmap_delete_elem_r(parent->left, args);
   }
 
-  if (*result == ccol_success) {
+  if (args->result == ccol_success) {
     parent = check_node_balance(parent);
   }
 
@@ -704,11 +713,13 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair* key_pair) {
     assert(false);
   }
 
-  ccol_retval_t result = ccol_key_not_found;
-  cbm->root = cbmap_delete_elem_r(cbm, cbm->root, key_pair, &result);
-  if (result == ccol_success) {
+  cbmap_delete_elem_r_args args = {
+      .cbm = cbm, .key_pair = key_pair, .result = ccol_key_not_found};
+
+  cbm->root = cbmap_delete_elem_r(cbm->root, &args);
+  if (args.result == ccol_success) {
     --(cbm->elem_count);
   }
 
-  return result;
+  return args.result;
 }

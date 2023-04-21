@@ -127,7 +127,7 @@ cvec cvector_create_with_mprocs(uint32_t elem_size,
 
 bool scale_the_cvector_size_up(cvec v) {
   if (!v) {
-    return false;
+    assert(false);
   }
 
   void* orig = v->data_ptr;
@@ -144,7 +144,7 @@ bool scale_the_cvector_size_up(cvec v) {
 
 void scale_the_cvector_size_down(cvec v) {
   if (!v) {
-    return;
+    assert(false);
   }
 
   if (v->capacity == minimum_capacity) {
@@ -177,7 +177,11 @@ static inline void assign(void* dest, const void* src, uint32_t size) {
 }
 
 ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
-  if (!v || !new_elem) {
+  if (!v) {
+    assert(false);
+  }
+
+  if (!new_elem) {
     return ccol_invalid_args;
   }
 
@@ -205,7 +209,11 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
 }
 
 ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
-  if (!v || !target_elem) {
+  if (!v) {
+    assert(false);
+  }
+
+  if (!target_elem) {
     return ccol_invalid_args;
   }
 
@@ -229,7 +237,7 @@ ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
 
 void* cvector_at(cvec v, uint32_t index) {
   if (!v) {
-    return NULL;
+    assert(false);
   }
 
   if (v->elem_count > 0 && index < v->elem_count) {
@@ -241,7 +249,7 @@ void* cvector_at(cvec v, uint32_t index) {
 
 uint32_t cvector_elem_count(cvec v) {
   if (!v) {
-    return 0;
+    assert(false);
   }
 
   return v->elem_count;
@@ -249,7 +257,7 @@ uint32_t cvector_elem_count(cvec v) {
 
 void cvector_reset(cvec v) {
   if (!v) {
-    return;
+    assert(false);
   }
 
   void* orig = v->data_ptr;
@@ -267,7 +275,7 @@ void cvector_reset(cvec v) {
 #ifdef RUNNING_UNIT_TESTS
 uint32_t cvector_get_capacity(cvec v) {
   if (!v) {
-    return 0;
+    assert(false);
   }
 
   return v->capacity;

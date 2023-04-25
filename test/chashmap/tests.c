@@ -663,7 +663,7 @@ TEST(chash_maps, declarative_macros) {
 
   chmap_remove(hm, key);
 
-  // chmap_destroy(hm);
+  chmap_destroy(hm);
 }
 
 TEST(chash_maps, constructive_macros) {
@@ -681,7 +681,7 @@ TEST(chash_maps, constructive_macros) {
 
   chmap_remove(hm, key);
 
-  // chmap_destroy(hm);
+  chmap_destroy(hm);
 }
 
 TEST(chash_maps, iteration) {

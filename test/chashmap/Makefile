@@ -16,7 +16,7 @@ test:
 	./tests
 
 memtest:
-	valgrind ./tests
+	valgrind --leak-check=full ./tests
 
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \

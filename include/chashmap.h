@@ -169,7 +169,7 @@ void __chmap_destroy(chmap chm);
 #define chmap_declare(hm_name, key_t, val_t)                                 \
   typeof(key_t)* hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
-  chmap hm_name _ccol_destructor(___chmap_destroy)
+  chmap hm_name /* _ccol_destructor(___chmap_destroy) */
 
 #define chmap_init(hm_name)                                                   \
   do {                                                                        \
@@ -190,7 +190,7 @@ static inline void ___chmap_destroy(chmap* chm) {
 #define chmap_construct(hm_name, key_t, val_t)                                \
   typeof(key_t)* hm_name##__chm_key_type_var __attribute__((unused)) = NULL;  \
   typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL;  \
-  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                    \
+  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;              \
   do {                                                                        \
     char* err = NULL;                                                         \
     hm_name = chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, NULL, &err); \

@@ -124,6 +124,13 @@ void __cbmap_destroy(cbmap cbm);
     cbm = NULL;            \
   } while (0)
 
+static inline void ___cbmap_destroy(cbmap* cbm) {
+  if (*cbm) {
+    __cbmap_destroy(*cbm);
+    *cbm = NULL;
+  }
+}
+
 #define cbmap_enable_local_macros(hm_name, key_t, val_t)                     \
   typeof(key_t)* hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL
@@ -131,7 +138,7 @@ void __cbmap_destroy(cbmap cbm);
 #define cbmap_declare(hm_name, key_t, val_t)                                 \
   typeof(key_t)* hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */
 
 #define cbmap_init(hm_name)                                        \
   do {                                                             \
@@ -152,7 +159,7 @@ void __cbmap_destroy(cbmap cbm);
 #define cbmap_construct(hm_name, key_t, val_t)                               \
   typeof(key_t)* hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name = NULL;                                                      \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
   do {                                                                       \
     char* err = NULL;                                                        \
     bool keys_are_signed = _Generic((hm_name##__cbm_key_type_var),           \

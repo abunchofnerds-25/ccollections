@@ -1,22 +1,22 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS
-SRC_FILE_PREFIX = cmempool
+SRC_FILE_PREFIX = cvector
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
-LFLAGS = -lpthread
+LFLAGS = -lm -lpthread
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
-test:
+test: build
 	./tests
 
-memtest:
-	valgrind ./tests
+memtest: build
+	valgrind --leak-check=full -s --show-leak-kinds=all ./tests
 
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
@@ -30,6 +30,6 @@ generate_coverage_report:
 all: build test memtest generate_coverage_report
 
 clean:
-	rm -rf tests coverage *.gcno *.gcda *.gcov *.c.info
+	rm -rf tests coverage *.gcda *.gcdo *.gcno *.gcov
 
 default: build

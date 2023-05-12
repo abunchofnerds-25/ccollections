@@ -168,34 +168,31 @@ void __circular_queue_destroy(circular_queue* cq) {
 
 // This function should always be called while holding the mutex.
 // Please notice that it's not exposed to the caller via the header file.
-int _sendto_cq(circular_queue* cq, void** msg, uint32_t msg_size) {
-  cq->msg_array[cq->write_index].data = *msg;
-  if (*msg == NULL) {
-    msg_size = 0;
+void _sendto_cq(circular_queue* cq, c_message_t* msg) {
+  cq->msg_array[cq->write_index].data = msg->data;
+  if (msg->data == NULL) {
+    msg->size = 0;
   }
-  cq->msg_array[cq->write_index++].size = msg_size;
-  *msg = NULL;  // The sender loses the ownership of the msg pointer.
+  cq->msg_array[cq->write_index++].size = msg->size;
+  msg->data = NULL;  // The sender loses the ownership of the msg pointer.
   if (cq->write_index == cq->max_size) {
     cq->write_index = 0;
   }
   ++cq->msg_count;
 
   cond_var_signal(cq->read_cond);
-
-  return msg_size;
 }
 
-ccol_retval_t verify_circq_send_zc_params(circular_queue* cq, void** msg,
-                                          uint32_t msg_size) {
-  if (!cq || !msg || (msg_size == 0 && *msg != NULL)) {
-    return ccol_invalid_args;
+bool verify_circq_send_zc_params(circular_queue* cq, c_message_t* msg) {
+  if (!cq || !msg || (msg->size == 0 && msg->data != NULL)) {
+    return false;
   }
 
-  return ccol_success_threshold;
+  return true;
 }
 
-ccol_retval_t circq_send_zc(circular_queue* cq, void** msg, uint32_t msg_size) {
-  if (verify_circq_send_zc_params(cq, msg, msg_size) != 0) {
+ccol_retval_t circq_send_zc(circular_queue* cq, c_message_t* msg) {
+  if (!verify_circq_send_zc_params(cq, msg)) {
     return ccol_invalid_args;
   }
 
@@ -210,16 +207,15 @@ ccol_retval_t circq_send_zc(circular_queue* cq, void** msg, uint32_t msg_size) {
     cond_var_wait(cq->write_cond, cq->mutex);
   }
 
-  msg_size = _sendto_cq(cq, msg, msg_size);
+  _sendto_cq(cq, msg);
 
   mutex_unlock(cq->mutex);
 
-  return msg_size;
+  return ccol_success;
 }
 
-ccol_retval_t circq_try_send_zc(circular_queue* cq, void** msg,
-                                uint32_t msg_size) {
-  if (verify_circq_send_zc_params(cq, msg, msg_size) != 0) {
+ccol_retval_t circq_try_send_zc(circular_queue* cq, c_message_t* msg) {
+  if (!verify_circq_send_zc_params(cq, msg)) {
     return ccol_invalid_args;
   }
 
@@ -235,7 +231,8 @@ ccol_retval_t circq_try_send_zc(circular_queue* cq, void** msg,
 
   if (cq->msg_count < cq->max_size) {
     // We have space for the new message, proceed.
-    result = _sendto_cq(cq, msg, msg_size);
+    _sendto_cq(cq, msg);
+    result = ccol_success;
   }
 
   mutex_unlock(cq->mutex);
@@ -243,10 +240,9 @@ ccol_retval_t circq_try_send_zc(circular_queue* cq, void** msg,
   return result;
 }
 
-ccol_retval_t circq_timed_send_zc(circular_queue* cq, void** msg,
-                                  uint32_t msg_size,
+ccol_retval_t circq_timed_send_zc(circular_queue* cq, c_message_t* msg,
                                   struct timespec* timeout_duration) {
-  if (verify_circq_send_zc_params(cq, msg, msg_size) != 0) {
+  if (!verify_circq_send_zc_params(cq, msg)) {
     return ccol_invalid_args;
   }
 
@@ -275,18 +271,18 @@ ccol_retval_t circq_timed_send_zc(circular_queue* cq, void** msg,
     }
   }
 
-  msg_size = _sendto_cq(cq, msg, msg_size);
+  _sendto_cq(cq, msg);
 
   mutex_unlock(cq->mutex);
 
-  return msg_size;
+  return ccol_success;
 }
 
 // This function should always be called while holding the mutex.
 // Please notice that it's not exposed to the caller via the header file.
-ccol_retval_t _recvfrom_cq(circular_queue* cq, void** target_buf) {
-  ccol_retval_t msg_size = cq->msg_array[cq->read_index].size;
-  *target_buf = cq->msg_array[cq->read_index++].data;
+void _recvfrom_cq(circular_queue* cq, c_message_t* target_buf) {
+  target_buf->data = cq->msg_array[cq->read_index].data;
+  target_buf->size = cq->msg_array[cq->read_index++].size;
   if (cq->read_index == cq->max_size) {
     cq->read_index = 0;
   }
@@ -294,21 +290,18 @@ ccol_retval_t _recvfrom_cq(circular_queue* cq, void** target_buf) {
   --cq->msg_count;
 
   cond_var_signal(cq->write_cond);
-
-  return msg_size;
 }
 
-ccol_retval_t verify_recvfrom_cq_zc_params(circular_queue* cq,
-                                           void** target_buf) {
+bool verify_recvfrom_cq_zc_params(circular_queue* cq, c_message_t* target_buf) {
   if (!cq || !target_buf) {
-    return ccol_invalid_args;
+    return false;
   }
 
-  return ccol_success_threshold;
+  return true;
 }
 
-ccol_retval_t circq_recv_zc(circular_queue* cq, void** target_buf) {
-  if (verify_recvfrom_cq_zc_params(cq, target_buf) != 0) {
+ccol_retval_t circq_recv_zc(circular_queue* cq, c_message_t* target_buf) {
+  if (!verify_recvfrom_cq_zc_params(cq, target_buf)) {
     return ccol_invalid_args;
   }
 
@@ -318,15 +311,15 @@ ccol_retval_t circq_recv_zc(circular_queue* cq, void** target_buf) {
     cond_var_wait(cq->read_cond, cq->mutex);
   }
 
-  ccol_retval_t msg_size = _recvfrom_cq(cq, target_buf);
+  _recvfrom_cq(cq, target_buf);
 
   mutex_unlock(cq->mutex);
 
-  return msg_size;
+  return ccol_success;
 }
 
-ccol_retval_t circq_try_recv_zc(circular_queue* cq, void** target_buf) {
-  if (verify_recvfrom_cq_zc_params(cq, target_buf) != 0) {
+ccol_retval_t circq_try_recv_zc(circular_queue* cq, c_message_t* target_buf) {
+  if (!verify_recvfrom_cq_zc_params(cq, target_buf)) {
     return ccol_invalid_args;
   }
 
@@ -335,7 +328,8 @@ ccol_retval_t circq_try_recv_zc(circular_queue* cq, void** target_buf) {
   mutex_lock(cq->mutex);
 
   if (cq->msg_count > 0) {
-    result = _recvfrom_cq(cq, target_buf);
+    result = ccol_success;
+    _recvfrom_cq(cq, target_buf);
   }
 
   mutex_unlock(cq->mutex);
@@ -343,9 +337,9 @@ ccol_retval_t circq_try_recv_zc(circular_queue* cq, void** target_buf) {
   return result;
 }
 
-ccol_retval_t circq_timed_recv_zc(circular_queue* cq, void** target_buf,
+ccol_retval_t circq_timed_recv_zc(circular_queue* cq, c_message_t* target_buf,
                                   struct timespec* timeout) {
-  if (verify_recvfrom_cq_zc_params(cq, target_buf) != 0) {
+  if (!verify_recvfrom_cq_zc_params(cq, target_buf)) {
     return ccol_invalid_args;
   }
 
@@ -369,11 +363,11 @@ ccol_retval_t circq_timed_recv_zc(circular_queue* cq, void** target_buf,
     }
   }
 
-  ccol_retval_t msg_size = _recvfrom_cq(cq, target_buf);
+  _recvfrom_cq(cq, target_buf);
 
   mutex_unlock(cq->mutex);
 
-  return msg_size;
+  return ccol_success;
 }
 
 ccol_retval_t circq_disable_sending(circular_queue* cq) {
@@ -381,7 +375,7 @@ ccol_retval_t circq_disable_sending(circular_queue* cq) {
     mutex_lock(cq->mutex);
     cq->writing_disabled = true;
     mutex_unlock(cq->mutex);
-    return ccol_success_threshold;
+    return ccol_success;
   }
   return ccol_invalid_args;
 }
@@ -391,13 +385,13 @@ ccol_retval_t circq_enable_sending(circular_queue* cq) {
     mutex_lock(cq->mutex);
     cq->writing_disabled = false;
     mutex_unlock(cq->mutex);
-    return ccol_success_threshold;
+    return ccol_success;
   }
   return ccol_invalid_args;
 }
 
-int circq_msg_count(circular_queue* cq) {
-  int result = -1;
+uint32_t circq_msg_count(circular_queue* cq) {
+  uint32_t result = -1;
 
   if (cq) {
     mutex_lock(cq->mutex);
@@ -427,20 +421,19 @@ struct dynamic_queue {
   bool writing_disabled;
 };
 
-ccol_retval_t append_msg_to_dq_tail(dynamic_queue* dq, void** data,
-                                    uint32_t msg_size) {
+ccol_retval_t append_msg_to_dq_tail(dynamic_queue* dq, c_message_t* msg) {
   dllist_node* new_elem = (dllist_node*)mem_alloc(sizeof(dllist_node));
   if (!new_elem) {
     return ccol_not_enough_memory;
   }
 
-  if (*data == NULL) {
-    msg_size = 0;
+  if (msg->data == NULL) {
+    msg->size = 0;
   }
 
-  new_elem->msg.data = *data;
-  *data = NULL;
-  new_elem->msg.size = msg_size;
+  new_elem->msg.data = msg->data;
+  msg->data = NULL;
+  new_elem->msg.size = msg->size;
   new_elem->next = NULL;
 
   if (!dq->head) {
@@ -459,10 +452,11 @@ ccol_retval_t append_msg_to_dq_tail(dynamic_queue* dq, void** data,
     dq->tail = new_elem;
   }
 
-  return msg_size;
+  return ccol_success;
 }
 
-ccol_retval_t remove_msg_from_dq_head(dynamic_queue* dq, void** data_buf_ptr) {
+ccol_retval_t remove_msg_from_dq_head(dynamic_queue* dq,
+                                      c_message_t* target_buf) {
   if (!dq->head) {
 #ifdef RUNNING_UNIT_TESTS
     assert(!dq->tail);
@@ -477,8 +471,8 @@ ccol_retval_t remove_msg_from_dq_head(dynamic_queue* dq, void** data_buf_ptr) {
 
   dllist_node* node_to_be_freed = dq->head;
 
-  *data_buf_ptr = dq->head->msg.data;
-  int msg_size = dq->head->msg.size;
+  target_buf->data = dq->head->msg.data;
+  target_buf->size = dq->head->msg.size;
 
   dq->head = dq->head->next;
   if (dq->head) {
@@ -489,8 +483,7 @@ ccol_retval_t remove_msg_from_dq_head(dynamic_queue* dq, void** data_buf_ptr) {
   }
 
   mem_free(node_to_be_freed);
-
-  return msg_size;
+  return ccol_success;
 }
 
 void destroy_dq_dllist(dynamic_queue* dq) {
@@ -535,10 +528,10 @@ void __dynamic_queue_destroy(dynamic_queue* dq) {
   }
 }
 
-ccol_retval_t _sendto_dq(dynamic_queue* dq, void** msg, uint32_t msg_size) {
-  ccol_retval_t retval = append_msg_to_dq_tail(dq, msg, msg_size);
+ccol_retval_t _sendto_dq(dynamic_queue* dq, c_message_t* msg) {
+  ccol_retval_t retval = append_msg_to_dq_tail(dq, msg);
 
-  if (retval != ccol_not_enough_memory) {
+  if (retval == ccol_success) {
     ++dq->msg_count;
     cond_var_signal(dq->read_cond);
   }
@@ -546,17 +539,16 @@ ccol_retval_t _sendto_dq(dynamic_queue* dq, void** msg, uint32_t msg_size) {
   return retval;
 }
 
-int verify_dynmq_send_zc_params(dynamic_queue* dq, void** msg,
-                                uint32_t msg_size) {
-  if (!dq || !msg || (msg_size == 0 && *msg != NULL)) {
-    return ccol_invalid_args;
+bool verify_dynmq_send_zc_params(dynamic_queue* dq, c_message_t* msg) {
+  if (!dq || !msg || (msg->size == 0 && msg->data != NULL)) {
+    return false;
   }
 
-  return ccol_success_threshold;
+  return true;
 }
 
-ccol_retval_t dynmq_send_zc(dynamic_queue* dq, void** msg, uint32_t msg_size) {
-  if (verify_dynmq_send_zc_params(dq, msg, msg_size) != 0) {
+ccol_retval_t dynmq_send_zc(dynamic_queue* dq, c_message_t* msg) {
+  if (!verify_dynmq_send_zc_params(dq, msg)) {
     return ccol_invalid_args;
   }
 
@@ -567,34 +559,33 @@ ccol_retval_t dynmq_send_zc(dynamic_queue* dq, void** msg, uint32_t msg_size) {
     return ccol_not_permitted;
   }
 
-  msg_size = _sendto_dq(dq, msg, msg_size);
+  _sendto_dq(dq, msg);
 
   mutex_unlock(dq->mutex);
 
-  return msg_size;
+  return ccol_success;
 }
 
-ccol_retval_t _recvfrom_dq(dynamic_queue* dq, void** target_buf) {
+ccol_retval_t _recvfrom_dq(dynamic_queue* dq, c_message_t* target_buf) {
   ccol_retval_t retval = remove_msg_from_dq_head(dq, target_buf);
 
-  if (retval != ccol_container_empty) {
+  if (retval == ccol_success) {
     --dq->msg_count;
   }
 
   return retval;
 }
 
-ccol_retval_t verify_recvfrom_dq_zc_params(dynamic_queue* dq,
-                                           void** target_buf) {
+bool verify_recvfrom_dq_zc_params(dynamic_queue* dq, c_message_t* target_buf) {
   if (!dq || !target_buf) {
-    return ccol_invalid_args;
+    return false;
   }
 
-  return ccol_success_threshold;
+  return true;
 }
 
-ccol_retval_t dynmq_recv_zc(dynamic_queue* dq, void** target_buf) {
-  if (verify_recvfrom_dq_zc_params(dq, target_buf) != 0) {
+ccol_retval_t dynmq_recv_zc(dynamic_queue* dq, c_message_t* target_buf) {
+  if (!verify_recvfrom_dq_zc_params(dq, target_buf)) {
     return ccol_invalid_args;
   }
 
@@ -604,15 +595,15 @@ ccol_retval_t dynmq_recv_zc(dynamic_queue* dq, void** target_buf) {
     cond_var_wait(dq->read_cond, dq->mutex);
   }
 
-  ccol_retval_t msg_size = _recvfrom_dq(dq, target_buf);
+  ccol_retval_t result = _recvfrom_dq(dq, target_buf);
 
   mutex_unlock(dq->mutex);
 
-  return msg_size;
+  return result;
 }
 
-ccol_retval_t dynmq_try_recv_zc(dynamic_queue* dq, void** target_buf) {
-  if (verify_recvfrom_dq_zc_params(dq, target_buf) != 0) {
+ccol_retval_t dynmq_try_recv_zc(dynamic_queue* dq, c_message_t* target_buf) {
+  if (!verify_recvfrom_dq_zc_params(dq, target_buf)) {
     return ccol_invalid_args;
   }
 
@@ -629,9 +620,9 @@ ccol_retval_t dynmq_try_recv_zc(dynamic_queue* dq, void** target_buf) {
   return result;
 }
 
-ccol_retval_t dynmq_timed_recv_zc(dynamic_queue* dq, void** target_buf,
+ccol_retval_t dynmq_timed_recv_zc(dynamic_queue* dq, c_message_t* target_buf,
                                   struct timespec* timeout) {
-  if (verify_recvfrom_dq_zc_params(dq, target_buf) != 0) {
+  if (!verify_recvfrom_dq_zc_params(dq, target_buf)) {
     return ccol_invalid_args;
   }
 
@@ -655,11 +646,11 @@ ccol_retval_t dynmq_timed_recv_zc(dynamic_queue* dq, void** target_buf,
     }
   }
 
-  ccol_retval_t msg_size = _recvfrom_dq(dq, target_buf);
+  ccol_retval_t result = _recvfrom_dq(dq, target_buf);
 
   mutex_unlock(dq->mutex);
 
-  return msg_size;
+  return result;
 }
 
 ccol_retval_t dynmq_disable_sending(dynamic_queue* dq) {
@@ -667,7 +658,7 @@ ccol_retval_t dynmq_disable_sending(dynamic_queue* dq) {
     mutex_lock(dq->mutex);
     dq->writing_disabled = true;
     mutex_unlock(dq->mutex);
-    return ccol_success_threshold;
+    return ccol_success;
   }
 
   return ccol_invalid_args;
@@ -678,7 +669,7 @@ ccol_retval_t dynmq_enable_sending(dynamic_queue* dq) {
     mutex_lock(dq->mutex);
     dq->writing_disabled = false;
     mutex_unlock(dq->mutex);
-    return ccol_success_threshold;
+    return ccol_success;
   }
 
   return ccol_invalid_args;
@@ -742,44 +733,44 @@ void __channel_destroy(channel* ch) {
   }
 }
 
-ccol_retval_t chan_send_zc(channel* ch, void** msg, uint32_t msg_size) {
+ccol_retval_t chan_send_zc(channel* ch, c_message_t* msg) {
   if (!ch) {
     return ccol_invalid_args;
   }
 
   if (get_thread_id() == ch->owner_tid) {
-    return circq_send_zc(ch->owner_to_workers_cq, msg, msg_size);
+    return circq_send_zc(ch->owner_to_workers_cq, msg);
   }
 
-  return circq_send_zc(ch->workers_to_owner_cq, msg, msg_size);
+  return circq_send_zc(ch->workers_to_owner_cq, msg);
 }
 
-ccol_retval_t chan_try_send_zc(channel* ch, void** msg, uint32_t msg_size) {
+ccol_retval_t chan_try_send_zc(channel* ch, c_message_t* msg) {
   if (!ch) {
     return ccol_invalid_args;
   }
 
   if (get_thread_id() == ch->owner_tid) {
-    return circq_try_send_zc(ch->owner_to_workers_cq, msg, msg_size);
+    return circq_try_send_zc(ch->owner_to_workers_cq, msg);
   }
 
-  return circq_try_send_zc(ch->workers_to_owner_cq, msg, msg_size);
+  return circq_try_send_zc(ch->workers_to_owner_cq, msg);
 }
 
-ccol_retval_t chan_timed_send_zc(channel* ch, void** msg, uint32_t msg_size,
+ccol_retval_t chan_timed_send_zc(channel* ch, c_message_t* msg,
                                  struct timespec* timeout) {
   if (!ch) {
     return ccol_invalid_args;
   }
 
   if (get_thread_id() == ch->owner_tid) {
-    return circq_timed_send_zc(ch->owner_to_workers_cq, msg, msg_size, timeout);
+    return circq_timed_send_zc(ch->owner_to_workers_cq, msg, timeout);
   }
 
-  return circq_timed_send_zc(ch->workers_to_owner_cq, msg, msg_size, timeout);
+  return circq_timed_send_zc(ch->workers_to_owner_cq, msg, timeout);
 }
 
-ccol_retval_t chan_recv_zc(channel* ch, void** target_buf) {
+ccol_retval_t chan_recv_zc(channel* ch, c_message_t* target_buf) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -791,7 +782,7 @@ ccol_retval_t chan_recv_zc(channel* ch, void** target_buf) {
   return circq_recv_zc(ch->owner_to_workers_cq, target_buf);
 }
 
-ccol_retval_t chan_try_recv_zc(channel* ch, void** target_buf) {
+ccol_retval_t chan_try_recv_zc(channel* ch, c_message_t* target_buf) {
   if (!ch) {
     return ccol_invalid_args;
   }
@@ -803,7 +794,7 @@ ccol_retval_t chan_try_recv_zc(channel* ch, void** target_buf) {
   return circq_try_recv_zc(ch->owner_to_workers_cq, target_buf);
 }
 
-ccol_retval_t chan_timed_recv_zc(channel* ch, void** target_buf,
+ccol_retval_t chan_timed_recv_zc(channel* ch, c_message_t* target_buf,
                                  struct timespec* timeout) {
   if (!ch) {
     return ccol_invalid_args;

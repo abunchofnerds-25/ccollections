@@ -87,7 +87,7 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err);
     char* err;                                            \
     cmap_iterator* iter = chashmap_begin_iter(chm, &err); \
     if (err != NULL) {                                    \
-      assert(false);                                      \
+      fatal_err("failed to create iterator: %s", err);    \
     }                                                     \
     iter;                                                 \
   })

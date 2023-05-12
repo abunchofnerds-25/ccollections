@@ -73,7 +73,7 @@ void cvector_reset(cvec v);
     v##__cvec_type_var = NULL;                                 \
     v = cvector_create(sizeof(*v##__cvec_type_var), &err_str); \
     if (!v) {                                                  \
-      assert(!err_str);                                        \
+      fatal_err("cvector_create failed: %s", err_str);         \
     }                                                          \
   } while (0)
 
@@ -85,7 +85,7 @@ void cvector_reset(cvec v);
     v = cvector_create_with_mprocs(sizeof(*v##__cvec_type_var), mprocs, \
                                    &err_str);                           \
     if (!v) {                                                           \
-      assert(!err_str);                                                 \
+      fatal_err("cvector_create_with_mprocs failed: %s", err_str);      \
     }                                                                   \
   } while (0)
 
@@ -98,7 +98,7 @@ void cvector_reset(cvec v);
     char* err_str = NULL;                                      \
     v = cvector_create(sizeof(*v##__cvec_type_var), &err_str); \
     if (!v) {                                                  \
-      assert(!err_str);                                        \
+      fatal_err("cvector_create failed: %s", err_str);         \
     }                                                          \
   } while (0)
 
@@ -112,7 +112,7 @@ void cvector_reset(cvec v);
     v = cvector_create_with_mprocs(sizeof(*v##__cvec_type_var), mprocs, \
                                    &err_str);                           \
     if (!v) {                                                           \
-      assert(!err_str);                                                 \
+      fatal_err("cvector_create_with_mprocs failed: %s", err_str);      \
     }                                                                   \
   } while (0)
 
@@ -122,7 +122,7 @@ void cvector_reset(cvec v);
   do {                                                              \
     ccol_retval_t r = cvector_push_back(v, (const void*)&new_elem); \
     if (r != ccol_success) {                                        \
-      assert(r == ccol_success);                                    \
+      fatal_err("cvector_push_back failed: %d", r);                 \
     }                                                               \
   } while (0)
 
@@ -132,18 +132,18 @@ void cvector_reset(cvec v);
   do {                                                                     \
     ccol_retval_t r = cvector_push_back(v, &(typeof(new_elem)){new_elem}); \
     if (r != ccol_success) {                                               \
-      assert(r == ccol_success);                                           \
+      fatal_err("cvector_push_back failed: %d", r);                        \
     }                                                                      \
   } while (0)
 
-#define cvec_pop(v)                               \
-  ({                                              \
-    typeof(*v##__cvec_type_var) _tmp;             \
-    ccol_retval_t r = cvector_pop_back(v, &_tmp); \
-    if (r != ccol_success) {                      \
-      assert(r == ccol_success);                  \
-    }                                             \
-    _tmp;                                         \
+#define cvec_pop(v)                                \
+  ({                                               \
+    typeof(*v##__cvec_type_var) _tmp;              \
+    ccol_retval_t r = cvector_pop_back(v, &_tmp);  \
+    if (r != ccol_success) {                       \
+      fatal_err("cvector_pop_back failed: %d", r); \
+    }                                              \
+    _tmp;                                          \
   })
 
 #define cvec_at(v, index) *(typeof(*v##__cvec_type_var)*)(cvector_at(v, index))

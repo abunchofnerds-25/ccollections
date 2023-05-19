@@ -201,17 +201,11 @@ static inline void ___chmap_destroy(chmap* chm) {
 
 #define _populate_chmap_pair(pair, data)         \
   do {                                           \
-    bool is_data_string = _Generic((data),       \
-        char*: true,                             \
-        const char*: true,                       \
-        unsigned char*: true,                    \
-        const unsigned char*: true,              \
-        default: false);                         \
-    if (is_data_string) {                        \
-      pair->ptr = (char*)(&(data));              \
+    if (is_string(data)) {                       \
+      pair->ptr = (char*)&(data);                \
       pair->size = strlen((char*)pair->ptr) + 1; \
     } else {                                     \
-      pair->ptr = &data;                         \
+      pair->ptr = &(data);                       \
       pair->size = sizeof((data));               \
     }                                            \
   } while (0)
@@ -257,7 +251,7 @@ static inline void ___chmap_destroy(chmap* chm) {
     } else if (val_pair->size != sizeof(*val)) {                            \
       fatal_err(                                                            \
           "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-          val_pair->size, sizeof(val));                                     \
+          val_pair->size, (unsigned long)sizeof(val));                      \
     } else {                                                                \
       val = (typeof(*hm_name##__chm_val_type_var)*)(val_pair->ptr);         \
     }                                                                       \
@@ -285,7 +279,7 @@ static inline void ___chmap_destroy(chmap* chm) {
     } else if (val_pair->size != sizeof(*val)) {                            \
       fatal_err(                                                            \
           "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-          val_pair->size, sizeof(val));                                     \
+          val_pair->size, (unsigned long)sizeof(val));                      \
     } else {                                                                \
       val = (typeof(*hm_name##__chm_val_type_var)*)(val_pair->ptr);         \
     }                                                                       \

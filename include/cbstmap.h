@@ -177,17 +177,11 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
 
 #define _populate_cbmap_pair(pair, data)         \
   do {                                           \
-    bool is_data_string = _Generic((data),       \
-        char*: true,                             \
-        const char*: true,                       \
-        unsigned char*: true,                    \
-        const unsigned char*: true,              \
-        default: false);                         \
-    if (is_data_string) {                        \
-      pair->ptr = (char*)(&(data));              \
+    if (is_string(data)) {                       \
+      pair->ptr = (char*)&(data);                \
       pair->size = strlen((char*)pair->ptr) + 1; \
     } else {                                     \
-      pair->ptr = &data;                         \
+      pair->ptr = &(data);                       \
       pair->size = sizeof((data));               \
     }                                            \
   } while (0)
@@ -233,7 +227,7 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     } else if (val_pair->size != sizeof(*val)) {                            \
       fatal_err(                                                            \
           "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-          val_pair->size, sizeof(val));                                     \
+          val_pair->size, (unsigned long)sizeof(val));                      \
     } else {                                                                \
       val = (typeof(*hm_name##__cbm_val_type_var)*)(val_pair->ptr);         \
     }                                                                       \

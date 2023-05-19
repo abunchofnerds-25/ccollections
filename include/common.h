@@ -127,3 +127,63 @@ typedef struct cmap_iterator {
                                                                                \
     result;                                                                    \
   })
+
+#define is_integral_type(x)     \
+  _Generic((x),                 \
+      char: true,               \
+      short: true,              \
+      int: true,                \
+      long: true,               \
+      long long: true,          \
+      unsigned char: true,      \
+      unsigned short: true,     \
+      unsigned int: true,       \
+      unsigned long: true,      \
+      unsigned long long: true, \
+      float: true,              \
+      double: true,             \
+      long double: true,        \
+      default: false)
+
+#define is_integral_ptr(x)       \
+  _Generic((x),                  \
+      char*: true,               \
+      short*: true,              \
+      int*: true,                \
+      long*: true,               \
+      long long*: true,          \
+      unsigned char*: true,      \
+      unsigned short*: true,     \
+      unsigned int*: true,       \
+      unsigned long*: true,      \
+      unsigned long long*: true, \
+      float*: true,              \
+      double*: true,             \
+      long double*: true,        \
+      default: false)
+
+#if defined __clang__
+#define is_string(data)                                                     \
+  ({                                                                        \
+    _Pragma("GCC diagnostic push");                                         \
+    _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
+    bool result = _Generic((data),                                          \
+        char[sizeof(data)]: true,                                           \
+        char*: true,                                                        \
+        const char*: true,                                                  \
+        unsigned char*: true,                                               \
+        const unsigned char*: true,                                         \
+        default: false);                                                    \
+    _Pragma("GCC diagnostic pop");                                          \
+    result;                                                                 \
+  })
+#else
+#define is_string(data)           \
+  _Generic((data),                \
+      char[sizeof(data)]: true,   \
+      char*: true,                \
+      const char*: true,          \
+      unsigned char*: true,       \
+      const unsigned char*: true, \
+      default: false)
+#endif

@@ -140,7 +140,7 @@ TEST(circular_queues, create_and_destroy) {
 TEST(circular_queues, basic_send_and_receive) {
   circular_queue* cq = circular_queue_create(1, NULL);
 
-  c_message_t m1 = {.data = (char*)malloc(16 * sizeof(char)), .size = 16};
+  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char*)(m1.data))[0] = 'A';
   ((char*)(m1.data))[1] = '\0';
 
@@ -210,7 +210,7 @@ TEST(circular_queues, try_send_and_try_receive) {
   REQUIRE_EQ(circq_try_send_zc(cq, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  m1.data = (char*)malloc(sizeof(char));
+  m1.data = malloc(sizeof(char));
   m1.size = 1;
   REQUIRE_EQ(circq_try_send_zc(cq, &m1), ccol_container_full);
   REQUIRE_NE(m1.data, NULL);
@@ -742,7 +742,7 @@ TEST(channels, try_send_and_try_receive) {
   REQUIRE_EQ(chan_try_send_zc(ch, &m1), ccol_success);
   REQUIRE_EQ(m1.data, NULL);
 
-  m1.data = (char*)malloc(sizeof(char));
+  m1.data = malloc(sizeof(char));
   m1.size = 1;
   REQUIRE_EQ(chan_try_send_zc(ch, &m1), ccol_container_full);
   REQUIRE_NE(m1.data, NULL);
@@ -889,7 +889,7 @@ TEST(channels, enable_disable_sending) {
   pthread_t tid;
   pthread_create(&tid, NULL, thr_for_enable_disable_sending, ch);
 
-  c_message_t m1 = {.data = (char*)malloc(sizeof(char)), .size = 1};
+  c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   m1.size = 1;
   ((char*)(m1.data))[0] = 'A';
 

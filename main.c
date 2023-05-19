@@ -10,10 +10,11 @@ void use_chmap() {
   // chmap_init(hmap);
   chmap_construct(hmap, char*, int);
 
-  chmap_insert(hmap, "ten", (int){10});
+  int number = 10;
+  chmap_insert(hmap, "ten", number);
 
   for (int i = 0; i < 10; ++i) {
-    char key_buf[6] = {0};
+    char key_buf[16] = {0};
     snprintf(key_buf, sizeof(key_buf), "%d", i);
     chmap_insert(hmap, key_buf, i);
   }

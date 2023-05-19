@@ -188,7 +188,7 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
   ccol_retval_t result = ccol_success;
 
   if (v->elem_count < v->capacity) {
-    assign((void*)((uint64_t)v->data_ptr + v->elem_count * v->elem_size),
+    assign((void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
            new_elem, v->elem_size);
     if (++v->elem_count == v->capacity) {
       // Ignoring the return value of scale_the_cvector_size_up
@@ -197,7 +197,7 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
     }
   } else {
     if (scale_the_cvector_size_up(v)) {
-      assign((void*)((uint64_t)v->data_ptr + v->elem_count * v->elem_size),
+      assign((void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
              new_elem, v->elem_size);
       ++v->elem_count;
     } else {
@@ -224,7 +224,7 @@ ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
     --v->elem_count;
 
     assign(target_elem,
-           (void*)((uint64_t)v->data_ptr + v->elem_count * v->elem_size),
+           (void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
            v->elem_size);
 
     if (v->elem_count < (v->capacity / minimum_capacity)) {
@@ -241,7 +241,7 @@ void* cvector_at(cvec v, uint32_t index) {
   }
 
   if (v->elem_count > 0 && index < v->elem_count) {
-    return (void*)((uint64_t)v->data_ptr + index * v->elem_size);
+    return (void*)((unsigned long)v->data_ptr + index * v->elem_size);
   }
 
   return NULL;

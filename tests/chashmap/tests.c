@@ -1,7 +1,11 @@
 #include <chashmap.h>
 #include <stdlib.h>
 #include <string.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#pragma GCC diagnostic pop
+
 TAU_MAIN()  // sets up Tau (+ main function)
 
 // HASH_MAP TESTS
@@ -417,7 +421,7 @@ TEST(chash_maps, insertions_with_a_variety_of_key_sizes) {
   char* a_string_key = "a string key for testing";
   for (uint32_t i = 1; i <= 24; ++i) {
     char key[32] = {0};
-    snprintf(key, 32, "%.*s", i, a_string_key);
+    snprintf(key, sizeof(key), "%.*s", i, a_string_key);
     val = i + 5;
 
     REQUIRE_EQ(
@@ -621,7 +625,7 @@ TEST(chash_maps, scaling) {
 
   char key_buf[16] = {0};
   for (uint32_t i = 0; i <= first_up_threshold; ++i) {
-    snprintf(key_buf, 16, "key%u", i);
+    snprintf(key_buf, sizeof(key_buf), "key%u", i);
     REQUIRE_EQ(insert_string_to_int(chmap, key_buf, 3), ccol_success);
   }
 
@@ -633,7 +637,7 @@ TEST(chash_maps, scaling) {
   REQUIRE_TRUE(first_capacity < chmap_get_bucket_arr_size(chmap));
 
   for (uint32_t i = 0; i <= first_up_threshold; ++i) {
-    snprintf(key_buf, 16, "key%u", i);
+    snprintf(key_buf, sizeof(key_buf), "key%u", i);
     delete_int_from_string(chmap, key_buf);
   }
 

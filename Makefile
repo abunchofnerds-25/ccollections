@@ -10,7 +10,7 @@ TEST_FOLDERS = $(shell ls -1d tests/*/ | grep -v /tau/)
 
 _create_object_dir := $(shell mkdir -p $(OBJECT_DIR))
 
-CFLAGS = -I$(INCLUDE_DIR) -I. -c -fPIC -fstack-protector-all \
+CFLAGS = -I$(INCLUDE_DIR) -fstack-protector-all \
 	-Wstrict-overflow -Wformat=2 -Wformat-security -Wall -Wextra \
 	-g3 -O3 -Werror
 LFLAGS = -shared -lpthread
@@ -36,11 +36,10 @@ $(LIBRARY_NAME): $(OBJ_FILES)
 	$(CC) -o $(LIBRARY_NAME) $(OBJ_FILES) $(LFLAGS)
 
 $(OBJECT_DIR)/%.o: $(SOURCE_DIR)/%.c $(HEADER_FILES)
-	$(CC) $(CFLAGS) $< -o $@
+	$(CC) -c -fPIC $(CFLAGS) $< -o $@
 
 main: main.c $(LIBRARY_NAME)
-	$(CC) -L. -I$(INCLUDE_DIR) -Wall -Wextra -g3 -O0 -Werror main.c -o main \
-	-l$(SHORT_LIBRARY_NAME)
+	$(CC) -L. $(CFLAGS) main.c -o main -l$(SHORT_LIBRARY_NAME)
 
 clean:
 	rm -rf $(LIBRARY_NAME) $(OBJECT_DIR) main tests/*/tests tests/*/coverage \

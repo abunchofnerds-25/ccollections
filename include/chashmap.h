@@ -25,7 +25,6 @@ SOFTWARE.
 #pragma once
 
 #include <common.h>
-#include <stdio.h>
 #include <string.h>
 
 #define DEFAULT_INITIAL_BUCKET_ARRAY_SIZE 64
@@ -199,23 +198,12 @@ static inline void ___chmap_destroy(chmap* chm) {
     }                                                                         \
   } while (0)
 
-#define _populate_chmap_pair(pair, data)         \
-  do {                                           \
-    if (is_string(data)) {                       \
-      pair->ptr = (char*)&(data);                \
-      pair->size = strlen((char*)pair->ptr) + 1; \
-    } else {                                     \
-      pair->ptr = &(data);                       \
-      pair->size = sizeof((data));               \
-    }                                            \
-  } while (0)
-
 #define chmap_insert(hm_name, key, val)                               \
   do {                                                                \
     cmap_pair* key_pair = &(cmap_pair){};                             \
     cmap_pair* val_pair = &(cmap_pair){};                             \
-    _populate_chmap_pair(key_pair, key);                              \
-    _populate_chmap_pair(val_pair, val);                              \
+    _populate_cmap_pair(key_pair, key);                               \
+    _populate_cmap_pair(val_pair, val);                               \
     ccol_retval_t r = chmap_insert_elem(hm_name, key_pair, val_pair); \
     if (r != ccol_success) {                                          \
       fatal_err("Failed to insert elem - r: %d", r);                  \
@@ -225,7 +213,7 @@ static inline void ___chmap_destroy(chmap* chm) {
 #define chmap_remove(hm_name, key)                          \
   ({                                                        \
     cmap_pair* key_pair = &(cmap_pair){};                   \
-    _populate_chmap_pair(key_pair, key);                    \
+    _populate_cmap_pair(key_pair, key);                     \
     ccol_retval_t r = chmap_delete_elem(hm_name, key_pair); \
     r;                                                      \
   })
@@ -235,7 +223,7 @@ static inline void ___chmap_destroy(chmap* chm) {
     typeof(*hm_name##__chm_val_type_var)* val = NULL;                       \
     cmap_pair* key_pair = &(cmap_pair){};                                   \
     cmap_pair* val_pair = NULL;                                             \
-    _populate_chmap_pair(key_pair, key);                                    \
+    _populate_cmap_pair(key_pair, key);                                     \
     ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
     if (r != ccol_success) {                                                \
       fatal_err("Failed to get elem ref - r: %d", r);                       \
@@ -263,7 +251,7 @@ static inline void ___chmap_destroy(chmap* chm) {
     typeof(*hm_name##__chm_val_type_var)* val = NULL;                       \
     cmap_pair* key_pair = &(cmap_pair){};                                   \
     cmap_pair* val_pair = NULL;                                             \
-    _populate_chmap_pair(key_pair, key);                                    \
+    _populate_cmap_pair(key_pair, key);                                     \
     ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
     if (r != ccol_success) {                                                \
       fatal_err("Failed to get elem ref - r: %d", r);                       \

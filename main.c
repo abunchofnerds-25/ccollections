@@ -19,6 +19,13 @@ void use_chmap() {
     chmap_insert(hmap, key_buf, i);
   }
 
+  for (int i = 11; i < 21; ++i) {
+    char key_buf[16] = {0};
+    snprintf(key_buf, sizeof(key_buf), "%d", i);
+    char* buf_ptr = key_buf;
+    chmap_insert(hmap, buf_ptr, i);
+  }
+
   chmap_iter_declare(hmap, it);
   for (it = chmap_begin(hmap); it != NULL; it = chmap_iter_next(it)) {
     fprintf(stderr, "%s: %d\n", *chmap_iter_key_ptr(it),

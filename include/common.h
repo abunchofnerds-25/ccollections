@@ -163,12 +163,11 @@ typedef struct cmap_iterator {
       default: false)
 
 #if defined __clang__
-#define is_string(data)                                                     \
+#define is_char_ptr(data)                                                   \
   ({                                                                        \
     _Pragma("GCC diagnostic push");                                         \
     _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
     bool result = _Generic((data),                                          \
-        char[sizeof(data)]: true,                                           \
         char*: true,                                                        \
         const char*: true,                                                  \
         unsigned char*: true,                                               \
@@ -177,13 +176,46 @@ typedef struct cmap_iterator {
     _Pragma("GCC diagnostic pop");                                          \
     result;                                                                 \
   })
+
+#define is_char_array(data)                             \
+  (is_char_ptr((data)) && _Generic((&(data)),           \
+                          char**: false,                \
+                          const char**: false,          \
+                          unsigned char**: false,       \
+                          const unsigned char**: false, \
+                          default: true))
 #else
-#define is_string(data)           \
+#define is_char_ptr(data)         \
   _Generic((data),                \
-      char[sizeof(data)]: true,   \
       char*: true,                \
       const char*: true,          \
       unsigned char*: true,       \
       const unsigned char*: true, \
       default: false)
+
+#define is_char_array(data)                             \
+  (is_char_ptr((data)) && _Generic((&(data)),           \
+                          char**: false,                \
+                          const char**: false,          \
+                          unsigned char**: false,       \
+                          const unsigned char**: false, \
+                          default: true))
 #endif
+
+#define _populate_cmap_pair(pair, data)                     \
+  do {                                                      \
+    if (is_char_array(data)) {                              \
+      pair->ptr = (char*)&(data);                           \
+      pair->size = strlen((char*)pair->ptr) + 1;            \
+    } else if (is_char_ptr(data)) {                         \
+      char* _ptr = (char*)&data;                            \
+      _Pragma("GCC diagnostic push");                       \
+      _Pragma("GCC diagnostic ignored \"-Warray-bounds\""); \
+      pair->ptr = *((char**)_ptr);                          \
+      _Pragma("GCC diagnostic pop");                        \
+      pair->size = strlen((char*)pair->ptr) + 1;            \
+    } else {                                                \
+      pair->ptr = &(data);                                  \
+      pair->size = sizeof((data));                          \
+    }                                                       \
+  } while (0)

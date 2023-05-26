@@ -103,7 +103,6 @@ typedef struct cmap_iterator {
       }                                                               \
       result = false;                                                 \
     }                                                                 \
-                                                                      \
     result;                                                           \
   })
 
@@ -124,7 +123,6 @@ typedef struct cmap_iterator {
     } else {                                                                   \
       container->m_procs = NULL;                                               \
     }                                                                          \
-                                                                               \
     result;                                                                    \
   })
 

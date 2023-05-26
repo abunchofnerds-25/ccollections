@@ -39,7 +39,7 @@ $(OBJECT_DIR)/%.o: $(SOURCE_DIR)/%.c $(HEADER_FILES)
 	$(CC) -c -fPIC $(CFLAGS) $< -o $@
 
 main: main.c $(LIBRARY_NAME)
-	$(CC) -L. $(CFLAGS) main.c -o main -l$(SHORT_LIBRARY_NAME)
+	$(CC) -L. $(CFLAGS) main.c -o main -l$(SHORT_LIBRARY_NAME) -lm
 
 clean:
 	rm -rf $(LIBRARY_NAME) $(OBJECT_DIR) main tests/*/tests tests/*/coverage \

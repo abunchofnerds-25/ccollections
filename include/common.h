@@ -126,38 +126,80 @@ typedef struct cmap_iterator {
     result;                                                                    \
   })
 
-#define is_integral_type(x)     \
-  _Generic((x),                 \
-      char: true,               \
-      short: true,              \
-      int: true,                \
-      long: true,               \
-      long long: true,          \
-      unsigned char: true,      \
-      unsigned short: true,     \
-      unsigned int: true,       \
-      unsigned long: true,      \
-      unsigned long long: true, \
-      float: true,              \
-      double: true,             \
-      long double: true,        \
+#define is_integral_type(x)           \
+  _Generic((x),                       \
+      char: true,                     \
+      short: true,                    \
+      int: true,                      \
+      long: true,                     \
+      long long: true,                \
+      unsigned char: true,            \
+      unsigned short: true,           \
+      unsigned int: true,             \
+      unsigned long: true,            \
+      unsigned long long: true,       \
+      float: true,                    \
+      double: true,                   \
+      long double: true,              \
+      const char: true,               \
+      const short: true,              \
+      const int: true,                \
+      const long: true,               \
+      const long long: true,          \
+      const unsigned char: true,      \
+      const unsigned short: true,     \
+      const unsigned int: true,       \
+      const unsigned long: true,      \
+      const unsigned long long: true, \
+      const float: true,              \
+      const double: true,             \
+      const long double: true,        \
       default: false)
 
-#define is_integral_ptr(x)       \
-  _Generic((x),                  \
-      char*: true,               \
-      short*: true,              \
-      int*: true,                \
-      long*: true,               \
-      long long*: true,          \
-      unsigned char*: true,      \
-      unsigned short*: true,     \
-      unsigned int*: true,       \
-      unsigned long*: true,      \
-      unsigned long long*: true, \
-      float*: true,              \
-      double*: true,             \
-      long double*: true,        \
+#define is_integral_ptr(x)             \
+  _Generic((x),                        \
+      char*: true,                     \
+      short*: true,                    \
+      int*: true,                      \
+      long*: true,                     \
+      long long*: true,                \
+      unsigned char*: true,            \
+      unsigned short*: true,           \
+      unsigned int*: true,             \
+      unsigned long*: true,            \
+      unsigned long long*: true,       \
+      float*: true,                    \
+      double*: true,                   \
+      long double*: true,              \
+      const char*: true,               \
+      const short*: true,              \
+      const int*: true,                \
+      const long*: true,               \
+      const long long*: true,          \
+      const unsigned char*: true,      \
+      const unsigned short*: true,     \
+      const unsigned int*: true,       \
+      const unsigned long*: true,      \
+      const unsigned long long*: true, \
+      const float*: true,              \
+      const double*: true,             \
+      const long double*: true,        \
+      default: false)
+
+#define __is_signed_int_ptr(_ptr) \
+  _Generic((_ptr),                \
+      char*: true,                \
+      int8_t*: true,              \
+      short*: true,               \
+      int*: true,                 \
+      long*: true,                \
+      long long*: true,           \
+      const char*: true,          \
+      const int8_t*: true,        \
+      const short*: true,         \
+      const int*: true,           \
+      const long*: true,          \
+      const long long*: true,     \
       default: false)
 
 #if defined __clang__

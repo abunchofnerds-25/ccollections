@@ -189,13 +189,11 @@ typedef struct cmap_iterator {
 #define __is_signed_int_ptr(_ptr) \
   _Generic((_ptr),                \
       char*: true,                \
-      int8_t*: true,              \
       short*: true,               \
       int*: true,                 \
       long*: true,                \
       long long*: true,           \
       const char*: true,          \
-      const int8_t*: true,        \
       const short*: true,         \
       const int*: true,           \
       const long*: true,          \

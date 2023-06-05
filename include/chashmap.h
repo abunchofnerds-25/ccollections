@@ -228,24 +228,23 @@ static inline void ___chmap_destroy(chmap* chm) {
     *val;                                                                   \
   })
 
-#define chmap_get_ptr(hm_name, key)                                         \
-  ({                                                                        \
-    typeof(*hm_name##__chm_val_type_var)* val = NULL;                       \
-    cmap_pair* key_pair = &(cmap_pair){};                                   \
-    cmap_pair* val_pair = NULL;                                             \
-    _populate_cmap_pair(key_pair, key);                                     \
-    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
-    if (r != ccol_success) {                                                \
-      fatal_err("Failed to get elem ref - r: %d", r);                       \
-    }                                                                       \
-    if (is_char_ptr(*hm_name##__chm_val_type_var)) {                        \
-      val = (typeof(*hm_name##__chm_val_type_var)*)&(val_pair->ptr);        \
-    } else if (val_pair->size != sizeof(*val)) {                            \
-      fatal_err(                                                            \
-          "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-          val_pair->size, (unsigned long)sizeof(val));                      \
-    } else {                                                                \
-      val = (typeof(*hm_name##__chm_val_type_var)*)(val_pair->ptr);         \
-    }                                                                       \
-    val;                                                                    \
+#define chmap_get_ptr(hm_name, key)                                           \
+  ({                                                                          \
+    typeof(*hm_name##__chm_val_type_var)* val = NULL;                         \
+    cmap_pair* key_pair = &(cmap_pair){};                                     \
+    cmap_pair* val_pair = NULL;                                               \
+    _populate_cmap_pair(key_pair, key);                                       \
+    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);       \
+    if (r == ccol_success) {                                                  \
+      if (is_char_ptr(*hm_name##__chm_val_type_var)) {                        \
+        val = (typeof(*hm_name##__chm_val_type_var)*)&(val_pair->ptr);        \
+      } else if (val_pair->size != sizeof(*val)) {                            \
+        fatal_err(                                                            \
+            "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
+            val_pair->size, (unsigned long)sizeof(val));                      \
+      } else {                                                                \
+        val = (typeof(*hm_name##__chm_val_type_var)*)(val_pair->ptr);         \
+      }                                                                       \
+    }                                                                         \
+    val;                                                                      \
   })

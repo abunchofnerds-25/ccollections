@@ -29,6 +29,7 @@ SOFTWARE.
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 // The following block is for having static error messages in place
 // when things fail during container "construction".
@@ -215,13 +216,13 @@ typedef struct cmap_iterator {
     result;                                                                 \
   })
 
-#define is_char_array(data)                             \
-  (is_char_ptr((data)) && _Generic((&(data)),           \
-                          char**: false,                \
-                          const char**: false,          \
-                          unsigned char**: false,       \
-                          const unsigned char**: false, \
-                          default: true))
+#define is_char_array(data)                   \
+  (is_char_ptr((data)) && _Generic((&(data)), \
+       char**: false,                         \
+       const char**: false,                   \
+       unsigned char**: false,                \
+       const unsigned char**: false,          \
+       default: true))
 #else
 #define is_char_ptr(data)         \
   _Generic((data),                \
@@ -231,13 +232,13 @@ typedef struct cmap_iterator {
       const unsigned char*: true, \
       default: false)
 
-#define is_char_array(data)                             \
-  (is_char_ptr((data)) && _Generic((&(data)),           \
-                          char**: false,                \
-                          const char**: false,          \
-                          unsigned char**: false,       \
-                          const unsigned char**: false, \
-                          default: true))
+#define is_char_array(data)                   \
+  (is_char_ptr((data)) && _Generic((&(data)), \
+       char**: false,                         \
+       const char**: false,                   \
+       unsigned char**: false,                \
+       const unsigned char**: false,          \
+       default: true))
 #endif
 
 #define _populate_cmap_pair(pair, data)                     \

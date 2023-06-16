@@ -27,11 +27,6 @@ SOFTWARE.
 #include <pthread.h>
 #include <stdlib.h>
 
-#define mem_alloc(size) malloc(size)
-#define mem_calloc(elem_count, elem_size) calloc(elem_count, elem_size)
-#define mem_realloc(ptr, new_size) realloc(ptr, new_size)
-#define mem_free(ptr) free(ptr)
-
 #define mutex_t pthread_mutex_t
 #define mutex_destroy(m) pthread_mutex_destroy(&m)
 #define mutex_init(m) pthread_mutex_init(&m, NULL)
@@ -99,11 +94,14 @@ struct circular_queue {
   uint32_t max_size;
   uint32_t msg_count;
 
+  ccol_memmgmt_procs_t* m_procs;
+
   message* msg_array;
   bool writing_disabled;
 };
 
-circular_queue* circular_queue_create(uint32_t max_size, char** err_str) {
+circular_queue* circular_queue_create_with_mprocs(
+    uint32_t max_size, ccol_memmgmt_procs_t* mmgmt_procs, char** err_str) {
   if (max_size == 0) {
     if (err_str) {
       *err_str = CERR_STR("max_size should be positive");
@@ -118,20 +116,31 @@ circular_queue* circular_queue_create(uint32_t max_size, char** err_str) {
     return NULL;
   }
 
-  circular_queue* cq = (circular_queue*)mem_alloc(sizeof(circular_queue));
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
+    return false;
+  }
+
+  circular_queue* cq =
+      (circular_queue*)_mem_alloc(mmgmt_procs, sizeof(circular_queue));
   if (!cq) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for circular_queue");
+      *err_str = CERR_STR("Failed to allocate memory for channel");
     }
     return NULL;
   }
 
-  cq->msg_array = (message*)mem_alloc(max_size * sizeof(message));
+  if (!ccol_populate_mem_mgmt_procs(cq, mmgmt_procs, err_str)) {
+    _mem_free(mmgmt_procs, cq);
+    return NULL;
+  }
+
+  cq->msg_array = (message*)_mem_alloc(mmgmt_procs, max_size * sizeof(message));
   if (!cq->msg_array) {
     if (err_str) {
       *err_str = CERR_STR("Failed to allocate memory for cq msg_array");
     }
-    mem_free(cq);
+    _mem_free(mmgmt_procs, cq->m_procs);
+    _mem_free(mmgmt_procs, cq);
     return NULL;
   }
 
@@ -154,7 +163,7 @@ circular_queue* circular_queue_create(uint32_t max_size, char** err_str) {
 void __circular_queue_destroy(circular_queue* cq) {
   if (cq) {
     if (cq->msg_array) {
-      mem_free(cq->msg_array);
+      _mem_free(cq->m_procs, cq->msg_array);
       cq->msg_array = NULL;
     }
 
@@ -162,7 +171,13 @@ void __circular_queue_destroy(circular_queue* cq) {
     cond_var_destroy(cq->read_cond);
     cond_var_destroy(cq->write_cond);
 
-    mem_free(cq);
+    if (cq->m_procs) {
+      void (*free_func)(void*) = cq->m_procs->free;
+      free_func(cq->m_procs);
+      free_func(cq);
+    } else {
+      mem_free(cq);
+    }
   }
 }
 
@@ -418,11 +433,14 @@ struct dynamic_queue {
   dllist_node* head;
   dllist_node* tail;
 
+  ccol_memmgmt_procs_t* m_procs;
+
   bool writing_disabled;
 };
 
 ccol_retval_t append_msg_to_dq_tail(dynamic_queue* dq, c_message_t* msg) {
-  dllist_node* new_elem = (dllist_node*)mem_alloc(sizeof(dllist_node));
+  dllist_node* new_elem =
+      (dllist_node*)_mem_alloc(dq->m_procs, sizeof(dllist_node));
   if (!new_elem) {
     return ccol_not_enough_memory;
   }
@@ -482,7 +500,7 @@ ccol_retval_t remove_msg_from_dq_head(dynamic_queue* dq,
     dq->tail = NULL;
   }
 
-  mem_free(node_to_be_freed);
+  _mem_free(dq->m_procs, node_to_be_freed);
   return ccol_success;
 }
 
@@ -491,17 +509,28 @@ void destroy_dq_dllist(dynamic_queue* dq) {
   while (dq->head) {
     node_to_be_freed = dq->head;
     dq->head = dq->head->next;
-    mem_free(node_to_be_freed);
+    _mem_free(dq->m_procs, node_to_be_freed);
   }
   dq->tail = NULL;
 }
 
-dynamic_queue* dynamic_queue_create(char** err_str) {
-  dynamic_queue* dq = (dynamic_queue*)mem_alloc(sizeof(dynamic_queue));
+dynamic_queue* dynamic_queue_create_with_mprocs(
+    ccol_memmgmt_procs_t* mmgmt_procs, char** err_str) {
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
+    return false;
+  }
+
+  dynamic_queue* dq =
+      (dynamic_queue*)_mem_alloc(mmgmt_procs, sizeof(dynamic_queue));
   if (!dq) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for dynamic queue");
+      *err_str = CERR_STR("Failed to allocate memory for channel");
     }
+    return NULL;
+  }
+
+  if (!ccol_populate_mem_mgmt_procs(dq, mmgmt_procs, err_str)) {
+    _mem_free(mmgmt_procs, dq);
     return NULL;
   }
 
@@ -524,7 +553,14 @@ void __dynamic_queue_destroy(dynamic_queue* dq) {
     mutex_destroy(dq->mutex);
     cond_var_destroy(dq->read_cond);
     destroy_dq_dllist(dq);
-    mem_free(dq);
+
+    if (dq->m_procs) {
+      void (*free_func)(void*) = dq->m_procs->free;
+      free_func(dq->m_procs);
+      free_func(dq);
+    } else {
+      mem_free(dq);
+    }
   }
 }
 
@@ -692,10 +728,17 @@ struct channel {
   thread_id_t owner_tid;
   circular_queue* owner_to_workers_cq;
   circular_queue* workers_to_owner_cq;
+  ccol_memmgmt_procs_t* m_procs;
 };
 
-channel* channel_create(uint32_t max_size, char** err_str) {
-  channel* ch = (channel*)mem_alloc(sizeof(channel));
+channel* channel_create_with_mprocs(uint32_t max_size,
+                                    ccol_memmgmt_procs_t* mmgmt_procs,
+                                    char** err_str) {
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
+    return false;
+  }
+
+  channel* ch = (channel*)_mem_alloc(mmgmt_procs, sizeof(channel));
   if (!ch) {
     if (err_str) {
       *err_str = CERR_STR("Failed to allocate memory for channel");
@@ -703,16 +746,25 @@ channel* channel_create(uint32_t max_size, char** err_str) {
     return NULL;
   }
 
-  ch->owner_to_workers_cq = circular_queue_create(max_size, err_str);
-  if (!ch->owner_to_workers_cq) {
-    mem_free(ch);
+  if (!ccol_populate_mem_mgmt_procs(ch, mmgmt_procs, err_str)) {
+    _mem_free(mmgmt_procs, ch);
     return NULL;
   }
 
-  ch->workers_to_owner_cq = circular_queue_create(max_size, err_str);
+  ch->owner_to_workers_cq =
+      circular_queue_create_with_mprocs(max_size, mmgmt_procs, err_str);
+  if (!ch->owner_to_workers_cq) {
+    _mem_free(mmgmt_procs, ch->m_procs);
+    _mem_free(mmgmt_procs, ch);
+    return NULL;
+  }
+
+  ch->workers_to_owner_cq =
+      circular_queue_create_with_mprocs(max_size, mmgmt_procs, err_str);
   if (!ch->workers_to_owner_cq) {
     circular_queue_destroy(ch->owner_to_workers_cq);
-    mem_free(ch);
+    _mem_free(mmgmt_procs, ch->m_procs);
+    _mem_free(mmgmt_procs, ch);
     return NULL;
   }
 
@@ -729,7 +781,14 @@ void __channel_destroy(channel* ch) {
   if (ch) {
     circular_queue_destroy(ch->owner_to_workers_cq);
     circular_queue_destroy(ch->workers_to_owner_cq);
-    mem_free(ch);
+
+    if (ch->m_procs) {
+      void (*free_func)(void*) = ch->m_procs->free;
+      free_func(ch->m_procs);
+      free_func(ch);
+    } else {
+      mem_free(ch);
+    }
   }
 }
 

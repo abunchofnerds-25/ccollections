@@ -124,7 +124,7 @@ circular_queue* circular_queue_create_with_mprocs(
       (circular_queue*)_mem_alloc(mmgmt_procs, sizeof(circular_queue));
   if (!cq) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for channel");
+      *err_str = CERR_STR("Failed to allocate memory for circular_queue");
     }
     return NULL;
   }
@@ -524,7 +524,7 @@ dynamic_queue* dynamic_queue_create_with_mprocs(
       (dynamic_queue*)_mem_alloc(mmgmt_procs, sizeof(dynamic_queue));
   if (!dq) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for channel");
+      *err_str = CERR_STR("Failed to allocate memory for dynamic_queue");
     }
     return NULL;
   }

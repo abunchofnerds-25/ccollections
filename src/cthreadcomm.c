@@ -117,7 +117,7 @@ circular_queue* circular_queue_create_with_mprocs(
   }
 
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
-    return false;
+    return NULL;
   }
 
   circular_queue* cq =
@@ -517,7 +517,7 @@ void destroy_dq_dllist(dynamic_queue* dq) {
 dynamic_queue* dynamic_queue_create_with_mprocs(
     ccol_memmgmt_procs_t* mmgmt_procs, char** err_str) {
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
-    return false;
+    return NULL;
   }
 
   dynamic_queue* dq =
@@ -735,7 +735,7 @@ channel* channel_create_with_mprocs(uint32_t max_size,
                                     ccol_memmgmt_procs_t* mmgmt_procs,
                                     char** err_str) {
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
-    return false;
+    return NULL;
   }
 
   channel* ch = (channel*)_mem_alloc(mmgmt_procs, sizeof(channel));

@@ -39,6 +39,10 @@ typedef struct c_message_t {
 // Circular queue related functions
 circular_queue* circular_queue_create_with_mprocs(
     uint32_t max_size, ccol_memmgmt_procs_t* mmgmt_procs, char** err_str);
+
+#define circular_queue_create(max_size, err_str) \
+  circular_queue_create_with_mprocs(max_size, NULL, err_str)
+
 void __circular_queue_destroy(circular_queue* cq);
 
 #define circular_queue_destroy(cq) \
@@ -74,6 +78,10 @@ uint32_t circq_msg_count(circular_queue* cq);
 // availability of memory.
 dynamic_queue* dynamic_queue_create_with_mprocs(
     ccol_memmgmt_procs_t* mmgmt_procs, char** err_str);
+
+#define dynamic_queue_create(err_str) \
+  dynamic_queue_create_with_mprocs(NULL, err_str)
+
 void __dynamic_queue_destroy(dynamic_queue* dq);
 
 #define dynamic_queue_destroy(dq) \
@@ -98,6 +106,10 @@ int dynmq_msg_count(dynamic_queue* dq);
 channel* channel_create_with_mprocs(uint32_t max_size,
                                     ccol_memmgmt_procs_t* mmgmt_procs,
                                     char** err_str);
+
+#define channel_create(max_size, err_str) \
+  channel_create_with_mprocs(max_size, NULL, err_str)
+
 void __channel_destroy(channel* ch);
 
 #define channel_destroy(ch) \

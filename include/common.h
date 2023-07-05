@@ -29,6 +29,7 @@ SOFTWARE.
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 // The following block is for having static error messages in place
 // when things fail during container "construction".
@@ -72,14 +73,19 @@ typedef enum ccollections_retval_t {
   ccol_success
 } ccol_retval_t;
 
-// #define _ccol_destructor(destructor) __attribute__((__cleanup__(destructor)))
 #define _ccol_destructor(destructor) __attribute__((cleanup(destructor)))
 
+typedef void* (*ccol_memmgmt_procs_malloc_t)(size_t size);
+typedef void (*ccol_memmgmt_procs_free_t)(void* ptr);
+typedef void* (*ccol_memmgmt_procs_calloc_t)(size_t elem_count,
+                                             size_t elem_size);
+typedef void* (*ccol_memmgmt_procs_realloc_t)(void* ptr, size_t size);
+
 typedef struct ccol_memmgmt_procs_t {
-  void* (*malloc)(size_t size);
-  void (*free)(void* ptr);
-  void* (*calloc)(size_t elem_count, size_t elem_size);
-  void* (*realloc)(void* ptr, size_t size);
+  ccol_memmgmt_procs_malloc_t malloc;
+  ccol_memmgmt_procs_free_t free;
+  ccol_memmgmt_procs_calloc_t calloc;
+  ccol_memmgmt_procs_realloc_t realloc;
 } ccol_memmgmt_procs_t;
 
 typedef struct cmap_pair {
@@ -215,13 +221,13 @@ typedef struct cmap_iterator {
     result;                                                                 \
   })
 
-#define is_char_array(data)                             \
-  (is_char_ptr((data)) && _Generic((&(data)),           \
-                          char**: false,                \
-                          const char**: false,          \
-                          unsigned char**: false,       \
-                          const unsigned char**: false, \
-                          default: true))
+#define is_char_array(data)                   \
+  (is_char_ptr((data)) && _Generic((&(data)), \
+       char**: false,                         \
+       const char**: false,                   \
+       unsigned char**: false,                \
+       const unsigned char**: false,          \
+       default: true))
 #else
 #define is_char_ptr(data)         \
   _Generic((data),                \
@@ -231,13 +237,13 @@ typedef struct cmap_iterator {
       const unsigned char*: true, \
       default: false)
 
-#define is_char_array(data)                             \
-  (is_char_ptr((data)) && _Generic((&(data)),           \
-                          char**: false,                \
-                          const char**: false,          \
-                          unsigned char**: false,       \
-                          const unsigned char**: false, \
-                          default: true))
+#define is_char_array(data)                   \
+  (is_char_ptr((data)) && _Generic((&(data)), \
+       char**: false,                         \
+       const char**: false,                   \
+       unsigned char**: false,                \
+       const unsigned char**: false,          \
+       default: true))
 #endif
 
 #define _populate_cmap_pair(pair, data)                     \

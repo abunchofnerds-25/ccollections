@@ -56,13 +56,13 @@ struct cvector {
 
 void __cvector_destroy(cvec v) {
   if (v) {
+    _mem_free(v->m_procs, v->data_ptr);
+
     if (v->m_procs) {
-      void (*free_proc)(void*) = v->m_procs->free;
-      free_proc(v->data_ptr);
-      free_proc(v->m_procs);
-      free_proc(v);
+      ccol_memmgmt_procs_free_t free_func = v->m_procs->free;
+      free_func(v->m_procs);
+      free_func(v);
     } else {
-      mem_free(v->data_ptr);
       mem_free(v);
     }
   }

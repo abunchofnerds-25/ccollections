@@ -1,4 +1,5 @@
 .vscode/
+.project
 obj/
 libccollections.so
 tests/*/tests

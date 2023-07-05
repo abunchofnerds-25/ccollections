@@ -111,24 +111,28 @@ struct llist_node {
 
 void destroy_llist_node(dllist_ref_node** head_of_all_elems, llist_node* elem) {
   if (elem) {
+    if (elem->data.key_pair->ptr) {
+      _mem_free(elem->m_procs, elem->data.key_pair->ptr);
+    }
+    if (elem->data.key_pair) {
+      _mem_free(elem->m_procs, elem->data.key_pair);
+    }
+    if (elem->data.val_pair->ptr) {
+      _mem_free(elem->m_procs, elem->data.val_pair->ptr);
+    }
+    if (elem->data.val_pair) {
+      _mem_free(elem->m_procs, elem->data.val_pair);
+    }
+    if (head_of_all_elems) {
+      detach_node_from_dllist(head_of_all_elems, &elem->dllist_refs);
+    }
+
     if (elem->m_procs) {
-      void (*free_func)(void*) = elem->m_procs->free;
-      if (elem->data.key_pair->ptr) free_func(elem->data.key_pair->ptr);
-      if (elem->data.key_pair) free_func(elem->data.key_pair);
-      if (elem->data.val_pair->ptr) free_func(elem->data.val_pair->ptr);
-      if (elem->data.val_pair) free_func(elem->data.val_pair);
-      if (head_of_all_elems) {
-        detach_node_from_dllist(head_of_all_elems, &elem->dllist_refs);
-      }
+      ccol_memmgmt_procs_free_t free_func = elem->m_procs->free;
+      // IMPORTANT NOTICE: The member field elem->m_procs is a mere reference
+      // pointer, don't free it.
       free_func(elem);
     } else {
-      if (elem->data.key_pair->ptr) mem_free(elem->data.key_pair->ptr);
-      if (elem->data.key_pair) mem_free(elem->data.key_pair);
-      if (elem->data.val_pair->ptr) mem_free(elem->data.val_pair->ptr);
-      if (elem->data.val_pair) mem_free(elem->data.val_pair);
-      if (head_of_all_elems) {
-        detach_node_from_dllist(head_of_all_elems, &elem->dllist_refs);
-      }
       mem_free(elem);
     }
   }
@@ -780,13 +784,13 @@ void __chmap_destroy(chmap chm) {
     for (uint32_t i = 0; i < chm->bucket_arr_size; ++i) {
       destroy_the_whole_llist(chm->bucket_arr[i], &chm->head_of_all_elems);
     }
+    _mem_free(chm->m_procs, (void*)chm->bucket_arr);
+
     if (chm->m_procs) {
-      void (*free_func)(void*) = chm->m_procs->free;
-      free_func((void*)chm->bucket_arr);
+      ccol_memmgmt_procs_free_t free_func = chm->m_procs->free;
       free_func(chm->m_procs);
       free_func(chm);
     } else {
-      mem_free((void*)chm->bucket_arr);
       mem_free(chm);
     }
   }

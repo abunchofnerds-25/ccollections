@@ -333,6 +333,7 @@ struct chashmap {
   llist_node** bucket_arr;
   dllist_ref_node* head_of_all_elems;
   ccol_memmgmt_procs_t* m_procs;
+  ccol_hashing_proc_t custom_hashing_proc;
 };
 
 void set_chmap_scaling_limits(chmap chm) {
@@ -407,8 +408,9 @@ bool verify_chmap_create_inputs(uint32_t initial_bucket_array_size,
   return true;
 }
 
-chmap chmap_create_mp(uint32_t initial_bucket_array_size,
-                      ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
+chmap chmap_create_full(uint32_t initial_bucket_array_size,
+                        ccol_memmgmt_procs_t* mmgmt_procs,
+                        ccol_hashing_proc_t custom_hashing_proc, char** err) {
   if (!verify_chmap_create_inputs(initial_bucket_array_size, mmgmt_procs,
                                   err)) {
     return NULL;
@@ -438,6 +440,7 @@ chmap chmap_create_mp(uint32_t initial_bucket_array_size,
   chm->elem_count = 0;
   chm->head_of_all_elems = NULL;
   set_chmap_scaling_limits(chm);
+  chm->custom_hashing_proc = custom_hashing_proc;
 
   chm->bucket_arr = (llist_node**)_mem_calloc(
       mmgmt_procs, initial_bucket_array_size, sizeof(llist_node*));
@@ -483,30 +486,35 @@ static inline void assign_key_to_hash_id(unsigned long* id_ptr, uint32_t size,
   }
 }
 
-static inline uint32_t calculate_bucket_index(uint32_t bucket_arr_size,
+static inline uint32_t calculate_bucket_index(chmap chm,
                                               const cmap_pair* key_pair,
                                               unsigned long* hash_ptr) {
-  unsigned long id = 0x0;
+  unsigned long id;
 
-  unsigned char* c_key_ptr = (unsigned char*)key_pair->ptr;
-  uint32_t size = key_pair->size;
+  if (!chm->custom_hashing_proc) {
+    id = 0x0;
+    unsigned char* c_key_ptr = (unsigned char*)key_pair->ptr;
+    uint32_t size = key_pair->size;
 
-  if (size <= sizeof(id)) {
-    // Kind of a number assignment.
-    assign_key_to_hash_id(&id, size, c_key_ptr);
-  } else {
-    // DJB2
-    id = 5381;
-    for (uint32_t i = 0; i < size; ++i) {
-      id = ((id << 5) + id) + c_key_ptr[i];
+    if (size <= sizeof(id)) {
+      // Kind of a number assignment.
+      assign_key_to_hash_id(&id, size, c_key_ptr);
+    } else {
+      // DJB2
+      id = 5381;
+      for (uint32_t i = 0; i < size; ++i) {
+        id = ((id << 5) + id) + c_key_ptr[i];
+      }
     }
+  } else {
+    id = chm->custom_hashing_proc(key_pair->ptr);
   }
 
   if (hash_ptr) {
     *hash_ptr = id;
   }
 
-  uint32_t index = (id % bucket_arr_size);
+  uint32_t index = (id % chm->bucket_arr_size);
 
   return index;
 }
@@ -587,8 +595,7 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
 
   bool result = false;
 
-  uint32_t index =
-      calculate_bucket_index(chm->bucket_arr_size, key_pair, &data.hash_val);
+  uint32_t index = calculate_bucket_index(chm, key_pair, &data.hash_val);
 
   llist_node* r = find_in_llist(chm->bucket_arr[index], key_pair);
   if (r) {
@@ -617,7 +624,7 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
 
   ccol_retval_t result = ccol_key_not_found;
 
-  uint32_t index = calculate_bucket_index(chm->bucket_arr_size, key_pair, NULL);
+  uint32_t index = calculate_bucket_index(chm, key_pair, NULL);
 
   llist_node* r = find_in_llist(chm->bucket_arr[index], key_pair);
   if (r) {
@@ -640,7 +647,7 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
 
   ccol_retval_t result = ccol_key_not_found;
 
-  uint32_t index = calculate_bucket_index(chm->bucket_arr_size, key_pair, NULL);
+  uint32_t index = calculate_bucket_index(chm, key_pair, NULL);
 
   llist_node* r = find_in_llist(chm->bucket_arr[index], key_pair);
   if (r) {
@@ -658,7 +665,7 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
 
   bool found = false;
 
-  uint32_t index = calculate_bucket_index(chm->bucket_arr_size, key_pair, NULL);
+  uint32_t index = calculate_bucket_index(chm, key_pair, NULL);
 
   chm->bucket_arr[index] = delete_from_llist(
       chm->bucket_arr[index], &chm->head_of_all_elems, key_pair, &found);

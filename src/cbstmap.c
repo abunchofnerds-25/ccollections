@@ -47,6 +47,7 @@ typedef struct cbinarymap {
   bmap_node* root;
   ccol_memmgmt_procs_t* m_procs;
   bool keys_are_signed;
+  ccol_comparison_proc_t custom_comparison_proc;
 } cbinarymap;
 
 typedef struct cbmap_cmap_iterator {  // Extended cmap_iterator for cbmap
@@ -201,8 +202,9 @@ bool cbm_populate_mem_mgmt_procs(cbmap cbm, ccol_memmgmt_procs_t* mmgmt_procs,
   return true;
 }
 
-cbmap cbmap_create_mp(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
-                      char** err) {
+cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
+                        ccol_comparison_proc_t custom_comparison_proc,
+                        char** err) {
   if (!verify_cbmap_create_inputs(mmgmt_procs, err)) {
     return NULL;
   }
@@ -223,6 +225,7 @@ cbmap cbmap_create_mp(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
   cbm->elem_count = 0;
   cbm->root = NULL;
   cbm->keys_are_signed = keys_are_signed;
+  cbm->custom_comparison_proc = custom_comparison_proc;
 
   return cbm;
 }
@@ -282,10 +285,14 @@ ccol_retval_t cbmap_reset(cbmap cbm) {
   return ccol_success;
 }
 
-static inline int compare_keys(bool keys_are_signed, const cmap_pair* key_pair1,
+static inline int compare_keys(cbmap cbm, const cmap_pair* key_pair1,
                                const cmap_pair* key_pair2) {
+  if (cbm->custom_comparison_proc) {
+    return cbm->custom_comparison_proc(key_pair1->ptr, key_pair2->ptr);
+  }
+
   if (key_pair1->size == key_pair2->size) {
-    if (!keys_are_signed) {
+    if (!cbm->keys_are_signed) {
       return memcmp(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
     }
     int8_t first1 = (*(int8_t*)key_pair1->ptr);
@@ -542,8 +549,8 @@ bmap_node* cbmap_insert_elem_r(bmap_node* parent,
     return parent;
   }
 
-  register int comparison = compare_keys(args->cbm->keys_are_signed,
-                                         args->key_pair, &parent->key_pair);
+  register int comparison =
+      compare_keys(args->cbm, args->key_pair, &parent->key_pair);
   if (comparison == 0) {
     // This entry exists
     update_bmap_node_value(args->cbm, parent, args->val_pair, &args->result);
@@ -595,8 +602,7 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair* key_pair,
 
   bmap_node* tracker = cbm->root;
   while (tracker) {
-    register int comparison =
-        compare_keys(cbm->keys_are_signed, key_pair, &tracker->key_pair);
+    register int comparison = compare_keys(cbm, key_pair, &tracker->key_pair);
     if (comparison == 0) {
       if (target_buf_size != tracker->val_pair.size) {
         return ccol_invalid_args;
@@ -623,8 +629,7 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair* key_pair,
 
   bmap_node* tracker = cbm->root;
   while (tracker) {
-    register int comparison =
-        compare_keys(cbm->keys_are_signed, key_pair, &tracker->key_pair);
+    register int comparison = compare_keys(cbm, key_pair, &tracker->key_pair);
     if (comparison == 0) {
       *val_pair = &tracker->val_pair;
       return ccol_success;
@@ -684,8 +689,8 @@ bmap_node* cbmap_delete_elem_r(bmap_node* parent,
     return parent;
   }
 
-  register int comparison = compare_keys(args->cbm->keys_are_signed,
-                                         args->key_pair, &parent->key_pair);
+  register int comparison =
+      compare_keys(args->cbm, args->key_pair, &parent->key_pair);
   if (comparison == 0) {
     // Found the entry!
     parent = perform_element_removal(args->cbm, parent);

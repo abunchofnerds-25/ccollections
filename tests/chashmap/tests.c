@@ -651,41 +651,170 @@ TEST(chash_maps, scaling) {
   chmap_destroy(chmap);
 }
 
+unsigned long custom_int_key_hasher(void* ptr) { return *(int*)ptr; }
+
 TEST(chash_maps, declarative_macros) {
-  chmap_declare(hm, int, char*);
-  chmap_init(hm);
+  {
+    chmap_declare(hm, int, char*);
+    chmap_init(hm);
 
-  int key = 3;
+    int key = 3;
 
-  chmap_insert(hm, key, "hello");
-  REQUIRE_STREQ(chmap_get(hm, key), "hello");
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-  // Here, we are not exceeding the size of hello, that's VERY important
-  // If we want to store a longer string, we'll need to do a realloc.
-  strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
-  REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
-  chmap_remove(hm, key);
+    chmap_remove(hm, key);
 
-  chmap_destroy(hm);
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+        .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
+    chmap_declare(hm, int, char*);
+    chmap_init_mp(hm, &mp);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_hashing_proc_t ch = &custom_int_key_hasher;
+    chmap_declare(hm, int, char*);
+    chmap_init_ch(hm, ch);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_hashing_proc_t ch = &custom_int_key_hasher;
+    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+        .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
+    chmap_declare(hm, int, char*);
+    chmap_init_full(hm, &mp, ch);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
 }
 
 TEST(chash_maps, constructive_macros) {
-  chmap_construct(hm, int, char*);
+  {
+    chmap_construct(hm, int, char*);
 
-  int key = 3;
+    int key = 3;
 
-  chmap_insert(hm, key, "hello");
-  REQUIRE_STREQ(chmap_get(hm, key), "hello");
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-  // Here, we are not exceeding the size of hello, that's VERY important
-  // If we want to store a longer string, we'll need to do a realloc.
-  strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
-  REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
-  chmap_remove(hm, key);
+    chmap_remove(hm, key);
 
-  chmap_destroy(hm);
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+        .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
+    chmap_construct_mp(hm, int, char*, &mp);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_hashing_proc_t ch = &custom_int_key_hasher;
+    chmap_construct_ch(hm, int, char*, ch);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_hashing_proc_t ch = &custom_int_key_hasher;
+    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+        .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
+    chmap_construct_full(hm, int, char*, &mp, ch);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
 }
 
 TEST(chash_maps, iteration) {

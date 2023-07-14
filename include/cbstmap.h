@@ -29,8 +29,9 @@ SOFTWARE.
 typedef struct cbinarymap cbinarymap;
 typedef cbinarymap* cbmap;
 
-cbmap cbmap_create_mp(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
-                      char** err);
+cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
+                        ccol_comparison_proc_t custom_comparison_proc,
+                        char** err);
 
 uint32_t cbmap_elem_count(cbmap cbm);
 
@@ -128,14 +129,14 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
   typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */
 
-#define cbmap_init(hm_name)                                            \
-  do {                                                                 \
-    char* err = NULL;                                                  \
-    hm_name = cbmap_create_mp(                                         \
-        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, &err); \
-    if (!hm_name) {                                                    \
-      fatal_err("%s", err);                                            \
-    }                                                                  \
+#define cbmap_init(hm_name)                                                  \
+  do {                                                                       \
+    char* err = NULL;                                                        \
+    hm_name = cbmap_create_full(                                             \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, NULL, &err); \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
   } while (0)
 
 #define cbmap_construct(hm_name, key_t, val_t)                               \
@@ -144,8 +145,8 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
   do {                                                                       \
     char* err = NULL;                                                        \
-    hm_name = cbmap_create_mp(                                               \
-        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, &err);       \
+    hm_name = cbmap_create_full(                                             \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, NULL, &err); \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
     }                                                                        \

@@ -33,6 +33,22 @@ cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char** err);
 
+static inline __attribute__((always_inline)) cbmap
+cbmap_create(bool keys_are_signed, char** err) {
+  return cbmap_create_full(keys_are_signed, NULL, NULL, err);
+}
+
+static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
+    bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
+  return cbmap_create_full(keys_are_signed, mmgmt_procs, NULL, err);
+}
+
+static inline __attribute__((always_inline)) cbmap
+cbmap_create_ch(bool keys_are_signed,
+                ccol_comparison_proc_t custom_comparison_proc, char** err) {
+  return cbmap_create_full(keys_are_signed, NULL, custom_comparison_proc, err);
+}
+
 uint32_t cbmap_elem_count(cbmap cbm);
 
 ccol_retval_t cbmap_reset(cbmap cbm);

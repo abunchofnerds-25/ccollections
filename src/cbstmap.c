@@ -172,31 +172,8 @@ void __cbmap_iterator_destroy(cmap_iterator* iter) {
 }
 
 bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
-  if (mmgmt_procs && (!mmgmt_procs->malloc || !mmgmt_procs->calloc ||
-                      !mmgmt_procs->realloc || !mmgmt_procs->free)) {
-    if (err) {
-      *err =
-          CCOL_ERR_STR("Detected at least one NULL memory management function");
-    }
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
     return false;
-  }
-
-  return true;
-}
-
-bool cbm_populate_mem_mgmt_procs(cbmap cbm, ccol_memmgmt_procs_t* mmgmt_procs,
-                                 char** err) {
-  if (mmgmt_procs) {
-    cbm->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t));
-    if (!cbm->m_procs) {
-      if (err) {
-        *err = CCOL_ERR_STR("Failed to allocate buffer for memory mgmt buffer");
-      }
-      return false;
-    }
-    memcpy(cbm->m_procs, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
-  } else {
-    cbm->m_procs = NULL;
   }
 
   return true;
@@ -217,7 +194,7 @@ cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
     return NULL;
   }
 
-  if (!cbm_populate_mem_mgmt_procs(cbm, mmgmt_procs, err)) {
+  if (!ccol_populate_mem_mgmt_procs(cbm, mmgmt_procs, err)) {
     _mem_free(mmgmt_procs, cbm);
     return NULL;
   }

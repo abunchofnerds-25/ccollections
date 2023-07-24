@@ -39,11 +39,11 @@ typedef struct bmap_node {
   struct bmap_node* left;
   struct bmap_node* right;
   // Metadata for self-balancing
-  uint32_t height;
+  size_t height;
 } bmap_node;
 
 typedef struct cbinarymap {
-  uint32_t elem_count;
+  size_t elem_count;
   bmap_node* root;
   ccol_memmgmt_procs_t* m_procs;
   bool keys_are_signed;
@@ -60,7 +60,7 @@ typedef struct cbmap_cmap_iterator {  // Extended cmap_iterator for cbmap
   (cbmap_cmap_iterator*)((uint8_t*)u_iter - \
                          offsetof(cbmap_cmap_iterator, user_iter))
 
-bmap_node* get_min_node(bmap_node* root, uint32_t* depth) {
+bmap_node* get_min_node(bmap_node* root, size_t* depth) {
   if (depth) {
     *depth = 0;
   }
@@ -77,7 +77,7 @@ bmap_node* get_min_node(bmap_node* root, uint32_t* depth) {
   return result;
 }
 
-bmap_node* get_max_node(bmap_node* root, uint32_t* depth) {
+bmap_node* get_max_node(bmap_node* root, size_t* depth) {
   if (depth) {
     *depth = 0;
   }
@@ -107,7 +107,7 @@ void push_all_lefts_into_iter_stack(cbmap_cmap_iterator* real_iter,
 cmap_iterator* cmap_real_iter_next(cbmap_cmap_iterator* real_iter) {
   cvec vn = real_iter->nodes;
   cvec_enable_local_macros(vn, bmap_node*);
-  uint32_t size = cvec_size(vn);
+  size_t size = cvec_size(vn);
   if (size == 0) {
     // Nowhere to advance
     __cbmap_iterator_destroy(&real_iter->user_iter);
@@ -244,7 +244,7 @@ void __cbmap_destroy(cbmap cbm) {
   }
 }
 
-uint32_t cbmap_elem_count(cbmap cbm) {
+size_t cbmap_elem_count(cbmap cbm) {
   if (!cbm) {
     assert(false);
   }
@@ -338,14 +338,14 @@ int maximum(int x, int y) {
   return y;
 }
 
-void cbmap_dump_elements(uint32_t extra_depth, cbmap cbm) {
+void cbmap_dump_elements(size_t extra_depth, cbmap cbm) {
   if (!cbm->root) {
     return;
   }
 
   printf("DUMP - STARTS\n");
 
-  uint32_t depth = cbm->root->height + extra_depth;
+  size_t depth = cbm->root->height + extra_depth;
   cvec_construct(v1, bmap_node*);
   cvec_push(v1, cbm->root);
 
@@ -353,8 +353,8 @@ void cbmap_dump_elements(uint32_t extra_depth, cbmap cbm) {
 
   while (cvec_size(v1) > 0 && !all_zeros) {
     cvec_construct(v2, bmap_node*);
-    uint32_t space_i = (1 << (depth + 1)) - 1;
-    uint32_t space_r = (1 << (depth + 2)) - 3;
+    size_t space_i = (1 << (depth + 1)) - 1;
+    size_t space_r = (1 << (depth + 2)) - 3;
     --depth;
     all_zeros = true;
     int size = cvec_size(v1);
@@ -572,7 +572,7 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
 }
 
 ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair* key_pair,
-                                  void* target_buf, uint32_t target_buf_size) {
+                                  void* target_buf, size_t target_buf_size) {
   if (!cbm) {
     assert(false);
   }

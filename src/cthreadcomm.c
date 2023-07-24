@@ -51,11 +51,11 @@ SOFTWARE.
 #include <assert.h>
 #endif
 
-const uint32_t max_allowed_cq_size = INT32_MAX;
+const size_t max_allowed_cq_size = INT32_MAX;
 
 typedef struct message {
   void* data;
-  uint32_t size;
+  size_t size;
 } message;
 
 void add_duration_to_timespec(struct timespec* target,
@@ -89,10 +89,10 @@ struct circular_queue {
   cond_var_t read_cond;
   cond_var_t write_cond;
 
-  uint32_t read_index;
-  uint32_t write_index;
-  uint32_t max_size;
-  uint32_t msg_count;
+  size_t read_index;
+  size_t write_index;
+  size_t max_size;
+  size_t msg_count;
 
   ccol_memmgmt_procs_t* m_procs;
 
@@ -100,7 +100,7 @@ struct circular_queue {
   bool writing_disabled;
 };
 
-bool verify_circular_queue_create_inputs(uint32_t max_size,
+bool verify_circular_queue_create_inputs(size_t max_size,
                                          ccol_memmgmt_procs_t* mmgmt_procs,
                                          char** err_str) {
   if (max_size == 0) {
@@ -125,7 +125,7 @@ bool verify_circular_queue_create_inputs(uint32_t max_size,
 }
 
 circular_queue* circular_queue_create_with_mprocs(
-    uint32_t max_size, ccol_memmgmt_procs_t* mmgmt_procs, char** err_str) {
+    size_t max_size, ccol_memmgmt_procs_t* mmgmt_procs, char** err_str) {
   if (!verify_circular_queue_create_inputs(max_size, mmgmt_procs, err_str)) {
     return NULL;
   }
@@ -415,8 +415,8 @@ ccol_retval_t circq_enable_sending(circular_queue* cq) {
   return ccol_invalid_args;
 }
 
-uint32_t circq_msg_count(circular_queue* cq) {
-  uint32_t result = -1;
+size_t circq_msg_count(circular_queue* cq) {
+  size_t result = -1;
 
   if (cq) {
     mutex_lock(cq->mutex);
@@ -438,7 +438,7 @@ struct dynamic_queue {
   mutex_t mutex;
   cond_var_t read_cond;
 
-  uint32_t msg_count;
+  size_t msg_count;
 
   dllist_node* head;
   dllist_node* tail;
@@ -741,7 +741,7 @@ struct channel {
   ccol_memmgmt_procs_t* m_procs;
 };
 
-channel* channel_create_with_mprocs(uint32_t max_size,
+channel* channel_create_with_mprocs(size_t max_size,
                                     ccol_memmgmt_procs_t* mmgmt_procs,
                                     char** err_str) {
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {

@@ -43,13 +43,13 @@ SOFTWARE.
 #define x_stringify(s) stringify(s)
 #define CERR_STR(x) (__FILE__ ":" x_stringify(__LINE__) " - " x)
 
-const uint32_t minimum_capacity = 4;
-const uint32_t scaling_factor = 2;
+const size_t minimum_capacity = 4;
+const size_t scaling_factor = 2;
 
 struct cvector {
-  uint32_t elem_size;
-  uint32_t elem_count;
-  uint32_t capacity;
+  size_t elem_size;
+  size_t elem_count;
+  size_t capacity;
   ccol_memmgmt_procs_t* m_procs;
   void* data_ptr;
 };
@@ -68,7 +68,7 @@ void __cvector_destroy(cvec v) {
   }
 }
 
-bool verify_cvector_create_inputs(uint32_t elem_size,
+bool verify_cvector_create_inputs(size_t elem_size,
                                   ccol_memmgmt_procs_t* mmgt_procs,
                                   char** err) {
   if (elem_size == 0) {
@@ -85,7 +85,7 @@ bool verify_cvector_create_inputs(uint32_t elem_size,
   return true;
 }
 
-cvec cvector_create_with_mprocs(uint32_t elem_size,
+cvec cvector_create_with_mprocs(size_t elem_size,
                                 ccol_memmgmt_procs_t* mmgt_procs, char** err) {
   if (!verify_cvector_create_inputs(elem_size, mmgt_procs, err)) {
     return NULL;
@@ -162,7 +162,7 @@ void scale_the_cvector_size_down(cvec v) {
   v->capacity /= scaling_factor;
 }
 
-static inline void assign(void* dest, const void* src, uint32_t size) {
+static inline void assign(void* dest, const void* src, size_t size) {
   if (size == sizeof(unsigned int)) {
     *(unsigned int*)dest = *(unsigned int*)src;
   } else if (size == sizeof(unsigned char)) {
@@ -235,7 +235,7 @@ ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
   return result;
 }
 
-void* cvector_at(cvec v, uint32_t index) {
+void* cvector_at(cvec v, size_t index) {
   if (!v) {
     assert(false);
   }
@@ -247,7 +247,7 @@ void* cvector_at(cvec v, uint32_t index) {
   return NULL;
 }
 
-uint32_t cvector_elem_count(cvec v) {
+size_t cvector_elem_count(cvec v) {
   if (!v) {
     assert(false);
   }
@@ -273,7 +273,7 @@ void cvector_reset(cvec v) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-uint32_t cvector_get_capacity(cvec v) {
+size_t cvector_get_capacity(cvec v) {
   if (!v) {
     assert(false);
   }

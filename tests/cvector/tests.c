@@ -100,7 +100,7 @@ TEST(cvectors, access_an_index) {
 
   REQUIRE_EQ(cvector_at(cvec, 0), NULL);
   REQUIRE_EQ(cvector_at(cvec, 1), NULL);
-  REQUIRE_EQ(cvector_at(cvec, (uint32_t)-1), NULL);
+  REQUIRE_EQ(cvector_at(cvec, (size_t)-1), NULL);
 
   for (int i = 0; i < 4; ++i) {
     cvector_push_back(cvec, &(int){i + 1});
@@ -113,7 +113,7 @@ TEST(cvectors, access_an_index) {
   }
 
   REQUIRE_EQ(cvector_at(cvec, 4), NULL);
-  REQUIRE_EQ(cvector_at(cvec, (uint32_t)-1), NULL);
+  REQUIRE_EQ(cvector_at(cvec, (size_t)-1), NULL);
 
   cvector_destroy(cvec);
 }
@@ -264,9 +264,9 @@ TEST(cvectors, for_each_rd) {
   cvector_destroy(cvec);
 }
 
-extern uint32_t cvector_get_capacity(cvector* v);
-extern const uint32_t minimum_capacity;
-extern const uint32_t scaling_factor;
+extern size_t cvector_get_capacity(cvector* v);
+extern const size_t minimum_capacity;
+extern const size_t scaling_factor;
 
 TEST(cvectors, scaling) {
   cvector* cvec = cvector_create(sizeof(int), NULL);
@@ -274,7 +274,7 @@ TEST(cvectors, scaling) {
   REQUIRE_EQ(cvector_elem_count(cvec), 0);
   REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity);
 
-  for (uint32_t i = 0; i < minimum_capacity; ++i) {
+  for (size_t i = 0; i < minimum_capacity; ++i) {
     cvector_push_back(cvec, &i);
   }
 
@@ -282,7 +282,7 @@ TEST(cvectors, scaling) {
   REQUIRE_EQ(cvector_get_capacity(cvec), minimum_capacity * scaling_factor);
 
   int tmp;
-  for (uint32_t i = 0; i < minimum_capacity; ++i) {
+  for (size_t i = 0; i < minimum_capacity; ++i) {
     cvector_pop_back(cvec, &tmp);
   }
   REQUIRE_EQ(cvector_elem_count(cvec), 0);

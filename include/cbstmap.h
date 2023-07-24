@@ -49,7 +49,7 @@ cbmap_create_ch(bool keys_are_signed,
   return cbmap_create_full(keys_are_signed, NULL, custom_comparison_proc, err);
 }
 
-uint32_t cbmap_elem_count(cbmap cbm);
+size_t cbmap_elem_count(cbmap cbm);
 
 ccol_retval_t cbmap_reset(cbmap cbm);
 
@@ -57,7 +57,7 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
                                 const cmap_pair* val_pair);
 
 ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair* key_pair,
-                                  void* target_buf, uint32_t target_buf_size);
+                                  void* target_buf, size_t target_buf_size);
 
 ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair* key_pair,
                                  cmap_pair** val_pair);
@@ -188,45 +188,45 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     r;                                                      \
   })
 
-#define cbmap_get(hm_name, key)                                             \
-  ({                                                                        \
-    typeof(*hm_name##__cbm_val_type_var)* val = NULL;                       \
-    cmap_pair* key_pair = &(cmap_pair){};                                   \
-    cmap_pair* val_pair = NULL;                                             \
-    _populate_cmap_pair(key_pair, key);                                     \
-    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
-    if (r != ccol_success) {                                                \
-      fatal_err("Failed to get elem ref - r: %d", r);                       \
-    }                                                                       \
-    if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                        \
-      val = (typeof(*hm_name##__cbm_val_type_var)*)&(val_pair->ptr);        \
-    } else if (val_pair->size != sizeof(*val)) {                            \
-      fatal_err(                                                            \
-          "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-          val_pair->size, (unsigned long)sizeof(val));                      \
-    } else {                                                                \
-      val = (typeof(*hm_name##__cbm_val_type_var)*)(val_pair->ptr);         \
-    }                                                                       \
-    *val;                                                                   \
+#define cbmap_get(hm_name, key)                                              \
+  ({                                                                         \
+    typeof(*hm_name##__cbm_val_type_var)* val = NULL;                        \
+    cmap_pair* key_pair = &(cmap_pair){};                                    \
+    cmap_pair* val_pair = NULL;                                              \
+    _populate_cmap_pair(key_pair, key);                                      \
+    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);      \
+    if (r != ccol_success) {                                                 \
+      fatal_err("Failed to get elem ref - r: %d", r);                        \
+    }                                                                        \
+    if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                         \
+      val = (typeof(*hm_name##__cbm_val_type_var)*)&(val_pair->ptr);         \
+    } else if (val_pair->size != sizeof(*val)) {                             \
+      fatal_err(                                                             \
+          "Failed to get elem ref - val_pair->size: %lu - sizeof(val): %lu", \
+          (unsigned long)val_pair->size, (unsigned long)sizeof(val));        \
+    } else {                                                                 \
+      val = (typeof(*hm_name##__cbm_val_type_var)*)(val_pair->ptr);          \
+    }                                                                        \
+    *val;                                                                    \
   })
 
-#define cbmap_get_ptr(hm_name, key)                                           \
-  ({                                                                          \
-    typeof(*hm_name##__cbm_val_type_var)* val = NULL;                         \
-    cmap_pair* key_pair = &(cmap_pair){};                                     \
-    cmap_pair* val_pair = NULL;                                               \
-    _populate_cmap_pair(key_pair, key);                                       \
-    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);       \
-    if (r == ccol_success) {                                                  \
-      if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                        \
-        val = (typeof(*hm_name##__cbm_val_type_var)*)&(val_pair->ptr);        \
-      } else if (val_pair->size != sizeof(*val)) {                            \
-        fatal_err(                                                            \
-            "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-            val_pair->size, sizeof(val));                                     \
-      } else {                                                                \
-        val = (typeof(*hm_name##__cbm_val_type_var)*)(val_pair->ptr);         \
-      }                                                                       \
-    }                                                                         \
-    val;                                                                      \
+#define cbmap_get_ptr(hm_name, key)                                            \
+  ({                                                                           \
+    typeof(*hm_name##__cbm_val_type_var)* val = NULL;                          \
+    cmap_pair* key_pair = &(cmap_pair){};                                      \
+    cmap_pair* val_pair = NULL;                                                \
+    _populate_cmap_pair(key_pair, key);                                        \
+    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);        \
+    if (r == ccol_success) {                                                   \
+      if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                         \
+        val = (typeof(*hm_name##__cbm_val_type_var)*)&(val_pair->ptr);         \
+      } else if (val_pair->size != sizeof(*val)) {                             \
+        fatal_err(                                                             \
+            "Failed to get elem ref - val_pair->size: %lu - sizeof(val): %lu", \
+            (unsigned long)val_pair->size, sizeof(val));                       \
+      } else {                                                                 \
+        val = (typeof(*hm_name##__cbm_val_type_var)*)(val_pair->ptr);          \
+      }                                                                        \
+    }                                                                          \
+    val;                                                                       \
   })

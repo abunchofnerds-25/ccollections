@@ -29,7 +29,7 @@ SOFTWARE.
 typedef struct cvector cvector;
 typedef cvector* cvec;
 
-cvec cvector_create_with_mprocs(uint32_t elem_size,
+cvec cvector_create_with_mprocs(size_t elem_size,
                                 ccol_memmgmt_procs_t* mmgmt_procs, char** err);
 
 #define cvector_create(elem_size, err) \
@@ -49,9 +49,9 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem);
 
 ccol_retval_t cvector_pop_back(cvec v, void* target_elem);
 
-void* cvector_at(cvec v, uint32_t index);
+void* cvector_at(cvec v, size_t index);
 
-uint32_t cvector_elem_count(cvec v);
+size_t cvector_elem_count(cvec v);
 
 void cvector_reset(cvec v);
 

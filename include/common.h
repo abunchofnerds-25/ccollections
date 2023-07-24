@@ -90,14 +90,14 @@ typedef struct ccol_memmgmt_procs_t {
 
 // The following function type can be used to supply a custom comparison
 // function.
-typedef bool (*ccol_comparison_proc_t)(void* ptr1, void* ptr2);
+typedef bool (*ccol_comparison_proc_t)(const void* ptr1, const void* ptr2);
 
 // The following function type can be used to supply a custom hashing function.
-typedef unsigned long (*ccol_hashing_proc_t)(void* ptr);
+typedef unsigned long (*ccol_hashing_proc_t)(const void* ptr);
 
 typedef struct cmap_pair {
   void* ptr;
-  uint32_t size;
+  size_t size;
 } cmap_pair;
 
 typedef struct cmap_iterator {

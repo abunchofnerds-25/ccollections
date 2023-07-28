@@ -555,6 +555,10 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
     assert(false);
   }
 
+  if (cbm->elem_count == max_elem_count) {
+    return ccol_container_full;
+  }
+
   cbmap_insert_elem_r_arg args = {.cbm = cbm,
                                   .key_pair = key_pair,
                                   .val_pair = val_pair,

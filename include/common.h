@@ -60,6 +60,8 @@ SOFTWARE.
   (m_procs) ? m_procs->realloc(ptr, new_size) : mem_realloc(ptr, new_size)
 #define _mem_free(m_procs, ptr) (m_procs) ? m_procs->free(ptr) : mem_free(ptr)
 
+#define max_elem_count UINT64_MAX
+
 typedef enum ccollections_retval_t {
   ccol_unexpected_failure = -9,
   ccol_container_empty,

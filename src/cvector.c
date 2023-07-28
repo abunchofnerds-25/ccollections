@@ -185,6 +185,10 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
     return ccol_invalid_args;
   }
 
+  if (v->elem_count == max_elem_count) {
+    return ccol_container_full;
+  }
+
   ccol_retval_t result = ccol_success;
 
   if (v->elem_count < v->capacity) {

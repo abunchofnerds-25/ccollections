@@ -51,8 +51,6 @@ SOFTWARE.
 #include <assert.h>
 #endif
 
-const size_t max_allowed_cq_size = INT32_MAX;
-
 typedef struct message {
   void* data;
   size_t size;
@@ -110,9 +108,9 @@ bool verify_circular_queue_create_inputs(size_t max_size,
     return false;
   }
 
-  if (max_size > max_allowed_cq_size) {
+  if (max_size > max_elem_count) {
     if (err_str) {
-      *err_str = CERR_STR("max_size can not exceed max_allowed_cq_size");
+      *err_str = CERR_STR("max_size can not exceed max_elem_count");
     }
     return false;
   }

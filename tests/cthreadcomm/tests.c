@@ -121,11 +121,6 @@ TEST(circular_queues, create_fails) {
   REQUIRE_EQ((void*)cq, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 
-  cq = circular_queue_create_with_mprocs((size_t)INT32_MAX + 1, NULL,
-                                         &err_str);
-  REQUIRE_EQ((void*)cq, NULL);
-  REQUIRE_NE((void*)err_str, NULL);
-
   cq = circular_queue_create_with_mprocs(
       (size_t)INT32_MAX,
       &(ccol_memmgmt_procs_t){
@@ -700,10 +695,6 @@ TEST(channels, create_fails) {
   REQUIRE_NE((void*)err_str, NULL);
 
   ch = channel_create_with_mprocs(-1, NULL, &err_str);
-  REQUIRE_EQ((void*)ch, NULL);
-  REQUIRE_NE((void*)err_str, NULL);
-
-  ch = channel_create_with_mprocs((size_t)INT32_MAX + 1, NULL, &err_str);
   REQUIRE_EQ((void*)ch, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 

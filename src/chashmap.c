@@ -645,6 +645,10 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
     return ccol_invalid_args;
   }
 
+  if (chm->elem_count == max_elem_count) {
+    return ccol_container_full;
+  }
+
   chmap_entry data = {.hash_val = 0,
                       .key_pair = (cmap_pair*)key_pair,
                       .val_pair = (cmap_pair*)val_pair,

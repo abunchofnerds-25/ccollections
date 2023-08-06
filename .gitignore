@@ -9,3 +9,4 @@ test/*/coverage/
 *.c.info
 *.o
 main
+/*.pdb

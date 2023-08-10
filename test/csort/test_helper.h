@@ -3,12 +3,12 @@
 #include <common.h>
 
 
-int int_comparer(void *first, void* second)
+static int int_comparer(void *first, void* second)
 {                                                       
     return (*(int *)first) - (*(int *)second);        
 }
 
-int double_comparer(void *first, void* second)
+static int double_comparer(void *first, void* second)
 {
   double f = *(double *)first;                                           
   double s = *(double *)second;                                           
@@ -23,12 +23,12 @@ int double_comparer(void *first, void* second)
   return 0;
 }
 
-int string_comparer(void *first, void* second)
+static int string_comparer(void *first, void* second)
 {                
   return strcmp(*(char **)first, *(char **)second);
 }
 
-void create_random_str(char *dest, size_t length) {
+static void create_random_str(char *dest, size_t length) {
     char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
     while (length-- > 0) {
@@ -38,7 +38,7 @@ void create_random_str(char *dest, size_t length) {
     *dest = '\0';
 }
 
-void *int_array_getter(void *col, uint32_t index)
+static void *int_array_getter(void *col, uint32_t index)
 {
     return &((int *)col)[index];
 }

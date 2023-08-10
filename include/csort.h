@@ -29,55 +29,11 @@ SOFTWARE.
 typedef void *(*csort_item_getter_t)(void *collection, uint32_t index);
 typedef int (*csort_item_comparer_t)(void *first, void *second);
 
-typedef struct 
-{
-  void *collection;
-  int length;
-  uint32_t elem_size;
-  csort_item_getter_t getter;
-  csort_item_comparer_t comparer;
-} csort_qsort_opt_t;
-
-
-#define csort_swap(i, j, elem_size)                                               \
-({                                                                                \
-    unsigned char *ci = (unsigned char *)i;                                       \
-    unsigned char *cj = (unsigned char *)j;                                       \
-    unsigned char tmp;                                                            \
-                                                                                  \
-    for (uint32_t byte_iter = 0; byte_iter < (uint32_t)elem_size; ++byte_iter) {  \
-      tmp = ci[byte_iter];                                                        \
-      ci[byte_iter] = cj[byte_iter];                                              \
-      cj[byte_iter] = tmp;                                                        \
-    }                                                                             \
-})
-
-#define csort_qsort_partition(col, low, high, elem_size, getter, comparer) \
-({                                                                         \
-  int j;                                                                   \
-  int i = low;                                                             \
-  void *pivot;                                                             \
-  void *pj;                                                                \
-  if (!getter || !comparer) {                                              \
-    assert(false);                                                         \
-  }                                                                        \
-                                                                           \
-  pivot = getter(col, high);                                               \
-                                                                           \
-   for (j = low; j < high; j++){                                           \
-    pj = getter(col, j);                                                   \
-                                                                           \
-    if (comparer(pj, pivot) < 0) {                                         \
-        csort_swap(getter(col, i), pj, elem_size);                         \
-        i++;                                                               \
-      }                                                                    \
-    }                                                                      \
-  csort_swap(getter(col, i), getter(col, high), elem_size);                \
-                                                                           \
-  i;                                                                       \
-})
-
 
 void csort_qsort_recursion(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer);
 
 #define csort_qsort(collection, length, elem_size, getter, comparer) (csort_qsort_recursion(collection, 0, length - 1, elem_size, getter, comparer))
+
+
+
+// #define csort_qsort(collection, length)

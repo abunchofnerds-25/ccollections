@@ -26,51 +26,60 @@ SOFTWARE.
 #include <stdint.h>
 
 
-  
-// void csort_swap(void *i, void *j, uint32_t elem_size)
-// {
-//     unsigned char *ci = i;
-//     unsigned char *cj = j;
-//     unsigned char tmp;
+void csort_swap(void *i, void *j, uint32_t elem_size)
+{
+  unsigned char *ci = (unsigned char *)i;
+  unsigned char *cj = (unsigned char *)j;
+  unsigned char tmp;
 
-//     for (uint32_t byte_iter = 0; byte_iter < elem_size; ++byte_iter)
-//     {
-//         tmp = ci[byte_iter];
-//         ci[byte_iter] = cj[byte_iter];
-//         cj[byte_iter] = tmp;
-//     }
-// }
+  for (uint32_t byte_iter = 0; byte_iter < (uint32_t)elem_size; ++byte_iter)
+  {
+    tmp = ci[byte_iter];
+    ci[byte_iter] = cj[byte_iter];
+    cj[byte_iter] = tmp;
+  }
+}
 
-// int csort_qsort_partition(void *col, int low, int high, size_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer)   
-// {                                                                        
-//   int j;                                                                  
-//   int i = low;                                                            
-//   void *pivot = getter(col, high);
-//   void *pj;
+int csort_qsort_partition(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer)
+{
+  int j;
+  int i = low;
+  void *pivot;
+  void *pj;
+  if (!getter || !comparer)
+  {
+    assert(false);
+  }
 
-//   for (j = low; j < high; j++){
-//     pj = getter(col, j);
-    
-//     if (comparer(pj, pivot) < 0) {    
-//       csort_swap(getter(col, i), pj, elem_size);
-//       i++;                                                            
-//     }                                                                   
-//   }     
-//   csort_swap(getter(col, i), getter(col, high), elem_size);                                                              
-                                                                          
-//   return i;                                                                      
-// }
+  pivot = getter(col, high);
 
-void csort_qsort_recursion(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer)          
-{   
-  if (!col) {
+  for (j = low; j < high; j++)
+  {
+    pj = getter(col, j);
+
+    if (comparer(pj, pivot) < 0)
+    {
+      csort_swap(getter(col, i), pj, elem_size);
+      i++;
+    }
+  }
+  csort_swap(getter(col, i), getter(col, high), elem_size);
+
+  return i;
+}
+
+void csort_qsort_recursion(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer)
+{
+  if (!col)
+  {
     return;
   }
 
-    if (low < high) {                                                             
-      int pivot =                                                                 
-        csort_qsort_partition(col, low, high, elem_size, getter, comparer);        
-        csort_qsort_recursion(col, low, pivot - 1, elem_size, getter, comparer);   
-        csort_qsort_recursion(col, pivot + 1, high, elem_size, getter, comparer);   
-    }                                                                             
+  if (low < high)
+  {
+    int pivot =
+        csort_qsort_partition(col, low, high, elem_size, getter, comparer);
+    csort_qsort_recursion(col, low, pivot - 1, elem_size, getter, comparer);
+    csort_qsort_recursion(col, pivot + 1, high, elem_size, getter, comparer);
+  }
 }

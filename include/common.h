@@ -36,12 +36,12 @@ SOFTWARE.
 #define ccol_x_stringify(s) ccol_stringify(s)
 #define CCOL_ERR_STR(x) (__FILE__ ":" ccol_x_stringify(__LINE__) " - " x)
 
-#define fatal_err(err_fmt, ...)                                 \
-  do {                                                          \
-    char err_str[512] = {0};                                    \
-    snprintf(err_str, sizeof(err_str), err_fmt, ##__VA_ARGS__); \
-    fprintf(stderr, "%s\n", err_str);                           \
-    assert(false);                                              \
+#define fatal_err(_err_fmt, ...)                                   \
+  do {                                                             \
+    char _err_str[512] = {0};                                      \
+    snprintf(_err_str, sizeof(_err_str), _err_fmt, ##__VA_ARGS__); \
+    fprintf(stderr, "%s\n", _err_str);                             \
+    assert(false);                                                 \
   } while (0)
 
 // The following block is there to easily use customized memory management
@@ -69,8 +69,7 @@ typedef enum ccollections_retval_t {
   ccol_key_not_found,
   ccol_key_already_present,
   ccol_not_enough_memory,
-  ccol_success,
-  ccol_success_threshold = ccol_success
+  ccol_success
 } ccol_retval_t;
 
 // #define _ccol_destructor(destructor) __attribute__((__cleanup__(destructor)))

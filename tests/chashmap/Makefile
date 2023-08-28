@@ -1,30 +1,30 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS
-SRC_FILE_PREFIX = cthreadcomm
+SRC_FILE_PREFIX = chashmap
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
-	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror
+	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
-LFLAGS = -lm -lpthread
+LFLAGS =
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
-test:
+test: build
 	./tests
 
-memtest:
-	valgrind ./tests
+memtest: build
+	valgrind --leak-check=full -s --show-leak-kinds=all ./tests
 
 generate_coverage_report:
-	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
+	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
-	gcov tests-$(SRC_FILE_PREFIX) && \
+	gcov -d -w tests-$(SRC_FILE_PREFIX) && echo 'GCOV SUCCEEDED, CALLING LCOV' && \
 	lcov --ignore-errors mismatch --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
-	genhtml $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
+	genhtml -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info
 
 all: build test memtest generate_coverage_report

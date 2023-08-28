@@ -1,8 +1,8 @@
 .vscode/
 obj/
 libccollections.so
-test/*/tests
-test/*/coverage/
+tests/*/tests
+tests/*/coverage/
 *.gcno
 *.gcda
 *.gcov

@@ -12,11 +12,11 @@ LFLAGS =
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
 
-test:
+test: build
 	./tests
 
-memtest:
-	valgrind --leak-check=full ./tests
+memtest: build
+	valgrind --leak-check=full -s --show-leak-kinds=all ./tests
 
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \

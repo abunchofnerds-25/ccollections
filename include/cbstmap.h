@@ -175,29 +175,12 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     }                                                                        \
   } while (0)
 
-#define _populate_cbmap_pair(pair, data)         \
-  do {                                           \
-    bool is_data_string = _Generic((data),       \
-        char*: true,                             \
-        const char*: true,                       \
-        unsigned char*: true,                    \
-        const unsigned char*: true,              \
-        default: false);                         \
-    if (is_data_string) {                        \
-      pair->ptr = (char*)(&(data));              \
-      pair->size = strlen((char*)pair->ptr) + 1; \
-    } else {                                     \
-      pair->ptr = &data;                         \
-      pair->size = sizeof((data));               \
-    }                                            \
-  } while (0)
-
 #define cbmap_insert(hm_name, key, val)                               \
   do {                                                                \
     cmap_pair* key_pair = &(cmap_pair){};                             \
     cmap_pair* val_pair = &(cmap_pair){};                             \
-    _populate_cbmap_pair(key_pair, key);                              \
-    _populate_cbmap_pair(val_pair, val);                              \
+    _populate_cmap_pair(key_pair, key);                               \
+    _populate_cmap_pair(val_pair, val);                               \
     ccol_retval_t r = cbmap_insert_elem(hm_name, key_pair, val_pair); \
     if (r != ccol_success) {                                          \
       fatal_err("Failed to insert elem - r: %d", r);                  \
@@ -207,7 +190,7 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
 #define cbmap_remove(hm_name, key)                          \
   ({                                                        \
     cmap_pair* key_pair = &(cmap_pair){};                   \
-    _populate_cbmap_pair(key_pair, key);                    \
+    _populate_cmap_pair(key_pair, key);                     \
     ccol_retval_t r = cbmap_delete_elem(hm_name, key_pair); \
     r;                                                      \
   })
@@ -217,7 +200,7 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     typeof(*hm_name##__cbm_val_type_var)* val = NULL;                       \
     cmap_pair* key_pair = &(cmap_pair){};                                   \
     cmap_pair* val_pair = NULL;                                             \
-    _populate_cbmap_pair(key_pair, key);                                    \
+    _populate_cmap_pair(key_pair, key);                                     \
     ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
     if (r != ccol_success) {                                                \
       fatal_err("Failed to get elem ref - r: %d", r);                       \
@@ -233,7 +216,7 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     } else if (val_pair->size != sizeof(*val)) {                            \
       fatal_err(                                                            \
           "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-          val_pair->size, sizeof(val));                                     \
+          val_pair->size, (unsigned long)sizeof(val));                      \
     } else {                                                                \
       val = (typeof(*hm_name##__cbm_val_type_var)*)(val_pair->ptr);         \
     }                                                                       \
@@ -245,7 +228,7 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     typeof(*hm_name##__cbm_val_type_var)* val = NULL;                       \
     cmap_pair* key_pair = &(cmap_pair){};                                   \
     cmap_pair* val_pair = NULL;                                             \
-    _populate_cbmap_pair(key_pair, key);                                    \
+    _populate_cmap_pair(key_pair, key);                                     \
     ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
     if (r != ccol_success) {                                                \
       fatal_err("Failed to get elem ref - r: %d", r);                       \

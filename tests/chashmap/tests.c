@@ -1,7 +1,11 @@
 #include <chashmap.h>
 #include <stdlib.h>
 #include <string.h>
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #include <tau/tau.h>
+#pragma GCC diagnostic pop
+
 TAU_MAIN()  // sets up Tau (+ main function)
 
 // HASH_MAP TESTS
@@ -417,7 +421,7 @@ TEST(chash_maps, insertions_with_a_variety_of_key_sizes) {
   char* a_string_key = "a string key for testing";
   for (uint32_t i = 1; i <= 24; ++i) {
     char key[32] = {0};
-    snprintf(key, 32, "%.*s", i, a_string_key);
+    snprintf(key, sizeof(key), "%.*s", i, a_string_key);
     val = i + 5;
 
     REQUIRE_EQ(
@@ -621,7 +625,7 @@ TEST(chash_maps, scaling) {
 
   char key_buf[16] = {0};
   for (uint32_t i = 0; i <= first_up_threshold; ++i) {
-    snprintf(key_buf, 16, "key%u", i);
+    snprintf(key_buf, sizeof(key_buf), "key%u", i);
     REQUIRE_EQ(insert_string_to_int(chmap, key_buf, 3), ccol_success);
   }
 
@@ -633,7 +637,7 @@ TEST(chash_maps, scaling) {
   REQUIRE_TRUE(first_capacity < chmap_get_bucket_arr_size(chmap));
 
   for (uint32_t i = 0; i <= first_up_threshold; ++i) {
-    snprintf(key_buf, 16, "key%u", i);
+    snprintf(key_buf, sizeof(key_buf), "key%u", i);
     delete_int_from_string(chmap, key_buf);
   }
 
@@ -732,15 +736,24 @@ TEST(chash_maps, map_string_to_void_ptrs) {
   some_struct d1 = (some_struct){.a = 3, .b = 4};
   some_struct d2 = (some_struct){.a = 5, .b = 6};
   some_struct d3 = (some_struct){.a = 7, .b = 8};
+  some_struct d4 = (some_struct){.a = 9, .b = 10};
 
   void* val_ptr = &d1;
   chmap_insert(hm, "d1", val_ptr);
+
   val_ptr = &d2;
   chmap_insert(hm, "d2", val_ptr);
-  val_ptr = &d3;
-  chmap_insert(hm, "d3", val_ptr);
 
-  int records[3] = {0};
+  val_ptr = &d3;
+  char k_d3[16];
+  snprintf(k_d3, sizeof(k_d3), "d3");
+  chmap_insert(hm, k_d3, val_ptr);
+
+  val_ptr = &d4;
+  const char* k_d4 = "d4";
+  chmap_insert(hm, k_d4, val_ptr);
+
+  int records[4] = {0};
   int counter = 0;
 
   chmap_iter_declare(hm, it);
@@ -757,13 +770,17 @@ TEST(chash_maps, map_string_to_void_ptrs) {
       REQUIRE_EQ(records[2]++, 0);
       REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->a, 7);
       REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->b, 8);
+    } else if (strcmp(*chmap_iter_key_ptr(it), "d4") == 0) {
+      REQUIRE_EQ(records[3]++, 0);
+      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->a, 9);
+      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->b, 10);
     } else {
       REQUIRE_TRUE(false);
     }
     ++counter;
   }
 
-  REQUIRE_EQ(counter, 3);
+  REQUIRE_EQ(counter, 4);
 
   chmap_destroy(hm);
 }

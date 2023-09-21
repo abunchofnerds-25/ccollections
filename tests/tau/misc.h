@@ -28,7 +28,7 @@ Copyright (c) 2021 Jason Dsouza <@jasmcaus>
     #define TAU_PRId64 "I64d"
     #define TAU_PRIu64 "I64u"
 #else
-    // Avoid spurious trailing \u2018%\u2019 in format error
+    // Avoid spurious trailing ‘%’ in format error
 	// See: https://stackoverflow.com/questions/8132399/how-to-printf-uint64-t-fails-with-spurious-trailing-in-format
 	#define __STDC_FORMAT_MACROS
     #include <inttypes.h>

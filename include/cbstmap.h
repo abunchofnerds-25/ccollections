@@ -70,38 +70,26 @@ cmap_iterator* cbmap_begin_iter(cbmap cbm, char** err);
 
 cmap_iterator* cbmap_iter_next(cmap_iterator* iter);
 
-#define cbmap_iter_key_ptr(iter)                                    \
-  ({                                                                \
-    bool is_key_string = _Generic((*iter##__cbm_iter_key_type_var), \
-        char*: true,                                                \
-        const char*: true,                                          \
-        unsigned char*: true,                                       \
-        const unsigned char*: true,                                 \
-        default: false);                                            \
-    const typeof(*iter##__cbm_iter_key_type_var)* key;              \
-    if (is_key_string) {                                            \
-      key = (typeof(key))(&iter->key_pair->ptr);                    \
-    } else {                                                        \
-      key = (typeof(key))(iter->key_pair->ptr);                     \
-    }                                                               \
-    key;                                                            \
+#define cbmap_iter_key_ptr(iter)                       \
+  ({                                                   \
+    const typeof(*iter##__cbm_iter_key_type_var)* key; \
+    if (is_char_ptr(*iter##__cbm_iter_key_type_var)) { \
+      key = (typeof(key))(&iter->key_pair->ptr);       \
+    } else {                                           \
+      key = (typeof(key))(iter->key_pair->ptr);        \
+    }                                                  \
+    key;                                               \
   })
 
-#define cbmap_iter_val_ptr(iter)                                    \
-  ({                                                                \
-    bool is_val_string = _Generic((*iter##__cbm_iter_val_type_var), \
-        char*: true,                                                \
-        const char*: true,                                          \
-        unsigned char*: true,                                       \
-        const unsigned char*: true,                                 \
-        default: false);                                            \
-    typeof(*iter##__cbm_iter_val_type_var)* val;                    \
-    if (is_val_string) {                                            \
-      val = (typeof(val))(&iter->val_pair->ptr);                    \
-    } else {                                                        \
-      val = (typeof(val))(iter->val_pair->ptr);                     \
-    }                                                               \
-    val;                                                            \
+#define cbmap_iter_val_ptr(iter)                       \
+  ({                                                   \
+    typeof(*iter##__cbm_iter_val_type_var)* val;       \
+    if (is_char_ptr(*iter##__cbm_iter_val_type_var)) { \
+      val = (typeof(val))(&iter->val_pair->ptr);       \
+    } else {                                           \
+      val = (typeof(val))(iter->val_pair->ptr);        \
+    }                                                  \
+    val;                                               \
   })
 
 void __cbmap_iterator_destroy(cmap_iterator* iter);
@@ -140,20 +128,14 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
   typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */
 
-#define cbmap_init(hm_name)                                        \
-  do {                                                             \
-    char* err = NULL;                                              \
-    bool keys_are_signed = _Generic((hm_name##__cbm_key_type_var), \
-        char*: true,                                               \
-        int8_t*: true,                                             \
-        short*: true,                                              \
-        int*: true,                                                \
-        long*: true,                                               \
-        default: false);                                           \
-    hm_name = cbmap_create_mp(keys_are_signed, NULL, &err);        \
-    if (!hm_name) {                                                \
-      fatal_err("%s", err);                                        \
-    }                                                              \
+#define cbmap_init(hm_name)                                            \
+  do {                                                                 \
+    char* err = NULL;                                                  \
+    hm_name = cbmap_create_mp(                                         \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, &err); \
+    if (!hm_name) {                                                    \
+      fatal_err("%s", err);                                            \
+    }                                                                  \
   } while (0)
 
 #define cbmap_construct(hm_name, key_t, val_t)                               \
@@ -162,14 +144,8 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
   do {                                                                       \
     char* err = NULL;                                                        \
-    bool keys_are_signed = _Generic((hm_name##__cbm_key_type_var),           \
-        char*: true,                                                         \
-        int8_t*: true,                                                       \
-        short*: true,                                                        \
-        int*: true,                                                          \
-        long*: true,                                                         \
-        default: false);                                                     \
-    hm_name = cbmap_create_mp(keys_are_signed, NULL, &err);                  \
+    hm_name = cbmap_create_mp(                                               \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, &err);       \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
     }                                                                        \
@@ -205,13 +181,7 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     if (r != ccol_success) {                                                \
       fatal_err("Failed to get elem ref - r: %d", r);                       \
     }                                                                       \
-    bool is_val_string = _Generic(*hm_name##__cbm_val_type_var,             \
-        char*: true,                                                        \
-        const char*: true,                                                  \
-        unsigned char*: true,                                               \
-        const unsigned char*: true,                                         \
-        default: false);                                                    \
-    if (is_val_string) {                                                    \
+    if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                        \
       val = (typeof(*hm_name##__cbm_val_type_var)*)&(val_pair->ptr);        \
     } else if (val_pair->size != sizeof(*val)) {                            \
       fatal_err(                                                            \
@@ -223,30 +193,23 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     *val;                                                                   \
   })
 
-#define cbmap_get_ptr(hm_name, key)                                         \
-  ({                                                                        \
-    typeof(*hm_name##__cbm_val_type_var)* val = NULL;                       \
-    cmap_pair* key_pair = &(cmap_pair){};                                   \
-    cmap_pair* val_pair = NULL;                                             \
-    _populate_cmap_pair(key_pair, key);                                     \
-    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
-    if (r != ccol_success) {                                                \
-      fatal_err("Failed to get elem ref - r: %d", r);                       \
-    }                                                                       \
-    bool is_val_string = _Generic(*hm_name##__cbm_val_type_var,             \
-        char*: true,                                                        \
-        const char*: true,                                                  \
-        unsigned char*: true,                                               \
-        const unsigned char*: true,                                         \
-        default: false);                                                    \
-    if (is_val_string) {                                                    \
-      val = (typeof(*hm_name##__cbm_val_type_var)*)&(val_pair->ptr);        \
-    } else if (val_pair->size != sizeof(*val)) {                            \
-      fatal_err(                                                            \
-          "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-          val_pair->size, sizeof(val));                                     \
-    } else {                                                                \
-      val = (typeof(*hm_name##__cbm_val_type_var)*)(val_pair->ptr);         \
-    }                                                                       \
-    val;                                                                    \
+#define cbmap_get_ptr(hm_name, key)                                           \
+  ({                                                                          \
+    typeof(*hm_name##__cbm_val_type_var)* val = NULL;                         \
+    cmap_pair* key_pair = &(cmap_pair){};                                     \
+    cmap_pair* val_pair = NULL;                                               \
+    _populate_cmap_pair(key_pair, key);                                       \
+    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);       \
+    if (r == ccol_success) {                                                  \
+      if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                        \
+        val = (typeof(*hm_name##__cbm_val_type_var)*)&(val_pair->ptr);        \
+      } else if (val_pair->size != sizeof(*val)) {                            \
+        fatal_err(                                                            \
+            "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
+            val_pair->size, sizeof(val));                                     \
+      } else {                                                                \
+        val = (typeof(*hm_name##__cbm_val_type_var)*)(val_pair->ptr);         \
+      }                                                                       \
+    }                                                                         \
+    val;                                                                      \
   })

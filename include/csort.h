@@ -29,11 +29,40 @@ SOFTWARE.
 typedef void *(*csort_item_getter_t)(void *collection, uint32_t index);
 typedef int (*csort_item_comparer_t)(void *first, void *second);
 
-
+int csort_qsort_default_integral_type_comparer(void *first, void *second);
+int csort_qsort_default_string_comparer(void *first, void *second);
 void csort_qsort_recursion(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer);
 
-#define csort_qsort(collection, length, elem_size, getter, comparer) (csort_qsort_recursion(collection, 0, length - 1, elem_size, getter, comparer))
+#define csort_qsort_ex(collection, length, elem_size, getter, comparer) (csort_qsort_recursion(collection, 0, length - 1, elem_size, getter, comparer))
 
 
+#define __get_collection_getter(col)    \
+  _Generic((col),                       \
+    cvec: (csort_item_getter_t)cvec_at, \
+    default: NULL                       \
+  )
+
+
+#define __get_collection_comparer(col)                            \
+  ({                                                              \
+    csort_item_comparer_t comparer;                               \
+    if (is_integral_type(typeof(*(col##__cvec_type_var)))) {      \
+    } else if (is_char_ptr(data)) {                               \
+    }                                                             \
+    comparer;                                                     \
+  })
+
+
+#define csort_qsort(collection, length) \
+  ({                                    \
+    size_t size = sizeof(typeof(*collection##__cvec_type_var));   \
+    csort_qsort_recursion(                                        \
+      collection,                                                 \
+      0,                                                          \
+      length - 1,                                                 \
+      size,                                                       \
+      __get_collection_getter(collection),                        \
+      comparer)                                                   \
+  })
 
 // #define csort_qsort(collection, length)

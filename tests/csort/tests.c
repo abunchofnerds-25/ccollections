@@ -8,7 +8,7 @@
 
 TAU_MAIN() // sets up Tau (+ main function)
 
-TEST(csort, cvector_integer_sort)
+TEST(csort, cvector_integer_qsort_ex)
 {
   const int num_sample = 10;
   const unsigned int seed = time(NULL);
@@ -31,7 +31,7 @@ TEST(csort, cvector_integer_sort)
 
   REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
 
-  csort_qsort(cvec, cvector_elem_count(cvec), elem_size, (csort_item_getter_t)cvector_at, int_comparer);
+  csort_qsort_ex(cvec, cvector_elem_count(cvec), elem_size, (csort_item_getter_t)cvector_at, int_comparer);
 
   for (i = 1; i < num_sample; i++)
   {
@@ -52,7 +52,7 @@ int double_compare(void *first, void *second)
   return (*(double *)first) - (*(double *)second);
 }
 
-TEST(csort, cvector_double_sort)
+TEST(csort, cvector_double_qsort_ex)
 {
   const int num_sample = 10;
   const unsigned int seed = time(NULL);
@@ -75,7 +75,7 @@ TEST(csort, cvector_double_sort)
 
   REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
 
-  csort_qsort(cvec, cvector_elem_count(cvec), elem_size, (csort_item_getter_t)cvector_at, double_comparer);
+  csort_qsort_ex(cvec, cvector_elem_count(cvec), elem_size, (csort_item_getter_t)cvector_at, double_comparer);
 
   for (i = 1; i < num_sample; i++)
   {
@@ -86,7 +86,7 @@ TEST(csort, cvector_double_sort)
   REQUIRE_EQ((void *)cvec, NULL);
 }
 
-TEST(csort, cvector_string_sort)
+TEST(csort, cvector_string_qsort_ex)
 {
   const unsigned int seed = time(NULL);
   const int num_sample = 10;
@@ -112,7 +112,7 @@ TEST(csort, cvector_string_sort)
 
   REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
 
-  csort_qsort(cvec, cvector_elem_count(cvec), elem_size, (csort_item_getter_t)cvector_at, string_comparer);
+  csort_qsort_ex(cvec, cvector_elem_count(cvec), elem_size, (csort_item_getter_t)cvector_at, string_comparer);
 
   {
     char *first, *second;
@@ -128,12 +128,12 @@ TEST(csort, cvector_string_sort)
   REQUIRE_EQ((void *)cvec, NULL);
 }
 
-TEST(csort, null_collection_check)
+TEST(csort, null_collection_check_qsort_ex)
 {
-  csort_qsort(NULL, 100, 200, (csort_item_getter_t)cvector_at, int_comparer);
+  csort_qsort_ex(NULL, 100, 200, (csort_item_getter_t)cvector_at, int_comparer);
 }
 
-TEST(csort, cvector_sort_with_wrong_collection_size)
+TEST(csort, cvector_sort_with_wrong_collection_size_qsort_ex)
 {
   int dataset[] = {9, 4, 3, 6, 8, 5, 1, 2, 0, 7};
   const int num_sample = sizeof(dataset) / sizeof(*dataset);
@@ -153,7 +153,7 @@ TEST(csort, cvector_sort_with_wrong_collection_size)
 
   REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
 
-  csort_qsort(cvec, cvector_elem_count(cvec) - 5, elem_size, (csort_item_getter_t)cvector_at, int_comparer);
+  csort_qsort_ex(cvec, cvector_elem_count(cvec) - 5, elem_size, (csort_item_getter_t)cvector_at, int_comparer);
 
   {
     int unsorted_count = 0;
@@ -172,7 +172,7 @@ TEST(csort, cvector_sort_with_wrong_collection_size)
   REQUIRE_EQ((void *)cvec, NULL);
 }
 
-TEST(csort, array_integer_sort)
+TEST(csort, array_integer_sort_qsort_ex)
 {
   const int num_sample = 10;
   const unsigned int seed = time(NULL);
@@ -189,10 +189,23 @@ TEST(csort, array_integer_sort)
   }
 
 
-  csort_qsort(arr, num_sample, elem_size, int_array_getter, int_comparer);
+  csort_qsort_ex(arr, num_sample, elem_size, int_array_getter, int_comparer);
 
   for (i = 1; i < num_sample; i++)
   {
     REQUIRE_LE(arr[i - 1], arr[i]);
   }
+}
+
+
+TEST(csort, dev_test)
+{
+  // char char_arr[5];
+  // short short_arr[5];
+  int int_arr[5];
+  // long long_arr[5];
+
+  size_t size = __get_elem_size_v4(int_arr);
+  printf("size: %ld\n", size);
+
 }

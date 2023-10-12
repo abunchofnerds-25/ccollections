@@ -24,6 +24,7 @@ SOFTWARE.
 
 #include <csort.h>
 #include <stdint.h>
+#include <string.h>
 
 
 void csort_swap(void *i, void *j, uint32_t elem_size)
@@ -83,3 +84,30 @@ void csort_qsort_recursion(void *col, int low, int high, uint32_t elem_size, cso
     csort_qsort_recursion(col, pivot + 1, high, elem_size, getter, comparer);
   }
 }
+
+
+int csort_default_string_comparer(const void *first, const void *second)
+{                
+  return strcmp((const char *)first, (const char *)second);
+}
+
+#define __define_default_integral_comparer(type, name)                              \
+int csort_default_##name##_comparer(const void *first, const void *second) {              \
+  return (*(const type*)first > *(const type*)second) - (*(const type*)first < *(const type*)second); \
+}
+
+__define_default_integral_comparer(char, char)
+__define_default_integral_comparer(short, short)
+__define_default_integral_comparer(int, int)
+__define_default_integral_comparer(long, long)
+__define_default_integral_comparer(long long, long_long)
+__define_default_integral_comparer(unsigned char, unsigned_char)
+__define_default_integral_comparer(unsigned short, unsigned_short)
+__define_default_integral_comparer(unsigned int, unsigned_int)
+__define_default_integral_comparer(unsigned long, unsigned_long)
+__define_default_integral_comparer(unsigned long long, unsigned_long_long)
+__define_default_integral_comparer(float, float)
+__define_default_integral_comparer(double, double)
+__define_default_integral_comparer(long double, long_double)
+
+#undef __define_default_integral_comparer

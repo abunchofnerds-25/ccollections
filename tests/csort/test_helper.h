@@ -23,10 +23,6 @@ static int double_comparer(void *first, void* second)
   return 0;
 }
 
-static int string_comparer(void *first, void* second)
-{                
-  return strcmp(*(char **)first, *(char **)second);
-}
 
 static void create_random_str(char *dest, size_t length) {
     char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";

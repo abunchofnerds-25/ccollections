@@ -157,17 +157,17 @@ void cvector_reset(cvec v);
 #define cvec_reset(v) cvector_reset(v)
 
 
-#define cvector_sort_with_comparer(v, comparer)                                                                  \
-do{                                                                                                                 \
-  if (!v || !comparer) {                                                                                            \
-    assert(false);                                                                                                  \
-  }                                                                                                                 \
-  csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)), (csort_item_getter_t)cvector_at, comparer);   \
+#define cvector_sort_with_comparer(v, comparer)                                                                           \
+do{                                                                                                                       \
+  if (!v || !comparer) {                                                                                                  \
+    assert(false);                                                                                                        \
+  }                                                                                                                       \
+  csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)), (csort_item_getter_t)cvector_at, comparer, NULL);   \
 } while(0)
 
 #define cvec_sort(v)                                                                      \
   do{                                                                                     \
-    csort_item_comparer_t comparer = __csort_default_get_comparer(*(v##__cvec_type_var)); \
+    csort_item_comparer_t comparer = csort_get_default_comparer(*(v##__cvec_type_var));   \
     cvector_sort_with_comparer(v, comparer);                                              \
   } while (0)
 

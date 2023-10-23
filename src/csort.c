@@ -26,22 +26,25 @@ SOFTWARE.
 #include <stdint.h>
 #include <string.h>
 
-
-void csort_swap(void *i, void *j, uint32_t elem_size)
+void csort_default_swapper(void *first, void *second, uint32_t elem_size)
 {
-  unsigned char *ci = (unsigned char *)i;
-  unsigned char *cj = (unsigned char *)j;
+  unsigned char *ptr_btye_first = (unsigned char *)first;
+  unsigned char *ptr_byte_second = (unsigned char *)second;
   unsigned char tmp;
+
+  if (!first || !second || first == second)  { 
+    return;
+  }
 
   for (uint32_t byte_iter = 0; byte_iter < (uint32_t)elem_size; ++byte_iter)
   {
-    tmp = ci[byte_iter];
-    ci[byte_iter] = cj[byte_iter];
-    cj[byte_iter] = tmp;
+    tmp = ptr_btye_first[byte_iter];
+    ptr_btye_first[byte_iter] = ptr_byte_second[byte_iter];
+    ptr_byte_second[byte_iter] = tmp;
   }
 }
 
-int csort_qsort_partition(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer)
+int csort_qsort_partition(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer, csort_item_swapper_t swapper)
 {
   int j;
   int i = low;
@@ -60,54 +63,61 @@ int csort_qsort_partition(void *col, int low, int high, uint32_t elem_size, csor
 
     if (comparer(pj, pivot) < 0)
     {
-      csort_swap(getter(col, i), pj, elem_size);
+      swapper(getter(col, i), pj, elem_size);
       i++;
     }
   }
-  csort_swap(getter(col, i), getter(col, high), elem_size);
+  swapper(getter(col, i), getter(col, high), elem_size);
 
   return i;
 }
 
-void csort_qsort_recursion(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer)
+void ___csort_qsort_recursion(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer, csort_item_swapper_t swapper)
 {
   if (!col)
   {
     return;
   }
 
+  if (!getter || !comparer) {
+    assert(false);
+  }
+
+  if (!swapper) {
+    swapper = csort_default_swapper;
+  }
+
   if (low < high)
   {
     int pivot =
-        csort_qsort_partition(col, low, high, elem_size, getter, comparer);
-    csort_qsort_recursion(col, low, pivot - 1, elem_size, getter, comparer);
-    csort_qsort_recursion(col, pivot + 1, high, elem_size, getter, comparer);
+        csort_qsort_partition(col, low, high, elem_size, getter, comparer, swapper);
+        ___csort_qsort_recursion(col, low, pivot - 1, elem_size, getter, comparer, swapper);
+        ___csort_qsort_recursion(col, pivot + 1, high, elem_size, getter, comparer, swapper);
   }
 }
 
-
 int csort_default_string_comparer(const void *first, const void *second)
-{                
-  return strcmp((const char *)first, (const char *)second);
+{ 
+  return strcmp(*(const char **)first, *(const char **)second);
 }
 
-#define __define_default_integral_comparer(type, name)                              \
-int csort_default_##name##_comparer(const void *first, const void *second) {              \
-  return (*(const type*)first > *(const type*)second) - (*(const type*)first < *(const type*)second); \
+#define ___csort__define_default_integral_comparer(type, name)                                               \
+int ___csort__get_default_integral_comparer_name(name)(const void *first, const void *second) {              \
+  return (*(const type*)first > *(const type*)second) - (*(const type*)first < *(const type*)second);        \
 }
 
-__define_default_integral_comparer(char, char)
-__define_default_integral_comparer(short, short)
-__define_default_integral_comparer(int, int)
-__define_default_integral_comparer(long, long)
-__define_default_integral_comparer(long long, long_long)
-__define_default_integral_comparer(unsigned char, unsigned_char)
-__define_default_integral_comparer(unsigned short, unsigned_short)
-__define_default_integral_comparer(unsigned int, unsigned_int)
-__define_default_integral_comparer(unsigned long, unsigned_long)
-__define_default_integral_comparer(unsigned long long, unsigned_long_long)
-__define_default_integral_comparer(float, float)
-__define_default_integral_comparer(double, double)
-__define_default_integral_comparer(long double, long_double)
+___csort__define_default_integral_comparer(char, char)
+___csort__define_default_integral_comparer(short, short)
+___csort__define_default_integral_comparer(int, int)
+___csort__define_default_integral_comparer(long, long)
+___csort__define_default_integral_comparer(long long, long_long)
+___csort__define_default_integral_comparer(unsigned char, unsigned_char)
+___csort__define_default_integral_comparer(unsigned short, unsigned_short)
+___csort__define_default_integral_comparer(unsigned int, unsigned_int)
+___csort__define_default_integral_comparer(unsigned long, unsigned_long)
+___csort__define_default_integral_comparer(unsigned long long, unsigned_long_long)
+___csort__define_default_integral_comparer(float, float)
+___csort__define_default_integral_comparer(double, double)
+___csort__define_default_integral_comparer(long double, long_double)
 
 #undef __define_default_integral_comparer

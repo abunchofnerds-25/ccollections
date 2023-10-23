@@ -28,107 +28,78 @@ SOFTWARE.
 
 typedef void *(*csort_item_getter_t)(void *collection, uint32_t index);
 typedef int (*csort_item_comparer_t)(const void *first, const void *second);
+typedef void (*csort_item_swapper_t)(void *first, void *second, uint32_t elem_size);
 
-
-void csort_qsort_recursion(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer);
-
-#define csort_sort(collection, length, elem_size, getter, comparer) (csort_qsort_recursion(collection, 0, length - 1, elem_size, getter, comparer))
-
-/* Decleration of default comparers */
+/* Declaration of default sort functions */
+void csort_default_swapper(void *first, void *second, uint32_t elem_size);
 int csort_default_string_comparer(const void *first, const void *second);
+/* End of Declaration of default sort functions */
 
-#define __declare_default_integral_comparer(type, name)                              \
-int csort_default_##name##_comparer(const void *first, const void *second);
+/*Declarations for internal use*/
+void ___csort_qsort_recursion(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer, csort_item_swapper_t swapper);
+/*End of Declarations for internal use*/
 
-__declare_default_integral_comparer(char, char)
-__declare_default_integral_comparer(short, short)
-__declare_default_integral_comparer(int, int)
-__declare_default_integral_comparer(long, long)
-__declare_default_integral_comparer(long long, long_long)
-__declare_default_integral_comparer(unsigned char, unsigned_char)
-__declare_default_integral_comparer(unsigned short, unsigned_short)
-__declare_default_integral_comparer(unsigned int, unsigned_int)
-__declare_default_integral_comparer(unsigned long, unsigned_long)
-__declare_default_integral_comparer(unsigned long long, unsigned_long_long)
-__declare_default_integral_comparer(float, float)
-__declare_default_integral_comparer(double, double)
-__declare_default_integral_comparer(long double, long_double)
+#define csort_sort(collection, length, elem_size, getter, comparer, swapper) (___csort_qsort_recursion(collection, 0, length - 1, elem_size, getter, comparer, swapper))
+
+/* Comparer related macros */
+/* Comparer declaration denerator macros */
+#define ___csort__get_default_integral_comparer_name(name) csort_default_##name##_comparer
+
+#define ___csort__declare_default_integral_comparer(type, name)                               \
+int ___csort__get_default_integral_comparer_name(name)(const void *first, const void *second);
+
+___csort__declare_default_integral_comparer(char, char)
+___csort__declare_default_integral_comparer(short, short)
+___csort__declare_default_integral_comparer(int, int)
+___csort__declare_default_integral_comparer(long, long)
+___csort__declare_default_integral_comparer(long long, long_long)
+___csort__declare_default_integral_comparer(unsigned char, unsigned_char)
+___csort__declare_default_integral_comparer(unsigned short, unsigned_short)
+___csort__declare_default_integral_comparer(unsigned int, unsigned_int)
+___csort__declare_default_integral_comparer(unsigned long, unsigned_long)
+___csort__declare_default_integral_comparer(unsigned long long, unsigned_long_long)
+___csort__declare_default_integral_comparer(float, float)
+___csort__declare_default_integral_comparer(double, double)
+___csort__declare_default_integral_comparer(long double, long_double)
 
 #undef __declare_default_integral_comparer
-/* End of Decleration of default comparers */
+/* End of Comparer declaration denerator macros */
 
-#define __get_collection_getter(col)    \
-  _Generic((col),                       \
-    cvec: (csort_item_getter_t)cvec_at, \
-    default: NULL                       \
-  )
-
-
-#define __get_collection_comparer(col)                            \
-  ({                                                              \
-    csort_item_comparer_t comparer;                               \
-    if (is_integral_type(typeof(*(col##__cvec_type_var)))) {      \
-    } else if (is_char_ptr(data)) {                               \
-    }                                                             \
-    comparer;                                                     \
-  })
-
-
-#define csort_qsort(collection, length) \
-  ({                                    \
-    size_t size = sizeof(typeof(*collection##__cvec_type_var));   \
-    csort_qsort_recursion(                                        \
-      collection,                                                 \
-      0,                                                          \
-      length - 1,                                                 \
-      size,                                                       \
-      __get_collection_getter(collection),                        \
-      comparer)                                                   \
-  })
-
-
-/* Default comparer getter Macros */
-#define __get_default_integral_comparer_name(name) csort_default_##name##_comparer
-
-#define __csort_default_get_comparer(x)                                                     \
-({                                                                                          \
-  csort_item_comparer_t comparer = NULL;                                                    \
-  if(is_integral_type(x)) {                                                                 \
-    comparer =   _Generic((x),                                                              \
-      char: __get_default_integral_comparer_name(char),                                     \
-      short: __get_default_integral_comparer_name(short),                                   \
-      int: __get_default_integral_comparer_name(int),                                       \
-      long: __get_default_integral_comparer_name(long),                                     \
-      long long: __get_default_integral_comparer_name(long_long),                           \
-      unsigned char: __get_default_integral_comparer_name(unsigned_char),                   \
-      unsigned short: __get_default_integral_comparer_name(unsigned_short),                 \
-      unsigned int: __get_default_integral_comparer_name(unsigned_int),                     \
-      unsigned long: __get_default_integral_comparer_name(unsigned_long),                   \
-      unsigned long long: __get_default_integral_comparer_name(unsigned_long_long),         \
-      float: __get_default_integral_comparer_name(float),                                   \
-      double: __get_default_integral_comparer_name(double),                                 \
-      long double: __get_default_integral_comparer_name(long_double),                       \
-      const char: __get_default_integral_comparer_name(char),                               \
-      const short: __get_default_integral_comparer_name(short),                             \
-      const int: __get_default_integral_comparer_name(int),                                 \
-      const long: __get_default_integral_comparer_name(long),                               \
-      const long long: __get_default_integral_comparer_name(long_long),                     \
-      const unsigned char: __get_default_integral_comparer_name(unsigned_char),             \
-      const unsigned short: __get_default_integral_comparer_name(unsigned_short),           \
-      const unsigned int: __get_default_integral_comparer_name(unsigned_int),               \
-      const unsigned long: __get_default_integral_comparer_name(unsigned_long),             \
-      const unsigned long long: __get_default_integral_comparer_name(unsigned_long_long),   \
-      const float: __get_default_integral_comparer_name(float),                             \
-      const double: __get_default_integral_comparer_name(double),                           \
-      const long double: __get_default_integral_comparer_name(long_double),                 \
-      default: NULL);                                                                       \
-  } else if(is_char_ptr(x)) {                                                               \
-    comparer = csort_default_string_comparer;                                               \
-  }                                                                                         \
-  comparer;                                                                                 \
+#define csort_get_default_comparer(x)                                                               \
+({                                                                                                  \
+  csort_item_comparer_t comparer = NULL;                                                            \
+  if(is_integral_type(x)) {                                                                         \
+    comparer =   _Generic((x),                                                                      \
+      char: ___csort__get_default_integral_comparer_name(char),                                     \
+      short: ___csort__get_default_integral_comparer_name(short),                                   \
+      int: ___csort__get_default_integral_comparer_name(int),                                       \
+      long: ___csort__get_default_integral_comparer_name(long),                                     \
+      long long: ___csort__get_default_integral_comparer_name(long_long),                           \
+      unsigned char: ___csort__get_default_integral_comparer_name(unsigned_char),                   \
+      unsigned short: ___csort__get_default_integral_comparer_name(unsigned_short),                 \
+      unsigned int: ___csort__get_default_integral_comparer_name(unsigned_int),                     \
+      unsigned long: ___csort__get_default_integral_comparer_name(unsigned_long),                   \
+      unsigned long long: ___csort__get_default_integral_comparer_name(unsigned_long_long),         \
+      float: ___csort__get_default_integral_comparer_name(float),                                   \
+      double: ___csort__get_default_integral_comparer_name(double),                                 \
+      long double: ___csort__get_default_integral_comparer_name(long_double),                       \
+      const char: ___csort__get_default_integral_comparer_name(char),                               \
+      const short: ___csort__get_default_integral_comparer_name(short),                             \
+      const int: ___csort__get_default_integral_comparer_name(int),                                 \
+      const long: ___csort__get_default_integral_comparer_name(long),                               \
+      const long long: ___csort__get_default_integral_comparer_name(long_long),                     \
+      const unsigned char: ___csort__get_default_integral_comparer_name(unsigned_char),             \
+      const unsigned short: ___csort__get_default_integral_comparer_name(unsigned_short),           \
+      const unsigned int: ___csort__get_default_integral_comparer_name(unsigned_int),               \
+      const unsigned long: ___csort__get_default_integral_comparer_name(unsigned_long),             \
+      const unsigned long long: ___csort__get_default_integral_comparer_name(unsigned_long_long),   \
+      const float: ___csort__get_default_integral_comparer_name(float),                             \
+      const double: ___csort__get_default_integral_comparer_name(double),                           \
+      const long double: ___csort__get_default_integral_comparer_name(long_double),                 \
+      default: NULL);                                                                               \
+  } else if(is_char_ptr(x)) {                                                                       \
+    comparer = csort_default_string_comparer;                                                       \
+  }                                                                                                 \
+  comparer;                                                                                         \
 })
-
-/* End of Default comparer getter Macros */
-
-
-// #define csort_qsort(collection, length)
+/* End of Comparer related macros */

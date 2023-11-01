@@ -32,6 +32,7 @@ typedef void (*csort_item_swapper_t)(void *first, void *second, uint32_t elem_si
 
 /* Declaration of default sort functions */
 void csort_default_swapper(void *first, void *second, uint32_t elem_size);
+void csort_default_pointer_swapper(void *first, void *second, uint32_t elem_size __attribute__((unused)));
 int csort_default_string_comparer(const void *first, const void *second);
 /* End of Declaration of default sort functions */
 

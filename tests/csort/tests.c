@@ -4,10 +4,45 @@
 #include <cvector.h>
 #include <tau/tau.h>
 
-#include "test_helper.h"
 
 TAU_MAIN() // sets up Tau (+ main function)
 
+#define define_integer_type_test(name, type, modulus_value)                     \
+TEST(csort, cvector_##name##_sort)                                              \
+{                                                                               \
+  const int num_sample = 10;                                                    \
+  const unsigned int seed = time(NULL);                                         \
+                                                                                \
+  char *err_str = NULL;                                                         \
+  int i;                                                                        \
+                                                                                \
+  srand(seed);                                                                  \
+  cvec_declare(cvec, type);                                                     \
+  cvec_init(cvec);                                                              \
+                                                                                \
+  REQUIRE_NE((void *)cvec, NULL);                                               \
+  REQUIRE_EQ((void *)err_str, NULL);                                            \
+                                                                                \
+  for (i = 0; i < num_sample; i++)                                              \
+  {                                                                             \
+    cvector_push_back(cvec, &(type){rand() % modulus_value});                   \
+  }                                                                             \
+                                                                                \
+  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);                             \
+                                                                                \
+  cvec_sort(cvec);                                                              \
+                                                                                \
+  for (i = 1; i < num_sample; i++)                                              \
+  {                                                                             \
+    REQUIRE_LE(*(type *)cvector_at(cvec, i - 1), *(type *)cvector_at(cvec, i)); \
+  }                                                                             \
+                                                                                \
+  cvector_destroy(cvec);                                                        \
+  REQUIRE_EQ((void *)cvec, NULL);                                               \
+}
+
+// The test for the int type has been written intentionally explicitly for inspection purposes.
+// The rest of the integer type test will be defined with the macro above.
 TEST(csort, cvector_integer_sort)
 {
   const int num_sample = 10;
@@ -41,6 +76,20 @@ TEST(csort, cvector_integer_sort)
   REQUIRE_EQ((void *)cvec, NULL);
 }
 
+define_integer_type_test(char, char, 100)
+define_integer_type_test(short, short, 1000)
+// define_integer_type_test(int, int, 1000) // Expilictly defined above
+define_integer_type_test(long, long, 1000)
+define_integer_type_test(long_long, long long, 1000)
+define_integer_type_test(unsigned_char, unsigned char, 100)
+define_integer_type_test(unsigned_short, unsigned short, 1000)
+define_integer_type_test(unsigned_int, unsigned int, 1000)
+define_integer_type_test(unsigned_long, unsigned long, 1000)
+// define_integer_type_test(unsigned_long_long, unsigned long long, 1000) // TAU REQUIRE_LE not supports unsigned long long
+
+
+
+
 TEST(csort, cvector_double_sort)
 {
   const int num_sample = 10;
@@ -68,6 +117,72 @@ TEST(csort, cvector_double_sort)
   for (i = 1; i < num_sample; i++)
   {
     REQUIRE_LE(*(double *)cvector_at(cvec, i - 1), *(double *)cvector_at(cvec, i));
+  }
+
+  cvector_destroy(cvec);
+  REQUIRE_EQ((void *)cvec, NULL);
+}
+
+TEST(csort, cvector_float_sort)
+{
+  const int num_sample = 10;
+  const unsigned int seed = time(NULL);
+
+  char *err_str = NULL;
+  int i;
+
+  srand(seed);
+  cvec_declare(cvec, float);
+  cvec_init(cvec);
+
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
+
+  for (i = 0; i < num_sample; i++)
+  {
+    cvector_push_back(cvec, &(float){((float)rand() / RAND_MAX * 10)});
+  }
+
+  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+
+  cvec_sort(cvec);
+
+  for (i = 1; i < num_sample; i++)
+  {
+    REQUIRE_LE(*(float *)cvector_at(cvec, i - 1), *(float *)cvector_at(cvec, i));
+  }
+
+  cvector_destroy(cvec);
+  REQUIRE_EQ((void *)cvec, NULL);
+}
+
+TEST(csort, cvector_long_double_sort)
+{
+  const int num_sample = 10;
+  const unsigned int seed = time(NULL);
+
+  char *err_str = NULL;
+  int i;
+
+  srand(seed);
+  cvec_declare(cvec, long double);
+  cvec_init(cvec);
+
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
+
+  for (i = 0; i < num_sample; i++)
+  {
+    cvector_push_back(cvec, &(long double){((long double)rand() / RAND_MAX * 10)});
+  }
+
+  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+
+  cvec_sort(cvec);
+
+  for (i = 1; i < num_sample; i++)
+  {
+    REQUIRE_LE(*(long double *)cvector_at(cvec, i - 1), *(long double *)cvector_at(cvec, i));
   }
 
   cvector_destroy(cvec);
@@ -140,6 +255,16 @@ char sorted_compare_values[10][100] = {
   REQUIRE_EQ((void *)cvec, NULL);
 }
 
+void create_random_str(char *dest, size_t length) {
+  char charset[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+  while (length-- > 0) {
+      size_t index = (double) rand() / RAND_MAX * (sizeof charset - 1);
+      *dest++ = charset[index];
+  }
+  *dest = '\0';
+}
+
 TEST(csort, cvector_string_sort_with_random_values)
 {
   const int num_sample = 10;
@@ -179,158 +304,3 @@ TEST(csort, cvector_string_sort_with_random_values)
   cvector_destroy(cvec);
   REQUIRE_EQ((void *)cvec, NULL);
 }
-
-TEST(csort, csort_default_get_comparer_test)
-{
-  csort_item_comparer_t comparer = NULL;
-  
-  cvec_enable_local_macros(charVecType, char);
-  comparer = csort_get_default_comparer(*charVecType__cvec_type_var);
-  REQUIRE_EQ((void *)comparer, (void *)csort_default_char_comparer);
-
-  cvec_enable_local_macros(shortVecType, short);
-  comparer = csort_get_default_comparer(*shortVecType__cvec_type_var);
-  REQUIRE_EQ((void *)comparer, (void *)csort_default_short_comparer);
-
-  cvec_enable_local_macros(intVecType, int);
-  comparer = csort_get_default_comparer(*intVecType__cvec_type_var);
-  REQUIRE_EQ((void *)comparer, (void *)csort_default_int_comparer);
-
-  // TODO: Add rest
-
-  cvec_enable_local_macros(pCharVecType, char*);
-  comparer = csort_get_default_comparer(*pCharVecType__cvec_type_var);
-  REQUIRE_EQ((void *)comparer, (void *)csort_default_string_comparer);
-
-}
-
-#include "temporary_test_linked_list.h"
-//// sizeof(NODE) temp_test_linked_list_swapper
-// TEST(csort, default_swap)
-// {
-//   const int num_sample = 10;
-//   const unsigned int seed = time(NULL);
-//   int i;
-//   int known_problematic_data_set[] = {1126865224, 1994478411, 2016342778, 874381483, 75213923, 1680913135, 1458973114, 1493654116, 63842372, 1335153754};
-
-//   temp_test_linked_list list = {0};
-//   ptr_temp_test_linked_list ptr_list = &list;
-
-//   srand(seed);
-
-//   for (i = 0; i < num_sample; i++)
-//   {
-//     temp_test_ll_push(ptr_list, rand());
-//   }
-
-//   temp_test_ll_print(ptr_list);
-
-
-//   csort_sort(
-//     ptr_list, 
-//     temp_test_ll_count(ptr_list), 
-//     sizeof(temp_test_ll_node),
-//     (csort_item_getter_t)temp_test_linked_list_getter_wrapper,
-//     (csort_item_comparer_t)temp_test_linked_list_comparer,
-//     temp_test_linked_list_swapper
-//   );
-//   temp_test_ll_print(ptr_list);
-  
-//   ptr_list->Head = temp_test_ll_node_iterate_backward(ptr_list->Head, -1);
-//   // temp_test_ll_print_detailed(ptr_list);
-//   temp_test_ll_print(ptr_list);
-
-//   printf("count: %d\n", temp_test_ll_count(ptr_list));
-// }
-
-//// sizeof(NODE) temp_test_linked_list_swapper
-// TEST(csort, test_for_temp_test_linked_list_swapper)
-// {
-//   temp_test_linked_list list = {0};
-//   ptr_temp_test_linked_list ptr_list = &list;
-
-//   temp_test_ll_push(ptr_list, 10);
-//   temp_test_ll_push(ptr_list, 5);
-//   temp_test_ll_push(ptr_list, 20);
-//   temp_test_ll_push(ptr_list, 15);
-
-//   csort_sort(
-//     ptr_list, 
-//     temp_test_ll_count(ptr_list), 
-//     sizeof(temp_test_ll_node),
-//     (csort_item_getter_t)temp_test_linked_list_getter_wrapper,
-//     (csort_item_comparer_t)temp_test_linked_list_comparer,
-//     temp_test_linked_list_swapper
-//   );
-  
-//   ptr_list->Head = temp_test_ll_node_iterate_backward(ptr_list->Head, -1);
-//   temp_test_ll_print_detailed(ptr_list);
-
-//   printf("count: %d\n", temp_test_ll_count(ptr_list));
-// }
-
-//// sizeof(int) temp_test_linked_list_swapper_v2
-// TEST(csort, test_for_temp_test_linked_list_swapper_v2)
-// {
-//   temp_test_linked_list list = {0};
-//   ptr_temp_test_linked_list ptr_list = &list;
-
-//   temp_test_ll_push(ptr_list, 10);
-//   temp_test_ll_push(ptr_list, 5);
-//   temp_test_ll_push(ptr_list, 20);
-//   temp_test_ll_push(ptr_list, 15);
-
-//   csort_sort(
-//     ptr_list, 
-//     temp_test_ll_count(ptr_list), 
-//     sizeof(int),
-//     (csort_item_getter_t)temp_test_linked_list_getter_wrapper,
-//     (csort_item_comparer_t)temp_test_linked_list_comparer,
-//     temp_test_linked_list_swapper_v2
-//   );
-  
-//   // ptr_list->Head = temp_test_ll_node_iterate_backward(ptr_list->Head, -1);
-//   temp_test_ll_print_detailed(ptr_list);
-
-//   printf("count: %d\n", temp_test_ll_count(ptr_list));
-// }
-
-
-// sizeof(int) temp_test_linked_list_swapper_v2
-TEST(csort, rand_test_for_temp_test_linked_list_swapper_v2)
-{
-  const int num_sample = 10;
-  const unsigned int seed = time(NULL);
-  int i;
-  int known_problematic_data_set[] = {1126865224, 1994478411, 2016342778, 874381483, 75213923, 1680913135, 1458973114, 1493654116, 63842372, 1335153754};
-
-  temp_test_linked_list list = {0};
-  ptr_temp_test_linked_list ptr_list = &list;
-
-  srand(seed);
-
-  for (i = 0; i < num_sample; i++)
-  {
-    // temp_test_ll_push(ptr_list, rand());
-    temp_test_ll_push(ptr_list, known_problematic_data_set[i]);
-  }
-
-  temp_test_ll_print(ptr_list);
-
-
-  csort_sort(
-    ptr_list, 
-    temp_test_ll_count(ptr_list), 
-    sizeof(int),
-    (csort_item_getter_t)temp_test_linked_list_getter_wrapper,
-    (csort_item_comparer_t)temp_test_linked_list_comparer,
-    temp_test_linked_list_swapper_v2
-  );
-  
-  // ptr_list->Head = temp_test_ll_node_iterate_backward(ptr_list->Head, -1);
-  // temp_test_ll_print_detailed(ptr_list);
-  temp_test_ll_print(ptr_list);
-
-  printf("count: %d\n", temp_test_ll_count(ptr_list));
-}
-

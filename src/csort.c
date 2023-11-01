@@ -44,6 +44,17 @@ void csort_default_swapper(void *first, void *second, uint32_t elem_size)
   }
 }
 
+void csort_default_pointer_swapper(void *first, void *second, uint32_t elem_size __attribute__((unused)))
+{
+  if (!first || !second || first == second)  { 
+    return;
+  }
+
+  void *tmp = first;
+  first = second;
+  second = tmp;
+}
+
 int csort_qsort_partition(void *col, int low, int high, uint32_t elem_size, csort_item_getter_t getter, csort_item_comparer_t comparer, csort_item_swapper_t swapper)
 {
   int j;

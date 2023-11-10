@@ -113,23 +113,32 @@ TEST(add_duration_to_timespec, edge_cases) {
 TEST(circular_queues, create_fails) {
   char* err_str = NULL;
 
-  circular_queue* cq = circular_queue_create(0, &err_str);
+  circular_queue* cq = circular_queue_create_with_mprocs(0, NULL, &err_str);
   REQUIRE_EQ((void*)cq, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 
-  cq = circular_queue_create(-1, &err_str);
+  cq = circular_queue_create_with_mprocs(-1, NULL, &err_str);
   REQUIRE_EQ((void*)cq, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 
-  cq = circular_queue_create((uint32_t)INT32_MAX + 1, &err_str);
+  cq = circular_queue_create_with_mprocs((uint32_t)INT32_MAX + 1, NULL,
+                                         &err_str);
+  REQUIRE_EQ((void*)cq, NULL);
+  REQUIRE_NE((void*)err_str, NULL);
+
+  cq = circular_queue_create_with_mprocs(
+      (uint32_t)INT32_MAX,
+      &(ccol_memmgmt_procs_t){
+          .calloc = calloc, .free = free, .malloc = malloc, .realloc = NULL},
+      &err_str);
   REQUIRE_EQ((void*)cq, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 }
 
-TEST(circular_queues, create_and_destroy) {
+TEST(circular_queues, create_and_destroy_no_mem_procs) {
   char* err_str = "";
 
-  circular_queue* cq = circular_queue_create(1, &err_str);
+  circular_queue* cq = circular_queue_create_with_mprocs(1, NULL, &err_str);
   REQUIRE_NE((void*)cq, NULL);
   REQUIRE_EQ((void*)err_str, NULL);
 
@@ -137,8 +146,49 @@ TEST(circular_queues, create_and_destroy) {
   REQUIRE_EQ((void*)cq, NULL);
 }
 
-TEST(circular_queues, basic_send_and_receive) {
-  circular_queue* cq = circular_queue_create(1, NULL);
+TEST(circular_queues, create_and_destroy_with_mem_procs) {
+  char* err_str = "";
+
+  circular_queue* cq = circular_queue_create_with_mprocs(
+      1,
+      &(ccol_memmgmt_procs_t){
+          .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
+      &err_str);
+  REQUIRE_NE((void*)cq, NULL);
+  REQUIRE_EQ((void*)err_str, NULL);
+
+  circular_queue_destroy(cq);
+  REQUIRE_EQ((void*)cq, NULL);
+}
+
+TEST(circular_queues, basic_send_and_receive_no_mem_procs) {
+  circular_queue* cq = circular_queue_create_with_mprocs(1, NULL, NULL);
+
+  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  ((char*)(m1.data))[0] = 'A';
+  ((char*)(m1.data))[1] = '\0';
+
+  REQUIRE_EQ(circq_send_zc(cq, &m1), ccol_success);
+  REQUIRE_EQ(m1.data, NULL);  // The ownership of the message is lost.
+
+  c_message_t m2;
+  REQUIRE_EQ(circq_recv_zc(cq, &m2), ccol_success);
+
+  REQUIRE_NE(m2.data, NULL);
+  REQUIRE_EQ(((char*)(m2.data))[0], 'A');
+  REQUIRE_EQ(((char*)(m2.data))[1], '\0');
+  REQUIRE_EQ(m2.size, 16);
+
+  free(m2.data);
+  circular_queue_destroy(cq);
+}
+
+TEST(circular_queues, basic_send_and_receive_with_mem_procs) {
+  circular_queue* cq = circular_queue_create_with_mprocs(
+      1,
+      &(ccol_memmgmt_procs_t){
+          .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
+      NULL);
 
   c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char*)(m1.data))[0] = 'A';
@@ -160,7 +210,7 @@ TEST(circular_queues, basic_send_and_receive) {
 }
 
 TEST(circular_queues, msg_count) {
-  circular_queue* cq = circular_queue_create(3, NULL);
+  circular_queue* cq = circular_queue_create_with_mprocs(3, NULL, NULL);
 
   c_message_t m1 = {.data = NULL, .size = 0};
 
@@ -180,7 +230,7 @@ TEST(circular_queues, msg_count) {
 }
 
 TEST(circular_queues, basic_send_and_receive_NULL_msg) {
-  circular_queue* cq = circular_queue_create(3, NULL);
+  circular_queue* cq = circular_queue_create_with_mprocs(3, NULL, NULL);
 
   c_message_t m1 = {.data = NULL, .size = 0};
   REQUIRE_EQ(circq_send_zc(cq, &m1), ccol_success);
@@ -201,7 +251,7 @@ TEST(circular_queues, basic_send_and_receive_NULL_msg) {
 }
 
 TEST(circular_queues, try_send_and_try_receive) {
-  circular_queue* cq = circular_queue_create(1, NULL);
+  circular_queue* cq = circular_queue_create_with_mprocs(1, NULL, NULL);
 
   c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char*)(m1.data))[0] = 'A';
@@ -235,7 +285,7 @@ TEST(circular_queues, try_send_and_try_receive) {
   (B.tv_sec - A.tv_sec) * 1000000 + (B.tv_nsec - A.tv_nsec) / 1000
 
 TEST(circular_queues, timed_send_and_timed_receive) {
-  circular_queue* cq = circular_queue_create(1, NULL);
+  circular_queue* cq = circular_queue_create_with_mprocs(1, NULL, NULL);
 
   c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char*)(m1.data))[0] = 'A';
@@ -285,7 +335,7 @@ TEST(circular_queues, timed_send_and_timed_receive) {
 }
 
 TEST(circular_queues, enable_disable_sending) {
-  circular_queue* cq = circular_queue_create(1, NULL);
+  circular_queue* cq = circular_queue_create_with_mprocs(1, NULL, NULL);
 
   c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char*)(m1.data))[0] = 'A';
@@ -342,7 +392,7 @@ void* cq_helper_thread(void* args) {
 }
 
 TEST(circular_queues, send_and_receive_thread) {
-  circular_queue* cq = circular_queue_create(1, NULL);
+  circular_queue* cq = circular_queue_create_with_mprocs(1, NULL, NULL);
 
   pthread_t tid;
   pthread_create(&tid, NULL, cq_helper_thread, cq);
@@ -368,10 +418,24 @@ TEST(circular_queues, send_and_receive_thread) {
 
 // DYNAMIC_QUEUE TESTS
 
-TEST(dynamic_queues, create_and_destroy) {
+TEST(dynamic_queues, create_fails) {
   char* err_str = "";
 
-  dynamic_queue* dq = dynamic_queue_create(&err_str);
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(
+      &(ccol_memmgmt_procs_t){
+          .calloc = calloc, .free = free, .malloc = malloc, .realloc = NULL},
+      &err_str);
+  REQUIRE_EQ((void*)dq, NULL);
+  REQUIRE_NE((void*)err_str, NULL);
+
+  dynamic_queue_destroy(dq);
+  REQUIRE_EQ((void*)dq, NULL);
+}
+
+TEST(dynamic_queues, create_and_destroy_no_mprocs) {
+  char* err_str = "";
+
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(NULL, &err_str);
   REQUIRE_NE((void*)dq, NULL);
   REQUIRE_EQ((void*)err_str, NULL);
 
@@ -379,8 +443,46 @@ TEST(dynamic_queues, create_and_destroy) {
   REQUIRE_EQ((void*)dq, NULL);
 }
 
-TEST(dynamic_queues, basic_send_and_receive) {
-  dynamic_queue* dq = dynamic_queue_create(NULL);
+TEST(dynamic_queues, create_and_destroy_with_mprocs) {
+  char* err_str = "";
+
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(
+      &(ccol_memmgmt_procs_t){
+          .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
+      &err_str);
+  REQUIRE_NE((void*)dq, NULL);
+  REQUIRE_EQ((void*)err_str, NULL);
+
+  dynamic_queue_destroy(dq);
+  REQUIRE_EQ((void*)dq, NULL);
+}
+
+TEST(dynamic_queues, basic_send_and_receive_no_mprocs) {
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(NULL, NULL);
+
+  c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
+  ((char*)(m1.data))[0] = 'A';
+  ((char*)(m1.data))[1] = '\0';
+
+  REQUIRE_EQ(dynmq_send_zc(dq, &m1), ccol_success);
+  REQUIRE_EQ(m1.data, NULL);  // The ownership of the message is lost.
+
+  c_message_t m2 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(dynmq_recv_zc(dq, &m2), ccol_success);
+
+  REQUIRE_NE(m2.data, NULL);
+  REQUIRE_EQ(((char*)(m2.data))[0], 'A');
+  REQUIRE_EQ(((char*)(m2.data))[1], '\0');
+
+  free(m2.data);
+  dynamic_queue_destroy(dq);
+}
+
+TEST(dynamic_queues, basic_send_and_receive_with_mprocs) {
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(
+      &(ccol_memmgmt_procs_t){
+          .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
+      NULL);
 
   c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char*)(m1.data))[0] = 'A';
@@ -401,7 +503,7 @@ TEST(dynamic_queues, basic_send_and_receive) {
 }
 
 TEST(dynamic_queues, msg_count) {
-  dynamic_queue* dq = dynamic_queue_create(NULL);
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 
   c_message_t m1 = {.data = NULL, .size = 0};
 
@@ -421,7 +523,7 @@ TEST(dynamic_queues, msg_count) {
 }
 
 TEST(dynamic_queues, destroy_queue_with_items_in_it) {
-  dynamic_queue* dq = dynamic_queue_create(NULL);
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 
   c_message_t m1 = {.data = NULL, .size = 0};
 
@@ -436,7 +538,7 @@ TEST(dynamic_queues, destroy_queue_with_items_in_it) {
 }
 
 TEST(dynamic_queues, basic_send_and_receive_NULL_msg) {
-  dynamic_queue* dq = dynamic_queue_create(NULL);
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 
   c_message_t m1 = {.data = NULL, .size = 0};
   REQUIRE_EQ(dynmq_send_zc(dq, &m1), ccol_success);
@@ -469,7 +571,7 @@ TEST(dynamic_queues, basic_send_and_receive_NULL_msg) {
 }
 
 TEST(dynamic_queues, send_and_try_receive) {
-  dynamic_queue* dq = dynamic_queue_create(NULL);
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 
   c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char*)(m1.data))[0] = 'A';
@@ -492,7 +594,7 @@ TEST(dynamic_queues, send_and_try_receive) {
 }
 
 TEST(dynamic_queues, send_and_timed_receive) {
-  dynamic_queue* dq = dynamic_queue_create(NULL);
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 
   c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char*)(m1.data))[0] = 'A';
@@ -528,7 +630,7 @@ TEST(dynamic_queues, send_and_timed_receive) {
 }
 
 TEST(dynamic_queues, enable_disable_sending) {
-  dynamic_queue* dq = dynamic_queue_create(NULL);
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 
   c_message_t m1 = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char*)(m1.data))[0] = 'A';
@@ -569,7 +671,7 @@ void* dq_helper_thread(void* args) {
 }
 
 TEST(dynamic_queues, send_and_receive_thread) {
-  dynamic_queue* dq = dynamic_queue_create(NULL);
+  dynamic_queue* dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 
   pthread_t tid;
   pthread_create(&tid, NULL, dq_helper_thread, dq);
@@ -593,23 +695,46 @@ TEST(dynamic_queues, send_and_receive_thread) {
 TEST(channels, create_fails) {
   char* err_str = NULL;
 
-  channel* ch = channel_create(0, &err_str);
+  channel* ch = channel_create_with_mprocs(0, NULL, &err_str);
   REQUIRE_EQ((void*)ch, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 
-  ch = channel_create(-1, &err_str);
+  ch = channel_create_with_mprocs(-1, NULL, &err_str);
   REQUIRE_EQ((void*)ch, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 
-  ch = channel_create((uint32_t)INT32_MAX + 1, &err_str);
+  ch = channel_create_with_mprocs((uint32_t)INT32_MAX + 1, NULL, &err_str);
+  REQUIRE_EQ((void*)ch, NULL);
+  REQUIRE_NE((void*)err_str, NULL);
+
+  ch = channel_create_with_mprocs(
+      (uint32_t)INT32_MAX,
+      &(ccol_memmgmt_procs_t){
+          .calloc = calloc, .free = NULL, .malloc = malloc, .realloc = realloc},
+      &err_str);
   REQUIRE_EQ((void*)ch, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 }
 
-TEST(channels, create_and_destroy) {
+TEST(channels, create_and_destroy_no_mprocs) {
   char* err_str = "";
 
-  channel* ch = channel_create(1, &err_str);
+  channel* ch = channel_create_with_mprocs(1, NULL, &err_str);
+  REQUIRE_NE((void*)ch, NULL);
+  REQUIRE_EQ((void*)err_str, NULL);
+
+  channel_destroy(ch);
+  REQUIRE_EQ((void*)ch, NULL);
+}
+
+TEST(channels, create_and_destroy_with_mprocs) {
+  char* err_str = "";
+
+  channel* ch = channel_create_with_mprocs(
+      1,
+      &(ccol_memmgmt_procs_t){
+          .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
+      &err_str);
   REQUIRE_NE((void*)ch, NULL);
   REQUIRE_EQ((void*)err_str, NULL);
 
@@ -636,8 +761,33 @@ void* thr_for_channels_basic_send_and_receive(void* args) {
   return NULL;
 }
 
-TEST(channels, basic_send_and_receive) {
-  channel* ch = channel_create(1, NULL);
+TEST(channels, basic_send_and_receive_no_mprocs) {
+  channel* ch = channel_create_with_mprocs(1, NULL, NULL);
+
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_for_channels_basic_send_and_receive, ch);
+
+  c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
+  *((char*)m1.data) = 'A';
+  REQUIRE_EQ(chan_send_zc(ch, &m1), ccol_success);
+  REQUIRE_EQ(m1.data, NULL);
+
+  c_message_t m2 = {.data = NULL, .size = 0};
+  REQUIRE_EQ(chan_recv_zc(ch, &m2), ccol_success);
+  REQUIRE_NE(m2.data, NULL);
+  REQUIRE_EQ(*((char*)m2.data), 'B');
+
+  free(m2.data);
+  pthread_join(tid, NULL);
+  channel_destroy(ch);
+}
+
+TEST(channels, basic_send_and_receive_with_mprocs) {
+  channel* ch = channel_create_with_mprocs(
+      1,
+      &(ccol_memmgmt_procs_t){
+          .calloc = calloc, .free = free, .malloc = malloc, .realloc = realloc},
+      NULL);
 
   pthread_t tid;
   pthread_create(&tid, NULL, thr_for_channels_basic_send_and_receive, ch);
@@ -679,7 +829,7 @@ void* thr_for_channels_msg_count(void* args) {
 }
 
 TEST(channels, msg_count) {
-  channel* ch = channel_create(3, NULL);
+  channel* ch = channel_create_with_mprocs(3, NULL, NULL);
 
   c_message_t m1 = {.data = NULL, .size = 0};
 
@@ -732,7 +882,7 @@ void* thr_for_channels_try_send_and_try_receive(void* args) {
 }
 
 TEST(channels, try_send_and_try_receive) {
-  channel* ch = channel_create(1, NULL);
+  channel* ch = channel_create_with_mprocs(1, NULL, NULL);
 
   pthread_t tid;
   pthread_create(&tid, NULL, thr_for_channels_try_send_and_try_receive, ch);
@@ -811,7 +961,7 @@ void* thr_for_channels_timed_send_and_timed_receive(void* args) {
 }
 
 TEST(channels, timed_send_and_timed_receive) {
-  channel* ch = channel_create(1, NULL);
+  channel* ch = channel_create_with_mprocs(1, NULL, NULL);
 
   pthread_t tid;
   pthread_create(&tid, NULL, thr_for_channels_timed_send_and_timed_receive, ch);
@@ -884,7 +1034,7 @@ void* thr_for_enable_disable_sending(void* args) {
 }
 
 TEST(channels, enable_disable_sending) {
-  channel* ch = channel_create(1, NULL);
+  channel* ch = channel_create_with_mprocs(1, NULL, NULL);
 
   pthread_t tid;
   pthread_create(&tid, NULL, thr_for_enable_disable_sending, ch);

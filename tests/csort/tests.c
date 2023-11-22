@@ -304,3 +304,85 @@ TEST(csort, cvector_string_sort_with_random_values)
   cvector_destroy(cvec);
   REQUIRE_EQ((void *)cvec, NULL);
 }
+
+typedef struct custom_test_struct{
+  int data;
+} custom_test_struct;
+
+int custom_test_struct_comparison_proc(const void *first, const void *second)
+{
+  custom_test_struct* p_struct_first = (custom_test_struct*)first;
+  custom_test_struct* p_struct_second = (custom_test_struct*)second;
+
+  return p_struct_first->data - p_struct_second->data;
+}
+
+TEST(csort, cvector_custom_test_struct_sort)
+{
+  const int num_sample = 10;
+  const unsigned int seed = time(NULL);
+
+  char *err_str = NULL;
+  int i;
+
+  srand(seed);
+  cvec_declare(cvec, custom_test_struct);
+  cvec_init(cvec);
+
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
+
+  for (i = 0; i < num_sample; i++)
+  {
+    cvector_push_back(cvec, &(custom_test_struct){.data = rand()});
+  }
+
+  REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
+
+  cvector_sort_with_comparison_proc(cvec, custom_test_struct_comparison_proc);
+
+  custom_test_struct* p_struct_first;
+  custom_test_struct* p_struct_second;
+  for (i = 1; i < num_sample; i++)
+  {
+    p_struct_first = (custom_test_struct *)cvector_at(cvec, i - 1);
+    p_struct_second = (custom_test_struct *)cvector_at(cvec, i);
+    REQUIRE_LE(p_struct_first->data, p_struct_second->data);
+  }
+
+  cvector_destroy(cvec);
+  REQUIRE_EQ((void *)cvec, NULL);
+}
+
+void *c_int_array_getter_proc_t(void *collection, uint32_t index)
+{
+  return ((int *)collection) + index;
+}
+
+TEST(csort, c_int_array_sort)
+{
+  const int num_sample = 10;
+  const unsigned int seed = time(NULL);
+  int test_array[10];
+  int i;
+
+  srand(seed);
+
+  for (i = 0; i < num_sample; i++)
+  {
+    test_array[i] = rand();
+  }
+
+  csort_sort(
+    test_array, 
+    sizeof(test_array) / sizeof(*test_array),
+    sizeof(*test_array),
+    c_int_array_getter_proc_t,
+    csort_get_default_comparison_proc(*test_array),
+    NULL
+  );
+  for (i = 1; i < num_sample; i++)
+  {
+    REQUIRE_LE(test_array[i - 1], test_array[i]);
+  }
+}

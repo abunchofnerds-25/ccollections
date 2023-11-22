@@ -157,17 +157,17 @@ void cvector_reset(cvec v);
 #define cvec_reset(v) cvector_reset(v)
 
 
-#define cvector_sort_with_comparer(v, comparer)                                                                           \
-do{                                                                                                                       \
-  if (!v || !comparer) {                                                                                                  \
-    assert(false);                                                                                                        \
-  }                                                                                                                       \
-  csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)), (csort_item_getter_t)cvector_at, comparer, NULL);   \
+#define cvector_sort_with_comparison_proc(v, comparison_proc)                                                                     \
+do{                                                                                                                               \
+  if (!v) {                                                                                                                       \
+    assert(false);                                                                                                                \
+  }                                                                                                                               \
+  csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)), (csort_item_getter_proc_t)cvector_at, comparison_proc, NULL);    \
 } while(0)
 
-#define cvec_sort(v)                                                                      \
-  do{                                                                                     \
-    csort_item_comparer_t comparer = csort_get_default_comparer(*(v##__cvec_type_var));   \
-    cvector_sort_with_comparer(v, comparer);                                              \
+#define cvec_sort(v)                                                                                      \
+  do{                                                                                                     \
+    ccol_comparison_proc_t comparison_proc = csort_get_default_comparison_proc(*(v##__cvec_type_var));    \
+    cvector_sort_with_comparison_proc(v, comparison_proc);                                                \
   } while (0)
 

@@ -88,6 +88,10 @@ typedef struct ccol_memmgmt_procs_t {
   ccol_memmgmt_procs_realloc_t realloc;
 } ccol_memmgmt_procs_t;
 
+// The following function type can be used to supply a custom comparison
+// function.
+typedef int (*ccol_comparison_proc_t)(const void *first, const void *second);
+
 typedef struct cmap_pair {
   void* ptr;
   uint32_t size;

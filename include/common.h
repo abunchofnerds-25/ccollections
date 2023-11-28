@@ -92,7 +92,7 @@ typedef struct ccol_memmgmt_procs_t {
 
 // The following function type can be used to supply a custom comparison
 // function.
-typedef bool (*ccol_comparison_proc_t)(const void* ptr1, const void* ptr2);
+typedef int (*ccol_comparison_proc_t)(const void *first, const void *second);
 
 // The following function type can be used to supply a custom hashing function.
 typedef unsigned long (*ccol_hashing_proc_t)(const void* ptr);

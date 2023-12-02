@@ -11,3 +11,4 @@ tests/*/coverage/
 *.o
 main
 /*.pdb
+.envrc

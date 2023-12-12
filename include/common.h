@@ -30,6 +30,30 @@ SOFTWARE.
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+
+#define mutex_t pthread_mutex_t
+#define mutex_destroy(m) pthread_mutex_destroy(&m)
+#define mutex_init(m) pthread_mutex_init(&m, NULL)
+#define mutex_lock(m) pthread_mutex_lock(&m)
+#define mutex_unlock(m) pthread_mutex_unlock(&m)
+
+#define rw_lock_t pthread_rwlock_t
+#define rw_lock_destroy(a) pthread_rwlock_destroy(a)
+#define rw_lock_init(a) pthread_rwlock_init(a, NULL)
+#define rw_lock_wrlock(a) pthread_rwlock_wrlock(a)
+#define rw_lock_rdlock(a) pthread_rwlock_rdlock(a)
+#define rw_lock_unlock(a) pthread_rwlock_unlock(a)
+
+#define cond_var_t pthread_cond_t
+#define cond_var_destroy(c) pthread_cond_destroy(&c)
+#define cond_var_init(c) pthread_cond_init(&c, NULL)
+#define cond_var_wait(c, m) pthread_cond_wait(&c, &m)
+#define cond_var_timedwait(c, m, t) pthread_cond_timedwait(&c, &m, &t)
+#define cond_var_signal(c) pthread_cond_signal(&c)
+
+#define thread_id_t pthread_t
+#define get_thread_id pthread_self
 
 // The following block is for having static error messages in place
 // when things fail during container "construction".
@@ -60,7 +84,7 @@ SOFTWARE.
   (m_procs) ? m_procs->realloc(ptr, new_size) : mem_realloc(ptr, new_size)
 #define _mem_free(m_procs, ptr) (m_procs) ? m_procs->free(ptr) : mem_free(ptr)
 
-#define max_elem_count UINT64_MAX
+#define max_elem_count (UINT64_MAX - 1)
 
 typedef enum ccollections_retval_t {
   ccol_unexpected_failure = -9,
@@ -92,7 +116,7 @@ typedef struct ccol_memmgmt_procs_t {
 
 // The following function type can be used to supply a custom comparison
 // function.
-typedef int (*ccol_comparison_proc_t)(const void *first, const void *second);
+typedef int (*ccol_comparison_proc_t)(const void* first, const void* second);
 
 // The following function type can be used to supply a custom hashing function.
 typedef unsigned long (*ccol_hashing_proc_t)(const void* ptr);

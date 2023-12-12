@@ -26,23 +26,6 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-#define mem_alloc(size) malloc(size)
-#define mem_calloc(elem_count, elem_size) calloc(elem_count, elem_size)
-#define mem_realloc(ptr, new_size) realloc(ptr, new_size)
-#define mem_free(ptr) free(ptr)
-
-#define _mem_alloc(m_procs, size) \
-  (m_procs) ? m_procs->malloc(size) : mem_alloc(size)
-#define _mem_calloc(m_procs, e_count, e_size) \
-  (m_procs) ? m_procs->calloc(e_count, e_size) : mem_calloc(e_count, e_size)
-#define _mem_realloc(m_procs, ptr, new_size) \
-  (m_procs) ? m_procs->realloc(ptr, new_size) : mem_realloc(ptr, new_size)
-#define _mem_free(m_procs, ptr) (m_procs) ? m_procs->free(ptr) : mem_free(ptr)
-
-#define stringify(s) #s
-#define x_stringify(s) stringify(s)
-#define CERR_STR(x) (__FILE__ ":" x_stringify(__LINE__) " - " x)
-
 const size_t minimum_capacity = 4;
 const size_t scaling_factor = 2;
 
@@ -73,7 +56,7 @@ bool verify_cvector_create_inputs(size_t elem_size,
                                   char** err) {
   if (elem_size == 0) {
     if (err) {
-      *err = CERR_STR("elem_size is zero");
+      *err = CCOL_ERR_STR("elem_size is zero");
     }
     return false;
   }
@@ -95,7 +78,7 @@ cvec cvector_create_with_mprocs(size_t elem_size,
   v = _mem_calloc(mmgt_procs, 1, sizeof(cvector));
   if (!v) {
     if (err) {
-      *err = CERR_STR("failed to allocate vector container");
+      *err = CCOL_ERR_STR("failed to allocate vector container");
     }
     return NULL;
   }
@@ -109,7 +92,7 @@ cvec cvector_create_with_mprocs(size_t elem_size,
   if (!v->data_ptr) {
     __cvector_destroy(v);
     if (err) {
-      *err = CERR_STR("failed to allocate data container");
+      *err = CCOL_ERR_STR("failed to allocate data container");
     }
     return NULL;
   }

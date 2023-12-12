@@ -37,26 +37,26 @@ typedef struct mempool mempool;
 // are expected to ignore this internal struct.
 typedef struct __internal_entry_header {
   size_t elem_status;
-  mempool *pool_ptr;
+  mempool* pool_ptr;
   // The following field should always be the last field.
-  uintptr_t *next;
+  uintptr_t* next;
 } __internal_entry_header;
 
-mempool *mempool_create(size_t elem_count, size_t elem_size,
+mempool* mempool_create(size_t elem_count, size_t elem_size,
                         bool fallback_to_dynamic_memory,
                         bool will_be_accessed_by_only_one_thread,
-                        ccol_memmgmt_procs_t *mmgmt_procs, char **err);
+                        ccol_memmgmt_procs_t* mmgmt_procs, char** err);
 
 #define DECLARE_PREALLOCATED_MEMPOOL_BUFFER(name, elem_count, elem_size) \
   uint8_t                                                                \
       name[elem_count * (elem_size + offsetof(__internal_entry_header, next))]
 
-mempool *mempool_create_from_preallocated_buffer(
-    void *buffer, size_t buf_size, size_t elem_size,
+mempool* mempool_create_from_preallocated_buffer(
+    void* buffer, size_t buf_size, size_t elem_size,
     bool fallback_to_dynamic_memory, bool will_be_accessed_by_only_one_thread,
-    ccol_memmgmt_procs_t *mmgmt_procs, char **err);
+    ccol_memmgmt_procs_t* mmgmt_procs, char** err);
 
-void _mempool_destroy(mempool *mp);
+void _mempool_destroy(mempool* mp);
 
 #define mempool_destroy(mp) \
   do {                      \
@@ -64,11 +64,11 @@ void _mempool_destroy(mempool *mp);
     mp = NULL;              \
   } while (0)
 
-void *mempool_alloc_entry(mempool *mp);
+void* mempool_alloc_entry(mempool* mp);
 
-void *mempool_calloc_entry(mempool *mp);
+void* mempool_calloc_entry(mempool* mp);
 
-void _mempool_free_entry(void *entry);
+void _mempool_free_entry(void* entry);
 
 #define mempool_free_entry(entry) \
   do {                            \
@@ -76,11 +76,11 @@ void _mempool_free_entry(void *entry);
     entry = NULL;                 \
   } while (0)
 
-size_t mempool_total_capacity(mempool *mp);
+size_t mempool_total_capacity(mempool* mp);
 
-size_t mempool_used_count(mempool *mp);
+size_t mempool_used_count(mempool* mp);
 
-size_t mempool_dynamic_allocs_count(mempool *mp);
+size_t mempool_dynamic_allocs_count(mempool* mp);
 
 // Ranged mempool declarations
 // The ranged mempools are a quick alternative to dynamic memory
@@ -106,12 +106,12 @@ typedef enum r_memory_fallback_policy_t {
 // successor. The number of the 'smallest_sized' elements will
 // be number_of_smallest_size_elems (Again, 'ceiled' to the
 // closest power of two).
-r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
+r_mempool* r_mempool_create(uint8_t smallest_size_power_of_two,
                             uint8_t largest_size_power_of_two,
                             uint8_t number_of_smallest_size_elems_power_of_two,
                             r_memory_fallback_policy_t fb_policy,
                             bool will_be_accessed_by_only_one_thread,
-                            ccol_memmgmt_procs_t *mmgmt_procs, char **err);
+                            ccol_memmgmt_procs_t* mmgmt_procs, char** err);
 
 // The macro CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE calculates
 // the required size for a rmempool. It is not meant to be used
@@ -135,15 +135,15 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
       smallest_size_power_of_two, largest_size_power_of_two,     \
       number_of_smallest_size_elems_power_of_two)]
 
-r_mempool *r_mempool_create_from_preallocated_buffer(
-    void *buffer, size_t buf_size, uint8_t smallest_size_power_of_two,
+r_mempool* r_mempool_create_from_preallocated_buffer(
+    void* buffer, size_t buf_size, uint8_t smallest_size_power_of_two,
     uint8_t largest_size_power_of_two,
     uint8_t number_of_smallest_size_elems_power_of_two,
     r_memory_fallback_policy_t fb_policy,
-    bool will_be_accessed_by_only_one_thread, ccol_memmgmt_procs_t *mmgmt_procs,
-    char **err);
+    bool will_be_accessed_by_only_one_thread, ccol_memmgmt_procs_t* mmgmt_procs,
+    char** err);
 
-void _r_mempool_destroy(r_mempool *rmp);
+void _r_mempool_destroy(r_mempool* rmp);
 
 #define r_mempool_destroy(rmp) \
   do {                         \
@@ -151,16 +151,16 @@ void _r_mempool_destroy(r_mempool *rmp);
     rmp = NULL;                \
   } while (0)
 
-size_t r_mempool_used_count(r_mempool *rmp, size_t size);
+size_t r_mempool_used_count(r_mempool* rmp, size_t size);
 
-size_t r_mempool_total_capacity(r_mempool *rmp, size_t size);
+size_t r_mempool_total_capacity(r_mempool* rmp, size_t size);
 
-size_t r_mempool_dynamic_allocs_count(r_mempool *rmp, size_t size);
+size_t r_mempool_dynamic_allocs_count(r_mempool* rmp, size_t size);
 
-void *r_mempool_alloc_entry(r_mempool *rmp, size_t size);
+void* r_mempool_alloc_entry(r_mempool* rmp, size_t size);
 
-void *r_mempool_calloc_entry(r_mempool *rmp, size_t size);
+void* r_mempool_calloc_entry(r_mempool* rmp, size_t size);
 
-void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size);
+void* r_mempool_realloc_entry(r_mempool* rmp, void* addr, size_t size);
 
 #define r_mempool_free_entry(entry) mempool_free_entry(entry)

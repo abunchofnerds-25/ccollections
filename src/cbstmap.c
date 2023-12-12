@@ -35,7 +35,7 @@ typedef struct bmap_node {
   cmap_pair key_pair;
   cmap_pair val_pair;
   // Relational pointers
-  struct bmap_node* parent;
+  // struct bmap_node* parent;
   struct bmap_node* left;
   struct bmap_node* right;
   // Metadata for self-balancing

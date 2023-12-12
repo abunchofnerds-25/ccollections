@@ -27,26 +27,6 @@ SOFTWARE.
 #include <pthread.h>
 #include <stdlib.h>
 
-#define mutex_t pthread_mutex_t
-#define mutex_destroy(m) pthread_mutex_destroy(&m)
-#define mutex_init(m) pthread_mutex_init(&m, NULL)
-#define mutex_lock(m) pthread_mutex_lock(&m)
-#define mutex_unlock(m) pthread_mutex_unlock(&m)
-
-#define cond_var_t pthread_cond_t
-#define cond_var_destroy(c) pthread_cond_destroy(&c)
-#define cond_var_init(c) pthread_cond_init(&c, NULL)
-#define cond_var_wait(c, m) pthread_cond_wait(&c, &m)
-#define cond_var_timedwait(c, m, t) pthread_cond_timedwait(&c, &m, &t)
-#define cond_var_signal(c) pthread_cond_signal(&c)
-
-#define thread_id_t pthread_t
-#define get_thread_id pthread_self
-
-#define stringify(s) #s
-#define x_stringify(s) stringify(s)
-#define CERR_STR(x) (__FILE__ ":" x_stringify(__LINE__) " - " x)
-
 #ifdef RUNNING_UNIT_TESTS
 #include <assert.h>
 #endif
@@ -103,14 +83,14 @@ bool verify_circular_queue_create_inputs(size_t max_size,
                                          char** err_str) {
   if (max_size == 0) {
     if (err_str) {
-      *err_str = CERR_STR("max_size should be positive");
+      *err_str = CCOL_ERR_STR("max_size should be positive");
     }
     return false;
   }
 
   if (max_size > max_elem_count) {
     if (err_str) {
-      *err_str = CERR_STR("max_size can not exceed max_elem_count");
+      *err_str = CCOL_ERR_STR("max_size can not exceed max_elem_count");
     }
     return false;
   }
@@ -132,7 +112,7 @@ circular_queue* circular_queue_create_with_mprocs(
       (circular_queue*)_mem_alloc(mmgmt_procs, sizeof(circular_queue));
   if (!cq) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for circular_queue");
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for circular_queue");
     }
     return NULL;
   }
@@ -145,7 +125,7 @@ circular_queue* circular_queue_create_with_mprocs(
   cq->msg_array = (message*)_mem_alloc(mmgmt_procs, max_size * sizeof(message));
   if (!cq->msg_array) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for cq msg_array");
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for cq msg_array");
     }
     _mem_free(mmgmt_procs, cq->m_procs);
     _mem_free(mmgmt_procs, cq);
@@ -532,7 +512,7 @@ dynamic_queue* dynamic_queue_create_with_mprocs(
       (dynamic_queue*)_mem_alloc(mmgmt_procs, sizeof(dynamic_queue));
   if (!dq) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for dynamic_queue");
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for dynamic_queue");
     }
     return NULL;
   }
@@ -749,7 +729,7 @@ channel* channel_create_with_mprocs(size_t max_size,
   channel* ch = (channel*)_mem_alloc(mmgmt_procs, sizeof(channel));
   if (!ch) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for channel");
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for channel");
     }
     return NULL;
   }

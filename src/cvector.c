@@ -113,6 +113,10 @@ bool scale_the_cvector_size_up(cvec v) {
     assert(false);
   }
 
+  if (v->capacity > (max_elem_count / scaling_factor)) {
+    return false;  // Would overflow
+  }
+
   void* orig = v->data_ptr;
   v->data_ptr = _mem_realloc(v->m_procs, v->data_ptr,
                              scaling_factor * v->capacity * v->elem_size);
@@ -175,8 +179,8 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
   ccol_retval_t result = ccol_success;
 
   if (v->elem_count < v->capacity) {
-    assign((void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
-           new_elem, v->elem_size);
+    assign((void*)((char*)v->data_ptr + v->elem_count * v->elem_size), new_elem,
+           v->elem_size);
     if (++v->elem_count == v->capacity) {
       // Ignoring the return value of scale_the_cvector_size_up
       // as we managed to insert the new_elem.
@@ -184,7 +188,7 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
     }
   } else {
     if (scale_the_cvector_size_up(v)) {
-      assign((void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
+      assign((void*)((char*)v->data_ptr + v->elem_count * v->elem_size),
              new_elem, v->elem_size);
       ++v->elem_count;
     } else {
@@ -211,7 +215,7 @@ ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
     --v->elem_count;
 
     assign(target_elem,
-           (void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
+           (void*)((char*)v->data_ptr + v->elem_count * v->elem_size),
            v->elem_size);
 
     if (v->elem_count < (v->capacity / minimum_capacity)) {
@@ -228,7 +232,7 @@ void* cvector_at(cvec v, size_t index) {
   }
 
   if (v->elem_count > 0 && index < v->elem_count) {
-    return (void*)((unsigned long)v->data_ptr + index * v->elem_size);
+    return (void*)((char*)v->data_ptr + index * v->elem_size);
   }
 
   return NULL;

@@ -107,8 +107,7 @@ void push_all_lefts_into_iter_stack(cbmap_cmap_iterator* real_iter,
 cmap_iterator* cmap_real_iter_next(cbmap_cmap_iterator* real_iter) {
   cvec vn = real_iter->nodes;
   cvec_enable_local_macros(vn, bmap_node*);
-  size_t size = cvec_size(vn);
-  if (size == 0) {
+  if (cvec_size(vn) == 0) {
     // Nowhere to advance
     __cbmap_iterator_destroy(&real_iter->user_iter);
     return NULL;
@@ -182,6 +181,10 @@ bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
 cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char** err) {
+  if (err) {
+    *err = NULL;
+  }
+
   if (!verify_cbmap_create_inputs(mmgmt_procs, err)) {
     return NULL;
   }
@@ -272,20 +275,33 @@ static inline int compare_keys(cbmap cbm, const cmap_pair* key_pair1,
     if (!cbm->keys_are_signed) {
       return memcmp(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
     }
-    int8_t first1 = (*(int8_t*)key_pair1->ptr);
-    int8_t first2 = (*(int8_t*)key_pair2->ptr);
-    if (first1 > first2) {
-      return 1;
+    // Properly handle signed integer comparison for standard sizes
+    switch (key_pair1->size) {
+      case 1: {
+        int8_t v1 = *(int8_t*)key_pair1->ptr;
+        int8_t v2 = *(int8_t*)key_pair2->ptr;
+        return (v1 > v2) - (v1 < v2);
+      }
+      case 2: {
+        int16_t v1 = *(int16_t*)key_pair1->ptr;
+        int16_t v2 = *(int16_t*)key_pair2->ptr;
+        return (v1 > v2) - (v1 < v2);
+      }
+      case 4: {
+        int32_t v1 = *(int32_t*)key_pair1->ptr;
+        int32_t v2 = *(int32_t*)key_pair2->ptr;
+        return (v1 > v2) - (v1 < v2);
+      }
+      case 8: {
+        int64_t v1 = *(int64_t*)key_pair1->ptr;
+        int64_t v2 = *(int64_t*)key_pair2->ptr;
+        return (v1 > v2) - (v1 < v2);
+      }
+      default:
+        // For non-standard sizes, just complain, as this should not
+        // be classified as a 'signed' number
+        assert(false);
     }
-    if (first1 < first2) {
-      return -1;
-    }
-    // first1 == first2
-    if (key_pair1->size > 1) {
-      return memcmp(((uint8_t*)key_pair1->ptr) + 1,
-                    ((uint8_t*)key_pair2->ptr) + 1, key_pair1->size - 1);
-    }
-    return 0;
   }
   return strcmp(key_pair1->ptr, key_pair2->ptr);
 }
@@ -440,10 +456,15 @@ bmap_node* check_node_balance(bmap_node* parent) {
     if (balance > 1) {
       // Right side is deeper
       if (node_balance(parent->right) >= 0 || !(parent->right->left)) {
+        // Simple left rotation
         parent = parent->right;
         p->right = parent->left;
         parent->left = p;
+        // Recalculate heights bottom-up
+        recalculate_node_height(p);
+        recalculate_node_height(parent);
       } else {  // node_balance(parent->right) < 0
+        // Right-Left double rotation
         bmap_node* rl_left = parent->right->left->left;
         bmap_node* rl_right = parent->right->left->right;
         parent = parent->right->left;
@@ -451,15 +472,23 @@ bmap_node* check_node_balance(bmap_node* parent) {
         parent->right = p->right;
         parent->right->left = rl_right;
         parent->left->right = rl_left;
-        check_node_balance(parent->right);
+        // Recalculate heights for both children, then parent
+        recalculate_node_height(parent->left);
+        recalculate_node_height(parent->right);
+        recalculate_node_height(parent);
       }
     } else {
       // Left side is deeper
       if (node_balance(parent->left) <= 0 || !(parent->left->right)) {
+        // Simple right rotation
         parent = parent->left;
         p->left = parent->right;
         parent->right = p;
+        // Recalculate heights bottom-up
+        recalculate_node_height(p);
+        recalculate_node_height(parent);
       } else {  // node_balance(parent->left) > 0
+        // Left-Right double rotation
         bmap_node* lr_left = parent->left->right->left;
         bmap_node* lr_right = parent->left->right->right;
         parent = parent->left->right;
@@ -467,11 +496,12 @@ bmap_node* check_node_balance(bmap_node* parent) {
         parent->left = p->left;
         parent->left->right = lr_left;
         parent->right->left = lr_right;
-        check_node_balance(parent->left);
+        // Recalculate heights for both children, then parent
+        recalculate_node_height(parent->left);
+        recalculate_node_height(parent->right);
+        recalculate_node_height(parent);
       }
     }
-    check_node_balance(p);
-    check_node_balance(parent);
   }
 
   if (absolute(node_balance(parent)) > 1) {
@@ -644,6 +674,9 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
       parent = right_min;
       parent->right = right;
       parent->left = left;
+      // Recalculate the height of the replacement node after assigning new
+      // children
+      recalculate_node_height(parent);
     } else {
       // Left side is deeper
       bmap_node* left_max = NULL;
@@ -651,6 +684,9 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
       parent = left_max;
       parent->right = right;
       parent->left = left;
+      // Recalculate the height of the replacement node after assigning new
+      // children
+      recalculate_node_height(parent);
     }
   }
 

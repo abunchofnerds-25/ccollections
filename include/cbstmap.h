@@ -155,6 +155,39 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     }                                                                        \
   } while (0)
 
+#define cbmap_init_mp(hm_name, mmgmt_procs)                                 \
+  do {                                                                      \
+    char* err = NULL;                                                       \
+    hm_name =                                                               \
+        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var), \
+                          mmgmt_procs, NULL, &err);                         \
+    if (!hm_name) {                                                         \
+      fatal_err("%s", err);                                                 \
+    }                                                                       \
+  } while (0)
+
+#define cbmap_init_cc(hm_name, custom_comparison_proc)                      \
+  do {                                                                      \
+    char* err = NULL;                                                       \
+    hm_name =                                                               \
+        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var), \
+                          NULL, custom_comparison_proc, &err);              \
+    if (!hm_name) {                                                         \
+      fatal_err("%s", err);                                                 \
+    }                                                                       \
+  } while (0)
+
+#define cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc)       \
+  do {                                                                      \
+    char* err = NULL;                                                       \
+    hm_name =                                                               \
+        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var), \
+                          mmgmt_procs, custom_comparison_proc, &err);       \
+    if (!hm_name) {                                                         \
+      fatal_err("%s", err);                                                 \
+    }                                                                       \
+  } while (0)
+
 #define cbmap_construct(hm_name, key_t, val_t)                               \
   typeof(key_t)* hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
@@ -163,6 +196,49 @@ static inline void ___cbmap_destroy(cbmap* cbm) {
     char* err = NULL;                                                        \
     hm_name = cbmap_create_full(                                             \
         __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, NULL, &err); \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
+#define cbmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs)               \
+  typeof(key_t)* hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
+  do {                                                                       \
+    char* err = NULL;                                                        \
+    hm_name =                                                                \
+        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
+                          mmgmt_procs, NULL, &err);                          \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
+#define cbmap_construct_cc(hm_name, key_t, val_t, custom_comparison_proc)    \
+  typeof(key_t)* hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
+  do {                                                                       \
+    char* err = NULL;                                                        \
+    hm_name =                                                                \
+        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
+                          NULL, custom_comparison_proc, &err);               \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
+#define cbmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,             \
+                             custom_comparison_proc)                         \
+  typeof(key_t)* hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t)* hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
+  do {                                                                       \
+    char* err = NULL;                                                        \
+    hm_name =                                                                \
+        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
+                          mmgmt_procs, custom_comparison_proc, &err);        \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
     }                                                                        \

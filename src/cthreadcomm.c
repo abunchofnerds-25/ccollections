@@ -27,35 +27,13 @@ SOFTWARE.
 #include <pthread.h>
 #include <stdlib.h>
 
-#define mutex_t pthread_mutex_t
-#define mutex_destroy(m) pthread_mutex_destroy(&m)
-#define mutex_init(m) pthread_mutex_init(&m, NULL)
-#define mutex_lock(m) pthread_mutex_lock(&m)
-#define mutex_unlock(m) pthread_mutex_unlock(&m)
-
-#define cond_var_t pthread_cond_t
-#define cond_var_destroy(c) pthread_cond_destroy(&c)
-#define cond_var_init(c) pthread_cond_init(&c, NULL)
-#define cond_var_wait(c, m) pthread_cond_wait(&c, &m)
-#define cond_var_timedwait(c, m, t) pthread_cond_timedwait(&c, &m, &t)
-#define cond_var_signal(c) pthread_cond_signal(&c)
-
-#define thread_id_t pthread_t
-#define get_thread_id pthread_self
-
-#define stringify(s) #s
-#define x_stringify(s) stringify(s)
-#define CERR_STR(x) (__FILE__ ":" x_stringify(__LINE__) " - " x)
-
 #ifdef RUNNING_UNIT_TESTS
 #include <assert.h>
 #endif
 
-const uint32_t max_allowed_cq_size = INT32_MAX;
-
 typedef struct message {
   void* data;
-  uint32_t size;
+  size_t size;
 } message;
 
 void add_duration_to_timespec(struct timespec* target,
@@ -89,10 +67,10 @@ struct circular_queue {
   cond_var_t read_cond;
   cond_var_t write_cond;
 
-  uint32_t read_index;
-  uint32_t write_index;
-  uint32_t max_size;
-  uint32_t msg_count;
+  size_t read_index;
+  size_t write_index;
+  size_t max_size;
+  size_t msg_count;
 
   ccol_memmgmt_procs_t* m_procs;
 
@@ -100,19 +78,19 @@ struct circular_queue {
   bool writing_disabled;
 };
 
-bool verify_circular_queue_create_inputs(uint32_t max_size,
+bool verify_circular_queue_create_inputs(size_t max_size,
                                          ccol_memmgmt_procs_t* mmgmt_procs,
                                          char** err_str) {
   if (max_size == 0) {
     if (err_str) {
-      *err_str = CERR_STR("max_size should be positive");
+      *err_str = CCOL_ERR_STR("max_size should be positive");
     }
     return false;
   }
 
-  if (max_size > max_allowed_cq_size) {
+  if (max_size > max_elem_count) {
     if (err_str) {
-      *err_str = CERR_STR("max_size can not exceed max_allowed_cq_size");
+      *err_str = CCOL_ERR_STR("max_size can not exceed max_elem_count");
     }
     return false;
   }
@@ -125,7 +103,7 @@ bool verify_circular_queue_create_inputs(uint32_t max_size,
 }
 
 circular_queue* circular_queue_create_with_mprocs(
-    uint32_t max_size, ccol_memmgmt_procs_t* mmgmt_procs, char** err_str) {
+    size_t max_size, ccol_memmgmt_procs_t* mmgmt_procs, char** err_str) {
   if (!verify_circular_queue_create_inputs(max_size, mmgmt_procs, err_str)) {
     return NULL;
   }
@@ -134,7 +112,7 @@ circular_queue* circular_queue_create_with_mprocs(
       (circular_queue*)_mem_alloc(mmgmt_procs, sizeof(circular_queue));
   if (!cq) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for circular_queue");
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for circular_queue");
     }
     return NULL;
   }
@@ -147,7 +125,7 @@ circular_queue* circular_queue_create_with_mprocs(
   cq->msg_array = (message*)_mem_alloc(mmgmt_procs, max_size * sizeof(message));
   if (!cq->msg_array) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for cq msg_array");
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for cq msg_array");
     }
     _mem_free(mmgmt_procs, cq->m_procs);
     _mem_free(mmgmt_procs, cq);
@@ -415,8 +393,8 @@ ccol_retval_t circq_enable_sending(circular_queue* cq) {
   return ccol_invalid_args;
 }
 
-uint32_t circq_msg_count(circular_queue* cq) {
-  uint32_t result = -1;
+size_t circq_msg_count(circular_queue* cq) {
+  size_t result = -1;
 
   if (cq) {
     mutex_lock(cq->mutex);
@@ -438,7 +416,7 @@ struct dynamic_queue {
   mutex_t mutex;
   cond_var_t read_cond;
 
-  uint32_t msg_count;
+  size_t msg_count;
 
   dllist_node* head;
   dllist_node* tail;
@@ -534,7 +512,7 @@ dynamic_queue* dynamic_queue_create_with_mprocs(
       (dynamic_queue*)_mem_alloc(mmgmt_procs, sizeof(dynamic_queue));
   if (!dq) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for dynamic_queue");
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for dynamic_queue");
     }
     return NULL;
   }
@@ -741,7 +719,7 @@ struct channel {
   ccol_memmgmt_procs_t* m_procs;
 };
 
-channel* channel_create_with_mprocs(uint32_t max_size,
+channel* channel_create_with_mprocs(size_t max_size,
                                     ccol_memmgmt_procs_t* mmgmt_procs,
                                     char** err_str) {
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
@@ -751,7 +729,7 @@ channel* channel_create_with_mprocs(uint32_t max_size,
   channel* ch = (channel*)_mem_alloc(mmgmt_procs, sizeof(channel));
   if (!ch) {
     if (err_str) {
-      *err_str = CERR_STR("Failed to allocate memory for channel");
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for channel");
     }
     return NULL;
   }

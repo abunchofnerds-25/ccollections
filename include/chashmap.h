@@ -36,15 +36,31 @@ typedef chashmap* chmap;
 // the pointer to it. This pointer should be passed to the macro
 // 'chmap_destroy', once the hash map is no longer needed. The input parameter
 // 'bucket_array_size' determines the initial bucket size of the hash map.
-chmap chmap_create_mp(uint32_t initial_bucket_array_size,
-                      ccol_memmgmt_procs_t* mmgmt_procs, char** err);
+chmap chmap_create_full(size_t initial_bucket_array_size,
+                        ccol_memmgmt_procs_t* mmgmt_procs,
+                        ccol_hashing_proc_t custom_hashing_proc, char** err);
 
-#define chmap_create(initial_bucket_array_size, err) \
-  chmap_create_mp(initial_bucket_array_size, NULL, err)
+static inline __attribute__((always_inline)) chmap
+chmap_create(size_t initial_bucket_array_size, char** err) {
+  return chmap_create_full(initial_bucket_array_size, NULL, NULL, err);
+}
+
+static inline __attribute__((always_inline)) chmap
+chmap_create_mp(size_t initial_bucket_array_size,
+                ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
+  return chmap_create_full(initial_bucket_array_size, mmgmt_procs, NULL, err);
+}
+
+static inline __attribute__((always_inline)) chmap
+chmap_create_ch(size_t initial_bucket_array_size,
+                ccol_hashing_proc_t custom_hashing_proc, char** err) {
+  return chmap_create_full(initial_bucket_array_size, NULL, custom_hashing_proc,
+                           err);
+}
 
 // The function 'chmap_elem_count' can be used to get the number of elements
-// in it. If chm is NULL, this function will return 0;
-uint32_t chmap_elem_count(chmap chm);
+// in it. If chm is NULL, this function cause an assert exception.
+size_t chmap_elem_count(chmap chm);
 
 // The function 'chmap_reset' can be used to clear a map by deleting the
 // existing elements from it. If the new_bucket_array_size is 0, the
@@ -53,7 +69,7 @@ uint32_t chmap_elem_count(chmap chm);
 // this function will return -1. If the chm pointer is not NULL, it will
 // always destroy the existing elements regardless of its return value,
 // the return value conveys information regarding the realloc attempt.
-ccol_retval_t chmap_reset(chmap chm, uint32_t new_bucket_array_size);
+ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
 
 // The function chmap_insert_elem 'upserts' the val_pair associated with
 // the key_pair into the hash map chm. If no element exists in the map
@@ -66,7 +82,7 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
 // val_pair from the hash map into the target_buf. The pointer target_buf SHOULD
 // BE non-null, otherwise the function will fail.
 ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
-                                  void* target_buf, uint32_t target_buf_size);
+                                  void* target_buf, size_t target_buf_size);
 
 // This function gets a pointer to the element's value pair and stores it into
 // the pointer-to-pointer val_pair. Here, naturally, val_pair gets overwritten.
@@ -141,6 +157,13 @@ static inline void ___chmap_iterator_destroy(cmap_iterator** iter) {
 // use the macro 'chmap_destroy' instead.
 void __chmap_destroy(chmap chm);
 
+static inline void ___chmap_destroy(chmap* chm) {
+  if (*chm) {
+    __chmap_destroy(*chm);
+    *chm = NULL;
+  }
+}
+
 // The macro 'chmap_destroy' can be used to destroy a hash map. The pointer
 // then gets set to NULL.
 #define chmap_destroy(chm) \
@@ -158,32 +181,95 @@ void __chmap_destroy(chmap chm);
   typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
   chmap hm_name /* _ccol_destructor(___chmap_destroy) */
 
-#define chmap_init(hm_name)                                                   \
-  do {                                                                        \
-    char* err = NULL;                                                         \
-    hm_name = chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, NULL, &err); \
-    if (!hm_name) {                                                           \
-      fatal_err("%s", err);                                                   \
-    }                                                                         \
+#define chmap_init_full(hm_name, mmgmt_procs, custom_hashing_proc)       \
+  do {                                                                   \
+    char* err = NULL;                                                    \
+    hm_name = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,       \
+                                mmgmt_procs, custom_hashing_proc, &err); \
+    if (!hm_name) {                                                      \
+      fatal_err("%s", err);                                              \
+    }                                                                    \
   } while (0)
 
-static inline void ___chmap_destroy(chmap* chm) {
-  if (*chm) {
-    __chmap_destroy(*chm);
-    *chm = NULL;
-  }
-}
+#define chmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,             \
+                             custom_hashing_proc)                            \
+  typeof(key_t)* hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
+  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;             \
+  do {                                                                       \
+    char* err = NULL;                                                        \
+    hm_name = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,           \
+                                mmgmt_procs, custom_hashing_proc, &err);     \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
 
-#define chmap_construct(hm_name, key_t, val_t)                                \
-  typeof(key_t)* hm_name##__chm_key_type_var __attribute__((unused)) = NULL;  \
-  typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL;  \
-  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;              \
-  do {                                                                        \
-    char* err = NULL;                                                         \
-    hm_name = chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, NULL, &err); \
-    if (!hm_name) {                                                           \
-      fatal_err("%s", err);                                                   \
-    }                                                                         \
+#define chmap_init(hm_name)                                          \
+  do {                                                               \
+    char* err = NULL;                                                \
+    hm_name = chmap_create(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, &err); \
+    if (!hm_name) {                                                  \
+      fatal_err("%s", err);                                          \
+    }                                                                \
+  } while (0)
+
+#define chmap_construct(hm_name, key_t, val_t)                               \
+  typeof(key_t)* hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
+  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;             \
+  do {                                                                       \
+    char* err = NULL;                                                        \
+    hm_name = chmap_create(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, &err);         \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
+#define chmap_init_mp(hm_name, mmgmt_procs)                                    \
+  do {                                                                         \
+    char* err = NULL;                                                          \
+    hm_name =                                                                  \
+        chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, mmgmt_procs, &err); \
+    if (!hm_name) {                                                            \
+      fatal_err("%s", err);                                                    \
+    }                                                                          \
+  } while (0)
+
+#define chmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs)                 \
+  typeof(key_t)* hm_name##__chm_key_type_var __attribute__((unused)) = NULL;   \
+  typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL;   \
+  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;               \
+  do {                                                                         \
+    char* err = NULL;                                                          \
+    hm_name =                                                                  \
+        chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, mmgmt_procs, &err); \
+    if (!hm_name) {                                                            \
+      fatal_err("%s", err);                                                    \
+    }                                                                          \
+  } while (0)
+
+#define chmap_init_ch(hm_name, custom_hashing_proc)              \
+  do {                                                           \
+    char* err = NULL;                                            \
+    hm_name = chmap_create_ch(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, \
+                              custom_hashing_proc, &err);        \
+    if (!hm_name) {                                              \
+      fatal_err("%s", err);                                      \
+    }                                                            \
+  } while (0)
+
+#define chmap_construct_ch(hm_name, key_t, val_t, custom_hashing_proc)       \
+  typeof(key_t)* hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t)* hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
+  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;             \
+  do {                                                                       \
+    char* err = NULL;                                                        \
+    hm_name = chmap_create_ch(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,             \
+                              custom_hashing_proc, &err);                    \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
   } while (0)
 
 #define chmap_insert(hm_name, key, val)                               \
@@ -206,45 +292,45 @@ static inline void ___chmap_destroy(chmap* chm) {
     r;                                                      \
   })
 
-#define chmap_get(hm_name, key)                                             \
-  ({                                                                        \
-    typeof(*hm_name##__chm_val_type_var)* val = NULL;                       \
-    cmap_pair* key_pair = &(cmap_pair){};                                   \
-    cmap_pair* val_pair = NULL;                                             \
-    _populate_cmap_pair(key_pair, key);                                     \
-    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
-    if (r != ccol_success) {                                                \
-      fatal_err("Failed to get elem ref - r: %d", r);                       \
-    }                                                                       \
-    if (is_char_ptr(*hm_name##__chm_val_type_var)) {                        \
-      val = (typeof(*hm_name##__chm_val_type_var)*)&(val_pair->ptr);        \
-    } else if (val_pair->size != sizeof(*val)) {                            \
-      fatal_err(                                                            \
-          "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-          val_pair->size, (unsigned long)sizeof(val));                      \
-    } else {                                                                \
-      val = (typeof(*hm_name##__chm_val_type_var)*)(val_pair->ptr);         \
-    }                                                                       \
-    *val;                                                                   \
+#define chmap_get(hm_name, key)                                              \
+  ({                                                                         \
+    typeof(*hm_name##__chm_val_type_var)* val = NULL;                        \
+    cmap_pair* key_pair = &(cmap_pair){};                                    \
+    cmap_pair* val_pair = NULL;                                              \
+    _populate_cmap_pair(key_pair, key);                                      \
+    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);      \
+    if (r != ccol_success) {                                                 \
+      fatal_err("Failed to get elem ref - r: %d", r);                        \
+    }                                                                        \
+    if (is_char_ptr(*hm_name##__chm_val_type_var)) {                         \
+      val = (typeof(*hm_name##__chm_val_type_var)*)&(val_pair->ptr);         \
+    } else if (val_pair->size != sizeof(*val)) {                             \
+      fatal_err(                                                             \
+          "Failed to get elem ref - val_pair->size: %lu - sizeof(val): %lu", \
+          (unsigned long)val_pair->size, (unsigned long)sizeof(val));        \
+    } else {                                                                 \
+      val = (typeof(*hm_name##__chm_val_type_var)*)(val_pair->ptr);          \
+    }                                                                        \
+    *val;                                                                    \
   })
 
-#define chmap_get_ptr(hm_name, key)                                           \
-  ({                                                                          \
-    typeof(*hm_name##__chm_val_type_var)* val = NULL;                         \
-    cmap_pair* key_pair = &(cmap_pair){};                                     \
-    cmap_pair* val_pair = NULL;                                               \
-    _populate_cmap_pair(key_pair, key);                                       \
-    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);       \
-    if (r == ccol_success) {                                                  \
-      if (is_char_ptr(*hm_name##__chm_val_type_var)) {                        \
-        val = (typeof(*hm_name##__chm_val_type_var)*)&(val_pair->ptr);        \
-      } else if (val_pair->size != sizeof(*val)) {                            \
-        fatal_err(                                                            \
-            "Failed to get elem ref - val_pair->size: %u - sizeof(val): %lu", \
-            val_pair->size, (unsigned long)sizeof(val));                      \
-      } else {                                                                \
-        val = (typeof(*hm_name##__chm_val_type_var)*)(val_pair->ptr);         \
-      }                                                                       \
-    }                                                                         \
-    val;                                                                      \
+#define chmap_get_ptr(hm_name, key)                                            \
+  ({                                                                           \
+    typeof(*hm_name##__chm_val_type_var)* val = NULL;                          \
+    cmap_pair* key_pair = &(cmap_pair){};                                      \
+    cmap_pair* val_pair = NULL;                                                \
+    _populate_cmap_pair(key_pair, key);                                        \
+    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);        \
+    if (r == ccol_success) {                                                   \
+      if (is_char_ptr(*hm_name##__chm_val_type_var)) {                         \
+        val = (typeof(*hm_name##__chm_val_type_var)*)&(val_pair->ptr);         \
+      } else if (val_pair->size != sizeof(*val)) {                             \
+        fatal_err(                                                             \
+            "Failed to get elem ref - val_pair->size: %lu - sizeof(val): %lu", \
+            (unsigned long)val_pair->size, (unsigned long)sizeof(val));        \
+      } else {                                                                 \
+        val = (typeof(*hm_name##__chm_val_type_var)*)(val_pair->ptr);          \
+      }                                                                        \
+    }                                                                          \
+    val;                                                                       \
   })

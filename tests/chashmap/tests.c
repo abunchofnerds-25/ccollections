@@ -10,53 +10,225 @@ TAU_MAIN()  // sets up Tau (+ main function)
 
 // HASH_MAP TESTS
 
-extern uint32_t find_nearest_gte_power_of_two(uint32_t input);
+extern size_t find_nearest_gte_power_of_two(size_t input);
 
 TEST(chash_maps, find_nearest_gte_power_of_two) {
   // Hand-crafted the following input and expected output arrays, as we don't
   // want to depend on a math lib to do the testing.
 
-  uint32_t test_inputs[] = {
-      0,          1,          2,          3,          4,          5,
-      7,          8,          9,          15,         16,         17,
-      31,         32,         33,         63,         64,         65,
-      127,        128,        129,        255,        256,        257,
-      511,        512,        513,        1023,       1024,       1025,
-      2047,       2048,       2049,       4095,       4096,       4097,
-      8191,       8192,       8193,       16383,      16384,      16385,
-      32767,      32768,      32769,      65535,      65536,      65537,
-      131071,     131072,     131073,     262143,     262144,     262145,
-      524287,     524288,     524289,     1048575,    1048576,    1048577,
-      2097151,    2097152,    2097153,    4194303,    4194304,    4194305,
-      8388607,    8388608,    8388609,    16777215,   16777216,   16777217,
-      33554431,   33554432,   33554433,   67108863,   67108864,   67108865,
-      134217727,  134217728,  134217729,  268435455,  268435456,  268435457,
-      536870911,  536870912,  536870913,  1073741823, 1073741824, 1073741825,
-      2147483647, 2147483648, 2147483649, 4294967295};
+  size_t test_inputs[] = {0,
+                          1,
+                          2,
+                          3,
+                          4,
+                          5,
+                          7,
+                          8,
+                          9,
+                          15,
+                          16,
+                          17,
+                          31,
+                          32,
+                          33,
+                          63,
+                          64,
+                          65,
+                          127,
+                          128,
+                          129,
+                          255,
+                          256,
+                          257,
+                          511,
+                          512,
+                          513,
+                          1023,
+                          1024,
+                          1025,
+                          2047,
+                          2048,
+                          2049,
+                          4095,
+                          4096,
+                          4097,
+                          8191,
+                          8192,
+                          8193,
+                          16383,
+                          16384,
+                          16385,
+                          32767,
+                          32768,
+                          32769,
+                          65535,
+                          65536,
+                          65537,
+                          131071,
+                          131072,
+                          131073,
+                          262143,
+                          262144,
+                          262145,
+                          524287,
+                          524288,
+                          524289,
+                          1048575,
+                          1048576,
+                          1048577,
+                          2097151,
+                          2097152,
+                          2097153,
+                          4194303,
+                          4194304,
+                          4194305,
+                          8388607,
+                          8388608,
+                          8388609,
+                          16777215,
+                          16777216,
+                          16777217,
+                          33554431,
+                          33554432,
+                          33554433,
+                          67108863,
+                          67108864,
+                          67108865,
+                          134217727,
+                          134217728,
+                          134217729,
+                          268435455,
+                          268435456,
+                          268435457,
+                          536870911,
+                          536870912,
+                          536870913,
+                          1073741823,
+                          1073741824,
+                          1073741825,
+                          2147483647,
+                          2147483648,
+                          2147483649,
+                          4294967295,
+                          4294967296,
+                          4294967297,
+                          4611686018427387903,
+                          4611686018427387904,
+                          4611686018427387905,
+                          9223372036854775807UL,
+                          9223372036854775808UL,
+                          9223372036854775809UL,
+                          18446744073709551615UL};
 
-  uint32_t expected_outputs[] = {
-      1,          1,          2,          4,          4,          8,
-      8,          8,          16,         16,         16,         32,
-      32,         32,         64,         64,         64,         128,
-      128,        128,        256,        256,        256,        512,
-      512,        512,        1024,       1024,       1024,       2048,
-      2048,       2048,       4096,       4096,       4096,       8192,
-      8192,       8192,       16384,      16384,      16384,      32768,
-      32768,      32768,      65536,      65536,      65536,      131072,
-      131072,     131072,     262144,     262144,     262144,     524288,
-      524288,     524288,     1048576,    1048576,    1048576,    2097152,
-      2097152,    2097152,    4194304,    4194304,    4194304,    8388608,
-      8388608,    8388608,    16777216,   16777216,   16777216,   33554432,
-      33554432,   33554432,   67108864,   67108864,   67108864,   134217728,
-      134217728,  134217728,  268435456,  268435456,  268435456,  536870912,
-      536870912,  536870912,  1073741824, 1073741824, 1073741824, 2147483648,
-      2147483648, 2147483648, 2147483648, 2147483648};
+  size_t expected_outputs[] = {1,
+                               1,
+                               2,
+                               4,
+                               4,
+                               8,
+                               8,
+                               8,
+                               16,
+                               16,
+                               16,
+                               32,
+                               32,
+                               32,
+                               64,
+                               64,
+                               64,
+                               128,
+                               128,
+                               128,
+                               256,
+                               256,
+                               256,
+                               512,
+                               512,
+                               512,
+                               1024,
+                               1024,
+                               1024,
+                               2048,
+                               2048,
+                               2048,
+                               4096,
+                               4096,
+                               4096,
+                               8192,
+                               8192,
+                               8192,
+                               16384,
+                               16384,
+                               16384,
+                               32768,
+                               32768,
+                               32768,
+                               65536,
+                               65536,
+                               65536,
+                               131072,
+                               131072,
+                               131072,
+                               262144,
+                               262144,
+                               262144,
+                               524288,
+                               524288,
+                               524288,
+                               1048576,
+                               1048576,
+                               1048576,
+                               2097152,
+                               2097152,
+                               2097152,
+                               4194304,
+                               4194304,
+                               4194304,
+                               8388608,
+                               8388608,
+                               8388608,
+                               16777216,
+                               16777216,
+                               16777216,
+                               33554432,
+                               33554432,
+                               33554432,
+                               67108864,
+                               67108864,
+                               67108864,
+                               134217728,
+                               134217728,
+                               134217728,
+                               268435456,
+                               268435456,
+                               268435456,
+                               536870912,
+                               536870912,
+                               536870912,
+                               1073741824,
+                               1073741824,
+                               1073741824,
+                               2147483648,
+                               2147483648,
+                               2147483648,
+                               4294967296,
+                               4294967296,
+                               4294967296,
+                               8589934592,
+                               4611686018427387904,
+                               4611686018427387904,
+                               9223372036854775808UL,
+                               9223372036854775808UL,
+                               9223372036854775808UL,
+                               9223372036854775808UL,
+                               9223372036854775808UL};
 
-  int len = sizeof(test_inputs) / sizeof(uint32_t);
-  REQUIRE_EQ(len, sizeof(expected_outputs) / sizeof(uint32_t));
+  int len = sizeof(test_inputs) / sizeof(size_t);
+  REQUIRE_EQ(len, sizeof(expected_outputs) / sizeof(size_t));
 
   for (int i = 0; i < len; ++i) {
-    uint32_t r = find_nearest_gte_power_of_two(test_inputs[i]);
+    size_t r = find_nearest_gte_power_of_two(test_inputs[i]);
     REQUIRE_EQ(r, expected_outputs[i]);
   }
 }
@@ -611,21 +783,21 @@ TEST(chash_maps, for_each_elem_rd) {
   chmap_destroy(chmap);
 }
 
-extern uint32_t chmap_get_bucket_arr_size(chashmap* chmap);
-extern uint32_t chmap_get_elem_count_to_scale_up(chashmap* chmap);
-extern uint32_t chmap_get_elem_count_to_scale_down(chashmap* chmap);
+extern size_t chmap_get_bucket_arr_size(chashmap* chmap);
+extern size_t chmap_get_elem_count_to_scale_up(chashmap* chmap);
+extern size_t chmap_get_elem_count_to_scale_down(chashmap* chmap);
 
 TEST(chash_maps, scaling) {
   chashmap* chmap = chmap_create(1, NULL);
   REQUIRE_NE((void*)chmap, NULL);
 
-  uint32_t first_up_threshold = chmap_get_elem_count_to_scale_up(chmap);
-  uint32_t first_down_threshold = chmap_get_elem_count_to_scale_down(chmap);
-  uint32_t first_capacity = chmap_get_bucket_arr_size(chmap);
+  size_t first_up_threshold = chmap_get_elem_count_to_scale_up(chmap);
+  size_t first_down_threshold = chmap_get_elem_count_to_scale_down(chmap);
+  size_t first_capacity = chmap_get_bucket_arr_size(chmap);
 
   char key_buf[16] = {0};
-  for (uint32_t i = 0; i <= first_up_threshold; ++i) {
-    snprintf(key_buf, sizeof(key_buf), "key%u", i);
+  for (size_t i = 0; i <= first_up_threshold; ++i) {
+    snprintf(key_buf, sizeof(key_buf), "key%lu", i);
     REQUIRE_EQ(insert_string_to_int(chmap, key_buf, 3), ccol_success);
   }
 
@@ -636,8 +808,8 @@ TEST(chash_maps, scaling) {
                chmap_get_elem_count_to_scale_down(chmap));
   REQUIRE_TRUE(first_capacity < chmap_get_bucket_arr_size(chmap));
 
-  for (uint32_t i = 0; i <= first_up_threshold; ++i) {
-    snprintf(key_buf, sizeof(key_buf), "key%u", i);
+  for (size_t i = 0; i <= first_up_threshold; ++i) {
+    snprintf(key_buf, sizeof(key_buf), "key%lu", i);
     delete_int_from_string(chmap, key_buf);
   }
 
@@ -651,41 +823,172 @@ TEST(chash_maps, scaling) {
   chmap_destroy(chmap);
 }
 
+unsigned long custom_int_key_hasher(const void* ptr) {
+  return *(const int*)ptr;
+}
+
 TEST(chash_maps, declarative_macros) {
-  chmap_declare(hm, int, char*);
-  chmap_init(hm);
+  {
+    chmap_declare(hm, int, char*);
+    chmap_init(hm);
 
-  int key = 3;
+    int key = 3;
 
-  chmap_insert(hm, key, "hello");
-  REQUIRE_STREQ(chmap_get(hm, key), "hello");
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-  // Here, we are not exceeding the size of hello, that's VERY important
-  // If we want to store a longer string, we'll need to do a realloc.
-  strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
-  REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
-  chmap_remove(hm, key);
+    chmap_remove(hm, key);
 
-  chmap_destroy(hm);
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+        .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
+    chmap_declare(hm, int, char*);
+    chmap_init_mp(hm, &mp);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_hashing_proc_t ch = &custom_int_key_hasher;
+    chmap_declare(hm, int, char*);
+    chmap_init_ch(hm, ch);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_hashing_proc_t ch = &custom_int_key_hasher;
+    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+        .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
+    chmap_declare(hm, int, char*);
+    chmap_init_full(hm, &mp, ch);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
 }
 
 TEST(chash_maps, constructive_macros) {
-  chmap_construct(hm, int, char*);
+  {
+    chmap_construct(hm, int, char*);
 
-  int key = 3;
+    int key = 3;
 
-  chmap_insert(hm, key, "hello");
-  REQUIRE_STREQ(chmap_get(hm, key), "hello");
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
 
-  // Here, we are not exceeding the size of hello, that's VERY important
-  // If we want to store a longer string, we'll need to do a realloc.
-  strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
-  REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
 
-  chmap_remove(hm, key);
+    chmap_remove(hm, key);
 
-  chmap_destroy(hm);
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+        .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
+    chmap_construct_mp(hm, int, char*, &mp);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_hashing_proc_t ch = &custom_int_key_hasher;
+    chmap_construct_ch(hm, int, char*, ch);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
+
+  {
+    ccol_hashing_proc_t ch = &custom_int_key_hasher;
+    ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
+        .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
+    chmap_construct_full(hm, int, char*, &mp, ch);
+
+    int key = 3;
+
+    chmap_insert(hm, key, "hello");
+    REQUIRE_STREQ(chmap_get(hm, key), "hello");
+
+    // Here, we are not exceeding the size of hello, that's VERY important
+    // If we want to store a longer string, we'll need to do a realloc.
+    strncpy(*chmap_get_ptr(hm, key), "hi!", 5);
+    REQUIRE_STREQ(chmap_get(hm, key), "hi!");
+
+    chmap_remove(hm, key);
+
+    chmap_destroy(hm);
+  }
 }
 
 TEST(chash_maps, iteration) {

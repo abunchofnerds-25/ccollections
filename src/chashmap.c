@@ -26,12 +26,12 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-const uint32_t minimum_allowed_bucket_array_size = 64;
-const uint32_t scale_factor = 4;
-const uint32_t minimum_scale_down_threshold =
+const size_t minimum_allowed_bucket_array_size = 64;
+const size_t scale_factor = 4;
+const size_t minimum_scale_down_threshold =
     scale_factor * minimum_allowed_bucket_array_size;
 
-static inline void mem_assign(void* dest, void* src, uint32_t size) {
+static inline void mem_assign(void* dest, void* src, size_t size) {
   if (size == sizeof(unsigned int)) {
     *(unsigned int*)dest = *(unsigned int*)src;
   } else if (size == sizeof(unsigned long)) {
@@ -326,13 +326,14 @@ llist_node* delete_from_llist(llist_node* head,
 }
 
 struct chashmap {
-  uint32_t elem_count;
-  uint32_t bucket_arr_size;
-  uint32_t elem_count_to_scale_up;
-  uint32_t elem_count_to_scale_down;
+  size_t elem_count;
+  size_t bucket_arr_size;
+  size_t elem_count_to_scale_up;
+  size_t elem_count_to_scale_down;
   llist_node** bucket_arr;
   dllist_ref_node* head_of_all_elems;
   ccol_memmgmt_procs_t* m_procs;
+  ccol_hashing_proc_t custom_hashing_proc;
 };
 
 void set_chmap_scaling_limits(chmap chm) {
@@ -340,46 +341,103 @@ void set_chmap_scaling_limits(chmap chm) {
   chm->elem_count_to_scale_down = chm->bucket_arr_size / 8;
 }
 
-#define POWERS_OF_TWO_LEN 32
-uint32_t uint32_powers_of_two[POWERS_OF_TWO_LEN] =
-    {
-        1,          2,         4,        8,         16,        32,
-        64,         128,       256,      512,       1024,      2048,
-        4096,       8192,      16384,    32768,     65536,     131072,
-        262144,     524288,    1048576,  2097152,   4194304,   8388608,
-        16777216,   33554432,  67108864, 134217728, 268435456, 536870912,
-        1073741824, 2147483648};  // 4294967296 exceeds 32 bits
+#define POWERS_OF_TWO_LEN 64
+size_t uint64_powers_of_two[POWERS_OF_TWO_LEN] = {
+    1,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    128,
+    256,
+    512,
+    1024,
+    2048,
+    4096,
+    8192,
+    16384,
+    32768,
+    65536,
+    131072,
+    262144,
+    524288,
+    1048576,
+    2097152,
+    4194304,
+    8388608,
+    16777216,
+    33554432,
+    67108864,
+    134217728,
+    268435456,
+    536870912,
+    1073741824,
+    2147483648,
+    4294967296,
+    8589934592,
+    17179869184,
+    34359738368,
+    68719476736,
+    137438953472,
+    274877906944,
+    549755813888,
+    1099511627776,
+    2199023255552,
+    4398046511104,
+    8796093022208,
+    17592186044416,
+    35184372088832,
+    70368744177664,
+    140737488355328,
+    281474976710656,
+    562949953421312,
+    1125899906842624,
+    2251799813685248,
+    4503599627370496,
+    9007199254740992,
+    18014398509481984,
+    36028797018963968,
+    72057594037927936,
+    144115188075855872,
+    288230376151711744,
+    576460752303423488,
+    1152921504606846976,
+    2305843009213693952,
+    4611686018427387904,
+    9223372036854775808UL};  // 18446744073709551616 exceeds 64 bits
 
 // Kind of a "pow(2, ceil(log2(input)))" without the math library.
-uint32_t find_nearest_gte_power_of_two(uint32_t input) {
+size_t find_nearest_gte_power_of_two(size_t input) {
   int left = 0;
   int right = POWERS_OF_TWO_LEN - 1;
   int middle = (left + right) / 2;
 
-  if (input <= uint32_powers_of_two[0]) {
-    return uint32_powers_of_two[0];
+  if (input <= uint64_powers_of_two[0]) {
+    return uint64_powers_of_two[0];
   }
 
-  if (input >= uint32_powers_of_two[POWERS_OF_TWO_LEN - 1]) {
-    return uint32_powers_of_two[POWERS_OF_TWO_LEN - 1];
+  if (input >= uint64_powers_of_two[POWERS_OF_TWO_LEN - 1]) {
+    return uint64_powers_of_two[POWERS_OF_TWO_LEN - 1];
   }
 
-  uint32_t result = 0;
+  size_t result = 0;
 
   while (left < right) {
-    if (uint32_powers_of_two[middle] == input ||
-        (middle > 0 && uint32_powers_of_two[middle - 1] < input &&
-         input < uint32_powers_of_two[middle])) {
-      result = uint32_powers_of_two[middle];
+    if (uint64_powers_of_two[middle] == input ||
+        (middle > 0 && uint64_powers_of_two[middle - 1] < input &&
+         input < uint64_powers_of_two[middle])) {
+      result = uint64_powers_of_two[middle];
       break;
     } else if (middle < (POWERS_OF_TWO_LEN - 1) &&
-               uint32_powers_of_two[middle] < input &&
-               input <= uint32_powers_of_two[middle + 1]) {
-      result = uint32_powers_of_two[middle + 1];
+               uint64_powers_of_two[middle] < input &&
+               input <= uint64_powers_of_two[middle + 1]) {
+      result = uint64_powers_of_two[middle + 1];
       break;
     }
 
-    if (input < uint32_powers_of_two[middle]) {
+    if (input < uint64_powers_of_two[middle]) {
       right = middle;
     } else {
       left = middle;
@@ -391,7 +449,7 @@ uint32_t find_nearest_gte_power_of_two(uint32_t input) {
   return result;
 }
 
-bool verify_chmap_create_inputs(uint32_t initial_bucket_array_size,
+bool verify_chmap_create_inputs(size_t initial_bucket_array_size,
                                 ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
   if (initial_bucket_array_size == 0) {
     if (err) {
@@ -407,8 +465,9 @@ bool verify_chmap_create_inputs(uint32_t initial_bucket_array_size,
   return true;
 }
 
-chmap chmap_create_mp(uint32_t initial_bucket_array_size,
-                      ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
+chmap chmap_create_full(size_t initial_bucket_array_size,
+                        ccol_memmgmt_procs_t* mmgmt_procs,
+                        ccol_hashing_proc_t custom_hashing_proc, char** err) {
   if (!verify_chmap_create_inputs(initial_bucket_array_size, mmgmt_procs,
                                   err)) {
     return NULL;
@@ -438,6 +497,7 @@ chmap chmap_create_mp(uint32_t initial_bucket_array_size,
   chm->elem_count = 0;
   chm->head_of_all_elems = NULL;
   set_chmap_scaling_limits(chm);
+  chm->custom_hashing_proc = custom_hashing_proc;
 
   chm->bucket_arr = (llist_node**)_mem_calloc(
       mmgmt_procs, initial_bucket_array_size, sizeof(llist_node*));
@@ -458,7 +518,7 @@ chmap chmap_create_mp(uint32_t initial_bucket_array_size,
   return chm;
 }
 
-static inline void assign_key_to_hash_id(unsigned long* id_ptr, uint32_t size,
+static inline void assign_key_to_hash_id(unsigned long* id_ptr, size_t size,
                                          const unsigned char* c_key_ptr) {
   if (size == sizeof(unsigned int)) {
     *id_ptr = *(unsigned int*)c_key_ptr;
@@ -471,48 +531,53 @@ static inline void assign_key_to_hash_id(unsigned long* id_ptr, uint32_t size,
   } else {
     unsigned char* c_id_ptr = (unsigned char*)id_ptr;
 #if BYTE_ORDER == LITTLE_ENDIAN
-    for (uint32_t i = 0; i < size; ++i) {
+    for (size_t i = 0; i < size; ++i) {
       c_id_ptr[i] = c_key_ptr[i];
     }
 #else
-    uint32_t offset = sizeof(id) - size;
-    for (uint32_t i = 0; i < size; ++i) {
+    size_t offset = sizeof(id) - size;
+    for (size_t i = 0; i < size; ++i) {
       c_id_ptr[offset + i] = c_key_ptr[i];
     }
 #endif
   }
 }
 
-static inline uint32_t calculate_bucket_index(uint32_t bucket_arr_size,
-                                              const cmap_pair* key_pair,
-                                              unsigned long* hash_ptr) {
-  unsigned long id = 0x0;
+static inline size_t calculate_bucket_index(chmap chm,
+                                            const cmap_pair* key_pair,
+                                            unsigned long* hash_ptr) {
+  unsigned long id;
 
-  unsigned char* c_key_ptr = (unsigned char*)key_pair->ptr;
-  uint32_t size = key_pair->size;
+  if (!chm->custom_hashing_proc) {
+    id = 0x0;
+    unsigned char* c_key_ptr = (unsigned char*)key_pair->ptr;
+    size_t size = key_pair->size;
 
-  if (size <= sizeof(id)) {
-    // Kind of a number assignment.
-    assign_key_to_hash_id(&id, size, c_key_ptr);
-  } else {
-    // DJB2
-    id = 5381;
-    for (uint32_t i = 0; i < size; ++i) {
-      id = ((id << 5) + id) + c_key_ptr[i];
+    if (size <= sizeof(id)) {
+      // Kind of a number assignment.
+      assign_key_to_hash_id(&id, size, c_key_ptr);
+    } else {
+      // DJB2
+      id = 5381;
+      for (size_t i = 0; i < size; ++i) {
+        id = ((id << 5) + id) + c_key_ptr[i];
+      }
     }
+  } else {
+    id = chm->custom_hashing_proc(key_pair->ptr);
   }
 
   if (hash_ptr) {
     *hash_ptr = id;
   }
 
-  uint32_t index = (id % bucket_arr_size);
+  size_t index = (id % chm->bucket_arr_size);
 
   return index;
 }
 
 #ifdef RUNNING_UNIT_TESTS
-uint32_t chmap_get_bucket_arr_size(chmap chm) {
+size_t chmap_get_bucket_arr_size(chmap chm) {
   if (!chm) {
     return 0;
   }
@@ -520,7 +585,7 @@ uint32_t chmap_get_bucket_arr_size(chmap chm) {
   return chm->bucket_arr_size;
 }
 
-uint32_t chmap_get_elem_count_to_scale_up(chmap chm) {
+size_t chmap_get_elem_count_to_scale_up(chmap chm) {
   if (!chm) {
     return 0;
   }
@@ -528,7 +593,7 @@ uint32_t chmap_get_elem_count_to_scale_up(chmap chm) {
   return chm->elem_count_to_scale_up;
 }
 
-uint32_t chmap_get_elem_count_to_scale_down(chmap chm) {
+size_t chmap_get_elem_count_to_scale_down(chmap chm) {
   if (!chm) {
     return 0;
   }
@@ -538,7 +603,7 @@ uint32_t chmap_get_elem_count_to_scale_down(chmap chm) {
 #endif
 
 void scale_chmap(chmap chm, bool up) {
-  uint32_t new_bucket_array_size = 0;
+  size_t new_bucket_array_size = 0;
   if (up) {
     new_bucket_array_size = chm->bucket_arr_size * scale_factor;
   } else {
@@ -554,11 +619,11 @@ void scale_chmap(chmap chm, bool up) {
   }
 
   // We have enough memory.
-  for (uint32_t i = 0; i < chm->bucket_arr_size; ++i) {
+  for (size_t i = 0; i < chm->bucket_arr_size; ++i) {
     llist_node* tracker = chm->bucket_arr[i];
     while (tracker) {
       llist_node* next = tracker->next;
-      uint32_t new_index = tracker->data.hash_val % new_bucket_array_size;
+      size_t new_index = tracker->data.hash_val % new_bucket_array_size;
       new_bucket_arr[new_index] = migrate_llist_node_to_another_llist(
           new_bucket_arr[new_index], NULL, tracker);
       tracker = next;
@@ -580,6 +645,10 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
     return ccol_invalid_args;
   }
 
+  if (chm->elem_count == max_elem_count) {
+    return ccol_container_full;
+  }
+
   chmap_entry data = {.hash_val = 0,
                       .key_pair = (cmap_pair*)key_pair,
                       .val_pair = (cmap_pair*)val_pair,
@@ -587,8 +656,7 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
 
   bool result = false;
 
-  uint32_t index =
-      calculate_bucket_index(chm->bucket_arr_size, key_pair, &data.hash_val);
+  size_t index = calculate_bucket_index(chm, key_pair, &data.hash_val);
 
   llist_node* r = find_in_llist(chm->bucket_arr[index], key_pair);
   if (r) {
@@ -609,7 +677,7 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
 }
 
 ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
-                                  void* target_buf, uint32_t target_buf_size) {
+                                  void* target_buf, size_t target_buf_size) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0 ||
       !target_buf || target_buf_size == 0) {
     return ccol_invalid_args;
@@ -617,11 +685,11 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
 
   ccol_retval_t result = ccol_key_not_found;
 
-  uint32_t index = calculate_bucket_index(chm->bucket_arr_size, key_pair, NULL);
+  size_t index = calculate_bucket_index(chm, key_pair, NULL);
 
   llist_node* r = find_in_llist(chm->bucket_arr[index], key_pair);
   if (r) {
-    uint32_t min_size = target_buf_size;
+    size_t min_size = target_buf_size;
     if (r->data.val_pair->size < min_size) {
       min_size = r->data.val_pair->size;
     }
@@ -640,7 +708,7 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
 
   ccol_retval_t result = ccol_key_not_found;
 
-  uint32_t index = calculate_bucket_index(chm->bucket_arr_size, key_pair, NULL);
+  size_t index = calculate_bucket_index(chm, key_pair, NULL);
 
   llist_node* r = find_in_llist(chm->bucket_arr[index], key_pair);
   if (r) {
@@ -658,7 +726,7 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
 
   bool found = false;
 
-  uint32_t index = calculate_bucket_index(chm->bucket_arr_size, key_pair, NULL);
+  size_t index = calculate_bucket_index(chm, key_pair, NULL);
 
   chm->bucket_arr[index] = delete_from_llist(
       chm->bucket_arr[index], &chm->head_of_all_elems, key_pair, &found);
@@ -675,7 +743,7 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
   return ccol_key_not_found;
 }
 
-uint32_t chmap_elem_count(chmap chm) {
+size_t chmap_elem_count(chmap chm) {
   if (!chm) {
     assert(false);
   }
@@ -740,7 +808,7 @@ cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
   return iter;
 }
 
-ccol_retval_t chmap_reset(chmap chm, uint32_t new_bucket_array_size) {
+ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
   if (!chm) {
     assert(false);
   }
@@ -755,7 +823,7 @@ ccol_retval_t chmap_reset(chmap chm, uint32_t new_bucket_array_size) {
         find_nearest_gte_power_of_two(new_bucket_array_size);
   }
 
-  for (uint32_t i = 0; i < chm->bucket_arr_size; ++i) {
+  for (size_t i = 0; i < chm->bucket_arr_size; ++i) {
     destroy_the_whole_llist(chm->bucket_arr[i], &chm->head_of_all_elems);
   }
 
@@ -781,7 +849,7 @@ ccol_retval_t chmap_reset(chmap chm, uint32_t new_bucket_array_size) {
 
 void __chmap_destroy(chmap chm) {
   if (chm) {
-    for (uint32_t i = 0; i < chm->bucket_arr_size; ++i) {
+    for (size_t i = 0; i < chm->bucket_arr_size; ++i) {
       destroy_the_whole_llist(chm->bucket_arr[i], &chm->head_of_all_elems);
     }
     _mem_free(chm->m_procs, (void*)chm->bucket_arr);

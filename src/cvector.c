@@ -26,30 +26,13 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-#define mem_alloc(size) malloc(size)
-#define mem_calloc(elem_count, elem_size) calloc(elem_count, elem_size)
-#define mem_realloc(ptr, new_size) realloc(ptr, new_size)
-#define mem_free(ptr) free(ptr)
-
-#define _mem_alloc(m_procs, size) \
-  (m_procs) ? m_procs->malloc(size) : mem_alloc(size)
-#define _mem_calloc(m_procs, e_count, e_size) \
-  (m_procs) ? m_procs->calloc(e_count, e_size) : mem_calloc(e_count, e_size)
-#define _mem_realloc(m_procs, ptr, new_size) \
-  (m_procs) ? m_procs->realloc(ptr, new_size) : mem_realloc(ptr, new_size)
-#define _mem_free(m_procs, ptr) (m_procs) ? m_procs->free(ptr) : mem_free(ptr)
-
-#define stringify(s) #s
-#define x_stringify(s) stringify(s)
-#define CERR_STR(x) (__FILE__ ":" x_stringify(__LINE__) " - " x)
-
-const uint32_t minimum_capacity = 4;
-const uint32_t scaling_factor = 2;
+const size_t minimum_capacity = 4;
+const size_t scaling_factor = 2;
 
 struct cvector {
-  uint32_t elem_size;
-  uint32_t elem_count;
-  uint32_t capacity;
+  size_t elem_size;
+  size_t elem_count;
+  size_t capacity;
   ccol_memmgmt_procs_t* m_procs;
   void* data_ptr;
 };
@@ -68,12 +51,12 @@ void __cvector_destroy(cvec v) {
   }
 }
 
-bool verify_cvector_create_inputs(uint32_t elem_size,
+bool verify_cvector_create_inputs(size_t elem_size,
                                   ccol_memmgmt_procs_t* mmgt_procs,
                                   char** err) {
   if (elem_size == 0) {
     if (err) {
-      *err = CERR_STR("elem_size is zero");
+      *err = CCOL_ERR_STR("elem_size is zero");
     }
     return false;
   }
@@ -85,7 +68,7 @@ bool verify_cvector_create_inputs(uint32_t elem_size,
   return true;
 }
 
-cvec cvector_create_with_mprocs(uint32_t elem_size,
+cvec cvector_create_with_mprocs(size_t elem_size,
                                 ccol_memmgmt_procs_t* mmgt_procs, char** err) {
   if (!verify_cvector_create_inputs(elem_size, mmgt_procs, err)) {
     return NULL;
@@ -95,7 +78,7 @@ cvec cvector_create_with_mprocs(uint32_t elem_size,
   v = _mem_calloc(mmgt_procs, 1, sizeof(cvector));
   if (!v) {
     if (err) {
-      *err = CERR_STR("failed to allocate vector container");
+      *err = CCOL_ERR_STR("failed to allocate vector container");
     }
     return NULL;
   }
@@ -109,7 +92,7 @@ cvec cvector_create_with_mprocs(uint32_t elem_size,
   if (!v->data_ptr) {
     __cvector_destroy(v);
     if (err) {
-      *err = CERR_STR("failed to allocate data container");
+      *err = CCOL_ERR_STR("failed to allocate data container");
     }
     return NULL;
   }
@@ -128,6 +111,10 @@ cvec cvector_create_with_mprocs(uint32_t elem_size,
 bool scale_the_cvector_size_up(cvec v) {
   if (!v) {
     assert(false);
+  }
+
+  if (v->capacity > (max_elem_count / scaling_factor)) {
+    return false;  // Would overflow
   }
 
   void* orig = v->data_ptr;
@@ -162,7 +149,7 @@ void scale_the_cvector_size_down(cvec v) {
   v->capacity /= scaling_factor;
 }
 
-static inline void assign(void* dest, const void* src, uint32_t size) {
+static inline void assign(void* dest, const void* src, size_t size) {
   if (size == sizeof(unsigned int)) {
     *(unsigned int*)dest = *(unsigned int*)src;
   } else if (size == sizeof(unsigned char)) {
@@ -185,11 +172,15 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
     return ccol_invalid_args;
   }
 
+  if (v->elem_count == max_elem_count) {
+    return ccol_container_full;
+  }
+
   ccol_retval_t result = ccol_success;
 
   if (v->elem_count < v->capacity) {
-    assign((void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
-           new_elem, v->elem_size);
+    assign((void*)((char*)v->data_ptr + v->elem_count * v->elem_size), new_elem,
+           v->elem_size);
     if (++v->elem_count == v->capacity) {
       // Ignoring the return value of scale_the_cvector_size_up
       // as we managed to insert the new_elem.
@@ -197,7 +188,7 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
     }
   } else {
     if (scale_the_cvector_size_up(v)) {
-      assign((void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
+      assign((void*)((char*)v->data_ptr + v->elem_count * v->elem_size),
              new_elem, v->elem_size);
       ++v->elem_count;
     } else {
@@ -224,7 +215,7 @@ ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
     --v->elem_count;
 
     assign(target_elem,
-           (void*)((unsigned long)v->data_ptr + v->elem_count * v->elem_size),
+           (void*)((char*)v->data_ptr + v->elem_count * v->elem_size),
            v->elem_size);
 
     if (v->elem_count < (v->capacity / minimum_capacity)) {
@@ -235,19 +226,19 @@ ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
   return result;
 }
 
-void* cvector_at(cvec v, uint32_t index) {
+void* cvector_at(cvec v, size_t index) {
   if (!v) {
     assert(false);
   }
 
   if (v->elem_count > 0 && index < v->elem_count) {
-    return (void*)((unsigned long)v->data_ptr + index * v->elem_size);
+    return (void*)((char*)v->data_ptr + index * v->elem_size);
   }
 
   return NULL;
 }
 
-uint32_t cvector_elem_count(cvec v) {
+size_t cvector_elem_count(cvec v) {
   if (!v) {
     assert(false);
   }
@@ -273,7 +264,7 @@ void cvector_reset(cvec v) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
-uint32_t cvector_get_capacity(cvec v) {
+size_t cvector_get_capacity(cvec v) {
   if (!v) {
     assert(false);
   }

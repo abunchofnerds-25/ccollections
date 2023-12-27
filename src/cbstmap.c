@@ -35,18 +35,19 @@ typedef struct bmap_node {
   cmap_pair key_pair;
   cmap_pair val_pair;
   // Relational pointers
-  struct bmap_node* parent;
+  // struct bmap_node* parent;
   struct bmap_node* left;
   struct bmap_node* right;
   // Metadata for self-balancing
-  uint32_t height;
+  size_t height;
 } bmap_node;
 
 typedef struct cbinarymap {
-  uint32_t elem_count;
+  size_t elem_count;
   bmap_node* root;
   ccol_memmgmt_procs_t* m_procs;
   bool keys_are_signed;
+  ccol_comparison_proc_t custom_comparison_proc;
 } cbinarymap;
 
 typedef struct cbmap_cmap_iterator {  // Extended cmap_iterator for cbmap
@@ -59,7 +60,7 @@ typedef struct cbmap_cmap_iterator {  // Extended cmap_iterator for cbmap
   (cbmap_cmap_iterator*)((uint8_t*)u_iter - \
                          offsetof(cbmap_cmap_iterator, user_iter))
 
-bmap_node* get_min_node(bmap_node* root, uint32_t* depth) {
+bmap_node* get_min_node(bmap_node* root, size_t* depth) {
   if (depth) {
     *depth = 0;
   }
@@ -76,7 +77,7 @@ bmap_node* get_min_node(bmap_node* root, uint32_t* depth) {
   return result;
 }
 
-bmap_node* get_max_node(bmap_node* root, uint32_t* depth) {
+bmap_node* get_max_node(bmap_node* root, size_t* depth) {
   if (depth) {
     *depth = 0;
   }
@@ -106,8 +107,7 @@ void push_all_lefts_into_iter_stack(cbmap_cmap_iterator* real_iter,
 cmap_iterator* cmap_real_iter_next(cbmap_cmap_iterator* real_iter) {
   cvec vn = real_iter->nodes;
   cvec_enable_local_macros(vn, bmap_node*);
-  uint32_t size = cvec_size(vn);
-  if (size == 0) {
+  if (cvec_size(vn) == 0) {
     // Nowhere to advance
     __cbmap_iterator_destroy(&real_iter->user_iter);
     return NULL;
@@ -171,38 +171,20 @@ void __cbmap_iterator_destroy(cmap_iterator* iter) {
 }
 
 bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
-  if (mmgmt_procs && (!mmgmt_procs->malloc || !mmgmt_procs->calloc ||
-                      !mmgmt_procs->realloc || !mmgmt_procs->free)) {
-    if (err) {
-      *err =
-          CCOL_ERR_STR("Detected at least one NULL memory management function");
-    }
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
     return false;
   }
 
   return true;
 }
 
-bool cbm_populate_mem_mgmt_procs(cbmap cbm, ccol_memmgmt_procs_t* mmgmt_procs,
-                                 char** err) {
-  if (mmgmt_procs) {
-    cbm->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t));
-    if (!cbm->m_procs) {
-      if (err) {
-        *err = CCOL_ERR_STR("Failed to allocate buffer for memory mgmt buffer");
-      }
-      return false;
-    }
-    memcpy(cbm->m_procs, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
-  } else {
-    cbm->m_procs = NULL;
+cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
+                        ccol_comparison_proc_t custom_comparison_proc,
+                        char** err) {
+  if (err) {
+    *err = NULL;
   }
 
-  return true;
-}
-
-cbmap cbmap_create_mp(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
-                      char** err) {
   if (!verify_cbmap_create_inputs(mmgmt_procs, err)) {
     return NULL;
   }
@@ -215,7 +197,7 @@ cbmap cbmap_create_mp(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
     return NULL;
   }
 
-  if (!cbm_populate_mem_mgmt_procs(cbm, mmgmt_procs, err)) {
+  if (!ccol_populate_mem_mgmt_procs(cbm, mmgmt_procs, err)) {
     _mem_free(mmgmt_procs, cbm);
     return NULL;
   }
@@ -223,6 +205,7 @@ cbmap cbmap_create_mp(bool keys_are_signed, ccol_memmgmt_procs_t* mmgmt_procs,
   cbm->elem_count = 0;
   cbm->root = NULL;
   cbm->keys_are_signed = keys_are_signed;
+  cbm->custom_comparison_proc = custom_comparison_proc;
 
   return cbm;
 }
@@ -264,7 +247,7 @@ void __cbmap_destroy(cbmap cbm) {
   }
 }
 
-uint32_t cbmap_elem_count(cbmap cbm) {
+size_t cbmap_elem_count(cbmap cbm) {
   if (!cbm) {
     assert(false);
   }
@@ -282,26 +265,43 @@ ccol_retval_t cbmap_reset(cbmap cbm) {
   return ccol_success;
 }
 
-static inline int compare_keys(bool keys_are_signed, const cmap_pair* key_pair1,
+static inline int compare_keys(cbmap cbm, const cmap_pair* key_pair1,
                                const cmap_pair* key_pair2) {
+  if (cbm->custom_comparison_proc) {
+    return cbm->custom_comparison_proc(key_pair1->ptr, key_pair2->ptr);
+  }
+
   if (key_pair1->size == key_pair2->size) {
-    if (!keys_are_signed) {
+    if (!cbm->keys_are_signed) {
       return memcmp(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
     }
-    int8_t first1 = (*(int8_t*)key_pair1->ptr);
-    int8_t first2 = (*(int8_t*)key_pair2->ptr);
-    if (first1 > first2) {
-      return 1;
+    // Properly handle signed integer comparison for standard sizes
+    switch (key_pair1->size) {
+      case 1: {
+        int8_t v1 = *(int8_t*)key_pair1->ptr;
+        int8_t v2 = *(int8_t*)key_pair2->ptr;
+        return (v1 > v2) - (v1 < v2);
+      }
+      case 2: {
+        int16_t v1 = *(int16_t*)key_pair1->ptr;
+        int16_t v2 = *(int16_t*)key_pair2->ptr;
+        return (v1 > v2) - (v1 < v2);
+      }
+      case 4: {
+        int32_t v1 = *(int32_t*)key_pair1->ptr;
+        int32_t v2 = *(int32_t*)key_pair2->ptr;
+        return (v1 > v2) - (v1 < v2);
+      }
+      case 8: {
+        int64_t v1 = *(int64_t*)key_pair1->ptr;
+        int64_t v2 = *(int64_t*)key_pair2->ptr;
+        return (v1 > v2) - (v1 < v2);
+      }
+      default:
+        // For non-standard sizes, just complain, as this should not
+        // be classified as a 'signed' number
+        assert(false);
     }
-    if (first1 < first2) {
-      return -1;
-    }
-    // first1 == first2
-    if (key_pair1->size > 1) {
-      return memcmp(((uint8_t*)key_pair1->ptr) + 1,
-                    ((uint8_t*)key_pair2->ptr) + 1, key_pair1->size - 1);
-    }
-    return 0;
   }
   return strcmp(key_pair1->ptr, key_pair2->ptr);
 }
@@ -354,14 +354,14 @@ int maximum(int x, int y) {
   return y;
 }
 
-void cbmap_dump_elements(uint32_t extra_depth, cbmap cbm) {
+void cbmap_dump_elements(size_t extra_depth, cbmap cbm) {
   if (!cbm->root) {
     return;
   }
 
   printf("DUMP - STARTS\n");
 
-  uint32_t depth = cbm->root->height + extra_depth;
+  size_t depth = cbm->root->height + extra_depth;
   cvec_construct(v1, bmap_node*);
   cvec_push(v1, cbm->root);
 
@@ -369,8 +369,8 @@ void cbmap_dump_elements(uint32_t extra_depth, cbmap cbm) {
 
   while (cvec_size(v1) > 0 && !all_zeros) {
     cvec_construct(v2, bmap_node*);
-    uint32_t space_i = (1 << (depth + 1)) - 1;
-    uint32_t space_r = (1 << (depth + 2)) - 3;
+    size_t space_i = (1 << (depth + 1)) - 1;
+    size_t space_r = (1 << (depth + 2)) - 3;
     --depth;
     all_zeros = true;
     int size = cvec_size(v1);
@@ -456,10 +456,15 @@ bmap_node* check_node_balance(bmap_node* parent) {
     if (balance > 1) {
       // Right side is deeper
       if (node_balance(parent->right) >= 0 || !(parent->right->left)) {
+        // Simple left rotation
         parent = parent->right;
         p->right = parent->left;
         parent->left = p;
+        // Recalculate heights bottom-up
+        recalculate_node_height(p);
+        recalculate_node_height(parent);
       } else {  // node_balance(parent->right) < 0
+        // Right-Left double rotation
         bmap_node* rl_left = parent->right->left->left;
         bmap_node* rl_right = parent->right->left->right;
         parent = parent->right->left;
@@ -467,15 +472,23 @@ bmap_node* check_node_balance(bmap_node* parent) {
         parent->right = p->right;
         parent->right->left = rl_right;
         parent->left->right = rl_left;
-        check_node_balance(parent->right);
+        // Recalculate heights for both children, then parent
+        recalculate_node_height(parent->left);
+        recalculate_node_height(parent->right);
+        recalculate_node_height(parent);
       }
     } else {
       // Left side is deeper
       if (node_balance(parent->left) <= 0 || !(parent->left->right)) {
+        // Simple right rotation
         parent = parent->left;
         p->left = parent->right;
         parent->right = p;
+        // Recalculate heights bottom-up
+        recalculate_node_height(p);
+        recalculate_node_height(parent);
       } else {  // node_balance(parent->left) > 0
+        // Left-Right double rotation
         bmap_node* lr_left = parent->left->right->left;
         bmap_node* lr_right = parent->left->right->right;
         parent = parent->left->right;
@@ -483,11 +496,12 @@ bmap_node* check_node_balance(bmap_node* parent) {
         parent->left = p->left;
         parent->left->right = lr_left;
         parent->right->left = lr_right;
-        check_node_balance(parent->left);
+        // Recalculate heights for both children, then parent
+        recalculate_node_height(parent->left);
+        recalculate_node_height(parent->right);
+        recalculate_node_height(parent);
       }
     }
-    check_node_balance(p);
-    check_node_balance(parent);
   }
 
   if (absolute(node_balance(parent)) > 1) {
@@ -542,8 +556,8 @@ bmap_node* cbmap_insert_elem_r(bmap_node* parent,
     return parent;
   }
 
-  register int comparison = compare_keys(args->cbm->keys_are_signed,
-                                         args->key_pair, &parent->key_pair);
+  register int comparison =
+      compare_keys(args->cbm, args->key_pair, &parent->key_pair);
   if (comparison == 0) {
     // This entry exists
     update_bmap_node_value(args->cbm, parent, args->val_pair, &args->result);
@@ -571,6 +585,10 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
     assert(false);
   }
 
+  if (cbm->elem_count == max_elem_count) {
+    return ccol_container_full;
+  }
+
   cbmap_insert_elem_r_arg args = {.cbm = cbm,
                                   .key_pair = key_pair,
                                   .val_pair = val_pair,
@@ -588,15 +606,14 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
 }
 
 ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair* key_pair,
-                                  void* target_buf, uint32_t target_buf_size) {
+                                  void* target_buf, size_t target_buf_size) {
   if (!cbm) {
     assert(false);
   }
 
   bmap_node* tracker = cbm->root;
   while (tracker) {
-    register int comparison =
-        compare_keys(cbm->keys_are_signed, key_pair, &tracker->key_pair);
+    register int comparison = compare_keys(cbm, key_pair, &tracker->key_pair);
     if (comparison == 0) {
       if (target_buf_size != tracker->val_pair.size) {
         return ccol_invalid_args;
@@ -623,8 +640,7 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair* key_pair,
 
   bmap_node* tracker = cbm->root;
   while (tracker) {
-    register int comparison =
-        compare_keys(cbm->keys_are_signed, key_pair, &tracker->key_pair);
+    register int comparison = compare_keys(cbm, key_pair, &tracker->key_pair);
     if (comparison == 0) {
       *val_pair = &tracker->val_pair;
       return ccol_success;
@@ -658,6 +674,9 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
       parent = right_min;
       parent->right = right;
       parent->left = left;
+      // Recalculate the height of the replacement node after assigning new
+      // children
+      recalculate_node_height(parent);
     } else {
       // Left side is deeper
       bmap_node* left_max = NULL;
@@ -665,6 +684,9 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
       parent = left_max;
       parent->right = right;
       parent->left = left;
+      // Recalculate the height of the replacement node after assigning new
+      // children
+      recalculate_node_height(parent);
     }
   }
 
@@ -684,8 +706,8 @@ bmap_node* cbmap_delete_elem_r(bmap_node* parent,
     return parent;
   }
 
-  register int comparison = compare_keys(args->cbm->keys_are_signed,
-                                         args->key_pair, &parent->key_pair);
+  register int comparison =
+      compare_keys(args->cbm, args->key_pair, &parent->key_pair);
   if (comparison == 0) {
     // Found the entry!
     parent = perform_element_removal(args->cbm, parent);

@@ -121,13 +121,8 @@ TEST(circular_queues, create_fails) {
   REQUIRE_EQ((void*)cq, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 
-  cq = circular_queue_create_with_mprocs((uint32_t)INT32_MAX + 1, NULL,
-                                         &err_str);
-  REQUIRE_EQ((void*)cq, NULL);
-  REQUIRE_NE((void*)err_str, NULL);
-
   cq = circular_queue_create_with_mprocs(
-      (uint32_t)INT32_MAX,
+      (size_t)INT32_MAX,
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = free, .malloc = malloc, .realloc = NULL},
       &err_str);
@@ -214,13 +209,13 @@ TEST(circular_queues, msg_count) {
 
   c_message_t m1 = {.data = NULL, .size = 0};
 
-  for (uint32_t i = 0; i < 3; ++i) {
+  for (size_t i = 0; i < 3; ++i) {
     REQUIRE_EQ(circq_msg_count(cq), i);
     circq_send_zc(cq, &m1);
     REQUIRE_EQ(circq_msg_count(cq), i + 1);
   }
 
-  for (uint32_t i = 3; i > 0; --i) {
+  for (size_t i = 3; i > 0; --i) {
     REQUIRE_EQ(circq_msg_count(cq), i);
     circq_recv_zc(cq, &m1);
     REQUIRE_EQ(circq_msg_count(cq), i - 1);
@@ -703,12 +698,8 @@ TEST(channels, create_fails) {
   REQUIRE_EQ((void*)ch, NULL);
   REQUIRE_NE((void*)err_str, NULL);
 
-  ch = channel_create_with_mprocs((uint32_t)INT32_MAX + 1, NULL, &err_str);
-  REQUIRE_EQ((void*)ch, NULL);
-  REQUIRE_NE((void*)err_str, NULL);
-
   ch = channel_create_with_mprocs(
-      (uint32_t)INT32_MAX,
+      (size_t)INT32_MAX,
       &(ccol_memmgmt_procs_t){
           .calloc = calloc, .free = NULL, .malloc = malloc, .realloc = realloc},
       &err_str);

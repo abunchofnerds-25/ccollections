@@ -33,12 +33,12 @@ typedef struct channel channel;
 
 typedef struct c_message_t {
   void* data;
-  uint32_t size;
+  size_t size;
 } c_message_t;
 
 // Circular queue related functions
 circular_queue* circular_queue_create_with_mprocs(
-    uint32_t max_size, ccol_memmgmt_procs_t* mmgmt_procs, char** err_str);
+    size_t max_size, ccol_memmgmt_procs_t* mmgmt_procs, char** err_str);
 
 #define circular_queue_create(max_size, err_str) \
   circular_queue_create_with_mprocs(max_size, NULL, err_str)
@@ -67,7 +67,7 @@ ccol_retval_t circq_timed_recv_zc(circular_queue* cq, c_message_t* target_buf,
 ccol_retval_t circq_disable_sending(circular_queue* cq);
 ccol_retval_t circq_enable_sending(circular_queue* cq);
 
-uint32_t circq_msg_count(circular_queue* cq);
+size_t circq_msg_count(circular_queue* cq);
 
 // Dynamic queue related functions
 // Dynamic queues will try to accept messages as much as
@@ -103,7 +103,7 @@ ccol_retval_t dynmq_enable_sending(dynamic_queue* dq);
 int dynmq_msg_count(dynamic_queue* dq);
 
 // Channel related functions
-channel* channel_create_with_mprocs(uint32_t max_size,
+channel* channel_create_with_mprocs(size_t max_size,
                                     ccol_memmgmt_procs_t* mmgmt_procs,
                                     char** err_str);
 

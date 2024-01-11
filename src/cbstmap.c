@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2018 Danis Ozdemir
+Copyright (c) 2024 A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -31,11 +31,10 @@ SOFTWARE.
 #include <string.h>
 
 typedef struct bmap_node {
-  // Data related pointers
+  // Data related containers
   cmap_pair key_pair;
   cmap_pair val_pair;
   // Relational pointers
-  // struct bmap_node* parent;
   struct bmap_node* left;
   struct bmap_node* right;
   // Metadata for self-balancing
@@ -352,57 +351,6 @@ int maximum(int x, int y) {
     return x;
   }
   return y;
-}
-
-void cbmap_dump_elements(size_t extra_depth, cbmap cbm) {
-  if (!cbm->root) {
-    return;
-  }
-
-  printf("DUMP - STARTS\n");
-
-  size_t depth = cbm->root->height + extra_depth;
-  cvec_construct(v1, bmap_node*);
-  cvec_push(v1, cbm->root);
-
-  bool all_zeros = false;
-
-  while (cvec_size(v1) > 0 && !all_zeros) {
-    cvec_construct(v2, bmap_node*);
-    size_t space_i = (1 << (depth + 1)) - 1;
-    size_t space_r = (1 << (depth + 2)) - 3;
-    --depth;
-    all_zeros = true;
-    int size = cvec_size(v1);
-    for (int i = 0; i < size; ++i) {
-      int space = (i == 0) ? space_i : space_r;
-      bmap_node* n = cvec_at(v1, i);
-      if (n) {
-        printf("%*s%03d", space, "", *(int*)n->key_pair.ptr);
-        cvec_push(v2, n->left);
-        cvec_push(v2, n->right);
-
-        if (n->left || n->right) {
-          all_zeros = false;
-        }
-      } else {
-        printf("%*s * ", space, "");
-        cvec_push_rvalue(v2, NULL);
-        cvec_push_rvalue(v2, NULL);
-      }
-    }
-    printf("\n");
-    cvec_reset(v1);
-    size = cvec_size(v2);
-    for (int i = 0; i < size; ++i) {
-      cvec_push(v1, cvec_at(v2, i));
-    }
-    cvec_destroy(v2);
-  }
-
-  cvec_destroy(v1);
-
-  printf("DUMP - ENDS\n");
 }
 
 void update_bmap_node_value(cbmap cbm, bmap_node* node,

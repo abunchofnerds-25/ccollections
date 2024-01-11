@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2018 Danis Ozdemir
+Copyright (c) 2024 A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

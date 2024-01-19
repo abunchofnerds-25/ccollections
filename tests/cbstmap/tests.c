@@ -781,7 +781,7 @@ TEST(cbst_maps, single_element_tree) {
 TEST(cbst_maps, stress_test_many_insertions) {
   cbmap_construct(bm, int, int);
 
-  const int size = 1000;
+  const int size = 1000000;
 
   // Insert elements
   for (int i = 0; i < size; ++i) {
@@ -813,7 +813,7 @@ TEST(cbst_maps, stress_test_many_insertions) {
 TEST(cbst_maps, stress_test_many_deletions) {
   cbmap_construct(bm, int, int);
 
-  const int size = 129;
+  const int size = 1000000;
 
   // Insert elements
   for (int i = 0; i < size; ++i) {

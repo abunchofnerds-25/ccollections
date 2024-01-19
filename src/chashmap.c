@@ -550,11 +550,10 @@ void scale_chmap(chmap chm, bool up) {
     // We don't have enough memory to scale, return.
     return;
   }
+  // We have enough memory, at least for now.
 
   bool all_went_well = true;
-
-  // We have enough memory, for now.
-  for (size_t i = 0; i < chm->bucket_arr_size; ++i) {
+  for (size_t i = 0; all_went_well && (i < chm->bucket_arr_size); ++i) {
     if (chm->bucket_arr[i]) {
       cmap_iterator* iter = cbmap_begin_iter(chm->bucket_arr[i], NULL);
       for (; iter; iter = cbmap_iter_next(iter)) {
@@ -567,9 +566,6 @@ void scale_chmap(chmap chm, bool up) {
           break;
         }
       }
-    }
-    if (!all_went_well) {
-      break;
     }
   }
 

@@ -232,7 +232,7 @@ void _clear_nodes(cbmap cbm) {
 
   // Use a stack for iterative post-order traversal
   cvec_declare(stack, bmap_node*);
-  cvec_init(stack);
+  cvec_init_with_mprocs(stack, cbm->m_procs);
 
   bmap_node* current = cbm->root;
   bmap_node* last_visited = NULL;
@@ -330,7 +330,7 @@ static inline int compare_keys(cbmap cbm, const cmap_pair* key_pair1,
       }
       default:
         // For non-standard sizes, just complain, as this should not
-        // be classified as a 'signed' number
+        // have been classified as a 'signed' number
         assert(false);
     }
   }
@@ -502,14 +502,15 @@ bmap_node* check_node_balance(bmap_node* parent) {
 
 // Iterative version of detach extreme node
 bmap_node* cbmap_detach_extreme_iter(bmap_node* root, bool max,
-                                     bmap_node** extreme) {
+                                     bmap_node** extreme,
+                                     ccol_memmgmt_procs_t* mprocs) {
   if (!root) {
     assert(false);
   }
 
   // Stack to track path from root to extreme node
   cvec_declare(path, node_stack_entry);
-  cvec_init(path);
+  cvec_init_with_mprocs(path, mprocs);
 
   // Find the extreme node and build the path
   bmap_node* current = root;
@@ -559,7 +560,7 @@ bmap_node* cbmap_detach_extreme_iter(bmap_node* root, bool max,
   }
 
   // Rebalance from bottom to top
-  for (int i = (int)cvec_size(path) - 1; i >= 0; i--) {
+  for (size_t i = cvec_size(path) - 1; i != (size_t)-1; i--) {
     node_stack_entry entry = cvec_at(path, i);
     bmap_node* balanced = check_node_balance(entry.node);
 
@@ -599,7 +600,7 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
 
   // Stack to track path from root to insertion point
   cvec_declare(path, node_stack_entry);
-  cvec_init(path);
+  cvec_init_with_mprocs(path, cbm->m_procs);
 
   bmap_node* current = cbm->root;
   bmap_node** parent_link = &(cbm->root);
@@ -640,7 +641,7 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
   result = ccol_success;
 
   // Rebalance from bottom to top
-  for (int i = (int)cvec_size(path) - 1; i >= 0; i--) {
+  for (size_t i = cvec_size(path) - 1; i != (size_t)-1; i--) {
     node_stack_entry entry = cvec_at(path, i);
     bmap_node* balanced = check_node_balance(entry.node);
 
@@ -723,7 +724,7 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
     if (right->height >= left->height) {
       // Right side is deeper
       bmap_node* right_min = NULL;
-      right = cbmap_detach_extreme_iter(right, false, &right_min);
+      right = cbmap_detach_extreme_iter(right, false, &right_min, cbm->m_procs);
       parent = right_min;
       parent->right = right;
       parent->left = left;
@@ -733,7 +734,7 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
     } else {
       // Left side is deeper
       bmap_node* left_max = NULL;
-      left = cbmap_detach_extreme_iter(left, true, &left_max);
+      left = cbmap_detach_extreme_iter(left, true, &left_max, cbm->m_procs);
       parent = left_max;
       parent->right = right;
       parent->left = left;
@@ -758,7 +759,7 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair* key_pair) {
 
   // Stack to track path from root to node to delete
   cvec_declare(path, node_stack_entry);
-  cvec_init(path);
+  cvec_init_with_mprocs(path, cbm->m_procs);
 
   bmap_node* current = cbm->root;
   bmap_node** parent_link = &(cbm->root);
@@ -791,7 +792,7 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair* key_pair) {
 
   if (result == ccol_success) {
     // Rebalance from bottom to top
-    for (int i = (int)cvec_size(path) - 1; i >= 0; i--) {
+    for (size_t i = cvec_size(path) - 1; i != (size_t)-1; i--) {
       node_stack_entry entry = cvec_at(path, i);
       bmap_node* balanced = check_node_balance(entry.node);
 

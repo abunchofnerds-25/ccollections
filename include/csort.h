@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2018 Danis Ozdemir
+Copyright (c) 2024 A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -41,13 +41,14 @@ int csort_default_string_comparison_proc(const void* first, const void* second);
 void ___csort_qsort(void* col, size_t length, size_t elem_size,
                     csort_item_getter_proc_t getter_proc,
                     ccol_comparison_proc_t comparison_proc,
-                    csort_item_swap_proc_t swap_proc);
+                    csort_item_swap_proc_t swap_proc,
+                    ccol_memmgmt_procs_t* mprocs);
 /*End of Declarations for internal use*/
 
 #define csort_sort(collection, length, elem_size, getter_proc,                 \
-                   comparison_proc, swap_proc)                                 \
+                   comparison_proc, swap_proc, mprocs)                         \
   (___csort_qsort(collection, length, elem_size, getter_proc, comparison_proc, \
-                  swap_proc))
+                  swap_proc, mprocs))
 
 /* Comparison procedure related macros */
 /* Comparison procedure declaration denerator macros */

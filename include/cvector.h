@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2018 Danis Ozdemir
+Copyright (c) 2024 A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -35,6 +35,8 @@ cvec cvector_create_with_mprocs(size_t elem_size,
 
 #define cvector_create(elem_size, err) \
   cvector_create_with_mprocs(elem_size, NULL, err)
+
+ccol_memmgmt_procs_t* cvector_get_mprocs(cvec v);
 
 void __cvector_destroy(cvec v);
 
@@ -156,13 +158,14 @@ void cvector_reset(cvec v);
 
 #define cvec_reset(v) cvector_reset(v)
 
-#define cvector_sort_with_comparison_proc(v, comparison_proc)                \
-  do {                                                                       \
-    if (!v) {                                                                \
-      assert(false);                                                         \
-    }                                                                        \
-    csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)),      \
-               (csort_item_getter_proc_t)cvector_at, comparison_proc, NULL); \
+#define cvector_sort_with_comparison_proc(v, comparison_proc)               \
+  do {                                                                      \
+    if (!v) {                                                               \
+      assert(false);                                                        \
+    }                                                                       \
+    csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)),     \
+               (csort_item_getter_proc_t)cvector_at, comparison_proc, NULL, \
+               cvector_get_mprocs(v));                                      \
   } while (0)
 
 #define cvec_sort(v)                                              \

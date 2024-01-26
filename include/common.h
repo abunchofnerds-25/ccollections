@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2018 Danis Ozdemir
+Copyright (c) 2024 A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -30,6 +30,7 @@ SOFTWARE.
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <pthread.h>
 
 #define mutex_t pthread_mutex_t
@@ -84,7 +85,7 @@ SOFTWARE.
   (m_procs) ? m_procs->realloc(ptr, new_size) : mem_realloc(ptr, new_size)
 #define _mem_free(m_procs, ptr) (m_procs) ? m_procs->free(ptr) : mem_free(ptr)
 
-#define max_elem_count (UINT64_MAX - 1)
+#define max_elem_count (((size_t)-1) - 1)
 
 typedef enum ccollections_retval_t {
   ccol_unexpected_failure = -9,

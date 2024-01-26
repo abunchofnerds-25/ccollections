@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2018 Danis Ozdemir
+Copyright (c) 2024 A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -107,6 +107,8 @@ cvec cvector_create_with_mprocs(size_t elem_size,
 
   return v;
 }
+
+ccol_memmgmt_procs_t* cvector_get_mprocs(cvec v) { return v->m_procs; }
 
 bool scale_the_cvector_size_up(cvec v) {
   if (!v) {

@@ -22,9 +22,9 @@ generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-$(SRC_FILE_PREFIX) && echo 'GCOV SUCCEEDED, CALLING LCOV' && \
-	lcov --ignore-errors mismatch --capture --directory . \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent,inconsistent --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
-	genhtml -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
+	genhtml --ignore-errors inconsistent -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info
 
 all: build test memtest generate_coverage_report

@@ -798,7 +798,7 @@ TEST(chash_maps, scaling) {
   char key_buf[16] = {0};
   for (size_t i = 0; i <= first_up_threshold; ++i) {
     snprintf(key_buf, sizeof(key_buf), "key%lu", i);
-    REQUIRE_EQ(insert_string_to_int(chmap, key_buf, 3), ccol_success);
+    REQUIRE_EQ(insert_string_to_int(chmap, key_buf, i + 1), ccol_success);
   }
 
   REQUIRE_EQ(chmap_elem_count(chmap), first_up_threshold + 1);
@@ -815,10 +815,36 @@ TEST(chash_maps, scaling) {
 
   REQUIRE_EQ(chmap_elem_count(chmap), 0);
 
-  REQUIRE_TRUE(first_up_threshold == chmap_get_elem_count_to_scale_up(chmap));
-  REQUIRE_TRUE(first_down_threshold ==
-               chmap_get_elem_count_to_scale_down(chmap));
-  REQUIRE_TRUE(first_capacity == chmap_get_bucket_arr_size(chmap));
+  REQUIRE_EQ(first_up_threshold, chmap_get_elem_count_to_scale_up(chmap));
+  REQUIRE_EQ(first_down_threshold, chmap_get_elem_count_to_scale_down(chmap));
+  REQUIRE_EQ(first_capacity, chmap_get_bucket_arr_size(chmap));
+
+  chmap_destroy(chmap);
+}
+
+TEST(chash_maps, stress_scaling) {
+  chashmap* chmap = chmap_create(1, NULL);
+  REQUIRE_NE((void*)chmap, NULL);
+
+  size_t max_elems = 100000;
+
+  char key_buf[16] = {0};
+  for (size_t i = 0; i <= max_elems; ++i) {
+    snprintf(key_buf, sizeof(key_buf), "k%lu", i);
+    REQUIRE_EQ(insert_string_to_int(chmap, key_buf, i + 1), ccol_success);
+  }
+
+  REQUIRE_EQ(chmap_elem_count(chmap), max_elems + 1);
+
+  for (size_t i = 0; i <= max_elems; ++i) {
+    snprintf(key_buf, sizeof(key_buf), "k%lu", i);
+    ccol_retval_t r = delete_int_from_string(chmap, key_buf);
+    if (r != ccol_success) {
+      printf("Failed to delete %s - i:%lu - r: %d\n", key_buf, i, r);
+    }
+  }
+
+  REQUIRE_EQ(chmap_elem_count(chmap), 0);
 
   chmap_destroy(chmap);
 }

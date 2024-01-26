@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2018 Danis Ozdemir
+Copyright (c) 2024 A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -31,11 +31,10 @@ SOFTWARE.
 #include <string.h>
 
 typedef struct bmap_node {
-  // Data related pointers
+  // Data related containers
   cmap_pair key_pair;
   cmap_pair val_pair;
   // Relational pointers
-  // struct bmap_node* parent;
   struct bmap_node* left;
   struct bmap_node* right;
   // Metadata for self-balancing
@@ -59,6 +58,13 @@ typedef struct cbmap_cmap_iterator {  // Extended cmap_iterator for cbmap
 #define cmapIter2CbmapIter(u_iter)          \
   (cbmap_cmap_iterator*)((uint8_t*)u_iter - \
                          offsetof(cbmap_cmap_iterator, user_iter))
+
+// Helper structure for tracking parent-child relationships during tree
+// operations
+typedef struct node_stack_entry {
+  bmap_node* node;
+  bmap_node** parent_link;  // Pointer to the parent's left or right pointer
+} node_stack_entry;
 
 bmap_node* get_min_node(bmap_node* root, size_t* depth) {
   if (depth) {
@@ -218,18 +224,43 @@ void destroy_bmap_node(cbmap cbm, bmap_node* node) {
   }
 }
 
-bmap_node* _clear_nodes_r(cbmap cbm, bmap_node* parent) {
-  if (parent) {
-    parent->left = _clear_nodes_r(cbm, parent->left);
-    parent->right = _clear_nodes_r(cbm, parent->right);
-    destroy_bmap_node(cbm, parent);
-    parent = NULL;
-  }
-  return parent;
-}
-
+// Iterative post-order traversal to clear all nodes
 void _clear_nodes(cbmap cbm) {
-  cbm->root = _clear_nodes_r(cbm, cbm->root);
+  if (!cbm->root) {
+    return;
+  }
+
+  // Use a stack for iterative post-order traversal
+  cvec_declare(stack, bmap_node*);
+  cvec_init_with_mprocs(stack, cbm->m_procs);
+
+  bmap_node* current = cbm->root;
+  bmap_node* last_visited = NULL;
+
+  while (cvec_size(stack) > 0 || current) {
+    // Go to the leftmost node
+    if (current) {
+      cvec_push(stack, current);
+      current = current->left;
+    } else {
+      // Peek at the top of stack
+      bmap_node* peek = cvec_at(stack, cvec_size(stack) - 1);
+
+      // If right child exists and not yet processed
+      if (peek->right && peek->right != last_visited) {
+        current = peek->right;
+      } else {
+        // Process this node (both children done)
+        cvec_pop(stack);
+        destroy_bmap_node(cbm, peek);
+        last_visited = peek;
+      }
+    }
+  }
+
+  cvec_destroy(stack);
+
+  cbm->root = NULL;
   cbm->elem_count = 0;
 }
 
@@ -299,11 +330,21 @@ static inline int compare_keys(cbmap cbm, const cmap_pair* key_pair1,
       }
       default:
         // For non-standard sizes, just complain, as this should not
-        // be classified as a 'signed' number
+        // have been classified as a 'signed' number
         assert(false);
     }
   }
-  return strcmp(key_pair1->ptr, key_pair2->ptr);
+
+  // Different sizes - compare common prefix, then by size
+  size_t min_size =
+      (key_pair1->size < key_pair2->size) ? key_pair1->size : key_pair2->size;
+  int cmp = memcmp(key_pair1->ptr, key_pair2->ptr, min_size);
+  if (cmp != 0) {
+    return cmp;
+  }
+  // Common prefix is equal, shorter string comes first
+  return (key_pair1->size > key_pair2->size) -
+         (key_pair1->size < key_pair2->size);
 }
 
 bmap_node* create_new_node(cbmap cbm, const cmap_pair* key_pair,
@@ -352,57 +393,6 @@ int maximum(int x, int y) {
     return x;
   }
   return y;
-}
-
-void cbmap_dump_elements(size_t extra_depth, cbmap cbm) {
-  if (!cbm->root) {
-    return;
-  }
-
-  printf("DUMP - STARTS\n");
-
-  size_t depth = cbm->root->height + extra_depth;
-  cvec_construct(v1, bmap_node*);
-  cvec_push(v1, cbm->root);
-
-  bool all_zeros = false;
-
-  while (cvec_size(v1) > 0 && !all_zeros) {
-    cvec_construct(v2, bmap_node*);
-    size_t space_i = (1 << (depth + 1)) - 1;
-    size_t space_r = (1 << (depth + 2)) - 3;
-    --depth;
-    all_zeros = true;
-    int size = cvec_size(v1);
-    for (int i = 0; i < size; ++i) {
-      int space = (i == 0) ? space_i : space_r;
-      bmap_node* n = cvec_at(v1, i);
-      if (n) {
-        printf("%*s%03d", space, "", *(int*)n->key_pair.ptr);
-        cvec_push(v2, n->left);
-        cvec_push(v2, n->right);
-
-        if (n->left || n->right) {
-          all_zeros = false;
-        }
-      } else {
-        printf("%*s * ", space, "");
-        cvec_push_rvalue(v2, NULL);
-        cvec_push_rvalue(v2, NULL);
-      }
-    }
-    printf("\n");
-    cvec_reset(v1);
-    size = cvec_size(v2);
-    for (int i = 0; i < size; ++i) {
-      cvec_push(v1, cvec_at(v2, i));
-    }
-    cvec_destroy(v2);
-  }
-
-  cvec_destroy(v1);
-
-  printf("DUMP - ENDS\n");
 }
 
 void update_bmap_node_value(cbmap cbm, bmap_node* node,
@@ -510,75 +500,84 @@ bmap_node* check_node_balance(bmap_node* parent) {
   return parent;
 }
 
-bmap_node* cbmap_detach_extreme_r(bmap_node* parent, bool max,
-                                  bmap_node** extreme) {
-  if (!parent) {
+// Iterative version of detach extreme node
+bmap_node* cbmap_detach_extreme_iter(bmap_node* root, bool max,
+                                     bmap_node** extreme,
+                                     ccol_memmgmt_procs_t* mprocs) {
+  if (!root) {
     assert(false);
   }
 
+  // Stack to track path from root to extreme node
+  cvec_declare(path, node_stack_entry);
+  cvec_init_with_mprocs(path, mprocs);
+
+  // Find the extreme node and build the path
+  bmap_node* current = root;
+  bmap_node** parent_link = NULL;
+
+  while (true) {
+    if (max) {
+      if (current->right) {
+        node_stack_entry entry = {current, parent_link};
+        cvec_push(path, entry);
+        parent_link = &(current->right);
+        current = current->right;
+      } else {
+        // Found the max node
+        *extreme = current;
+        break;
+      }
+    } else {
+      if (current->left) {
+        node_stack_entry entry = {current, parent_link};
+        cvec_push(path, entry);
+        parent_link = &(current->left);
+        current = current->left;
+      } else {
+        // Found the min node
+        *extreme = current;
+        break;
+      }
+    }
+  }
+
+  // Replace extreme node with its child
+  bmap_node* replacement = max ? current->left : current->right;
+
+  // Update parent link or return replacement if extreme was root
+  if (cvec_size(path) == 0) {
+    cvec_destroy(path);
+    return replacement;
+  }
+
+  // Update the last parent's child pointer
+  node_stack_entry last_entry = cvec_at(path, cvec_size(path) - 1);
   if (max) {
-    if (parent->right) {
-      parent->right = cbmap_detach_extreme_r(parent->right, max, extreme);
-    } else {
-      *extreme = parent;
-      parent = parent->left;
-    }
+    last_entry.node->right = replacement;
   } else {
-    if (parent->left) {
-      parent->left = cbmap_detach_extreme_r(parent->left, max, extreme);
+    last_entry.node->left = replacement;
+  }
+
+  // Rebalance from bottom to top
+  for (size_t i = cvec_size(path) - 1; i != (size_t)-1; i--) {
+    node_stack_entry entry = cvec_at(path, i);
+    bmap_node* balanced = check_node_balance(entry.node);
+
+    // Update parent's pointer using the parent_link from the path
+    if (entry.parent_link) {
+      *(entry.parent_link) = balanced;
     } else {
-      *extreme = parent;
-      parent = parent->right;
+      // This is the root
+      root = balanced;
     }
   }
 
-  parent = check_node_balance(parent);
-
-  return parent;
+  cvec_destroy(path);
+  return root;
 }
 
-typedef struct cbmap_insert_elem_r_arg {
-  cbmap cbm;
-  const cmap_pair* key_pair;
-  const cmap_pair* val_pair;
-  ccol_retval_t result;
-} cbmap_insert_elem_r_arg;
-
-bmap_node* cbmap_insert_elem_r(bmap_node* parent,
-                               cbmap_insert_elem_r_arg* args) {
-  if (!parent) {
-    parent = create_new_node(args->cbm, args->key_pair, args->val_pair);
-    if (!parent) {
-      return parent;
-    }
-
-    args->result = ccol_success;
-    return parent;
-  }
-
-  register int comparison =
-      compare_keys(args->cbm, args->key_pair, &parent->key_pair);
-  if (comparison == 0) {
-    // This entry exists
-    update_bmap_node_value(args->cbm, parent, args->val_pair, &args->result);
-    return parent;
-  }
-
-  if (comparison > 0) {
-    // We should go right!
-    parent->right = cbmap_insert_elem_r(parent->right, args);
-  } else {
-    // We should go left!
-    parent->left = cbmap_insert_elem_r(parent->left, args);
-  }
-
-  if (args->result == ccol_success) {
-    parent = check_node_balance(parent);
-  }
-
-  return parent;
-}
-
+// Iterative version of insert
 ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
                                 const cmap_pair* val_pair) {
   if (!cbm) {
@@ -589,20 +588,75 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair* key_pair,
     return ccol_container_full;
   }
 
-  cbmap_insert_elem_r_arg args = {.cbm = cbm,
-                                  .key_pair = key_pair,
-                                  .val_pair = val_pair,
-                                  .result = ccol_not_enough_memory};
-
-  cbm->root = cbmap_insert_elem_r(cbm->root, &args);
-  if (args.result == ccol_success) {
-    // That was an insertion
-    ++(cbm->elem_count);
-  } else if (args.result == ccol_key_already_present) {
-    // That was an update
-    args.result = ccol_success;
+  // Handle empty tree case
+  if (!cbm->root) {
+    cbm->root = create_new_node(cbm, key_pair, val_pair);
+    if (!cbm->root) {
+      return ccol_not_enough_memory;
+    }
+    cbm->elem_count++;
+    return ccol_success;
   }
-  return args.result;
+
+  // Stack to track path from root to insertion point
+  cvec_declare(path, node_stack_entry);
+  cvec_init_with_mprocs(path, cbm->m_procs);
+
+  bmap_node* current = cbm->root;
+  bmap_node** parent_link = &(cbm->root);
+  ccol_retval_t result = ccol_not_enough_memory;
+
+  // Navigate to insertion point or existing key
+  while (current) {
+    int comparison = compare_keys(cbm, key_pair, &current->key_pair);
+
+    if (comparison == 0) {
+      // Key already exists - update value
+      update_bmap_node_value(cbm, current, val_pair, &result);
+      cvec_destroy(path);
+      return ccol_success;  // Update succeeded
+    }
+
+    // Push current node onto path
+    node_stack_entry entry = {current, parent_link};
+    cvec_push(path, entry);
+
+    if (comparison > 0) {
+      parent_link = &(current->right);
+      current = current->right;
+    } else {
+      parent_link = &(current->left);
+      current = current->left;
+    }
+  }
+
+  // Create new node at insertion point
+  bmap_node* new_node = create_new_node(cbm, key_pair, val_pair);
+  if (!new_node) {
+    cvec_destroy(path);
+    return ccol_not_enough_memory;
+  }
+
+  *parent_link = new_node;
+  result = ccol_success;
+
+  // Rebalance from bottom to top
+  for (size_t i = cvec_size(path) - 1; i != (size_t)-1; i--) {
+    node_stack_entry entry = cvec_at(path, i);
+    bmap_node* balanced = check_node_balance(entry.node);
+
+    // Update parent's pointer to this node
+    if (entry.parent_link) {
+      *(entry.parent_link) = balanced;
+    } else {
+      // This is the root
+      cbm->root = balanced;
+    }
+  }
+
+  cvec_destroy(path);
+  cbm->elem_count++;
+  return result;
 }
 
 ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair* key_pair,
@@ -670,7 +724,7 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
     if (right->height >= left->height) {
       // Right side is deeper
       bmap_node* right_min = NULL;
-      right = cbmap_detach_extreme_r(right, false, &right_min);
+      right = cbmap_detach_extreme_iter(right, false, &right_min, cbm->m_procs);
       parent = right_min;
       parent->right = right;
       parent->left = left;
@@ -680,7 +734,7 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
     } else {
       // Left side is deeper
       bmap_node* left_max = NULL;
-      left = cbmap_detach_extreme_r(left, true, &left_max);
+      left = cbmap_detach_extreme_iter(left, true, &left_max, cbm->m_procs);
       parent = left_max;
       parent->right = right;
       parent->left = left;
@@ -693,55 +747,67 @@ bmap_node* perform_element_removal(cbmap cbm, bmap_node* parent) {
   return parent;
 }
 
-typedef struct cbmap_delete_elem_r_args {
-  cbmap cbm;
-  const cmap_pair* key_pair;
-  ccol_retval_t result;
-} cbmap_delete_elem_r_args;
-
-bmap_node* cbmap_delete_elem_r(bmap_node* parent,
-                               cbmap_delete_elem_r_args* args) {
-  if (!parent) {
-    // The key is not present within the map
-    return parent;
-  }
-
-  register int comparison =
-      compare_keys(args->cbm, args->key_pair, &parent->key_pair);
-  if (comparison == 0) {
-    // Found the entry!
-    parent = perform_element_removal(args->cbm, parent);
-    args->result = ccol_success;
-    return parent;
-  }
-
-  if (comparison > 0) {
-    // We should go right!
-    parent->right = cbmap_delete_elem_r(parent->right, args);
-  } else {
-    // We should go left!
-    parent->left = cbmap_delete_elem_r(parent->left, args);
-  }
-
-  if (args->result == ccol_success) {
-    parent = check_node_balance(parent);
-  }
-
-  return parent;
-}
-
+// Iterative version of delete
 ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair* key_pair) {
   if (!cbm) {
     assert(false);
   }
 
-  cbmap_delete_elem_r_args args = {
-      .cbm = cbm, .key_pair = key_pair, .result = ccol_key_not_found};
-
-  cbm->root = cbmap_delete_elem_r(cbm->root, &args);
-  if (args.result == ccol_success) {
-    --(cbm->elem_count);
+  if (!cbm->root) {
+    return ccol_key_not_found;
   }
 
-  return args.result;
+  // Stack to track path from root to node to delete
+  cvec_declare(path, node_stack_entry);
+  cvec_init_with_mprocs(path, cbm->m_procs);
+
+  bmap_node* current = cbm->root;
+  bmap_node** parent_link = &(cbm->root);
+  ccol_retval_t result = ccol_key_not_found;
+
+  // Navigate to node to delete
+  while (current) {
+    int comparison = compare_keys(cbm, key_pair, &current->key_pair);
+
+    if (comparison == 0) {
+      // Found the node to delete
+      bmap_node* replacement = perform_element_removal(cbm, current);
+      *parent_link = replacement;
+      result = ccol_success;
+      break;
+    }
+
+    // Push current node onto path
+    node_stack_entry entry = {current, parent_link};
+    cvec_push(path, entry);
+
+    if (comparison > 0) {
+      parent_link = &(current->right);
+      current = current->right;
+    } else {
+      parent_link = &(current->left);
+      current = current->left;
+    }
+  }
+
+  if (result == ccol_success) {
+    // Rebalance from bottom to top
+    for (size_t i = cvec_size(path) - 1; i != (size_t)-1; i--) {
+      node_stack_entry entry = cvec_at(path, i);
+      bmap_node* balanced = check_node_balance(entry.node);
+
+      // Update parent's pointer to this node
+      if (entry.parent_link) {
+        *(entry.parent_link) = balanced;
+      } else {
+        // This is the root
+        cbm->root = balanced;
+      }
+    }
+
+    cbm->elem_count--;
+  }
+
+  cvec_destroy(path);
+  return result;
 }

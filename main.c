@@ -1,13 +1,13 @@
 #include <cbstmap.h>
 #include <chashmap.h>
 #include <cvector.h>
-#include <stdio.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 void use_nested_types_hmap_of_cvecs() {
-  chmap_construct(hmap, char*, cvec);
+  chmap_construct(hmap, char *, cvec);
   for (int i = 0; i < 11; ++i) {
     char key[16];
     snprintf(key, sizeof(key), "%d", i);
@@ -20,7 +20,7 @@ void use_nested_types_hmap_of_cvecs() {
   for (int i = 0; i < 11; ++i) {
     char key[16];
     snprintf(key, sizeof(key), "%d", i);
-    cvec* v = chmap_get_ptr(hmap, key);
+    cvec *v = chmap_get_ptr(hmap, key);
     cvec_push_rvalue(*v, i * i * i);
   }
 
@@ -43,7 +43,7 @@ void use_nested_types_hmap_of_cvecs() {
 void use_chmap() {
   // chmap_declare(hmap, char*, int) = NULL;
   // chmap_init(hmap);
-  chmap_construct(hmap, char*, int);
+  chmap_construct(hmap, char *, int);
 
   int number = 10;
   chmap_insert(hmap, "ten", number);
@@ -57,7 +57,7 @@ void use_chmap() {
   for (int i = 11; i < 21; ++i) {
     char key_buf[16] = {0};
     snprintf(key_buf, sizeof(key_buf), "%d", i);
-    char* buf_ptr = key_buf;
+    char *buf_ptr = key_buf;
     chmap_insert(hmap, buf_ptr, i);
   }
 

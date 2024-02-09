@@ -33,8 +33,8 @@ struct cvector {
   size_t elem_size;
   size_t elem_count;
   size_t capacity;
-  ccol_memmgmt_procs_t* m_procs;
-  void* data_ptr;
+  ccol_memmgmt_procs_t *m_procs;
+  void *data_ptr;
 };
 
 void __cvector_destroy(cvec v) {
@@ -52,8 +52,8 @@ void __cvector_destroy(cvec v) {
 }
 
 bool verify_cvector_create_inputs(size_t elem_size,
-                                  ccol_memmgmt_procs_t* mmgt_procs,
-                                  char** err) {
+                                  ccol_memmgmt_procs_t *mmgt_procs,
+                                  char **err) {
   if (elem_size == 0) {
     if (err) {
       *err = CCOL_ERR_STR("elem_size is zero");
@@ -69,7 +69,7 @@ bool verify_cvector_create_inputs(size_t elem_size,
 }
 
 cvec cvector_create_with_mprocs(size_t elem_size,
-                                ccol_memmgmt_procs_t* mmgt_procs, char** err) {
+                                ccol_memmgmt_procs_t *mmgt_procs, char **err) {
   if (!verify_cvector_create_inputs(elem_size, mmgt_procs, err)) {
     return NULL;
   }
@@ -108,7 +108,7 @@ cvec cvector_create_with_mprocs(size_t elem_size,
   return v;
 }
 
-ccol_memmgmt_procs_t* cvector_get_mprocs(cvec v) { return v->m_procs; }
+ccol_memmgmt_procs_t *cvector_get_mprocs(cvec v) { return v->m_procs; }
 
 bool scale_the_cvector_size_up(cvec v) {
   if (!v) {
@@ -119,7 +119,7 @@ bool scale_the_cvector_size_up(cvec v) {
     return false;  // Would overflow
   }
 
-  void* orig = v->data_ptr;
+  void *orig = v->data_ptr;
   v->data_ptr = _mem_realloc(v->m_procs, v->data_ptr,
                              scaling_factor * v->capacity * v->elem_size);
   if (!v->data_ptr) {
@@ -140,7 +140,7 @@ void scale_the_cvector_size_down(cvec v) {
     return;
   }
 
-  void* orig = v->data_ptr;
+  void *orig = v->data_ptr;
   v->data_ptr = _mem_realloc(v->m_procs, v->data_ptr,
                              (v->capacity / scaling_factor) * v->elem_size);
   if (!v->data_ptr) {
@@ -151,21 +151,21 @@ void scale_the_cvector_size_down(cvec v) {
   v->capacity /= scaling_factor;
 }
 
-static inline void assign(void* dest, const void* src, size_t size) {
+static inline void assign(void *dest, const void *src, size_t size) {
   if (size == sizeof(unsigned int)) {
-    *(unsigned int*)dest = *(unsigned int*)src;
+    *(unsigned int *)dest = *(unsigned int *)src;
   } else if (size == sizeof(unsigned char)) {
-    *(unsigned char*)dest = *(unsigned char*)src;
+    *(unsigned char *)dest = *(unsigned char *)src;
   } else if (size == sizeof(uint64_t)) {
-    *(uint64_t*)dest = *(uint64_t*)src;
+    *(uint64_t *)dest = *(uint64_t *)src;
   } else if (size == sizeof(uint16_t)) {
-    *(uint16_t*)dest = *(uint16_t*)src;
+    *(uint16_t *)dest = *(uint16_t *)src;
   } else {
     memcpy(dest, src, size);
   }
 }
 
-ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
+ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
   if (!v) {
     assert(false);
   }
@@ -181,8 +181,8 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
   ccol_retval_t result = ccol_success;
 
   if (v->elem_count < v->capacity) {
-    assign((void*)((char*)v->data_ptr + v->elem_count * v->elem_size), new_elem,
-           v->elem_size);
+    assign((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+           new_elem, v->elem_size);
     if (++v->elem_count == v->capacity) {
       // Ignoring the return value of scale_the_cvector_size_up
       // as we managed to insert the new_elem.
@@ -190,7 +190,7 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
     }
   } else {
     if (scale_the_cvector_size_up(v)) {
-      assign((void*)((char*)v->data_ptr + v->elem_count * v->elem_size),
+      assign((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
              new_elem, v->elem_size);
       ++v->elem_count;
     } else {
@@ -201,7 +201,7 @@ ccol_retval_t cvector_push_back(cvec v, const void* new_elem) {
   return result;
 }
 
-ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
+ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
   if (!v) {
     assert(false);
   }
@@ -217,7 +217,7 @@ ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
     --v->elem_count;
 
     assign(target_elem,
-           (void*)((char*)v->data_ptr + v->elem_count * v->elem_size),
+           (void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
            v->elem_size);
 
     if (v->elem_count < (v->capacity / minimum_capacity)) {
@@ -228,13 +228,13 @@ ccol_retval_t cvector_pop_back(cvec v, void* target_elem) {
   return result;
 }
 
-void* cvector_at(cvec v, size_t index) {
+void *cvector_at(cvec v, size_t index) {
   if (!v) {
     assert(false);
   }
 
   if (v->elem_count > 0 && index < v->elem_count) {
-    return (void*)((char*)v->data_ptr + index * v->elem_size);
+    return (void *)((char *)v->data_ptr + index * v->elem_size);
   }
 
   return NULL;
@@ -253,7 +253,7 @@ void cvector_reset(cvec v) {
     assert(false);
   }
 
-  void* orig = v->data_ptr;
+  void *orig = v->data_ptr;
   v->data_ptr =
       _mem_realloc(v->m_procs, v->data_ptr, minimum_capacity * v->elem_size);
   if (!v->data_ptr) {

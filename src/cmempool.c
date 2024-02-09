@@ -29,13 +29,13 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-const char* _mempool_mark = "mempool";
+const char *_mempool_mark = "mempool";
 
-typedef uintptr_t* addr_t;
+typedef uintptr_t *addr_t;
 
-#define ENTRY_TO_HEADER(entry)                  \
-  (__internal_entry_header*)((uintptr_t)entry - \
-                             offsetof(__internal_entry_header, next))
+#define ENTRY_TO_HEADER(entry)                   \
+  (__internal_entry_header *)((uintptr_t)entry - \
+                              offsetof(__internal_entry_header, next))
 
 #define EXT_SIZE_TO_USER_SIZE(ext_elem_size) \
   (ext_elem_size - offsetof(__internal_entry_header, next))
@@ -44,7 +44,7 @@ typedef uintptr_t* addr_t;
   (elem_size + offsetof(__internal_entry_header, next))
 
 struct mempool {
-  const char* mempool_mark;  // This field is used for sanity checks
+  const char *mempool_mark;  // This field is used for sanity checks
   size_t ext_elem_size;
   size_t total_elem_count;
   bool fallback_to_dynamic_memory;
@@ -52,11 +52,11 @@ struct mempool {
   uintptr_t lower_addr_limit;
   uintptr_t upper_addr_limit;
   size_t free_elem_count;
-  ccol_memmgmt_procs_t* m_procs;
-  void* objects;
+  ccol_memmgmt_procs_t *m_procs;
+  void *objects;
   bool is_preallocated;
   bool should_use_locks;
-  void* free_inst;
+  void *free_inst;
   rw_lock_t lock;
 };
 
@@ -64,7 +64,7 @@ const size_t elem_is_free = 0xdeadbeef;
 const size_t elem_is_taken = 0xfeedcafe;
 const size_t elem_is_not_a_pool_member = 0xfadeface;
 
-void _mempool_destroy(mempool* mp) {
+void _mempool_destroy(mempool *mp) {
   if (mp) {
     if (mp->should_use_locks) {
       rw_lock_destroy(&mp->lock);
@@ -84,12 +84,12 @@ void _mempool_destroy(mempool* mp) {
   }
 }
 
-void mempool_init_internal_scalars(mempool* mp, size_t elem_count,
+void mempool_init_internal_scalars(mempool *mp, size_t elem_count,
                                    size_t ext_elem_size,
                                    bool fallback_to_dynamic_memory) {
   for (size_t i = 0; i < elem_count; ++i) {
-    __internal_entry_header* header =
-        (__internal_entry_header*)((uintptr_t)mp->objects + i * ext_elem_size);
+    __internal_entry_header *header =
+        (__internal_entry_header *)((uintptr_t)mp->objects + i * ext_elem_size);
     header->elem_status = elem_is_free;
     header->pool_ptr = mp;
 
@@ -111,10 +111,9 @@ void mempool_init_internal_scalars(mempool* mp, size_t elem_count,
   mp->free_elem_count = elem_count;
 }
 
-mempool* mempool_create(size_t elem_count, size_t elem_size,
-                        bool fallback_to_dynamic_memory,
-                        bool will_be_accessed_by_only_one_thread,
-                        ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
+mempool *mempool_create(size_t elem_count, size_t elem_size,
+                        bool fallback_to_dynamic_memory, bool single_threaded,
+                        ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   if (err) {
     *err = NULL;
   }
@@ -132,7 +131,7 @@ mempool* mempool_create(size_t elem_count, size_t elem_size,
     return NULL;
   }
 
-  mempool* mp = (mempool*)_mem_calloc(mmgmt_procs, 1, sizeof(mempool));
+  mempool *mp = (mempool *)_mem_calloc(mmgmt_procs, 1, sizeof(mempool));
   if (!mp) {
     if (err) {
       *err = CCOL_ERR_STR("failed to allocate memory pool struct");
@@ -155,7 +154,7 @@ mempool* mempool_create(size_t elem_count, size_t elem_size,
     return NULL;
   }
 
-  mp->should_use_locks = !will_be_accessed_by_only_one_thread;
+  mp->should_use_locks = !single_threaded;
 
   if (mp->should_use_locks) {
     if (rw_lock_init(&mp->lock) != 0) {
@@ -173,10 +172,10 @@ mempool* mempool_create(size_t elem_count, size_t elem_size,
   return mp;
 }
 
-mempool* mempool_create_from_preallocated_buffer(
-    void* buffer, size_t buf_size, size_t elem_size,
-    bool fallback_to_dynamic_memory, bool will_be_accessed_by_only_one_thread,
-    ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
+mempool *mempool_create_from_preallocated_buffer(
+    void *buffer, size_t buf_size, size_t elem_size,
+    bool fallback_to_dynamic_memory, bool single_threaded,
+    ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   if (err) {
     *err = NULL;
   }
@@ -202,7 +201,7 @@ mempool* mempool_create_from_preallocated_buffer(
     return NULL;
   }
 
-  mempool* mp = (mempool*)_mem_calloc(mmgmt_procs, 1, sizeof(mempool));
+  mempool *mp = (mempool *)_mem_calloc(mmgmt_procs, 1, sizeof(mempool));
   if (!mp) {
     if (err) {
       *err = CCOL_ERR_STR("failed to allocate mempool struct");
@@ -218,7 +217,7 @@ mempool* mempool_create_from_preallocated_buffer(
   mp->is_preallocated = true;
   mp->objects = buffer;
 
-  mp->should_use_locks = !will_be_accessed_by_only_one_thread;
+  mp->should_use_locks = !single_threaded;
 
   if (mp->should_use_locks) {
     if (rw_lock_init(&mp->lock) != 0) {
@@ -236,19 +235,19 @@ mempool* mempool_create_from_preallocated_buffer(
   return mp;
 }
 
-void* mempool_alloc_entry(mempool* mp) {
+void *mempool_alloc_entry(mempool *mp) {
   if (!mp) {
     assert(false);
   }
 
-  void* result = NULL;
+  void *result = NULL;
 
   if (mp->should_use_locks) {
     rw_lock_wrlock(&mp->lock);
   }
 
   if (mp->free_inst) {
-    __internal_entry_header* header = (__internal_entry_header*)mp->free_inst;
+    __internal_entry_header *header = (__internal_entry_header *)mp->free_inst;
 
     if (header->elem_status != elem_is_free || header->pool_ptr != mp) {
       // We have a corruption!
@@ -260,18 +259,18 @@ void* mempool_alloc_entry(mempool* mp) {
 
     mp->free_inst = header->next;
     header->elem_status = elem_is_taken;
-    result = (void*)&header->next;
+    result = (void *)&header->next;
     --mp->free_elem_count;
   } else if (mp->fallback_to_dynamic_memory) {
     // Seems like we exhausted our buffers and
     // we are asked to fallback to the dynamic
     // memory allocation mechanisms.
-    void* new_buffer = _mem_alloc(mp->m_procs, mp->ext_elem_size);
+    void *new_buffer = _mem_alloc(mp->m_procs, mp->ext_elem_size);
     if (new_buffer) {
-      __internal_entry_header* header = (__internal_entry_header*)new_buffer;
+      __internal_entry_header *header = (__internal_entry_header *)new_buffer;
       header->elem_status = elem_is_not_a_pool_member;
       header->pool_ptr = mp;
-      result = (void*)&header->next;
+      result = (void *)&header->next;
       ++mp->active_dynamic_memory_buffer_count;
     }
   }
@@ -283,8 +282,8 @@ void* mempool_alloc_entry(mempool* mp) {
   return result;
 }
 
-void* mempool_calloc_entry(mempool* mp) {
-  void* result = mempool_alloc_entry(mp);
+void *mempool_calloc_entry(mempool *mp) {
+  void *result = mempool_alloc_entry(mp);
 
   if (result) {
     memset(result, 0, EXT_SIZE_TO_USER_SIZE(mp->ext_elem_size));
@@ -293,13 +292,13 @@ void* mempool_calloc_entry(mempool* mp) {
   return result;
 }
 
-static inline bool valid_mempool_addr(mempool* mp, uintptr_t c_entry) {
+static inline bool valid_mempool_addr(mempool *mp, uintptr_t c_entry) {
   return (c_entry >= mp->lower_addr_limit) &&
          (c_entry < mp->upper_addr_limit) &&
          (c_entry - mp->lower_addr_limit) % mp->ext_elem_size == 0;
 }
 
-void __mempool_free_entry(mempool* mp, __internal_entry_header* header) {
+void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
   if (!mp) {
     assert(false);
   }
@@ -366,14 +365,14 @@ void __mempool_free_entry(mempool* mp, __internal_entry_header* header) {
   }
 }
 
-void _mempool_free_entry(void* entry) {
+void _mempool_free_entry(void *entry) {
   if (!entry) {
     // Let's resemble the dynamic memory allocation approach here.
     // Releasing a NULL pointer is acceptable.
     return;
   }
 
-  __internal_entry_header* header = ENTRY_TO_HEADER(entry);
+  __internal_entry_header *header = ENTRY_TO_HEADER(entry);
 
   // Let's check the invariant parts.
   if (!header) {
@@ -392,7 +391,7 @@ void _mempool_free_entry(void* entry) {
   __mempool_free_entry(header->pool_ptr, header);
 }
 
-size_t mempool_total_capacity(mempool* mp) {
+size_t mempool_total_capacity(mempool *mp) {
   if (!mp) {
     assert(false);
   }
@@ -412,7 +411,7 @@ size_t mempool_total_capacity(mempool* mp) {
   return result;
 }
 
-size_t mempool_used_count(mempool* mp) {
+size_t mempool_used_count(mempool *mp) {
   if (!mp) {
     assert(false);
   }
@@ -432,7 +431,7 @@ size_t mempool_used_count(mempool* mp) {
   return result;
 }
 
-size_t mempool_dynamic_allocs_count(mempool* mp) {
+size_t mempool_dynamic_allocs_count(mempool *mp) {
   if (!mp) {
     assert(false);
   }
@@ -457,20 +456,20 @@ const size_t min_allowed_smallest_size = 16;
 const size_t max_allowed_largest_size = 9223372036854775808UL;
 
 struct r_mempool {
-  mempool** mem_pools;  // The real memory pools
+  mempool **mem_pools;  // The real memory pools
   mempool pseudo_pool;
   r_memory_fallback_policy_t fb_policy;
   bool should_use_locks;
-  ccol_memmgmt_procs_t* m_procs;
+  ccol_memmgmt_procs_t *m_procs;
   size_t number_of_mempools;
-  size_t* reverse_size_lookup_array;
+  size_t *reverse_size_lookup_array;
   size_t reverse_size_lookup_array_length;
   size_t smallest_size;
   size_t largest_size;
   size_t smallest_elem_count;
 };
 
-void _r_mempool_destroy(r_mempool* rmp) {
+void _r_mempool_destroy(r_mempool *rmp) {
   if (rmp) {
     if (rmp->mem_pools) {
       for (size_t i = 0; i < rmp->number_of_mempools; ++i) {
@@ -500,13 +499,12 @@ void _r_mempool_destroy(r_mempool* rmp) {
   }
 }
 
-bool assess_r_mempool_create_inputs(r_mempool* rmp,
+bool assess_r_mempool_create_inputs(r_mempool *rmp,
                                     uint8_t smallest_size_power_of_two,
                                     uint8_t largest_size_power_of_two,
                                     uint8_t smallest_elem_count_power_of_two,
                                     r_memory_fallback_policy_t fb_policy,
-                                    bool will_be_accessed_by_only_one_thread,
-                                    char** err) {
+                                    bool single_threaded, char **err) {
   if (smallest_size_power_of_two == 0 || largest_size_power_of_two == 0 ||
       smallest_elem_count_power_of_two == 0) {
     if (err) {
@@ -543,7 +541,7 @@ bool assess_r_mempool_create_inputs(r_mempool* rmp,
     return false;
   }
 
-  rmp->should_use_locks = !will_be_accessed_by_only_one_thread;
+  rmp->should_use_locks = !single_threaded;
   rmp->smallest_size = smallest_size;
   rmp->largest_size = largest_size;
   rmp->smallest_elem_count = smallest_elem_count;
@@ -554,7 +552,7 @@ bool assess_r_mempool_create_inputs(r_mempool* rmp,
   return true;
 }
 
-bool init_r_mempool_pseudo_pool(r_mempool* rmp) {
+bool init_r_mempool_pseudo_pool(r_mempool *rmp) {
   memset(&rmp->pseudo_pool, 0, sizeof(mempool));
   if (rmp->fb_policy == fallback_at_last_exhaustion) {
     if (rmp->should_use_locks) {
@@ -569,7 +567,7 @@ bool init_r_mempool_pseudo_pool(r_mempool* rmp) {
   return true;
 }
 
-bool init_r_mempool_internal_pools(r_mempool* rmp, char** err) {
+bool init_r_mempool_internal_pools(r_mempool *rmp, char **err) {
   if (!init_r_mempool_pseudo_pool(rmp)) {
     if (err) {
       *err = CCOL_ERR_STR("failed to initialize the pseudo_pool");
@@ -577,7 +575,7 @@ bool init_r_mempool_internal_pools(r_mempool* rmp, char** err) {
     return false;
   }
 
-  rmp->mem_pools = (mempool**)_mem_alloc(
+  rmp->mem_pools = (mempool **)_mem_alloc(
       rmp->m_procs, rmp->number_of_mempools * sizeof(mempool));
   if (!rmp->mem_pools) {
     // The cleanup will be performed by the caller.
@@ -606,8 +604,8 @@ bool init_r_mempool_internal_pools(r_mempool* rmp, char** err) {
   return true;
 }
 
-bool init_r_mempool_reverse_size_lookup_array(r_mempool* rmp, char** err) {
-  rmp->reverse_size_lookup_array = (size_t*)_mem_alloc(
+bool init_r_mempool_reverse_size_lookup_array(r_mempool *rmp, char **err) {
+  rmp->reverse_size_lookup_array = (size_t *)_mem_alloc(
       rmp->m_procs, rmp->largest_size / rmp->smallest_size * sizeof(size_t));
   if (!rmp->reverse_size_lookup_array) {
     // The cleanup will be performed by the caller.
@@ -631,12 +629,12 @@ bool init_r_mempool_reverse_size_lookup_array(r_mempool* rmp, char** err) {
   return true;
 }
 
-r_mempool* r_mempool_create(uint8_t smallest_size_power_of_two,
+r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
                             uint8_t largest_size_power_of_two,
                             uint8_t smallest_elem_count_power_of_two,
                             r_memory_fallback_policy_t fb_policy,
-                            bool will_be_accessed_by_only_one_thread,
-                            ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
+                            bool single_threaded,
+                            ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   if (err) {
     *err = NULL;
   }
@@ -645,7 +643,7 @@ r_mempool* r_mempool_create(uint8_t smallest_size_power_of_two,
     return NULL;
   }
 
-  r_mempool* rmp = (r_mempool*)_mem_calloc(mmgmt_procs, 1, sizeof(r_mempool));
+  r_mempool *rmp = (r_mempool *)_mem_calloc(mmgmt_procs, 1, sizeof(r_mempool));
   if (!rmp) {
     if (err) {
       *err = CCOL_ERR_STR("failed to allocate r_mempool struct");
@@ -660,8 +658,7 @@ r_mempool* r_mempool_create(uint8_t smallest_size_power_of_two,
 
   if (!assess_r_mempool_create_inputs(
           rmp, smallest_size_power_of_two, largest_size_power_of_two,
-          smallest_elem_count_power_of_two, fb_policy,
-          will_be_accessed_by_only_one_thread, err)) {
+          smallest_elem_count_power_of_two, fb_policy, single_threaded, err)) {
     r_mempool_destroy(rmp);
     return NULL;
   }
@@ -680,10 +677,10 @@ r_mempool* r_mempool_create(uint8_t smallest_size_power_of_two,
   return rmp;
 }
 
-bool init_preallocated_r_mempool_internal_pools(r_mempool* rmp,
-                                                void* preallocated_buffer,
+bool init_preallocated_r_mempool_internal_pools(r_mempool *rmp,
+                                                void *preallocated_buffer,
                                                 size_t preallocated_buffer_size,
-                                                char** err) {
+                                                char **err) {
   if (!init_r_mempool_pseudo_pool(rmp)) {
     if (err) {
       *err = CCOL_ERR_STR("failed to initialize the pseudo_pool");
@@ -691,8 +688,8 @@ bool init_preallocated_r_mempool_internal_pools(r_mempool* rmp,
     return false;
   }
 
-  rmp->mem_pools = (mempool**)_mem_calloc(rmp->m_procs, rmp->number_of_mempools,
-                                          sizeof(mempool));
+  rmp->mem_pools = (mempool **)_mem_calloc(
+      rmp->m_procs, rmp->number_of_mempools, sizeof(mempool));
   if (!rmp->mem_pools) {
     // The cleanup will be performed by the caller.
     if (err) {
@@ -711,7 +708,7 @@ bool init_preallocated_r_mempool_internal_pools(r_mempool* rmp,
        esize <= last_size; esize *= 2, ecount /= 2, ++index) {
     // Using different adjacent segments of the preallocated buffer
     // with different sizes to accommodate different pools of memory.
-    uint8_t* sub_buffer = (uint8_t*)preallocated_buffer + cumulative_size;
+    uint8_t *sub_buffer = (uint8_t *)preallocated_buffer + cumulative_size;
     size_t sub_buffer_size =
         ecount * (esize + offsetof(__internal_entry_header, next));
     rmp->mem_pools[index] = mempool_create_from_preallocated_buffer(
@@ -735,12 +732,11 @@ bool init_preallocated_r_mempool_internal_pools(r_mempool* rmp,
   return true;
 }
 
-r_mempool* r_mempool_create_from_preallocated_buffer(
-    void* buffer, size_t buf_size, uint8_t smallest_size_power_of_two,
+r_mempool *r_mempool_create_from_preallocated_buffer(
+    void *buffer, size_t buf_size, uint8_t smallest_size_power_of_two,
     uint8_t largest_size_power_of_two, uint8_t smallest_elem_count_power_of_two,
-    r_memory_fallback_policy_t fb_policy,
-    bool will_be_accessed_by_only_one_thread, ccol_memmgmt_procs_t* mmgmt_procs,
-    char** err) {
+    r_memory_fallback_policy_t fb_policy, bool single_threaded,
+    ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   if (err) {
     *err = NULL;
   }
@@ -749,7 +745,7 @@ r_mempool* r_mempool_create_from_preallocated_buffer(
     return NULL;
   }
 
-  r_mempool* rmp = (r_mempool*)_mem_calloc(mmgmt_procs, 1, sizeof(r_mempool));
+  r_mempool *rmp = (r_mempool *)_mem_calloc(mmgmt_procs, 1, sizeof(r_mempool));
   if (!rmp) {
     if (err) {
       *err = CCOL_ERR_STR("failed to allocate r_mempool struct");
@@ -764,8 +760,7 @@ r_mempool* r_mempool_create_from_preallocated_buffer(
 
   if (!assess_r_mempool_create_inputs(
           rmp, smallest_size_power_of_two, largest_size_power_of_two,
-          smallest_elem_count_power_of_two, fb_policy,
-          will_be_accessed_by_only_one_thread, err)) {
+          smallest_elem_count_power_of_two, fb_policy, single_threaded, err)) {
     r_mempool_destroy(rmp);
     return NULL;
   }
@@ -784,8 +779,8 @@ r_mempool* r_mempool_create_from_preallocated_buffer(
   return rmp;
 }
 
-void* mempool_pseudo_alloc_entry(mempool* mp, size_t elem_size) {
-  void* result = NULL;
+void *mempool_pseudo_alloc_entry(mempool *mp, size_t elem_size) {
+  void *result = NULL;
 
   if (elem_size < sizeof(addr_t)) {
     elem_size = sizeof(addr_t);
@@ -797,12 +792,12 @@ void* mempool_pseudo_alloc_entry(mempool* mp, size_t elem_size) {
     rw_lock_wrlock(&mp->lock);
   }
 
-  void* new_buffer = _mem_alloc(mp->m_procs, ext_elem_size);
+  void *new_buffer = _mem_alloc(mp->m_procs, ext_elem_size);
   if (new_buffer) {
-    __internal_entry_header* header = (__internal_entry_header*)new_buffer;
+    __internal_entry_header *header = (__internal_entry_header *)new_buffer;
     header->elem_status = elem_is_not_a_pool_member;
     header->pool_ptr = mp;
-    result = (void*)&header->next;
+    result = (void *)&header->next;
     ++mp->active_dynamic_memory_buffer_count;
   }
 
@@ -813,14 +808,14 @@ void* mempool_pseudo_alloc_entry(mempool* mp, size_t elem_size) {
   return result;
 }
 
-void* r_mempool_alloc_entry(r_mempool* rmp, size_t size) {
+void *r_mempool_alloc_entry(r_mempool *rmp, size_t size) {
   if (!rmp || size == 0 || size > rmp->largest_size) {
     return NULL;
   }
 
   size_t index = (size - 1) / rmp->smallest_size;
 
-  void* result = NULL;
+  void *result = NULL;
 
   for (; index <= rmp->number_of_mempools; ++index) {
     result = mempool_alloc_entry(
@@ -837,8 +832,8 @@ void* r_mempool_alloc_entry(r_mempool* rmp, size_t size) {
   return result;
 }
 
-void* r_mempool_calloc_entry(r_mempool* rmp, size_t size) {
-  void* result = r_mempool_alloc_entry(rmp, size);
+void *r_mempool_calloc_entry(r_mempool *rmp, size_t size) {
+  void *result = r_mempool_alloc_entry(rmp, size);
 
   if (result) {
     memset(result, 0, size);
@@ -847,7 +842,7 @@ void* r_mempool_calloc_entry(r_mempool* rmp, size_t size) {
   return result;
 }
 
-void* r_mempool_realloc_entry(r_mempool* rmp, void* addr, size_t size) {
+void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size) {
   if (!rmp || size == 0 || size > rmp->largest_size) {
     return NULL;
   }
@@ -855,7 +850,7 @@ void* r_mempool_realloc_entry(r_mempool* rmp, void* addr, size_t size) {
   size_t min_user_size = 0;
 
   if (addr) {
-    __internal_entry_header* header = ENTRY_TO_HEADER(addr);
+    __internal_entry_header *header = ENTRY_TO_HEADER(addr);
 
     size_t index = (size - 1) / rmp->smallest_size;
     size_t new_ext_size =
@@ -873,7 +868,7 @@ void* r_mempool_realloc_entry(r_mempool* rmp, void* addr, size_t size) {
     }
   }
 
-  void* new_entry = r_mempool_alloc_entry(rmp, size);
+  void *new_entry = r_mempool_alloc_entry(rmp, size);
   if (new_entry && addr) {
     memcpy(new_entry, addr, min_user_size);
     mempool_free_entry(addr);
@@ -882,7 +877,7 @@ void* r_mempool_realloc_entry(r_mempool* rmp, void* addr, size_t size) {
   return new_entry;
 }
 
-size_t r_mempool_used_count(r_mempool* rmp, size_t size) {
+size_t r_mempool_used_count(r_mempool *rmp, size_t size) {
   if (!rmp || size == 0 || size > rmp->largest_size) {
     return 0;
   }
@@ -893,7 +888,7 @@ size_t r_mempool_used_count(r_mempool* rmp, size_t size) {
       rmp->mem_pools[rmp->reverse_size_lookup_array[index]]);
 }
 
-size_t r_mempool_total_capacity(r_mempool* rmp, size_t size) {
+size_t r_mempool_total_capacity(r_mempool *rmp, size_t size) {
   if (!rmp || size == 0 || size > rmp->largest_size) {
     return 0;
   }
@@ -904,7 +899,7 @@ size_t r_mempool_total_capacity(r_mempool* rmp, size_t size) {
       rmp->mem_pools[rmp->reverse_size_lookup_array[index]]);
 }
 
-size_t r_mempool_dynamic_allocs_count(r_mempool* rmp, size_t size) {
+size_t r_mempool_dynamic_allocs_count(r_mempool *rmp, size_t size) {
   if (!rmp || size == 0 || size > rmp->largest_size) {
     return 0;
   }

@@ -24,13 +24,13 @@ SOFTWARE.
 
 #include <csort.h>
 #include <stdint.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Swap procedures region */
-void csort_default_swap_proc(void* first, void* second, size_t elem_size) {
-  unsigned char* ptr_btye_first = (unsigned char*)first;
-  unsigned char* ptr_byte_second = (unsigned char*)second;
+void csort_default_swap_proc(void *first, void *second, size_t elem_size) {
+  unsigned char *ptr_btye_first = (unsigned char *)first;
+  unsigned char *ptr_byte_second = (unsigned char *)second;
   unsigned char tmp;
 
   if (!first || !second || first == second) {
@@ -44,29 +44,29 @@ void csort_default_swap_proc(void* first, void* second, size_t elem_size) {
   }
 }
 
-void csort_default_pointer_swap_proc(void* first, void* second,
+void csort_default_pointer_swap_proc(void *first, void *second,
                                      size_t elem_size __attribute__((unused))) {
   if (!first || !second || first == second) {
     return;
   }
 
-  void* tmp = first;
+  void *tmp = first;
   first = second;
   second = tmp;
 }
 /* End of Swap procedures region */
 
 /* Comparison procedures region */
-int csort_default_string_comparison_proc(const void* first,
-                                         const void* second) {
-  return strcmp(*(const char**)first, *(const char**)second);
+int csort_default_string_comparison_proc(const void *first,
+                                         const void *second) {
+  return strcmp(*(const char **)first, *(const char **)second);
 }
 
 #define ___csort__define_default_integral_comparison_proc(type, name) \
   int ___csort__get_default_integral_comparison_proc_name(name)(      \
-      const void* first, const void* second) {                        \
-    return (*(const type*)first > *(const type*)second) -             \
-           (*(const type*)first < *(const type*)second);              \
+      const void *first, const void *second) {                        \
+    return (*(const type *)first > *(const type *)second) -           \
+           (*(const type *)first < *(const type *)second);            \
   }
 
 ___csort__define_default_integral_comparison_proc(char, char);
@@ -87,14 +87,14 @@ ___csort__define_default_integral_comparison_proc(long double, long_double);
 #undef __define_default_integral_comparison_proc
 /* End of Comparison procedures region */
 
-static int csort_qsort_partition(void* col, int low, int high, size_t elem_size,
+static int csort_qsort_partition(void *col, int low, int high, size_t elem_size,
                                  csort_item_getter_proc_t getter_proc,
                                  ccol_comparison_proc_t comparison_proc,
                                  csort_item_swap_proc_t swap_proc) {
   int j;
   int i = low;
-  void* pivot;
-  void* pj;
+  void *pivot;
+  void *pj;
   if (!getter_proc || !comparison_proc) {
     assert(false);
   }
@@ -122,14 +122,14 @@ typedef struct {
 
 // Simple stack implementation for iterative quicksort
 typedef struct {
-  csort_stack_entry* entries;
+  csort_stack_entry *entries;
   size_t capacity;
   size_t size;
 } csort_stack;
 
-static bool csort_stack_init(csort_stack* stack, size_t initial_capacity,
-                             ccol_memmgmt_procs_t* mprocs) {
-  stack->entries = (csort_stack_entry*)_mem_alloc(
+static bool csort_stack_init(csort_stack *stack, size_t initial_capacity,
+                             ccol_memmgmt_procs_t *mprocs) {
+  stack->entries = (csort_stack_entry *)_mem_alloc(
       mprocs, initial_capacity * sizeof(csort_stack_entry));
   if (!stack->entries) {
     return false;
@@ -139,8 +139,8 @@ static bool csort_stack_init(csort_stack* stack, size_t initial_capacity,
   return true;
 }
 
-static void csort_stack_destroy(csort_stack* stack,
-                                ccol_memmgmt_procs_t* mprocs) {
+static void csort_stack_destroy(csort_stack *stack,
+                                ccol_memmgmt_procs_t *mprocs) {
   if (stack->entries) {
     _mem_free(mprocs, stack->entries);
     stack->entries = NULL;
@@ -149,12 +149,12 @@ static void csort_stack_destroy(csort_stack* stack,
   stack->size = 0;
 }
 
-static bool csort_stack_push(csort_stack* stack, int low, int high,
-                             ccol_memmgmt_procs_t* mprocs) {
+static bool csort_stack_push(csort_stack *stack, int low, int high,
+                             ccol_memmgmt_procs_t *mprocs) {
   if (stack->size >= stack->capacity) {
     // Need to grow the stack
     size_t new_capacity = stack->capacity * 2;
-    csort_stack_entry* new_entries = (csort_stack_entry*)_mem_realloc(
+    csort_stack_entry *new_entries = (csort_stack_entry *)_mem_realloc(
         mprocs, stack->entries, new_capacity * sizeof(csort_stack_entry));
     if (!new_entries) {
       return false;
@@ -169,7 +169,7 @@ static bool csort_stack_push(csort_stack* stack, int low, int high,
   return true;
 }
 
-static bool csort_stack_pop(csort_stack* stack, int* low, int* high) {
+static bool csort_stack_pop(csort_stack *stack, int *low, int *high) {
   if (stack->size == 0) {
     return false;
   }
@@ -180,17 +180,17 @@ static bool csort_stack_pop(csort_stack* stack, int* low, int* high) {
   return true;
 }
 
-static bool csort_stack_is_empty(csort_stack* stack) {
+static bool csort_stack_is_empty(csort_stack *stack) {
   return stack->size == 0;
 }
 
 // Iterative quicksort implementation
-static void csort_qsort_iterative(void* col, int low, int high,
+static void csort_qsort_iterative(void *col, int low, int high,
                                   size_t elem_size,
                                   csort_item_getter_proc_t getter_proc,
                                   ccol_comparison_proc_t comparison_proc,
                                   csort_item_swap_proc_t swap_proc,
-                                  ccol_memmgmt_procs_t* mprocs) {
+                                  ccol_memmgmt_procs_t *mprocs) {
   if (low >= high) {
     return;
   }
@@ -249,11 +249,11 @@ static void csort_qsort_iterative(void* col, int low, int high,
   csort_stack_destroy(&stack, mprocs);
 }
 
-void ___csort_qsort(void* col, size_t length, size_t elem_size,
+void ___csort_qsort(void *col, size_t length, size_t elem_size,
                     csort_item_getter_proc_t getter_proc,
                     ccol_comparison_proc_t comparison_proc,
                     csort_item_swap_proc_t swap_proc,
-                    ccol_memmgmt_procs_t* mprocs) {
+                    ccol_memmgmt_procs_t *mprocs) {
   if (!col) {
     return;
   }

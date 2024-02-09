@@ -234,52 +234,52 @@ TEST(chash_maps, find_nearest_gte_power_of_two) {
 }
 
 TEST(chash_maps, create_fails) {
-  char* err = NULL;
-  chashmap* chmap = chmap_create(0, &err);
-  REQUIRE_EQ((void*)chmap, NULL);
-  REQUIRE_NE((void*)err, NULL);
+  char *err = NULL;
+  chashmap *chmap = chmap_create(0, &err);
+  REQUIRE_EQ((void *)chmap, NULL);
+  REQUIRE_NE((void *)err, NULL);
 
   chmap = chmap_create_mp(
       4096,
       &(ccol_memmgmt_procs_t){
           .malloc = NULL, .free = free, .calloc = calloc, .realloc = realloc},
       &err);
-  REQUIRE_EQ((void*)chmap, NULL);
-  REQUIRE_NE((void*)err, NULL);
+  REQUIRE_EQ((void *)chmap, NULL);
+  REQUIRE_NE((void *)err, NULL);
 
   chmap = chmap_create_mp(
       4096,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = NULL, .calloc = calloc, .realloc = realloc},
       &err);
-  REQUIRE_EQ((void*)chmap, NULL);
-  REQUIRE_NE((void*)err, NULL);
+  REQUIRE_EQ((void *)chmap, NULL);
+  REQUIRE_NE((void *)err, NULL);
 
   chmap = chmap_create_mp(
       4096,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = NULL, .realloc = realloc},
       &err);
-  REQUIRE_EQ((void*)chmap, NULL);
-  REQUIRE_NE((void*)err, NULL);
+  REQUIRE_EQ((void *)chmap, NULL);
+  REQUIRE_NE((void *)err, NULL);
 
   chmap = chmap_create_mp(
       4096,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = NULL},
       &err);
-  REQUIRE_EQ((void*)chmap, NULL);
-  REQUIRE_NE((void*)err, NULL);
+  REQUIRE_EQ((void *)chmap, NULL);
+  REQUIRE_NE((void *)err, NULL);
 }
 
 TEST(chash_maps, create_succeeds) {
-  char* err = "";
-  chashmap* chmap = chmap_create(4096, &err);
-  REQUIRE_NE((void*)chmap, NULL);
-  REQUIRE_EQ((void*)err, NULL);
+  char *err = "";
+  chashmap *chmap = chmap_create(4096, &err);
+  REQUIRE_NE((void *)chmap, NULL);
+  REQUIRE_EQ((void *)err, NULL);
 
   chmap_destroy(chmap);
-  REQUIRE_EQ((void*)chmap, NULL);
+  REQUIRE_EQ((void *)chmap, NULL);
 
   chmap = chmap_create_mp(
       4096,
@@ -288,42 +288,42 @@ TEST(chash_maps, create_succeeds) {
       &err);
 
   chmap_destroy(chmap);
-  REQUIRE_EQ((void*)chmap, NULL);
+  REQUIRE_EQ((void *)chmap, NULL);
 }
 
 // Helper functions start.
-int insert_string_to_int(chashmap* chmap, const char* key, int val) {
+int insert_string_to_int(chashmap *chmap, const char *key, int val) {
   return chmap_insert_elem(
-      chmap, &(cmap_pair){.ptr = (void*)key, .size = strlen(key)},
-      &(cmap_pair){.ptr = (void*)&val, .size = sizeof(val)});
+      chmap, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
+      &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)});
 }
 
-int get_int_from_string(chashmap* chmap, const char* key, int* val_ptr) {
+int get_int_from_string(chashmap *chmap, const char *key, int *val_ptr) {
   return chmap_get_elem_copy(
-      chmap, &(cmap_pair){.ptr = (void*)key, .size = strlen(key)}, val_ptr,
+      chmap, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, val_ptr,
       sizeof(int));
 }
 
-int get_int_ref_from_string(chashmap* chmap, const char* key, int** val_ptr) {
-  cmap_pair* tmp_val_pair_ptr = NULL;
+int get_int_ref_from_string(chashmap *chmap, const char *key, int **val_ptr) {
+  cmap_pair *tmp_val_pair_ptr = NULL;
   if (chmap_get_elem_ref(chmap,
-                         &(cmap_pair){.ptr = (void*)key, .size = strlen(key)},
+                         &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
                          &tmp_val_pair_ptr) == 0) {
-    *val_ptr = (int*)tmp_val_pair_ptr->ptr;
+    *val_ptr = (int *)tmp_val_pair_ptr->ptr;
     return 0;
   }
   return -1;
 }
 
-ccol_retval_t delete_int_from_string(chashmap* chmap, const char* key) {
+ccol_retval_t delete_int_from_string(chashmap *chmap, const char *key) {
   return chmap_delete_elem(
-      chmap, &(cmap_pair){.ptr = (void*)key, .size = strlen(key)});
+      chmap, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)});
 }
 // Helper functions end.
 
 TEST(chash_maps, basic_insertions_and_lookups) {
-  chashmap* chmap = chmap_create(1, NULL);
-  REQUIRE_NE((void*)chmap, NULL);
+  chashmap *chmap = chmap_create(1, NULL);
+  REQUIRE_NE((void *)chmap, NULL);
 
   int val = -1;
 
@@ -351,12 +351,12 @@ TEST(chash_maps, basic_insertions_and_lookups) {
 }
 
 TEST(chash_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
-  chashmap* chmap = chmap_create_mp(
+  chashmap *chmap = chmap_create_mp(
       1,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc},
       NULL);
-  REQUIRE_NE((void*)chmap, NULL);
+  REQUIRE_NE((void *)chmap, NULL);
 
   int val = -1;
 
@@ -384,10 +384,10 @@ TEST(chash_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
 }
 
 TEST(chash_maps, insert_values_with_different_sizes) {
-  chashmap* chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, NULL);
 
-  const char* key1 = "key";
-  cmap_pair* target_pair = NULL;
+  const char *key1 = "key";
+  cmap_pair *target_pair = NULL;
 
   {
     struct s1 {
@@ -399,13 +399,13 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_insert_elem(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
-            &(cmap_pair){.ptr = (void*)&val, .size = sizeof(val)}),
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
+            &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
         ccol_success);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &target_pair),
         ccol_success);
 
@@ -413,7 +413,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &test_val, sizeof(test_val)),
         ccol_success);
 
@@ -434,13 +434,13 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_insert_elem(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
-            &(cmap_pair){.ptr = (void*)&val, .size = sizeof(val)}),
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
+            &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
         ccol_success);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &target_pair),
         ccol_success);
 
@@ -448,7 +448,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &test_val, sizeof(test_val)),
         ccol_success);
 
@@ -460,13 +460,13 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_insert_elem(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
-            &(cmap_pair){.ptr = (void*)&val, .size = sizeof(val)}),
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
+            &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
         ccol_success);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &target_pair),
         ccol_success);
 
@@ -474,7 +474,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &test_val, sizeof(test_val)),
         ccol_success);
 
@@ -486,13 +486,13 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_insert_elem(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
-            &(cmap_pair){.ptr = (void*)&val, .size = sizeof(val)}),
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
+            &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
         ccol_success);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &target_pair),
         ccol_success);
 
@@ -500,7 +500,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &test_val, sizeof(test_val)),
         ccol_success);
 
@@ -512,13 +512,13 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_insert_elem(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
-            &(cmap_pair){.ptr = (void*)&val, .size = sizeof(val)}),
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
+            &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
         ccol_success);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &target_pair),
         ccol_success);
 
@@ -526,7 +526,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 
     REQUIRE_EQ(
         chmap_get_elem_copy(
-            chmap, &(cmap_pair){.ptr = (void*)key1, .size = strlen(key1)},
+            chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &test_val, sizeof(test_val)),
         ccol_success);
 
@@ -537,7 +537,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 }
 
 TEST(chash_maps, insertions_with_a_variety_of_key_sizes) {
-  chashmap* chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, NULL);
 
   int val;
   int target = 0;
@@ -590,7 +590,7 @@ TEST(chash_maps, insertions_with_a_variety_of_key_sizes) {
       ccol_success);
   REQUIRE_EQ(val, target);
 
-  char* a_string_key = "a string key for testing";
+  char *a_string_key = "a string key for testing";
   for (uint32_t i = 1; i <= 24; ++i) {
     char key[32] = {0};
     snprintf(key, sizeof(key), "%.*s", i, a_string_key);
@@ -611,8 +611,8 @@ TEST(chash_maps, insertions_with_a_variety_of_key_sizes) {
 }
 
 TEST(chash_maps, basic_deletions) {
-  chashmap* chmap = chmap_create(1, NULL);
-  REQUIRE_NE((void*)chmap, NULL);
+  chashmap *chmap = chmap_create(1, NULL);
+  REQUIRE_NE((void *)chmap, NULL);
 
   int val = -1;
 
@@ -652,15 +652,15 @@ TEST(chash_maps, basic_deletions) {
 }
 
 TEST(chash_maps, accessing_references) {
-  chashmap* chmap = chmap_create(1, NULL);
-  REQUIRE_NE((void*)chmap, NULL);
+  chashmap *chmap = chmap_create(1, NULL);
+  REQUIRE_NE((void *)chmap, NULL);
 
-  int* val_ptr = NULL;
+  int *val_ptr = NULL;
 
   REQUIRE_EQ(get_int_ref_from_string(chmap, "key1", &val_ptr), -1);
-  REQUIRE_EQ((void*)val_ptr, NULL);
+  REQUIRE_EQ((void *)val_ptr, NULL);
   REQUIRE_EQ(get_int_ref_from_string(chmap, "", &val_ptr), -1);
-  REQUIRE_EQ((void*)val_ptr, NULL);
+  REQUIRE_EQ((void *)val_ptr, NULL);
 
   REQUIRE_EQ(chmap_elem_count(chmap), 0);
 
@@ -672,14 +672,14 @@ TEST(chash_maps, accessing_references) {
   int tmp;
 
   REQUIRE_EQ(get_int_ref_from_string(chmap, "key1", &val_ptr), ccol_success);
-  REQUIRE_NE((void*)val_ptr, NULL);
+  REQUIRE_NE((void *)val_ptr, NULL);
   REQUIRE_EQ(*val_ptr, -3);
   *val_ptr = 1;  // The changes made via pointer alters the map element directly
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &tmp), ccol_success);
   REQUIRE_EQ(tmp, 1);
 
   REQUIRE_EQ(get_int_ref_from_string(chmap, "key2", &val_ptr), ccol_success);
-  REQUIRE_NE((void*)val_ptr, NULL);
+  REQUIRE_NE((void *)val_ptr, NULL);
   REQUIRE_EQ(*val_ptr, -5);
   *val_ptr = 7;  // The changes made via pointer alters the map element directly
   REQUIRE_EQ(get_int_from_string(chmap, "key2", &tmp), ccol_success);
@@ -689,8 +689,8 @@ TEST(chash_maps, accessing_references) {
 }
 
 TEST(chash_maps, reset) {
-  chashmap* chmap = chmap_create(1, NULL);
-  REQUIRE_NE((void*)chmap, NULL);
+  chashmap *chmap = chmap_create(1, NULL);
+  REQUIRE_NE((void *)chmap, NULL);
 
   REQUIRE_EQ(chmap_elem_count(chmap), 0);
 
@@ -735,8 +735,8 @@ TEST(chash_maps, reset) {
 
 TEST(chash_maps, for_each_elem_wr) {
   // chashmap* chmap = chmap_create(1, NULL);
-  chmap_construct(chmap, char*, int);
-  REQUIRE_NE((void*)chmap, NULL);
+  chmap_construct(chmap, char *, int);
+  REQUIRE_NE((void *)chmap, NULL);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
@@ -757,8 +757,8 @@ TEST(chash_maps, for_each_elem_wr) {
 }
 
 TEST(chash_maps, for_each_elem_rd) {
-  chmap_construct(chmap, char*, int);
-  REQUIRE_NE((void*)chmap, NULL);
+  chmap_construct(chmap, char *, int);
+  REQUIRE_NE((void *)chmap, NULL);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
@@ -783,13 +783,13 @@ TEST(chash_maps, for_each_elem_rd) {
   chmap_destroy(chmap);
 }
 
-extern size_t chmap_get_bucket_arr_size(chashmap* chmap);
-extern size_t chmap_get_elem_count_to_scale_up(chashmap* chmap);
-extern size_t chmap_get_elem_count_to_scale_down(chashmap* chmap);
+extern size_t chmap_get_bucket_arr_size(chashmap *chmap);
+extern size_t chmap_get_elem_count_to_scale_up(chashmap *chmap);
+extern size_t chmap_get_elem_count_to_scale_down(chashmap *chmap);
 
 TEST(chash_maps, scaling) {
-  chashmap* chmap = chmap_create(1, NULL);
-  REQUIRE_NE((void*)chmap, NULL);
+  chashmap *chmap = chmap_create(1, NULL);
+  REQUIRE_NE((void *)chmap, NULL);
 
   size_t first_up_threshold = chmap_get_elem_count_to_scale_up(chmap);
   size_t first_down_threshold = chmap_get_elem_count_to_scale_down(chmap);
@@ -822,9 +822,37 @@ TEST(chash_maps, scaling) {
   chmap_destroy(chmap);
 }
 
-TEST(chash_maps, stress_scaling) {
-  chashmap* chmap = chmap_create(1, NULL);
-  REQUIRE_NE((void*)chmap, NULL);
+TEST(chash_maps, stress_scaling_ints) {
+  chmap_construct(chm, size_t, int);
+
+  size_t max_elems = 1000000;
+
+  // Insert elements
+  for (size_t i = 0; i <= max_elems; ++i) {
+    int val = i * 10;
+    chmap_insert(chm, i, val);
+  }
+
+  REQUIRE_EQ(chmap_elem_count(chm), max_elems + 1);
+
+  // Check elements
+  for (size_t i = 0; i <= max_elems; ++i) {
+    REQUIRE_EQ(chmap_get(chm, i), (int)i * 10);
+  }
+
+  // Delete elements
+  for (size_t i = 0; i <= max_elems; ++i) {
+    chmap_remove(chm, i);
+  }
+
+  REQUIRE_EQ(chmap_elem_count(chm), 0);
+
+  chmap_destroy(chm);
+}
+
+TEST(chash_maps, stress_scaling_strings) {
+  chashmap *chmap = chmap_create(1, NULL);
+  REQUIRE_NE((void *)chmap, NULL);
 
   size_t max_elems = 100000;
 
@@ -849,13 +877,13 @@ TEST(chash_maps, stress_scaling) {
   chmap_destroy(chmap);
 }
 
-unsigned long custom_int_key_hasher(const void* ptr) {
-  return *(const int*)ptr;
+unsigned long custom_int_key_hasher(const void *ptr) {
+  return *(const int *)ptr;
 }
 
 TEST(chash_maps, declarative_macros) {
   {
-    chmap_declare(hm, int, char*);
+    chmap_declare(hm, int, char *);
     chmap_init(hm);
 
     int key = 3;
@@ -876,7 +904,7 @@ TEST(chash_maps, declarative_macros) {
   {
     ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
         .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
-    chmap_declare(hm, int, char*);
+    chmap_declare(hm, int, char *);
     chmap_init_mp(hm, &mp);
 
     int key = 3;
@@ -896,7 +924,7 @@ TEST(chash_maps, declarative_macros) {
 
   {
     ccol_hashing_proc_t ch = &custom_int_key_hasher;
-    chmap_declare(hm, int, char*);
+    chmap_declare(hm, int, char *);
     chmap_init_ch(hm, ch);
 
     int key = 3;
@@ -918,7 +946,7 @@ TEST(chash_maps, declarative_macros) {
     ccol_hashing_proc_t ch = &custom_int_key_hasher;
     ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
         .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
-    chmap_declare(hm, int, char*);
+    chmap_declare(hm, int, char *);
     chmap_init_full(hm, &mp, ch);
 
     int key = 3;
@@ -939,7 +967,7 @@ TEST(chash_maps, declarative_macros) {
 
 TEST(chash_maps, constructive_macros) {
   {
-    chmap_construct(hm, int, char*);
+    chmap_construct(hm, int, char *);
 
     int key = 3;
 
@@ -959,7 +987,7 @@ TEST(chash_maps, constructive_macros) {
   {
     ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
         .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
-    chmap_construct_mp(hm, int, char*, &mp);
+    chmap_construct_mp(hm, int, char *, &mp);
 
     int key = 3;
 
@@ -978,7 +1006,7 @@ TEST(chash_maps, constructive_macros) {
 
   {
     ccol_hashing_proc_t ch = &custom_int_key_hasher;
-    chmap_construct_ch(hm, int, char*, ch);
+    chmap_construct_ch(hm, int, char *, ch);
 
     int key = 3;
 
@@ -999,7 +1027,7 @@ TEST(chash_maps, constructive_macros) {
     ccol_hashing_proc_t ch = &custom_int_key_hasher;
     ccol_memmgmt_procs_t mp = (ccol_memmgmt_procs_t){
         .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
-    chmap_construct_full(hm, int, char*, &mp, ch);
+    chmap_construct_full(hm, int, char *, &mp, ch);
 
     int key = 3;
 
@@ -1018,7 +1046,7 @@ TEST(chash_maps, constructive_macros) {
 }
 
 TEST(chash_maps, iteration) {
-  chmap_construct(hm, int, char*);
+  chmap_construct(hm, int, char *);
 
   int key = 3;
   chmap_insert(hm, key, "hello");
@@ -1055,7 +1083,7 @@ TEST(chash_maps, iteration) {
 }
 
 TEST(chash_maps, map_string_to_void_ptrs) {
-  chmap_construct(hm, char*, void*);
+  chmap_construct(hm, char *, void *);
 
   typedef struct some_struct {
     int a;
@@ -1067,7 +1095,7 @@ TEST(chash_maps, map_string_to_void_ptrs) {
   some_struct d3 = (some_struct){.a = 7, .b = 8};
   some_struct d4 = (some_struct){.a = 9, .b = 10};
 
-  void* val_ptr = &d1;
+  void *val_ptr = &d1;
   chmap_insert(hm, "d1", val_ptr);
 
   val_ptr = &d2;
@@ -1079,7 +1107,7 @@ TEST(chash_maps, map_string_to_void_ptrs) {
   chmap_insert(hm, k_d3, val_ptr);
 
   val_ptr = &d4;
-  const char* k_d4 = "d4";
+  const char *k_d4 = "d4";
   chmap_insert(hm, k_d4, val_ptr);
 
   int records[4] = {0};
@@ -1089,20 +1117,20 @@ TEST(chash_maps, map_string_to_void_ptrs) {
   for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
     if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->a, 3);
-      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->b, 4);
+      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->a, 3);
+      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->b, 4);
     } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->a, 5);
-      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->b, 6);
+      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->a, 5);
+      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->b, 6);
     } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->a, 7);
-      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->b, 8);
+      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->a, 7);
+      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->b, 8);
     } else if (strcmp(*chmap_iter_key_ptr(it), "d4") == 0) {
       REQUIRE_EQ(records[3]++, 0);
-      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->a, 9);
-      REQUIRE_EQ((*(some_struct**)chmap_iter_val_ptr(it))->b, 10);
+      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->a, 9);
+      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->b, 10);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -1120,13 +1148,13 @@ TEST(chash_maps, map_string_to_struct_ptrs) {
     short b;
   } some_struct;
 
-  chmap_construct(hm, char*, some_struct*);
+  chmap_construct(hm, char *, some_struct *);
 
   some_struct d1 = (some_struct){.a = 3, .b = 4};
   some_struct d2 = (some_struct){.a = 5, .b = 6};
   some_struct d3 = (some_struct){.a = 7, .b = 8};
 
-  some_struct* val_ptr = &d1;
+  some_struct *val_ptr = &d1;
   chmap_insert(hm, "d1", val_ptr);
   val_ptr = &d2;
   chmap_insert(hm, "d2", val_ptr);
@@ -1167,7 +1195,7 @@ TEST(chash_maps, map_string_to_a_struct) {
     short b;
   } some_struct;
 
-  chmap_construct(hm, char*, some_struct);
+  chmap_construct(hm, char *, some_struct);
 
   some_struct d1 = (some_struct){.a = 3, .b = 4};
   some_struct d2 = (some_struct){.a = 5, .b = 6};
@@ -1242,7 +1270,7 @@ typedef struct helper_struct {
 } helper_struct;
 
 void helper_function(chmap chm) {
-  chmap_enable_local_macros(chm, char*, helper_struct);
+  chmap_enable_local_macros(chm, char *, helper_struct);
 
   helper_struct d1 = (helper_struct){.a = 3, .b = 4};
   helper_struct d2 = (helper_struct){.a = 5, .b = 6};
@@ -1286,7 +1314,7 @@ void helper_function(chmap chm) {
 }
 
 TEST(chash_maps, re_enabled_local_chm_macros) {
-  chmap_construct(hm, char*, helper_struct);
+  chmap_construct(hm, char *, helper_struct);
 
   helper_function(hm);
 

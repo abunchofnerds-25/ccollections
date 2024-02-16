@@ -235,12 +235,12 @@ TEST(chash_maps, find_nearest_gte_power_of_two) {
 
 TEST(chash_maps, create_fails) {
   char *err = NULL;
-  chashmap *chmap = chmap_create(0, &err);
+  chashmap *chmap = chmap_create(0, ccol_char, &err);
   REQUIRE_EQ((void *)chmap, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   chmap = chmap_create_mp(
-      4096,
+      4096, ccol_char,
       &(ccol_memmgmt_procs_t){
           .malloc = NULL, .free = free, .calloc = calloc, .realloc = realloc},
       &err);
@@ -248,7 +248,7 @@ TEST(chash_maps, create_fails) {
   REQUIRE_NE((void *)err, NULL);
 
   chmap = chmap_create_mp(
-      4096,
+      4096, ccol_char,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = NULL, .calloc = calloc, .realloc = realloc},
       &err);
@@ -256,7 +256,7 @@ TEST(chash_maps, create_fails) {
   REQUIRE_NE((void *)err, NULL);
 
   chmap = chmap_create_mp(
-      4096,
+      4096, ccol_char,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = NULL, .realloc = realloc},
       &err);
@@ -264,7 +264,7 @@ TEST(chash_maps, create_fails) {
   REQUIRE_NE((void *)err, NULL);
 
   chmap = chmap_create_mp(
-      4096,
+      4096, ccol_char,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = NULL},
       &err);
@@ -274,7 +274,7 @@ TEST(chash_maps, create_fails) {
 
 TEST(chash_maps, create_succeeds) {
   char *err = "";
-  chashmap *chmap = chmap_create(4096, &err);
+  chashmap *chmap = chmap_create(4096, ccol_char, &err);
   REQUIRE_NE((void *)chmap, NULL);
   REQUIRE_EQ((void *)err, NULL);
 
@@ -282,7 +282,7 @@ TEST(chash_maps, create_succeeds) {
   REQUIRE_EQ((void *)chmap, NULL);
 
   chmap = chmap_create_mp(
-      4096,
+      4096, ccol_char,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc},
       &err);
@@ -322,7 +322,7 @@ ccol_retval_t delete_int_from_string(chashmap *chmap, const char *key) {
 // Helper functions end.
 
 TEST(chash_maps, basic_insertions_and_lookups) {
-  chashmap *chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, ccol_string, NULL);
   REQUIRE_NE((void *)chmap, NULL);
 
   int val = -1;
@@ -352,7 +352,7 @@ TEST(chash_maps, basic_insertions_and_lookups) {
 
 TEST(chash_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
   chashmap *chmap = chmap_create_mp(
-      1,
+      1, ccol_string,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc},
       NULL);
@@ -384,7 +384,7 @@ TEST(chash_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
 }
 
 TEST(chash_maps, insert_values_with_different_sizes) {
-  chashmap *chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, ccol_string, NULL);
 
   const char *key1 = "key";
   cmap_pair *target_pair = NULL;
@@ -537,7 +537,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
 }
 
 TEST(chash_maps, insertions_with_a_variety_of_key_sizes) {
-  chashmap *chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, ccol_other_types, NULL);
 
   int val;
   int target = 0;
@@ -611,7 +611,7 @@ TEST(chash_maps, insertions_with_a_variety_of_key_sizes) {
 }
 
 TEST(chash_maps, basic_deletions) {
-  chashmap *chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, ccol_string, NULL);
   REQUIRE_NE((void *)chmap, NULL);
 
   int val = -1;
@@ -652,7 +652,7 @@ TEST(chash_maps, basic_deletions) {
 }
 
 TEST(chash_maps, accessing_references) {
-  chashmap *chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, ccol_string, NULL);
   REQUIRE_NE((void *)chmap, NULL);
 
   int *val_ptr = NULL;
@@ -689,7 +689,7 @@ TEST(chash_maps, accessing_references) {
 }
 
 TEST(chash_maps, reset) {
-  chashmap *chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, ccol_string, NULL);
   REQUIRE_NE((void *)chmap, NULL);
 
   REQUIRE_EQ(chmap_elem_count(chmap), 0);
@@ -788,7 +788,7 @@ extern size_t chmap_get_elem_count_to_scale_up(chashmap *chmap);
 extern size_t chmap_get_elem_count_to_scale_down(chashmap *chmap);
 
 TEST(chash_maps, scaling) {
-  chashmap *chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, ccol_string, NULL);
   REQUIRE_NE((void *)chmap, NULL);
 
   size_t first_up_threshold = chmap_get_elem_count_to_scale_up(chmap);
@@ -825,7 +825,7 @@ TEST(chash_maps, scaling) {
 TEST(chash_maps, stress_scaling_ints) {
   chmap_construct(chm, size_t, int);
 
-  size_t max_elems = 1000000;
+  size_t max_elems = 10000000;
 
   // Insert elements
   for (size_t i = 0; i <= max_elems; ++i) {
@@ -851,10 +851,10 @@ TEST(chash_maps, stress_scaling_ints) {
 }
 
 TEST(chash_maps, stress_scaling_strings) {
-  chashmap *chmap = chmap_create(1, NULL);
+  chashmap *chmap = chmap_create(1, ccol_string, NULL);
   REQUIRE_NE((void *)chmap, NULL);
 
-  size_t max_elems = 100000;
+  size_t max_elems = 10000000;
 
   char key_buf[16] = {0};
   for (size_t i = 0; i <= max_elems; ++i) {

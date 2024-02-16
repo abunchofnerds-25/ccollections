@@ -25,6 +25,7 @@ SOFTWARE.
 #include <assert.h>
 #include <cbstmap.h>
 #include <cvector.h>
+#include <memops.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -367,9 +368,9 @@ bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
     return NULL;
   }
 
-  memcpy(new_node->key_pair.ptr, key_pair->ptr, key_pair->size);
+  mem_cpy(new_node->key_pair.ptr, key_pair->ptr, key_pair->size);
   new_node->key_pair.size = key_pair->size;
-  memcpy(new_node->val_pair.ptr, val_pair->ptr, val_pair->size);
+  mem_cpy(new_node->val_pair.ptr, val_pair->ptr, val_pair->size);
   new_node->val_pair.size = val_pair->size;
 
   new_node->left = NULL;
@@ -407,7 +408,7 @@ void update_bmap_node_value(cbmap cbm, bmap_node *node,
     }
     node->val_pair.ptr = new_ptr;
   }
-  memcpy(node->val_pair.ptr, val_pair->ptr, val_pair->size);
+  mem_cpy(node->val_pair.ptr, val_pair->ptr, val_pair->size);
   *result = ccol_key_already_present;
 }
 
@@ -672,7 +673,7 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
       if (target_buf_size != tracker->val_pair.size) {
         return ccol_invalid_args;
       }
-      memcpy(target_buf, tracker->val_pair.ptr, target_buf_size);
+      mem_cpy(target_buf, tracker->val_pair.ptr, target_buf_size);
       return ccol_success;
     }
 

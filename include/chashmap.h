@@ -91,6 +91,7 @@ typedef chashmap *chmap;
  * @see chmap_destroy
  */
 chmap chmap_create_full(size_t initial_bucket_array_size,
+                        ccol_data_type key_type,
                         ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_hashing_proc_t custom_hashing_proc, char **err);
 
@@ -105,9 +106,10 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
  *
  * @return Pointer to newly created hash map, or NULL on failure
  */
-static inline __attribute__((always_inline)) chmap
-chmap_create(size_t initial_bucket_array_size, char **err) {
-  return chmap_create_full(initial_bucket_array_size, NULL, NULL, err);
+static inline __attribute__((always_inline)) chmap chmap_create(
+    size_t initial_bucket_array_size, ccol_data_type key_type, char **err) {
+  return chmap_create_full(initial_bucket_array_size, key_type, NULL, NULL,
+                           err);
 }
 
 /**
@@ -123,9 +125,10 @@ chmap_create(size_t initial_bucket_array_size, char **err) {
  * @return Pointer to newly created hash map, or NULL on failure
  */
 static inline __attribute__((always_inline)) chmap
-chmap_create_mp(size_t initial_bucket_array_size,
+chmap_create_mp(size_t initial_bucket_array_size, ccol_data_type key_type,
                 ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
-  return chmap_create_full(initial_bucket_array_size, mmgmt_procs, NULL, err);
+  return chmap_create_full(initial_bucket_array_size, key_type, mmgmt_procs,
+                           NULL, err);
 }
 
 /**
@@ -141,10 +144,10 @@ chmap_create_mp(size_t initial_bucket_array_size,
  * @return Pointer to newly created hash map, or NULL on failure
  */
 static inline __attribute__((always_inline)) chmap
-chmap_create_ch(size_t initial_bucket_array_size,
+chmap_create_ch(size_t initial_bucket_array_size, ccol_data_type key_type,
                 ccol_hashing_proc_t custom_hashing_proc, char **err) {
-  return chmap_create_full(initial_bucket_array_size, NULL, custom_hashing_proc,
-                           err);
+  return chmap_create_full(initial_bucket_array_size, key_type, NULL,
+                           custom_hashing_proc, err);
 }
 
 /* ========================================================================== */
@@ -593,14 +596,16 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @see chmap_declare
  * @see chmap_construct_full
  */
-#define chmap_init_full(hm_name, mmgmt_procs, custom_hashing_proc)       \
-  do {                                                                   \
-    char *err = NULL;                                                    \
-    hm_name = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,       \
-                                mmgmt_procs, custom_hashing_proc, &err); \
-    if (!hm_name) {                                                      \
-      fatal_err("%s", err);                                              \
-    }                                                                    \
+#define chmap_init_full(hm_name, mmgmt_procs, custom_hashing_proc)           \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = chmap_create_full(                                             \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var), mmgmt_procs, \
+        custom_hashing_proc, &err);                                          \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
   } while (0)
 
 /**
@@ -627,8 +632,10 @@ static inline void ___chmap_destroy(chmap *chm) {
   chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;             \
   do {                                                                       \
     char *err = NULL;                                                        \
-    hm_name = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,           \
-                                mmgmt_procs, custom_hashing_proc, &err);     \
+    hm_name = chmap_create_full(                                             \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var), mmgmt_procs, \
+        custom_hashing_proc, &err);                                          \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
     }                                                                        \
@@ -644,13 +651,15 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note Terminates program on failure
  * @note Uses default memory management and DJB2 hashing
  */
-#define chmap_init(hm_name)                                          \
-  do {                                                               \
-    char *err = NULL;                                                \
-    hm_name = chmap_create(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, &err); \
-    if (!hm_name) {                                                  \
-      fatal_err("%s", err);                                          \
-    }                                                                \
+#define chmap_init(hm_name)                                            \
+  do {                                                                 \
+    char *err = NULL;                                                  \
+    hm_name = chmap_create(                                            \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                             \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var), &err); \
+    if (!hm_name) {                                                    \
+      fatal_err("%s", err);                                            \
+    }                                                                  \
   } while (0)
 
 /**
@@ -679,7 +688,9 @@ static inline void ___chmap_destroy(chmap *chm) {
   chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;             \
   do {                                                                       \
     char *err = NULL;                                                        \
-    hm_name = chmap_create(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, &err);         \
+    hm_name = chmap_create(                                                  \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var), &err);       \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
     }                                                                        \
@@ -696,14 +707,16 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note Terminates program on failure
  * @note Uses default DJB2 hashing
  */
-#define chmap_init_mp(hm_name, mmgmt_procs)                                    \
-  do {                                                                         \
-    char *err = NULL;                                                          \
-    hm_name =                                                                  \
-        chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, mmgmt_procs, &err); \
-    if (!hm_name) {                                                            \
-      fatal_err("%s", err);                                                    \
-    }                                                                          \
+#define chmap_init_mp(hm_name, mmgmt_procs)                                  \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = chmap_create_mp(                                               \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var), mmgmt_procs, \
+        &err);                                                               \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
   } while (0)
 
 /**
@@ -718,17 +731,19 @@ static inline void ___chmap_destroy(chmap *chm) {
  *
  * @note Terminates program on failure
  */
-#define chmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs)                 \
-  typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL;   \
-  typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL;   \
-  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;               \
-  do {                                                                         \
-    char *err = NULL;                                                          \
-    hm_name =                                                                  \
-        chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, mmgmt_procs, &err); \
-    if (!hm_name) {                                                            \
-      fatal_err("%s", err);                                                    \
-    }                                                                          \
+#define chmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs)               \
+  typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
+  chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;             \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = chmap_create_mp(                                               \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var), mmgmt_procs, \
+        &err);                                                               \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
   } while (0)
 
 /**
@@ -742,14 +757,16 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note Terminates program on failure
  * @note Uses default memory management
  */
-#define chmap_init_ch(hm_name, custom_hashing_proc)              \
-  do {                                                           \
-    char *err = NULL;                                            \
-    hm_name = chmap_create_ch(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, \
-                              custom_hashing_proc, &err);        \
-    if (!hm_name) {                                              \
-      fatal_err("%s", err);                                      \
-    }                                                            \
+#define chmap_init_ch(hm_name, custom_hashing_proc)             \
+  do {                                                          \
+    char *err = NULL;                                           \
+    hm_name = chmap_create_ch(                                  \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                      \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var), \
+        custom_hashing_proc, &err);                             \
+    if (!hm_name) {                                             \
+      fatal_err("%s", err);                                     \
+    }                                                           \
   } while (0)
 
 /**
@@ -770,8 +787,10 @@ static inline void ___chmap_destroy(chmap *chm) {
   chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;             \
   do {                                                                       \
     char *err = NULL;                                                        \
-    hm_name = chmap_create_ch(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,             \
-                              custom_hashing_proc, &err);                    \
+    hm_name = chmap_create_ch(                                               \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        custom_hashing_proc, &err);                                          \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
     }                                                                        \

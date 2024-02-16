@@ -24,6 +24,7 @@ SOFTWARE.
 
 #include <assert.h>
 #include <cmempool.h>
+#include <memops.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -870,7 +871,7 @@ void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size) {
 
   void *new_entry = r_mempool_alloc_entry(rmp, size);
   if (new_entry && addr) {
-    memcpy(new_entry, addr, min_user_size);
+    mem_cpy(new_entry, addr, min_user_size);
     mempool_free_entry(addr);
   }
 

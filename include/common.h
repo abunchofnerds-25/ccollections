@@ -667,6 +667,73 @@ typedef struct cmap_iterator {
        default: true))
 #endif
 
+typedef enum ccollections_data_type {
+  ccol_char = 0,
+  ccol_short,
+  ccol_int,
+  ccol_long,
+  ccol_long_long,
+  ccol_unsigned_char,
+  ccol_unsigned_short,
+  ccol_unsigned_int,
+  ccol_unsigned_long,
+  ccol_unsigned_long_long,
+  ccol_float,
+  ccol_double,
+  ccol_long_double,
+  ccol_pointer,
+  ccol_string,
+  ccol_other_types,
+} ccol_data_type;
+
+#define _determine_non_special_data_type(var)            \
+  _Generic((var),                                        \
+      char: ccol_char,                                   \
+      short: ccol_short,                                 \
+      int: ccol_int,                                     \
+      long: ccol_long,                                   \
+      long long: ccol_long_long,                         \
+      unsigned char: ccol_unsigned_char,                 \
+      unsigned short: ccol_unsigned_short,               \
+      unsigned int: ccol_unsigned_int,                   \
+      unsigned long: ccol_unsigned_long,                 \
+      unsigned long long: ccol_unsigned_long_long,       \
+      float: ccol_float,                                 \
+      double: ccol_double,                               \
+      long double: ccol_long_double,                     \
+      const char: ccol_char,                             \
+      const short: ccol_short,                           \
+      const int: ccol_int,                               \
+      const long: ccol_long,                             \
+      const long long: ccol_long_long,                   \
+      const unsigned char: ccol_unsigned_char,           \
+      const unsigned short: ccol_unsigned_short,         \
+      const unsigned int: ccol_unsigned_int,             \
+      const unsigned long: ccol_unsigned_long,           \
+      const unsigned long long: ccol_unsigned_long_long, \
+      const float: ccol_float,                           \
+      const double: ccol_double,                         \
+      const long double: ccol_long_double,               \
+      default: ccol_other_types)
+
+#define determine_ccol_data_type(data)                                 \
+  ({                                                                   \
+    ccol_data_type r = ccol_other_types;                               \
+    if (is_char_array(data)) {                                         \
+      r = ccol_string;                                                 \
+    } else if (is_char_ptr(data)) {                                    \
+      r = ccol_string;                                                 \
+    } else {                                                           \
+      if (__builtin_classify_type((data)) == 5 && /* is a pointer */   \
+          sizeof((data)) == sizeof(uintptr_t)) {  /* other pointers */ \
+        r = ccol_pointer;                                              \
+      } else {                                                         \
+        r = _determine_non_special_data_type(data);                    \
+      }                                                                \
+    }                                                                  \
+    r;                                                                 \
+  })
+
 /* ========================================================================== */
 /*                    MAP PAIR POPULATION UTILITY                             */
 /* ========================================================================== */

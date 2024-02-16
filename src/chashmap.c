@@ -23,27 +23,14 @@ SOFTWARE.
 */
 
 #include <chashmap.h>
+#include <memops.h>
 #include <stdlib.h>
 #include <string.h>
 
 const size_t minimum_allowed_bucket_array_size = 64;
 const size_t scale_factor = 4;
 const size_t minimum_scale_down_threshold =
-    scale_factor * (minimum_allowed_bucket_array_size - 1);
-
-static inline void mem_assign(void* dest, void* src, size_t size) {
-  if (size == sizeof(unsigned int)) {
-    *(unsigned int*)dest = *(unsigned int*)src;
-  } else if (size == sizeof(unsigned long)) {
-    *(unsigned long*)dest = *(unsigned long*)src;
-  } else if (size == sizeof(unsigned char)) {
-    *(unsigned char*)dest = *(unsigned char*)src;
-  } else if (size == sizeof(unsigned short)) {
-    *(unsigned short*)dest = *(unsigned short*)src;
-  } else {
-    memcpy(dest, src, size);
-  }
-}
+    scale_factor * (minimum_allowed_bucket_array_size);
 
 typedef struct chmap_entry {
   size_t hash_val;
@@ -156,10 +143,8 @@ llist_node* create_llist_node(dllist_ref_node** head_of_all_elems,
   new_elem->data.hash_val = data->hash_val;
   new_elem->data.key_pair.size = data->key_pair.size;
   new_elem->data.val_pair.size = data->val_pair.size;
-  mem_assign(new_elem->data.key_pair.ptr, data->key_pair.ptr,
-             data->key_pair.size);
-  mem_assign(new_elem->data.val_pair.ptr, data->val_pair.ptr,
-             data->val_pair.size);
+  mem_cpy(new_elem->data.key_pair.ptr, data->key_pair.ptr, data->key_pair.size);
+  mem_cpy(new_elem->data.val_pair.ptr, data->val_pair.ptr, data->val_pair.size);
 
   return new_elem;
 }
@@ -169,7 +154,7 @@ bool reset_val_of_llist_node(llist_node* elem, const cmap_pair* val_pair) {
 
   if (elem->data.val_pair.size == val_pair->size) {
     // The new value has the same size
-    mem_assign(elem->data.val_pair.ptr, val_pair->ptr, val_pair->size);
+    mem_cpy(elem->data.val_pair.ptr, val_pair->ptr, val_pair->size);
     success = true;
   } else {
     // Sizes do not match, trying to reallocate.
@@ -182,7 +167,7 @@ bool reset_val_of_llist_node(llist_node* elem, const cmap_pair* val_pair) {
       elem->data.val_pair.ptr = orig_buf;
     } else {
       // Buffer reallocated, all is good.
-      mem_assign(elem->data.val_pair.ptr, val_pair->ptr, val_pair->size);
+      mem_cpy(elem->data.val_pair.ptr, val_pair->ptr, val_pair->size);
       elem->data.val_pair.size = val_pair->size;
       success = true;
     }
@@ -310,11 +295,12 @@ struct chashmap {
   dllist_ref_node* head_of_all_elems;
   ccol_memmgmt_procs_t* m_procs;
   ccol_hashing_proc_t custom_hashing_proc;
+  ccol_data_type key_type;
 };
 
 void set_chmap_scaling_limits(chmap chm) {
-  chm->elem_count_to_scale_up = (chm->bucket_arr_size + 1) * 6 / 4;
-  chm->elem_count_to_scale_down = (chm->bucket_arr_size + 1) / 8;
+  chm->elem_count_to_scale_up = (chm->bucket_arr_size) * 6 / 4;
+  chm->elem_count_to_scale_down = (chm->bucket_arr_size) / 8;
 }
 
 #define POWERS_OF_TWO_LEN 64
@@ -452,6 +438,7 @@ bool verify_chmap_create_inputs(size_t initial_bucket_array_size,
 }
 
 chmap chmap_create_full(size_t initial_bucket_array_size,
+                        ccol_data_type key_type,
                         ccol_memmgmt_procs_t* mmgmt_procs,
                         ccol_hashing_proc_t custom_hashing_proc, char** err) {
   if (!verify_chmap_create_inputs(initial_bucket_array_size, mmgmt_procs,
@@ -460,10 +447,10 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
   }
 
   if (initial_bucket_array_size <= minimum_allowed_bucket_array_size) {
-    initial_bucket_array_size = minimum_allowed_bucket_array_size - 1;
+    initial_bucket_array_size = minimum_allowed_bucket_array_size;
   } else {
     initial_bucket_array_size =
-        find_nearest_gte_power_of_two(initial_bucket_array_size) - 1;
+        find_nearest_gte_power_of_two(initial_bucket_array_size);
   }
 
   chmap chm = (chmap)_mem_alloc(mmgmt_procs, sizeof(chashmap));
@@ -481,6 +468,7 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
 
   chm->bucket_arr_size = initial_bucket_array_size;
   chm->elem_count = 0;
+  chm->key_type = key_type;
   chm->head_of_all_elems = NULL;
   set_chmap_scaling_limits(chm);
   chm->custom_hashing_proc = custom_hashing_proc;
@@ -504,19 +492,182 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
   return chm;
 }
 
-static inline size_t calculate_bucket_index(chmap chm,
-                                            const cmap_pair* key_pair,
-                                            size_t* hash_ptr) {
+#define XXH_PRIME64_1 0x9E3779B185EBCA87ULL
+#define XXH_PRIME64_2 0xC2B2AE3D27D4EB4FULL
+#define XXH_PRIME64_3 0x165667B19E3779F9ULL
+#define XXH_PRIME64_4 0x85EBCA77C2B2AE63ULL
+#define XXH_PRIME64_5 0x27D4EB2F165667C5ULL
+
+// Rotate left
+inline __attribute__((always_inline)) uint64_t xxh_rotl64(uint64_t x, int r) {
+  return (x << r) | (x >> (64 - r));
+}
+
+// Core round function
+inline __attribute__((always_inline)) uint64_t xxh_round(uint64_t acc,
+                                                         uint64_t input) {
+  acc += input * XXH_PRIME64_2;
+  acc = xxh_rotl64(acc, 31);
+  acc *= XXH_PRIME64_1;
+  return acc;
+}
+
+// Merge accumulator
+inline __attribute__((always_inline)) uint64_t xxh_merge_round(uint64_t acc,
+                                                               uint64_t val) {
+  val = xxh_round(0, val);
+  acc ^= val;
+  acc = acc * XXH_PRIME64_1 + XXH_PRIME64_4;
+  return acc;
+}
+
+// Avalanche/finalization mixer
+inline __attribute__((always_inline)) uint64_t xxh_avalanche(uint64_t hash) {
+  hash ^= hash >> 33;
+  hash *= XXH_PRIME64_2;
+  hash ^= hash >> 29;
+  hash *= XXH_PRIME64_3;
+  hash ^= hash >> 32;
+  return hash;
+}
+
+// ============================================================================
+// INTEGER HASH - Optimized for single integers
+// ============================================================================
+
+// Hash a 64-bit integer
+inline __attribute__((always_inline)) uint64_t xxhash64_int64(uint64_t value,
+                                                              uint64_t seed) {
+  uint64_t hash = seed + XXH_PRIME64_5 + 8;  // 8 bytes
+  hash ^= xxh_round(0, value);
+  hash = xxh_rotl64(hash, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
+  return xxh_avalanche(hash);
+}
+
+// Hash a 32-bit integer
+inline __attribute__((always_inline)) uint64_t xxhash64_int32(uint32_t value,
+                                                              uint64_t seed) {
+  uint64_t hash = seed + XXH_PRIME64_5 + 4;  // 4 bytes
+  hash ^= value * XXH_PRIME64_1;
+  hash = xxh_rotl64(hash, 23) * XXH_PRIME64_2 + XXH_PRIME64_3;
+  return xxh_avalanche(hash);
+}
+
+// Hash a 16-bit integer
+inline __attribute__((always_inline)) uint64_t xxhash64_int16(uint16_t value,
+                                                              uint64_t seed) {
+  uint64_t hash = seed + XXH_PRIME64_5 + 2;  // 2 bytes
+  hash ^= value * XXH_PRIME64_5;
+  hash = xxh_rotl64(hash, 11) * XXH_PRIME64_1;
+  return xxh_avalanche(hash);
+}
+
+// Hash an 8-bit integer
+inline __attribute__((always_inline)) uint64_t xxhash64_int8(uint8_t value,
+                                                             uint64_t seed) {
+  uint64_t hash = seed + XXH_PRIME64_5 + 1;  // 1 byte
+  hash ^= value * XXH_PRIME64_5;
+  hash = xxh_rotl64(hash, 11) * XXH_PRIME64_1;
+  return xxh_avalanche(hash);
+}
+
+// ============================================================================
+// STRING/BUFFER HASH - Full XXHash64 for variable-length data
+// ============================================================================
+
+inline __attribute__((always_inline)) uint64_t
+xxhash64_buffer(const void* input, size_t len, uint64_t seed) {
+  const uint8_t* p = (const uint8_t*)input;
+  const uint8_t* const end = p + len;
+  uint64_t hash;
+
+  if (len >= 32) {
+    const uint8_t* const limit = end - 32;
+    uint64_t v1 = seed + XXH_PRIME64_1 + XXH_PRIME64_2;
+    uint64_t v2 = seed + XXH_PRIME64_2;
+    uint64_t v3 = seed + 0;
+    uint64_t v4 = seed - XXH_PRIME64_1;
+
+    do {
+      v1 = xxh_round(v1, *(uint64_t*)p);
+      p += 8;
+      v2 = xxh_round(v2, *(uint64_t*)p);
+      p += 8;
+      v3 = xxh_round(v3, *(uint64_t*)p);
+      p += 8;
+      v4 = xxh_round(v4, *(uint64_t*)p);
+      p += 8;
+    } while (p <= limit);
+
+    hash = xxh_rotl64(v1, 1) + xxh_rotl64(v2, 7) + xxh_rotl64(v3, 12) +
+           xxh_rotl64(v4, 18);
+
+    hash = xxh_merge_round(hash, v1);
+    hash = xxh_merge_round(hash, v2);
+    hash = xxh_merge_round(hash, v3);
+    hash = xxh_merge_round(hash, v4);
+  } else {
+    hash = seed + XXH_PRIME64_5;
+  }
+
+  hash += len;
+
+  // Process remaining bytes in 8-byte chunks
+  while (p + 8 <= end) {
+    uint64_t k1 = xxh_round(0, *(uint64_t*)p);
+    hash ^= k1;
+    hash = xxh_rotl64(hash, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
+    p += 8;
+  }
+
+  // Process remaining 4-byte chunk
+  if (p + 4 <= end) {
+    hash ^= (uint64_t)(*(uint32_t*)p) * XXH_PRIME64_1;
+    hash = xxh_rotl64(hash, 23) * XXH_PRIME64_2 + XXH_PRIME64_3;
+    p += 4;
+  }
+
+  // Process remaining bytes
+  while (p < end) {
+    hash ^= (*p) * XXH_PRIME64_5;
+    hash = xxh_rotl64(hash, 11) * XXH_PRIME64_1;
+    p++;
+  }
+
+  return xxh_avalanche(hash);
+}
+
+inline __attribute__((always_inline)) size_t
+calculate_bucket_index(chmap chm, const cmap_pair* key_pair, size_t* hash_ptr) {
   size_t id = 0;
 
   if (!chm->custom_hashing_proc) {
-    unsigned char* c_key_ptr = (unsigned char*)key_pair->ptr;
-    size_t size = key_pair->size;
+    switch (chm->key_type) {
+      case ccol_char:
+      case ccol_unsigned_char:
+        id = xxhash64_int8(*(uint8_t*)key_pair->ptr, 0);
+        break;
 
-    // DJB2
-    id = 5381;
-    for (size_t i = 0; i < size; ++i) {
-      id = ((id << 5) + id) + c_key_ptr[i];
+      case ccol_short:
+      case ccol_unsigned_short:
+        id = xxhash64_int16(*(uint16_t*)key_pair->ptr, 0);
+        break;
+
+      case ccol_int:
+      case ccol_unsigned_int:
+        id = xxhash64_int32(*(uint32_t*)key_pair->ptr, 0);
+        break;
+
+      case ccol_long:
+      case ccol_unsigned_long:
+        id = xxhash64_int64(*(uint64_t*)key_pair->ptr, 0);
+        break;
+
+      case ccol_long_long:
+      case ccol_unsigned_long_long:
+      default:
+        id = xxhash64_buffer(key_pair->ptr, key_pair->size, 0);
+        break;
     }
   } else {
     id = chm->custom_hashing_proc(key_pair->ptr);
@@ -526,7 +677,7 @@ static inline size_t calculate_bucket_index(chmap chm,
     *hash_ptr = id;
   }
 
-  size_t index = (id % chm->bucket_arr_size);
+  size_t index = id & (chm->bucket_arr_size - 1);
 
   return index;
 }
@@ -560,9 +711,9 @@ size_t chmap_get_elem_count_to_scale_down(chmap chm) {
 void scale_chmap(chmap chm, bool up) {
   size_t new_bucket_array_size = 0;
   if (up) {
-    new_bucket_array_size = (chm->bucket_arr_size + 1) * scale_factor - 1;
+    new_bucket_array_size = (chm->bucket_arr_size) * scale_factor;
   } else {
-    new_bucket_array_size = (chm->bucket_arr_size + 1) / scale_factor - 1;
+    new_bucket_array_size = (chm->bucket_arr_size) / scale_factor;
   }
 
   llist_node** new_bucket_arr;
@@ -647,9 +798,10 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
   if (r) {
     size_t min_size = target_buf_size;
     if (r->data.val_pair.size < min_size) {
+      mem_zero(target_buf, target_buf_size - r->data.val_pair.size);
       min_size = r->data.val_pair.size;
     }
-    mem_assign(target_buf, r->data.val_pair.ptr, min_size);
+    mem_cpy(target_buf, r->data.val_pair.ptr, min_size);
     result = ccol_success;
   }
 
@@ -776,10 +928,10 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
 
   if (new_bucket_array_size > 0 &&
       new_bucket_array_size < minimum_allowed_bucket_array_size) {
-    new_bucket_array_size = minimum_allowed_bucket_array_size - 1;
+    new_bucket_array_size = minimum_allowed_bucket_array_size;
   } else {
     new_bucket_array_size =
-        find_nearest_gte_power_of_two(new_bucket_array_size) - 1;
+        find_nearest_gte_power_of_two(new_bucket_array_size);
   }
 
   for (size_t i = 0; i < chm->bucket_arr_size; ++i) {

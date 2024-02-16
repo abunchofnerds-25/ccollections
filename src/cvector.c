@@ -23,6 +23,7 @@ SOFTWARE.
 */
 
 #include <cvector.h>
+#include <memops.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -151,20 +152,6 @@ void scale_the_cvector_size_down(cvec v) {
   v->capacity /= scaling_factor;
 }
 
-static inline void assign(void *dest, const void *src, size_t size) {
-  if (size == sizeof(unsigned int)) {
-    *(unsigned int *)dest = *(unsigned int *)src;
-  } else if (size == sizeof(unsigned char)) {
-    *(unsigned char *)dest = *(unsigned char *)src;
-  } else if (size == sizeof(uint64_t)) {
-    *(uint64_t *)dest = *(uint64_t *)src;
-  } else if (size == sizeof(uint16_t)) {
-    *(uint16_t *)dest = *(uint16_t *)src;
-  } else {
-    memcpy(dest, src, size);
-  }
-}
-
 ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
   if (!v) {
     assert(false);
@@ -181,8 +168,8 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
   ccol_retval_t result = ccol_success;
 
   if (v->elem_count < v->capacity) {
-    assign((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
-           new_elem, v->elem_size);
+    mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+            new_elem, v->elem_size);
     if (++v->elem_count == v->capacity) {
       // Ignoring the return value of scale_the_cvector_size_up
       // as we managed to insert the new_elem.
@@ -190,8 +177,8 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
     }
   } else {
     if (scale_the_cvector_size_up(v)) {
-      assign((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
-             new_elem, v->elem_size);
+      mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+              new_elem, v->elem_size);
       ++v->elem_count;
     } else {
       result = ccol_not_enough_memory;
@@ -216,9 +203,9 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
     result = ccol_success;
     --v->elem_count;
 
-    assign(target_elem,
-           (void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
-           v->elem_size);
+    mem_cpy(target_elem,
+            (void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+            v->elem_size);
 
     if (v->elem_count < (v->capacity / minimum_capacity)) {
       scale_the_cvector_size_down(v);

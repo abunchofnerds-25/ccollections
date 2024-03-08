@@ -87,166 +87,125 @@ ___csort__define_default_integral_comparison_proc(long double, long_double);
 #undef __define_default_integral_comparison_proc
 /* End of Comparison procedures region */
 
-static int csort_qsort_partition(void *col, int low, int high, size_t elem_size,
-                                 csort_item_getter_proc_t getter_proc,
-                                 ccol_comparison_proc_t comparison_proc,
-                                 csort_item_swap_proc_t swap_proc) {
-  int j;
-  int i = low;
-  void *pivot;
-  void *pj;
+// Merge two sorted subarrays [left...mid] and [mid+1...right]
+static void csort_merge(void *col, int left, int mid, int right,
+                        size_t elem_size, csort_item_getter_proc_t getter_proc,
+                        ccol_comparison_proc_t comparison_proc,
+                        void *temp_buffer) {
+  int i, j, k;
+  int n1 = mid - left + 1;  // Size of left subarray
+  int n2 = right - mid;     // Size of right subarray
+
   if (!getter_proc || !comparison_proc) {
     assert(false);
   }
 
-  pivot = getter_proc(col, high);
+  // Copy both subarrays to temporary buffer
+  // Left subarray goes to temp_buffer[0...n1-1]
+  // Right subarray goes to temp_buffer[n1...n1+n2-1]
+  for (i = 0; i < n1; i++) {
+    void *src = getter_proc(col, left + i);
+    void *dst = (unsigned char *)temp_buffer + i * elem_size;
+    memcpy(dst, src, elem_size);
+  }
 
-  for (j = low; j < high; j++) {
-    pj = getter_proc(col, j);
+  for (j = 0; j < n2; j++) {
+    void *src = getter_proc(col, mid + 1 + j);
+    void *dst = (unsigned char *)temp_buffer + (n1 + j) * elem_size;
+    memcpy(dst, src, elem_size);
+  }
 
-    if (comparison_proc(pj, pivot) < 0) {
-      swap_proc(getter_proc(col, i), pj, elem_size);
+  // Merge the two subarrays back into col
+  i = 0;     // Index for left subarray
+  j = n1;    // Index for right subarray (starts after left subarray in buffer)
+  k = left;  // Index for merged array
+
+  while (i < n1 && j < n1 + n2) {
+    void *elem_i = (unsigned char *)temp_buffer + i * elem_size;
+    void *elem_j = (unsigned char *)temp_buffer + j * elem_size;
+    void *dst = getter_proc(col, k);
+
+    if (comparison_proc(elem_i, elem_j) <= 0) {
+      memcpy(dst, elem_i, elem_size);
       i++;
+    } else {
+      memcpy(dst, elem_j, elem_size);
+      j++;
     }
-  }
-  swap_proc(getter_proc(col, i), getter_proc(col, high), elem_size);
-
-  return i;
-}
-
-// Stack entry to track ranges that need to be sorted
-typedef struct {
-  int low;
-  int high;
-} csort_stack_entry;
-
-// Simple stack implementation for iterative quicksort
-typedef struct {
-  csort_stack_entry *entries;
-  size_t capacity;
-  size_t size;
-} csort_stack;
-
-static bool csort_stack_init(csort_stack *stack, size_t initial_capacity,
-                             ccol_memmgmt_procs_t *mprocs) {
-  stack->entries = (csort_stack_entry *)_mem_alloc(
-      mprocs, initial_capacity * sizeof(csort_stack_entry));
-  if (!stack->entries) {
-    return false;
-  }
-  stack->capacity = initial_capacity;
-  stack->size = 0;
-  return true;
-}
-
-static void csort_stack_destroy(csort_stack *stack,
-                                ccol_memmgmt_procs_t *mprocs) {
-  if (stack->entries) {
-    _mem_free(mprocs, stack->entries);
-    stack->entries = NULL;
-  }
-  stack->capacity = 0;
-  stack->size = 0;
-}
-
-static bool csort_stack_push(csort_stack *stack, int low, int high,
-                             ccol_memmgmt_procs_t *mprocs) {
-  if (stack->size >= stack->capacity) {
-    // Need to grow the stack
-    size_t new_capacity = stack->capacity * 2;
-    csort_stack_entry *new_entries = (csort_stack_entry *)_mem_realloc(
-        mprocs, stack->entries, new_capacity * sizeof(csort_stack_entry));
-    if (!new_entries) {
-      return false;
-    }
-    stack->entries = new_entries;
-    stack->capacity = new_capacity;
+    k++;
   }
 
-  stack->entries[stack->size].low = low;
-  stack->entries[stack->size].high = high;
-  stack->size++;
-  return true;
-}
-
-static bool csort_stack_pop(csort_stack *stack, int *low, int *high) {
-  if (stack->size == 0) {
-    return false;
+  // Copy any remaining elements from left subarray
+  while (i < n1) {
+    void *src = (unsigned char *)temp_buffer + i * elem_size;
+    void *dst = getter_proc(col, k);
+    memcpy(dst, src, elem_size);
+    i++;
+    k++;
   }
 
-  stack->size--;
-  *low = stack->entries[stack->size].low;
-  *high = stack->entries[stack->size].high;
-  return true;
+  // Copy any remaining elements from right subarray
+  while (j < n1 + n2) {
+    void *src = (unsigned char *)temp_buffer + j * elem_size;
+    void *dst = getter_proc(col, k);
+    memcpy(dst, src, elem_size);
+    j++;
+    k++;
+  }
 }
 
-static bool csort_stack_is_empty(csort_stack *stack) {
-  return stack->size == 0;
-}
-
-// Iterative quicksort implementation
-static void csort_qsort_iterative(void *col, int low, int high,
-                                  size_t elem_size,
-                                  csort_item_getter_proc_t getter_proc,
-                                  ccol_comparison_proc_t comparison_proc,
-                                  csort_item_swap_proc_t swap_proc,
-                                  ccol_memmgmt_procs_t *mprocs) {
+// Iterative merge sort implementation using bottom-up approach
+static void csort_mergesort_iterative(void *col, int low, int high,
+                                      size_t elem_size,
+                                      csort_item_getter_proc_t getter_proc,
+                                      ccol_comparison_proc_t comparison_proc,
+                                      csort_item_swap_proc_t swap_proc
+                                      __attribute__((unused)),
+                                      ccol_memmgmt_procs_t *mprocs) {
   if (low >= high) {
     return;
   }
 
-  // Initialize stack with initial capacity
-  // For an array of length n, worst case depth is O(n)
-  // But average case is O(log n), so start with a reasonable size
-  size_t initial_capacity = 64;
-  if (high - low + 1 > 1000) {
-    // For larger arrays, start with bigger stack
-    initial_capacity = 128;
-  }
+  int length = high - low + 1;
 
-  csort_stack stack;
-  if (!csort_stack_init(&stack, initial_capacity, mprocs)) {
-    // Failed to allocate stack, cannot sort
+  // Allocate temporary buffer for merging
+  // This buffer will be reused for all merge operations
+  void *temp_buffer = _mem_alloc(mprocs, length * elem_size);
+  if (!temp_buffer) {
+    // Failed to allocate temporary buffer, cannot sort
     return;
   }
 
-  // Push initial range
-  if (!csort_stack_push(&stack, low, high, mprocs)) {
-    csort_stack_destroy(&stack, mprocs);
-    return;
-  }
+  // Bottom-up merge sort: start with subarrays of size 1,
+  // then merge pairs to get size 2, then 4, 8, etc.
+  for (int curr_size = 1; curr_size < length; curr_size *= 2) {
+    // Pick starting point of left subarray to be merged
+    for (int left_start = low; left_start <= high;
+         left_start += 2 * curr_size) {
+      // Calculate the end of left subarray
+      int mid = left_start + curr_size - 1;
 
-  // Process ranges until stack is empty
-  while (!csort_stack_is_empty(&stack)) {
-    int curr_low, curr_high;
-    if (!csort_stack_pop(&stack, &curr_low, &curr_high)) {
-      break;
-    }
-
-    // Partition the current range
-    int pivot = csort_qsort_partition(col, curr_low, curr_high, elem_size,
-                                      getter_proc, comparison_proc, swap_proc);
-
-    // Push left subarray (if it has more than 1 element)
-    if (pivot - 1 > curr_low) {
-      if (!csort_stack_push(&stack, curr_low, pivot - 1, mprocs)) {
-        // Stack push failed, cleanup and return
-        csort_stack_destroy(&stack, mprocs);
-        return;
+      // If there's no right subarray (mid >= high), nothing to merge
+      if (mid >= high) {
+        break;
       }
-    }
 
-    // Push right subarray (if it has more than 1 element)
-    if (pivot + 1 < curr_high) {
-      if (!csort_stack_push(&stack, pivot + 1, curr_high, mprocs)) {
-        // Stack push failed, cleanup and return
-        csort_stack_destroy(&stack, mprocs);
-        return;
+      // Calculate the end of right subarray
+      // It should be (left_start + 2*curr_size - 1) or high, whichever is
+      // smaller
+      int right_end = left_start + 2 * curr_size - 1;
+      if (right_end > high) {
+        right_end = high;
       }
+
+      // Merge the two subarrays [left_start...mid] and [mid+1...right_end]
+      csort_merge(col, left_start, mid, right_end, elem_size, getter_proc,
+                  comparison_proc, temp_buffer);
     }
   }
 
-  csort_stack_destroy(&stack, mprocs);
+  // Free the temporary buffer
+  _mem_free(mprocs, temp_buffer);
 }
 
 void ___csort_qsort(void *col, size_t length, size_t elem_size,
@@ -266,10 +225,7 @@ void ___csort_qsort(void *col, size_t length, size_t elem_size,
     assert(false);
   }
 
-  if (!swap_proc) {
-    swap_proc = csort_default_swap_proc;
-  }
-
-  csort_qsort_iterative(col, 0, length - 1, elem_size, getter_proc,
-                        comparison_proc, swap_proc, mprocs);
+  // Note: swap_proc is not used in merge sort but kept for API compatibility
+  csort_mergesort_iterative(col, 0, length - 1, elem_size, getter_proc,
+                            comparison_proc, swap_proc, mprocs);
 }

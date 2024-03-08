@@ -29,23 +29,40 @@ SOFTWARE.
 
 /**
  * @file chashmap.h
- * @brief Hash map (dictionary) with automatic resizing and separate chaining
+ * @brief Hash map (dictionary) with automatic resizing and dual implementation
+ * strategy
  *
- * Provides a hash map implementation with:
- * - Automatic dynamic resizing based on load factor
- * - Separate chaining using linked lists for collision resolution
+ * Provides a hash map implementation with automatic selection between two
+ * strategies:
+ *
+ * **Open-addressing** (used when both key and value are integral types ≤8
+ * bytes):
+ * - Compact 17-byte slots (8-byte key + 8-byte value + 1-byte metadata)
+ * - Linear probing with Fibonacci hashing for integers
+ * - Load factor thresholds: 0.70 (grow) / 0.25 (shrink)
+ * - Zero allocations per entry (contiguous array)
+ * - Excellent cache locality and memory efficiency
+ * - Excludes long double (can be >8 bytes on some architectures)
+ *
+ * **Separate chaining** (used for non-integral types or types >8 bytes):
+ * - Linked lists for collision resolution
+ * - Small String Optimization (SSO): 23-byte inline storage for keys/values
  * - Doubly-linked list for maintaining insertion order and iteration
- * - Custom hashing function support
- * - Type-safe macros for common operations
- * - DJB2 hash function as default
- *
- * Key characteristics:
- * - Minimum bucket array size: 63 (always power-of-2 minus 1)
+ * - Minimum bucket array size: 64 (always power-of-2)
  * - Scale factor: 4x (grows to 4x size, shrinks to 0.25x size)
  * - Scale up threshold: (bucket_count + 1) * 1.5 elements
  * - Scale down threshold: (bucket_count + 1) / 8 elements
- * - Average complexity: O(1) for insert/get/delete (with good hash function)
- * - Worst case: O(n) per bucket for collision chains (where n is chain length)
+ *
+ * Common features:
+ * - Automatic implementation selection based on key and value types
+ * - Custom hashing function support (default: XXHash64 for buffers, Fibonacci
+ * for integers)
+ * - Type-safe macros for common operations
+ * - Average complexity: O(1) for insert/get/delete
+ *
+ * Implementation selection examples:
+ * - int→int, long→double, float→uint32_t: Open-addressing
+ * - string→int, int→string, string→string, int→long double: Separate chaining
  */
 
 /** @brief Default initial bucket array size */
@@ -64,25 +81,30 @@ typedef chashmap *chmap;
 /**
  * @brief Create a hash map with full customization
  *
- * Creates a new hash map with specified initial bucket count, custom memory
- * management, and custom hashing function. The bucket array size is rounded
- * up to the nearest power-of-2 minus 1 (minimum 63).
+ * Creates a new hash map with specified initial bucket count, key and value
+ * types, custom memory management, and custom hashing function. The
+ * implementation strategy (open-addressing vs separate chaining) is
+ * automatically selected based on the key and value types.
  *
- * @param initial_bucket_array_size Initial number of buckets (minimum 64,
- * rounded to power-of-2 - 1)
+ * @param initial_bucket_array_size Initial number of buckets (minimum 64)
+ * @param key_type Type of keys (determines implementation strategy)
+ * @param val_type Type of values (determines implementation strategy)
  * @param mmgmt_procs Custom memory management procedures, or NULL for default
  * malloc/free
- * @param custom_hashing_proc Custom hash function, or NULL for default DJB2
+ * @param custom_hashing_proc Custom hash function, or NULL for default
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created hash map, or NULL on failure
  *
- * @note Actual bucket size is max(63,
- * nearest_power_of_2(initial_bucket_array_size) - 1)
- * @note Default hash function is DJB2: hash = 5381; hash = ((hash << 5) + hash)
- * + byte
- * @note Custom hash function receives void* pointer to key data
- * @note Each bucket uses a linked list for collision resolution
+ * @note Implementation selection:
+ *       - Open-addressing: Both key and value are integral types ≤8 bytes
+ *       - Separate chaining: Either key or value is non-integral or >8 bytes
+ * @note Integral types: char, short, int, long, long long (signed/unsigned),
+ * float, double
+ * @note Excludes long double from open-addressing (can be 10-16 bytes)
+ * @note Open-addressing uses Fibonacci hashing for integers, XXHash64 for
+ * buffers
+ * @note Separate chaining default is XXHash64 for all types
  * @note Map must be destroyed with chmap_destroy() when done
  *
  * @see chmap_create
@@ -91,7 +113,7 @@ typedef chashmap *chmap;
  * @see chmap_destroy
  */
 chmap chmap_create_full(size_t initial_bucket_array_size,
-                        ccol_data_type key_type,
+                        ccol_data_type key_type, ccol_data_type val_type,
                         ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_hashing_proc_t custom_hashing_proc, char **err);
 
@@ -99,36 +121,45 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
  * @brief Create a hash map with default settings
  *
  * Convenience wrapper for chmap_create_full() with default memory management
- * and default DJB2 hashing.
+ * and default hashing (Fibonacci for integral keys, XXHash64 for others).
  *
  * @param initial_bucket_array_size Initial number of buckets
+ * @param key_type Type of keys (determines implementation strategy)
+ * @param val_type Type of values (determines implementation strategy)
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created hash map, or NULL on failure
+ *
+ * @note See chmap_create_full() for implementation selection details
  */
-static inline __attribute__((always_inline)) chmap chmap_create(
-    size_t initial_bucket_array_size, ccol_data_type key_type, char **err) {
-  return chmap_create_full(initial_bucket_array_size, key_type, NULL, NULL,
-                           err);
+static inline __attribute__((always_inline)) chmap
+chmap_create(size_t initial_bucket_array_size, ccol_data_type key_type,
+             ccol_data_type val_type, char **err) {
+  return chmap_create_full(initial_bucket_array_size, key_type, val_type, NULL,
+                           NULL, err);
 }
 
 /**
  * @brief Create a hash map with custom memory management
  *
  * Convenience wrapper for chmap_create_full() with custom memory management
- * but default DJB2 hashing.
+ * but default hashing.
  *
  * @param initial_bucket_array_size Initial number of buckets
+ * @param key_type Type of keys (determines implementation strategy)
+ * @param val_type Type of values (determines implementation strategy)
  * @param mmgmt_procs Custom memory management procedures
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created hash map, or NULL on failure
+ *
+ * @note See chmap_create_full() for implementation selection details
  */
-static inline __attribute__((always_inline)) chmap
-chmap_create_mp(size_t initial_bucket_array_size, ccol_data_type key_type,
-                ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
-  return chmap_create_full(initial_bucket_array_size, key_type, mmgmt_procs,
-                           NULL, err);
+static inline __attribute__((always_inline)) chmap chmap_create_mp(
+    size_t initial_bucket_array_size, ccol_data_type key_type,
+    ccol_data_type val_type, ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
+  return chmap_create_full(initial_bucket_array_size, key_type, val_type,
+                           mmgmt_procs, NULL, err);
 }
 
 /**
@@ -138,15 +169,20 @@ chmap_create_mp(size_t initial_bucket_array_size, ccol_data_type key_type,
  * but default memory management.
  *
  * @param initial_bucket_array_size Initial number of buckets
+ * @param key_type Type of keys (determines implementation strategy)
+ * @param val_type Type of values (determines implementation strategy)
  * @param custom_hashing_proc Custom hash function
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created hash map, or NULL on failure
+ *
+ * @note See chmap_create_full() for implementation selection details
  */
 static inline __attribute__((always_inline)) chmap
 chmap_create_ch(size_t initial_bucket_array_size, ccol_data_type key_type,
+                ccol_data_type val_type,
                 ccol_hashing_proc_t custom_hashing_proc, char **err) {
-  return chmap_create_full(initial_bucket_array_size, key_type, NULL,
+  return chmap_create_full(initial_bucket_array_size, key_type, val_type, NULL,
                            custom_hashing_proc, err);
 }
 
@@ -172,18 +208,18 @@ size_t chmap_elem_count(chmap chm);
  * @brief Clear all elements and optionally resize the map
  *
  * Removes all key-value pairs from the map and destroys all internal data
- * structures. Optionally resizes the bucket array to a new size.
+ * structures. Optionally resizes the bucket/slot array to a new size.
  *
  * @param chm Hash map to reset
- * @param new_bucket_array_size New bucket count (0 to keep current size)
+ * @param new_bucket_array_size New capacity (0 to keep current size)
  *
  * @return ccol_success on success
  * @return ccol_not_enough_memory if resize fails (elements still cleared)
  *
  * @note All elements are destroyed regardless of return value
- * @note If new_bucket_array_size is 0, bucket array size remains unchanged
- * @note If new_bucket_array_size < 64, it's set to 63
- * @note Otherwise rounded to nearest_power_of_2(new_bucket_array_size) - 1
+ * @note If new_bucket_array_size is 0, array size remains unchanged
+ * @note If new_bucket_array_size < 64, it's set to 64
+ * @note Otherwise rounded to nearest_power_of_2(new_bucket_array_size)
  * @note Will assert if chm is NULL
  *
  * @see chmap_destroy
@@ -206,12 +242,15 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
  * @return ccol_container_full if max_elem_count reached
  * @return ccol_not_enough_memory if allocation fails
  *
- * @note O(1) average, O(n) worst case per bucket (where n is chain length)
+ * @note O(1) average complexity
+ * @note Open-addressing: O(n) worst case for linear probing
+ * @note Separate chaining: O(n) worst case per bucket (where n is chain length)
  * @note Key and value data are copied (not referenced)
  * @note If key exists, only value is updated (key remains unchanged)
- * @note If update changes value size, memory is reallocated
- * @note Triggers resize if elem_count >= (bucket_count + 1) * 1.5
- * @note Scale factor is 4x on resize
+ * @note Open-addressing: Triggers resize at 0.70 load factor
+ * @note Separate chaining: Triggers resize if elem_count >= (bucket_count + 1)
+ * * 1.5
+ * @note Scale factor is 2x for open-addressing, 4x for separate chaining
  *
  * @see chmap_get_elem_copy
  * @see chmap_get_elem_ref
@@ -235,7 +274,9 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair *key_pair,
  * @return ccol_invalid_args if any pointer is NULL or size is 0
  * @return ccol_key_not_found if key does not exist
  *
- * @note O(1) average, O(n) worst case per bucket (where n is chain length)
+ * @note O(1) average complexity
+ * @note Open-addressing: O(n) worst case for linear probing
+ * @note Separate chaining: O(n) worst case per bucket (where n is chain length)
  * @note Copies min(actual_value_size, target_buf_size) bytes
  * @note Safe to use with undersized buffers (partial copy)
  *
@@ -260,7 +301,9 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
  * @return ccol_invalid_args if any pointer is NULL or key size is 0
  * @return ccol_key_not_found if key does not exist
  *
- * @note O(1) average, O(n) worst case per bucket (where n is chain length)
+ * @note O(1) average complexity
+ * @note Open-addressing: O(n) worst case for linear probing
+ * @note Separate chaining: O(n) worst case per bucket (where n is chain length)
  * @note Returned pointer is invalidated by insert/delete/resize operations
  * @note Do not free the returned pointer - it's owned by the map
  * @note Can modify value in-place, but do not change size
@@ -284,11 +327,15 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair *key_pair,
  * @return ccol_invalid_args if any pointer is NULL or key size is 0
  * @return ccol_key_not_found if key does not exist
  *
- * @note O(1) average, O(n) worst case per bucket (where n is chain length)
+ * @note O(1) average complexity
+ * @note Open-addressing: O(n) worst case for linear probing, uses tombstones
+ * @note Separate chaining: O(n) worst case per bucket (where n is chain length)
  * @note Frees memory allocated for key and value
- * @note Triggers resize if elem_count < (bucket_count + 1) / 8
- * @note Won't resize below minimum threshold (scale_factor * (64 - 1))
- * @note Scale factor is 0.25x on resize down
+ * @note Open-addressing: Triggers resize at 0.25 load factor
+ * @note Separate chaining: Triggers resize if elem_count < (bucket_count + 1) /
+ * 8
+ * @note Scale factor is 0.5x for open-addressing, 0.25x for separate chaining
+ * @note Won't resize below minimum threshold
  *
  * @see chmap_insert_elem
  * @see chmap_reset
@@ -302,16 +349,17 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
 /**
  * @brief Begin iteration over the hash map
  *
- * Creates an iterator positioned at the first element in insertion order.
- * The hash map maintains a doubly-linked list of all elements for iteration
- * independent of hash bucket organization.
+ * Creates an iterator positioned at the first element. For separate chaining
+ * maps, iteration follows insertion order via the doubly-linked list. For
+ * open-addressing maps, iteration follows slot order.
  *
  * @param chm Hash map to iterate over
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to iterator, or NULL if map is empty or allocation fails
  *
- * @note Iterates in insertion order, not hash order
+ * @note Separate chaining: Iterates in insertion order via doubly-linked list
+ * @note Open-addressing: Iterates in slot order (not insertion order)
  * @note Iterator must be destroyed with chmap_iter_destroy() or will
  * auto-destroy at end
  * @note Modifying map during iteration invalidates the iterator
@@ -380,8 +428,10 @@ cmap_iterator *chashmap_begin_iter(chmap chm, char **err);
 /**
  * @brief Advance iterator to next element
  *
- * Moves the iterator to the next element in insertion order. If the end is
- * reached, automatically destroys the iterator and returns NULL.
+ * Moves the iterator to the next element. For separate chaining maps, follows
+ * insertion order via the doubly-linked list. For open-addressing maps,
+ * advances to the next occupied slot. If the end is reached, automatically
+ * destroys the iterator and returns NULL.
  *
  * @param iter Current iterator position
  *
@@ -389,7 +439,8 @@ cmap_iterator *chashmap_begin_iter(chmap chm, char **err);
  *
  * @note Automatically destroys iterator when returning NULL
  * @note Do not access iterator after it returns NULL
- * @note O(1) complexity (follows linked list)
+ * @note O(1) complexity for separate chaining (follows linked list)
+ * @note O(capacity) worst case for open-addressing (sparse slots)
  *
  * @see chashmap_begin_iter
  * @see chmap_iter_destroy
@@ -584,7 +635,8 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @brief Initialize a hash map with full customization
  *
  * Initializes a previously declared hash map with custom memory management
- * and custom hashing. Calls fatal_err() on failure.
+ * and custom hashing. Calls fatal_err() on failure. Key and value types are
+ * automatically detected from the type variables created by chmap_declare.
  *
  * @param hm_name Hash map variable to initialize (must be declared)
  * @param mmgmt_procs Custom memory management procedures
@@ -592,6 +644,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  *
  * @note Terminates program on failure
  * @note Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (64)
+ * @note Automatically detects key and value types to select implementation
  *
  * @see chmap_declare
  * @see chmap_construct_full
@@ -601,7 +654,8 @@ static inline void ___chmap_destroy(chmap *chm) {
     char *err = NULL;                                                        \
     hm_name = chmap_create_full(                                             \
         DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
-        determine_ccol_data_type(*hm_name##__chm_key_type_var), mmgmt_procs, \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         custom_hashing_proc, &err);                                          \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
@@ -612,7 +666,8 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @brief Declare and initialize a hash map with full customization
  *
  * Combines declaration and initialization with custom memory management
- * and custom hashing. Calls fatal_err() on failure.
+ * and custom hashing. Calls fatal_err() on failure. Key and value types
+ * are specified explicitly and determine the implementation strategy.
  *
  * @param hm_name Hash map variable name
  * @param key_t Key type
@@ -622,6 +677,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  *
  * @note Terminates program on failure
  * @note Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (64)
+ * @note Implementation automatically selected based on key_t and val_t
  *
  * @see chmap_init_full
  */
@@ -634,7 +690,8 @@ static inline void ___chmap_destroy(chmap *chm) {
     char *err = NULL;                                                        \
     hm_name = chmap_create_full(                                             \
         DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
-        determine_ccol_data_type(*hm_name##__chm_key_type_var), mmgmt_procs, \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         custom_hashing_proc, &err);                                          \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
@@ -645,18 +702,21 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @brief Initialize a hash map with defaults
  *
  * Initializes a previously declared hash map with default settings.
+ * Key and value types are automatically detected from the type variables.
  *
  * @param hm_name Hash map variable to initialize
  *
  * @note Terminates program on failure
- * @note Uses default memory management and DJB2 hashing
+ * @note Uses default memory management and automatic hashing selection
+ * @note Implementation automatically selected based on detected types
  */
 #define chmap_init(hm_name)                                            \
   do {                                                                 \
     char *err = NULL;                                                  \
     hm_name = chmap_create(                                            \
         DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                             \
-        determine_ccol_data_type(*hm_name##__chm_key_type_var), &err); \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),        \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), &err); \
     if (!hm_name) {                                                    \
       fatal_err("%s", err);                                            \
     }                                                                  \
@@ -666,20 +726,29 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @brief Declare and initialize a hash map with defaults
  *
  * Combines declaration and initialization with default settings.
+ * Implementation strategy is automatically selected based on key and value
+ * types.
  *
  * @param hm_name Hash map variable name
  * @param key_t Key type
  * @param val_t Value type
  *
  * @note Terminates program on failure
+ * @note Open-addressing used for: int→int, long→double, float→uint32_t, etc.
+ * @note Separate chaining used for: string→int, int→string, string→string, etc.
  *
  * Example:
  * @code
- * chmap_construct(ages, char*, int);
+ * chmap_construct(ages, char*, int);      // string→int: separate chaining
  * chmap_insert(ages, "Alice", 30);
  * chmap_insert(ages, "Bob", 25);
- * int age = chmap_get(ages, "Alice"); // age == 30
+ * int age = chmap_get(ages, "Alice");     // age == 30
  * chmap_destroy(ages);
+ *
+ * chmap_construct(counters, int, int);    // int→int: open-addressing
+ * chmap_insert(counters, 1, 100);
+ * int count = chmap_get(counters, 1);     // count == 100
+ * chmap_destroy(counters);
  * @endcode
  */
 #define chmap_construct(hm_name, key_t, val_t)                               \
@@ -690,7 +759,8 @@ static inline void ___chmap_destroy(chmap *chm) {
     char *err = NULL;                                                        \
     hm_name = chmap_create(                                                  \
         DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
-        determine_ccol_data_type(*hm_name##__chm_key_type_var), &err);       \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), &err);       \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
     }                                                                        \
@@ -700,19 +770,21 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @brief Initialize a hash map with custom memory management
  *
  * Initializes a previously declared hash map with custom memory management.
+ * Key and value types are automatically detected from the type variables.
  *
  * @param hm_name Hash map variable to initialize
  * @param mmgmt_procs Custom memory management procedures
  *
  * @note Terminates program on failure
- * @note Uses default DJB2 hashing
+ * @note Uses default hashing (automatic selection based on types)
  */
 #define chmap_init_mp(hm_name, mmgmt_procs)                                  \
   do {                                                                       \
     char *err = NULL;                                                        \
     hm_name = chmap_create_mp(                                               \
         DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
-        determine_ccol_data_type(*hm_name##__chm_key_type_var), mmgmt_procs, \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         &err);                                                               \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
@@ -739,7 +811,8 @@ static inline void ___chmap_destroy(chmap *chm) {
     char *err = NULL;                                                        \
     hm_name = chmap_create_mp(                                               \
         DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
-        determine_ccol_data_type(*hm_name##__chm_key_type_var), mmgmt_procs, \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         &err);                                                               \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
@@ -763,6 +836,7 @@ static inline void ___chmap_destroy(chmap *chm) {
     hm_name = chmap_create_ch(                                  \
         DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                      \
         determine_ccol_data_type(*hm_name##__chm_key_type_var), \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), \
         custom_hashing_proc, &err);                             \
     if (!hm_name) {                                             \
       fatal_err("%s", err);                                     \
@@ -790,6 +864,7 @@ static inline void ___chmap_destroy(chmap *chm) {
     hm_name = chmap_create_ch(                                               \
         DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
         determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var),              \
         custom_hashing_proc, &err);                                          \
     if (!hm_name) {                                                          \
       fatal_err("%s", err);                                                  \
@@ -932,7 +1007,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @note Returns NULL if key not found (does not terminate)
  * @note Terminates program if value size doesn't match type size
  * @note Returns pointer to value for in-place modification
- * @note Pointer invalidated by insert/delete/resize operations
+ * @note Pointer will get invalidated by later insert/delete/resize operations
  * @note For strings, returns pointer to the char* itself
  *
  * @see chmap_get

@@ -297,55 +297,73 @@ ccol_retval_t cbmap_reset(cbmap cbm) {
   return ccol_success;
 }
 
+static inline int cmp_signed_small(void *ptr1, void *ptr2, size_t size) {
+  switch (size) {
+    case 1: {
+      return ccol_typed_cmp(ptr1, ptr2, int8_t);
+    }
+    case 2: {
+      return ccol_typed_cmp(ptr1, ptr2, int16_t);
+    }
+    case 4: {
+      return ccol_typed_cmp(ptr1, ptr2, int32_t);
+    }
+    case 8: {
+      return ccol_typed_cmp(ptr1, ptr2, int64_t);
+    }
+    default: {
+      // For non-standard sizes, just complain, as this should not
+      // have been classified as a 'signed' number
+      assert(false);
+    }
+  }
+}
+
+static inline int cmp_unsigned_small(void *ptr1, void *ptr2, size_t size) {
+  switch (size) {
+    case 1: {
+      return ccol_typed_cmp(ptr1, ptr2, uint8_t);
+    }
+    case 2: {
+      return ccol_typed_cmp(ptr1, ptr2, uint16_t);
+    }
+    case 4: {
+      return ccol_typed_cmp(ptr1, ptr2, uint32_t);
+    }
+    case 8: {
+      return ccol_typed_cmp(ptr1, ptr2, uint64_t);
+    }
+    default: {
+      return memcmp(ptr1, ptr2, size);
+    }
+  }
+}
+
 static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
                                const cmap_pair *key_pair2) {
   if (cbm->custom_comparison_proc) {
     return cbm->custom_comparison_proc(key_pair1->ptr, key_pair2->ptr);
   }
 
-  if (key_pair1->size == key_pair2->size) {
-    if (!cbm->keys_are_signed) {
-      return memcmp(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
+  if (key_pair1->size != key_pair2->size) {
+    // Different sizes - compare common prefix, then by size
+    size_t min_size = ccol_min(key_pair1->size, key_pair2->size);
+    int cmp = memcmp(key_pair1->ptr, key_pair2->ptr, min_size);
+    if (cmp != 0) {
+      return cmp;
     }
-    // Properly handle signed integer comparison for standard sizes
-    switch (key_pair1->size) {
-      case 1: {
-        int8_t v1 = *(int8_t *)key_pair1->ptr;
-        int8_t v2 = *(int8_t *)key_pair2->ptr;
-        return (v1 > v2) - (v1 < v2);
-      }
-      case 2: {
-        int16_t v1 = *(int16_t *)key_pair1->ptr;
-        int16_t v2 = *(int16_t *)key_pair2->ptr;
-        return (v1 > v2) - (v1 < v2);
-      }
-      case 4: {
-        int32_t v1 = *(int32_t *)key_pair1->ptr;
-        int32_t v2 = *(int32_t *)key_pair2->ptr;
-        return (v1 > v2) - (v1 < v2);
-      }
-      case 8: {
-        int64_t v1 = *(int64_t *)key_pair1->ptr;
-        int64_t v2 = *(int64_t *)key_pair2->ptr;
-        return (v1 > v2) - (v1 < v2);
-      }
-      default:
-        // For non-standard sizes, just complain, as this should not
-        // have been classified as a 'signed' number
-        assert(false);
-    }
+
+    // Common prefix is equal, shorter string comes first
+    return (key_pair1->size > key_pair2->size) -
+           (key_pair1->size < key_pair2->size);
   }
 
-  // Different sizes - compare common prefix, then by size
-  size_t min_size =
-      (key_pair1->size < key_pair2->size) ? key_pair1->size : key_pair2->size;
-  int cmp = memcmp(key_pair1->ptr, key_pair2->ptr, min_size);
-  if (cmp != 0) {
-    return cmp;
+  if (cbm->keys_are_signed) {
+    // Properly handle signed integer comparison for standard sizes
+    return cmp_signed_small(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
   }
-  // Common prefix is equal, shorter string comes first
-  return (key_pair1->size > key_pair2->size) -
-         (key_pair1->size < key_pair2->size);
+
+  return cmp_unsigned_small(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
 }
 
 bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,

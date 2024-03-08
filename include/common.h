@@ -74,19 +74,19 @@ SOFTWARE.
 #define rw_lock_t pthread_rwlock_t
 
 /** @brief Destroy a read-write lock */
-#define rw_lock_destroy(a) pthread_rwlock_destroy(a)
+#define rw_lock_destroy(a) pthread_rwlock_destroy(&a)
 
 /** @brief Initialize a read-write lock with default attributes */
-#define rw_lock_init(a) pthread_rwlock_init(a, NULL)
+#define rw_lock_init(a) pthread_rwlock_init(&a, NULL)
 
 /** @brief Acquire write lock (exclusive access) */
-#define rw_lock_wrlock(a) pthread_rwlock_wrlock(a)
+#define rw_lock_wrlock(a) pthread_rwlock_wrlock(&a)
 
 /** @brief Acquire read lock (shared access) */
-#define rw_lock_rdlock(a) pthread_rwlock_rdlock(a)
+#define rw_lock_rdlock(a) pthread_rwlock_rdlock(&a)
 
 /** @brief Release read-write lock */
-#define rw_lock_unlock(a) pthread_rwlock_unlock(a)
+#define rw_lock_unlock(a) pthread_rwlock_unlock(&a)
 
 /** @brief Condition variable type (wraps pthread_cond_t) */
 #define cond_var_t pthread_cond_t
@@ -780,3 +780,13 @@ typedef enum ccollections_data_type {
       pair->size = sizeof((data));                          \
     }                                                       \
   } while (0)
+
+#define ccol_min(a, b) ((a) < (b) ? (a) : (b))
+#define ccol_max(a, b) ((a) > (b) ? (a) : (b))
+
+#define ccol_typed_cmp(ptr1, ptr2, T) \
+  ({                                  \
+    T var1 = *(T *)(ptr1);            \
+    T var2 = *(T *)(ptr2);            \
+    (var1 > var2) - (var1 < var2);    \
+  })

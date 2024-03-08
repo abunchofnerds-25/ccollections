@@ -61,14 +61,22 @@ struct mempool {
   rw_lock_t lock;
 };
 
+#if UINTPTR_MAX == UINT32_MAX
 const size_t elem_is_free = 0xdeadbeef;
 const size_t elem_is_taken = 0xfeedcafe;
 const size_t elem_is_not_a_pool_member = 0xfadeface;
+#elif UINTPTR_MAX == UINT64_MAX
+const size_t elem_is_free = 0xdeadbeefdeadbeef;
+const size_t elem_is_taken = 0xfeedcafefeedcafe;
+const size_t elem_is_not_a_pool_member = 0xfadefacefadeface;
+#else
+#error "Unexpected pointer size"
+#endif
 
 void _mempool_destroy(mempool *mp) {
   if (mp) {
     if (mp->should_use_locks) {
-      rw_lock_destroy(&mp->lock);
+      rw_lock_destroy(mp->lock);
     }
 
     if (!mp->is_preallocated && mp->objects) {
@@ -158,7 +166,7 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
   mp->should_use_locks = !single_threaded;
 
   if (mp->should_use_locks) {
-    if (rw_lock_init(&mp->lock) != 0) {
+    if (rw_lock_init(mp->lock) != 0) {
       if (err) {
         *err = CCOL_ERR_STR("failed to initialize the rw lock");
       }
@@ -221,7 +229,7 @@ mempool *mempool_create_from_preallocated_buffer(
   mp->should_use_locks = !single_threaded;
 
   if (mp->should_use_locks) {
-    if (rw_lock_init(&mp->lock) != 0) {
+    if (rw_lock_init(mp->lock) != 0) {
       if (err) {
         *err = CCOL_ERR_STR("failed to init the rw lock");
       }
@@ -244,7 +252,7 @@ void *mempool_alloc_entry(mempool *mp) {
   void *result = NULL;
 
   if (mp->should_use_locks) {
-    rw_lock_wrlock(&mp->lock);
+    rw_lock_wrlock(mp->lock);
   }
 
   if (mp->free_inst) {
@@ -253,7 +261,7 @@ void *mempool_alloc_entry(mempool *mp) {
     if (header->elem_status != elem_is_free || header->pool_ptr != mp) {
       // We have a corruption!
       if (mp->should_use_locks) {
-        rw_lock_unlock(&mp->lock);
+        rw_lock_unlock(mp->lock);
       }
       assert(false);
     }
@@ -277,7 +285,7 @@ void *mempool_alloc_entry(mempool *mp) {
   }
 
   if (mp->should_use_locks) {
-    rw_lock_unlock(&mp->lock);
+    rw_lock_unlock(mp->lock);
   }
 
   return result;
@@ -307,7 +315,7 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
   uintptr_t c_header = (uintptr_t)header;
 
   if (mp->should_use_locks) {
-    rw_lock_wrlock(&mp->lock);
+    rw_lock_wrlock(mp->lock);
   }
 
   if (header->elem_status == elem_is_not_a_pool_member) {
@@ -316,14 +324,14 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
     if (mp->active_dynamic_memory_buffer_count == 0) {
       // Something is not right, most probably a double free
       if (mp->should_use_locks) {
-        rw_lock_unlock(&mp->lock);
+        rw_lock_unlock(mp->lock);
       }
       assert(false);
     }
     --mp->active_dynamic_memory_buffer_count;
     _mem_free(mp->m_procs, header);
     if (mp->should_use_locks) {
-      rw_lock_unlock(&mp->lock);
+      rw_lock_unlock(mp->lock);
     }
     return;
   }
@@ -337,7 +345,7 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
         if (header->elem_status == elem_is_free) {
           // Double free!
           if (mp->should_use_locks) {
-            rw_lock_unlock(&mp->lock);
+            rw_lock_unlock(mp->lock);
           }
           assert(false);
         }
@@ -345,7 +353,7 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
 
       // Somehow the entry got overwritten.
       if (mp->should_use_locks) {
-        rw_lock_unlock(&mp->lock);
+        rw_lock_unlock(mp->lock);
       }
       assert(false);
     }
@@ -356,13 +364,13 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
     ++mp->free_elem_count;
   } else {
     if (mp->should_use_locks) {
-      rw_lock_unlock(&mp->lock);
+      rw_lock_unlock(mp->lock);
     }
     assert(false);
   }
 
   if (mp->should_use_locks) {
-    rw_lock_unlock(&mp->lock);
+    rw_lock_unlock(mp->lock);
   }
 }
 
@@ -400,13 +408,13 @@ size_t mempool_total_capacity(mempool *mp) {
   size_t result = 0;
 
   if (mp->should_use_locks) {
-    rw_lock_rdlock(&mp->lock);
+    rw_lock_rdlock(mp->lock);
   }
 
   result = mp->total_elem_count;
 
   if (mp->should_use_locks) {
-    rw_lock_unlock(&mp->lock);
+    rw_lock_unlock(mp->lock);
   }
 
   return result;
@@ -420,13 +428,13 @@ size_t mempool_used_count(mempool *mp) {
   size_t result = 0;
 
   if (mp->should_use_locks) {
-    rw_lock_rdlock(&mp->lock);
+    rw_lock_rdlock(mp->lock);
   }
 
   result = mp->total_elem_count - mp->free_elem_count;
 
   if (mp->should_use_locks) {
-    rw_lock_unlock(&mp->lock);
+    rw_lock_unlock(mp->lock);
   }
 
   return result;
@@ -440,13 +448,13 @@ size_t mempool_dynamic_allocs_count(mempool *mp) {
   size_t result = 0;
 
   if (mp->should_use_locks) {
-    rw_lock_rdlock(&mp->lock);
+    rw_lock_rdlock(mp->lock);
   }
 
   result = mp->active_dynamic_memory_buffer_count;
 
   if (mp->should_use_locks) {
-    rw_lock_unlock(&mp->lock);
+    rw_lock_unlock(mp->lock);
   }
 
   return result;
@@ -486,7 +494,7 @@ void _r_mempool_destroy(r_mempool *rmp) {
 
     if (rmp->fb_policy == fallback_at_last_exhaustion) {
       if (rmp->should_use_locks) {
-        rw_lock_destroy(&rmp->pseudo_pool.lock);
+        rw_lock_destroy(rmp->pseudo_pool.lock);
       }
     }
 
@@ -557,7 +565,7 @@ bool init_r_mempool_pseudo_pool(r_mempool *rmp) {
   memset(&rmp->pseudo_pool, 0, sizeof(mempool));
   if (rmp->fb_policy == fallback_at_last_exhaustion) {
     if (rmp->should_use_locks) {
-      if (rw_lock_init(&rmp->pseudo_pool.lock) != 0) {
+      if (rw_lock_init(rmp->pseudo_pool.lock) != 0) {
         return false;
       }
     }
@@ -790,7 +798,7 @@ void *mempool_pseudo_alloc_entry(mempool *mp, size_t elem_size) {
   size_t ext_elem_size = USER_SIZE_TO_EXT_SIZE(elem_size);
 
   if (mp->should_use_locks) {
-    rw_lock_wrlock(&mp->lock);
+    rw_lock_wrlock(mp->lock);
   }
 
   void *new_buffer = _mem_alloc(mp->m_procs, ext_elem_size);
@@ -803,7 +811,7 @@ void *mempool_pseudo_alloc_entry(mempool *mp, size_t elem_size) {
   }
 
   if (mp->should_use_locks) {
-    rw_lock_unlock(&mp->lock);
+    rw_lock_unlock(mp->lock);
   }
 
   return result;

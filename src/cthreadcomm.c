@@ -31,11 +31,6 @@ SOFTWARE.
 #include <assert.h>
 #endif
 
-typedef struct message {
-  void *data;
-  size_t size;
-} message;
-
 void add_duration_to_timespec(struct timespec *target,
                               struct timespec *duration) {
   static const long int max_nsecs = 1000000000;
@@ -74,7 +69,7 @@ struct circular_queue {
 
   ccol_memmgmt_procs_t *m_procs;
 
-  message *msg_array;
+  c_message_t *msg_array;
   bool writing_disabled;
 };
 
@@ -123,7 +118,7 @@ circular_queue *circular_queue_create_with_mprocs(
   }
 
   cq->msg_array =
-      (message *)_mem_alloc(mmgmt_procs, max_size * sizeof(message));
+      (c_message_t *)_mem_alloc(mmgmt_procs, max_size * sizeof(c_message_t));
   if (!cq->msg_array) {
     if (err_str) {
       *err_str = CCOL_ERR_STR("Failed to allocate memory for cq msg_array");
@@ -421,7 +416,7 @@ size_t circq_msg_count(circular_queue *cq) {
 // Dynamic queue related section starts here.
 typedef struct dllist_node {
   struct dllist_node *prev;
-  message msg;
+  c_message_t msg;
   struct dllist_node *next;
 } dllist_node;
 

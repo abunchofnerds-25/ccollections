@@ -873,14 +873,12 @@ ccol_retval_t chan_disable_sending(channel *ch, channel_direction d) {
   }
 
   if (d == owner_to_workers) {
-    circq_disable_sending(ch->owner_to_workers_cq);
+    return circq_disable_sending(ch->owner_to_workers_cq);
   } else if (d == workers_to_owner) {
-    circq_disable_sending(ch->workers_to_owner_cq);
-  } else {
-    return ccol_invalid_args;
+    return circq_disable_sending(ch->workers_to_owner_cq);
   }
 
-  return ccol_success;
+  return ccol_invalid_args;
 }
 
 ccol_retval_t chan_enable_sending(channel *ch, channel_direction d) {
@@ -889,14 +887,12 @@ ccol_retval_t chan_enable_sending(channel *ch, channel_direction d) {
   }
 
   if (d == owner_to_workers) {
-    circq_enable_sending(ch->owner_to_workers_cq);
+    return circq_enable_sending(ch->owner_to_workers_cq);
   } else if (d == workers_to_owner) {
-    circq_enable_sending(ch->workers_to_owner_cq);
-  } else {
-    return ccol_invalid_args;
+    return circq_enable_sending(ch->workers_to_owner_cq);
   }
 
-  return ccol_success;
+  return ccol_invalid_args;
 }
 
 size_t chan_msg_count(channel *ch, channel_direction d) {

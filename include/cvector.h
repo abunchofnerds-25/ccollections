@@ -248,10 +248,11 @@ void cvector_reset(cvec v);
  * type safety in macro operations. The vector must be initialized before use.
  *
  * @param v Name of the vector variable to declare
- * @param type Type of elements the vector will hold
+ * @param type Element type for the vector
  *
- * @note Vector must be initialized with cvec_init() before use
- * @note Type variable is used internally by other macros for type safety
+ * @note Vector must be initialized with cvec_init() or cvec_construct() before
+ * use
+ * @note Type variable is named v##__cvec_type_var and used internally by macros
  *
  * @see cvec_init
  * @see cvec_construct
@@ -260,11 +261,13 @@ void cvector_reset(cvec v);
  * @code
  * cvec_declare(my_vec, int);
  * cvec_init(my_vec);
+ * // ... use vector ...
+ * cvec_destroy(my_vec);
  * @endcode
  */
 #define cvec_declare(v, type) \
-  type *v##__cvec_type_var;   \
-  cvec v
+  cvec v;                     \
+  type *v##__cvec_type_var
 
 /**
  * @brief Enable type-safe macros for a vector in local scope
@@ -290,68 +293,79 @@ void cvector_reset(cvec v);
   type *v##__cvec_type_var __attribute__((unused)) = NULL
 
 /**
- * @brief Initialize a previously declared vector
+ * @brief Initialize a declared vector (with error handling)
  *
- * Initializes a vector that was declared with cvec_declare(). Calls fatal_err()
- * if initialization fails.
+ * Initializes a vector that was previously declared with cvec_declare().
+ * Terminates the program with fatal_err() if initialization fails.
  *
- * @param v Vector variable to initialize (must be declared with cvec_declare)
+ * @param v Vector variable to initialize
  *
+ * @note Calls fatal_err() on initialization failure
+ * @note Vector must have been declared with cvec_declare()
  * @note Uses default memory management (malloc/free)
- * @note Initial capacity is 4 elements
- * @note Terminates program on failure
  *
  * @see cvec_declare
- * @see cvec_init_with_mprocs
  * @see cvec_construct
+ * @see cvec_init_with_mprocs
+ *
+ * Example:
+ * @code
+ * cvec_declare(my_vec, int);
+ * cvec_init(my_vec);  // Terminates on failure
+ * @endcode
  */
-#define cvec_init(v)                                           \
-  do {                                                         \
-    char *err_str = NULL;                                      \
-    v##__cvec_type_var = NULL;                                 \
-    v = cvector_create(sizeof(*v##__cvec_type_var), &err_str); \
-    if (!v) {                                                  \
-      fatal_err("cvector_create failed: %s", err_str);         \
-    }                                                          \
+#define cvec_init(v)                                                       \
+  do {                                                                     \
+    char *err = NULL;                                                      \
+    v = cvector_create(sizeof(*v##__cvec_type_var), &err);                 \
+    if (!v) {                                                              \
+      fatal_err("cvector_create failed: %s", err ? err : "unknown error"); \
+    }                                                                      \
   } while (0)
 
 /**
- * @brief Initialize a vector with custom memory management
+ * @brief Initialize a declared vector with custom memory management
  *
- * Initializes a vector that was declared with cvec_declare() using custom
- * memory management procedures. Calls fatal_err() if initialization fails.
+ * Initializes a vector with custom memory management procedures.
+ * Terminates the program with fatal_err() if initialization fails.
  *
- * @param v Vector variable to initialize (must be declared with cvec_declare)
- * @param mprocs Custom memory management procedures
+ * @param v Vector variable to initialize
+ * @param mprocs Pointer to custom memory management procedures
  *
- * @note Initial capacity is 4 elements
- * @note Terminates program on failure
+ * @note Calls fatal_err() on initialization failure
+ * @note Vector must have been declared with cvec_declare()
  *
- * @see cvec_declare
  * @see cvec_init
+ * @see cvec_declare
+ *
+ * Example:
+ * @code
+ * ccol_memmgmt_procs_t my_mprocs = { ... };
+ * cvec_declare(my_vec, int);
+ * cvec_init_with_mprocs(my_vec, &my_mprocs);
+ * @endcode
  */
-#define cvec_init_with_mprocs(v, mprocs)                                \
-  do {                                                                  \
-    char *err_str = NULL;                                               \
-    v = cvector_create_with_mprocs(sizeof(*v##__cvec_type_var), mprocs, \
-                                   &err_str);                           \
-    if (!v) {                                                           \
-      fatal_err("cvector_create_with_mprocs failed: %s", err_str);      \
-    }                                                                   \
+#define cvec_init_with_mprocs(v, mprocs)                                       \
+  do {                                                                         \
+    char *err = NULL;                                                          \
+    v = cvector_create_with_mprocs(sizeof(*v##__cvec_type_var), mprocs, &err); \
+    if (!v) {                                                                  \
+      fatal_err("cvector_create_with_mprocs failed: %s",                       \
+                err ? err : "unknown error");                                  \
+    }                                                                          \
   } while (0)
 
 /**
- * @brief Declare and initialize a vector in one statement
+ * @brief Declare and initialize a vector in one step
  *
- * Combines declaration and initialization of a vector into a single macro.
- * Uses default memory management. Calls fatal_err() if creation fails.
+ * Convenience macro that combines cvec_declare() and cvec_init().
+ * Terminates the program with fatal_err() if initialization fails.
  *
  * @param v Name of the vector variable to create
- * @param type Type of elements the vector will hold
+ * @param type Element type for the vector
  *
- * @note Uses default memory management (malloc/free)
- * @note Initial capacity is 4 elements
- * @note Terminates program on failure
+ * @note Calls fatal_err() on initialization failure
+ * @note Equivalent to: cvec_declare(v, type); cvec_init(v);
  *
  * @see cvec_declare
  * @see cvec_init
@@ -359,55 +373,48 @@ void cvector_reset(cvec v);
  *
  * Example:
  * @code
- * cvec_construct(numbers, int);
- * cvec_push(numbers, 42);
+ * cvec_construct(my_vec, int);
+ * cvec_push_rvalue(my_vec, 42);
+ * cvec_destroy(my_vec);
  * @endcode
  */
-#define cvec_construct(v, type)                                \
-  type *v##__cvec_type_var __attribute__((unused)) = NULL;     \
-  cvec v;                                                      \
-  do {                                                         \
-    char *err_str = NULL;                                      \
-    v = cvector_create(sizeof(*v##__cvec_type_var), &err_str); \
-    if (!v) {                                                  \
-      fatal_err("cvector_create failed: %s", err_str);         \
-    }                                                          \
-  } while (0)
+#define cvec_construct(v, type) \
+  cvec_declare(v, type);        \
+  cvec_init(v)
 
 /**
  * @brief Declare and initialize a vector with custom memory management
  *
- * Combines declaration and initialization of a vector with custom memory
- * management. Calls fatal_err() if creation fails.
+ * Convenience macro that combines cvec_declare() and cvec_init_with_mprocs().
+ * Terminates the program with fatal_err() if initialization fails.
  *
  * @param v Name of the vector variable to create
- * @param type Type of elements the vector will hold
- * @param mprocs Custom memory management procedures
+ * @param type Element type for the vector
+ * @param mprocs Pointer to custom memory management procedures
  *
- * @note Initial capacity is 4 elements
- * @note Terminates program on failure
+ * @note Calls fatal_err() on initialization failure
  *
  * @see cvec_construct
  * @see cvec_init_with_mprocs
+ *
+ * Example:
+ * @code
+ * ccol_memmgmt_procs_t my_mprocs = { ... };
+ * cvec_construct_with_mprocs(my_vec, int, &my_mprocs);
+ * @endcode
  */
-#define cvec_construct_with_mprocs(v, type, mprocs)                     \
-  type *v##__cvec_type_var = NULL;                                      \
-  cvec v;                                                               \
-  do {                                                                  \
-    char *err_str = NULL;                                               \
-    v = cvector_create_with_mprocs(sizeof(*v##__cvec_type_var), mprocs, \
-                                   &err_str);                           \
-    if (!v) {                                                           \
-      fatal_err("cvector_create_with_mprocs failed: %s", err_str);      \
-    }                                                                   \
-  } while (0)
+#define cvec_construct_with_mprocs(v, type, mprocs) \
+  cvec_declare(v, type);                            \
+  cvec_init_with_mprocs(v, mprocs)
 
 /**
- * @brief Destroy a vector (type-safe wrapper)
+ * @brief Destroy a vector and set pointer to NULL (type-safe wrapper)
  *
- * Type-safe wrapper around cvector_destroy().
+ * Type-safe wrapper for cvector_destroy().
  *
- * @param v Vector to destroy
+ * @param v Vector to destroy (will be set to NULL after destruction)
+ *
+ * @note Safe to call with NULL pointer (no-op)
  *
  * @see cvector_destroy
  */
@@ -510,19 +517,19 @@ void cvector_reset(cvec v);
   })
 
 /**
- * @brief Access element at index (type-safe, returns value)
+ * @brief Access element at index (type-safe, returns reference)
  *
- * Type-safe wrapper for cvector_at() that returns the element value (not
+ * Type-safe wrapper for cvector_at() that returns the element reference (not
  * pointer). Automatically casts to the correct type.
  *
  * @param v Vector to access
  * @param index Zero-based index of element
  *
- * @return Element value at index
+ * @return Element reference at index
  *
- * @note Returns value, not pointer
+ * @note Returns reference, not pointer
  * @note For pointer access, use cvec_at_ptr()
- * @note No bounds checking - returns garbage if index out of bounds
+ * @note No bounds checking - will cause a SIGSEGV, if index out of bounds
  *
  * @see cvec_at_ptr
  * @see cvector_at
@@ -532,6 +539,7 @@ void cvector_reset(cvec v);
  * cvec_construct(vec, int);
  * cvec_push_rvalue(vec, 42);
  * int val = cvec_at(vec, 0);  // val == 42
+ * cvec_at(vec, 0) = 5;        // now the first element is 5
  * @endcode
  */
 #define cvec_at(v, index) *(typeof(*v##__cvec_type_var) *)(cvector_at(v, index))
@@ -600,9 +608,10 @@ void cvector_reset(cvec v);
  * @param v Vector to sort
  * @param comparison_proc Comparison function for sorting
  *
- * @note Sorts in-place
+ * @note Sorts in-place using stable mergesort algorithm
+ * @note O(n log n) time complexity, O(n) space complexity
  * @note Will assert if v is NULL
- * @note Uses csort library for sorting algorithm
+ * @note Uses csort for sorting
  *
  * @see cvec_sort
  *
@@ -616,14 +625,14 @@ void cvector_reset(cvec v);
  * cvector_sort_with_comparison_proc(vec, compare_ints);
  * @endcode
  */
-#define cvector_sort_with_comparison_proc(v, comparison_proc)               \
-  do {                                                                      \
-    if (!v) {                                                               \
-      assert(false);                                                        \
-    }                                                                       \
-    csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)),     \
-               (csort_item_getter_proc_t)cvector_at, comparison_proc, NULL, \
-               cvector_get_mprocs(v));                                      \
+#define cvector_sort_with_comparison_proc(v, comparison_proc)           \
+  do {                                                                  \
+    if (!v) {                                                           \
+      assert(false);                                                    \
+    }                                                                   \
+    csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)), \
+               (csort_item_getter_proc_t)cvector_at, comparison_proc,   \
+               cvector_get_mprocs(v));                                  \
   } while (0)
 
 /**
@@ -635,7 +644,8 @@ void cvector_reset(cvec v);
  *
  * @param v Vector to sort
  *
- * @note Sorts in-place
+ * @note Sorts in-place using stable mergesort algorithm
+ * @note O(n log n) time complexity, O(n) space complexity
  * @note Uses default comparison for the element type
  * @note Supported types depend on csort library defaults
  *

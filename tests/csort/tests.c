@@ -348,7 +348,7 @@ TEST(csort, c_int_array_sort) {
 
   csort_sort(test_array, sizeof(test_array) / sizeof(*test_array),
              sizeof(*test_array), c_int_array_getter_proc_t,
-             csort_get_default_comparison_proc(*test_array), NULL, NULL);
+             csort_get_default_comparison_proc(*test_array), NULL);
   for (i = 1; i < num_sample; i++) {
     REQUIRE_LE(test_array[i - 1], test_array[i]);
   }

@@ -27,36 +27,10 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-/* Swap procedures region */
-void csort_default_swap_proc(void *first, void *second, size_t elem_size) {
-  unsigned char *ptr_btye_first = (unsigned char *)first;
-  unsigned char *ptr_byte_second = (unsigned char *)second;
-  unsigned char tmp;
+/* ========================================================================== */
+/*                      DEFAULT COMPARISON PROCEDURES                         */
+/* ========================================================================== */
 
-  if (!first || !second || first == second) {
-    return;
-  }
-
-  for (size_t byte_iter = 0; byte_iter < elem_size; ++byte_iter) {
-    tmp = ptr_btye_first[byte_iter];
-    ptr_btye_first[byte_iter] = ptr_byte_second[byte_iter];
-    ptr_byte_second[byte_iter] = tmp;
-  }
-}
-
-void csort_default_pointer_swap_proc(void *first, void *second,
-                                     size_t elem_size __attribute__((unused))) {
-  if (!first || !second || first == second) {
-    return;
-  }
-
-  void *tmp = first;
-  first = second;
-  second = tmp;
-}
-/* End of Swap procedures region */
-
-/* Comparison procedures region */
 int csort_default_string_comparison_proc(const void *first,
                                          const void *second) {
   return strcmp(*(const char **)first, *(const char **)second);
@@ -85,9 +59,27 @@ ___csort__define_default_integral_comparison_proc(float, float);
 ___csort__define_default_integral_comparison_proc(double, double);
 ___csort__define_default_integral_comparison_proc(long double, long_double);
 #undef __define_default_integral_comparison_proc
-/* End of Comparison procedures region */
 
-// Merge two sorted subarrays [left...mid] and [mid+1...right]
+/* ========================================================================== */
+/*                         MERGESORT IMPLEMENTATION                           */
+/* ========================================================================== */
+
+/**
+ * @brief Merge two sorted subarrays into one
+ *
+ * Merges two contiguous sorted subarrays [left...mid] and [mid+1...right]
+ * into a single sorted array. Uses a temporary buffer to hold intermediate
+ * results during the merge operation.
+ *
+ * @param col Pointer to collection being sorted
+ * @param left Starting index of left subarray
+ * @param mid Ending index of left subarray (mid+1 is start of right subarray)
+ * @param right Ending index of right subarray
+ * @param elem_size Size of each element in bytes
+ * @param getter_proc Function to get element at index
+ * @param comparison_proc Function to compare two elements
+ * @param temp_buffer Pre-allocated temporary buffer for merging
+ */
 static void csort_merge(void *col, int left, int mid, int right,
                         size_t elem_size, csort_item_getter_proc_t getter_proc,
                         ccol_comparison_proc_t comparison_proc,
@@ -154,13 +146,25 @@ static void csort_merge(void *col, int left, int mid, int right,
   }
 }
 
-// Iterative merge sort implementation using bottom-up approach
+/**
+ * @brief Iterative mergesort implementation using bottom-up approach
+ *
+ * Implements mergesort iteratively without recursion by starting with
+ * subarrays of size 1 and progressively merging pairs to create larger
+ * sorted subarrays (size 2, 4, 8, etc.) until the entire array is sorted.
+ *
+ * @param col Pointer to collection to sort
+ * @param low Starting index (inclusive)
+ * @param high Ending index (inclusive)
+ * @param elem_size Size of each element in bytes
+ * @param getter_proc Function to get element at index
+ * @param comparison_proc Function to compare two elements
+ * @param mprocs Memory management procedures for buffer allocation
+ */
 static void csort_mergesort_iterative(void *col, int low, int high,
                                       size_t elem_size,
                                       csort_item_getter_proc_t getter_proc,
                                       ccol_comparison_proc_t comparison_proc,
-                                      csort_item_swap_proc_t swap_proc
-                                      __attribute__((unused)),
                                       ccol_memmgmt_procs_t *mprocs) {
   if (low >= high) {
     return;
@@ -208,10 +212,13 @@ static void csort_mergesort_iterative(void *col, int low, int high,
   _mem_free(mprocs, temp_buffer);
 }
 
+/* ========================================================================== */
+/*                         PUBLIC SORT INTERFACE                              */
+/* ========================================================================== */
+
 void ___csort_qsort(void *col, size_t length, size_t elem_size,
                     csort_item_getter_proc_t getter_proc,
                     ccol_comparison_proc_t comparison_proc,
-                    csort_item_swap_proc_t swap_proc,
                     ccol_memmgmt_procs_t *mprocs) {
   if (!col) {
     return;
@@ -225,7 +232,6 @@ void ___csort_qsort(void *col, size_t length, size_t elem_size,
     assert(false);
   }
 
-  // Note: swap_proc is not used in merge sort but kept for API compatibility
   csort_mergesort_iterative(col, 0, length - 1, elem_size, getter_proc,
-                            comparison_proc, swap_proc, mprocs);
+                            comparison_proc, mprocs);
 }

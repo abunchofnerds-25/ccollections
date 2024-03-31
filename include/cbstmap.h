@@ -346,7 +346,7 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err);
       __attribute__((unused)) = NULL;                             \
   typeof(*cbm##__cbm_val_type_var) *iter##__cbm_iter_val_type_var \
       __attribute__((unused)) = NULL;                             \
-  cmap_iterator *iter
+  cmap_iterator *iter _ccol_destructor(___cbmap_iterator_destroy)
 
 /**
  * @brief Begin iteration with automatic error handling
@@ -466,6 +466,13 @@ void __cbmap_iterator_destroy(cmap_iterator *iter);
     __cbmap_iterator_destroy((iter)); \
     iter = NULL;                      \
   } while (0)
+
+static inline void ___cbmap_iterator_destroy(cmap_iterator **iter) {
+  if (*iter) {
+    __cbmap_iterator_destroy(*iter);
+    *iter = NULL;
+  }
+}
 
 /* ========================================================================== */
 /*                         BST MAP DESTRUCTION                                */

@@ -23,107 +23,601 @@ SOFTWARE.
 */
 
 #include <chashmap.h>
-#include <cbstmap.h>
+#include <memops.h>
 #include <stdlib.h>
 #include <string.h>
 
 const size_t minimum_allowed_bucket_array_size = 64;
 const size_t scale_factor = 4;
 const size_t minimum_scale_down_threshold =
-    scale_factor * (minimum_allowed_bucket_array_size - 1);
+    scale_factor * (minimum_allowed_bucket_array_size);
 
-static inline void mem_assign(void* dest, void* src, size_t size) {
-  if (size == sizeof(unsigned int)) {
-    *(unsigned int*)dest = *(unsigned int*)src;
-  } else if (size == sizeof(unsigned long)) {
-    *(unsigned long*)dest = *(unsigned long*)src;
-  } else if (size == sizeof(unsigned char)) {
-    *(unsigned char*)dest = *(unsigned char*)src;
-  } else if (size == sizeof(unsigned short)) {
-    *(unsigned short*)dest = *(unsigned short*)src;
-  } else {
-    memcpy(dest, src, size);
-  }
-}
+#define OPEN_ADDR_MAX_LOAD_FACTOR 0.70
+#define OPEN_ADDR_MIN_LOAD_FACTOR 0.25
+#define INLINE_STORAGE_THRESHOLD 23  // SSO: Small String Optimization threshold
 
-typedef struct chmap_entry chmap_entry;
+// Fibonacci hashing for integers
+#define FIBONACCI_HASH_MULTIPLIER 11400714819323198485ULL
+
+/* ========================================================================== */
+/*                    OPEN ADDRESSING STRUCTURES                              */
+/* ========================================================================== */
+
+// Compact slot - 17 bytes instead of 32
+typedef struct {
+  uint64_t key_data;
+  uint64_t val_data;
+  uint8_t metadata;  // bit 0: occupied, bit 1: deleted
+} oa_slot;
+
+#define SLOT_OCCUPIED 0x01
+#define SLOT_DELETED 0x02
+
+typedef struct {
+  oa_slot* slots;
+  size_t capacity;
+  size_t count;
+  size_t key_size;
+  size_t val_size;
+  size_t deleted_count;
+  ccol_memmgmt_procs_t* m_procs;
+  ccol_hashing_proc_t custom_hashing_proc;
+  ccol_data_type key_type;
+  ccol_data_type val_type;
+} open_addr_map;
+
+/* ========================================================================== */
+/*                 SEPARATE CHAINING STRUCTURES                               */
+/* ========================================================================== */
+
+typedef struct chmap_entry {
+  size_t hash_val;
+  union {
+    void* ptr;
+    // SSO: 23 bytes + null terminator
+    char inline_data[INLINE_STORAGE_THRESHOLD + 1];
+  } key_storage;
+  size_t key_size;
+  bool key_is_inline;
+  union {
+    void* ptr;
+    // SSO: 23 bytes + null terminator
+    char inline_data[INLINE_STORAGE_THRESHOLD + 1];
+  } val_storage;
+  size_t val_size;
+  bool val_is_inline;
+  ccol_memmgmt_procs_t* m_procs;
+} chmap_entry;
 
 typedef struct dllist_ref_node {
-  // All these pointers are mere references,
-  // and they are not 'owned' by this struct
   struct dllist_ref_node* prev;
   struct dllist_ref_node* next;
 } dllist_ref_node;
 
-typedef struct chmap_entry {
-  size_t hash_val;
-  cmap_pair key_pair;
-  cmap_pair val_pair;
+typedef struct llist_node {
+  struct llist_node* next;
   dllist_ref_node dllist_refs;
+  chmap_entry data;
+  cmap_pair key_pair_accessor;
+  cmap_pair val_pair_accessor;
   ccol_memmgmt_procs_t* m_procs;
-} chmap_entry;
+} llist_node;
 
-#define dllistRefNode2ChmapEntry(tracker) \
-  (chmap_entry*)(((uint8_t*)tracker) - offsetof(chmap_entry, dllist_refs))
+typedef struct sep_chain_map {
+  size_t elem_count;
+  size_t bucket_arr_size;
+  size_t elem_count_to_scale_up;
+  size_t elem_count_to_scale_down;
+  llist_node** bucket_arr;
+  dllist_ref_node* head_of_all_elems;
+  ccol_memmgmt_procs_t* m_procs;
+  ccol_hashing_proc_t custom_hashing_proc;
+  ccol_data_type key_type;
+  ccol_data_type val_type;
+} sep_chain_map;
 
-typedef struct chmap_cmap_iterator {
-  // Extended cmap_iterator for chmap
-  // User doesn't need to know about the fields
-  // 'tracker' and 'parent_map' or use them directly
-  chmap parent_map;
-  dllist_ref_node* tracker;
-  cmap_iterator user_iter;
-} chmap_cmap_iterator;
+/* ========================================================================== */
+/*                      UNIFIED STRUCTURE                                     */
+/* ========================================================================== */
 
-#define cmapIter2ChmapIter(u_iter)          \
-  (chmap_cmap_iterator*)((uint8_t*)u_iter - \
-                         offsetof(chmap_cmap_iterator, user_iter))
+typedef enum { IMPL_OPEN_ADDRESSING, IMPL_SEPARATE_CHAINING } hashmap_impl_type;
 
-void attach_node_to_dllist(dllist_ref_node** head, chmap_entry* host) {
-  host->dllist_refs.prev = NULL;
-  if (!(*head)) {
-    host->dllist_refs.next = NULL;
-    *head = &host->dllist_refs;
+struct chashmap {
+  hashmap_impl_type impl_type;
+  union {
+    open_addr_map* oa_map;
+    sep_chain_map* sc_map;
+  } impl;
+};
+
+/* ========================================================================== */
+/*                      TYPE DETECTION                                        */
+/* ========================================================================== */
+
+static inline bool is_type_integral(ccol_data_type type) {
+  switch (type) {
+    case ccol_char:
+    case ccol_short:
+    case ccol_int:
+    case ccol_long:
+    case ccol_long_long:
+    case ccol_unsigned_char:
+    case ccol_unsigned_short:
+    case ccol_unsigned_int:
+    case ccol_unsigned_long:
+    case ccol_unsigned_long_long:
+    case ccol_float:
+    case ccol_double:
+    case ccol_long_double:
+    case ccol_pointer:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static inline size_t get_type_size(ccol_data_type type) {
+  switch (type) {
+    case ccol_char:
+    case ccol_unsigned_char:
+      return sizeof(char);
+    case ccol_short:
+    case ccol_unsigned_short:
+      return sizeof(short);
+    case ccol_int:
+    case ccol_unsigned_int:
+      return sizeof(int);
+    case ccol_long:
+    case ccol_unsigned_long:
+      return sizeof(long);
+    case ccol_long_long:
+    case ccol_unsigned_long_long:
+      return sizeof(long long);
+    case ccol_pointer:
+      return sizeof(uintptr_t);
+    case ccol_float:
+      return sizeof(float);
+    case ccol_double:
+      return sizeof(double);
+    case ccol_long_double:
+      return sizeof(long double);
+    default:
+      return 8;
+  }
+}
+
+static inline bool should_use_open_addressing(ccol_data_type key_type,
+                                              ccol_data_type val_type) {
+  return is_type_integral(key_type) && is_type_integral(val_type) &&
+         get_type_size(key_type) <= 8 && get_type_size(val_type) <= 8;
+}
+
+/* ========================================================================== */
+/*                         HASH FUNCTIONS                                     */
+/* ========================================================================== */
+
+#define XXH_PRIME64_1 0x9E3779B185EBCA87ULL
+#define XXH_PRIME64_2 0xC2B2AE3D27D4EB4FULL
+#define XXH_PRIME64_3 0x165667B19E3779F9ULL
+#define XXH_PRIME64_4 0x85EBCA77C2B2AE63ULL
+#define XXH_PRIME64_5 0x27D4EB2F165667C5ULL
+
+static inline uint64_t xxh_rotl64(uint64_t x, int r) {
+  return (x << r) | (x >> (64 - r));
+}
+
+static inline uint64_t xxh_round(uint64_t acc, uint64_t input) {
+  acc += input * XXH_PRIME64_2;
+  acc = xxh_rotl64(acc, 31);
+  acc *= XXH_PRIME64_1;
+  return acc;
+}
+
+static inline uint64_t xxh_avalanche(uint64_t hash) {
+  hash ^= hash >> 33;
+  hash *= XXH_PRIME64_2;
+  hash ^= hash >> 29;
+  hash *= XXH_PRIME64_3;
+  hash ^= hash >> 32;
+  return hash;
+}
+
+static inline uint64_t xxhash64_int64(uint64_t value, uint64_t seed) {
+  uint64_t hash = seed + XXH_PRIME64_5 + 8;
+  hash ^= xxh_round(0, value);
+  hash = xxh_rotl64(hash, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
+  return xxh_avalanche(hash);
+}
+
+static inline uint64_t xxhash64_int32(uint32_t value, uint64_t seed) {
+  uint64_t hash = seed + XXH_PRIME64_5 + 4;
+  hash ^= value * XXH_PRIME64_1;
+  hash = xxh_rotl64(hash, 23) * XXH_PRIME64_2 + XXH_PRIME64_3;
+  return xxh_avalanche(hash);
+}
+
+static inline uint64_t xxhash64_buffer(const void* input, size_t len,
+                                       uint64_t seed) {
+  const uint8_t* p = (const uint8_t*)input;
+  const uint8_t* const end = p + len;
+  uint64_t hash;
+
+  if (len >= 32) {
+    const uint8_t* const limit = end - 32;
+    uint64_t v1 = seed + XXH_PRIME64_1 + XXH_PRIME64_2;
+    uint64_t v2 = seed + XXH_PRIME64_2;
+    uint64_t v3 = seed + 0;
+    uint64_t v4 = seed - XXH_PRIME64_1;
+
+    do {
+      v1 = xxh_round(v1, *(uint64_t*)p);
+      p += 8;
+      v2 = xxh_round(v2, *(uint64_t*)p);
+      p += 8;
+      v3 = xxh_round(v3, *(uint64_t*)p);
+      p += 8;
+      v4 = xxh_round(v4, *(uint64_t*)p);
+      p += 8;
+    } while (p <= limit);
+
+    hash = xxh_rotl64(v1, 1) + xxh_rotl64(v2, 7) + xxh_rotl64(v3, 12) +
+           xxh_rotl64(v4, 18);
+    hash ^= xxh_round(0, v1);
+    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash ^= xxh_round(0, v2);
+    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash ^= xxh_round(0, v3);
+    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash ^= xxh_round(0, v4);
+    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
   } else {
-    host->dllist_refs.next = *head;
-    (*head)->prev = &host->dllist_refs;
-    *head = &host->dllist_refs;
+    hash = seed + XXH_PRIME64_5;
+  }
+
+  hash += len;
+
+  while (p + 8 <= end) {
+    uint64_t k1 = xxh_round(0, *(uint64_t*)p);
+    hash ^= k1;
+    hash = xxh_rotl64(hash, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
+    p += 8;
+  }
+
+  if (p + 4 <= end) {
+    hash ^= (uint64_t)(*(uint32_t*)p) * XXH_PRIME64_1;
+    hash = xxh_rotl64(hash, 23) * XXH_PRIME64_2 + XXH_PRIME64_3;
+    p += 4;
+  }
+
+  while (p < end) {
+    hash ^= (*p) * XXH_PRIME64_5;
+    hash = xxh_rotl64(hash, 11) * XXH_PRIME64_1;
+    p++;
+  }
+
+  return xxh_avalanche(hash);
+}
+
+// Fast Fibonacci hashing for integers
+static inline size_t hash_int_fast(uint64_t key) {
+  return key * FIBONACCI_HASH_MULTIPLIER;
+}
+
+static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
+                                   ccol_data_type key_type,
+                                   ccol_hashing_proc_t custom_proc) {
+  if (custom_proc) {
+    return custom_proc(key_ptr);
+  }
+
+  // Use fast Fibonacci hashing for all integral types
+  switch (key_type) {
+    case ccol_char:
+    case ccol_unsigned_char:
+      return hash_int_fast(*(uint8_t*)key_ptr);
+    case ccol_short:
+    case ccol_unsigned_short:
+      return hash_int_fast(*(uint16_t*)key_ptr);
+    case ccol_int:
+    case ccol_unsigned_int:
+      return hash_int_fast(*(uint32_t*)key_ptr);
+    case ccol_long:
+    case ccol_unsigned_long:
+    case ccol_long_long:
+    case ccol_unsigned_long_long:
+      return hash_int_fast(*(uint64_t*)key_ptr);
+    case ccol_float: {
+      uint32_t bits;
+      memcpy(&bits, key_ptr, 4);
+      return hash_int_fast(bits);
+    }
+    case ccol_double: {
+      uint64_t bits;
+      memcpy(&bits, key_ptr, 8);
+      return hash_int_fast(bits);
+    }
+    default:
+      return xxhash64_buffer(key_ptr, key_size, 0);
   }
 }
 
-void detach_node_from_dllist(dllist_ref_node** head, chmap_entry* host) {
-  if (host->dllist_refs.next) {
-    host->dllist_refs.next->prev = host->dllist_refs.prev;
+/* ========================================================================== */
+/*                   OPEN ADDRESSING IMPLEMENTATION                           */
+/* ========================================================================== */
+
+static inline bool oa_keys_equal(const oa_slot* slot, const void* key_ptr,
+                                 size_t key_size) {
+  return memcmp(&slot->key_data, key_ptr, key_size) == 0;
+}
+
+static open_addr_map* oa_create(size_t capacity, ccol_data_type key_type,
+                                ccol_data_type val_type, size_t key_size,
+                                size_t val_size, ccol_memmgmt_procs_t* m_procs,
+                                ccol_hashing_proc_t custom_hashing_proc) {
+  open_addr_map* map =
+      (open_addr_map*)_mem_alloc(m_procs, sizeof(open_addr_map));
+  if (!map) return NULL;
+
+  map->slots = (oa_slot*)_mem_calloc(m_procs, capacity, sizeof(oa_slot));
+  if (!map->slots) {
+    _mem_free(m_procs, map);
+    return NULL;
   }
 
-  if (host->dllist_refs.prev) {
-    host->dllist_refs.prev->next = host->dllist_refs.next;
+  map->capacity = capacity;
+  map->count = 0;
+  map->deleted_count = 0;
+  map->key_size = key_size;
+  map->val_size = val_size;
+  map->m_procs = m_procs;
+  map->custom_hashing_proc = custom_hashing_proc;
+  map->key_type = key_type;
+  map->val_type = val_type;
+
+  return map;
+}
+
+static void oa_rehash(open_addr_map* map, size_t new_capacity) {
+  oa_slot* old_slots = map->slots;
+  size_t old_capacity = map->capacity;
+
+  map->slots =
+      (oa_slot*)_mem_calloc(map->m_procs, new_capacity, sizeof(oa_slot));
+  if (!map->slots) {
+    map->slots = old_slots;
+    return;
   }
 
-  if (*head == &host->dllist_refs) {
-    *head = host->dllist_refs.next;
+  map->capacity = new_capacity;
+  map->count = 0;
+  map->deleted_count = 0;
+
+  // Rehash all existing entries - recalculate hash since we don't store it
+  for (size_t i = 0; i < old_capacity; i++) {
+    if ((old_slots[i].metadata & SLOT_OCCUPIED) &&
+        !(old_slots[i].metadata & SLOT_DELETED)) {
+      size_t hash_val = hash_key_data(&old_slots[i].key_data, map->key_size,
+                                      map->key_type, map->custom_hashing_proc);
+      size_t index = hash_val % new_capacity;
+
+      // Prefetch likely next location
+      __builtin_prefetch(&map->slots[(index + 1) % new_capacity], 1, 1);
+
+      while (map->slots[index].metadata & SLOT_OCCUPIED) {
+        index = (index + 1) % new_capacity;
+        __builtin_prefetch(&map->slots[(index + 1) % new_capacity], 1, 1);
+      }
+
+      map->slots[index] = old_slots[i];
+      map->slots[index].metadata = SLOT_OCCUPIED;  // Clear deleted flag
+      map->count++;
+    }
+  }
+
+  _mem_free(map->m_procs, old_slots);
+}
+
+static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
+                               const cmap_pair* val_pair) {
+  double load_factor =
+      (double)(map->count + map->deleted_count) / map->capacity;
+  if (load_factor > OPEN_ADDR_MAX_LOAD_FACTOR) {
+    oa_rehash(map, map->capacity * 2);
+  }
+
+  // Set val_size on first insert to match actual value size
+  if (map->count == 0 && val_pair->size <= 8) {
+    map->val_size = val_pair->size;
+  }
+
+  size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
+                                  map->custom_hashing_proc);
+  size_t index = hash_val % map->capacity;
+  size_t start_index = index;
+  size_t first_deleted = map->capacity;
+
+  // Prefetch first location
+  __builtin_prefetch(&map->slots[index], 1, 1);
+
+  do {
+    // Prefetch next likely location
+    __builtin_prefetch(&map->slots[(index + 1) % map->capacity], 1, 1);
+
+    if (!(map->slots[index].metadata & SLOT_OCCUPIED)) {
+      if (first_deleted < map->capacity) {
+        index = first_deleted;
+        map->deleted_count--;
+      }
+
+      mem_zero(&map->slots[index].key_data, sizeof(uint64_t));
+      mem_zero(&map->slots[index].val_data, sizeof(uint64_t));
+      mem_cpy(&map->slots[index].key_data, key_pair->ptr, key_pair->size);
+      mem_cpy(&map->slots[index].val_data, val_pair->ptr, val_pair->size);
+      map->slots[index].metadata = SLOT_OCCUPIED;
+      map->count++;
+      return ccol_success;
+    }
+
+    if ((map->slots[index].metadata & SLOT_DELETED) &&
+        first_deleted == map->capacity) {
+      first_deleted = index;
+    }
+
+    if ((map->slots[index].metadata & SLOT_OCCUPIED) &&
+        !(map->slots[index].metadata & SLOT_DELETED) &&
+        oa_keys_equal(&map->slots[index], key_pair->ptr, key_pair->size)) {
+      mem_cpy(&map->slots[index].val_data, val_pair->ptr, val_pair->size);
+      return ccol_success;
+    }
+
+    index = (index + 1) % map->capacity;
+  } while (index != start_index);
+
+  return ccol_container_full;
+}
+
+static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
+                            cmap_pair** val_pair) {
+  size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
+                                  map->custom_hashing_proc);
+  size_t index = hash_val % map->capacity;
+  size_t start_index = index;
+
+  // Prefetch first location
+  __builtin_prefetch(&map->slots[index], 0, 1);
+
+  do {
+    // Prefetch next likely location
+    __builtin_prefetch(&map->slots[(index + 1) % map->capacity], 0, 1);
+
+    if (!(map->slots[index].metadata & SLOT_OCCUPIED) &&
+        !(map->slots[index].metadata & SLOT_DELETED)) {
+      return ccol_key_not_found;
+    }
+
+    if ((map->slots[index].metadata & SLOT_OCCUPIED) &&
+        !(map->slots[index].metadata & SLOT_DELETED) &&
+        oa_keys_equal(&map->slots[index], key_pair->ptr, key_pair->size)) {
+      static cmap_pair temp_pair;
+      temp_pair.ptr = &map->slots[index].val_data;
+      temp_pair.size = map->val_size;
+      *val_pair = &temp_pair;
+      return ccol_success;
+    }
+
+    index = (index + 1) % map->capacity;
+  } while (index != start_index);
+
+  return ccol_key_not_found;
+}
+
+static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
+  size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
+                                  map->custom_hashing_proc);
+  size_t index = hash_val % map->capacity;
+  size_t start_index = index;
+
+  do {
+    if (!(map->slots[index].metadata & SLOT_OCCUPIED) &&
+        !(map->slots[index].metadata & SLOT_DELETED)) {
+      return ccol_key_not_found;
+    }
+
+    if ((map->slots[index].metadata & SLOT_OCCUPIED) &&
+        !(map->slots[index].metadata & SLOT_DELETED) &&
+        oa_keys_equal(&map->slots[index], key_pair->ptr, key_pair->size)) {
+      map->slots[index].metadata |= SLOT_DELETED;
+      map->count--;
+      map->deleted_count++;
+
+      double load_factor = (double)map->count / map->capacity;
+      if (load_factor < OPEN_ADDR_MIN_LOAD_FACTOR &&
+          map->capacity > minimum_allowed_bucket_array_size) {
+        oa_rehash(map, map->capacity / 2);
+      }
+
+      return ccol_success;
+    }
+
+    index = (index + 1) % map->capacity;
+  } while (index != start_index);
+
+  return ccol_key_not_found;
+}
+
+static void oa_destroy(open_addr_map* map) {
+  if (map) {
+    _mem_free(map->m_procs, map->slots);
+    _mem_free(map->m_procs, map);
   }
 }
 
-void destroy_chmap_entry(dllist_ref_node** head_of_all_elems,
-                         chmap_entry* elem) {
+static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
+  if (new_capacity == 0) {
+    new_capacity = map->capacity;
+  }
+
+  _mem_free(map->m_procs, map->slots);
+  map->slots =
+      (oa_slot*)_mem_calloc(map->m_procs, new_capacity, sizeof(oa_slot));
+  if (!map->slots) {
+    return ccol_not_enough_memory;
+  }
+
+  map->capacity = new_capacity;
+  map->count = 0;
+  map->deleted_count = 0;
+
+  return ccol_success;
+}
+
+/* ========================================================================== */
+/*              SEPARATE CHAINING IMPLEMENTATION                              */
+/* ========================================================================== */
+
+#define dllistRefNodePtr2LlistNodePtr(tracker) \
+  (llist_node*)((uint8_t*)tracker - offsetof(llist_node, dllist_refs))
+
+static void attach_node_to_dllist(dllist_ref_node** head,
+                                  dllist_ref_node* node) {
+  node->prev = NULL;
+  if (!(*head)) {
+    node->next = NULL;
+    *head = node;
+  } else {
+    node->next = *head;
+    (*head)->prev = node;
+    *head = node;
+  }
+}
+
+static void detach_node_from_dllist(dllist_ref_node** head,
+                                    dllist_ref_node* node) {
+  if (node->next) {
+    node->next->prev = node->prev;
+  }
+  if (node->prev) {
+    node->prev->next = node->next;
+  }
+  if (*head == node) {
+    *head = node->next;
+  }
+}
+
+static void sc_destroy_llist_node(dllist_ref_node** head_of_all_elems,
+                                  llist_node* elem) {
   if (elem) {
-    if (elem->key_pair.ptr) {
-      _mem_free(elem->m_procs, elem->key_pair.ptr);
+    if (!elem->data.key_is_inline && elem->data.key_storage.ptr) {
+      _mem_free(elem->m_procs, elem->data.key_storage.ptr);
     }
-
-    if (elem->val_pair.ptr) {
-      _mem_free(elem->m_procs, elem->val_pair.ptr);
+    if (!elem->data.val_is_inline && elem->data.val_storage.ptr) {
+      _mem_free(elem->m_procs, elem->data.val_storage.ptr);
     }
-
     if (head_of_all_elems) {
-      detach_node_from_dllist(head_of_all_elems, elem);
+      detach_node_from_dllist(head_of_all_elems, &elem->dllist_refs);
     }
-
     if (elem->m_procs) {
       ccol_memmgmt_procs_free_t free_func = elem->m_procs->free;
-      // IMPORTANT NOTICE: The member field elem->m_procs is a mere reference
-      // pointer, don't free it.
       free_func(elem);
     } else {
       mem_free(elem);
@@ -131,460 +625,514 @@ void destroy_chmap_entry(dllist_ref_node** head_of_all_elems,
   }
 }
 
-typedef struct reduced_chmap_entry {
-  chmap chm;
-  const cmap_pair* key_pair;
-  const cmap_pair* val_pair;
-  size_t hash_val;
-} reduced_chmap_entry;
+static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
+                                        chmap_entry* data, const void* key_ptr,
+                                        const void* val_ptr) {
+  llist_node* new_elem =
+      (llist_node*)_mem_calloc(data->m_procs, 1, sizeof(llist_node));
+  if (!new_elem) return NULL;
 
-struct chashmap {
-  size_t elem_count;
-  size_t bucket_arr_size;
-  size_t elem_count_to_scale_up;
-  size_t elem_count_to_scale_down;
-  cbmap* bucket_arr;
-  dllist_ref_node* head_of_all_elems;
-  ccol_memmgmt_procs_t* m_procs;
-  ccol_hashing_proc_t custom_hashing_proc;
-};
+  new_elem->m_procs = data->m_procs;
+  new_elem->data.m_procs = data->m_procs;
+  new_elem->data.hash_val = data->hash_val;
+  new_elem->data.key_size = data->key_size;
 
-chmap_entry* create_chmap_entry(reduced_chmap_entry* inp) {
-  chmap_entry* elem =
-      (chmap_entry*)_mem_calloc(inp->chm->m_procs, 1, sizeof(chmap_entry));
-  if (!elem) {
-    return NULL;
+  if (data->key_size <= INLINE_STORAGE_THRESHOLD) {
+    new_elem->data.key_is_inline = true;
+    mem_cpy(&new_elem->data.key_storage.inline_data, key_ptr, data->key_size);
+    new_elem->key_pair_accessor.ptr = &new_elem->data.key_storage.inline_data;
+    new_elem->key_pair_accessor.size = data->key_size;
+  } else {
+    new_elem->data.key_is_inline = false;
+    new_elem->data.key_storage.ptr = _mem_alloc(data->m_procs, data->key_size);
+    if (!new_elem->data.key_storage.ptr) {
+      sc_destroy_llist_node(head_of_all_elems, new_elem);
+      return NULL;
+    }
+    mem_cpy(new_elem->data.key_storage.ptr, key_ptr, data->key_size);
+    new_elem->key_pair_accessor.ptr = new_elem->data.key_storage.ptr;
+    new_elem->key_pair_accessor.size = data->key_size;
   }
 
-  elem->key_pair.ptr = _mem_alloc(inp->chm->m_procs, inp->key_pair->size);
-  if (!elem->key_pair.ptr) {
-    destroy_chmap_entry(&inp->chm->head_of_all_elems, elem);
-    return NULL;
+  new_elem->data.val_size = data->val_size;
+  if (data->val_size <= INLINE_STORAGE_THRESHOLD) {
+    new_elem->data.val_is_inline = true;
+    mem_cpy(&new_elem->data.val_storage.inline_data, val_ptr, data->val_size);
+    new_elem->val_pair_accessor.ptr = &new_elem->data.val_storage.inline_data;
+    new_elem->val_pair_accessor.size = data->val_size;
+  } else {
+    new_elem->data.val_is_inline = false;
+    new_elem->data.val_storage.ptr = _mem_alloc(data->m_procs, data->val_size);
+    if (!new_elem->data.val_storage.ptr) {
+      sc_destroy_llist_node(head_of_all_elems, new_elem);
+      return NULL;
+    }
+    mem_cpy(new_elem->data.val_storage.ptr, val_ptr, data->val_size);
+    new_elem->val_pair_accessor.ptr = new_elem->data.val_storage.ptr;
+    new_elem->val_pair_accessor.size = data->val_size;
   }
 
-  elem->val_pair.ptr = _mem_alloc(inp->chm->m_procs, inp->val_pair->size);
-  if (!elem->val_pair.ptr) {
-    destroy_chmap_entry(&inp->chm->head_of_all_elems, elem);
-    return NULL;
-  }
-
-  elem->key_pair.size = inp->key_pair->size;
-  memcpy(elem->key_pair.ptr, inp->key_pair->ptr, inp->key_pair->size);
-  elem->val_pair.size = inp->val_pair->size;
-  memcpy(elem->val_pair.ptr, inp->val_pair->ptr, inp->val_pair->size);
-  elem->hash_val = inp->hash_val;
-  attach_node_to_dllist(&inp->chm->head_of_all_elems, elem);
-
-  return elem;
+  attach_node_to_dllist(head_of_all_elems, &new_elem->dllist_refs);
+  new_elem->next = NULL;
+  return new_elem;
 }
 
-bool reset_val_of_chmap_entry(chmap_entry* elem, const cmap_pair* val_pair) {
-  if (elem->val_pair.size == val_pair->size) {
-    // The new value has the same size
-    mem_assign(elem->val_pair.ptr, val_pair->ptr, val_pair->size);
-    return true;
-  }
+static inline bool sc_compare_keys(const llist_node* node, const void* key_ptr,
+                                   size_t key_size) {
+  if (node->data.key_size != key_size) return false;
 
-  // Sizes do not match, trying to reallocate.
-  void* orig_buf = elem->val_pair.ptr;
-  elem->val_pair.ptr =
-      _mem_realloc(elem->m_procs, elem->val_pair.ptr, val_pair->size);
-  if (!elem->val_pair.ptr) {
-    // Failed to reallocate.
-    elem->val_pair.ptr = orig_buf;
-    return false;
-  }
+  const void* node_key_ptr =
+      node->data.key_is_inline
+          ? (const void*)&node->data.key_storage.inline_data
+          : (const void*)node->data.key_storage.ptr;
 
-  // Buffer reallocated, all is good.
-  mem_assign(elem->val_pair.ptr, val_pair->ptr, val_pair->size);
-  elem->val_pair.size = val_pair->size;
-  return true;
+  if (key_size == sizeof(int)) {
+    return *(unsigned int*)node_key_ptr == *(unsigned int*)key_ptr;
+  } else if (key_size == sizeof(long)) {
+    return *(unsigned long*)node_key_ptr == *(unsigned long*)key_ptr;
+  } else {
+    return memcmp(node_key_ptr, key_ptr, key_size) == 0;
+  }
 }
 
-bool insert_elem_into_bucket(cbmap* bucket, reduced_chmap_entry* inp) {
-  if (!*bucket) {
-    *bucket = cbmap_create_mp(false, inp->chm->m_procs, NULL);
-    if (!bucket) {
-      return false;
+static llist_node* sc_find_in_llist(llist_node* head, const void* key_ptr,
+                                    size_t key_size) {
+  llist_node* tracker = head;
+  while (tracker) {
+    if (sc_compare_keys(tracker, key_ptr, key_size)) {
+      return tracker;
     }
+    tracker = tracker->next;
   }
-
-  chmap_entry* elem = create_chmap_entry(inp);
-  if (!elem) {
-    if (cbmap_elem_count(*bucket) == 0) {
-      cbmap_destroy(*bucket);
-    }
-    return false;
-  }
-
-  cmap_pair v_pair = {.ptr = &elem, .size = sizeof(elem)};
-  ccol_retval_t r = cbmap_insert_elem(*bucket, inp->key_pair, &v_pair);
-  if (r != ccol_success) {
-    destroy_chmap_entry(&inp->chm->head_of_all_elems, elem);
-    if (cbmap_elem_count(*bucket) == 0) {
-      cbmap_destroy(*bucket);
-    }
-    return false;
-  }
-
-  return true;
-}
-
-chmap_entry* find_elem_in_bucket(cbmap bucket, const cmap_pair* key_pair) {
-  if (!bucket) {
-    return NULL;
-  }
-
-  cmap_pair* v_pair;
-
-  ccol_retval_t r = cbmap_get_elem_ref(bucket, key_pair, &v_pair);
-  if (r == ccol_success) {
-    return *(chmap_entry**)v_pair->ptr;
-  }
-
   return NULL;
 }
 
-bool delete_elem_from_bucket(cbmap* bucket, const cmap_pair* key_pair,
-                             dllist_ref_node** head_of_all_elems) {
-  if (!*bucket) {
-    return false;
-  }
-
-  cmap_pair* v_pair;
-
-  ccol_retval_t r = cbmap_get_elem_ref(*bucket, key_pair, &v_pair);
-  if (r == ccol_success) {
-    chmap_entry* elem = *(chmap_entry**)v_pair->ptr;
-    cbmap_delete_elem(*bucket, key_pair);
-    destroy_chmap_entry(head_of_all_elems, elem);
-
-    if (cbmap_elem_count(*bucket) == 0) {
-      cbmap_destroy(*bucket);
+static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
+                                       size_t val_size) {
+  if (val_size == elem->data.val_size) {
+    if (elem->data.val_is_inline) {
+      mem_cpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
+    } else {
+      mem_cpy(elem->data.val_storage.ptr, val_ptr, val_size);
     }
-
+    return true;
+  } else if (val_size <= INLINE_STORAGE_THRESHOLD) {
+    if (!elem->data.val_is_inline) {
+      _mem_free(elem->m_procs, elem->data.val_storage.ptr);
+    }
+    elem->data.val_is_inline = true;
+    elem->data.val_size = val_size;
+    mem_cpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
+    elem->val_pair_accessor.ptr = &elem->data.val_storage.inline_data;
+    elem->val_pair_accessor.size = val_size;
+    return true;
+  } else {
+    if (elem->data.val_is_inline) {
+      elem->data.val_storage.ptr = _mem_alloc(elem->m_procs, val_size);
+      if (!elem->data.val_storage.ptr) return false;
+      elem->data.val_is_inline = false;
+    } else {
+      void* orig = elem->data.val_storage.ptr;
+      elem->data.val_storage.ptr =
+          _mem_realloc(elem->m_procs, elem->data.val_storage.ptr, val_size);
+      if (!elem->data.val_storage.ptr) {
+        elem->data.val_storage.ptr = orig;
+        return false;
+      }
+    }
+    mem_cpy(elem->data.val_storage.ptr, val_ptr, val_size);
+    elem->data.val_size = val_size;
+    elem->val_pair_accessor.ptr = elem->data.val_storage.ptr;
+    elem->val_pair_accessor.size = val_size;
     return true;
   }
-
-  return false;
 }
 
-bool copy_chmap_entry_into_bucket(chmap_entry* elem, cbmap* dst) {
-  if (!*dst) {
-    *dst = cbmap_create_mp(false, elem->m_procs, NULL);
-    if (!*dst) {
-      return false;
+static llist_node* sc_delete_from_llist(llist_node* head,
+                                        dllist_ref_node** head_of_all_elems,
+                                        const void* key_ptr, size_t key_size,
+                                        bool* found) {
+  *found = false;
+  llist_node* tracker = head;
+  llist_node* previous = NULL;
+
+  while (tracker) {
+    if (sc_compare_keys(tracker, key_ptr, key_size)) {
+      *found = true;
+      if (!previous) {
+        head = tracker->next;
+      } else {
+        previous->next = tracker->next;
+      }
+      sc_destroy_llist_node(head_of_all_elems, tracker);
+      return head;
+    }
+    previous = tracker;
+    tracker = tracker->next;
+  }
+  return head;
+}
+
+static llist_node* sc_destroy_the_whole_llist(
+    llist_node* head, dllist_ref_node** head_of_all_elems) {
+  llist_node* tracker = head;
+  while (tracker) {
+    llist_node* node_to_be_deleted = tracker;
+    tracker = tracker->next;
+    sc_destroy_llist_node(head_of_all_elems, node_to_be_deleted);
+  }
+  return NULL;
+}
+
+static void sc_set_scaling_limits(sep_chain_map* map) {
+  map->elem_count_to_scale_up = (map->bucket_arr_size) * 6 / 4;
+  map->elem_count_to_scale_down = (map->bucket_arr_size) / 8;
+}
+
+static void sc_scale(sep_chain_map* map, bool up) {
+  size_t new_size = up ? map->bucket_arr_size * scale_factor
+                       : map->bucket_arr_size / scale_factor;
+
+  llist_node** new_arr =
+      (llist_node**)_mem_calloc(map->m_procs, new_size, sizeof(llist_node*));
+  if (!new_arr) return;
+
+  for (size_t i = 0; i < map->bucket_arr_size; i++) {
+    llist_node* tracker = map->bucket_arr[i];
+    while (tracker) {
+      llist_node* next = tracker->next;
+      size_t new_index = tracker->data.hash_val & (new_size - 1);
+      tracker->next = new_arr[new_index];
+      new_arr[new_index] = tracker;
+      tracker = next;
     }
   }
 
-  cmap_pair val_pair = {.ptr = &elem, .size = sizeof(elem)};
-  return (ccol_success == cbmap_insert_elem(*dst, &elem->key_pair, &val_pair));
+  _mem_free(map->m_procs, map->bucket_arr);
+  map->bucket_arr = new_arr;
+  map->bucket_arr_size = new_size;
+  sc_set_scaling_limits(map);
 }
 
-void destroy_the_whole_bucket(cbmap* bucket,
-                              dllist_ref_node** head_of_all_elems) {
-  if (!*bucket) {
-    return;
+static sep_chain_map* sc_create(size_t bucket_arr_size, ccol_data_type key_type,
+                                ccol_data_type val_type,
+                                ccol_memmgmt_procs_t* m_procs,
+                                ccol_hashing_proc_t custom_hashing_proc) {
+  sep_chain_map* map =
+      (sep_chain_map*)_mem_alloc(m_procs, sizeof(sep_chain_map));
+  if (!map) return NULL;
+
+  map->bucket_arr =
+      (llist_node**)_mem_calloc(m_procs, bucket_arr_size, sizeof(llist_node*));
+  if (!map->bucket_arr) {
+    _mem_free(m_procs, map);
+    return NULL;
   }
 
-  for (cmap_iterator* iter = cbmap_begin_iter(*bucket, NULL); iter;
-       iter = cbmap_iter_next(iter)) {
-    destroy_chmap_entry(head_of_all_elems, *(chmap_entry**)iter->val_pair->ptr);
+  map->bucket_arr_size = bucket_arr_size;
+  map->elem_count = 0;
+  map->key_type = key_type;
+  map->val_type = val_type;
+  map->head_of_all_elems = NULL;
+  map->m_procs = m_procs;
+  map->custom_hashing_proc = custom_hashing_proc;
+  sc_set_scaling_limits(map);
+
+  return map;
+}
+
+static ccol_retval_t sc_insert(sep_chain_map* map, const cmap_pair* key_pair,
+                               const cmap_pair* val_pair) {
+  if (map->elem_count == max_elem_count) {
+    return ccol_container_full;
   }
 
-  cbmap_destroy(*bucket);
+  chmap_entry data = {
+      .hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
+                                map->custom_hashing_proc),
+      .key_size = key_pair->size,
+      .val_size = val_pair->size,
+      .m_procs = map->m_procs};
+
+  size_t index = data.hash_val & (map->bucket_arr_size - 1);
+
+  llist_node* existing =
+      sc_find_in_llist(map->bucket_arr[index], key_pair->ptr, key_pair->size);
+  if (existing) {
+    return sc_reset_val_of_llist_node(existing, val_pair->ptr, val_pair->size)
+               ? ccol_success
+               : ccol_not_enough_memory;
+  }
+
+  llist_node* new_node = sc_create_llist_node(&map->head_of_all_elems, &data,
+                                              key_pair->ptr, val_pair->ptr);
+  if (!new_node) {
+    return ccol_not_enough_memory;
+  }
+
+  new_node->next = map->bucket_arr[index];
+  map->bucket_arr[index] = new_node;
+
+  if (++map->elem_count >= map->elem_count_to_scale_up) {
+    sc_scale(map, true);
+  }
+
+  return ccol_success;
 }
 
-void set_chmap_scaling_limits(chmap chm) {
-  chm->elem_count_to_scale_up = (chm->bucket_arr_size + 1) * 6 / 4;
-  chm->elem_count_to_scale_down = (chm->bucket_arr_size + 1) / 8;
+static ccol_retval_t sc_get(sep_chain_map* map, const cmap_pair* key_pair,
+                            cmap_pair** val_pair) {
+  size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
+                                  map->custom_hashing_proc);
+  size_t index = hash_val & (map->bucket_arr_size - 1);
+
+  llist_node* node =
+      sc_find_in_llist(map->bucket_arr[index], key_pair->ptr, key_pair->size);
+  if (node) {
+    *val_pair = &node->val_pair_accessor;
+    return ccol_success;
+  }
+  return ccol_key_not_found;
 }
+
+static ccol_retval_t sc_delete(sep_chain_map* map, const cmap_pair* key_pair) {
+  size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
+                                  map->custom_hashing_proc);
+  size_t index = hash_val & (map->bucket_arr_size - 1);
+
+  bool found = false;
+  map->bucket_arr[index] =
+      sc_delete_from_llist(map->bucket_arr[index], &map->head_of_all_elems,
+                           key_pair->ptr, key_pair->size, &found);
+
+  if (found) {
+    if (--map->elem_count < map->elem_count_to_scale_down &&
+        map->bucket_arr_size >= minimum_scale_down_threshold) {
+      sc_scale(map, false);
+    }
+    return ccol_success;
+  }
+  return ccol_key_not_found;
+}
+
+static void sc_destroy(sep_chain_map* map) {
+  if (map) {
+    for (size_t i = 0; i < map->bucket_arr_size; i++) {
+      sc_destroy_the_whole_llist(map->bucket_arr[i], &map->head_of_all_elems);
+    }
+    _mem_free(map->m_procs, map->bucket_arr);
+    _mem_free(map->m_procs, map);
+  }
+}
+
+static ccol_retval_t sc_reset(sep_chain_map* map,
+                              size_t new_bucket_array_size) {
+  for (size_t i = 0; i < map->bucket_arr_size; i++) {
+    sc_destroy_the_whole_llist(map->bucket_arr[i], &map->head_of_all_elems);
+  }
+
+  if (new_bucket_array_size > 0 &&
+      new_bucket_array_size != map->bucket_arr_size) {
+    llist_node** orig = map->bucket_arr;
+    map->bucket_arr = _mem_realloc(map->m_procs, map->bucket_arr,
+                                   new_bucket_array_size * sizeof(llist_node*));
+    if (!map->bucket_arr) {
+      map->bucket_arr = orig;
+      memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
+      map->elem_count = 0;
+      return ccol_not_enough_memory;
+    }
+    map->bucket_arr_size = new_bucket_array_size;
+  }
+
+  memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
+  map->elem_count = 0;
+  sc_set_scaling_limits(map);
+
+  return ccol_success;
+}
+
+/* ========================================================================== */
+/*                    ITERATOR STRUCTURES                                     */
+/* ========================================================================== */
+
+typedef struct chmap_cmap_iterator {
+  chmap parent_map;
+  union {
+    dllist_ref_node* sc_tracker;
+    size_t oa_index;
+  } iter;
+  cmap_iterator user_iter;
+} chmap_cmap_iterator;
+
+#define cmapIter2ChmapIter(u_iter)          \
+  (chmap_cmap_iterator*)((uint8_t*)u_iter - \
+                         offsetof(chmap_cmap_iterator, user_iter))
+
+/* ========================================================================== */
+/*                         HELPER FUNCTIONS                                   */
+/* ========================================================================== */
 
 #define POWERS_OF_TWO_LEN 64
-size_t uint64_powers_of_two[POWERS_OF_TWO_LEN] = {
-    1,
-    2,
-    4,
-    8,
-    16,
-    32,
-    64,
-    128,
-    256,
-    512,
-    1024,
-    2048,
-    4096,
-    8192,
-    16384,
-    32768,
-    65536,
-    131072,
-    262144,
-    524288,
-    1048576,
-    2097152,
-    4194304,
-    8388608,
-    16777216,
-    33554432,
-    67108864,
-    134217728,
-    268435456,
-    536870912,
-    1073741824,
-    2147483648,
-    4294967296,
-    8589934592,
-    17179869184,
-    34359738368,
-    68719476736,
-    137438953472,
-    274877906944,
-    549755813888,
-    1099511627776,
-    2199023255552,
-    4398046511104,
-    8796093022208,
-    17592186044416,
-    35184372088832,
-    70368744177664,
-    140737488355328,
-    281474976710656,
-    562949953421312,
-    1125899906842624,
-    2251799813685248,
-    4503599627370496,
-    9007199254740992,
-    18014398509481984,
-    36028797018963968,
-    72057594037927936,
-    144115188075855872,
-    288230376151711744,
-    576460752303423488,
-    1152921504606846976,
-    2305843009213693952,
-    4611686018427387904,
-    9223372036854775808UL};  // 18446744073709551616 exceeds 64 bits
+static size_t uint64_powers_of_two[POWERS_OF_TWO_LEN] = {
+    1ULL,
+    2ULL,
+    4ULL,
+    8ULL,
+    16ULL,
+    32ULL,
+    64ULL,
+    128ULL,
+    256ULL,
+    512ULL,
+    1024ULL,
+    2048ULL,
+    4096ULL,
+    8192ULL,
+    16384ULL,
+    32768ULL,
+    65536ULL,
+    131072ULL,
+    262144ULL,
+    524288ULL,
+    1048576ULL,
+    2097152ULL,
+    4194304ULL,
+    8388608ULL,
+    16777216ULL,
+    33554432ULL,
+    67108864ULL,
+    134217728ULL,
+    268435456ULL,
+    536870912ULL,
+    1073741824ULL,
+    2147483648ULL,
+    4294967296ULL,
+    8589934592ULL,
+    17179869184ULL,
+    34359738368ULL,
+    68719476736ULL,
+    137438953472ULL,
+    274877906944ULL,
+    549755813888ULL,
+    1099511627776ULL,
+    2199023255552ULL,
+    4398046511104ULL,
+    8796093022208ULL,
+    17592186044416ULL,
+    35184372088832ULL,
+    70368744177664ULL,
+    140737488355328ULL,
+    281474976710656ULL,
+    562949953421312ULL,
+    1125899906842624ULL,
+    2251799813685248ULL,
+    4503599627370496ULL,
+    9007199254740992ULL,
+    18014398509481984ULL,
+    36028797018963968ULL,
+    72057594037927936ULL,
+    144115188075855872ULL,
+    288230376151711744ULL,
+    576460752303423488ULL,
+    1152921504606846976ULL,
+    2305843009213693952ULL,
+    4611686018427387904ULL,
+    9223372036854775808ULL};
 
-// Kind of a "pow(2, ceil(log2(input)))" without the math library.
 size_t find_nearest_gte_power_of_two(size_t input) {
-  int left = 0;
-  int right = POWERS_OF_TWO_LEN - 1;
-  int middle = (left + right) / 2;
-
-  if (input <= uint64_powers_of_two[0]) {
-    return uint64_powers_of_two[0];
-  }
-
-  if (input >= uint64_powers_of_two[POWERS_OF_TWO_LEN - 1]) {
-    return uint64_powers_of_two[POWERS_OF_TWO_LEN - 1];
-  }
-
-  size_t result = 0;
-
-  while (left < right) {
-    if (uint64_powers_of_two[middle] == input ||
-        (middle > 0 && uint64_powers_of_two[middle - 1] < input &&
-         input < uint64_powers_of_two[middle])) {
-      result = uint64_powers_of_two[middle];
-      break;
-    } else if (middle < (POWERS_OF_TWO_LEN - 1) &&
-               uint64_powers_of_two[middle] < input &&
-               input <= uint64_powers_of_two[middle + 1]) {
-      result = uint64_powers_of_two[middle + 1];
-      break;
+  for (int i = 0; i < POWERS_OF_TWO_LEN; i++) {
+    if (uint64_powers_of_two[i] >= input) {
+      return uint64_powers_of_two[i];
     }
-
-    if (input < uint64_powers_of_two[middle]) {
-      right = middle;
-    } else {
-      left = middle;
-    }
-
-    middle = (left + right) / 2;
   }
-
-  return result;
+  return uint64_powers_of_two[POWERS_OF_TWO_LEN - 1];
 }
 
-bool verify_chmap_create_inputs(size_t initial_bucket_array_size,
-                                ccol_memmgmt_procs_t* mmgmt_procs, char** err) {
+/* ========================================================================== */
+/*                         UNIFIED API IMPLEMENTATION                         */
+/* ========================================================================== */
+
+chmap chmap_create_full(size_t initial_bucket_array_size,
+                        ccol_data_type key_type, ccol_data_type val_type,
+                        ccol_memmgmt_procs_t* mmgmt_procs,
+                        ccol_hashing_proc_t custom_hashing_proc, char** err) {
   if (initial_bucket_array_size == 0) {
-    if (err) {
-      *err = CCOL_ERR_STR("The initial bucket size is zero");
-    }
-    return false;
+    if (err) *err = CCOL_ERR_STR("initial_bucket_array_size is zero");
+    return NULL;
   }
 
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
-    return false;
+    return NULL;
   }
 
-  return true;
-}
-
-chmap chmap_create_full(size_t initial_bucket_array_size,
-                        ccol_memmgmt_procs_t* mmgmt_procs,
-                        ccol_hashing_proc_t custom_hashing_proc, char** err) {
-  if (!verify_chmap_create_inputs(initial_bucket_array_size, mmgmt_procs,
-                                  err)) {
+  chmap chm = (chmap)_mem_alloc(mmgmt_procs, sizeof(struct chashmap));
+  if (!chm) {
+    if (err) *err = CCOL_ERR_STR("Failed to allocate chashmap");
     return NULL;
   }
 
   if (initial_bucket_array_size <= minimum_allowed_bucket_array_size) {
-    initial_bucket_array_size = minimum_allowed_bucket_array_size - 1;
+    initial_bucket_array_size = minimum_allowed_bucket_array_size;
   } else {
     initial_bucket_array_size =
-        find_nearest_gte_power_of_two(initial_bucket_array_size) - 1;
+        find_nearest_gte_power_of_two(initial_bucket_array_size);
   }
 
-  chmap chm = (chmap)_mem_alloc(mmgmt_procs, sizeof(chashmap));
-  if (!chm) {
-    if (err) {
-      *err = CCOL_ERR_STR("Failed to allocate buffer");
+  if (should_use_open_addressing(key_type, val_type)) {
+    chm->impl_type = IMPL_OPEN_ADDRESSING;
+
+    size_t key_size = get_type_size(key_type);
+    size_t val_size = get_type_size(val_type);
+
+    ccol_memmgmt_procs_t* procs_copy = NULL;
+    if (mmgmt_procs) {
+      procs_copy = (ccol_memmgmt_procs_t*)_mem_alloc(
+          mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      if (!procs_copy) {
+        if (err) *err = CCOL_ERR_STR("Failed to allocate m_procs");
+        _mem_free(mmgmt_procs, chm);
+        return NULL;
+      }
+      memcpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
     }
-    return NULL;
-  }
 
-  if (!ccol_populate_mem_mgmt_procs(chm, mmgmt_procs, err)) {
-    _mem_free(mmgmt_procs, chm);
-    return NULL;
-  }
-
-  chm->bucket_arr_size = initial_bucket_array_size;
-  chm->elem_count = 0;
-  chm->head_of_all_elems = NULL;
-  set_chmap_scaling_limits(chm);
-  chm->custom_hashing_proc = custom_hashing_proc;
-
-  chm->bucket_arr = (cbmap*)_mem_calloc(mmgmt_procs, initial_bucket_array_size,
-                                        sizeof(cbmap));
-  if (!chm->bucket_arr) {
-    // Failed to allocate buffer for bucket_arr
-    if (err) {
-      *err = CCOL_ERR_STR("Failed to allocate bucket_arr");
-    }
-    _mem_free(mmgmt_procs, chm->m_procs);
-    _mem_free(mmgmt_procs, chm);
-    return NULL;
-  }
-
-  if (err) {
-    *err = NULL;
-  }
-
-  return chm;
-}
-
-static inline size_t calculate_bucket_index(chmap chm,
-                                            const cmap_pair* key_pair,
-                                            size_t* hash_ptr) {
-  size_t id = 0;
-
-  if (!chm->custom_hashing_proc) {
-    unsigned char* c_key_ptr = (unsigned char*)key_pair->ptr;
-    size_t size = key_pair->size;
-
-    // DJB2
-    id = 5381;
-    for (size_t i = 0; i < size; ++i) {
-      id = ((id << 5) + id) + c_key_ptr[i];
+    chm->impl.oa_map =
+        oa_create(initial_bucket_array_size, key_type, val_type, key_size,
+                  val_size, procs_copy, custom_hashing_proc);
+    if (!chm->impl.oa_map) {
+      if (err) *err = CCOL_ERR_STR("Failed to create open addressing map");
+      if (procs_copy) _mem_free(mmgmt_procs, procs_copy);
+      _mem_free(mmgmt_procs, chm);
+      return NULL;
     }
   } else {
-    id = chm->custom_hashing_proc(key_pair->ptr);
-  }
+    chm->impl_type = IMPL_SEPARATE_CHAINING;
 
-  if (hash_ptr) {
-    *hash_ptr = id;
-  }
-
-  size_t index = (id % chm->bucket_arr_size);
-
-  return index;
-}
-
-#ifdef RUNNING_UNIT_TESTS
-size_t chmap_get_bucket_arr_size(chmap chm) {
-  if (!chm) {
-    return 0;
-  }
-
-  return chm->bucket_arr_size;
-}
-
-size_t chmap_get_elem_count_to_scale_up(chmap chm) {
-  if (!chm) {
-    return 0;
-  }
-
-  return chm->elem_count_to_scale_up;
-}
-
-size_t chmap_get_elem_count_to_scale_down(chmap chm) {
-  if (!chm) {
-    return 0;
-  }
-
-  return chm->elem_count_to_scale_down;
-}
-#endif
-
-void dump_cmap_pair(const cmap_pair* pair) {
-  for (size_t i = 0; i < pair->size; ++i) {
-    printf("%02x ", ((char*)pair->ptr)[i]);
-  }
-  printf("\n");
-}
-
-void scale_chmap(chmap chm, bool up) {
-  size_t new_arr_size = (chm->bucket_arr_size + 1) * scale_factor - 1;
-  if (!up) {
-    new_arr_size = (chm->bucket_arr_size + 1) / scale_factor - 1;
-  }
-
-  cbmap* new_bucket_arr;
-  new_bucket_arr =
-      (cbmap**)_mem_calloc(chm->m_procs, new_arr_size, sizeof(cbmap));
-  if (!new_bucket_arr) {
-    // We don't have enough memory to scale, return.
-    return;
-  }
-  // We have enough memory, at least for now.
-
-  bool all_went_well = true;
-  for (size_t i = 0; all_went_well && (i < chm->bucket_arr_size); ++i) {
-    if (chm->bucket_arr[i]) {
-      cmap_iterator* iter = cbmap_begin_iter(chm->bucket_arr[i], NULL);
-      for (; iter; iter = cbmap_iter_next(iter)) {
-        chmap_entry* elem = *(chmap_entry**)iter->val_pair->ptr;
-        size_t new_index = elem->hash_val % new_arr_size;
-        if (!copy_chmap_entry_into_bucket(elem, &new_bucket_arr[new_index])) {
-          // We faced a failure, set all_went_well
-          // to false to go for a rollback below.
-          all_went_well = false;
-          break;
-        }
+    ccol_memmgmt_procs_t* procs_copy = NULL;
+    if (mmgmt_procs) {
+      procs_copy = (ccol_memmgmt_procs_t*)_mem_alloc(
+          mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      if (!procs_copy) {
+        if (err) *err = CCOL_ERR_STR("Failed to allocate m_procs");
+        _mem_free(mmgmt_procs, chm);
+        return NULL;
       }
+      memcpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+    }
+
+    chm->impl.sc_map = sc_create(initial_bucket_array_size, key_type, val_type,
+                                 procs_copy, custom_hashing_proc);
+    if (!chm->impl.sc_map) {
+      if (err) *err = CCOL_ERR_STR("Failed to create separate chaining map");
+      if (procs_copy) _mem_free(mmgmt_procs, procs_copy);
+      _mem_free(mmgmt_procs, chm);
+      return NULL;
     }
   }
 
-  if (!all_went_well) {
-    for (size_t i = 0; i < new_arr_size; ++i) {
-      cbmap_destroy(new_bucket_arr[i]);
-    }
-    _mem_free(chm->m_procs, new_bucket_arr);
-    return;
-  }
-
-  for (size_t i = 0; i < chm->bucket_arr_size; ++i) {
-    cbmap_destroy(chm->bucket_arr[i]);
-  }
-  _mem_free(chm->m_procs, chm->bucket_arr);
-
-  chm->bucket_arr = new_bucket_arr;
-  chm->bucket_arr_size = new_arr_size;
-  set_chmap_scaling_limits(chm);
+  if (err) *err = NULL;
+  return chm;
 }
 
 ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
@@ -594,59 +1142,11 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
     return ccol_invalid_args;
   }
 
-  if (chm->elem_count == max_elem_count) {
-    return ccol_container_full;
-  }
-
-  bool result = false;
-
-  size_t hash_val = 0;
-  size_t index = calculate_bucket_index(chm, key_pair, &hash_val);
-  chmap_entry* r = find_elem_in_bucket(chm->bucket_arr[index], key_pair);
-  if (r) {
-    // The entry already exists
-    result = reset_val_of_chmap_entry(r, val_pair);
+  if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
+    return oa_insert(chm->impl.oa_map, key_pair, val_pair);
   } else {
-    // This key does not exist,
-    // we need to insert a new entry
-    reduced_chmap_entry inp = {.chm = chm,
-                               .hash_val = hash_val,
-                               .key_pair = key_pair,
-                               .val_pair = val_pair};
-    result = insert_elem_into_bucket(&chm->bucket_arr[index], &inp);
-    if (result) {
-      if (++chm->elem_count >= chm->elem_count_to_scale_up) {
-        // Time to scale up!
-        scale_chmap(chm, true);
-      }
-    }
+    return sc_insert(chm->impl.sc_map, key_pair, val_pair);
   }
-
-  return result ? ccol_success : ccol_not_enough_memory;
-}
-
-ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
-                                  void* target_buf, size_t target_buf_size) {
-  if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0 ||
-      !target_buf || target_buf_size == 0) {
-    return ccol_invalid_args;
-  }
-
-  ccol_retval_t result = ccol_key_not_found;
-
-  size_t index = calculate_bucket_index(chm, key_pair, NULL);
-
-  chmap_entry* r = find_elem_in_bucket(chm->bucket_arr[index], key_pair);
-  if (r) {
-    size_t min_size = target_buf_size;
-    if (r->val_pair.size < min_size) {
-      min_size = r->val_pair.size;
-    }
-    mem_assign(target_buf, r->val_pair.ptr, min_size);
-    result = ccol_success;
-  }
-
-  return result;
 }
 
 ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
@@ -655,17 +1155,27 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
     return ccol_invalid_args;
   }
 
-  ccol_retval_t result = ccol_key_not_found;
-
-  size_t index = calculate_bucket_index(chm, key_pair, NULL);
-
-  chmap_entry* r = find_elem_in_bucket(chm->bucket_arr[index], key_pair);
-  if (r) {
-    *val_pair = &r->val_pair;
-    result = ccol_success;
+  if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
+    return oa_get(chm->impl.oa_map, key_pair, val_pair);
+  } else {
+    return sc_get(chm->impl.sc_map, key_pair, val_pair);
   }
+}
 
-  return result;
+ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
+                                  void* target_buf, size_t target_buf_size) {
+  cmap_pair* val_pair = NULL;
+  ccol_retval_t ret = chmap_get_elem_ref(chm, key_pair, &val_pair);
+  if (ret == ccol_success && val_pair) {
+    size_t copy_size =
+        val_pair->size < target_buf_size ? val_pair->size : target_buf_size;
+    mem_cpy(target_buf, val_pair->ptr, copy_size);
+    if (val_pair->size < target_buf_size) {
+      mem_zero((uint8_t*)target_buf + val_pair->size,
+               target_buf_size - val_pair->size);
+    }
+  }
+  return ret;
 }
 
 ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
@@ -673,20 +1183,11 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
     return ccol_invalid_args;
   }
 
-  size_t index = calculate_bucket_index(chm, key_pair, NULL);
-
-  bool found = delete_elem_from_bucket(&chm->bucket_arr[index], key_pair,
-                                       &chm->head_of_all_elems);
-  if (found) {
-    if (--chm->elem_count < chm->elem_count_to_scale_down &&
-        chm->bucket_arr_size >= minimum_scale_down_threshold) {
-      // Time to scale down!
-      scale_chmap(chm, false);
-    }
-    return ccol_success;
+  if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
+    return oa_delete(chm->impl.oa_map, key_pair);
+  } else {
+    return sc_delete(chm->impl.sc_map, key_pair);
   }
-
-  return ccol_key_not_found;
 }
 
 size_t chmap_elem_count(chmap chm) {
@@ -694,7 +1195,31 @@ size_t chmap_elem_count(chmap chm) {
     assert(false);
   }
 
-  return chm->elem_count;
+  if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
+    return chm->impl.oa_map->count;
+  } else {
+    return chm->impl.sc_map->elem_count;
+  }
+}
+
+ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
+  if (!chm) {
+    assert(false);
+  }
+
+  if (new_bucket_array_size > 0 &&
+      new_bucket_array_size < minimum_allowed_bucket_array_size) {
+    new_bucket_array_size = minimum_allowed_bucket_array_size;
+  } else if (new_bucket_array_size > 0) {
+    new_bucket_array_size =
+        find_nearest_gte_power_of_two(new_bucket_array_size);
+  }
+
+  if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
+    return oa_reset(chm->impl.oa_map, new_bucket_array_size);
+  } else {
+    return sc_reset(chm->impl.sc_map, new_bucket_array_size);
+  }
 }
 
 cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
@@ -706,106 +1231,179 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
     assert(false);
   }
 
-  if (!chm->head_of_all_elems) {
-    return NULL;
-  }
-
-  chmap_cmap_iterator* real_iter =
-      _mem_calloc(chm->m_procs, 1, sizeof(chmap_cmap_iterator));
-  if (!real_iter) {
-    if (err) {
-      *err = CCOL_ERR_STR("Failed to allocate iterator");
+  if (chm->impl_type == IMPL_SEPARATE_CHAINING) {
+    if (!chm->impl.sc_map->head_of_all_elems) {
+      return NULL;
     }
-    return NULL;
+
+    ccol_memmgmt_procs_t* m_procs = chm->impl.sc_map->m_procs;
+    chmap_cmap_iterator* real_iter =
+        _mem_calloc(m_procs, 1, sizeof(chmap_cmap_iterator));
+    if (!real_iter) {
+      if (err) {
+        *err = CCOL_ERR_STR("Failed to allocate iterator");
+      }
+      return NULL;
+    }
+
+    dllist_ref_node* tracker = chm->impl.sc_map->head_of_all_elems;
+    real_iter->parent_map = chm;
+    real_iter->iter.sc_tracker = tracker;
+    llist_node* host = dllistRefNodePtr2LlistNodePtr(tracker);
+    real_iter->user_iter.key_pair = &(host->key_pair_accessor);
+    real_iter->user_iter.val_pair = &(host->val_pair_accessor);
+
+    return &(real_iter->user_iter);
+  } else {
+    // Open addressing iteration
+    open_addr_map* map = chm->impl.oa_map;
+
+    // Find first occupied slot
+    size_t i = 0;
+    while (i < map->capacity && (!(map->slots[i].metadata & SLOT_OCCUPIED) ||
+                                 (map->slots[i].metadata & SLOT_DELETED))) {
+      i++;
+    }
+
+    if (i >= map->capacity) {
+      return NULL;  // Empty map
+    }
+
+    chmap_cmap_iterator* real_iter =
+        _mem_calloc(map->m_procs, 1, sizeof(chmap_cmap_iterator));
+    if (!real_iter) {
+      if (err) {
+        *err = CCOL_ERR_STR("Failed to allocate iterator");
+      }
+      return NULL;
+    }
+
+    real_iter->parent_map = chm;
+    real_iter->iter.oa_index = i;
+
+    static cmap_pair key_pair_static, val_pair_static;
+    key_pair_static.ptr = &map->slots[i].key_data;
+    key_pair_static.size = map->key_size;
+    val_pair_static.ptr = &map->slots[i].val_data;
+    val_pair_static.size = map->val_size;
+
+    real_iter->user_iter.key_pair = &key_pair_static;
+    real_iter->user_iter.val_pair = &val_pair_static;
+
+    return &(real_iter->user_iter);
   }
-
-  dllist_ref_node* tracker = chm->head_of_all_elems;
-  real_iter->parent_map = chm;
-  real_iter->tracker = tracker;
-  chmap_entry* host = dllistRefNode2ChmapEntry(tracker);
-  real_iter->user_iter.key_pair = &host->key_pair;
-  real_iter->user_iter.val_pair = &host->val_pair;
-
-  return &(real_iter->user_iter);
 }
 
 void __chmap_iterator_destroy(cmap_iterator* iter) {
   if (iter) {
     chmap_cmap_iterator* real_iter = cmapIter2ChmapIter(iter);
-    _mem_free(real_iter->parent_map->m_procs, real_iter);
+    if (real_iter->parent_map->impl_type == IMPL_OPEN_ADDRESSING) {
+      _mem_free(real_iter->parent_map->impl.oa_map->m_procs, real_iter);
+    } else {
+      _mem_free(real_iter->parent_map->impl.sc_map->m_procs, real_iter);
+    }
   }
 }
 
 cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
   chmap_cmap_iterator* real_iter = cmapIter2ChmapIter(iter);
-  real_iter->tracker = real_iter->tracker->next;
 
-  if (real_iter->tracker) {
-    // iter already points to the correct location, no need to
-    // use real_iter for the following two lines.
-    chmap_entry* host = dllistRefNode2ChmapEntry(real_iter->tracker);
+  if (real_iter->parent_map->impl_type == IMPL_SEPARATE_CHAINING) {
+    real_iter->iter.sc_tracker = real_iter->iter.sc_tracker->next;
 
-    iter->key_pair = &host->key_pair;
-    iter->val_pair = &host->val_pair;
+    if (real_iter->iter.sc_tracker) {
+      dllist_ref_node* tracker = real_iter->iter.sc_tracker;
+      llist_node* host = dllistRefNodePtr2LlistNodePtr(tracker);
+      iter->key_pair = &(host->key_pair_accessor);
+      iter->val_pair = &(host->val_pair_accessor);
+    } else {
+      __chmap_iterator_destroy(iter);
+      iter = NULL;
+    }
   } else {
-    // The iterator reached to the end of the map, nowhere to
-    // advance. Let's destroy it and return NULL.
-    __chmap_iterator_destroy(iter);
-    iter = NULL;
+    // Open addressing iteration
+    open_addr_map* map = real_iter->parent_map->impl.oa_map;
+    size_t i = real_iter->iter.oa_index + 1;
+
+    // Find next occupied slot
+    while (i < map->capacity && (!(map->slots[i].metadata & SLOT_OCCUPIED) ||
+                                 (map->slots[i].metadata & SLOT_DELETED))) {
+      i++;
+    }
+
+    if (i >= map->capacity) {
+      __chmap_iterator_destroy(iter);
+      iter = NULL;
+    } else {
+      real_iter->iter.oa_index = i;
+
+      static cmap_pair key_pair_static, val_pair_static;
+      key_pair_static.ptr = &map->slots[i].key_data;
+      key_pair_static.size = map->key_size;
+      val_pair_static.ptr = &map->slots[i].val_data;
+      val_pair_static.size = map->val_size;
+
+      iter->key_pair = &key_pair_static;
+      iter->val_pair = &val_pair_static;
+    }
   }
 
   return iter;
 }
 
-ccol_retval_t chmap_reset(chmap chm, size_t new_arr_size) {
-  if (!chm) {
-    assert(false);
-  }
-
-  int result = ccol_success;
-
-  if (new_arr_size > 0 && new_arr_size < minimum_allowed_bucket_array_size) {
-    new_arr_size = minimum_allowed_bucket_array_size - 1;
-  } else {
-    new_arr_size = find_nearest_gte_power_of_two(new_arr_size) - 1;
-  }
-
-  for (size_t i = 0; i < chm->bucket_arr_size; ++i) {
-    destroy_the_whole_bucket(&chm->bucket_arr[i], &chm->head_of_all_elems);
-  }
-
-  if (new_arr_size > 0 && new_arr_size != chm->bucket_arr_size) {
-    cbmap* orig = chm->bucket_arr;
-
-    chm->bucket_arr = _mem_realloc(chm->m_procs, chm->bucket_arr,
-                                   new_arr_size * sizeof(cbmap));
-    if (!chm->bucket_arr) {
-      chm->bucket_arr = orig;
-      result = ccol_not_enough_memory;
-    } else {
-      chm->bucket_arr_size = new_arr_size;
-    }
-  }
-
-  memset(chm->bucket_arr, 0, chm->bucket_arr_size * sizeof(cbmap));
-  chm->elem_count = 0;
-
-  return result;
-}
-
 void __chmap_destroy(chmap chm) {
   if (chm) {
-    for (size_t i = 0; i < chm->bucket_arr_size; ++i) {
-      destroy_the_whole_bucket(&chm->bucket_arr[i], &chm->head_of_all_elems);
-    }
-    _mem_free(chm->m_procs, (void*)chm->bucket_arr);
-
-    if (chm->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = chm->m_procs->free;
-      free_func(chm->m_procs);
-      free_func(chm);
+    if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
+      if (chm->impl.oa_map) {
+        ccol_memmgmt_procs_t* procs = chm->impl.oa_map->m_procs;
+        oa_destroy(chm->impl.oa_map);
+        if (procs) {
+          ccol_memmgmt_procs_free_t free_func = procs->free;
+          free_func(procs);
+        }
+      }
     } else {
-      mem_free(chm);
+      if (chm->impl.sc_map) {
+        ccol_memmgmt_procs_t* procs = chm->impl.sc_map->m_procs;
+        sc_destroy(chm->impl.sc_map);
+        if (procs) {
+          ccol_memmgmt_procs_free_t free_func = procs->free;
+          free_func(procs);
+        }
+      }
     }
+    mem_free(chm);
   }
 }
+
+#ifdef RUNNING_UNIT_TESTS
+size_t chmap_get_bucket_arr_size(chmap chm) {
+  if (!chm) return 0;
+
+  if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
+    return chm->impl.oa_map->capacity;
+  } else {
+    return chm->impl.sc_map->bucket_arr_size;
+  }
+}
+
+size_t chmap_get_elem_count_to_scale_up(chmap chm) {
+  if (!chm) return 0;
+
+  if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
+    return (size_t)(chm->impl.oa_map->capacity * OPEN_ADDR_MAX_LOAD_FACTOR);
+  } else {
+    return chm->impl.sc_map->elem_count_to_scale_up;
+  }
+}
+
+size_t chmap_get_elem_count_to_scale_down(chmap chm) {
+  if (!chm) return 0;
+
+  if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
+    return (size_t)(chm->impl.oa_map->capacity * OPEN_ADDR_MIN_LOAD_FACTOR);
+  } else {
+    return chm->impl.sc_map->elem_count_to_scale_down;
+  }
+}
+#endif

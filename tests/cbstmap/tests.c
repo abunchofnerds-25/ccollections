@@ -11,9 +11,9 @@ TAU_MAIN()  // sets up Tau (+ main function)
 // BST_MAP TESTS (AVL Tree)
 
 TEST(cbst_maps, create_fails) {
-  char* err = NULL;
-  cbinarymap* cbmap = cbmap_create(true, &err);
-  REQUIRE_NE((void*)cbmap, NULL);
+  char *err = NULL;
+  cbinarymap *cbmap = cbmap_create(true, &err);
+  REQUIRE_NE((void *)cbmap, NULL);
   cbmap_destroy(cbmap);
 
   cbmap = cbmap_create_mp(
@@ -21,42 +21,42 @@ TEST(cbst_maps, create_fails) {
       &(ccol_memmgmt_procs_t){
           .malloc = NULL, .free = free, .calloc = calloc, .realloc = realloc},
       &err);
-  REQUIRE_EQ((void*)cbmap, NULL);
-  REQUIRE_NE((void*)err, NULL);
+  REQUIRE_EQ((void *)cbmap, NULL);
+  REQUIRE_NE((void *)err, NULL);
 
   cbmap = cbmap_create_mp(
       true,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = NULL, .calloc = calloc, .realloc = realloc},
       &err);
-  REQUIRE_EQ((void*)cbmap, NULL);
-  REQUIRE_NE((void*)err, NULL);
+  REQUIRE_EQ((void *)cbmap, NULL);
+  REQUIRE_NE((void *)err, NULL);
 
   cbmap = cbmap_create_mp(
       true,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = NULL, .realloc = realloc},
       &err);
-  REQUIRE_EQ((void*)cbmap, NULL);
-  REQUIRE_NE((void*)err, NULL);
+  REQUIRE_EQ((void *)cbmap, NULL);
+  REQUIRE_NE((void *)err, NULL);
 
   cbmap = cbmap_create_mp(
       true,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = NULL},
       &err);
-  REQUIRE_EQ((void*)cbmap, NULL);
-  REQUIRE_NE((void*)err, NULL);
+  REQUIRE_EQ((void *)cbmap, NULL);
+  REQUIRE_NE((void *)err, NULL);
 }
 
 TEST(cbst_maps, create_succeeds) {
-  char* err = "";
-  cbinarymap* cbmap = cbmap_create(true, &err);
-  REQUIRE_NE((void*)cbmap, NULL);
-  REQUIRE_EQ((void*)err, NULL);
+  char *err = "";
+  cbinarymap *cbmap = cbmap_create(true, &err);
+  REQUIRE_NE((void *)cbmap, NULL);
+  REQUIRE_EQ((void *)err, NULL);
 
   cbmap_destroy(cbmap);
-  REQUIRE_EQ((void*)cbmap, NULL);
+  REQUIRE_EQ((void *)cbmap, NULL);
 
   cbmap = cbmap_create_mp(
       true,
@@ -65,42 +65,42 @@ TEST(cbst_maps, create_succeeds) {
       &err);
 
   cbmap_destroy(cbmap);
-  REQUIRE_EQ((void*)cbmap, NULL);
+  REQUIRE_EQ((void *)cbmap, NULL);
 }
 
 // Helper functions start.
-int insert_int_to_int(cbinarymap* cbmap, int key, int val) {
+int insert_int_to_int(cbinarymap *cbmap, int key, int val) {
   return cbmap_insert_elem(
-      cbmap, &(cmap_pair){.ptr = (void*)&key, .size = sizeof(key)},
-      &(cmap_pair){.ptr = (void*)&val, .size = sizeof(val)});
+      cbmap, &(cmap_pair){.ptr = (void *)&key, .size = sizeof(key)},
+      &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)});
 }
 
-int get_int_from_int(cbinarymap* cbmap, int key, int* val_ptr) {
+int get_int_from_int(cbinarymap *cbmap, int key, int *val_ptr) {
   return cbmap_get_elem_copy(
-      cbmap, &(cmap_pair){.ptr = (void*)&key, .size = sizeof(key)}, val_ptr,
+      cbmap, &(cmap_pair){.ptr = (void *)&key, .size = sizeof(key)}, val_ptr,
       sizeof(int));
 }
 
-int get_int_ref_from_int(cbinarymap* cbmap, int key, int** val_ptr) {
-  cmap_pair* tmp_val_pair_ptr = NULL;
+int get_int_ref_from_int(cbinarymap *cbmap, int key, int **val_ptr) {
+  cmap_pair *tmp_val_pair_ptr = NULL;
   if (cbmap_get_elem_ref(cbmap,
-                         &(cmap_pair){.ptr = (void*)&key, .size = sizeof(key)},
+                         &(cmap_pair){.ptr = (void *)&key, .size = sizeof(key)},
                          &tmp_val_pair_ptr) == 0) {
-    *val_ptr = (int*)tmp_val_pair_ptr->ptr;
+    *val_ptr = (int *)tmp_val_pair_ptr->ptr;
     return 0;
   }
   return -1;
 }
 
-ccol_retval_t delete_int_from_int(cbinarymap* cbmap, int key) {
+ccol_retval_t delete_int_from_int(cbinarymap *cbmap, int key) {
   return cbmap_delete_elem(
-      cbmap, &(cmap_pair){.ptr = (void*)&key, .size = sizeof(key)});
+      cbmap, &(cmap_pair){.ptr = (void *)&key, .size = sizeof(key)});
 }
 // Helper functions end.
 
 TEST(cbst_maps, basic_insertions_and_lookups) {
-  cbinarymap* cbmap = cbmap_create(true, NULL);
-  REQUIRE_NE((void*)cbmap, NULL);
+  cbinarymap *cbmap = cbmap_create(true, NULL);
+  REQUIRE_NE((void *)cbmap, NULL);
 
   int val = -1;
 
@@ -127,12 +127,12 @@ TEST(cbst_maps, basic_insertions_and_lookups) {
 }
 
 TEST(cbst_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
-  cbinarymap* cbmap = cbmap_create_mp(
+  cbinarymap *cbmap = cbmap_create_mp(
       true,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc},
       NULL);
-  REQUIRE_NE((void*)cbmap, NULL);
+  REQUIRE_NE((void *)cbmap, NULL);
 
   int val = -1;
 
@@ -155,42 +155,46 @@ TEST(cbst_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
 }
 
 TEST(cbst_maps, insert_values_with_different_sizes) {
-  cbinarymap* cbmap = cbmap_create(true, NULL);
+  cbinarymap *cbmap = cbmap_create(true, NULL);
 
   short key1 = 3;
   long val1 = 43;
-  REQUIRE_EQ(cbmap_insert_elem(
-                 cbmap, &(cmap_pair){.ptr = (void*)&key1, .size = sizeof(key1)},
-                 &(cmap_pair){.ptr = (void*)&val1, .size = sizeof(val1)}),
-             ccol_success);
+  REQUIRE_EQ(
+      cbmap_insert_elem(
+          cbmap, &(cmap_pair){.ptr = (void *)&key1, .size = sizeof(key1)},
+          &(cmap_pair){.ptr = (void *)&val1, .size = sizeof(val1)}),
+      ccol_success);
 
   int key2 = 4;
   char val2 = 44;
-  REQUIRE_EQ(cbmap_insert_elem(
-                 cbmap, &(cmap_pair){.ptr = (void*)&key2, .size = sizeof(key2)},
-                 &(cmap_pair){.ptr = (void*)&val2, .size = sizeof(val2)}),
-             ccol_success);
+  REQUIRE_EQ(
+      cbmap_insert_elem(
+          cbmap, &(cmap_pair){.ptr = (void *)&key2, .size = sizeof(key2)},
+          &(cmap_pair){.ptr = (void *)&val2, .size = sizeof(val2)}),
+      ccol_success);
 
   long val1_from_map = -1;
-  REQUIRE_EQ(cbmap_get_elem_copy(
-                 cbmap, &(cmap_pair){.ptr = (void*)&key1, .size = sizeof(key1)},
-                 &val1_from_map, sizeof(val1_from_map)),
-             ccol_success);
+  REQUIRE_EQ(
+      cbmap_get_elem_copy(
+          cbmap, &(cmap_pair){.ptr = (void *)&key1, .size = sizeof(key1)},
+          &val1_from_map, sizeof(val1_from_map)),
+      ccol_success);
   REQUIRE_EQ(val1_from_map, val1);
 
   char val2_from_map = -1;
-  REQUIRE_EQ(cbmap_get_elem_copy(
-                 cbmap, &(cmap_pair){.ptr = (void*)&key2, .size = sizeof(key2)},
-                 &val2_from_map, sizeof(val2_from_map)),
-             ccol_success);
+  REQUIRE_EQ(
+      cbmap_get_elem_copy(
+          cbmap, &(cmap_pair){.ptr = (void *)&key2, .size = sizeof(key2)},
+          &val2_from_map, sizeof(val2_from_map)),
+      ccol_success);
   REQUIRE_EQ(val2_from_map, val2);
 
   cbmap_destroy(cbmap);
 }
 
 TEST(cbst_maps, basic_deletions) {
-  cbinarymap* cbmap = cbmap_create(true, NULL);
-  REQUIRE_NE((void*)cbmap, NULL);
+  cbinarymap *cbmap = cbmap_create(true, NULL);
+  REQUIRE_NE((void *)cbmap, NULL);
 
   REQUIRE_EQ(insert_int_to_int(cbmap, 10, 100), ccol_success);
   REQUIRE_EQ(insert_int_to_int(cbmap, 20, 200), ccol_success);
@@ -216,13 +220,13 @@ TEST(cbst_maps, basic_deletions) {
 }
 
 TEST(cbst_maps, accessing_references) {
-  cbinarymap* cbmap = cbmap_create(true, NULL);
-  REQUIRE_NE((void*)cbmap, NULL);
+  cbinarymap *cbmap = cbmap_create(true, NULL);
+  REQUIRE_NE((void *)cbmap, NULL);
 
   REQUIRE_EQ(insert_int_to_int(cbmap, 10, 100), ccol_success);
   REQUIRE_EQ(insert_int_to_int(cbmap, 20, 200), ccol_success);
 
-  int* val_ptr = NULL;
+  int *val_ptr = NULL;
   REQUIRE_EQ(get_int_ref_from_int(cbmap, 10, &val_ptr), 0);
   REQUIRE_EQ(*val_ptr, 100);
 
@@ -237,8 +241,8 @@ TEST(cbst_maps, accessing_references) {
 }
 
 TEST(cbst_maps, reset) {
-  cbinarymap* cbmap = cbmap_create(true, NULL);
-  REQUIRE_NE((void*)cbmap, NULL);
+  cbinarymap *cbmap = cbmap_create(true, NULL);
+  REQUIRE_NE((void *)cbmap, NULL);
 
   for (int i = 0; i < 100; ++i) {
     REQUIRE_EQ(insert_int_to_int(cbmap, i, i * 10), ccol_success);
@@ -400,9 +404,9 @@ TEST(cbst_maps, deletions_maintain_balance) {
   cbmap_destroy(bmap);
 }
 
-int custom_int_comparator(const void* a, const void* b) {
-  int val_a = *(const int*)a;
-  int val_b = *(const int*)b;
+int custom_int_comparator(const void *a, const void *b) {
+  int val_a = *(const int *)a;
+  int val_b = *(const int *)b;
   return (val_a > val_b) - (val_a < val_b);
 }
 
@@ -542,7 +546,7 @@ TEST(cbst_maps, constructive_macros) {
 }
 
 TEST(cbst_maps, iteration_with_macros) {
-  cbmap_construct(bm, int, char*);
+  cbmap_construct(bm, int, char *);
 
   int key = 3;
   cbmap_insert(bm, key, "hello");
@@ -625,14 +629,14 @@ TEST(cbst_maps, map_int_to_struct_ptr) {
     short b;
   } some_struct;
 
-  cbmap_construct(bm, int, some_struct*);
+  cbmap_construct(bm, int, some_struct *);
 
   some_struct d1 = {.a = 3, .b = 4};
   some_struct d2 = {.a = 5, .b = 6};
   some_struct d3 = {.a = 7, .b = 8};
 
   int key = 1;
-  some_struct* ptr = &d1;
+  some_struct *ptr = &d1;
   cbmap_insert(bm, key, ptr);
   key = 2;
   ptr = &d2;

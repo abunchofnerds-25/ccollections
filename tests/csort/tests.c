@@ -1,8 +1,8 @@
-#include <stdio.h>
-#include <time.h>
 #include <csort.h>
 #include <cvector.h>
+#include <stdio.h>
 #include <tau/tau.h>
+#include <time.h>
 
 TAU_MAIN()  // sets up Tau (+ main function)
 
@@ -11,15 +11,15 @@ TAU_MAIN()  // sets up Tau (+ main function)
     const int num_sample = 10;                                  \
     const unsigned int seed = time(NULL);                       \
                                                                 \
-    char* err_str = NULL;                                       \
+    char *err_str = NULL;                                       \
     int i;                                                      \
                                                                 \
     srand(seed);                                                \
     cvec_declare(cvec, type);                                   \
     cvec_init(cvec);                                            \
                                                                 \
-    REQUIRE_NE((void*)cvec, NULL);                              \
-    REQUIRE_EQ((void*)err_str, NULL);                           \
+    REQUIRE_NE((void *)cvec, NULL);                             \
+    REQUIRE_EQ((void *)err_str, NULL);                          \
                                                                 \
     for (i = 0; i < num_sample; i++) {                          \
       cvector_push_back(cvec, &(type){rand() % modulus_value}); \
@@ -30,12 +30,12 @@ TAU_MAIN()  // sets up Tau (+ main function)
     cvec_sort(cvec);                                            \
                                                                 \
     for (i = 1; i < num_sample; i++) {                          \
-      REQUIRE_LE(*(type*)cvector_at(cvec, i - 1),               \
-                 *(type*)cvector_at(cvec, i));                  \
+      REQUIRE_LE(*(type *)cvector_at(cvec, i - 1),              \
+                 *(type *)cvector_at(cvec, i));                 \
     }                                                           \
                                                                 \
     cvector_destroy(cvec);                                      \
-    REQUIRE_EQ((void*)cvec, NULL);                              \
+    REQUIRE_EQ((void *)cvec, NULL);                             \
   }
 
 // The test for the int type has been written intentionally explicitly for
@@ -45,15 +45,15 @@ TEST(csort, cvector_integer_sort) {
   const int num_sample = 10;
   const unsigned int seed = time(NULL);
 
-  char* err_str = NULL;
+  char *err_str = NULL;
   int i;
 
   srand(seed);
   cvec_declare(cvec, int);
   cvec_init(cvec);
 
-  REQUIRE_NE((void*)cvec, NULL);
-  REQUIRE_EQ((void*)err_str, NULL);
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
     cvector_push_back(cvec, &(int){rand()});
@@ -64,11 +64,11 @@ TEST(csort, cvector_integer_sort) {
   cvec_sort(cvec);
 
   for (i = 1; i < num_sample; i++) {
-    REQUIRE_LE(*(int*)cvector_at(cvec, i - 1), *(int*)cvector_at(cvec, i));
+    REQUIRE_LE(*(int *)cvector_at(cvec, i - 1), *(int *)cvector_at(cvec, i));
   }
 
   cvector_destroy(cvec);
-  REQUIRE_EQ((void*)cvec, NULL);
+  REQUIRE_EQ((void *)cvec, NULL);
 }
 
 define_integer_type_test(char, char, 100)
@@ -88,15 +88,15 @@ define_integer_type_test(char, char, 100)
   const int num_sample = 10;
   const unsigned int seed = time(NULL);
 
-  char* err_str = NULL;
+  char *err_str = NULL;
   int i;
 
   srand(seed);
   cvec_declare(cvec, double);
   cvec_init(cvec);
 
-  REQUIRE_NE((void*)cvec, NULL);
-  REQUIRE_EQ((void*)err_str, NULL);
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
     cvector_push_back(cvec, &(double){((double)rand() / RAND_MAX * 10)});
@@ -107,27 +107,27 @@ define_integer_type_test(char, char, 100)
   cvec_sort(cvec);
 
   for (i = 1; i < num_sample; i++) {
-    REQUIRE_LE(*(double*)cvector_at(cvec, i - 1),
-               *(double*)cvector_at(cvec, i));
+    REQUIRE_LE(*(double *)cvector_at(cvec, i - 1),
+               *(double *)cvector_at(cvec, i));
   }
 
   cvector_destroy(cvec);
-  REQUIRE_EQ((void*)cvec, NULL);
+  REQUIRE_EQ((void *)cvec, NULL);
 }
 
 TEST(csort, cvector_float_sort) {
   const int num_sample = 10;
   const unsigned int seed = time(NULL);
 
-  char* err_str = NULL;
+  char *err_str = NULL;
   int i;
 
   srand(seed);
   cvec_declare(cvec, float);
   cvec_init(cvec);
 
-  REQUIRE_NE((void*)cvec, NULL);
-  REQUIRE_EQ((void*)err_str, NULL);
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
     cvector_push_back(cvec, &(float){((float)rand() / RAND_MAX * 10)});
@@ -138,26 +138,27 @@ TEST(csort, cvector_float_sort) {
   cvec_sort(cvec);
 
   for (i = 1; i < num_sample; i++) {
-    REQUIRE_LE(*(float*)cvector_at(cvec, i - 1), *(float*)cvector_at(cvec, i));
+    REQUIRE_LE(*(float *)cvector_at(cvec, i - 1),
+               *(float *)cvector_at(cvec, i));
   }
 
   cvector_destroy(cvec);
-  REQUIRE_EQ((void*)cvec, NULL);
+  REQUIRE_EQ((void *)cvec, NULL);
 }
 
 TEST(csort, cvector_long_double_sort) {
   const int num_sample = 10;
   const unsigned int seed = time(NULL);
 
-  char* err_str = NULL;
+  char *err_str = NULL;
   int i;
 
   srand(seed);
   cvec_declare(cvec, long double);
   cvec_init(cvec);
 
-  REQUIRE_NE((void*)cvec, NULL);
-  REQUIRE_EQ((void*)err_str, NULL);
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
     cvector_push_back(cvec,
@@ -169,12 +170,12 @@ TEST(csort, cvector_long_double_sort) {
   cvec_sort(cvec);
 
   for (i = 1; i < num_sample; i++) {
-    REQUIRE_LE(*(long double*)cvector_at(cvec, i - 1),
-               *(long double*)cvector_at(cvec, i));
+    REQUIRE_LE(*(long double *)cvector_at(cvec, i - 1),
+               *(long double *)cvector_at(cvec, i));
   }
 
   cvector_destroy(cvec);
-  REQUIRE_EQ((void*)cvec, NULL);
+  REQUIRE_EQ((void *)cvec, NULL);
 }
 
 TEST(csort, cvector_string_sort_with_known_values) {
@@ -202,17 +203,17 @@ TEST(csort, cvector_string_sort_with_known_values) {
       "p8Lz7yF5w2m9rG0YqD6XnQW1b5Vj4kT3oH2KsZy7A",
       "wz2A4TgB1fV0o9c8Qe5jZyH7NkWv6pUdxXlJl0L"};
 
-  char* err_str = NULL;
+  char *err_str = NULL;
   int i;
 
-  cvec_declare(cvec, char*);
+  cvec_declare(cvec, char *);
   cvec_init(cvec);
 
-  REQUIRE_NE((void*)cvec, NULL);
-  REQUIRE_EQ((void*)err_str, NULL);
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
-    cvector_push_back(cvec, &(char*){test_strings[i]});
+    cvector_push_back(cvec, &(char *){test_strings[i]});
   }
   REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
 
@@ -220,23 +221,23 @@ TEST(csort, cvector_string_sort_with_known_values) {
 
   for (i = 0; i < num_sample; i++) {
     REQUIRE_TRUE(
-        strcmp(*(char**)cvector_at(cvec, i), sorted_compare_values[i]) == 0);
+        strcmp(*(char **)cvector_at(cvec, i), sorted_compare_values[i]) == 0);
   }
 
   {
     const char *first, *second;
     for (i = 1; i < num_sample; i++) {
-      first = *(const char**)cvector_at(cvec, i - 1);
-      second = *(const char**)cvector_at(cvec, i);
+      first = *(const char **)cvector_at(cvec, i - 1);
+      second = *(const char **)cvector_at(cvec, i);
       REQUIRE_TRUE(strcmp(first, second) < 0);
     }
   }
 
   cvector_destroy(cvec);
-  REQUIRE_EQ((void*)cvec, NULL);
+  REQUIRE_EQ((void *)cvec, NULL);
 }
 
-void create_random_str(char* dest, size_t length) {
+void create_random_str(char *dest, size_t length) {
   char charset[] =
       "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
@@ -252,19 +253,19 @@ TEST(csort, cvector_string_sort_with_random_values) {
   const int max_str_lenght = 100;
   char rand_strings[10][100];
 
-  char* err_str = NULL;
+  char *err_str = NULL;
   int i;
 
-  cvec_declare(cvec, char*);
+  cvec_declare(cvec, char *);
   cvec_init(cvec);
 
-  REQUIRE_NE((void*)cvec, NULL);
-  REQUIRE_EQ((void*)err_str, NULL);
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
     create_random_str(rand_strings[i],
                       (int)((double)rand() / RAND_MAX * max_str_lenght));
-    cvector_push_back(cvec, &(char*){rand_strings[i]});
+    cvector_push_back(cvec, &(char *){rand_strings[i]});
   }
 
   REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
@@ -274,23 +275,23 @@ TEST(csort, cvector_string_sort_with_random_values) {
   {
     const char *first, *second;
     for (i = 1; i < num_sample; i++) {
-      first = *(const char**)cvector_at(cvec, i - 1);
-      second = *(const char**)cvector_at(cvec, i);
+      first = *(const char **)cvector_at(cvec, i - 1);
+      second = *(const char **)cvector_at(cvec, i);
       REQUIRE_TRUE(strcmp(first, second) < 0);
     }
   }
 
   cvector_destroy(cvec);
-  REQUIRE_EQ((void*)cvec, NULL);
+  REQUIRE_EQ((void *)cvec, NULL);
 }
 
 typedef struct custom_test_struct {
   int data;
 } custom_test_struct;
 
-int custom_test_struct_comparison_proc(const void* first, const void* second) {
-  custom_test_struct* p_struct_first = (custom_test_struct*)first;
-  custom_test_struct* p_struct_second = (custom_test_struct*)second;
+int custom_test_struct_comparison_proc(const void *first, const void *second) {
+  custom_test_struct *p_struct_first = (custom_test_struct *)first;
+  custom_test_struct *p_struct_second = (custom_test_struct *)second;
 
   return p_struct_first->data - p_struct_second->data;
 }
@@ -299,15 +300,15 @@ TEST(csort, cvector_custom_test_struct_sort) {
   const int num_sample = 10;
   const unsigned int seed = time(NULL);
 
-  char* err_str = NULL;
+  char *err_str = NULL;
   int i;
 
   srand(seed);
   cvec_declare(cvec, custom_test_struct);
   cvec_init(cvec);
 
-  REQUIRE_NE((void*)cvec, NULL);
-  REQUIRE_EQ((void*)err_str, NULL);
+  REQUIRE_NE((void *)cvec, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
     cvector_push_back(cvec, &(custom_test_struct){.data = rand()});
@@ -317,20 +318,20 @@ TEST(csort, cvector_custom_test_struct_sort) {
 
   cvector_sort_with_comparison_proc(cvec, custom_test_struct_comparison_proc);
 
-  custom_test_struct* p_struct_first;
-  custom_test_struct* p_struct_second;
+  custom_test_struct *p_struct_first;
+  custom_test_struct *p_struct_second;
   for (i = 1; i < num_sample; i++) {
-    p_struct_first = (custom_test_struct*)cvector_at(cvec, i - 1);
-    p_struct_second = (custom_test_struct*)cvector_at(cvec, i);
+    p_struct_first = (custom_test_struct *)cvector_at(cvec, i - 1);
+    p_struct_second = (custom_test_struct *)cvector_at(cvec, i);
     REQUIRE_LE(p_struct_first->data, p_struct_second->data);
   }
 
   cvector_destroy(cvec);
-  REQUIRE_EQ((void*)cvec, NULL);
+  REQUIRE_EQ((void *)cvec, NULL);
 }
 
-void* c_int_array_getter_proc_t(void* collection, size_t index) {
-  return ((int*)collection) + index;
+void *c_int_array_getter_proc_t(void *collection, size_t index) {
+  return ((int *)collection) + index;
 }
 
 TEST(csort, c_int_array_sort) {
@@ -347,7 +348,7 @@ TEST(csort, c_int_array_sort) {
 
   csort_sort(test_array, sizeof(test_array) / sizeof(*test_array),
              sizeof(*test_array), c_int_array_getter_proc_t,
-             csort_get_default_comparison_proc(*test_array), NULL, NULL);
+             csort_get_default_comparison_proc(*test_array), NULL);
   for (i = 1; i < num_sample; i++) {
     REQUIRE_LE(test_array[i - 1], test_array[i]);
   }

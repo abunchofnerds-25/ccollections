@@ -1,1793 +1,1319 @@
-# libccollections Documentation
+# C Collections Library
 
-**Version:** 1.0  
-**License:** MIT License  
-**Copyright:** 2024 A bunch of nerds
-
----
-
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Features](#features)
-3. [Building and Installation](#building-and-installation)
-4. [Core Components](#core-components)
-   - [Common Infrastructure](#common-infrastructure)
-   - [Vectors (cvector)](#vectors-cvector)
-   - [Hash Maps (chashmap)](#hash-maps-chashmap)
-   - [BST Maps (cbstmap)](#bst-maps-cbstmap)
-   - [Thread Communication (cthreadcomm)](#thread-communication-cthreadcomm)
-   - [Memory Pools (cmempool)](#memory-pools-cmempool)
-   - [Sorting (csort)](#sorting-csort)
-   - [Memory Operations (memops)](#memory-operations-memops)
-5. [Usage Examples](#usage-examples)
-6. [API Reference](#api-reference)
-7. [Best Practices](#best-practices)
-
----
+A production-ready collection of generic data structures and utilities for C, providing type-safe interfaces through extensive use of C11 features and GNU C extensions.
 
 ## Overview
 
-**libccollections** is a comprehensive C library providing generic, high-performance data structures and algorithms. It offers a complete suite of collections, thread-safe communication primitives, memory management utilities, and sorting algorithms designed for systems programming.
+This library provides fundamental data structures with a focus on:
 
-### Design Philosophy
+- **Type safety** through C11 `_Generic` and compile-time type introspection
+- **Memory efficiency** with optimized implementations and custom memory management support
+- **Developer ergonomics** via intuitive macro-based APIs
+- **Thread-safety options** for concurrent applications
+- **Zero dependencies** beyond standard C library and pthreads
 
-- **Type Safety**: Extensive use of C11 `_Generic` macros for compile-time type checking
-- **Zero-Copy Semantics**: Message passing uses ownership transfer, not data copying
-- **Customizable Memory Management**: All containers support custom allocators
-- **Thread Safety**: Opt-in thread-safety with minimal overhead
-- **Performance**: Optimized implementations with O(1) operations where possible
-- **Embedded Systems**: Support for preallocated buffers and no-heap operation
+The library is compiled as `libccollections.so` which includes:
 
-### Key Technologies
+- **Dynamic arrays** (vectors) with automatic resizing
+- **Hash maps** with dual implementation strategy (open-addressing and separate chaining) depending on key and value types
+- **Ordered maps** using self-balancing AVL trees
+- **Sorting utilities** with stable mergesort
+- **Memory pools** (fixed-size and ranged)
+- **Thread communication** primitives for message passing
 
-- **C11 Standard**: Requires C11 compiler (GCC/Clang)
-- **POSIX Threads**: Thread-safe operations use pthreads
-- **GNU Extensions**: Statement expressions and compound literals
-- **Iterative Algorithms**: Stack-safe, no recursion
+## Table of Contents
 
----
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+- [Data Structures](#data-structures)
+  - [Vector (cvector)](#vector-cvector)
+  - [Hash Map (chashmap)](#hash-map-chashmap)
+  - [Binary Search Tree Map (cbstmap)](#binary-search-tree-map-cbstmap)
+  - [Sorting (csort)](#sorting-csort)
+  - [Memory Pools (cmempool)](#memory-pools-cmempool)
+  - [Thread Communication (cthreadcomm)](#thread-communication-cthreadcomm)
+- [API Conventions](#api-conventions)
+- [Thread Safety](#thread-safety)
+- [Memory Management](#memory-management)
+- [License](#license)
 
-## Features
+## Installation
 
-### Data Structures
+Link against `libccollections` and include the appropriate headers:
 
-| Structure | Type | Complexity | Thread-Safe | Key Feature |
-|-----------|------|------------|-------------|-------------|
-| `cvector` | Dynamic Array | O(1) amortized | Optional | Auto-resizing vector |
-| `chashmap` | Dual Hash Table | O(1) average | Optional | Open addressing + separate chaining |
-| `cbstmap` | AVL Tree | O(log n) | Optional | Self-balancing BST |
+```c
+#include <cvector.h>
+#include <chashmap.h>
+#include <cbstmap.h>
+#include <csort.h>
+#include <cmempool.h>
+#include <cthreadcomm.h>
+```
 
-### Thread Communication
-
-| Primitive | Type | Blocking | Capacity | Use Case |
-|-----------|------|----------|----------|----------|
-| `circular_queue` | Bounded | Yes | Fixed | Backpressure control |
-| `dynamic_queue` | Unbounded | Receive only | Unlimited* | Fire-and-forget |
-| `channel` | Bidirectional | Configurable | Fixed | Worker threads |
-
-*Limited by `max_elem_count (18446744073709551614)`
-
-### Memory Management
-
-| Component | Type | Allocation | Thread-Safe | Key Feature |
-|-----------|------|------------|-------------|-------------|
-| `mempool` | Fixed-size | O(1) | Optional | Free list, fallback |
-| `r_mempool` | Ranged | O(1) | Optional | Multiple pools, power-of-2 |
-
-### Algorithms
-
-- **Sorting**: Iterative merge sort with custom comparators
-- **Memory Operations**: Optimized small-copy routines (1-8 bytes)
-
----
-
-## Building and Installation
-
-### Prerequisites
-
+Compilation:
 ```bash
-# Ubuntu/Debian
-sudo apt-get install build-essential gcc
-
-# Fedora/RHEL
-sudo dnf install gcc make
+gcc -o myapp myapp.c -lccollections -lpthread
 ```
 
-### Build Instructions
-
-```bash
-# Clone or extract the library
-cd libccollections
-
-# Build the shared library
-make
-
-# Run tests
-make test
-
-# Run with Valgrind
-make memtest
-
-# Generate coverage report
-make generate_coverage_report
-
-# Clean build artifacts
-make clean
-```
-
-### Build Output
-
-- `libccollections.so` - Shared library
-- `obj/*.o` - Object files
-- `main` - Test executable
-
-### Compiler Flags
-
-```makefile
-CFLAGS = -I$(INCLUDE_DIR) -fstack-protector-all \
-    -Wstrict-overflow -Wformat=2 -Wformat-security -Wall -Wextra \
-    -g3 -O3 -Werror
-LFLAGS = -shared -lpthread
-```
-
-### Linking
-
-```bash
-# Compile with library
-gcc -L. -Iinclude myapp.c -o myapp -lccollections -lm -lpthread
-
-# Run with library path
-LD_LIBRARY_PATH=. ./myapp
-```
-
----
-
-## Core Components
-
-## Common Infrastructure
-
-**Header:** `common.h`
-
-Provides foundational infrastructure used across all collection types.
-
-### Threading Primitives
-
-Thin wrappers around POSIX pthread primitives:
+## Quick Start
 
 ```c
-mutex_t mutex;
-mutex_init(mutex);
-mutex_lock(mutex);
-mutex_unlock(mutex);
-mutex_destroy(mutex);
+#include <cvector.h>
+#include <chashmap.h>
+#include <stdio.h>
 
-rw_lock_t rwlock;
-rw_lock_init(&rwlock);
-rw_lock_rdlock(&rwlock);  // Shared access
-rw_lock_wrlock(&rwlock);  // Exclusive access
-rw_lock_unlock(&rwlock);
-
-cond_var_t cond;
-cond_var_init(cond);
-cond_var_wait(cond, mutex);
-cond_var_signal(cond);
-cond_var_broadcast(cond);
+int main(void) {
+    // Create a vector of integers
+    cvec_construct(numbers, int);
+    
+    // Add elements
+    cvec_push_rvalue(numbers, 42);
+    cvec_push_rvalue(numbers, 17);
+    cvec_push_rvalue(numbers, 8);
+    
+    // Sort the vector
+    cvec_sort(numbers);
+    
+    // Access elements
+    printf("First element: %d\n", cvec_at(numbers, 0));
+    
+    // Clean up
+    cvec_destroy(numbers);
+    
+    // Create a scoped hash map: string -> int
+    // which does not need to be destroyed, since
+    // it'll be automatically destroyed when its scope
+    // ceases to exist.
+    chmap_construct_scoped(ages, char*, int);
+    
+    // Insert key-value pairs (use variables)
+    char *name1 = "Alice";
+    int age1 = 30;
+    chmap_insert(ages, name1, age1);
+    
+    char *name2 = "Bob";
+    int age2 = 25;
+    chmap_insert(ages, name2, age2);
+    
+    // Retrieve values
+    char *lookup = "Alice";
+    int age = chmap_get(ages, lookup);
+    printf("Alice's age: %d\n", age);
+    
+    // Clean up not required
+    // chmap_destroy(ages);
+    
+    return 0;
+}
 ```
 
-### Memory Management Abstraction
+## Core Concepts
 
-All containers support custom memory management:
+### Convenience Macro Patterns
 
+The library provides several macro patterns for ease of use:
+
+#### Declaration and Initialization
+
+Most containers support three macro patterns:
+
+1. **`*_declare`** - Declares the container variable
+2. **`*_init`** - Initializes an already-declared container
+3. **`*_construct`** - Combines declaration and initialization in one step
+4. **`*_redeclare`** - Re-enables the usage of type-safe macros in a new function
+
+Example:
 ```c
-typedef struct ccol_memmgmt_procs_t {
-  ccol_memmgmt_procs_alloc_t alloc;      // malloc-like
-  ccol_memmgmt_procs_calloc_t calloc;    // calloc-like
-  ccol_memmgmt_procs_realloc_t realloc;  // realloc-like
-  ccol_memmgmt_procs_free_t free;        // free-like
-} ccol_memmgmt_procs_t;
+// Pattern 1: Separate declaration and initialization
+cvec_declare(vec1, int); // "cvec_declare_scoped(vec1, int);" would declare an auto-cleaning vector
+cvec_init(vec1);
+
+// Pattern 2: Combined declaration and initialization
+cvec_construct(vec2, int);  // Equivalent to declare + init
+// "cvec_construct_scoped(vec2, int);" would construct an auto-cleaning vector
+
+// Pattern 3: With custom memory management
+cvec_construct_mp(vec3, int, my_mprocs);
+// "cvec_construct_mp_scoped(vec3, int, my_mprocs);" would also construct an auto-cleaning vector
 ```
 
-**Default allocators:**
-```c
-#define mem_alloc(size) malloc(size)
-#define mem_calloc(elem_count, elem_size) calloc(elem_count, elem_size)
-#define mem_realloc(ptr, new_size) realloc(ptr, new_size)
-#define mem_free(ptr) free(ptr)
-```
+**Note:** `*_construct` macros are simply convenience wrappers that combine `*_declare` and `*_init` - use whichever pattern fits your code style.
 
-### Return Values
+#### Re-declaring for Function Parameters
+
+When you pass containers to functions, the type information needed by the convenience macros is lost. Use `*_redeclare` macros to restore type-safe operations:
 
 ```c
-typedef enum ccol_retval_t {
-  ccol_success = 0,
-  ccol_invalid_args,
-  ccol_container_full,
-  ccol_container_empty,
-  ccol_not_enough_memory,
-  ccol_key_not_found,
-  ccol_not_permitted,
-  ccol_timed_out,
-  ccol_unexpected_failure
-} ccol_retval_t;
-```
-
-### Error Handling
-
-```c
-// Error string with file:line
-char *err = CCOL_ERR_STR("allocation failed");
-
-// Fatal error (prints and asserts)
-fatal_err("failed with code: %d", error_code);
-```
-
-### Map Key-Value Pairs
-
-```c
-typedef struct cmap_pair {
-  void *ptr;    // Pointer to data
-  size_t size;  // Size of data
-} cmap_pair;
-
-// Auto-populate based on type
-cmap_pair kp, vp;
-int key = 42;
-char value[] = "hello";
-_populate_cmap_pair(&kp, key);     // kp.ptr = &key, kp.size = 4
-_populate_cmap_pair(&vp, value);   // vp.ptr = value, vp.size = 6
-```
-
-### Type Introspection
-
-```c
-// Data type enumeration
-typedef enum ccollections_data_type {
-  ccol_char, ccol_short, ccol_int, ccol_long, ccol_long_long,
-  ccol_unsigned_char, ccol_unsigned_short, ccol_unsigned_int,
-  ccol_unsigned_long, ccol_unsigned_long_long,
-  ccol_float, ccol_double, ccol_long_double,
-  ccol_pointer, ccol_string, ccol_other_types
-} ccol_data_type;
-
-// Determine type at compile time
-ccol_data_type type = determine_ccol_data_type(my_variable);
-```
-
----
-
-## Vectors (cvector)
-
-**Header:** `cvector.h`  
-**Source:** `cvector.c`
-
-Dynamic array with automatic resizing.
-
-### Key Characteristics
-
-- **Minimum capacity**: 4 elements
-- **Scaling factor**: 2x growth, 0.5x shrinkage
-- **Growth threshold**: When full
-- **Shrink threshold**: When < 1/4 full
-- **Complexity**: O(1) amortized push/pop
-- **Memory**: Contiguous allocation
-
-### Basic Operations
-
-```c
-// Create vector
-char *err = NULL;
-cvec vec = cvector_create(sizeof(int), &err);
-if (!vec) {
-    fprintf(stderr, "Error: %s\n", err);
-    return;
+// Function that receives a vector
+void process_vector(cvec vec) {
+    // Re-establish type information for this function scope
+    cvec_redeclare(vec, int);
+    
+    // Now type-safe macros work
+    cvec_push_rvalue(vec, 42);
+    int val = cvec_at(vec, 0);
+    cvec_sort(vec);
 }
 
-// Push elements
-int x = 42;
-if (cvector_push_back(vec, &x) != ccol_success) {
-    // Handle error
+// Similarly for maps
+void process_map(chmap map) {
+    chmap_redeclare(map, int, char*);
+    
+    int key = 1;
+    char *value = "hello";
+    chmap_insert(map, key, value);
+    
+    int lookup = 1;
+    char *val = chmap_get(map, lookup);
 }
 
-// Pop elements
-int y;
-if (cvector_pop_back(vec, &y) == ccol_success) {
-    printf("Popped: %d\n", y);
+void process_bst(cbmap tree) {
+    cbmap_redeclare(tree, int, char*);
+    
+    int key = 1;
+    char *value = "world";
+    cbmap_insert(tree, key, value);
 }
 
-// Access elements
-int *ptr = (int*)cvector_at(vec, 0);
-if (ptr) {
-    printf("First: %d\n", *ptr);
+int main(void) {
+    cvec_construct(numbers, int);
+    chmap_construct(map, int, char*);
+    cbmap_construct(tree, int, char*);
+    
+    process_vector(numbers);
+    process_map(map);
+    process_bst(tree);
+    
+    cvec_destroy(numbers);
+    chmap_destroy(map);
+    cbmap_destroy(tree);
+    
+    return 0;
 }
-
-// Size
-size_t count = cvector_elem_count(vec);
-
-// Clear
-cvector_reset(vec);
-
-// Destroy
-cvector_destroy(vec);
 ```
 
-### Type-Safe Macros
+**Why is this needed?** The type-safe macros rely on hidden type variables created by `*_declare`/`*_construct`. When you pass a container to a function, these variables aren't available in the new scope. `*_redeclare` creates new type variables that reference the same container instance. These mysterious variables are just simple pointers, by the way.
 
-There are two ways to create a vector:
+#### Scoped Auto-Cleanup
 
-**Option 1: Declare then Init (two steps)**
+**All containers** support **`*_scoped`** variants that automatically clean up when going out of scope (requires GNU C `cleanup` attribute):
+
 ```c
-cvec_declare(vec, int);  // Declare with type
-cvec_init(vec);          // Initialize
+void process_data(void) {
+    cvec_construct_scoped(temp_data, int);
+    
+    // Use temp_data...
+    cvec_push_rvalue(temp_data, 42);
+    
+    // Automatically destroyed when leaving the scope
+}
 ```
 
-**Option 2: Construct (single step - combines both)**
-```c
-cvec_construct(vec, int);  // Declare + init in one
+This is particularly useful for error handling paths where manual cleanup becomes cumbersome and error-prone.
 
-// Push/pop with automatic addressing
-cvec_push(vec, x);              // Takes address automatically
-cvec_push_rvalue(vec, 42);      // Can push literals
-int val = cvec_pop(vec);        // Returns value
+### Type Safety and RValues
 
-// Access
-int val = cvec_at(vec, 0);      // Returns value
-int *ptr = cvec_at_ptr(vec, 0); // Returns pointer
-*ptr = 100;                     // Modify in place
+The library uses C11 `_Generic` for compile-time type introspection, providing type-safe operations without runtime overhead.
 
-// Size and reset
-size_t size = cvec_size(vec);
-cvec_reset(vec);
-cvec_destroy(vec);
-```
+#### Vectors and RValues
 
-### Sorting
+Vectors provide special handling for rvalue expressions:
 
 ```c
-// Sort with default comparison
 cvec_construct(vec, int);
-cvec_push_rvalue(vec, 3);
-cvec_push_rvalue(vec, 1);
-cvec_push_rvalue(vec, 2);
-cvec_sort(vec);  // Now [1, 2, 3]
 
-// Sort with custom comparison
-int my_compare(const void *a, const void *b) {
-    return *(int*)b - *(int*)a;  // Descending
-}
-cvector_sort_with_comparison_proc(vec, my_compare);
+int x = 42;
+cvec_push(vec, x);              // For lvalues (addressable variables)
+cvec_push_rvalue(vec, 42);      // For rvalues (literals, expressions)
+cvec_push_rvalue(vec, x + 10);  // For computed values
 ```
 
-### Custom Memory Management
+#### Maps and Variable Requirement
+
+**Important limitation:** Due to C's constraints, convenience macros of the map implementations (`chmap` and `cbmap`)
+cannot directly consume rvalue expressions or literal constants (except string literals). You **must always** use variables:
 
 ```c
-ccol_memmgmt_procs_t mprocs = {
-    .alloc = my_alloc,
-    .calloc = my_calloc,
-    .realloc = my_realloc,
-    .free = my_free
-};
-cvec vec = cvector_create_with_mprocs(sizeof(int), &mprocs, &err);
-```
+chmap_construct(map, int, char*);
 
----
-
-## Hash Maps (chashmap)
-
-**Header:** `chashmap.h`  
-**Source:** `chashmap.c`
-
-Hash table with **dual implementation strategy** for optimal performance.
-
-### Key Characteristics
-
-**Dual Implementation:**
-- **Open Addressing** (linear probing) for integral types (int, float, double, etc.)
-  - Compact 17-byte slot structure
-  - Linear probing with prefetching
-  - 70% max load factor, 25% min load factor
-  - Fibonacci hashing for integers
-- **Separate Chaining** (linked lists) for other types (strings, pointers, structs)
-  - Doubly-linked list for insertion-order iteration
-  - Small String Optimization (SSO) - up to 23 bytes inline
-  - 1.5× load factor for scale-up, 1/8× for scale-down
-  
-**Common Features:**
-- **Minimum buckets**: 64 (always power-of-2)
-- **Scaling factor**: 4× up, 0.25× down
-- **Default hash**: XXHash64 (not DJB2!)
-- **Complexity**: O(1) average, O(n) worst case per bucket
-
-### Hash Functions
-
-**XXHash64** - Primary hash function for non-integral types:
-```c
-// Fast, high-quality 64-bit hash
-uint64_t xxhash64(const void *data, size_t len, uint64_t seed)
-```
-
-**Fibonacci Hashing** - Optimized for integral types:
-```c
-// Multiplicative hash: key * 11400714819323198485ULL
-size_t hash = key * FIBONACCI_HASH_MULTIPLIER;
-```
-
-### Basic Operations
-
-```c
-// Create map (automatically selects implementation based on key type)
-char *err = NULL;
-chmap map = chmap_create(64, ccol_int, &err);  // Uses open addressing
-chmap str_map = chmap_create(64, ccol_string, &err);  // Uses separate chaining
-
-// Insert key-value
-cmap_pair kp, vp;
-int key = 42;
-char *value = "hello";
-_populate_cmap_pair(&kp, key);
-_populate_cmap_pair(&vp, value);
-
-if (chmap_insert_elem(map, &kp, &vp) != ccol_success) {
-    // Handle error
-}
-
-// Get value (copy)
-char buffer[256];
-if (chmap_get_elem_copy(map, &kp, buffer, sizeof(buffer)) == ccol_success) {
-    printf("Value: %s\n", buffer);
-}
-
-// Get value (reference)
-cmap_pair *val_ref;
-if (chmap_get_elem_ref(map, &kp, &val_ref) == ccol_success) {
-    printf("Value: %s\n", (char*)val_ref->ptr);
-    // Don't free val_ref - it's owned by the map
-}
-
-// Delete
-chmap_delete_elem(map, &kp);
-
-// Count
-size_t count = chmap_elem_count(map);
-
-// Reset
-chmap_reset(map, 0);  // Keep current size
-chmap_reset(map, 128); // Resize to 128 buckets
-
-// Destroy
-chmap_destroy(map);
-```
-
-### Type-Safe Macros
-
-There are two ways to create a hash map:
-
-**Option 1: Declare then Init (two steps)**
-```c
-chmap_declare(map, int, char*);  // Declare with types
-chmap_init(map);                 // Initialize
-```
-
-**Option 2: Construct (single step - combines both)**
-```c
-chmap_construct(map, int, char*);  // Declare + init in one
-```
-
-**Using the map:**
-```c
-// Insert
+// Correct - using variables
 int key = 42;
 char *value = "hello";
 chmap_insert(map, key, value);
 
-// Get (returns pointer to value)
-char **val_ptr = chmap_get(map, key);
-if (val_ptr) {
-    printf("Value: %s\n", *val_ptr);
+// INCORRECT - literals/constants don't work
+chmap_insert(map, 42, "world");  // ERROR: cannot take address of constant
+
+// For literals, assign to variables first
+int key2 = 1;
+char *value2 = "world";
+chmap_insert(map, key2, value2);
+
+// String literals do not have that limitation
+int key3 = 2;
+chmap_insert(map, key3, "foo");
+
+// For complex expressions, use temporary variables
+int computed_key = expensive_calculation();
+char *computed_value = build_string();
+chmap_insert(map, computed_key, computed_value);
+```
+
+This limitation exists because the map insert macros take addresses of the key and value parameters using the `&` operator. Since constants and rvalue expressions have no addressable storage, this operation fails. Always store your keys and values in variables before passing them to map operations.
+
+### Return Values
+
+Most operations return `ccol_retval_t` status codes:
+
+```c
+typedef enum {
+  ccol_unexpected_failure,      /**< -9: Unexpected/unknown error */
+  ccol_container_empty,         /**< -8: Container has no elements */
+  ccol_container_full,          /**< -7: Container at maximum capacity */
+  ccol_timed_out,               /**< -6: Operation timed out */
+  ccol_not_permitted,           /**< -5: Operation not allowed in current state */
+  ccol_invalid_args,            /**< -4: Invalid arguments provided */
+  ccol_key_not_found,           /**< -3: Key does not exist in map */
+  ccol_key_already_present,     /**< -2: Key already exists (for update operations) */
+  ccol_not_enough_memory,       /**< -1: Memory allocation failed */
+  ccol_success                  /**<  0: Operation succeeded */
+} ccol_retval_t;
+```
+
+The majority of the convenience macros call `fatal_err()` on a non-recoverable failure, terminating the program (When they detect a caller bug or when there is a shortage of resources). For finer control, use the underlying functions directly.
+
+## Data Structures
+
+### Vector (cvector)
+
+Dynamic array with automatic resizing.
+
+#### Features
+
+- Amortized O(1) push and pop operations
+- Minimum capacity of 4 elements
+- Grows by 2× when full, shrinks by 0.5× when less than 1/4 full
+- Stable sorting via mergesort integration
+- Type-safe element access
+
+#### Basic Operations
+
+```c
+// Creation
+cvec_construct(vec, int);
+cvec_construct_mp(vec_custom, double, my_mprocs);  // Custom memory management
+cvec_construct_scoped(temp, int);                  // Auto-cleanup
+
+// Adding elements
+int x = 10;
+cvec_push(vec, x);              // Push lvalue
+cvec_push_rvalue(vec, 42);      // Push rvalue/literal
+
+// Accessing elements
+int first = cvec_at(vec, 0);         // Returns reference to the value (Dereferenced pointer)
+cvec_at(vec, 0) = 3;                 // Also modifies in place
+
+// Size and capacity
+size_t count = cvec_size(vec);
+
+// Iteration
+// Index-based (traditional)
+for (size_t i = 0; i < cvec_size(vec); i++) {
+    printf("%d ", cvec_at(vec, i));
+    cvec_at(vec, i) += 1; // Can also be used for in place modifications
 }
 
-// Delete
-chmap_delete(map, key);
+// Removing elements
+int last = cvec_pop(vec);  // Returns value
 
-// Iteration (insertion order for separate chaining)
-for (chmap_iter_declare(map, it) = chmap_begin(map);
-     it; it = chmap_iter_next(it)) {
-    int *k = chmap_iter_key_ptr(it);
-    char **v = chmap_iter_val_ptr(it);
-    printf("%d -> %s\n", *k, *v);
-}
+// Sorting
+cvec_sort(vec);                              // Default comparison
+cvec_sort_with_comparison_proc(vec, my_cmp); // Custom comparison
+
+// Cleanup
+cvec_reset(vec);      // Clear all elements, reset capacity
+cvec_destroy(vec);    // Destroy and set to NULL
 ```
 
-### Custom Hash Function
+#### Example: Processing Data
 
 ```c
-size_t my_hash(const void *key_data) {
-    const int *k = (const int*)key_data;
-    return *k * 2654435761u;  // Knuth's multiplicative hash
-}
+cvec_construct(temperatures, double);
 
-chmap map = chmap_create_ch(64, ccol_int, my_hash, &err);
+// Collect temperature readings
+cvec_push_rvalue(temperatures, 23.5);
+cvec_push_rvalue(temperatures, 21.8);
+cvec_push_rvalue(temperatures, 24.2);
+
+// Sort the data
+cvec_sort(temperatures);
+
+// Calculate median
+size_t n = cvec_size(temperatures);
+double median = cvec_at(temperatures, n / 2);
+
+printf("Median temperature: %.1f°C\n", median);
+
+cvec_destroy(temperatures);
 ```
 
-### Small String Optimization (SSO)
+### Hash Map (chashmap)
 
-For separate chaining maps, strings up to 23 bytes are stored inline:
+Dictionary/associative array with O(1) average-case operations.
+
+#### Features
+
+The hash map automatically selects between two implementation strategies based on key and value types:
+
+**Open-Addressing** (for integral types ≤8 bytes for both key and value):
+- Compact 17-byte slots (8-byte key + 8-byte value + 1-byte metadata)
+- Linear probing with Fibonacci hashing for integers
+- Load factor thresholds: 0.70 (grow) / 0.25 (shrink)
+- Zero per-entry allocations
+- Excellent cache locality
+
+**Separate Chaining** (for non-integral types or types >8 bytes):
+- Linked lists for collision resolution
+- Small String Optimization: 23-byte inline storage
+- Doubly-linked list maintains insertion order
+- Minimum 64 buckets (always power-of-2)
+- Scale factor: 4× (grows to 4×, shrinks to 0.25×)
+
+Both implementations:
+- Default hashing: XXHash64 for buffers, Fibonacci for integers
+- Custom hashing function support
+- Automatic resizing based on load factor
+
+#### Basic Operations
 
 ```c
-typedef struct chmap_entry {
-  union {
-    void* ptr;           // Heap-allocated for > 23 bytes
-    char inline_data[24]; // Stack storage for ≤ 23 bytes
-  } key_storage;
-  bool key_is_inline;
-  // ... same for value
-} chmap_entry;
-```
+// Creation - implementation chosen automatically based on types
+chmap_construct(map, int, char*);           // Separate chaining (string value)
+chmap_construct(numbers, int, int);         // Open-addressing (both integral ≤8 bytes)
+chmap_construct(cache, char*, double);      // Separate chaining (string key)
 
-### Implementation Selection
+// With custom settings
+chmap_construct_full(map, char*, int, 128, my_mprocs, my_hash_func);
 
-The implementation is automatically chosen based on key type:
-
-```c
-// Integral types → Open Addressing
-chmap_construct(int_map, int, char*);        // Open addressing
-chmap_construct(float_map, float, int);      // Open addressing
-
-// Other types → Separate Chaining
-chmap_construct(str_map, char*, int);        // Separate chaining
-chmap_construct(ptr_map, void*, char*);      // Separate chaining
-```
-
----
-
-## BST Maps (cbstmap)
-
-**Header:** `cbstmap.h`  
-**Source:** `cbstmap.c`
-
-Self-balancing binary search tree (AVL tree) with sorted keys.
-
-### Key Characteristics
-
-- **Balance**: AVL tree (|height(left) - height(right)| ≤ 1)
-- **Rotations**: Single (L/R) and double (LR/RL)
-- **Implementation**: Iterative with explicit stacks (no recursion)
-- **Iteration**: In-order traversal (sorted key order)
-- **Complexity**: O(log n) all operations
-- **Default comparison**: memcmp (unsigned), proper signed comparison
-
-### AVL Balancing
-
-The tree maintains balance through four rotation types:
-
-```
-Left-Left (LL):         Right-Right (RR):
-    z                        z
-   /                          \
-  y        =>       y           y       =>      y
- /                /   \          \               / \
-x                x     z          x             z   x
-
-Left-Right (LR):        Right-Left (RL):
-    z                        z
-   /                          \
-  x        =>       y           x       =>      y
-   \               / \         /               / \
-    y             x   z       y               z   x
-```
-
-### Basic Operations
-
-```c
-// Create map
-char *err = NULL;
-cbmap map = cbmap_create(false, &err);  // false = unsigned keys
-
-// Insert (auto-balancing)
-cmap_pair kp, vp;
+// Insertion (always use variables - constants and rvalues don't work)
 int key = 42;
 char *value = "hello";
-_populate_cmap_pair(&kp, key);
-_populate_cmap_pair(&vp, value);
+chmap_insert(map, key, value);
 
-cbmap_insert_elem(map, &kp, &vp);
+// Multiple insertions
+int key2 = 100;
+char *value2 = "world";
+chmap_insert(map, key2, value2);
 
-// Get value
-char buffer[256];
-if (cbmap_get_elem_copy(map, &kp, buffer, sizeof(buffer)) == ccol_success) {
-    printf("Value: %s\n", buffer);
+// Retrieval
+int lookup_key = 42;
+char *val = chmap_get(map, lookup_key);          // Returns value, fatal_err if not found
+char **ptr = chmap_get_ptr(map, lookup_key);     // Returns pointer or NULL
+
+// Check existence
+if (chmap_get_ptr(map, lookup_key) != NULL) {
+    printf("Key exists\n");
 }
 
-// Delete (auto-rebalancing)
-cbmap_delete_elem(map, &kp);
-
-// Count
-size_t count = cbmap_elem_count(map);
-
-// Reset
-cbmap_reset(map);
-
-// Destroy
-cbmap_destroy(map);
-```
-
-### Type-Safe Macros
-
-There are two ways to create a BST map:
-
-**Option 1: Declare then Init (two steps)**
-```c
-cbmap_declare(map, int, char*);  // Declare with types
-cbmap_init(map);                 // Initialize (auto-detects signedness)
-```
-
-**Option 2: Construct (single step - combines both)**
-```c
-cbmap_construct(map, int, char*);  // Declare + init in one (auto-detects signedness)
-```
-
-**Using the map:**
-```c
-// Insert
-cbmap_insert(map, key, value);
-
-// Get
-char **val = cbmap_get(map, key);
-
-// Delete
-cbmap_delete(map, key);
-
-// Iteration (sorted order)
-for (cbmap_iter_declare(map, it) = cbmap_begin(map);
-     it; it = cbmap_iter_next(it)) {
-    int *k = cbmap_iter_key_ptr(it);
-    char **v = cbmap_iter_val_ptr(it);
-    printf("%d -> %s\n", *k, *v);
+// Removal
+int remove_key = 42;
+ccol_retval_t result = chmap_remove(map, remove_key);
+if (result == ccol_key_not_found) {
+    printf("Key not found\n");
 }
+
+// Iteration - RECOMMENDED METHOD
+// The chmap_for_each macro is the standard way to iterate
+chmap_for_each(map, it, {
+    int k = *chmap_iter_key_ptr(it);
+    char *v = *chmap_iter_val_ptr(it);
+    printf("Key: %d, Value: %s\n", k, v);
+});
+
+// Manual iteration (if you need more control)
+// Please notice that the iterator has to be declared outside
+// of the for loop. That's why the chmap_for_each exists in
+// the first place.
+chmap_iter_declare(map, it);
+for (it = chmap_begin(map); it != NULL; it = chmap_iter_next(it)) {
+    int k = *chmap_iter_key_ptr(it);
+    char *v = *chmap_iter_val_ptr(it);
+    printf("Key: %d, Value: %s\n", k, v);
+}
+
+// Cleanup
+chmap_reset(map);     // Remove all entries
+chmap_destroy(map);   // Destroy and set to NULL
 ```
 
-**Custom initialization variants:**
-```c
-// Declare first
-cbmap_declare(map, int, char*);
+#### Example: Word Frequency Counter
 
-// Then init with custom options
-cbmap_init_mp(map, &my_mem_procs);           // Custom memory management
-cbmap_init_cc(map, my_comparison_func);      // Custom comparison
-cbmap_init_full(map, &my_mem_procs, my_cmp); // Both custom
+```c
+chmap_construct(word_count, char*, int);
+
+// Count word occurrences
+const char *words[] = {"hello", "world", "hello", "foo", "world", "hello"};
+for (size_t i = 0; i < 6; i++) {
+    char *word = (char*)words[i];
+    int *count_ptr = chmap_get_ptr(word_count, word);
+    if (count_ptr) {
+        (*count_ptr)++;
+    } else {
+        int initial = 1;
+        chmap_insert(word_count, word, initial);
+    }
+}
+
+// Print results
+chmap_for_each(word_count, it, {
+    const char *word = *chmap_iter_key_ptr(it);
+    int count = *chmap_iter_val_ptr(it);
+    printf("%s: %d\n", word, count);
+});
+
+chmap_destroy(word_count);
 ```
 
-### Deletion Strategy
+### Binary Search Tree Map (cbstmap)
 
-For nodes with two children:
-- **Right deeper or equal**: Replace with right subtree minimum
-- **Left deeper**: Replace with left subtree maximum
+Ordered map using self-balancing AVL tree.
 
----
+#### Features
 
-## Thread Communication (cthreadcomm)
+- Self-balancing AVL tree (|height(left) - height(right)| ≤ 1)
+- O(log n) insert, delete, and search
+- In-order iteration (sorted by key)
+- All operations are iterative (no recursion, stack-safe)
+- Configurable signed/unsigned key comparison
+- Custom comparison function support
 
-**Header:** `cthreadcomm.h`  
-**Source:** `cthreadcomm.c`
-
-Thread-safe message passing primitives using zero-copy semantics.
-
-### Zero-Copy Semantics
+#### Basic Operations
 
 ```c
-typedef struct c_message_t {
-  void *data;   // Ownership transfers on send
-  size_t size;
-} c_message_t;
+// Creation
+cbmap_construct(tree, int, char*);                    // Signed integer keys
+cbmap_construct_unsigned(tree2, unsigned int, int);   // Unsigned integer keys
+
+// With custom comparison
+int my_compare(const void *a, const void *b) {
+    return strcmp(*(char**)a, *(char**)b);
+}
+cbmap_construct_ch(string_tree, char*, int, my_compare);
+
+// Insertion (always use variables - automatic rebalancing)
+int key = 42;
+char *value = "hello";
+cbmap_insert(tree, key, value);
+
+// Multiple insertions
+int key2 = 10;
+char *value2 = "world";
+cbmap_insert(tree, key2, value2);
+
+// Retrieval
+int lookup_key = 42;
+char *val = cbmap_get(tree, lookup_key);      // Returns value, fatal_err if not found
+char **ptr = cbmap_get_ptr(tree, lookup_key); // Returns pointer or NULL
+
+// Removal (automatic rebalancing)
+int remove_key = 42;
+ccol_retval_t result = cbmap_remove(tree, remove_key);
+
+// Iteration - RECOMMENDED METHOD (traverses in sorted key order)
+// The cbmap_for_each macro is the standard way to iterate
+cbmap_for_each(tree, it, {
+    int k = *cbmap_iter_key_ptr(it);
+    char *v = *cbmap_iter_val_ptr(it);
+    printf("Key: %d, Value: %s\n", k, v);
+});
+
+// Manual iteration (if you need more control)
+// Again, please notice that this approach declares
+// the iterator in the outer scope. The cbmap_for_each
+// does not have that problem.
+cbmap_iter_declare(tree, it);
+for (it = cbmap_begin(tree); it != NULL; it = cbmap_iter_next(it)) {
+    int k = *cbmap_iter_key_ptr(it);
+    char *v = *cbmap_iter_val_ptr(it);
+    printf("Key: %d, Value: %s\n", k, v);
+}
+
+// Cleanup
+cbmap_reset(tree);    // Remove all nodes
+cbmap_destroy(tree);  // Destroy and set to NULL
 ```
 
-**Key principle**: After successful send, sender's `data` pointer is set to NULL. Receiver gains ownership and must free.
-
-### Circular Queue
-
-**Bounded, blocking queue with backpressure.**
+#### Example: Range Queries
 
 ```c
-// Create
-circular_queue *cq = circular_queue_create(100, &err);
+cbmap_construct(scores, int, char*);
 
-// Send (blocking)
-c_message_t msg = {
-    .data = malloc(256),
-    .size = 256
+// Insert student scores (use variables)
+int score1 = 95;
+char *name1 = "Alice";
+cbmap_insert(scores, score1, name1);
+
+int score2 = 82;
+char *name2 = "Bob";
+cbmap_insert(scores, score2, name2);
+
+int score3 = 78;
+char *name3 = "Charlie";
+cbmap_insert(scores, score3, name3);
+
+int score4 = 91;
+char *name4 = "Diana";
+cbmap_insert(scores, score4, name4);
+
+// Iterate in sorted order (by score)
+printf("Scores from lowest to highest:\n");
+cbmap_for_each(scores, it, {
+    int *score = cbmap_iter_key_ptr(it);
+    char **name = cbmap_iter_val_ptr(it);
+    printf("%s: %d\n", *name, *score);
+});
+
+cbmap_destroy(scores);
+```
+
+### Sorting (csort)
+
+Generic stable sorting using iterative mergesort.
+
+#### Features
+
+- Stable sort (preserves relative order of equal elements)
+- O(n log n) time complexity in all cases
+- O(n) space complexity for temporary buffer
+- Iterative implementation (no recursion, no stack overflow risk)
+- Default comparison functions for all standard C types
+- Works with any collection type via getter abstraction
+
+#### Basic Operations
+
+```c
+// Sort a vector (most common and simplest use case)
+cvec_construct(vec, int);
+// ... add elements ...
+cvec_sort(vec);                              // Default comparison
+cvec_sort_with_comparison_proc(vec, my_cmp); // Custom comparison
+
+// Sort a C array
+int numbers[] = {5, 2, 8, 1, 9};
+size_t count = sizeof(numbers) / sizeof(numbers[0]);
+
+// Getter function for plain arrays
+void *array_getter(void *collection, size_t index) {
+    return &((int*)collection)[index];
+}
+
+// Custom comparison
+int int_compare(const void *a, const void *b) {
+    int x = *(const int*)a;
+    int y = *(const int*)b;
+    return (x > y) - (x < y);
+}
+
+// Sort the array
+csort_sort(numbers, count, sizeof(int), array_getter, int_compare, NULL);
+```
+
+#### Example: Sorting Custom Structures
+
+```c
+typedef struct {
+    char name[50];
+    int age;
+} Person;
+
+int compare_by_age(const void *a, const void *b) {
+    const Person *p1 = (const Person*)a;
+    const Person *p2 = (const Person*)b;
+    return (p1->age > p2->age) - (p1->age < p2->age);
+}
+
+void *person_array_getter(void *collection, size_t index) {
+    return &((Person*)collection)[index];
+}
+
+Person people[] = {
+    {"Alice", 30},
+    {"Bob", 25},
+    {"Charlie", 35}
 };
-strcpy(msg.data, "Hello");
-circq_send_zc(cq, &msg);  // Blocks if full, msg.data becomes NULL
 
-// Try send (non-blocking)
-if (circq_try_send_zc(cq, &msg) == ccol_container_full) {
-    // Queue is full
+csort_sort(people, 3, sizeof(Person), person_array_getter, compare_by_age, NULL);
+
+for (int i = 0; i < 3; i++) {
+    printf("%s: %d years old\n", people[i].name, people[i].age);
+}
+```
+
+### Memory Pools (cmempool)
+
+Fixed-size and ranged memory pool allocators for efficient memory management.
+
+#### Features
+
+- O(1) allocation and deallocation
+- Thread-safe or single-threaded operation
+- Preallocated buffer support (useful for embedded systems)
+- Optional fallback to dynamic allocation
+- Corruption detection via assertions
+- Zero external fragmentation (fixed-size pools)
+
+#### Fixed-Size Memory Pool
+
+```c
+// Create a pool of 100 elements, each 64 bytes
+mempool *pool = mempool_create(100, 64, false, false, NULL, NULL);
+//                               │   │    │      │      │     └─ error string
+//                               │   │    │      │      └─ memory management
+//                               │   │    │      └─ single threaded?
+//                               │   │    └─ fallback to malloc?
+//                               │   └─ element size
+//                               └─ element count
+
+// Allocate entries
+void *entry1 = mempool_alloc_entry(pool);
+void *entry2 = mempool_calloc_entry(pool);  // Zero-initialized
+
+// Use the entries
+strcpy(entry1, "Hello");
+
+// Free entries back to pool
+mempool_free_entry(entry1);
+mempool_free_entry(entry2);
+
+// Cleanup
+mempool_destroy(pool);
+```
+
+#### Preallocated Buffer (Embedded Systems)
+
+```c
+// Declare a buffer in static storage
+DECLARE_PREALLOCATED_MEMPOOL_BUFFER(my_buffer, 100, 64);
+
+// Create pool from preallocated buffer
+mempool *pool = mempool_create_from_preallocated_buffer(
+    my_buffer, sizeof(my_buffer), 64, false, true, NULL, NULL);
+
+// Use normally...
+void *entry = mempool_alloc_entry(pool);
+
+// Cleanup (buffer itself is not freed)
+mempool_destroy(pool);
+```
+
+#### Ranged Memory Pool
+
+For allocations of varying sizes:
+
+```c
+// Create ranged pool: sizes from 2^4 (16) to 2^12 (4096) bytes
+// With 2^9 (512) elements in the smallest pool
+// -------------------------------
+// | Elem size    |   Elem count |
+// |------------------------------
+// | 2^4  (16)    |   2^9 (512)  |
+// | 2^5  (32)    |   2^8 (256)  |
+// | 2^6  (64)    |   2^7 (128)  |
+// | 2^7  (128)   |   2^6 (64)   |
+// | 2^8  (256)   |   2^5 (32)   |
+// | 2^9  (512)   |   2^4 (16)   |
+// | 2^10 (1024)  |   2^3 (8)    |
+// | 2^11 (2048)  |   2^2 (4)    |
+// | 2^12 (4096)  |   2^1 (2)    |
+// -------------------------------
+r_mempool *rpool = r_mempool_create(4, 12, 9,
+                                    // Try to allocate from the internal buffers first, when
+                                    // they are exhausted, fallback to the provided memory
+                                    // management mechanism (here it is heap, since the second
+                                    // pointer from the end is NULL).
+                                    fallback_at_last_exhaustion,
+                                    false, // not-single-threaded, internal locks are enabled
+                                    NULL,  // No memory management procs are provided, fallback to heap.
+                                    NULL); // We are not interested in any error strings.
+
+// Allocate various sizes (automatically selects appropriate sub-pool)
+void *small = r_mempool_alloc_entry(rpool, 20);   // Uses 32-byte pool
+void *medium = r_mempool_alloc_entry(rpool, 100); // Uses 128-byte pool
+void *large = r_mempool_alloc_entry(rpool, 500);  // Uses 512-byte pool
+
+// Reallocate if needed
+medium = r_mempool_realloc_entry(rpool, medium, 200);  // Will move to 256-byte pool from 128-byte pool
+
+// Query pool statistics
+size_t used = r_mempool_used_count(rpool, 100);
+size_t capacity = r_mempool_total_capacity(rpool, 100);
+printf("Pool utilization: %zu/%zu\n", used, capacity);
+
+// Cleanup
+r_mempool_free_entry(small);
+r_mempool_free_entry(medium);
+r_mempool_free_entry(large);
+r_mempool_destroy(rpool);
+```
+
+### Thread Communication (cthreadcomm)
+
+Thread-safe message passing primitives.
+
+#### Features
+
+- Zero-copy semantics (ownership transfer)
+- Designed to accept dynamically allocated data buffers
+- Three abstractions: circular queue, dynamic queue, and bidirectional channel
+- Blocking, non-blocking, and timed operations
+- Thread-safe
+- Message ownership transferr prevents data races
+
+#### Circular Queue (Strictly Bounded)
+
+Fixed-size queue with blocking backpressure:
+
+```c
+// Create queue that holds max 10 messages
+circular_queue *cq = circular_queue_create(10, NULL);
+
+// Send messages (blocks if full)
+c_message_t msg = {
+    .data = strdup("Hello"),
+    .size = 6
+};
+circq_send_zc(cq, &msg);  // msg.data is now NULL (ownership transferred)
+
+// Try to send without blocking
+c_message_t msg2 = { .data = strdup("World"), .size = 6 };
+ccol_retval_t result = circq_try_send_zc(cq, &msg2);
+if (result == ccol_container_full) {
+    printf("Queue full, message not sent\n");
+    free(msg2.data);  // Still own the data if send failed
 }
 
-// Timed send
-struct timespec timeout = {.tv_sec = 1, .tv_nsec = 0};
-ccol_retval_t ret = circq_timed_send_zc(cq, &msg, &timeout);
+// Receive messages (blocks if empty)
+c_message_t received;
+circq_recv_zc(cq, &received);
+printf("Received: %s\n", (char*)received.data);
+free(received.data);  // Now we own and must free the data
 
-// Receive (blocking)
-c_message_t recv_msg;
-circq_recv_zc(cq, &recv_msg);
-printf("%s\n", (char*)recv_msg.data);
-free(recv_msg.data);  // Receiver must free
-
-// Disable/enable sending
-circq_disable_sending(cq);  // Wakes all blocked senders
-circq_enable_sending(cq);
-
-// Count
-size_t count = circq_msg_count(cq);
-
-// Destroy
+// Cleanup
 circular_queue_destroy(cq);
 ```
 
-### Dynamic Queue
+#### Dynamic Queue (Loosely Bounded)
 
-**Unbounded queue, send never blocks.**
+Linked-list based queue that grows dynamically up to **`18446744073709551614`**
+unconsumed messages, as long as there is enough memory:
 
 ```c
-// Create
-dynamic_queue *dq = dynamic_queue_create(&err);
+dynamic_queue *dq = dynamic_queue_create(NULL);
 
-// Send (never blocks)
-c_message_t msg = {.data = malloc(256), .size = 256};
+// Send never fails (unless memory exhausted) and never gets blocked
+c_message_t msg = { .data = strdup("Message"), .size = 8 };
 dynq_send_zc(dq, &msg);
 
-// Receive (blocking)
-c_message_t recv_msg;
-dynq_recv_zc(dq, &recv_msg);
-free(recv_msg.data);
+// Receive works same as circular queue
+c_message_t received;
+dynq_recv_zc(dq, &received);
+free(received.data);
 
-// Try receive (non-blocking)
-if (dynq_try_recv_zc(dq, &recv_msg) == ccol_container_empty) {
-    // Queue is empty
-}
-
-// Timed receive
-struct timespec timeout = {.tv_sec = 1, .tv_nsec = 0};
-dynq_timed_recv_zc(dq, &recv_msg, &timeout);
-
-// Count
-size_t count = dynq_msg_count(dq);
-
-// Destroy
 dynamic_queue_destroy(dq);
 ```
 
-### Channel
+#### Channel (Bidirectional, Strictly Bounded)
 
-**Bidirectional owner-worker communication.**
+Owner-worker communication pattern:
 
 ```c
-// Create
-channel *ch = channel_create(100, &err);  // 100 = queue capacity
+// Create channel with capacity 10 in each direction
+channel *ch = channel_create(10, NULL);
 
-// Owner sends to worker
-c_message_t msg = {.data = malloc(256), .size = 256};
-channel_send_to_worker_zc(ch, &msg);
+// From worker thread: send to owner
+void *worker_thread(void *arg) {
+    channel *ch = (channel*)arg;
+    
+    c_message_t msg = { .data = strdup("Result"), .size = 7 };
+    chan_send_zc(ch, &msg);  // Automatically routes to workers_to_owner queue
+    
+    return NULL;
+}
 
-// Worker receives from owner
-c_message_t recv_msg;
-channel_recv_from_owner_zc(ch, &recv_msg);
-// Process...
-free(recv_msg.data);
+// From owner thread: send to workers
+c_message_t task = { .data = strdup("Task"), .size = 5 };
+chan_send_zc(ch, &task);  // Automatically routes to owner_to_workers queue
 
-// Worker sends response to owner
-c_message_t resp = {.data = malloc(128), .size = 128};
-channel_send_to_owner_zc(ch, &resp);
+// Receive from workers
+c_message_t result;
+chan_recv_zc(ch, &result);
+printf("Worker result: %s\n", (char*)result.data);
+free(result.data);
 
-// Owner receives response
-channel_recv_from_worker_zc(ch, &recv_msg);
-free(recv_msg.data);
+// Control flow
+chan_disable_sending(ch, owner_to_workers);  // Stop new tasks
+chan_enable_sending(ch, owner_to_workers);   // Resume tasks
 
-// Control
-channel_disable_sending_to_worker(ch);
-channel_enable_sending_to_worker(ch);
+// Query state
+size_t pending = chan_msg_count(ch, workers_to_owner);
+printf("%zu messages pending from workers\n", pending);
 
-// Count
-size_t to_worker = channel_to_worker_msg_count(ch);
-size_t to_owner = channel_to_owner_msg_count(ch);
-
-// Destroy
 channel_destroy(ch);
 ```
 
-### Producer-Consumer Example
+#### Example: Producer-Consumer
 
 ```c
+#include <cthreadcomm.h>
+#include <pthread.h>
+
+circular_queue *queue;
+
 void *producer(void *arg) {
-    circular_queue *cq = (circular_queue*)arg;
-    
     for (int i = 0; i < 100; i++) {
-        c_message_t msg = {
-            .data = malloc(sizeof(int)),
-            .size = sizeof(int)
-        };
-        *(int*)msg.data = i;
-        circq_send_zc(cq, &msg);
+        int *data = malloc(sizeof(int));
+        *data = i;
+        
+        c_message_t msg = { .data = data, .size = sizeof(int) };
+        circq_send_zc(queue, &msg);
     }
     
     // Send sentinel
-    c_message_t sentinel = {.data = NULL, .size = 0};
-    circq_send_zc(cq, &sentinel);
+    c_message_t sentinel = { .data = NULL, .size = 0 };
+    circq_send_zc(queue, &sentinel);
+    
     return NULL;
 }
 
 void *consumer(void *arg) {
-    circular_queue *cq = (circular_queue*)arg;
-    
     while (1) {
         c_message_t msg;
-        circq_recv_zc(cq, &msg);
+        circq_recv_zc(queue, &msg);
         
         if (msg.data == NULL) {
             break;  // Sentinel received
         }
         
-        printf("Received: %d\n", *(int*)msg.data);
+        int value = *(int*)msg.data;
+        printf("Consumed: %d\n", value);
         free(msg.data);
     }
-    return NULL;
-}
-
-// Usage
-circular_queue *cq = circular_queue_create(10, NULL);
-pthread_t prod_thread, cons_thread;
-pthread_create(&prod_thread, NULL, producer, cq);
-pthread_create(&cons_thread, NULL, consumer, cq);
-pthread_join(prod_thread, NULL);
-pthread_join(cons_thread, NULL);
-circular_queue_destroy(cq);
-```
-
----
-
-## Memory Pools (cmempool)
-
-**Header:** `cmempool.h`  
-**Source:** `cmempool.c`
-
-Fixed-size and ranged memory allocators.
-
-### Fixed-Size Memory Pool
-
-**O(1) allocation/deallocation with free list.**
-
-```c
-// Create pool
-mempool *mp = mempool_create(
-    100,              // 100 elements
-    64,               // 64 bytes each
-    true,             // Fallback to dynamic when exhausted
-    false,            // Thread-safe
-    NULL,             // Default allocator
-    &err
-);
-
-// Allocate
-void *ptr = mempool_alloc_entry(mp);
-if (ptr) {
-    // Use memory...
-}
-
-// Allocate zeroed
-void *zptr = mempool_calloc_entry(mp);
-
-// Free
-mempool_free_entry(ptr);  // Sets ptr to NULL
-
-// Query
-size_t total = mempool_total_capacity(mp);
-size_t used = mempool_used_count(mp);
-size_t dynamic = mempool_dynamic_allocs_count(mp);
-
-// Destroy
-mempool_destroy(mp);
-```
-
-### Preallocated Buffer Pool
-
-**For embedded systems or avoiding heap.**
-
-```c
-// Declare buffer
-DECLARE_PREALLOCATED_MEMPOOL_BUFFER(buffer, 100, 64);
-
-// Create pool from buffer
-mempool *mp = mempool_create_from_preallocated_buffer(
-    buffer,
-    sizeof(buffer),
-    64,
-    false,            // No fallback
-    true,             // Single-threaded
-    NULL,
-    &err
-);
-
-// Use normally...
-void *ptr = mempool_alloc_entry(mp);
-mempool_free_entry(ptr);
-
-// Destroy (buffer is NOT freed)
-mempool_destroy(mp);
-```
-
-### Ranged Memory Pool
-
-**Multiple pools for power-of-2 sizes.**
-
-```c
-// Create ranged pool
-// Pool 0: 2^4 = 16 bytes, 2^8 = 256 elements
-// Pool 1: 2^5 = 32 bytes, 2^7 = 128 elements
-// Pool 2: 2^6 = 64 bytes, 2^6 = 64 elements
-r_mempool *rmp = r_mempool_create(
-    4,                              // Smallest: 2^4 = 16 bytes
-    6,                              // Largest: 2^6 = 64 bytes
-    8,                              // Smallest count: 2^8 = 256
-    fallback_at_first_exhaustion,   // Fallback policy
-    false,                          // Thread-safe
-    NULL,
-    &err
-);
-
-// Allocate (automatically selects pool)
-void *ptr16 = r_mempool_alloc_entry(rmp, 12);   // Uses 16-byte pool
-void *ptr32 = r_mempool_alloc_entry(rmp, 20);   // Uses 32-byte pool
-void *ptr64 = r_mempool_alloc_entry(rmp, 50);   // Uses 64-byte pool
-
-// Allocate zeroed
-void *zptr = r_mempool_calloc_entry(rmp, 16);
-
-// Free (automatically returns to correct pool)
-r_mempool_free_entry(ptr16);
-r_mempool_free_entry(ptr32);
-
-// Query
-size_t pool_count = r_mempool_get_pool_count(rmp);
-for (size_t i = 0; i < pool_count; i++) {
-    size_t elem_size = r_mempool_get_ith_pool_elem_size(rmp, i);
-    size_t capacity = r_mempool_get_ith_pool_capacity(rmp, i);
-    size_t used = r_mempool_get_ith_pool_used_count(rmp, i);
-    printf("Pool %zu: %zu bytes, %zu/%zu used\n", 
-           i, elem_size, used, capacity);
-}
-
-// Destroy
-r_mempool_destroy(rmp);
-```
-
-### Preallocated Ranged Pool
-
-```c
-// Declare buffer
-DECLARE_PREALLOCATED_RANGED_MEMPOOL_BUFFER(buffer, 4, 6, 8);
-
-r_mempool *rmp = r_mempool_create_from_preallocated_buffer(
-    buffer,
-    sizeof(buffer),
-    4, 6, 8,
-    fallback_disabled,
-    true,
-    NULL,
-    &err
-);
-
-// Use and destroy as normal
-```
-
-### Fallback Policies
-
-```c
-typedef enum r_memory_fallback_policy_t {
-  fallback_disabled,              // Never use heap
-  fallback_at_first_exhaustion,   // Each pool has fallback
-  fallback_at_last_exhaustion,    // Only after all pools exhausted
-} r_memory_fallback_policy_t;
-```
-
-### Corruption Detection
-
-Memory pools detect corruption via:
-- **Magic values**: Entry status markers
-- **Back-pointers**: Each entry points to owning pool
-- **Double-free detection**: Status checks
-- **Assertions**: Extensive validation
-
-```c
-#define MEMPOOL_ENTRY_TAKEN (size_t)0xDEADBEEFDEADBEEF
-#define MEMPOOL_ENTRY_FREE (size_t)0xFEEDBEADFEEDBEAD
-#define NOT_A_POOL_MEMBER (size_t)0xBADC0FFEEBADC0FE
-```
-
----
-
-## Sorting (csort)
-
-**Header:** `csort.h`  
-**Source:** `csort.c`
-
-Generic sorting with iterative merge sort.
-
-### Algorithm
-
-**Iterative bottom-up merge sort:**
-- Start with subarrays of size 1
-- Merge pairs: 1→2, 2→4, 4→8, ...
-- No recursion, stack-safe
-- Stable sort
-- O(n log n) time, O(n) space
-
-### Default Comparisons
-
-Automatic selection via `_Generic`:
-
-```c
-// Signed integers
-csort_default_char_comparison_proc
-csort_default_short_comparison_proc
-csort_default_int_comparison_proc
-csort_default_long_comparison_proc
-csort_default_long_long_comparison_proc
-
-// Unsigned integers
-csort_default_unsigned_char_comparison_proc
-csort_default_unsigned_short_comparison_proc
-csort_default_unsigned_int_comparison_proc
-csort_default_unsigned_long_comparison_proc
-csort_default_unsigned_long_long_comparison_proc
-
-// Floating-point
-csort_default_float_comparison_proc
-csort_default_double_comparison_proc
-csort_default_long_double_comparison_proc
-
-// Strings
-csort_default_string_comparison_proc
-```
-
-### Array Sorting
-
-```c
-// Array getter
-void *array_getter(void *collection, size_t index) {
-    int *arr = (int*)collection;
-    return &arr[index];
-}
-
-// Sort array
-int arr[] = {3, 1, 4, 1, 5, 9, 2, 6};
-size_t len = sizeof(arr) / sizeof(arr[0]);
-
-// With default comparison
-int dummy;
-csort_sort(arr, len, sizeof(int), array_getter,
-           csort_get_default_comparison_proc(dummy), NULL, NULL);
-
-// With custom comparison (descending)
-int cmp_desc(const void *a, const void *b) {
-    return *(int*)b - *(int*)a;
-}
-csort_sort(arr, len, sizeof(int), array_getter, cmp_desc, NULL, NULL);
-```
-
-### Vector Sorting
-
-```c
-cvec_construct(vec, int);
-// ... populate vec ...
-
-// Default comparison (ascending)
-cvec_sort(vec);
-
-// Custom comparison
-int cmp_desc(const void *a, const void *b) {
-    return *(int*)b - *(int*)a;
-}
-cvector_sort_with_comparison_proc(vec, cmp_desc);
-```
-
-### Custom Collection Sorting
-
-```c
-// Define getter for your collection
-void *my_getter(void *collection, size_t index) {
-    my_collection_t *col = (my_collection_t*)collection;
-    return my_collection_get(col, index);
-}
-
-// Define comparison
-int my_compare(const void *a, const void *b) {
-    const my_type_t *x = (const my_type_t*)a;
-    const my_type_t *y = (const my_type_t*)b;
-    // Return -1, 0, or 1
-}
-
-// Sort
-csort_sort(my_col, count, sizeof(my_type_t),
-           my_getter, my_compare, NULL, NULL);
-```
-
----
-
-## Memory Operations (memops)
-
-**Header:** `memops.h`  
-**Source:** `memops.c`
-
-Optimized memory operations for small sizes.
-
-### Small Copy Optimization
-
-```c
-void mem_cpy(void* dst, const void* src, size_t n);
-```
-
-**Optimization for sizes 0-8:**
-- **Direct assignments** using packed structs
-- **Eliminates loop overhead** for common sizes
-- **Falls back to memcpy** for larger sizes
-
-```c
-// Size-specific optimizations
-switch (n) {
-  case 0: return;
-  case 1: *(uint8_t*)dst = *(uint8_t*)src; return;
-  case 2: *(uint16_t*)dst = *(uint16_t*)src; return;
-  case 4: *(uint32_t*)dst = *(uint32_t*)src; return;
-  case 8: *(uint64_t*)dst = *(uint64_t*)src; return;
-  // 3, 5, 6, 7 use packed structs
-}
-```
-
-### Small Zero Optimization
-
-```c
-void mem_zero(void* dst, size_t n);
-```
-
-**Similar optimization for zeroing:**
-
-```c
-// Size-specific zeroing
-switch (n) {
-  case 0: return;
-  case 1: *(uint8_t*)dst = 0; return;
-  case 2: *(uint16_t*)dst = 0; return;
-  case 4: *(uint32_t*)dst = 0; return;
-  case 8: *(uint64_t*)dst = 0; return;
-  // 3, 5, 6, 7 use packed structs
-}
-```
-
-### Packed Structures
-
-```c
-typedef struct s3 {
-  uint16_t _0_;
-  uint8_t _1_;
-} __attribute__((packed)) s3;
-
-typedef struct s5 {
-  uint32_t _0_;
-  uint8_t _1_;
-} __attribute__((packed)) s5;
-
-typedef struct s6 {
-  uint32_t _0_;
-  uint16_t _1_;
-} __attribute__((packed)) s6;
-
-typedef struct s7 {
-  uint32_t _0_;
-  uint16_t _1_;
-  uint8_t _2_;
-} __attribute__((packed)) s7;
-```
-
-### Usage
-
-```c
-// Automatically optimized for common element sizes
-cvector uses mem_cpy for element copying
-circular_queue uses mem_cpy for message copying
-Memory pools use mem_zero for calloc operations
-```
-
----
-
-## Usage Examples
-
-### Example 1: Simple Vector
-
-```c
-#include <cvector.h>
-#include <stdio.h>
-
-int main(void) {
-    // Option 1: construct (single step)
-    cvec_construct(vec, int);
     
-    // Option 2: declare + init (two steps)
-    // cvec_declare(vec, int);
-    // cvec_init(vec);
-    
-    // Add elements
-    for (int i = 0; i < 10; i++) {
-        cvec_push_rvalue(vec, i * i);
-    }
-    
-    // Print
-    for (size_t i = 0; i < cvec_size(vec); i++) {
-        printf("%d ", cvec_at(vec, i));
-    }
-    printf("\n");
-    
-    // Sort
-    cvec_sort(vec);
-    
-    // Pop
-    while (cvec_size(vec) > 0) {
-        printf("%d ", cvec_pop(vec));
-    }
-    printf("\n");
-    
-    cvec_destroy(vec);
-    return 0;
-}
-```
-
-### Example 2: Hash Map with Strings
-
-```c
-#include <chashmap.h>
-#include <stdio.h>
-#include <string.h>
-
-int main(void) {
-    // Option 1: construct (single step)
-    chmap_construct(map, int, char*);
-    
-    // Option 2: declare + init (two steps)
-    // chmap_declare(map, int, char*);
-    // chmap_init(map);
-    
-    // Insert
-    chmap_insert(map, 1, "one");
-    chmap_insert(map, 2, "two");
-    chmap_insert(map, 3, "three");
-    
-    // Get
-    char **val = chmap_get(map, 2);
-    if (val) {
-        printf("Key 2: %s\n", *val);
-    }
-    
-    // Iterate (insertion order for separate chaining maps)
-    for (chmap_iter_declare(map, it) = chmap_begin(map);
-         it; it = chmap_iter_next(it)) {
-        int *k = chmap_iter_key_ptr(it);
-        char **v = chmap_iter_val_ptr(it);
-        printf("%d -> %s\n", *k, *v);
-    }
-    
-    chmap_destroy(map);
-    return 0;
-}
-```
-
-### Example 3: BST Map - Sorted Iteration
-
-```c
-#include <cbstmap.h>
-#include <stdio.h>
-
-int main(void) {
-    // Option 1: construct (single step)
-    cbmap_construct(map, unsigned int, double);
-    
-    // Option 2: declare + init (two steps)
-    // cbmap_declare(map, unsigned int, double);
-    // cbmap_init(map);
-    
-    // Insert in random order
-    cbmap_insert(map, 50, 5.0);
-    cbmap_insert(map, 30, 3.0);
-    cbmap_insert(map, 70, 7.0);
-    cbmap_insert(map, 20, 2.0);
-    cbmap_insert(map, 40, 4.0);
-    
-    // Iterate in sorted key order
-    printf("Sorted iteration:\n");
-    for (cbmap_iter_declare(map, it) = cbmap_begin(map);
-         it; it = cbmap_iter_next(it)) {
-        unsigned int *k = cbmap_iter_key_ptr(it);
-        double *v = cbmap_iter_val_ptr(it);
-        printf("%u -> %.1f\n", *k, *v);
-    }
-    
-    cbmap_destroy(map);
-    return 0;
-}
-```
-
-### Example 4: Producer-Consumer with Queue
-
-```c
-#include <cthreadcomm.h>
-#include <pthread.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-typedef struct {
-    int id;
-    char message[256];
-} task_t;
-
-void *producer(void *arg) {
-    circular_queue *cq = arg;
-    
-    for (int i = 0; i < 5; i++) {
-        task_t *task = malloc(sizeof(task_t));
-        task->id = i;
-        snprintf(task->message, sizeof(task->message), 
-                 "Task %d", i);
-        
-        c_message_t msg = {
-            .data = task,
-            .size = sizeof(task_t)
-        };
-        circq_send_zc(cq, &msg);
-        printf("Produced: Task %d\n", i);
-    }
-    
-    // Sentinel
-    c_message_t sentinel = {NULL, 0};
-    circq_send_zc(cq, &sentinel);
-    return NULL;
-}
-
-void *consumer(void *arg) {
-    circular_queue *cq = arg;
-    
-    while (1) {
-        c_message_t msg;
-        circq_recv_zc(cq, &msg);
-        
-        if (msg.data == NULL) break;
-        
-        task_t *task = msg.data;
-        printf("Consumed: %s\n", task->message);
-        free(task);
-    }
     return NULL;
 }
 
 int main(void) {
-    circular_queue *cq = circular_queue_create(10, NULL);
+    queue = circular_queue_create(10, NULL);
     
     pthread_t prod, cons;
-    pthread_create(&prod, NULL, producer, cq);
-    pthread_create(&cons, NULL, consumer, cq);
+    pthread_create(&prod, NULL, producer, NULL);
+    pthread_create(&cons, NULL, consumer, NULL);
     
     pthread_join(prod, NULL);
     pthread_join(cons, NULL);
     
-    circular_queue_destroy(cq);
+    circular_queue_destroy(queue);
     return 0;
 }
 ```
 
-### Example 5: Memory Pool Allocation
+## API Conventions
+
+### Naming Patterns
+
+The library follows consistent naming conventions:
+
+- **Container types**: `cvec`, `chmap`, `cbmap`, `mempool`, `r_mempool`, etc.
+- **Creation**: `*_create()`, `*_create_full()`, `*_create_mp()`, etc.
+- **Destruction**: `*_destroy()` (macro that nullifies pointer)
+- **Operations**: `*_push()`, `*_pop()`, `*_insert()`, `*_get()`, `*_remove()`, etc.
+- **Convenience macros**: `*_construct()`, `*_construct_scoped()`, `*_declare()`, `*_init()`
+- **Iterators**: `*_for_each()`, `*_begin()`, `*_iter_next()`, etc.
+
+### Internal Functions
+
+Functions and macros prefixed with underscore(s) are internal and should not be called directly:
+
+- `_mem_alloc()`, `_mem_free()` - Internal memory management
+- `__cvector_destroy()`, `___cbmap_destroy()` - Internal destructors (use macros instead)
+- `___csort_qsort()` - Internal sort implementation (use `csort_sort()` macro)
+- `_populate_cmap_pair()` - Internal helper for maps
+
+Always use the public macros and functions documented in this README.
+
+### Iteration Patterns
+
+The library provides `*_for_each` macros as the **recommended way to iterate** through containers:
 
 ```c
-#include <cmempool.h>
-#include <stdio.h>
-#include <string.h>
+// Hash maps - iteration order is undefined
+chmap_for_each(map, it, {
+    int key = *chmap_iter_key_ptr(it);
+    char *val = *chmap_iter_val_ptr(it);
+    // Process key and value
+});
 
-typedef struct {
-    int id;
-    char name[64];
-    double value;
-} record_t;
+// BST maps - iteration is in sorted key order (in-order traversal)
+cbmap_for_each(tree, it, {
+    int key = *cbmap_iter_key_ptr(it);
+    char *val = *cbmap_iter_val_ptr(it);
+    // Process key and value in ascending key order
+});
 
-int main(void) {
-    // Create pool for 1000 records
-    mempool *mp = mempool_create(1000, sizeof(record_t),
-                                 true, false, NULL, NULL);
-    
-    // Allocate records
-    record_t *records[100];
-    for (int i = 0; i < 100; i++) {
-        records[i] = mempool_calloc_entry(mp);
-        records[i]->id = i;
-        snprintf(records[i]->name, 64, "Record %d", i);
-        records[i]->value = i * 3.14;
-    }
-    
-    // Use records...
-    printf("Record 50: %s, %.2f\n", 
-           records[50]->name, records[50]->value);
-    
-    // Free records
-    for (int i = 0; i < 100; i++) {
-        mempool_free_entry(records[i]);
-    }
-    
-    // Stats
-    printf("Pool capacity: %zu\n", mempool_total_capacity(mp));
-    printf("Pool used: %zu\n", mempool_used_count(mp));
-    printf("Dynamic allocs: %zu\n", mempool_dynamic_allocs_count(mp));
-    
-    mempool_destroy(mp);
-    return 0;
+// Vectors - use index-based iteration
+for (size_t i = 0; i < cvec_size(vec); i++) {
+    int val = cvec_at(vec, i);
+    // Process value
 }
 ```
 
-### Example 6: Ranged Memory Pool
+**For maps**, the `*_for_each` macro:
+- Automatically declares the iterator variable
+- Handles iteration setup and advancement
+- Provides cleaner, more readable code
+- Uses a block `{ }` for the loop body
+
+**Iterator macros** (`*_iter_key_ptr` and `*_iter_val_ptr`):
+- Already have type information from the container declaration
+- No need to pass type parameters
+- Return properly-typed pointers automatically
+
+If you need manual iteration control:
 
 ```c
-#include <cmempool.h>
-#include <stdio.h>
-
-int main(void) {
-    // Pools: 16, 32, 64, 128 bytes
-    r_mempool *rmp = r_mempool_create(
-        4,  // 2^4 = 16 bytes min
-        7,  // 2^7 = 128 bytes max
-        8,  // 2^8 = 256 elements in smallest pool
-        fallback_at_first_exhaustion,
-        false, NULL, NULL
-    );
-    
-    // Allocate various sizes (automatically routed)
-    void *p1 = r_mempool_alloc_entry(rmp, 10);   // → 16-byte pool
-    void *p2 = r_mempool_alloc_entry(rmp, 20);   // → 32-byte pool
-    void *p3 = r_mempool_alloc_entry(rmp, 50);   // → 64-byte pool
-    void *p4 = r_mempool_alloc_entry(rmp, 100);  // → 128-byte pool
-    
-    // Print pool stats
-    size_t pool_count = r_mempool_get_pool_count(rmp);
-    for (size_t i = 0; i < pool_count; i++) {
-        printf("Pool %zu: %zu bytes, %zu/%zu used\n",
-               i,
-               r_mempool_get_ith_pool_elem_size(rmp, i),
-               r_mempool_get_ith_pool_used_count(rmp, i),
-               r_mempool_get_ith_pool_capacity(rmp, i));
-    }
-    
-    // Free
-    r_mempool_free_entry(p1);
-    r_mempool_free_entry(p2);
-    r_mempool_free_entry(p3);
-    r_mempool_free_entry(p4);
-    
-    r_mempool_destroy(rmp);
-    return 0;
+chmap_iter_declare(map, it);
+for (it = chmap_begin(map); it != NULL; it = chmap_iter_next(it)) {
+    int *key = chmap_iter_key_ptr(it);
+    // Manual control
+    // ...
 }
 ```
-
----
-
-## API Reference
-
-### Return Codes
-
-```c
-typedef enum ccol_retval_t {
-  ccol_success = 0,              // Operation successful
-  ccol_invalid_args,             // NULL pointer or invalid argument
-  ccol_container_full,           // Container at capacity
-  ccol_container_empty,          // Container has no elements
-  ccol_not_enough_memory,        // Allocation failed
-  ccol_key_not_found,            // Key does not exist in map
-  ccol_not_permitted,            // Operation not allowed (e.g., sending disabled)
-  ccol_timed_out,                // Timeout expired
-  ccol_unexpected_failure        // System error (check errno)
-} ccol_retval_t;
-```
-
-### Memory Management
-
-```c
-// Function pointer types
-typedef void *(*ccol_memmgmt_procs_alloc_t)(size_t size);
-typedef void *(*ccol_memmgmt_procs_calloc_t)(size_t elem_count, size_t elem_size);
-typedef void *(*ccol_memmgmt_procs_realloc_t)(void *ptr, size_t new_size);
-typedef void (*ccol_memmgmt_procs_free_t)(void *ptr);
-
-// Procedure structure
-typedef struct ccol_memmgmt_procs_t {
-  ccol_memmgmt_procs_alloc_t alloc;
-  ccol_memmgmt_procs_calloc_t calloc;
-  ccol_memmgmt_procs_realloc_t realloc;
-  ccol_memmgmt_procs_free_t free;
-} ccol_memmgmt_procs_t;
-```
-
-### Comparison and Hashing
-
-```c
-// Comparison function type (-1, 0, 1)
-typedef int (*ccol_comparison_proc_t)(const void *first, const void *second);
-
-// Hashing function type
-typedef size_t (*ccol_hashing_proc_t)(const void *key_data);
-```
-
-### Iterator
-
-```c
-typedef struct cmap_iterator {
-  cmap_pair *key_pair;    // Pointer to key
-  cmap_pair *val_pair;    // Pointer to value
-  // Internal fields...
-} cmap_iterator;
-```
-
----
-
-## Best Practices
-
-### Memory Management
-
-1. **Always check return values**
-   ```c
-   if (cvector_push_back(vec, &elem) != ccol_success) {
-       // Handle error
-   }
-   ```
-
-2. **Use type-safe macros**
-   ```c
-   cvec_construct(vec, int);  // Preferred
-   // vs
-   cvec vec = cvector_create(sizeof(int), &err);  // Manual
-   ```
-
-3. **Custom allocators for pools**
-   ```c
-   mempool *mp = mempool_create(...);
-   ccol_memmgmt_procs_t mprocs = {
-       .alloc = (ccol_memmgmt_procs_alloc_t)mempool_alloc_entry,
-       .free = (ccol_memmgmt_procs_free_t)_mempool_free_entry,
-       // ...
-   };
-   cvec vec = cvector_create_with_mprocs(sizeof(int), &mprocs, &err);
-   ```
-
-### Thread Safety
-
-1. **Choose appropriate queue type**
-   - **Circular queue**: Bounded, backpressure, predictable memory
-   - **Dynamic queue**: Unbounded, no backpressure, unpredictable memory
-   - **Channel**: Bidirectional, worker pattern
-
-2. **Enable thread-safety when needed**
-   ```c
-   mempool *mp = mempool_create(100, 64, false, false, NULL, &err);
-   //                                           ^^^^^ thread-safe
-   ```
-
-3. **Use sentinels for shutdown**
-   ```c
-   c_message_t sentinel = {.data = NULL, .size = 0};
-   circq_send_zc(queue, &sentinel);
-   ```
-
-### Performance
-
-1. **Preallocate for known sizes**
-   ```c
-   // For vectors, use push operations instead of frequent resets
-   cvec vec = cvector_create(sizeof(large_struct), &err);
-   // ... use ...
-   cvector_reset(vec);  // Reuse instead of destroy/create
-   ```
-
-2. **Use memory pools for frequent allocations**
-   ```c
-   // Instead of malloc/free in loop
-   mempool *mp = mempool_create(1000, sizeof(node_t), true, false, NULL, NULL);
-   for (...) {
-       node_t *node = mempool_alloc_entry(mp);
-       // ...
-       mempool_free_entry(node);
-   }
-   ```
-
-3. **Choose correct map type**
-   - **Hash map**: Fast average case, unordered
-   - **BST map**: Slower, ordered iteration, range queries possible
 
 ### Error Handling
 
-1. **Check error strings**
+Most functions return `ccol_retval_t`, if executed directly:
+
+```c
+ccol_retval_t result = chmap_remove(map, key);
+switch (result) {
+    case ccol_success:
+        printf("Key removed\n");
+        break;
+    case ccol_key_not_found:
+        printf("Key not found\n");
+        break;
+    default:
+        printf("Error: %d\n", result);
+}
+```
+
+Convenience macros typically call `fatal_err()` on failures
+caused by the buggy caller code to make them noticed or when
+there is a shortage of resources:
+
+```c
+chmap_insert(map, key, value);  // Terminates program on failure
+```
+
+For non-fatal error handling, one can use the underlying functions:
+
+```c
+cmap_pair key_pair = { .ptr = &key, .size = sizeof(key) };
+cmap_pair val_pair = { .ptr = &value, .size = sizeof(value) };
+ccol_retval_t result = chmap_insert_elem(map, &key_pair, &val_pair);
+if (result != ccol_success) {
+    // Handle error gracefully
+}
+```
+
+## Thread Safety
+
+### Containers Are Not Thread-Safe by Design
+
+**Important:** Vector, hash map, and BST map implementations **do not include internal locks**. This is by design, as locking only during the access operation (e.g., insert, get) would not provide a meaningful protection against race conditions in typical usage patterns.
+
+Consider this example:
+
+```c
+// Thread 1
+if (chmap_get_ptr(map, key) == NULL) {
+    // Race condition: Thread 2 might insert here
+    chmap_insert(map, key, value);
+}
+
+// Thread 2
+chmap_insert(map, key, other_value);
+```
+
+Even if individual operations were internally locked, the check-then-insert pattern remains racy. Proper thread safety requires higher-level synchronization:
+
+```c
+// Correct: Lock around the entire logical operation
+pthread_mutex_t map_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// Thread 1
+pthread_mutex_lock(&map_lock);
+if (chmap_get_ptr(map, key) == NULL) {
+    chmap_insert(map, key, value);
+}
+pthread_mutex_unlock(&map_lock);
+```
+
+### Thread-Safe Components
+
+The following components **are** thread-safe by default:
+
+- **Memory pools** (`mempool`, `r_mempool`) - Unless created with `single_threaded=true`
+- **Thread communication** (`circular_queue`, `dynamic_queue`, `channel`) - Always thread-safe
+
+```c
+// Thread-safe (not single-threaded) memory pool
+mempool *pool = mempool_create(100, 64, false, false, NULL, NULL);
+//                               multi-threaded ─┘
+
+// Single-threaded pool (faster, not thread-safe)
+mempool *fast_pool = mempool_create(100, 64, false, true, NULL, NULL);
+//                                   single-threaded ─┘
+```
+
+### Recommended Patterns
+
+For shared containers:
+
+1. **Per-thread containers** (no synchronization needed)
+2. **Reader-writer locks** for read-heavy workloads:
    ```c
-   char *err = NULL;
-   cvec vec = cvector_create(sizeof(int), &err);
-   if (!vec) {
-       fprintf(stderr, "Error: %s\n", err);
-       return -1;
-   }
-   ```
-
-2. **Use fatal_err for unrecoverable errors**
-   ```c
-   if (critical_failure) {
-       fatal_err("Critical: %s", reason);  // Prints and asserts
-   }
-   ```
-
-### Memory Pools
-
-1. **Size pools appropriately**
-   ```c
-   // Calculate expected peak usage
-   size_t peak_concurrent = 100;
-   size_t safety_factor = 1.5;
-   mempool *mp = mempool_create(
-       peak_concurrent * safety_factor,
-       elem_size,
-       true,  // Fallback for bursts
-       false, NULL, NULL
-   );
-   ```
-
-2. **Monitor dynamic allocations**
-   ```c
-   size_t dynamic = mempool_dynamic_allocs_count(mp);
-   if (dynamic > threshold) {
-       // Consider increasing pool size
-   }
-   ```
-
-3. **Use ranged pools for varied sizes**
-   ```c
-   // Instead of multiple fixed pools
-   r_mempool *rmp = r_mempool_create(4, 10, 8, ...);
-   ```
-
-### Iterators
-
-1. **Don't modify during iteration**
-   ```c
-   // BAD
-   for (chmap_iter_declare(map, it) = chmap_begin(map); it; it = chmap_iter_next(it)) {
-       chmap_insert(map, new_key, new_val);  // Invalidates iterator!
-   }
+   rw_lock_t lock = PTHREAD_RWLOCK_INITIALIZER;
    
-   // GOOD
-   cvec_declare(to_insert);
-   cvec_construct(to_insert, pair_t);
-   for (chmap_iter_declare(map, it) = chmap_begin(map); it; it = chmap_iter_next(it)) {
-       // Collect items to insert
-       cvec_push(to_insert, ...);
-   }
-   // Insert after iteration
-   for (size_t i = 0; i < cvec_size(to_insert); i++) {
-       chmap_insert(map, ...);
-   }
-   ```
-
-2. **Use automatic cleanup**
-   ```c
-   // Hash map iterator auto-destroys
-   for (chmap_iter_declare(map, it) = chmap_begin(map); 
-        it; it = chmap_iter_next(it)) {
-       // No manual cleanup needed
-   }
+   // Readers
+   rw_lock_rdlock(lock);
+   int val = chmap_get(map, key);
+   rw_lock_unlock(lock);
    
-   // BST map iterator needs manual cleanup
-   cbmap_iter_declare(map, it);
-   for (it = cbmap_begin(map); it; it = cbmap_iter_next(it)) {
-       // Auto-destroys at end
-   }
+   // Writers
+   rw_lock_wrlock(lock);
+   chmap_insert(map, key, value);
+   rw_lock_unlock(lock);
    ```
 
-### Sorting
-
-1. **Use default comparisons when possible**
+3. **Mutexes** for simpler use cases:
    ```c
-   cvec_sort(vec);  // Automatic type-based comparison
+   mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+   
+   mutex_lock(lock);
+   chmap_insert(map, key, value);
+   mutex_unlock(lock);
    ```
 
-2. **Stable sort for secondary keys**
-   ```c
-   // Merge sort is stable
-   cvec_sort_by_secondary_key(vec);
-   cvec_sort_by_primary_key(vec);
-   // Elements with equal primary keys maintain secondary order
-   ```
+## Memory Management
 
----
+### Default Allocators
 
-## Troubleshooting
+By default, all containers use standard `malloc`, `calloc`, `realloc`, and `free`.
 
-### Common Issues
+### Custom Memory Management
 
-**Issue:** Segmentation fault on iterator
+All containers support custom memory management through `ccol_memmgmt_procs_t`:
+
 ```c
-// BAD: Iterator invalidated by modification
-for (chmap_iter_declare(map, it) = chmap_begin(map); it; it = chmap_iter_next(it)) {
-    chmap_delete(map, *chmap_iter_key_ptr(it));  // CRASH!
-}
-
-// GOOD: Collect keys first
-cvec_declare(keys);
-cvec_construct(keys, int);
-for (chmap_iter_declare(map, it) = chmap_begin(map); it; it = chmap_iter_next(it)) {
-    cvec_push(keys, *chmap_iter_key_ptr(it));
-}
-for (size_t i = 0; i < cvec_size(keys); i++) {
-    chmap_delete(map, cvec_at(keys, i));
-}
+typedef struct {
+    ccol_memmgmt_procs_alloc_t alloc;      // malloc equivalent
+    ccol_memmgmt_procs_calloc_t calloc;    // calloc equivalent
+    ccol_memmgmt_procs_realloc_t realloc;  // realloc equivalent
+    ccol_memmgmt_procs_free_t free;        // free equivalent
+} ccol_memmgmt_procs_t;
 ```
 
-**Issue:** Memory leak in queue
+#### Example: Custom Allocator
+
 ```c
-// BAD: Messages not freed
-while (circq_try_recv_zc(queue, &msg) == ccol_success) {
-    // Process msg.data but don't free
+void *my_alloc(size_t size) {
+    void *ptr = custom_malloc(size);
+    printf("Allocated %zu bytes at %p\n", size, ptr);
+    return ptr;
 }
 
-// GOOD: Always free received data
-c_message_t msg;
-while (circq_try_recv_zc(queue, &msg) == ccol_success) {
-    // Process msg.data
-    free(msg.data);  // Receiver must free
+void *my_calloc(size_t count, size_t size) {
+    void *ptr = custom_calloc(count, size);
+    printf("Allocated %zu elements at %p\n", count, ptr);
+    return ptr;
 }
+
+void *my_realloc(void *ptr, size_t size) {
+    void *new_ptr = custom_realloc(ptr, size);
+    printf("Reallocated %p to %zu bytes -> %p\n", ptr, size, new_ptr);
+    return new_ptr;
+}
+
+void my_free(void *ptr) {
+    printf("Freeing %p\n", ptr);
+    custom_free(ptr);
+}
+
+// Setup custom allocators
+ccol_memmgmt_procs_t my_mprocs = {
+    .alloc = my_alloc,
+    .calloc = my_calloc,
+    .realloc = my_realloc,
+    .free = my_free
+};
+
+// Use with any container
+cvec_construct_mp(vec, int, &my_mprocs);
+chmap_construct_mp(map, int, char*, 64, &my_mprocs);
+mempool *pool = mempool_create(100, 64, false, false, &my_mprocs, NULL);
 ```
 
-**Issue:** Pool corruption assertion
+### Memory Pool Integration
+
+Containers can use memory pools for their internal allocations:
+
 ```c
-// BAD: Double free
-void *ptr = mempool_alloc_entry(mp);
-mempool_free_entry(ptr);
-mempool_free_entry(ptr);  // ASSERT!
+// Create a memory pool for map nodes
+r_mempool *node_pool = r_mempool_create(4, 10, 6, 
+                                        fallback_at_last_exhaustion,
+                                        false, NULL, NULL);
 
-// GOOD: Macro sets pointer to NULL
-void *ptr = mempool_alloc_entry(mp);
-mempool_free_entry(ptr);  // ptr is now NULL
-mempool_free_entry(ptr);  // Safe no-op
+// Wrapper functions
+void *pool_alloc(size_t size) {
+    return r_mempool_alloc_entry(node_pool, size);
+}
+
+void *pool_calloc(size_t count, size_t size) {
+    return r_mempool_calloc_entry(node_pool, count * size);
+}
+
+void *pool_realloc(void *ptr, size_t size) {
+    return r_mempool_realloc_entry(node_pool, ptr, size);
+}
+
+void pool_free(void *ptr) {
+    r_mempool_free_entry(ptr);
+}
+
+ccol_memmgmt_procs_t pool_mprocs = {
+    .alloc = pool_alloc,
+    .calloc = pool_calloc,
+    .realloc = pool_realloc,
+    .free = pool_free
+};
+
+// Map now allocates from the pool
+chmap_construct_mp(map, int, int, 64, &pool_mprocs);
+
+// ... use map ...
+
+chmap_destroy(map);
+r_mempool_destroy(node_pool);
 ```
 
-### Debug Build
+### Memory Ownership
 
-```bash
-# Build with debug symbols and assertions
-make CFLAGS="-g3 -O0 -DDEBUG"
+#### Vectors
 
-# Run in gdb
-make run-in-gdb
+Vectors copy elements:
 
-# Run with valgrind
-make run-in-valgrind
+```c
+cvec_construct(vec, int);
+int x = 42;
+cvec_push(vec, x);
+x = 100;  // Original variable unchanged
+printf("%d\n", cvec_at(vec, 0));  // Still 42
 ```
 
----
+#### Maps
+
+Maps copy keys and values:
+
+```c
+chmap_construct(map, int, int);
+int key = 1, value = 100;
+chmap_insert(map, key, value);
+key = 2;    // Map's key still 1
+value = 200; // Map's value still 100
+```
+
+For string data, the map copies the string content:
+
+```c
+chmap_construct(map, int, char*);
+
+char *str = strdup("hello");
+int key = 1;
+chmap_insert(map, key, str);
+free(str);  // This is FINE - map copied the string (SSO or allocation)
+
+// When you retrieve strings from the map, you get pointers to the map's internal storage
+int lookup = 1;
+char *value = chmap_get(map, lookup);  // Points to map's copy
+printf("%s\n", value);  // OK to use
+// Don't free 'value' - it belongs to the map
+
+// Map cleanup automatically frees all internal string storage
+chmap_destroy(map);
+```
+
+For non-string pointer types, you need to manage the pointed-to data yourself:
+
+```c
+typedef struct { int x, y; } Point;
+chmap_construct(points, int, Point*);
+
+Point *p = malloc(sizeof(Point));
+p->x = 10; p->y = 20;
+int key = 1;
+chmap_insert(points, key, p);
+free(p);  // DON'T DO THIS - map stores the pointer value, not a copy of the Point
+// Here, since the map was constructed as (int -> Point*), it will store
+// the pointers as values, not the areas pointed by those pointers. Therefore
+// managing the lifecycles of the pointers is the responsibility of the caller.
+// Please notice that this code will be faster, since the pointers are some
+// unsigned long variables to contain addresses.
+
+// Correct cleanup:
+chmap_for_each(points, it, {
+    Point *ptr = *chmap_iter_val_ptr(it);
+    free(ptr);  // Free the pointed-to data
+});
+chmap_destroy(points);  // Then destroy the map
+```
+
+#### Thread Communication
+
+Messages use zero-copy transfer:
+
+```c
+c_message_t msg = { .data = malloc(100), .size = 100 };
+circq_send_zc(queue, &msg);
+// msg.data is now NULL - ownership transferred to queue
+
+c_message_t received;
+circq_recv_zc(queue, &received);
+// received.data contains the original pointer - we now own it
+free(received.data);
+```
 
 ## License
 
-MIT License - See source files for full text.
+MIT License
 
-## Contributors
+Copyright (c) 2024 A bunch of nerds
 
-A bunch of nerds
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-## Version History
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-- **1.0** (2024): Initial release
-  - Vectors, hash maps, BST maps
-  - Thread communication primitives
-  - Memory pools
-  - Sorting algorithms
-  - Memory operation optimizations
-
----
-
-**End of Documentation**
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

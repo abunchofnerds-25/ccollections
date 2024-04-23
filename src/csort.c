@@ -23,6 +23,7 @@ SOFTWARE.
 */
 
 #include <csort.h>
+#include <memops.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -89,7 +90,7 @@ static void csort_merge(void *col, int left, int mid, int right,
   int n2 = right - mid;     // Size of right subarray
 
   if (!getter_proc || !comparison_proc) {
-    assert(false);
+    ccol_assert(false);
   }
 
   // Copy both subarrays to temporary buffer
@@ -98,13 +99,13 @@ static void csort_merge(void *col, int left, int mid, int right,
   for (i = 0; i < n1; i++) {
     void *src = getter_proc(col, left + i);
     void *dst = (unsigned char *)temp_buffer + i * elem_size;
-    memcpy(dst, src, elem_size);
+    mem_cpy(dst, src, elem_size);
   }
 
   for (j = 0; j < n2; j++) {
     void *src = getter_proc(col, mid + 1 + j);
     void *dst = (unsigned char *)temp_buffer + (n1 + j) * elem_size;
-    memcpy(dst, src, elem_size);
+    mem_cpy(dst, src, elem_size);
   }
 
   // Merge the two subarrays back into col
@@ -118,10 +119,10 @@ static void csort_merge(void *col, int left, int mid, int right,
     void *dst = getter_proc(col, k);
 
     if (comparison_proc(elem_i, elem_j) <= 0) {
-      memcpy(dst, elem_i, elem_size);
+      mem_cpy(dst, elem_i, elem_size);
       i++;
     } else {
-      memcpy(dst, elem_j, elem_size);
+      mem_cpy(dst, elem_j, elem_size);
       j++;
     }
     k++;
@@ -131,7 +132,7 @@ static void csort_merge(void *col, int left, int mid, int right,
   while (i < n1) {
     void *src = (unsigned char *)temp_buffer + i * elem_size;
     void *dst = getter_proc(col, k);
-    memcpy(dst, src, elem_size);
+    mem_cpy(dst, src, elem_size);
     i++;
     k++;
   }
@@ -140,7 +141,7 @@ static void csort_merge(void *col, int left, int mid, int right,
   while (j < n1 + n2) {
     void *src = (unsigned char *)temp_buffer + j * elem_size;
     void *dst = getter_proc(col, k);
-    memcpy(dst, src, elem_size);
+    mem_cpy(dst, src, elem_size);
     j++;
     k++;
   }
@@ -229,7 +230,7 @@ void ___csort_qsort(void *col, size_t length, size_t elem_size,
   }
 
   if (!getter_proc || !comparison_proc) {
-    assert(false);
+    ccol_assert(false);
   }
 
   csort_mergesort_iterative(col, 0, length - 1, elem_size, getter_proc,

@@ -57,7 +57,7 @@ typedef struct channel channel;
  * and is responsible for freeing the memory.
  */
 typedef struct c_message_t {
-  void *data;  /**< Pointer to message data (ownership is transferred on send) */
+  void *data; /**< Pointer to message data (ownership is transferred on send) */
   size_t size; /**< Size of data in bytes */
 } c_message_t;
 

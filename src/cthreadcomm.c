@@ -146,6 +146,14 @@ circular_queue *circular_queue_create_with_mprocs(
 
 void __circular_queue_destroy(circular_queue *cq) {
   if (cq) {
+    if (circq_msg_count(cq) > 0) {
+      // The data pointers of the messages that
+      // haven't been consumed are going to be
+      // leaked. That's a bug on the caller side.
+      // Let's make it noticed.
+      ccol_assert(false);
+    }
+
     if (cq->msg_array) {
       _mem_free(cq->m_procs, cq->msg_array);
       cq->msg_array = NULL;
@@ -452,14 +460,14 @@ ccol_retval_t append_msg_to_dq_tail(dynamic_queue *dq, c_message_t *msg) {
 
   if (!dq->head) {
 #ifdef RUNNING_UNIT_TESTS
-    assert(!dq->tail);
+    ccol_assert(!dq->tail);
 #endif
     new_elem->prev = NULL;
     dq->head = new_elem;
     dq->tail = new_elem;
   } else {
 #ifdef RUNNING_UNIT_TESTS
-    assert(dq->tail && !dq->tail->next);
+    ccol_assert(dq->tail && !dq->tail->next);
 #endif
     new_elem->prev = dq->tail;
     dq->tail->next = new_elem;
@@ -473,14 +481,14 @@ ccol_retval_t remove_msg_from_dq_head(dynamic_queue *dq,
                                       c_message_t *target_buf) {
   if (!dq->head) {
 #ifdef RUNNING_UNIT_TESTS
-    assert(!dq->tail);
+    ccol_assert(!dq->tail);
 #endif
     return ccol_container_empty;
   }
 
 #ifdef RUNNING_UNIT_TESTS
-  assert(!dq->head->prev);
-  assert(dq->tail && !dq->tail->next);
+  ccol_assert(!dq->head->prev);
+  ccol_assert(dq->tail && !dq->tail->next);
 #endif
 
   dllist_node *node_to_be_freed = dq->head;
@@ -546,6 +554,14 @@ dynamic_queue *dynamic_queue_create_with_mprocs(
 
 void __dynamic_queue_destroy(dynamic_queue *dq) {
   if (dq) {
+    if (dynmq_msg_count(dq) > 0) {
+      // The data pointers of the messages that
+      // haven't been consumed are going to be
+      // leaked. That's a bug on the caller side.
+      // Let's make it noticed.
+      ccol_assert(false);
+    }
+
     mutex_destroy(dq->mutex);
     cond_var_destroy(dq->read_cond);
     destroy_dq_dllist(dq);

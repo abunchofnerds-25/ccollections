@@ -27,7 +27,7 @@ void use_nested_types_hmap_of_cvecs() {
   chmap_iter_declare(hmap, it);
   for (it = chmap_begin(hmap); it != NULL; it = chmap_iter_next(it)) {
     cvec v = *chmap_iter_val_ptr(it);
-    cvec_enable_local_macros(v, int);
+    cvec_redeclare(v, int);
     int size = cvec_size(v);
     for (int i = 0; i < size; ++i) {
       int k = -1;
@@ -75,6 +75,21 @@ void use_chmap() {
     }
     ++elem_count;
   }
+
+  assert(elem_count == 21);
+
+  elem_count = 0;
+  chmap_for_each(hmap, it, {
+    if (strcmp(*chmap_iter_key_ptr(it), "ten") == 0) {
+      assert(*chmap_iter_val_ptr(it) == 10);
+    } else {
+      char expected_key[16];
+      snprintf(expected_key, sizeof(expected_key), "%d",
+               *chmap_iter_val_ptr(it));
+      assert(strcmp(*chmap_iter_key_ptr(it), expected_key) == 0);
+    }
+    ++elem_count;
+  });
 
   assert(elem_count == 21);
 
@@ -126,6 +141,11 @@ void use_cbmap() {
            ((*cbmap_iter_key_ptr(iter)) * (*cbmap_iter_key_ptr(iter))));
   }
 
+  cbmap_for_each(bmap, iter, {
+    assert(*cbmap_iter_val_ptr(iter) ==
+           ((*cbmap_iter_key_ptr(iter)) * (*cbmap_iter_key_ptr(iter))));
+  });
+
   for (int i = -30; i <= 10; ++i) {
     cbmap_remove(bmap, i);
   }
@@ -148,6 +168,8 @@ void use_cvec() {
   }
 
   cvec_destroy(vec);
+
+  cvec_construct_scoped(v, int);
 }
 
 int main() {

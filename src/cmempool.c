@@ -75,6 +75,15 @@ const size_t elem_is_not_a_pool_member = 0xfadefacefadeface;
 
 void _mempool_destroy(mempool *mp) {
   if (mp) {
+    if (mp->fallback_to_dynamic_memory) {
+      if (mempool_dynamic_allocs_count(mp) > 0) {
+        // This pool has dynamically allotated entries that have
+        // not yet been freed. This is a leak, let's make it
+        // noticed.
+        ccol_assert(false);
+      }
+    }
+
     if (mp->should_use_locks) {
       rw_lock_destroy(mp->lock);
     }
@@ -246,7 +255,7 @@ mempool *mempool_create_from_preallocated_buffer(
 
 void *mempool_alloc_entry(mempool *mp) {
   if (!mp) {
-    assert(false);
+    ccol_assert(false);
   }
 
   void *result = NULL;
@@ -263,7 +272,7 @@ void *mempool_alloc_entry(mempool *mp) {
       if (mp->should_use_locks) {
         rw_lock_unlock(mp->lock);
       }
-      assert(false);
+      ccol_assert(false);
     }
 
     mp->free_inst = header->next;
@@ -295,7 +304,7 @@ void *mempool_calloc_entry(mempool *mp) {
   void *result = mempool_alloc_entry(mp);
 
   if (result) {
-    memset(result, 0, EXT_SIZE_TO_USER_SIZE(mp->ext_elem_size));
+    mem_zero(result, EXT_SIZE_TO_USER_SIZE(mp->ext_elem_size));
   }
 
   return result;
@@ -309,7 +318,7 @@ static inline bool valid_mempool_addr(mempool *mp, uintptr_t c_entry) {
 
 void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
   if (!mp) {
-    assert(false);
+    ccol_assert(false);
   }
 
   uintptr_t c_header = (uintptr_t)header;
@@ -326,7 +335,7 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
       if (mp->should_use_locks) {
         rw_lock_unlock(mp->lock);
       }
-      assert(false);
+      ccol_assert(false);
     }
     --mp->active_dynamic_memory_buffer_count;
     _mem_free(mp->m_procs, header);
@@ -347,7 +356,7 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
           if (mp->should_use_locks) {
             rw_lock_unlock(mp->lock);
           }
-          assert(false);
+          ccol_assert(false);
         }
       }
 
@@ -355,7 +364,7 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
       if (mp->should_use_locks) {
         rw_lock_unlock(mp->lock);
       }
-      assert(false);
+      ccol_assert(false);
     }
 
     header->elem_status = elem_is_free;
@@ -366,7 +375,7 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
     if (mp->should_use_locks) {
       rw_lock_unlock(mp->lock);
     }
-    assert(false);
+    ccol_assert(false);
   }
 
   if (mp->should_use_locks) {
@@ -385,15 +394,15 @@ void _mempool_free_entry(void *entry) {
 
   // Let's check the invariant parts.
   if (!header) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (!header->pool_ptr) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (header->pool_ptr->mempool_mark != _mempool_mark) {
-    assert(false);
+    ccol_assert(false);
   }
 
   // Passed the initial checks, no corruption so far.
@@ -402,7 +411,7 @@ void _mempool_free_entry(void *entry) {
 
 size_t mempool_total_capacity(mempool *mp) {
   if (!mp) {
-    assert(false);
+    ccol_assert(false);
   }
 
   size_t result = 0;
@@ -422,7 +431,7 @@ size_t mempool_total_capacity(mempool *mp) {
 
 size_t mempool_used_count(mempool *mp) {
   if (!mp) {
-    assert(false);
+    ccol_assert(false);
   }
 
   size_t result = 0;
@@ -442,7 +451,7 @@ size_t mempool_used_count(mempool *mp) {
 
 size_t mempool_dynamic_allocs_count(mempool *mp) {
   if (!mp) {
-    assert(false);
+    ccol_assert(false);
   }
 
   size_t result = 0;
@@ -480,6 +489,14 @@ struct r_mempool {
 
 void _r_mempool_destroy(r_mempool *rmp) {
   if (rmp) {
+    if (rmp->fb_policy == fallback_at_last_exhaustion) {
+      if (mempool_dynamic_allocs_count(&rmp->pseudo_pool) > 0) {
+        // We have dynamic pointers that have not been freed yet
+        // That's a potential leak, let's make it noticed.
+        ccol_assert(false);
+      }
+    }
+
     if (rmp->mem_pools) {
       for (size_t i = 0; i < rmp->number_of_mempools; ++i) {
         if (rmp->mem_pools[i]) {
@@ -562,7 +579,7 @@ bool assess_r_mempool_create_inputs(r_mempool *rmp,
 }
 
 bool init_r_mempool_pseudo_pool(r_mempool *rmp) {
-  memset(&rmp->pseudo_pool, 0, sizeof(mempool));
+  mem_zero(&rmp->pseudo_pool, sizeof(mempool));
   if (rmp->fb_policy == fallback_at_last_exhaustion) {
     if (rmp->should_use_locks) {
       if (rw_lock_init(rmp->pseudo_pool.lock) != 0) {
@@ -593,7 +610,7 @@ bool init_r_mempool_internal_pools(r_mempool *rmp, char **err) {
     }
     return false;
   }
-  memset(rmp->mem_pools, 0, rmp->number_of_mempools * sizeof(mempool));
+  mem_zero(rmp->mem_pools, rmp->number_of_mempools * sizeof(mempool));
 
   size_t first_size = rmp->smallest_size;
   size_t last_size = rmp->largest_size;
@@ -818,7 +835,11 @@ void *mempool_pseudo_alloc_entry(mempool *mp, size_t elem_size) {
 }
 
 void *r_mempool_alloc_entry(r_mempool *rmp, size_t size) {
-  if (!rmp || size == 0 || size > rmp->largest_size) {
+  if (!rmp) {
+    ccol_assert(false);
+  }
+
+  if (size == 0 || size > rmp->largest_size) {
     return NULL;
   }
 
@@ -845,14 +866,18 @@ void *r_mempool_calloc_entry(r_mempool *rmp, size_t size) {
   void *result = r_mempool_alloc_entry(rmp, size);
 
   if (result) {
-    memset(result, 0, size);
+    mem_zero(result, size);
   }
 
   return result;
 }
 
 void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size) {
-  if (!rmp || size == 0 || size > rmp->largest_size) {
+  if (!rmp) {
+    ccol_assert(false);
+  }
+
+  if (size == 0 || size > rmp->largest_size) {
     return NULL;
   }
 
@@ -887,7 +912,11 @@ void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size) {
 }
 
 size_t r_mempool_used_count(r_mempool *rmp, size_t size) {
-  if (!rmp || size == 0 || size > rmp->largest_size) {
+  if (!rmp) {
+    ccol_assert(false);
+  }
+
+  if (size == 0 || size > rmp->largest_size) {
     return 0;
   }
 
@@ -898,7 +927,11 @@ size_t r_mempool_used_count(r_mempool *rmp, size_t size) {
 }
 
 size_t r_mempool_total_capacity(r_mempool *rmp, size_t size) {
-  if (!rmp || size == 0 || size > rmp->largest_size) {
+  if (!rmp) {
+    ccol_assert(false);
+  }
+
+  if (size == 0 || size > rmp->largest_size) {
     return 0;
   }
 
@@ -909,7 +942,11 @@ size_t r_mempool_total_capacity(r_mempool *rmp, size_t size) {
 }
 
 size_t r_mempool_dynamic_allocs_count(r_mempool *rmp, size_t size) {
-  if (!rmp || size == 0 || size > rmp->largest_size) {
+  if (!rmp) {
+    ccol_assert(false);
+  }
+
+  if (size == 0 || size > rmp->largest_size) {
     return 0;
   }
 

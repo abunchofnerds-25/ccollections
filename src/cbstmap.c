@@ -46,7 +46,7 @@ typedef struct cbinarymap {
   size_t elem_count;
   bmap_node *root;
   ccol_memmgmt_procs_t *m_procs;
-  bool keys_are_signed;
+  bool keys_are_signed_ints;
   ccol_comparison_proc_t custom_comparison_proc;
 } cbinarymap;
 
@@ -104,7 +104,7 @@ bmap_node *get_max_node(bmap_node *root, size_t *depth) {
 void push_all_lefts_into_iter_stack(cbmap_cmap_iterator *real_iter,
                                     bmap_node *node) {
   cvec vn = real_iter->nodes;
-  cvec_enable_local_macros(vn, bmap_node *);
+  cvec_redeclare(vn, bmap_node *);
   while (node) {
     cvec_push(vn, node);
     node = node->left;
@@ -113,7 +113,7 @@ void push_all_lefts_into_iter_stack(cbmap_cmap_iterator *real_iter,
 
 cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
   cvec vn = real_iter->nodes;
-  cvec_enable_local_macros(vn, bmap_node *);
+  cvec_redeclare(vn, bmap_node *);
   if (cvec_size(vn) == 0) {
     // Nowhere to advance
     __cbmap_iterator_destroy(&real_iter->user_iter);
@@ -131,7 +131,7 @@ cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
 
 cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (err) {
@@ -152,7 +152,7 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
   }
 
   // Initialize the stack of nodes within the real iterator.
-  cvec_init_with_mprocs(real_iter->nodes, cbm->m_procs);
+  cvec_init_mp(real_iter->nodes, cbm->m_procs);
 
   real_iter->parent_map = cbm;
   push_all_lefts_into_iter_stack(real_iter, cbm->root);
@@ -162,7 +162,7 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
 cmap_iterator *cbmap_iter_next(cmap_iterator *iter) {
   // Advance to the next node
   if (!iter) {
-    assert(false);
+    ccol_assert(false);
   }
 
   cbmap_cmap_iterator *real_iter = cmapIter2CbmapIter(iter);
@@ -185,7 +185,7 @@ bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   return true;
 }
 
-cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t *mmgmt_procs,
+cbmap cbmap_create_full(bool keys_are_signed_ints, ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char **err) {
   if (err) {
@@ -211,7 +211,7 @@ cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t *mmgmt_procs,
 
   cbm->elem_count = 0;
   cbm->root = NULL;
-  cbm->keys_are_signed = keys_are_signed;
+  cbm->keys_are_signed_ints = keys_are_signed_ints;
   cbm->custom_comparison_proc = custom_comparison_proc;
 
   return cbm;
@@ -233,7 +233,7 @@ void _clear_nodes(cbmap cbm) {
 
   // Use a stack for iterative post-order traversal
   cvec_declare(stack, bmap_node *);
-  cvec_init_with_mprocs(stack, cbm->m_procs);
+  cvec_init_mp(stack, cbm->m_procs);
 
   bmap_node *current = cbm->root;
   bmap_node *last_visited = NULL;
@@ -281,7 +281,7 @@ void __cbmap_destroy(cbmap cbm) {
 
 size_t cbmap_elem_count(cbmap cbm) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   return cbm->elem_count;
@@ -289,7 +289,7 @@ size_t cbmap_elem_count(cbmap cbm) {
 
 ccol_retval_t cbmap_reset(cbmap cbm) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   _clear_nodes(cbm);
@@ -314,7 +314,7 @@ static inline int cmp_signed_small(void *ptr1, void *ptr2, size_t size) {
     default: {
       // For non-standard sizes, just complain, as this should not
       // have been classified as a 'signed' number
-      assert(false);
+      ccol_assert(false);
     }
   }
 }
@@ -358,7 +358,7 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
            (key_pair1->size < key_pair2->size);
   }
 
-  if (cbm->keys_are_signed) {
+  if (cbm->keys_are_signed_ints) {
     // Properly handle signed integer comparison for standard sizes
     return cmp_signed_small(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
   }
@@ -514,7 +514,7 @@ bmap_node *check_node_balance(bmap_node *parent) {
   }
 
   if (absolute(node_balance(parent)) > 1) {
-    assert(false);
+    ccol_assert(false);
   }
   return parent;
 }
@@ -524,12 +524,12 @@ bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
                                      bmap_node **extreme,
                                      ccol_memmgmt_procs_t *mprocs) {
   if (!root) {
-    assert(false);
+    ccol_assert(false);
   }
 
   // Stack to track path from root to extreme node
   cvec_declare(path, node_stack_entry);
-  cvec_init_with_mprocs(path, mprocs);
+  cvec_init_mp(path, mprocs);
 
   // Find the extreme node and build the path
   bmap_node *current = root;
@@ -600,7 +600,7 @@ bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
 ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
                                 const cmap_pair *val_pair) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (cbm->elem_count == max_elem_count) {
@@ -619,7 +619,7 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
 
   // Stack to track path from root to insertion point
   cvec_declare(path, node_stack_entry);
-  cvec_init_with_mprocs(path, cbm->m_procs);
+  cvec_init_mp(path, cbm->m_procs);
 
   bmap_node *current = cbm->root;
   bmap_node **parent_link = &(cbm->root);
@@ -681,7 +681,7 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
 ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
                                   void *target_buf, size_t target_buf_size) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   bmap_node *tracker = cbm->root;
@@ -708,7 +708,7 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
 ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
                                  cmap_pair **val_pair) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   bmap_node *tracker = cbm->root;
@@ -769,7 +769,7 @@ bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
 // Iterative version of delete
 ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (!cbm->root) {
@@ -778,7 +778,7 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
 
   // Stack to track path from root to node to delete
   cvec_declare(path, node_stack_entry);
-  cvec_init_with_mprocs(path, cbm->m_procs);
+  cvec_init_mp(path, cbm->m_procs);
 
   bmap_node *current = cbm->root;
   bmap_node **parent_link = &(cbm->root);

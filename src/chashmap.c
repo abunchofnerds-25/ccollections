@@ -222,14 +222,16 @@ static inline uint64_t xxh_avalanche(uint64_t hash) {
   return hash;
 }
 
-static inline uint64_t xxhash64_int64(uint64_t value, uint64_t seed) {
+static inline __attribute__((unused)) uint64_t xxhash64_int64(uint64_t value,
+                                                              uint64_t seed) {
   uint64_t hash = seed + XXH_PRIME64_5 + 8;
   hash ^= xxh_round(0, value);
   hash = xxh_rotl64(hash, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
   return xxh_avalanche(hash);
 }
 
-static inline uint64_t xxhash64_int32(uint32_t value, uint64_t seed) {
+static inline __attribute__((unused)) uint64_t xxhash64_int32(uint32_t value,
+                                                              uint64_t seed) {
   uint64_t hash = seed + XXH_PRIME64_5 + 4;
   hash ^= value * XXH_PRIME64_1;
   hash = xxh_rotl64(hash, 23) * XXH_PRIME64_2 + XXH_PRIME64_3;
@@ -328,12 +330,12 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
       return hash_int_fast(*(uint64_t*)key_ptr);
     case ccol_float: {
       uint32_t bits;
-      memcpy(&bits, key_ptr, 4);
+      mem_cpy(&bits, key_ptr, 4);
       return hash_int_fast(bits);
     }
     case ccol_double: {
       uint64_t bits;
-      memcpy(&bits, key_ptr, 8);
+      mem_cpy(&bits, key_ptr, 8);
       return hash_int_fast(bits);
     }
     default:
@@ -938,14 +940,14 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
                                    new_bucket_array_size * sizeof(llist_node*));
     if (!map->bucket_arr) {
       map->bucket_arr = orig;
-      memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
+      mem_zero(map->bucket_arr, map->bucket_arr_size * sizeof(llist_node*));
       map->elem_count = 0;
       return ccol_not_enough_memory;
     }
     map->bucket_arr_size = new_bucket_array_size;
   }
 
-  memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
+  mem_zero(map->bucket_arr, map->bucket_arr_size * sizeof(llist_node*));
   map->elem_count = 0;
   sc_set_scaling_limits(map);
 
@@ -1094,7 +1096,7 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
         _mem_free(mmgmt_procs, chm);
         return NULL;
       }
-      memcpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
     }
 
     chm->impl.oa_map =
@@ -1118,7 +1120,7 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
         _mem_free(mmgmt_procs, chm);
         return NULL;
       }
-      memcpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
     }
 
     chm->impl.sc_map = sc_create(initial_bucket_array_size, key_type, val_type,
@@ -1192,7 +1194,7 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
 
 size_t chmap_elem_count(chmap chm) {
   if (!chm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
@@ -1204,7 +1206,7 @@ size_t chmap_elem_count(chmap chm) {
 
 ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
   if (!chm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (new_bucket_array_size > 0 &&
@@ -1228,7 +1230,7 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
   }
 
   if (!chm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (chm->impl_type == IMPL_SEPARATE_CHAINING) {

@@ -75,8 +75,8 @@ typedef cvector *cvec;
  * @see cvector_create
  * @see cvector_destroy
  */
-cvec cvector_create_with_mprocs(size_t elem_size,
-                                ccol_memmgmt_procs_t *mmgmt_procs, char **err);
+cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgmt_procs,
+                         char **err);
 
 /**
  * @brief Create a vector with default memory management
@@ -88,8 +88,7 @@ cvec cvector_create_with_mprocs(size_t elem_size,
  *
  * @return Pointer to newly created vector, or NULL on failure
  */
-#define cvector_create(elem_size, err) \
-  cvector_create_with_mprocs(elem_size, NULL, err)
+#define cvector_create(elem_size, err) cvector_create_full(elem_size, NULL, err)
 
 /**
  * @brief Get the memory management procedures for a vector
@@ -198,7 +197,6 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem);
  * @note Will assert if v is NULL (in debug builds)
  *
  * @see cvec_at
- * @see cvec_at_ptr
  * @see cvector_elem_count
  */
 void *cvector_at(cvec v, size_t index);
@@ -237,6 +235,13 @@ size_t cvector_elem_count(cvec v);
  */
 void cvector_reset(cvec v);
 
+static inline void ___cvector_destroy(cvec *cv) {
+  if (*cv) {
+    __cvector_destroy(*cv);
+    *cv = NULL;
+  }
+}
+
 /* ========================================================================== */
 /*                         TYPE-SAFE CONVENIENCE MACROS                       */
 /* ========================================================================== */
@@ -266,8 +271,12 @@ void cvector_reset(cvec v);
  * @endcode
  */
 #define cvec_declare(v, type) \
-  cvec v;                     \
-  type *v##__cvec_type_var
+  type *v##__cvec_type_var;   \
+  cvec v
+
+#define cvec_declare_scoped(v, type) \
+  type *v##__cvec_type_var;          \
+  cvec v _ccol_destructor(___cvector_destroy)
 
 /**
  * @brief Enable type-safe macros for a vector in local scope
@@ -284,12 +293,12 @@ void cvector_reset(cvec v);
  * Example:
  * @code
  * void process(cvec vec) {
- *   cvec_enable_local_macros(vec, int);
+ *   cvec_redeclare(vec, int);
  *   int val = cvec_at(vec, 0);
  * }
  * @endcode
  */
-#define cvec_enable_local_macros(v, type) \
+#define cvec_redeclare(v, type) \
   type *v##__cvec_type_var __attribute__((unused)) = NULL
 
 /**
@@ -306,7 +315,7 @@ void cvector_reset(cvec v);
  *
  * @see cvec_declare
  * @see cvec_construct
- * @see cvec_init_with_mprocs
+ * @see cvec_init_mp
  *
  * Example:
  * @code
@@ -342,17 +351,17 @@ void cvector_reset(cvec v);
  * @code
  * ccol_memmgmt_procs_t my_mprocs = { ... };
  * cvec_declare(my_vec, int);
- * cvec_init_with_mprocs(my_vec, &my_mprocs);
+ * cvec_init_mp(my_vec, &my_mprocs);
  * @endcode
  */
-#define cvec_init_with_mprocs(v, mprocs)                                       \
-  do {                                                                         \
-    char *err = NULL;                                                          \
-    v = cvector_create_with_mprocs(sizeof(*v##__cvec_type_var), mprocs, &err); \
-    if (!v) {                                                                  \
-      fatal_err("cvector_create_with_mprocs failed: %s",                       \
-                err ? err : "unknown error");                                  \
-    }                                                                          \
+#define cvec_init_mp(v, mprocs)                                         \
+  do {                                                                  \
+    char *err = NULL;                                                   \
+    v = cvector_create_full(sizeof(*v##__cvec_type_var), mprocs, &err); \
+    if (!v) {                                                           \
+      fatal_err("cvector_create_full failed: %s",                       \
+                err ? err : "unknown error");                           \
+    }                                                                   \
   } while (0)
 
 /**
@@ -369,7 +378,7 @@ void cvector_reset(cvec v);
  *
  * @see cvec_declare
  * @see cvec_init
- * @see cvec_construct_with_mprocs
+ * @see cvec_construct_mp
  *
  * Example:
  * @code
@@ -382,10 +391,14 @@ void cvector_reset(cvec v);
   cvec_declare(v, type);        \
   cvec_init(v)
 
+#define cvec_construct_scoped(v, type) \
+  cvec_declare_scoped(v, type);        \
+  cvec_init(v)
+
 /**
  * @brief Declare and initialize a vector with custom memory management
  *
- * Convenience macro that combines cvec_declare() and cvec_init_with_mprocs().
+ * Convenience macro that combines cvec_declare() and cvec_init_mp().
  * Terminates the program with fatal_err() if initialization fails.
  *
  * @param v Name of the vector variable to create
@@ -395,17 +408,21 @@ void cvector_reset(cvec v);
  * @note Calls fatal_err() on initialization failure
  *
  * @see cvec_construct
- * @see cvec_init_with_mprocs
+ * @see cvec_init_mp
  *
  * Example:
  * @code
  * ccol_memmgmt_procs_t my_mprocs = { ... };
- * cvec_construct_with_mprocs(my_vec, int, &my_mprocs);
+ * cvec_construct_mp(my_vec, int, &my_mprocs);
  * @endcode
  */
-#define cvec_construct_with_mprocs(v, type, mprocs) \
-  cvec_declare(v, type);                            \
-  cvec_init_with_mprocs(v, mprocs)
+#define cvec_construct_mp(v, type, mprocs) \
+  cvec_declare(v, type);                   \
+  cvec_init_mp(v, mprocs)
+
+#define cvec_construct_mp_scoped(v, type, mprocs) \
+  cvec_declare_scoped(v, type);                   \
+  cvec_init_mp(v, mprocs)
 
 /**
  * @brief Destroy a vector and set pointer to NULL (type-safe wrapper)
@@ -528,10 +545,8 @@ void cvector_reset(cvec v);
  * @return Element reference at index
  *
  * @note Returns reference, not pointer
- * @note For pointer access, use cvec_at_ptr()
  * @note No bounds checking - will cause a SIGSEGV, if index out of bounds
  *
- * @see cvec_at_ptr
  * @see cvector_at
  *
  * Example:
@@ -543,36 +558,6 @@ void cvector_reset(cvec v);
  * @endcode
  */
 #define cvec_at(v, index) *(typeof(*v##__cvec_type_var) *)(cvector_at(v, index))
-
-/**
- * @brief Access element at index (type-safe, returns pointer)
- *
- * Type-safe wrapper for cvector_at() that returns a pointer to the element.
- * Automatically casts to the correct pointer type. Useful for modifying
- * elements in place or passing to functions.
- *
- * @param v Vector to access
- * @param index Zero-based index of element
- *
- * @return Pointer to element at index, or NULL if out of bounds
- *
- * @note Returns pointer, not value
- * @note For value access, use cvec_at()
- * @note Pointer is only valid until vector is resized
- *
- * @see cvec_at
- * @see cvector_at
- *
- * Example:
- * @code
- * cvec_construct(vec, int);
- * cvec_push_rvalue(vec, 42);
- * int *ptr = cvec_at_ptr(vec, 0);
- * *ptr = 100;  // Modify in place
- * @endcode
- */
-#define cvec_at_ptr(v, index) \
-  (typeof(*v##__cvec_type_var) *)(cvector_at(v, index))
 
 /**
  * @brief Get the number of elements (type-safe wrapper)
@@ -628,7 +613,7 @@ void cvector_reset(cvec v);
 #define cvector_sort_with_comparison_proc(v, comparison_proc)           \
   do {                                                                  \
     if (!v) {                                                           \
-      assert(false);                                                    \
+      ccol_assert(false);                                               \
     }                                                                   \
     csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)), \
                (csort_item_getter_proc_t)cvector_at, comparison_proc,   \

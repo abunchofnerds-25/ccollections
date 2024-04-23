@@ -228,7 +228,7 @@ void *mempool_alloc_entry(mempool *mp);
  * @return Pointer to zero-initialized entry, or NULL if pool exhausted and no
  * fallback
  *
- * @note O(1) allocation + memset cost
+ * @note O(1) allocation + mem_set cost
  * @note Only zeros user-visible portion (not internal header)
  * @note Thread-safe if pool was created with single_threaded=false
  *

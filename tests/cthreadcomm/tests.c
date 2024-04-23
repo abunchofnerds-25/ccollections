@@ -517,21 +517,6 @@ TEST(dynamic_queues, msg_count) {
   dynamic_queue_destroy(dq);
 }
 
-TEST(dynamic_queues, destroy_queue_with_items_in_it) {
-  dynamic_queue *dq = dynamic_queue_create_with_mprocs(NULL, NULL);
-
-  c_message_t m1 = {.data = NULL, .size = 0};
-
-  for (size_t i = 0; i < 3; ++i) {
-    REQUIRE_EQ(dynmq_msg_count(dq), i);
-    dynmq_send_zc(dq, &m1);
-    REQUIRE_EQ(dynmq_msg_count(dq), i + 1);
-  }
-
-  dynamic_queue_destroy(dq);
-  REQUIRE_EQ((void *)dq, NULL);
-}
-
 TEST(dynamic_queues, basic_send_and_receive_NULL_msg) {
   dynamic_queue *dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 

@@ -69,8 +69,8 @@ bool verify_cvector_create_inputs(size_t elem_size,
   return true;
 }
 
-cvec cvector_create_with_mprocs(size_t elem_size,
-                                ccol_memmgmt_procs_t *mmgt_procs, char **err) {
+cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
+                         char **err) {
   if (!verify_cvector_create_inputs(elem_size, mmgt_procs, err)) {
     return NULL;
   }
@@ -113,7 +113,7 @@ ccol_memmgmt_procs_t *cvector_get_mprocs(cvec v) { return v->m_procs; }
 
 bool scale_the_cvector_size_up(cvec v) {
   if (!v) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (v->capacity > (max_elem_count / scaling_factor)) {
@@ -134,7 +134,7 @@ bool scale_the_cvector_size_up(cvec v) {
 
 void scale_the_cvector_size_down(cvec v) {
   if (!v) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (v->capacity == minimum_capacity) {
@@ -154,7 +154,7 @@ void scale_the_cvector_size_down(cvec v) {
 
 ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
   if (!v) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (!new_elem) {
@@ -190,7 +190,7 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
 
 ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
   if (!v) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (!target_elem) {
@@ -217,7 +217,7 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
 
 void *cvector_at(cvec v, size_t index) {
   if (!v) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (v->elem_count > 0 && index < v->elem_count) {
@@ -229,7 +229,7 @@ void *cvector_at(cvec v, size_t index) {
 
 size_t cvector_elem_count(cvec v) {
   if (!v) {
-    assert(false);
+    ccol_assert(false);
   }
 
   return v->elem_count;
@@ -237,7 +237,7 @@ size_t cvector_elem_count(cvec v) {
 
 void cvector_reset(cvec v) {
   if (!v) {
-    assert(false);
+    ccol_assert(false);
   }
 
   void *orig = v->data_ptr;
@@ -255,7 +255,7 @@ void cvector_reset(cvec v) {
 #ifdef RUNNING_UNIT_TESTS
 size_t cvector_get_capacity(cvec v) {
   if (!v) {
-    assert(false);
+    ccol_assert(false);
   }
 
   return v->capacity;

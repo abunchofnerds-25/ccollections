@@ -882,7 +882,7 @@ TEST(cbst_maps, re_enabled_local_cbm_macros) {
 
   {
     // Test that re-enabling local macros works
-    cbmap_enable_local_macros(bm, int, int);
+    cbmap_redeclare(bm, int, int);
 
     for (int i = 0; i < 10; ++i) {
       int val = cbmap_get(bm, i);

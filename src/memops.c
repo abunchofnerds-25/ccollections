@@ -85,8 +85,7 @@ inline __attribute__((always_inline)) void mem_cpy(void* dst, const void* src,
 }
 
 // Direct inlined small zero implementations
-inline inline __attribute__((always_inline)) void mem_zero_small(void* dst,
-                                                                 size_t n) {
+inline __attribute__((always_inline)) void mem_zero_small(void* dst, size_t n) {
   // Handle common small sizes with direct assignments
   switch (n) {
     case 0:

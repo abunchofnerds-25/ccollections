@@ -130,7 +130,7 @@ TEST(csort, cvector_float_sort) {
   REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
-    cvector_push_back(cvec, &(float){((float)rand() / RAND_MAX * 10)});
+    cvector_push_back(cvec, &(float){((float)rand() / (float)RAND_MAX * 10)});
   }
 
   REQUIRE_EQ(cvector_elem_count(cvec), num_sample);

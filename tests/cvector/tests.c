@@ -13,7 +13,7 @@ TEST(cvectors, create_fails) {
   REQUIRE_EQ((void *)cvec, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  cvec = cvector_create_with_mprocs(
+  cvec = cvector_create_full(
       0,
       &(ccol_memmgmt_procs_t){
           .malloc = NULL, .free = free, .calloc = calloc, .realloc = realloc},
@@ -21,7 +21,7 @@ TEST(cvectors, create_fails) {
   REQUIRE_EQ((void *)cvec, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  cvec = cvector_create_with_mprocs(
+  cvec = cvector_create_full(
       0,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = NULL, .calloc = calloc, .realloc = realloc},
@@ -29,7 +29,7 @@ TEST(cvectors, create_fails) {
   REQUIRE_EQ((void *)cvec, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  cvec = cvector_create_with_mprocs(
+  cvec = cvector_create_full(
       0,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = NULL, .realloc = realloc},
@@ -37,7 +37,7 @@ TEST(cvectors, create_fails) {
   REQUIRE_EQ((void *)cvec, NULL);
   REQUIRE_NE((void *)err_str, NULL);
 
-  cvec = cvector_create_with_mprocs(
+  cvec = cvector_create_full(
       0,
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = NULL},
@@ -54,7 +54,7 @@ TEST(cvectors, create_succeeds) {
   cvector_destroy(cvec);
   REQUIRE_EQ((void *)cvec, NULL);
 
-  cvec = cvector_create_with_mprocs(
+  cvec = cvector_create_full(
       sizeof(int),
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc},
@@ -79,7 +79,7 @@ TEST(cvectors, simple_push_backs) {
 }
 
 TEST(cvectors, simple_push_backs_with_memmgmt_procs) {
-  cvector *cvec = cvector_create_with_mprocs(
+  cvector *cvec = cvector_create_full(
       sizeof(int),
       &(ccol_memmgmt_procs_t){
           .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc},
@@ -389,12 +389,12 @@ TEST(cvectors, declarative_macros) {
   cvec_destroy(vec);
 }
 
-TEST(cvectors, constructive_macros_with_mprocs) {
-  cvec_construct_with_mprocs(vec, int,
-                             (&(ccol_memmgmt_procs_t){.malloc = malloc,
-                                                      .free = free,
-                                                      .calloc = calloc,
-                                                      .realloc = realloc}));
+TEST(cvectors, constructive_macros_mp) {
+  cvec_construct_mp(vec, int,
+                    (&(ccol_memmgmt_procs_t){.malloc = malloc,
+                                             .free = free,
+                                             .calloc = calloc,
+                                             .realloc = realloc}));
 
   int tmp = 2;
   cvec_push(vec, tmp);
@@ -439,12 +439,12 @@ TEST(cvectors, constructive_macros_with_mprocs) {
   cvec_destroy(vec);
 }
 
-TEST(cvectors, declarative_macros_with_mprocs) {
+TEST(cvectors, declarative_macros_mp) {
   cvec_declare(vec, int);
-  cvec_init_with_mprocs(vec, (&(ccol_memmgmt_procs_t){.malloc = malloc,
-                                                      .free = free,
-                                                      .calloc = calloc,
-                                                      .realloc = realloc}));
+  cvec_init_mp(vec, (&(ccol_memmgmt_procs_t){.malloc = malloc,
+                                             .free = free,
+                                             .calloc = calloc,
+                                             .realloc = realloc}));
 
   int tmp = 2;
   cvec_push(vec, tmp);

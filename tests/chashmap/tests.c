@@ -1298,7 +1298,7 @@ typedef struct helper_struct {
 } helper_struct;
 
 void helper_function(chmap chm) {
-  chmap_enable_local_macros(chm, char *, helper_struct);
+  chmap_redeclare(chm, char *, helper_struct);
 
   helper_struct d1 = (helper_struct){.a = 3, .b = 4};
   helper_struct d2 = (helper_struct){.a = 5, .b = 6};

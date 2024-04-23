@@ -43,6 +43,7 @@ SOFTWARE.
  */
 
 #include <assert.h>
+#include <memops.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -115,6 +116,8 @@ SOFTWARE.
 /** @brief Get current thread ID */
 #define get_thread_id pthread_self
 
+#define ccol_assert assert
+
 /* ========================================================================== */
 /*                         ERROR HANDLING                                     */
 /* ========================================================================== */
@@ -157,7 +160,7 @@ SOFTWARE.
  * @param _err_fmt Printf-style format string
  * @param ... Format arguments
  *
- * @note Always terminates program via assert(false)
+ * @note Always terminates program via ccol_assert(false)
  * @note Message limited to 512 characters
  *
  * Example:
@@ -172,7 +175,7 @@ SOFTWARE.
     char _err_str[512] = {0};                                      \
     snprintf(_err_str, sizeof(_err_str), _err_fmt, ##__VA_ARGS__); \
     fprintf(stderr, "%s\n", _err_str);                             \
-    assert(false);                                                 \
+    ccol_assert(false);                                            \
   } while (0)
 
 /* ========================================================================== */
@@ -468,24 +471,25 @@ typedef struct cmap_iterator {
  * @note If mmgmt_procs is NULL, sets container->m_procs to NULL (use defaults)
  * @note Allocates memory for m_procs using the provided allocator
  */
-#define ccol_populate_mem_mgmt_procs(container, mmgmt_procs, err)              \
-  ({                                                                           \
-    bool result = true;                                                        \
-    if (mmgmt_procs) {                                                         \
-      container->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t));  \
-      if (!container->m_procs) {                                               \
-        if (err) {                                                             \
-          *err = CCOL_ERR_STR(                                                 \
-              "Failed to allocate buffer for memory mgmt buffer");             \
-        }                                                                      \
-        result = false;                                                        \
-      } else {                                                                 \
-        memcpy(container->m_procs, mmgmt_procs, sizeof(ccol_memmgmt_procs_t)); \
-      }                                                                        \
-    } else {                                                                   \
-      container->m_procs = NULL;                                               \
-    }                                                                          \
-    result;                                                                    \
+#define ccol_populate_mem_mgmt_procs(container, mmgmt_procs, err)             \
+  ({                                                                          \
+    bool result = true;                                                       \
+    if (mmgmt_procs) {                                                        \
+      container->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t)); \
+      if (!container->m_procs) {                                              \
+        if (err) {                                                            \
+          *err = CCOL_ERR_STR(                                                \
+              "Failed to allocate buffer for memory mgmt buffer");            \
+        }                                                                     \
+        result = false;                                                       \
+      } else {                                                                \
+        mem_cpy(container->m_procs, mmgmt_procs,                              \
+                sizeof(ccol_memmgmt_procs_t));                                \
+      }                                                                       \
+    } else {                                                                  \
+      container->m_procs = NULL;                                              \
+    }                                                                         \
+    result;                                                                   \
   })
 
 /* ========================================================================== */
@@ -505,6 +509,43 @@ typedef struct cmap_iterator {
  * @note Supports: float, double, long double
  * @note Supports: const variants of all above types
  */
+#if defined __clang__
+#define is_integral_type(x)                                                 \
+  ({                                                                        \
+    _Pragma("GCC diagnostic push");                                         \
+    _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
+    bool result = _Generic((x),                                             \
+        char: true,                                                         \
+        short: true,                                                        \
+        int: true,                                                          \
+        long: true,                                                         \
+        long long: true,                                                    \
+        unsigned char: true,                                                \
+        unsigned short: true,                                               \
+        unsigned int: true,                                                 \
+        unsigned long: true,                                                \
+        unsigned long long: true,                                           \
+        float: true,                                                        \
+        double: true,                                                       \
+        long double: true,                                                  \
+        const char: true,                                                   \
+        const short: true,                                                  \
+        const int: true,                                                    \
+        const long: true,                                                   \
+        const long long: true,                                              \
+        const unsigned char: true,                                          \
+        const unsigned short: true,                                         \
+        const unsigned int: true,                                           \
+        const unsigned long: true,                                          \
+        const unsigned long long: true,                                     \
+        const float: true,                                                  \
+        const double: true,                                                 \
+        const long double: true,                                            \
+        default: false);                                                    \
+    _Pragma("GCC diagnostic pop");                                          \
+    result;                                                                 \
+  })
+#else
 #define is_integral_type(x)           \
   _Generic((x),                       \
       char: true,                     \
@@ -534,6 +575,7 @@ typedef struct cmap_iterator {
       const double: true,             \
       const long double: true,        \
       default: false)
+#endif
 
 /**
  * @brief Check if type is a pointer to integral or floating-point type
@@ -546,6 +588,43 @@ typedef struct cmap_iterator {
  *
  * @note Supports pointers to all types checked by is_integral_type()
  */
+#if defined __clang__
+#define is_integral_ptr(x)                                                  \
+  ({                                                                        \
+    _Pragma("GCC diagnostic push");                                         \
+    _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
+    bool result = _Generic((x),                                             \
+        char *: true,                                                       \
+        short *: true,                                                      \
+        int *: true,                                                        \
+        long *: true,                                                       \
+        long long *: true,                                                  \
+        unsigned char *: true,                                              \
+        unsigned short *: true,                                             \
+        unsigned int *: true,                                               \
+        unsigned long *: true,                                              \
+        unsigned long long *: true,                                         \
+        float *: true,                                                      \
+        double *: true,                                                     \
+        long double *: true,                                                \
+        const char *: true,                                                 \
+        const short *: true,                                                \
+        const int *: true,                                                  \
+        const long *: true,                                                 \
+        const long long *: true,                                            \
+        const unsigned char *: true,                                        \
+        const unsigned short *: true,                                       \
+        const unsigned int *: true,                                         \
+        const unsigned long *: true,                                        \
+        const unsigned long long *: true,                                   \
+        const float *: true,                                                \
+        const double *: true,                                               \
+        const long double *: true,                                          \
+        default: false);                                                    \
+    result;                                                                 \
+    _Pragma("GCC diagnostic pop");                                          \
+  })
+#else
 #define is_integral_ptr(x)              \
   _Generic((x),                         \
       char *: true,                     \
@@ -575,6 +654,7 @@ typedef struct cmap_iterator {
       const double *: true,             \
       const long double *: true,        \
       default: false)
+#endif
 
 /**
  * @brief Check if pointer points to signed integer type
@@ -686,6 +766,43 @@ typedef enum ccollections_data_type {
   ccol_other_types,
 } ccol_data_type;
 
+#if defined __clang__
+#define _determine_non_special_data_type(var)                               \
+  ({                                                                        \
+    _Pragma("GCC diagnostic push");                                         \
+    _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
+    ccol_data_type result = _Generic((var),                                 \
+        char: ccol_char,                                                    \
+        short: ccol_short,                                                  \
+        int: ccol_int,                                                      \
+        long: ccol_long,                                                    \
+        long long: ccol_long_long,                                          \
+        unsigned char: ccol_unsigned_char,                                  \
+        unsigned short: ccol_unsigned_short,                                \
+        unsigned int: ccol_unsigned_int,                                    \
+        unsigned long: ccol_unsigned_long,                                  \
+        unsigned long long: ccol_unsigned_long_long,                        \
+        float: ccol_float,                                                  \
+        double: ccol_double,                                                \
+        long double: ccol_long_double,                                      \
+        const char: ccol_char,                                              \
+        const short: ccol_short,                                            \
+        const int: ccol_int,                                                \
+        const long: ccol_long,                                              \
+        const long long: ccol_long_long,                                    \
+        const unsigned char: ccol_unsigned_char,                            \
+        const unsigned short: ccol_unsigned_short,                          \
+        const unsigned int: ccol_unsigned_int,                              \
+        const unsigned long: ccol_unsigned_long,                            \
+        const unsigned long long: ccol_unsigned_long_long,                  \
+        const float: ccol_float,                                            \
+        const double: ccol_double,                                          \
+        const long double: ccol_long_double,                                \
+        default: ccol_other_types);                                         \
+    _Pragma("GCC diagnostic pop");                                          \
+    result;                                                                 \
+  })
+#else
 #define _determine_non_special_data_type(var)            \
   _Generic((var),                                        \
       char: ccol_char,                                   \
@@ -715,6 +832,7 @@ typedef enum ccollections_data_type {
       const double: ccol_double,                         \
       const long double: ccol_long_double,               \
       default: ccol_other_types)
+#endif
 
 #define determine_ccol_data_type(data)                                 \
   ({                                                                   \

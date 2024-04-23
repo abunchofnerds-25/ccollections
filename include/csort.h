@@ -313,6 +313,67 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
  * @see csort_sort
  * @see cvec_sort (uses this macro)
  */
+#if defined __clang__
+#define csort_get_default_comparison_proc(x)                                             \
+  ({                                                                                     \
+    ccol_comparison_proc_t comparison_proc = NULL;                                       \
+    if (is_integral_type(x)) {                                                           \
+      _Pragma("GCC diagnostic push");                                                    \
+      _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\"");            \
+      comparison_proc = _Generic((x),                                                    \
+          char: ___csort__get_default_integral_comparison_proc_name(char),               \
+          short: ___csort__get_default_integral_comparison_proc_name(short),             \
+          int: ___csort__get_default_integral_comparison_proc_name(int),                 \
+          long: ___csort__get_default_integral_comparison_proc_name(long),               \
+          long long: ___csort__get_default_integral_comparison_proc_name(                \
+                                     long_long),                                         \
+          unsigned char: ___csort__get_default_integral_comparison_proc_name(            \
+                                     unsigned_char),                                     \
+          unsigned short: ___csort__get_default_integral_comparison_proc_name(           \
+                                     unsigned_short),                                    \
+          unsigned int: ___csort__get_default_integral_comparison_proc_name(             \
+                                     unsigned_int),                                      \
+          unsigned long: ___csort__get_default_integral_comparison_proc_name(            \
+                                     unsigned_long),                                     \
+          unsigned long long: ___csort__get_default_integral_comparison_proc_name(       \
+                                     unsigned_long_long),                                \
+          float: ___csort__get_default_integral_comparison_proc_name(float),             \
+          double: ___csort__get_default_integral_comparison_proc_name(double),           \
+          long double: ___csort__get_default_integral_comparison_proc_name(              \
+                                     long_double),                                       \
+          const char: ___csort__get_default_integral_comparison_proc_name(               \
+                                     char),                                              \
+          const short: ___csort__get_default_integral_comparison_proc_name(              \
+                                     short),                                             \
+          const int: ___csort__get_default_integral_comparison_proc_name(int),           \
+          const long: ___csort__get_default_integral_comparison_proc_name(               \
+                                     long),                                              \
+          const long long: ___csort__get_default_integral_comparison_proc_name(          \
+                                     long_long),                                         \
+          const unsigned char: ___csort__get_default_integral_comparison_proc_name(      \
+                                     unsigned_char),                                     \
+          const unsigned short: ___csort__get_default_integral_comparison_proc_name(     \
+                                     unsigned_short),                                    \
+          const unsigned int: ___csort__get_default_integral_comparison_proc_name(       \
+                                     unsigned_int),                                      \
+          const unsigned long: ___csort__get_default_integral_comparison_proc_name(      \
+                                     unsigned_long),                                     \
+          const unsigned long long: ___csort__get_default_integral_comparison_proc_name( \
+                                     unsigned_long_long),                                \
+          const float: ___csort__get_default_integral_comparison_proc_name(              \
+                                     float),                                             \
+          const double: ___csort__get_default_integral_comparison_proc_name(             \
+                                     double),                                            \
+          const long double: ___csort__get_default_integral_comparison_proc_name(        \
+                                     long_double),                                       \
+          default: NULL);                                                                \
+      _Pragma("GCC diagnostic pop");                                                     \
+    } else if (is_char_ptr(x)) {                                                         \
+      comparison_proc = csort_default_string_comparison_proc;                            \
+    }                                                                                    \
+    comparison_proc;                                                                     \
+  })
+#else
 #define csort_get_default_comparison_proc(x)                                             \
   ({                                                                                     \
     ccol_comparison_proc_t comparison_proc = NULL;                                       \
@@ -369,3 +430,4 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
     }                                                                                    \
     comparison_proc;                                                                     \
   })
+#endif

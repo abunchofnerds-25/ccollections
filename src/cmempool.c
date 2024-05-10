@@ -24,7 +24,6 @@ SOFTWARE.
 
 #include <assert.h>
 #include <cmempool.h>
-#include <memops.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>

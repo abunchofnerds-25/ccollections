@@ -23,7 +23,6 @@ SOFTWARE.
 */
 
 #include <chashmap.h>
-#include <memops.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,8 +35,14 @@ const size_t minimum_scale_down_threshold =
 #define OPEN_ADDR_MIN_LOAD_FACTOR 0.25
 #define INLINE_STORAGE_THRESHOLD 23  // SSO: Small String Optimization threshold
 
-// Fibonacci hashing for integers
+// Fibonacci hashing for integers - architecture dependent
+#if SIZE_MAX == UINT64_MAX  // 64-bit architecture
 #define FIBONACCI_HASH_MULTIPLIER 11400714819323198485ULL
+#elif SIZE_MAX == UINT32_MAX  // 32-bit architecture
+#define FIBONACCI_HASH_MULTIPLIER 2654435769U
+#else
+#error "Unsupported architecture: SIZE_MAX is neither UINT32_MAX nor UINT64_MAX"
+#endif
 
 /* ========================================================================== */
 /*                    OPEN ADDRESSING STRUCTURES                              */
@@ -196,60 +201,47 @@ static inline bool should_use_open_addressing(ccol_data_type key_type,
 /*                         HASH FUNCTIONS                                     */
 /* ========================================================================== */
 
-#define XXH_PRIME64_1 0x9E3779B185EBCA87ULL
-#define XXH_PRIME64_2 0xC2B2AE3D27D4EB4FULL
-#define XXH_PRIME64_3 0x165667B19E3779F9ULL
-#define XXH_PRIME64_4 0x85EBCA77C2B2AE63ULL
-#define XXH_PRIME64_5 0x27D4EB2F165667C5ULL
+// XXHash constants adapted for both 32-bit and 64-bit
+#if SIZE_MAX == UINT64_MAX  // 64-bit architecture
 
-static inline uint64_t xxh_rotl64(uint64_t x, int r) {
+#define XXH_PRIME_1 0x9E3779B185EBCA87ULL
+#define XXH_PRIME_2 0xC2B2AE3D27D4EB4FULL
+#define XXH_PRIME_3 0x165667B19E3779F9ULL
+#define XXH_PRIME_4 0x85EBCA77C2B2AE63ULL
+#define XXH_PRIME_5 0x27D4EB2F165667C5ULL
+
+static inline size_t xxh_rotl(size_t x, int r) {
   return (x << r) | (x >> (64 - r));
 }
 
-static inline uint64_t xxh_round(uint64_t acc, uint64_t input) {
-  acc += input * XXH_PRIME64_2;
-  acc = xxh_rotl64(acc, 31);
-  acc *= XXH_PRIME64_1;
+static inline size_t xxh_round(size_t acc, size_t input) {
+  acc += input * XXH_PRIME_2;
+  acc = xxh_rotl(acc, 31);
+  acc *= XXH_PRIME_1;
   return acc;
 }
 
-static inline uint64_t xxh_avalanche(uint64_t hash) {
+static inline size_t xxh_avalanche(size_t hash) {
   hash ^= hash >> 33;
-  hash *= XXH_PRIME64_2;
+  hash *= XXH_PRIME_2;
   hash ^= hash >> 29;
-  hash *= XXH_PRIME64_3;
+  hash *= XXH_PRIME_3;
   hash ^= hash >> 32;
   return hash;
 }
 
-static inline __attribute__((unused)) uint64_t xxhash64_int64(uint64_t value,
-                                                              uint64_t seed) {
-  uint64_t hash = seed + XXH_PRIME64_5 + 8;
-  hash ^= xxh_round(0, value);
-  hash = xxh_rotl64(hash, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
-  return xxh_avalanche(hash);
-}
-
-static inline __attribute__((unused)) uint64_t xxhash64_int32(uint32_t value,
-                                                              uint64_t seed) {
-  uint64_t hash = seed + XXH_PRIME64_5 + 4;
-  hash ^= value * XXH_PRIME64_1;
-  hash = xxh_rotl64(hash, 23) * XXH_PRIME64_2 + XXH_PRIME64_3;
-  return xxh_avalanche(hash);
-}
-
-static inline uint64_t xxhash64_buffer(const void* input, size_t len,
-                                       uint64_t seed) {
+static inline size_t xxhash64_buffer(const void* input, size_t len,
+                                     size_t seed) {
   const uint8_t* p = (const uint8_t*)input;
   const uint8_t* const end = p + len;
-  uint64_t hash;
+  size_t hash;
 
   if (len >= 32) {
     const uint8_t* const limit = end - 32;
-    uint64_t v1 = seed + XXH_PRIME64_1 + XXH_PRIME64_2;
-    uint64_t v2 = seed + XXH_PRIME64_2;
-    uint64_t v3 = seed + 0;
-    uint64_t v4 = seed - XXH_PRIME64_1;
+    size_t v1 = seed + XXH_PRIME_1 + XXH_PRIME_2;
+    size_t v2 = seed + XXH_PRIME_2;
+    size_t v3 = seed + 0;
+    size_t v4 = seed - XXH_PRIME_1;
 
     do {
       v1 = xxh_round(v1, *(uint64_t*)p);
@@ -262,46 +254,123 @@ static inline uint64_t xxhash64_buffer(const void* input, size_t len,
       p += 8;
     } while (p <= limit);
 
-    hash = xxh_rotl64(v1, 1) + xxh_rotl64(v2, 7) + xxh_rotl64(v3, 12) +
-           xxh_rotl64(v4, 18);
+    hash =
+        xxh_rotl(v1, 1) + xxh_rotl(v2, 7) + xxh_rotl(v3, 12) + xxh_rotl(v4, 18);
     hash ^= xxh_round(0, v1);
-    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = hash * XXH_PRIME_1 + XXH_PRIME_4;
     hash ^= xxh_round(0, v2);
-    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = hash * XXH_PRIME_1 + XXH_PRIME_4;
     hash ^= xxh_round(0, v3);
-    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = hash * XXH_PRIME_1 + XXH_PRIME_4;
     hash ^= xxh_round(0, v4);
-    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = hash * XXH_PRIME_1 + XXH_PRIME_4;
   } else {
-    hash = seed + XXH_PRIME64_5;
+    hash = seed + XXH_PRIME_5;
   }
 
   hash += len;
 
   while (p + 8 <= end) {
-    uint64_t k1 = xxh_round(0, *(uint64_t*)p);
+    size_t k1 = xxh_round(0, *(uint64_t*)p);
     hash ^= k1;
-    hash = xxh_rotl64(hash, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = xxh_rotl(hash, 27) * XXH_PRIME_1 + XXH_PRIME_4;
     p += 8;
   }
 
   if (p + 4 <= end) {
-    hash ^= (uint64_t)(*(uint32_t*)p) * XXH_PRIME64_1;
-    hash = xxh_rotl64(hash, 23) * XXH_PRIME64_2 + XXH_PRIME64_3;
+    hash ^= (size_t)(*(uint32_t*)p) * XXH_PRIME_1;
+    hash = xxh_rotl(hash, 23) * XXH_PRIME_2 + XXH_PRIME_3;
     p += 4;
   }
 
   while (p < end) {
-    hash ^= (*p) * XXH_PRIME64_5;
-    hash = xxh_rotl64(hash, 11) * XXH_PRIME64_1;
+    hash ^= (*p) * XXH_PRIME_5;
+    hash = xxh_rotl(hash, 11) * XXH_PRIME_1;
     p++;
   }
 
   return xxh_avalanche(hash);
 }
 
+#else  // 32-bit architecture
+
+#define XXH_PRIME_1 0x9E3779B1U
+#define XXH_PRIME_2 0x85EBCA77U
+#define XXH_PRIME_3 0xC2B2AE3DU
+#define XXH_PRIME_4 0x27D4EB2FU
+#define XXH_PRIME_5 0x165667B1U
+
+static inline size_t xxh_rotl(size_t x, int r) {
+  return (x << r) | (x >> (32 - r));
+}
+
+static inline size_t xxh_round(size_t acc, size_t input) {
+  acc += input * XXH_PRIME_2;
+  acc = xxh_rotl(acc, 13);
+  acc *= XXH_PRIME_1;
+  return acc;
+}
+
+static inline size_t xxh_avalanche(size_t hash) {
+  hash ^= hash >> 15;
+  hash *= XXH_PRIME_2;
+  hash ^= hash >> 13;
+  hash *= XXH_PRIME_3;
+  hash ^= hash >> 16;
+  return hash;
+}
+
+static inline size_t xxhash64_buffer(const void* input, size_t len,
+                                     size_t seed) {
+  const uint8_t* p = (const uint8_t*)input;
+  const uint8_t* const end = p + len;
+  size_t hash;
+
+  if (len >= 16) {
+    const uint8_t* const limit = end - 16;
+    size_t v1 = seed + XXH_PRIME_1 + XXH_PRIME_2;
+    size_t v2 = seed + XXH_PRIME_2;
+    size_t v3 = seed + 0;
+    size_t v4 = seed - XXH_PRIME_1;
+
+    do {
+      v1 = xxh_round(v1, *(uint32_t*)p);
+      p += 4;
+      v2 = xxh_round(v2, *(uint32_t*)p);
+      p += 4;
+      v3 = xxh_round(v3, *(uint32_t*)p);
+      p += 4;
+      v4 = xxh_round(v4, *(uint32_t*)p);
+      p += 4;
+    } while (p <= limit);
+
+    hash =
+        xxh_rotl(v1, 1) + xxh_rotl(v2, 7) + xxh_rotl(v3, 12) + xxh_rotl(v4, 18);
+  } else {
+    hash = seed + XXH_PRIME_5;
+  }
+
+  hash += len;
+
+  while (p + 4 <= end) {
+    hash += (*(uint32_t*)p) * XXH_PRIME_3;
+    hash = xxh_rotl(hash, 17) * XXH_PRIME_4;
+    p += 4;
+  }
+
+  while (p < end) {
+    hash += (*p) * XXH_PRIME_5;
+    hash = xxh_rotl(hash, 11) * XXH_PRIME_1;
+    p++;
+  }
+
+  return xxh_avalanche(hash);
+}
+
+#endif
+
 // Fast Fibonacci hashing for integers
-static inline size_t hash_int_fast(uint64_t key) {
+static inline size_t hash_int_fast(size_t key) {
   return key * FIBONACCI_HASH_MULTIPLIER;
 }
 
@@ -316,27 +385,50 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
   switch (key_type) {
     case ccol_char:
     case ccol_unsigned_char:
-      return hash_int_fast(*(uint8_t*)key_ptr);
+      return hash_int_fast((size_t)*(uint8_t*)key_ptr);
     case ccol_short:
     case ccol_unsigned_short:
-      return hash_int_fast(*(uint16_t*)key_ptr);
+      return hash_int_fast((size_t)*(uint16_t*)key_ptr);
     case ccol_int:
     case ccol_unsigned_int:
-      return hash_int_fast(*(uint32_t*)key_ptr);
+      return hash_int_fast((size_t)*(uint32_t*)key_ptr);
     case ccol_long:
     case ccol_unsigned_long:
+#if SIZE_MAX == UINT64_MAX
+      return hash_int_fast((size_t)*(uint64_t*)key_ptr);
+#else
+      return hash_int_fast((size_t)*(uint32_t*)key_ptr);
+#endif
     case ccol_long_long:
-    case ccol_unsigned_long_long:
-      return hash_int_fast(*(uint64_t*)key_ptr);
+    case ccol_unsigned_long_long: {
+#if SIZE_MAX == UINT64_MAX
+      return hash_int_fast((size_t)*(uint64_t*)key_ptr);
+#else
+      // On 32-bit, hash the 64-bit value by combining high and low parts
+      uint64_t val = *(uint64_t*)key_ptr;
+      uint32_t low = (uint32_t)val;
+      uint32_t high = (uint32_t)(val >> 32);
+      return hash_int_fast((size_t)(low ^ high));
+#endif
+    }
     case ccol_float: {
       uint32_t bits;
       mem_cpy(&bits, key_ptr, 4);
-      return hash_int_fast(bits);
+      return hash_int_fast((size_t)bits);
     }
     case ccol_double: {
+#if SIZE_MAX == UINT64_MAX
       uint64_t bits;
       mem_cpy(&bits, key_ptr, 8);
-      return hash_int_fast(bits);
+      return hash_int_fast((size_t)bits);
+#else
+      // On 32-bit, hash the 64-bit double by combining parts
+      uint64_t bits;
+      mem_cpy(&bits, key_ptr, 8);
+      uint32_t low = (uint32_t)bits;
+      uint32_t high = (uint32_t)(bits >> 32);
+      return hash_int_fast((size_t)(low ^ high));
+#endif
     }
     default:
       return xxhash64_buffer(key_ptr, key_size, 0);
@@ -424,7 +516,9 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
   double load_factor =
       (double)(map->count + map->deleted_count) / map->capacity;
   if (load_factor > OPEN_ADDR_MAX_LOAD_FACTOR) {
-    oa_rehash(map, map->capacity * 2);
+    if ((map->capacity * 2) <= max_power_of_two_size_t) {
+      oa_rehash(map, map->capacity * 2);
+    }
   }
 
   // Set val_size on first insert to match actual value size
@@ -795,6 +889,11 @@ static void sc_scale(sep_chain_map* map, bool up) {
   size_t new_size = up ? map->bucket_arr_size * scale_factor
                        : map->bucket_arr_size / scale_factor;
 
+  if (up && (new_size > max_power_of_two_size_t)) {
+    // That's beyond the scape-up limit
+    return;
+  }
+
   llist_node** new_arr =
       (llist_node**)_mem_calloc(map->m_procs, new_size, sizeof(llist_node*));
   if (!new_arr) return;
@@ -940,8 +1039,6 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
                                    new_bucket_array_size * sizeof(llist_node*));
     if (!map->bucket_arr) {
       map->bucket_arr = orig;
-      mem_zero(map->bucket_arr, map->bucket_arr_size * sizeof(llist_node*));
-      map->elem_count = 0;
       return ccol_not_enough_memory;
     }
     map->bucket_arr_size = new_bucket_array_size;
@@ -972,86 +1069,6 @@ typedef struct chmap_cmap_iterator {
                          offsetof(chmap_cmap_iterator, user_iter))
 
 /* ========================================================================== */
-/*                         HELPER FUNCTIONS                                   */
-/* ========================================================================== */
-
-#define POWERS_OF_TWO_LEN 64
-static size_t uint64_powers_of_two[POWERS_OF_TWO_LEN] = {
-    1ULL,
-    2ULL,
-    4ULL,
-    8ULL,
-    16ULL,
-    32ULL,
-    64ULL,
-    128ULL,
-    256ULL,
-    512ULL,
-    1024ULL,
-    2048ULL,
-    4096ULL,
-    8192ULL,
-    16384ULL,
-    32768ULL,
-    65536ULL,
-    131072ULL,
-    262144ULL,
-    524288ULL,
-    1048576ULL,
-    2097152ULL,
-    4194304ULL,
-    8388608ULL,
-    16777216ULL,
-    33554432ULL,
-    67108864ULL,
-    134217728ULL,
-    268435456ULL,
-    536870912ULL,
-    1073741824ULL,
-    2147483648ULL,
-    4294967296ULL,
-    8589934592ULL,
-    17179869184ULL,
-    34359738368ULL,
-    68719476736ULL,
-    137438953472ULL,
-    274877906944ULL,
-    549755813888ULL,
-    1099511627776ULL,
-    2199023255552ULL,
-    4398046511104ULL,
-    8796093022208ULL,
-    17592186044416ULL,
-    35184372088832ULL,
-    70368744177664ULL,
-    140737488355328ULL,
-    281474976710656ULL,
-    562949953421312ULL,
-    1125899906842624ULL,
-    2251799813685248ULL,
-    4503599627370496ULL,
-    9007199254740992ULL,
-    18014398509481984ULL,
-    36028797018963968ULL,
-    72057594037927936ULL,
-    144115188075855872ULL,
-    288230376151711744ULL,
-    576460752303423488ULL,
-    1152921504606846976ULL,
-    2305843009213693952ULL,
-    4611686018427387904ULL,
-    9223372036854775808ULL};
-
-size_t find_nearest_gte_power_of_two(size_t input) {
-  for (int i = 0; i < POWERS_OF_TWO_LEN; i++) {
-    if (uint64_powers_of_two[i] >= input) {
-      return uint64_powers_of_two[i];
-    }
-  }
-  return uint64_powers_of_two[POWERS_OF_TWO_LEN - 1];
-}
-
-/* ========================================================================== */
 /*                         UNIFIED API IMPLEMENTATION                         */
 /* ========================================================================== */
 
@@ -1079,6 +1096,13 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
   } else {
     initial_bucket_array_size =
         find_nearest_gte_power_of_two(initial_bucket_array_size);
+    if (initial_bucket_array_size > max_elem_count) {
+      _mem_free(mmgmt_procs, chm);
+      if (err) {
+        *err = CCOL_ERR_STR("Initial bucket array size is too big");
+      }
+      return NULL;
+    }
   }
 
   if (should_use_open_addressing(key_type, val_type)) {
@@ -1215,6 +1239,10 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
   } else if (new_bucket_array_size > 0) {
     new_bucket_array_size =
         find_nearest_gte_power_of_two(new_bucket_array_size);
+    if (new_bucket_array_size > max_elem_count) {
+      // The requsted size is too big
+      return ccol_not_enough_memory;
+    }
   }
 
   if (chm->impl_type == IMPL_OPEN_ADDRESSING) {

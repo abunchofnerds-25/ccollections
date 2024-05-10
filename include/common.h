@@ -43,7 +43,7 @@ SOFTWARE.
  */
 
 #include <assert.h>
-#include <memops.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -116,6 +116,12 @@ SOFTWARE.
 /** @brief Get current thread ID */
 #define get_thread_id pthread_self
 
+/**
+ * @brief Assertion macro for collections library
+ *
+ * Wrapper around standard assert() for consistency across the library.
+ * Enables runtime assertion checking in debug builds.
+ */
 #define ccol_assert assert
 
 /* ========================================================================== */
@@ -248,11 +254,31 @@ SOFTWARE.
 #define _mem_free(m_procs, ptr) (m_procs) ? m_procs->free(ptr) : mem_free(ptr)
 
 /**
+ * @brief The invalid size_t for size related operations
+ *
+ * The maximum value that can be contained by size_t
+ */
+#define ccol_invalid_size ((size_t)-1)
+
+/**
+ * @brief The maximum power of two that can be stored in a size_t
+ *
+ * on 32 bit archs -> 2^31
+ *
+ * on 64 bit archs -> 2^63
+ *
+ * As 2^(#arch_bits) would exceed size_t's storage area, the maximum
+ * integer power of two that can be contained by a size_t variable
+ * is the half of the 2^(#arch_bits).
+ */
+#define max_power_of_two_size_t ((size_t)1 << ((sizeof(size_t) * CHAR_BIT) - 1))
+
+/**
  * @brief Maximum element count for collections
  *
- * Set to SIZE_MAX - 1 to allow SIZE_MAX to indicate special conditions.
+ * It is the maximum power of 2 that can be stored by a size_t
  */
-#define max_elem_count (((size_t)-1) - 1)
+#define max_elem_count max_power_of_two_size_t
 
 /* ========================================================================== */
 /*                         RETURN VALUE CODES                                 */
@@ -899,12 +925,132 @@ typedef enum ccollections_data_type {
     }                                                       \
   } while (0)
 
+/* ========================================================================== */
+/*                         UTILITY MACROS                                     */
+/* ========================================================================== */
+
+/**
+ * @brief Return minimum of two values
+ *
+ * Evaluates both arguments and returns the smaller value.
+ *
+ * @param a First value
+ * @param b Second value
+ * @return The smaller of a and b
+ *
+ * @warning Arguments may be evaluated multiple times
+ */
 #define ccol_min(a, b) ((a) < (b) ? (a) : (b))
+
+/**
+ * @brief Return maximum of two values
+ *
+ * Evaluates both arguments and returns the larger value.
+ *
+ * @param a First value
+ * @param b Second value
+ * @return The larger of a and b
+ *
+ * @warning Arguments may be evaluated multiple times
+ */
 #define ccol_max(a, b) ((a) > (b) ? (a) : (b))
 
+/**
+ * @brief Type-safe comparison macro
+ *
+ * Compares two values of the same type and returns standard comparison result.
+ * Casts pointers to the specified type before comparison.
+ *
+ * @param ptr1 Pointer to first value
+ * @param ptr2 Pointer to second value
+ * @param T Type to cast to
+ * @return Negative if *ptr1 < *ptr2, 0 if equal, positive if *ptr1 > *ptr2
+ *
+ * @note Uses three-way comparison: (a > b) - (a < b)
+ * @note Result is -1, 0, or 1 for integer types
+ */
 #define ccol_typed_cmp(ptr1, ptr2, T) \
   ({                                  \
     T var1 = *(T *)(ptr1);            \
     T var2 = *(T *)(ptr2);            \
     (var1 > var2) - (var1 < var2);    \
   })
+
+/* ========================================================================== */
+/*                    OPTIMIZED UTILITY FUNCTIONS                             */
+/* ========================================================================== */
+
+/**
+ * @brief Find nearest power of two greater than or equal to input
+ *
+ * Searches a precomputed table of powers of two (2^0 through 2^63) and
+ * returns the smallest power of two that is >= input. If input exceeds
+ * the largest power of two (2^63), returns uint64_invalid_size to indicate
+ * an error condition.
+ *
+ * @param input Value to round up to power of two
+ * @return Nearest power of two >= input, or uint64_invalid_size if too large
+ *
+ * @note O(1) lookup
+ * @note Returns 1 for input 0 or 1
+ * @note Returns uint64_invalid_size if input > 2^63
+ * @note Useful for capacity calculations in dynamic containers
+ *
+ * Example:
+ * @code
+ * find_nearest_gte_power_of_two(5)   -> 8
+ * find_nearest_gte_power_of_two(16)  -> 16
+ * find_nearest_gte_power_of_two(100) -> 128
+ * find_nearest_gte_power_of_two(UINT64_MAX) -> uint64_invalid_size
+ * @endcode
+ */
+size_t find_nearest_gte_power_of_two(size_t input);
+
+/**
+ * @brief Optimized memory copy for small and large buffers
+ *
+ * Uses direct assignments for small sizes (1-8 bytes) and falls back to
+ * memcpy for larger buffers. Small copies use packed structs for optimal
+ * performance and avoid function call overhead.
+ *
+ * @param dst Destination pointer (must not overlap with src)
+ * @param src Source pointer
+ * @param n Number of bytes to copy
+ *
+ * @note For n <= 32: Uses direct uint8/16/32/64 assignments
+ * @note For n > 32: Falls back to standard memcpy
+ * @note Does not handle overlapping regions (use memmove for that)
+ * @note Inlined for optimal performance
+ *
+ * @warning Behavior undefined if src and dst overlap
+ *
+ * Example:
+ * @code
+ * int src = 42;
+ * int dst;
+ * mem_cpy(&dst, &src, sizeof(int));  // Optimized for 4 bytes
+ * @endcode
+ */
+void mem_cpy(void *dst, const void *src, size_t n);
+
+/**
+ * @brief Optimized memory zeroing for small and large buffers
+ *
+ * Uses direct zero assignments for small sizes (1-8 bytes) and falls back
+ * to memset for larger buffers. Small zeros use packed structs for optimal
+ * performance and avoid function call overhead.
+ *
+ * @param dst Destination pointer to zero
+ * @param n Number of bytes to zero
+ *
+ * @note For n <= 32: Uses direct zero assignments to uint8/16/32/64
+ * @note For n > 32: Falls back to memset(dst, 0, n)
+ * @note Inlined for optimal performance
+ *
+ * Example:
+ * @code
+ * int array[100];
+ * mem_zero(array, sizeof(array));  // Zeros entire array
+ * @endcode
+ */
+void mem_zero(void *dst, size_t n);

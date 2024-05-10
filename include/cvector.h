@@ -69,7 +69,7 @@ typedef cvector *cvec;
  * @return Pointer to newly created vector, or NULL on failure
  *
  * @note Initial capacity is 4 elements
- * @note Capacity doubles when full, halves when 1/4 filled
+ * @note Capacity doubles when full + 1, halves when < 1/4 filled
  * @note The vector must be destroyed with cvector_destroy() when done
  *
  * @see cvector_create
@@ -119,8 +119,9 @@ void __cvector_destroy(cvec v);
  * @param v Vector to destroy (will be set to NULL after destruction)
  *
  * @note Safe to call with NULL pointer (no-op)
- * @note Does not free individual elements - caller must free element data first
- * if needed
+ * @note Does not free individual elements when the vector itself was created to
+ * contain pointers to buffers allocated from the heap - caller must free
+ * element data first if needed
  */
 #define cvector_destroy(v)  \
   do {                      \
@@ -148,7 +149,7 @@ void __cvector_destroy(cvec v);
  * @note Amortized O(1) complexity
  * @note Element is copied into the vector
  * @note Capacity doubles when full (2x scaling factor)
- * @note Will assert if v is NULL (in debug builds)
+ * @note Will assert if v is NULL
  *
  * @see cvector_pop_back
  * @see cvec_push
@@ -173,7 +174,7 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem);
  * @note O(1) complexity
  * @note Element is copied to target_elem
  * @note Capacity halves when < 1/4 full (down to minimum of 4)
- * @note Will assert if v is NULL (in debug builds)
+ * @note Will assert if v is NULL
  *
  * @see cvector_push_back
  * @see cvec_pop
@@ -194,7 +195,7 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem);
  * @note O(1) complexity
  * @note Returns NULL if index >= elem_count or vector is empty
  * @note Returned pointer is only valid until vector is resized
- * @note Will assert if v is NULL (in debug builds)
+ * @note Will assert if v is NULL
  *
  * @see cvec_at
  * @see cvector_elem_count
@@ -211,7 +212,7 @@ void *cvector_at(cvec v, size_t index);
  * @return Number of elements in the vector
  *
  * @note O(1) complexity
- * @note Will assert if v is NULL (in debug builds)
+ * @note Will assert if v is NULL
  *
  * @see cvec_size
  */
@@ -229,12 +230,153 @@ size_t cvector_elem_count(cvec v);
  * @note Element count becomes 0
  * @note Capacity reset to minimum (4) if reallocation succeeds
  * @note Does not free individual elements - caller must do this first if needed
- * @note Will assert if v is NULL (in debug builds)
+ * @note Will assert if v is NULL
  *
  * @see cvec_reset
  */
 void cvector_reset(cvec v);
 
+/**
+ * @brief Reserve capacity for future elements
+ *
+ * Pre-allocates capacity to hold at least new_capacity_count elements,
+ * rounded up to the nearest power of two (minimum 4). Helps avoid multiple
+ * reallocations when the final size is known in advance.
+ *
+ * @param v Vector to reserve capacity for
+ * @param new_capacity_count Minimum number of elements to reserve space for
+ *
+ * @return true if reservation succeeded, false on failure
+ *
+ * @note Actual capacity will be rounded up to nearest power of two >= 4
+ * @note Does not shrink capacity if new_capacity <= current capacity
+ * @note Returns true immediately if already have enough capacity
+ * @note Returns false if new_capacity > max_elem_count
+ * @note Will assert if v is NULL
+ *
+ * @see cvec_reserve
+ *
+ * Example:
+ * @code
+ * cvec v = cvector_create(sizeof(int), NULL);
+ * cvector_reserve(v, 100);  // Pre-allocate for 128 elements (next power of 2)
+ * // Now can push 100+ elements without reallocation
+ * @endcode
+ */
+bool cvector_reserve(cvec v, size_t new_capacity_count);
+
+/**
+ * @brief Append an array of elements to the vector
+ *
+ * Efficiently appends multiple elements from a C array to the end of the
+ * vector. Automatically handles capacity expansion and may trigger a single
+ * reallocation if needed.
+ *
+ * @param v Vector to append to
+ * @param arr_ptr Pointer to array of elements to append
+ * @param elem_count Number of elements in the array
+ *
+ * @return true on success, false on failure
+ *
+ * @note More efficient than multiple push_back calls
+ * @note Uses optimized mem_cpy for bulk copying
+ * @note May trigger capacity expansion via cvector_reserve
+ * @note Returns false if result would exceed max_elem_count
+ * @note Returns false if elem_count would cause overflow
+ * @note Will assert if v is NULL
+ *
+ * @see cvector_append_cvector
+ * @see cvec_append_array
+ *
+ * Example:
+ * @code
+ * int arr[] = {1, 2, 3, 4, 5};
+ * cvec v = cvector_create(sizeof(int), NULL);
+ * cvector_append_array(v, arr, 5);  // Add all 5 elements at once
+ * @endcode
+ */
+bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count);
+
+/**
+ * @brief Append all elements from one vector to another
+ *
+ * Efficiently copies all elements from v_from to the end of v_to.
+ * Both vectors must have the same element size.
+ *
+ * @param v_to Destination vector to append to
+ * @param v_from Source vector to copy elements from
+ *
+ * @return true on success, false on failure
+ *
+ * @note Both vectors must have the same elem_size
+ * @note v_from remains unchanged
+ * @note May trigger capacity expansion in v_to
+ * @note Returns false if result would exceed max_elem_count
+ * @note Will assert if either vector is NULL or elem_size mismatch
+ *
+ * @see cvector_append_array
+ * @see cvec_append_cvec
+ *
+ * Example:
+ * @code
+ * cvec v1 = cvector_create(sizeof(int), NULL);
+ * cvec v2 = cvector_create(sizeof(int), NULL);
+ * // ... populate v1 and v2 ...
+ * cvector_append_cvector(v1, v2);  // v1 now contains all of v2's elements
+ * @endcode
+ */
+bool cvector_append_cvector(cvec v_to, cvec v_from);
+
+/**
+ * @brief Get pointer to the underlying data array
+ *
+ * Returns a direct pointer to the vector's internal data buffer. Useful
+ * for passing the vector to functions that expect C arrays.
+ *
+ * @param v Vector to get data pointer from
+ *
+ * @return Pointer to internal data array
+ *
+ * @warning Pointer becomes invalid after any operation that may resize
+ * @warning Do not free this pointer - it's managed by the vector
+ * @note Will assert if v is NULL
+ *
+ * @see cvec_data_ptr
+ *
+ * Example:
+ * @code
+ * cvec v = cvector_create(sizeof(int), NULL);
+ * // ... add elements ...
+ * int *arr = cvector_data_ptr(v);
+ * for (size_t i = 0; i < cvector_elem_count(v); i++) {
+ *   printf("%d ", arr[i]);
+ * }
+ * @endcode
+ */
+void *cvector_data_ptr(cvec v);
+
+/**
+ * @brief Destroy vector and set pointer to NULL (cleanup helper)
+ *
+ * Helper function used with _ccol_destructor attribute for automatic
+ * cleanup when variables go out of scope. Destroys the vector and sets
+ * the pointer to NULL.
+ *
+ * @param cv Pointer to vector pointer
+ *
+ * @note Designed for use with __attribute__((cleanup))
+ * @note Safe to call with NULL or pointer to NULL
+ * @note This is an internal helper - prefer using cvector_destroy() macro
+ *
+ * Example:
+ * @code
+ * {
+ *   cvec v _ccol_destructor(___cvector_destroy) = cvector_create(sizeof(int),
+ *                                                 NULL);
+ *   // ... use vector ...
+ * } // Automatically destroyed when leaving scope
+ * @endcode
+ */
 static inline void ___cvector_destroy(cvec *cv) {
   if (*cv) {
     __cvector_destroy(*cv);
@@ -582,6 +724,81 @@ static inline void ___cvector_destroy(cvec *cv) {
  * @see cvector_reset
  */
 #define cvec_reset(v) cvector_reset(v)
+
+/**
+ * @brief Reserve capacity (type-safe wrapper with error handling)
+ *
+ * Type-safe wrapper for cvector_reserve() that calls fatal_err() on failure.
+ *
+ * @param v Vector to reserve capacity for
+ * @param new_capacity_count Minimum number of elements to reserve
+ *
+ * @note Terminates program if reservation fails
+ *
+ * @see cvector_reserve
+ */
+#define cvec_reserve(v, new_capacity_count)               \
+  do {                                                    \
+    if (!cvector_reserve((v), (new_capacity_count))) {    \
+      fatal_err("cvector_reserve failed - %p - %lu", (v), \
+                (size_t)(new_capacity_count));            \
+    }                                                     \
+  } while (0)
+
+/**
+ * @brief Append array of elements (type-safe wrapper with error handling)
+ *
+ * Type-safe wrapper for cvector_append_array() that calls fatal_err() on
+ * failure.
+ *
+ * @param v Vector to append to
+ * @param arr_ptr Pointer to array of elements
+ * @param elem_count Number of elements in array
+ *
+ * @note Terminates program if append fails
+ *
+ * @see cvector_append_array
+ */
+#define cvec_append_array(v, arr_ptr, elem_count)                              \
+  do {                                                                         \
+    if (!cvector_append_array((v), (arr_ptr), (elem_count))) {                 \
+      fatal_err("cvector_append_array failed - %p - %p - %lu", (v), (arr_ptr), \
+                (size_t)(elem_count));                                         \
+    }                                                                          \
+  } while (0)
+
+/**
+ * @brief Append vector to vector (type-safe wrapper with error handling)
+ *
+ * Type-safe wrapper for cvector_append_cvector() that calls fatal_err() on
+ * failure.
+ *
+ * @param v_to Destination vector
+ * @param v_from Source vector
+ *
+ * @note Terminates program if append fails
+ *
+ * @see cvector_append_cvector
+ */
+#define cvec_append_cvec(v_to, v_from)                                      \
+  do {                                                                      \
+    if (!cvector_append_cvector((v_to), (v_from))) {                        \
+      fatal_err("cvector_append_cvector failed - %p - %p", (v_to), (v_to)); \
+    }                                                                       \
+  } while (0)
+
+/**
+ * @brief Get data pointer (type-safe wrapper)
+ *
+ * Type-safe wrapper for cvector_data_ptr().
+ *
+ * @param v Vector to get data pointer from
+ *
+ * @return Pointer to internal data array
+ *
+ * @see cvector_data_ptr
+ */
+#define cvec_data_ptr(v) cvector_data_ptr((v))
 
 /**
  * @brief Sort vector using custom comparison function

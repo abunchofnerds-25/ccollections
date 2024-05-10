@@ -63,7 +63,8 @@ typedef cbinarymap *cbmap;
  * Creates a new self-balancing binary search tree map with specified key
  * signedness, custom memory management, and custom comparison function.
  *
- * @param keys_are_signed_ints If true, treat integer keys as signed for comparison
+ * @param keys_are_signed_ints If true, treat integer keys as signed for
+ * comparison
  * @param mmgmt_procs Custom memory management procedures, or NULL for default
  * malloc/free
  * @param custom_comparison_proc Custom comparison function, or NULL for default
@@ -84,7 +85,8 @@ typedef cbinarymap *cbmap;
  * @see cbmap_create_ch
  * @see cbmap_destroy
  */
-cbmap cbmap_create_full(bool keys_are_signed_ints, ccol_memmgmt_procs_t *mmgmt_procs,
+cbmap cbmap_create_full(bool keys_are_signed_ints,
+                        ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char **err);
 
@@ -139,7 +141,8 @@ static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
 static inline __attribute__((always_inline)) cbmap
 cbmap_create_ch(bool keys_are_signed_ints,
                 ccol_comparison_proc_t custom_comparison_proc, char **err) {
-  return cbmap_create_full(keys_are_signed_ints, NULL, custom_comparison_proc, err);
+  return cbmap_create_full(keys_are_signed_ints, NULL, custom_comparison_proc,
+                           err);
 }
 
 /* ========================================================================== */

@@ -23,7 +23,6 @@ SOFTWARE.
 */
 
 #include <csort.h>
-#include <memops.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>

@@ -221,8 +221,8 @@ TEST(chash_maps, find_nearest_gte_power_of_two) {
                                9223372036854775808UL,
                                9223372036854775808UL,
                                9223372036854775808UL,
-                               9223372036854775808UL,
-                               9223372036854775808UL};
+                               ccol_invalid_size,
+                               ccol_invalid_size};
 
   int len = sizeof(test_inputs) / sizeof(size_t);
   REQUIRE_EQ(len, sizeof(expected_outputs) / sizeof(size_t));

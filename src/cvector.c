@@ -23,7 +23,6 @@ SOFTWARE.
 */
 
 #include <cvector.h>
-#include <memops.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -170,11 +169,7 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
   if (v->elem_count < v->capacity) {
     mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
             new_elem, v->elem_size);
-    if (++v->elem_count == v->capacity) {
-      // Ignoring the return value of scale_the_cvector_size_up
-      // as we managed to insert the new_elem.
-      scale_the_cvector_size_up(v);
-    }
+    ++v->elem_count;
   } else {
     if (scale_the_cvector_size_up(v)) {
       mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
@@ -213,6 +208,89 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
   }
 
   return result;
+}
+
+bool cvector_reserve(cvec v, size_t new_capacity_count) {
+  if (!v) {
+    ccol_assert(false);
+  }
+
+  size_t refined_new_capacity_count =
+      find_nearest_gte_power_of_two(new_capacity_count);
+  if (refined_new_capacity_count < minimum_capacity) {
+    refined_new_capacity_count = minimum_capacity;
+  }
+
+  if (refined_new_capacity_count > max_elem_count) {
+    // That's too much, reject it.
+    return false;
+  }
+
+  if (refined_new_capacity_count <= v->capacity) {
+    // We already have the requested capacity
+    return true;
+  }
+
+  // We need to extend our capacity
+  void *orig = v->data_ptr;
+  v->data_ptr = _mem_realloc(v->m_procs, v->data_ptr,
+                             refined_new_capacity_count * v->elem_size);
+  if (!v->data_ptr) {
+    // Reallocation attempt failed, restore the original pointer
+    v->data_ptr = orig;
+    return false;
+  }
+
+  // Reallocation attempt succeeded, all went well
+  v->capacity = refined_new_capacity_count;
+  return true;
+}
+
+bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count) {
+  if (!v) {
+    ccol_assert(false);
+  }
+
+  size_t new_elem_count = v->elem_count + elem_count;
+  if (new_elem_count < v->elem_count || new_elem_count > max_elem_count) {
+    // Either new_elem_count wrapped or it's greater than the max_elem_count
+    return false;
+  }
+
+  if (new_elem_count <= v->capacity) {
+    // We have enough space already
+    mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size),
+            arr_ptr, elem_count * v->elem_size);
+    v->elem_count += elem_count;
+    return true;
+  }
+
+  // Our capacity is not enough, let's try to see whether we can reserve
+  if (!cvector_reserve(v, new_elem_count)) {
+    return false;
+  }
+
+  // We now should have enough space
+  mem_cpy((void *)((char *)v->data_ptr + v->elem_count * v->elem_size), arr_ptr,
+          elem_count * v->elem_size);
+  v->elem_count += elem_count;
+  return true;
+}
+
+bool cvector_append_cvector(cvec v_to, cvec v_from) {
+  if (!v_to || !v_from || v_to->elem_size != v_from->elem_size) {
+    ccol_assert(false);
+  }
+
+  return cvector_append_array(v_to, v_from->data_ptr, v_from->elem_count);
+}
+
+void *cvector_data_ptr(cvec v) {
+  if (!v) {
+    ccol_assert(false);
+  }
+
+  return v->data_ptr;
 }
 
 void *cvector_at(cvec v, size_t index) {

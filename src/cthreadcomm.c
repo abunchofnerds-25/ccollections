@@ -410,7 +410,7 @@ ccol_retval_t circq_enable_sending(circular_queue *cq) {
 }
 
 size_t circq_msg_count(circular_queue *cq) {
-  size_t result = (size_t)-1;
+  size_t result = ccol_invalid_size;
 
   if (cq) {
     mutex_lock(cq->mutex);
@@ -729,7 +729,7 @@ ccol_retval_t dynmq_enable_sending(dynamic_queue *dq) {
 }
 
 size_t dynmq_msg_count(dynamic_queue *dq) {
-  size_t result = (size_t)-1;
+  size_t result = ccol_invalid_size;
 
   if (dq) {
     mutex_lock(dq->mutex);
@@ -913,7 +913,7 @@ ccol_retval_t chan_enable_sending(channel *ch, channel_direction d) {
 
 size_t chan_msg_count(channel *ch, channel_direction d) {
   if (!ch) {
-    return (size_t)-1;
+    return ccol_invalid_size;
   }
 
   if (d == owner_to_workers) {
@@ -922,5 +922,5 @@ size_t chan_msg_count(channel *ch, channel_direction d) {
     return circq_msg_count(ch->workers_to_owner_cq);
   }
 
-  return (size_t)-1;
+  return ccol_invalid_size;
 }

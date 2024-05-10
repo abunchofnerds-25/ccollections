@@ -805,7 +805,7 @@ circular_queue_destroy(cq);
 
 #### Dynamic Queue (Loosely Bounded)
 
-Linked-list based queue that grows dynamically up to **`18446744073709551614`**
+Linked-list based queue that is allowed to grow dynamically up to **`max(size_t)-1`**
 unconsumed messages, as long as there is enough memory:
 
 ```c
@@ -922,7 +922,7 @@ int main(void) {
 
 ### Naming Patterns
 
-The library follows consistent naming conventions:
+The library tries to follow consistent naming conventions:
 
 - **Container types**: `cvec`, `chmap`, `cbmap`, `mempool`, `r_mempool`, etc.
 - **Creation**: `*_create()`, `*_create_full()`, `*_create_mp()`, etc.
@@ -944,7 +944,7 @@ Always use the public macros and functions documented in this README.
 
 ### Iteration Patterns
 
-The library provides `*_for_each` macros as the **recommended way to iterate** through containers:
+The library provides `*_for_each` macros as the **recommended way to iterate** through key-value containers:
 
 ```c
 // Hash maps - iteration order is undefined
@@ -961,7 +961,7 @@ cbmap_for_each(tree, it, {
     // Process key and value in ascending key order
 });
 
-// Vectors - use index-based iteration
+// Vectors - just use index-based iteration
 for (size_t i = 0; i < cvec_size(vec); i++) {
     int val = cvec_at(vec, i);
     // Process value
@@ -1031,7 +1031,9 @@ if (result != ccol_success) {
 
 ### Containers Are Not Thread-Safe by Design
 
-**Important:** Vector, hash map, and BST map implementations **do not include internal locks**. This is by design, as locking only during the access operation (e.g., insert, get) would not provide a meaningful protection against race conditions in typical usage patterns.
+**Important:** Vector, hash map, and BST map implementations **do not include internal locks**. This is by design,
+as locking only during the access operation (e.g., insert, get) would not provide a meaningful protection against
+race conditions in typical usage patterns.
 
 Consider this example:
 

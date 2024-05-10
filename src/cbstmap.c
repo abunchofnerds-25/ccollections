@@ -25,7 +25,6 @@ SOFTWARE.
 #include <assert.h>
 #include <cbstmap.h>
 #include <cvector.h>
-#include <memops.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,7 +184,8 @@ bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   return true;
 }
 
-cbmap cbmap_create_full(bool keys_are_signed_ints, ccol_memmgmt_procs_t *mmgmt_procs,
+cbmap cbmap_create_full(bool keys_are_signed_ints,
+                        ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char **err) {
   if (err) {

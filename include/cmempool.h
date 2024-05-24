@@ -181,10 +181,11 @@ void _mempool_destroy(mempool *mp);
  *
  * @param mp Memory pool to destroy (will be set to NULL after destruction)
  *
- * @warning Pointers to the entries still allocated from the pool become
- * dangling
- * @warning Does not free dynamically allocated entries - they need to be freed
- * first
+ * @warning Unfreed, dynamically allocated pointers via the fallback memory
+ * management mechanism will make this function assert to make sure a potential
+ * leak does not go unnoticed. If no fallback is requested during the creation
+ * of this pool, such an assert does not happen. As a rule of thumb, the
+ * allocated buffers should always be freed.
  * @note Safe to call with NULL pointer
  * @note For preallocated pools, user must manage buffer lifetime
  */
@@ -513,8 +514,11 @@ void _r_mempool_destroy(r_mempool *rmp);
  * @param rmp Ranged memory pool to destroy (will be set to NULL after
  * destruction)
  *
- * @warning Pointers to the entries still allocated from the pool become
- * dangling
+ * @warning Unfreed, dynamically allocated pointers via the fallback memory
+ * management mechanism will make this function assert to make sure a potential
+ * leak does not go unnoticed. If no fallback is requested during the creation
+ * of this pool, such an assert does not happen. As a rule of thumb, the
+ * allocated buffers should always be freed.
  * @note Safe to call with NULL pointer
  * @note For preallocated pools, user must manage buffer lifetime
  */

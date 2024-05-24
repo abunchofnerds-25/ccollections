@@ -981,19 +981,19 @@ typedef enum ccollections_data_type {
 /* ========================================================================== */
 
 /**
- * @brief Find nearest power of two greater than or equal to input
+ * @brief Find nearest power of two that is greater than or equal to input
  *
  * Searches a precomputed table of powers of two (2^0 through 2^63) and
  * returns the smallest power of two that is >= input. If input exceeds
- * the largest power of two (2^63), returns uint64_invalid_size to indicate
+ * the largest power of two (2^63), returns ccol_invalid_size to indicate
  * an error condition.
  *
  * @param input Value to round up to power of two
- * @return Nearest power of two >= input, or uint64_invalid_size if too large
+ * @return Nearest power of two >= input, or ccol_invalid_size if too large
  *
  * @note O(1) lookup
  * @note Returns 1 for input 0 or 1
- * @note Returns uint64_invalid_size if input > 2^63
+ * @note Returns ccol_invalid_size if input > 2^63
  * @note Useful for capacity calculations in dynamic containers
  *
  * Example:
@@ -1001,7 +1001,7 @@ typedef enum ccollections_data_type {
  * find_nearest_gte_power_of_two(5)   -> 8
  * find_nearest_gte_power_of_two(16)  -> 16
  * find_nearest_gte_power_of_two(100) -> 128
- * find_nearest_gte_power_of_two(UINT64_MAX) -> uint64_invalid_size
+ * find_nearest_gte_power_of_two(UINT64_MAX) -> ccol_invalid_size
  * @endcode
  */
 size_t find_nearest_gte_power_of_two(size_t input);

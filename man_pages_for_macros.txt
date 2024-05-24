@@ -1,0 +1,1862 @@
+================================================================================
+                      C COLLECTIONS LIBRARY - MAN PAGES
+================================================================================
+
+This document contains manual pages for the macros that the C collections
+library defines.
+
+================================================================================
+                           CVECTOR.H - DYNAMIC ARRAY
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cvector_destroy - destroy a vector and set pointer to NULL
+
+SYNOPSIS
+       #include <cvector.h>
+
+       cvector_destroy(v)
+
+DESCRIPTION
+       Frees all resources associated with the vector including the data buffer.
+       The vector pointer is automatically set to NULL after destruction. This
+       is a macro wrapper around __cvector_destroy().
+
+PARAMETERS
+       v    Vector to destroy (will be set to NULL after destruction)
+
+NOTES
+       Safe to call with NULL pointer (no-op)
+       Does not free individual elements when the vector contains pointers
+       to heap-allocated buffers - caller must free element data first if needed
+
+SEE ALSO
+       cvector_create, __cvector_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cvec_construct - type-safe vector construction
+
+SYNOPSIS
+       #include <cvector.h>
+
+       cvec_construct(vec_name, type);
+
+DESCRIPTION
+       Type-safe macro for creating a vector. Automatically determines element
+       size from the type and creates type marker variables for compile-time
+       type checking in other macros.
+
+PARAMETERS
+       vec_name  Name of the vector variable to create
+       type      Element type (e.g., int, double, struct foo)
+
+NOTES
+       Terminates program on allocation failure
+       Creates hidden type marker variable for type safety
+       Equivalent to cvector_create(sizeof(type), &err) with error handling
+
+EXAMPLES
+       cvec_construct(my_vec, int);
+       cvec_push_rvalue(my_vec, 42);
+
+SEE ALSO
+       cvec_construct_scoped, cvector_create
+
+------------------------------------------------------------------------------
+NAME
+       cvec_push - push an element onto the vector (type-safe)
+
+SYNOPSIS
+       #include <cvector.h>
+
+       cvec_push(v, new_elem);
+
+DESCRIPTION
+       Type-safe wrapper for cvector_push_back() that automatically takes the
+       address of the element. Calls fatal_err() on failure.
+
+PARAMETERS
+       v         Vector to push onto
+       new_elem  Element to push (passed by reference automatically)
+
+NOTES
+       Terminates program on failure
+       Automatically takes address of new_elem
+       Type is verified at compile time
+
+EXAMPLES
+       cvec_construct(vec, int);
+       int x = 42;
+       cvec_push(vec, x);
+
+SEE ALSO
+       cvec_push_rvalue, cvector_push_back
+
+------------------------------------------------------------------------------
+NAME
+       cvec_push_rvalue - push an rvalue onto the vector (type-safe)
+
+SYNOPSIS
+       #include <cvector.h>
+
+       cvec_push_rvalue(v, new_elem);
+
+DESCRIPTION
+       Type-safe wrapper for cvector_push_back() that accepts rvalues (literals,
+       expressions). Creates a temporary variable and takes its address. Calls
+       fatal_err() on failure.
+
+PARAMETERS
+       v         Vector to push onto
+       new_elem  Expression or literal to push
+
+NOTES
+       Terminates program on failure
+       Accepts expressions and literals
+       Uses GNU C statement expression extension
+
+EXAMPLES
+       cvec_construct(vec, int);
+       cvec_push_rvalue(vec, 42);
+       cvec_push_rvalue(vec, x + y);
+
+SEE ALSO
+       cvec_push, cvector_push_back
+
+------------------------------------------------------------------------------
+NAME
+       cvec_pop - pop an element from the vector (type-safe)
+
+SYNOPSIS
+       #include <cvector.h>
+
+       value = cvec_pop(v);
+
+DESCRIPTION
+       Type-safe wrapper for cvector_pop_back() that returns the popped element
+       as a value. Calls fatal_err() on failure.
+
+PARAMETERS
+       v    Vector to pop from
+
+RETURN VALUE
+       Returns the popped element value
+
+NOTES
+       Terminates program on failure
+       Returns value, not pointer
+       Uses GNU C statement expression extension
+
+EXAMPLES
+       cvec_construct(vec, int);
+       cvec_push_rvalue(vec, 42);
+       int val = cvec_pop(vec);  // val == 42
+
+SEE ALSO
+       cvector_pop_back, cvec_push
+
+------------------------------------------------------------------------------
+NAME
+       cvec_at - access element at index (type-safe, returns reference)
+
+SYNOPSIS
+       #include <cvector.h>
+
+       element_ref = cvec_at(v, index);
+
+DESCRIPTION
+       Type-safe wrapper for cvector_at() that returns the element reference
+       (not pointer). Automatically casts to the correct type. Can be used as
+       lvalue for assignment.
+
+PARAMETERS
+       v      Vector to access
+       index  Zero-based index of element
+
+RETURN VALUE
+       Returns element reference at index
+
+NOTES
+       Returns reference, not pointer
+       No bounds checking - will cause SIGSEGV if index out of bounds
+       Can be used on left side of assignment
+
+EXAMPLES
+       cvec_construct(vec, int);
+       cvec_push_rvalue(vec, 42);
+       int val = cvec_at(vec, 0);  // val == 42
+       cvec_at(vec, 0) = 5;        // now the first element is 5
+
+SEE ALSO
+       cvector_at
+
+------------------------------------------------------------------------------
+NAME
+       cvec_size - get the number of elements (type-safe wrapper)
+
+SYNOPSIS
+       #include <cvector.h>
+
+       size_t cvec_size(v);
+
+DESCRIPTION
+       Type-safe wrapper for cvector_elem_count().
+
+PARAMETERS
+       v    Vector to query
+
+RETURN VALUE
+       Returns number of elements in the vector
+
+SEE ALSO
+       cvector_elem_count
+
+------------------------------------------------------------------------------
+NAME
+       cvector_sort_with_comparison_proc - sort vector with custom comparison
+
+SYNOPSIS
+       #include <cvector.h>
+
+       cvector_sort_with_comparison_proc(v, comparison_proc);
+
+DESCRIPTION
+       Sorts the vector in-place using the csort library with a custom comparison
+       function. The comparison function should follow the standard comparator
+       convention (return <0, 0, or >0).
+
+PARAMETERS
+       v                 Vector to sort
+       comparison_proc   Comparison function for sorting
+
+NOTES
+       Sorts in-place using stable mergesort algorithm
+       O(n log n) time complexity, O(n) space complexity
+       Asserts if v is NULL
+       Uses csort for sorting
+
+EXAMPLES
+       int compare_ints(const void *a, const void *b) {
+         return *(int*)a - *(int*)b;
+       }
+       cvec_construct(vec, int);
+       // ... add elements ...
+       cvector_sort_with_comparison_proc(vec, compare_ints);
+
+SEE ALSO
+       cvec_sort, csort_sort
+
+------------------------------------------------------------------------------
+NAME
+       cvec_sort - sort vector using default comparison for type
+
+SYNOPSIS
+       #include <cvector.h>
+
+       cvec_sort(v);
+
+DESCRIPTION
+       Sorts the vector in-place using the default comparison function for the
+       element type. The default comparator is obtained from the csort library
+       based on the type.
+
+PARAMETERS
+       v    Vector to sort
+
+NOTES
+       Sorts in-place using stable mergesort algorithm
+       O(n log n) time complexity, O(n) space complexity
+       Uses default comparison for the element type
+       Supported types depend on csort library defaults
+
+EXAMPLES
+       cvec_construct(vec, int);
+       cvec_push_rvalue(vec, 3);
+       cvec_push_rvalue(vec, 1);
+       cvec_push_rvalue(vec, 2);
+       cvec_sort(vec);  // vec is now [1, 2, 3]
+
+SEE ALSO
+       cvector_sort_with_comparison_proc
+
+================================================================================
+                        CSORT.H - SORTING LIBRARY
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       csort_sort - sort any collection with custom getter and comparison
+
+SYNOPSIS
+       #include <csort.h>
+
+       csort_sort(collection, length, elem_size, getter_proc, 
+                  comparison_proc, mprocs);
+
+DESCRIPTION
+       Generic sorting macro that sorts any collection using an iterative
+       mergesort algorithm. Works with any collection type (arrays, vectors,
+       custom containers) as long as getter and comparison functions are provided.
+
+       This is a wrapper macro around ___csort_qsort().
+
+PARAMETERS
+       collection       Pointer to collection to sort
+       length          Number of elements in collection
+       elem_size       Size of each element in bytes
+       getter_proc     Function to get element at index
+       comparison_proc Function to compare two elements
+       mprocs          Memory management procedures, or NULL for default
+
+NOTES
+       Stable sort (preserves relative order of equal elements)
+       O(n log n) time complexity in all cases
+       O(n) space complexity for temporary merge buffer
+       Iterative implementation (no recursion)
+
+EXAMPLES
+       // Sort a plain array
+       int arr[] = {3, 1, 2};
+       void *getter(void *col, size_t i) { return &((int*)col)[i]; }
+       int cmp(const void *a, const void *b) { 
+         return *(int*)a - *(int*)b; 
+       }
+       csort_sort(arr, 3, sizeof(int), getter, cmp, NULL);
+
+SEE ALSO
+       csort_get_default_comparison_proc, cvec_sort
+
+------------------------------------------------------------------------------
+NAME
+       csort_get_default_comparison_proc - get default comparison for a type
+
+SYNOPSIS
+       #include <csort.h>
+
+       ccol_comparison_proc_t csort_get_default_comparison_proc(dummy_var);
+
+DESCRIPTION
+       Returns the default comparison function for a given type. Uses C11 
+       _Generic to select the appropriate comparison based on the type of the 
+       dummy variable.
+
+       Supports all standard C integral types (char, short, int, long, long long,
+       unsigned variants) and floating-point types (float, double, long double),
+       as well as strings (char*).
+
+PARAMETERS
+       dummy_var  A variable of the type you want to compare (not evaluated)
+
+RETURN VALUE
+       Returns pointer to appropriate comparison function
+       Returns NULL if type is not supported
+
+NOTES
+       Variable is only used for type deduction, not evaluated
+       For strings, returns csort_default_string_comparison_proc
+       For integral types, uses three-way comparison: (a > b) - (a < b)
+
+EXAMPLES
+       // Get comparator for strings
+       char* dummy_str;
+       ccol_comparison_proc_t cmp = csort_get_default_comparison_proc(dummy_str);
+       // cmp now points to csort_default_string_comparison_proc
+
+       // Get comparator for doubles
+       double dummy_double;
+       cmp = csort_get_default_comparison_proc(dummy_double);
+
+SEE ALSO
+       csort_sort, cvec_sort
+
+================================================================================
+                         CHASHMAP.H - HASH MAP
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       chmap_destroy - destroy a hash map and set pointer to NULL
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       chmap_destroy(hm);
+
+DESCRIPTION
+       Frees all resources associated with the hash map including all key-value
+       pairs. The hash map pointer is automatically set to NULL after destruction.
+
+PARAMETERS
+       hm   Hash map to destroy (will be set to NULL after destruction)
+
+NOTES
+       Safe to call with NULL pointer
+       Frees all keys and values
+       For maps created from preallocated buffers, only the map structure is
+       freed (user must manage buffer lifetime)
+
+SEE ALSO
+       chmap_create, __chmap_destroy
+
+------------------------------------------------------------------------------
+NAME
+       chmap_construct - type-safe hash map construction
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       chmap_construct(hm_name, key_type, val_type);
+
+DESCRIPTION
+       Type-safe macro for creating a hash map with default settings. 
+       Automatically determines key and value types and creates type marker
+       variables for compile-time type checking.
+
+PARAMETERS
+       hm_name   Name of the hash map variable to create
+       key_type  Type of keys
+       val_type  Type of values
+
+NOTES
+       Terminates program on allocation failure
+       Creates hidden type marker variables for type safety
+       Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (64) buckets
+       Uses default memory management and hashing
+
+EXAMPLES
+       chmap_construct(map, int, char*);
+       chmap_insert(map, 42, "hello");
+
+SEE ALSO
+       chmap_construct_full, chmap_create
+
+------------------------------------------------------------------------------
+NAME
+       chmap_insert - insert a key-value pair (type-safe)
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       chmap_insert(hm_name, key, val);
+
+DESCRIPTION
+       Type-safe wrapper for chmap_insert_elem() that automatically handles
+       type conversion and cmap_pair creation. Calls fatal_err() on failure.
+
+PARAMETERS
+       hm_name  Hash map to insert into
+       key      Key to insert
+       val      Value to associate with key
+
+NOTES
+       Terminates program on failure
+       Automatically takes address of key and value
+       Handles both value types and string types correctly
+
+EXAMPLES
+       chmap_construct(map, int, char*);
+       chmap_insert(map, 42, "hello");
+       chmap_insert(map, 100, "world");
+
+SEE ALSO
+       chmap_insert_elem, chmap_get, chmap_remove
+
+------------------------------------------------------------------------------
+NAME
+       chmap_remove - remove a key-value pair (type-safe)
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       ccol_retval_t chmap_remove(hm_name, key);
+
+DESCRIPTION
+       Type-safe wrapper for chmap_delete_elem() that returns the result code.
+       Does not terminate on key_not_found.
+
+PARAMETERS
+       hm_name  Hash map to remove from
+       key      Key to remove
+
+RETURN VALUE
+       Returns ccol_success if removed
+       Returns ccol_key_not_found if not found
+
+NOTES
+       Does not terminate on key_not_found
+       Frees memory for key and value
+
+EXAMPLES
+       ccol_retval_t r = chmap_remove(map, 42);
+       if (r == ccol_key_not_found) {
+         printf("Key not found\n");
+       }
+
+SEE ALSO
+       chmap_delete_elem, chmap_insert
+
+------------------------------------------------------------------------------
+NAME
+       chmap_get - get value by key (type-safe, returns value)
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       value = chmap_get(hm_name, key);
+
+DESCRIPTION
+       Type-safe wrapper for chmap_get_elem_ref() that returns the actual value.
+       Calls fatal_err() if key not found or size mismatch.
+
+PARAMETERS
+       hm_name  Hash map to search
+       key      Key to look up
+
+RETURN VALUE
+       Returns value associated with key
+
+NOTES
+       Terminates program if key not found
+       Terminates program if value size doesn't match type size
+       Returns value, not pointer
+       For strings, returns the char* itself
+
+EXAMPLES
+       chmap_construct(map, int, char*);
+       chmap_insert(map, 42, "hello");
+       char* val = chmap_get(map, 42); // val == "hello"
+
+SEE ALSO
+       chmap_get_ptr, chmap_insert
+
+------------------------------------------------------------------------------
+NAME
+       chmap_get_ptr - get pointer to value by key (type-safe)
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       value_ptr = chmap_get_ptr(hm_name, key);
+
+DESCRIPTION
+       Type-safe wrapper for chmap_get_elem_ref() that returns a pointer to the
+       value, or NULL if key not found. Unlike chmap_get(), does not terminate
+       on key_not_found.
+
+PARAMETERS
+       hm_name  Hash map to search
+       key      Key to look up
+
+RETURN VALUE
+       Returns pointer to value if key found
+       Returns NULL if key not found
+
+NOTES
+       Returns NULL if key not found (does not terminate)
+       Terminates program if value size doesn't match type size
+       Returns pointer to value for in-place modification
+       Pointer invalidated by later insert/delete/resize operations
+       For strings, returns pointer to the char* itself
+
+EXAMPLES
+       chmap_construct(map, int, int);
+       chmap_insert(map, 42, 100);
+       int* ptr = chmap_get_ptr(map, 42);
+       if (ptr) {
+         *ptr = 200; // Modify in-place
+       }
+
+SEE ALSO
+       chmap_get, chmap_get_elem_ref
+
+================================================================================
+                      CBSTMAP.H - BALANCED BST MAP
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_destroy - destroy a BST map and set pointer to NULL
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       cbmap_destroy(cbm);
+
+DESCRIPTION
+       Frees all resources associated with the BST map including all nodes,
+       keys, and values. The map pointer is automatically set to NULL.
+
+PARAMETERS
+       cbm  BST map to destroy (will be set to NULL after destruction)
+
+NOTES
+       Safe to call with NULL pointer
+       Frees all nodes, keys, and values
+       Uses iterative post-order traversal
+
+SEE ALSO
+       cbmap_create, ___cbmap_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_construct - type-safe BST map construction
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       cbmap_construct(hm_name, key_type, val_type);
+
+DESCRIPTION
+       Type-safe macro for creating a BST map with default settings. 
+       Automatically determines if keys are signed integers and creates type
+       marker variables for compile-time type checking.
+
+PARAMETERS
+       hm_name   Name of the BST map variable to create
+       key_type  Type of keys
+       val_type  Type of values
+
+NOTES
+       Terminates program on allocation failure
+       Creates hidden type marker variables for type safety
+       Automatically determines key signedness
+       Uses default memory management and comparison
+
+EXAMPLES
+       cbmap_construct(map, int, char*);
+       cbmap_insert(map, 42, "hello");
+
+SEE ALSO
+       cbmap_construct_full, cbmap_create
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_insert - insert a key-value pair (type-safe)
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       cbmap_insert(hm_name, key, val);
+
+DESCRIPTION
+       Type-safe wrapper for cbmap_insert_elem() that automatically handles
+       type conversion and cmap_pair creation. Calls fatal_err() on failure.
+       Tree is automatically rebalanced after insertion.
+
+PARAMETERS
+       hm_name  BST map to insert into
+       key      Key to insert
+       val      Value to associate with key
+
+NOTES
+       Terminates program on failure
+       Automatically takes address of key and value
+       Handles both value types and string types correctly
+       Tree is automatically rebalanced after insertion
+
+SEE ALSO
+       cbmap_insert_elem, cbmap_get, cbmap_remove
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_remove - remove a key-value pair (type-safe)
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       ccol_retval_t cbmap_remove(hm_name, key);
+
+DESCRIPTION
+       Type-safe wrapper for cbmap_delete_elem() that returns the result code.
+       Tree is automatically rebalanced after deletion.
+
+PARAMETERS
+       hm_name  BST map to remove from
+       key      Key to remove
+
+RETURN VALUE
+       Returns ccol_success if removed
+       Returns ccol_key_not_found if not found
+
+NOTES
+       Does not terminate on key_not_found
+       Frees memory for key and value
+       Tree is automatically rebalanced after deletion
+
+SEE ALSO
+       cbmap_delete_elem, cbmap_insert
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_get - get value by key (type-safe, returns value)
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       value = cbmap_get(hm_name, key);
+
+DESCRIPTION
+       Type-safe wrapper for cbmap_get_elem_ref() that returns the actual value.
+       Calls fatal_err() if key not found or size mismatch.
+
+PARAMETERS
+       hm_name  BST map to search
+       key      Key to look up
+
+RETURN VALUE
+       Returns value associated with key
+
+NOTES
+       Terminates program if key not found
+       Terminates program if value size doesn't match type size
+       Returns value, not pointer
+       For strings, returns the char* itself
+       O(log n) search time
+
+SEE ALSO
+       cbmap_get_ptr, cbmap_insert
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_get_ptr - get pointer to value by key (type-safe)
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       value_ptr = cbmap_get_ptr(hm_name, key);
+
+DESCRIPTION
+       Type-safe wrapper for cbmap_get_elem_ref() that returns a pointer to the
+       value, or NULL if key not found. Unlike cbmap_get(), does not terminate
+       on key_not_found.
+
+PARAMETERS
+       hm_name  BST map to search
+       key      Key to look up
+
+RETURN VALUE
+       Returns pointer to value if key found
+       Returns NULL if key not found
+
+NOTES
+       Returns NULL if key not found (does not terminate)
+       Terminates program if value size doesn't match type size
+       Returns pointer to value for in-place modification
+       Pointer invalidated by insert/delete operations
+       For strings, returns pointer to the char* itself
+       O(log n) search time
+
+SEE ALSO
+       cbmap_get, cbmap_get_elem_ref
+
+================================================================================
+                       CMEMPOOL.H - MEMORY POOLS
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       DECLARE_PREALLOCATED_MEMPOOL_BUFFER - declare buffer for memory pool
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       DECLARE_PREALLOCATED_MEMPOOL_BUFFER(name, elem_count, elem_size);
+
+DESCRIPTION
+       Declares a uint8_t array sized correctly for a memory pool with the
+       specified parameters. The buffer can then be passed to
+       mempool_create_from_preallocated_buffer(). Automatically includes header
+       overhead in size calculation.
+
+PARAMETERS
+       name        Variable name for the buffer
+       elem_count  Number of elements the pool will hold
+       elem_size   Size of each element in bytes
+
+NOTES
+       Buffer is allocated on stack or in static storage depending on context
+       Useful for embedded systems or avoiding heap allocation
+
+EXAMPLES
+       DECLARE_PREALLOCATED_MEMPOOL_BUFFER(my_buffer, 100, 64);
+       mempool *mp = mempool_create_from_preallocated_buffer(
+           my_buffer, sizeof(my_buffer), 64, false, false, NULL, NULL);
+
+SEE ALSO
+       mempool_create_from_preallocated_buffer
+
+------------------------------------------------------------------------------
+NAME
+       mempool_destroy - destroy a memory pool and set pointer to NULL
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       mempool_destroy(mp);
+
+DESCRIPTION
+       Frees all resources associated with the memory pool. For pools created
+       from preallocated buffers, the buffer itself is not freed (only the pool
+       struct).
+
+PARAMETERS
+       mp   Memory pool to destroy (will be set to NULL after destruction)
+
+WARNINGS
+       Unfreed dynamically allocated pointers via the fallback mechanism will
+       cause assertion failure. All allocated entries should be freed before
+       destroying the pool.
+
+NOTES
+       Safe to call with NULL pointer
+       For preallocated pools, user must manage buffer lifetime
+
+SEE ALSO
+       mempool_create, _mempool_destroy
+
+------------------------------------------------------------------------------
+NAME
+       mempool_free_entry - free an entry back to the pool
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       mempool_free_entry(entry);
+
+DESCRIPTION
+       Returns an allocated entry to the pool's free list. Macro wrapper around
+       _mempool_free_entry() that sets pointer to NULL.
+
+PARAMETERS
+       entry  Entry to free (will be set to NULL after freeing)
+
+NOTES
+       O(1) complexity
+       Safe to call with NULL
+       Thread-safe if pool created with single_threaded=false
+       Performs corruption detection via assertions
+
+SEE ALSO
+       mempool_alloc_entry, _mempool_free_entry
+
+------------------------------------------------------------------------------
+NAME
+       r_mempool_destroy - destroy a ranged memory pool
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       r_mempool_destroy(rmp);
+
+DESCRIPTION
+       Frees all resources associated with the ranged memory pool including all
+       sub-pools. For pools created from preallocated buffers, the buffer itself
+       is not freed.
+
+PARAMETERS
+       rmp  Ranged memory pool to destroy (will be set to NULL)
+
+WARNINGS
+       Unfreed dynamically allocated pointers via fallback will cause assertion
+       failure. All allocated entries should be freed before destroying.
+
+NOTES
+       Safe to call with NULL pointer
+       For preallocated pools, user must manage buffer lifetime
+
+SEE ALSO
+       r_mempool_create, _r_mempool_destroy
+
+------------------------------------------------------------------------------
+NAME
+       r_mempool_free_entry - free an entry back to the ranged pool
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       r_mempool_free_entry(entry);
+
+DESCRIPTION
+       Returns an allocated entry to the appropriate sub-pool's free list.
+       Macro wrapper around mempool_free_entry() that sets pointer to NULL.
+
+PARAMETERS
+       entry  Entry to free (will be set to NULL after freeing)
+
+NOTES
+       Works for entries from any sub-pool in the ranged pool
+       Also works for dynamically allocated entries (fallback)
+       Safe to call with NULL
+       Thread-safe if pool created with single_threaded=false
+       Performs corruption detection via assertions
+
+SEE ALSO
+       mempool_free_entry, r_mempool_alloc_entry
+
+================================================================================
+                   CTHREADCOMM.H - THREAD COMMUNICATION
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       circular_queue_create - create a circular queue
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       circular_queue_create(max_size, err_str);
+
+DESCRIPTION
+       Creates a fixed-size bounded queue that uses a circular buffer internally.
+       Send operations block when the queue is full until space becomes available.
+       Uses standard malloc/free for memory management.
+
+       This is a convenience macro for circular_queue_create_with_mprocs() with
+       NULL memory management procedures.
+
+PARAMETERS
+       max_size  Maximum number of messages the queue can hold (1 to max_elem_count)
+       err_str   Optional pointer to receive error string on failure
+
+RETURN VALUE
+       Returns pointer to newly created circular queue on success
+       Returns NULL on failure
+
+NOTES
+       All operations on this queue are thread-safe
+       Queue must be destroyed with circular_queue_destroy() when done
+
+SEE ALSO
+       circular_queue_create_with_mprocs, circular_queue_destroy
+
+------------------------------------------------------------------------------
+NAME
+       circular_queue_destroy - destroy a circular queue
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       circular_queue_destroy(cq);
+
+DESCRIPTION
+       Frees all resources associated with the queue. The queue pointer is
+       automatically set to NULL after destruction.
+
+PARAMETERS
+       cq   Circular queue to destroy (will be set to NULL)
+
+WARNINGS
+       Messages remaining in the queue cause assertion failure
+       Drain the queue before destroying
+
+NOTES
+       Safe to call with NULL pointer
+
+SEE ALSO
+       circular_queue_create, __circular_queue_destroy
+
+------------------------------------------------------------------------------
+NAME
+       dynamic_queue_create - create a dynamic (unbounded) queue
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       dynamic_queue_create(err_str);
+
+DESCRIPTION
+       Creates an unbounded queue implemented as a linked list. Send operations
+       never block (queue can grow indefinitely). Uses standard malloc/free.
+
+       This is a convenience macro for dynamic_queue_create_with_mprocs() with
+       NULL memory management procedures.
+
+PARAMETERS
+       err_str  Optional pointer to receive error string on failure
+
+RETURN VALUE
+       Returns pointer to newly created dynamic queue on success
+       Returns NULL on failure
+
+NOTES
+       All operations on this queue are thread-safe
+       Queue must be destroyed with dynamic_queue_destroy() when done
+
+SEE ALSO
+       dynamic_queue_create_with_mprocs, dynamic_queue_destroy
+
+------------------------------------------------------------------------------
+NAME
+       dynamic_queue_destroy - destroy a dynamic queue
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       dynamic_queue_destroy(dq);
+
+DESCRIPTION
+       Frees all resources associated with the queue. The queue pointer is
+       automatically set to NULL after destruction.
+
+PARAMETERS
+       dq   Dynamic queue to destroy (will be set to NULL)
+
+WARNINGS
+       Messages remaining in the queue cause assertion failure
+       Drain the queue before destroying
+
+NOTES
+       Safe to call with NULL pointer
+
+SEE ALSO
+       dynamic_queue_create, __dynamic_queue_destroy
+
+------------------------------------------------------------------------------
+NAME
+       channel_create - create a bidirectional communication channel
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       channel_create(max_size, err_str);
+
+DESCRIPTION
+       Creates a bidirectional channel with two internal circular queues for
+       communication between an owner thread and worker threads. Both directions
+       share the same capacity. Uses standard malloc/free for memory management.
+
+       This is a convenience macro for channel_create_with_mprocs() with NULL
+       memory management procedures.
+
+PARAMETERS
+       max_size   Maximum number of messages each direction can hold
+       err_str    Optional error string pointer
+
+RETURN VALUE
+       Returns pointer to newly created channel on success
+       Returns NULL on failure
+
+NOTES
+       All operations are thread-safe
+       Channel must be destroyed with channel_destroy() when done
+       Direction is automatically selected based on calling thread ID
+
+SEE ALSO
+       channel_create_with_mprocs, channel_destroy
+
+------------------------------------------------------------------------------
+NAME
+       channel_destroy - destroy a channel
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       channel_destroy(ch);
+
+DESCRIPTION
+       Frees all resources associated with the channel including both internal
+       queues. The channel pointer is automatically set to NULL.
+
+PARAMETERS
+       ch   Channel to destroy (will be set to NULL)
+
+WARNINGS
+       Messages remaining in either direction cause assertion failure
+       Drain both queues before destroying
+
+NOTES
+       Safe to call with NULL pointer
+
+SEE ALSO
+       channel_create, __channel_destroy
+
+================================================================================
+                       CSTRING.H - DYNAMIC STRING
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cstring_destroy - destroy a string and set its pointer to NULL
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstring_destroy(s);
+
+DESCRIPTION
+       Destroys the cstring by freeing its internal buffer and the container
+       itself. The pointer variable s is set to NULL after destruction, making
+       repeated calls safe.
+
+PARAMETERS
+       s   cstr variable to destroy (set to NULL on return)
+
+NOTES
+       Safe to call with a NULL pointer (no-op)
+       Prefer this macro over calling __cstring_destroy() directly
+
+EXAMPLES
+       cstr s = cstring_create("hello", NULL);
+       cstring_destroy(s);   /* s is now NULL */
+
+SEE ALSO
+       cstr_destroy, __cstring_destroy, ___cstring_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cstr_declare - declare an uninitialised cstr variable
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_declare(s);
+
+DESCRIPTION
+       Expands to a bare cstr declaration. The variable is uninitialized and
+       must be initialised before use.
+
+PARAMETERS
+       s   Name of the variable to declare
+
+EXAMPLES
+       cstr_declare(greeting);
+       cstr_init(greeting, "Hello");
+       cstr_destroy(greeting);
+
+SEE ALSO
+       cstr_declare_scoped, cstr_init, cstr_construct
+
+------------------------------------------------------------------------------
+NAME
+       cstr_declare_scoped - declare a cstr variable with automatic RAII destruction
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_declare_scoped(s);
+
+DESCRIPTION
+       Like cstr_declare() but attaches __attribute__((cleanup(___cstring_destroy)))
+       so that __cstring_destroy is called automatically when the variable leaves
+       scope.
+
+PARAMETERS
+       s   Name of the variable to declare
+
+NOTES
+       Requires GCC or Clang (uses __attribute__((cleanup)))
+
+EXAMPLES
+       {
+         cstr_declare_scoped(s);
+         cstr_init(s, "auto-freed");
+         /* s is destroyed automatically at end of this block */
+       }
+
+SEE ALSO
+       cstr_declare, cstr_construct_scoped
+
+------------------------------------------------------------------------------
+NAME
+       cstr_init - initialise a declared cstr using default allocators
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_init(s, initial);
+
+DESCRIPTION
+       Calls cstring_create() to initialise the already-declared cstr variable s
+       with the given initial content. Calls fatal_err() if creation fails.
+
+PARAMETERS
+       s        cstr variable to initialise (must have been declared)
+       initial  Initial content (C string or NULL for empty string)
+
+NOTES
+       Calls fatal_err() on allocation failure — use cstring_create() directly
+       if you need to handle errors gracefully
+
+EXAMPLES
+       cstr_declare(s);
+       cstr_init(s, "hello");
+       cstr_destroy(s);
+
+SEE ALSO
+       cstr_init_mp, cstr_construct, cstring_create
+
+------------------------------------------------------------------------------
+NAME
+       cstr_init_mp - initialise a declared cstr using custom memory management
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_init_mp(s, initial, mprocs);
+
+DESCRIPTION
+       Calls cstring_create_full() to initialise the already-declared cstr variable
+       s with the given initial content and memory management procedures. Calls
+       fatal_err() if creation fails.
+
+PARAMETERS
+       s        cstr variable to initialise (must have been declared)
+       initial  Initial content (C string or NULL for empty string)
+       mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
+
+NOTES
+       Calls fatal_err() on allocation failure
+
+SEE ALSO
+       cstr_init, cstr_construct_mp, cstring_create_full
+
+------------------------------------------------------------------------------
+NAME
+       cstr_construct - declare and initialise a cstr in one step
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_construct(s, initial);
+
+DESCRIPTION
+       Combines cstr_declare() and cstr_init() into a single statement. Creates a
+       new cstr variable named s and initialises it with the given content.
+
+PARAMETERS
+       s        Variable name to create
+       initial  Initial content (C string or NULL for empty string)
+
+EXAMPLES
+       cstr_construct(greeting, "Hello");
+       cstr_append(greeting, ", world!");
+       cstr_destroy(greeting);
+
+SEE ALSO
+       cstr_construct_scoped, cstr_construct_mp, cstr_declare, cstr_init
+
+------------------------------------------------------------------------------
+NAME
+       cstr_construct_scoped - declare and initialise a cstr with automatic RAII
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_construct_scoped(s, initial);
+
+DESCRIPTION
+       Combines cstr_declare_scoped() and cstr_init() into a single statement.
+       The string is automatically destroyed when the variable leaves scope.
+
+PARAMETERS
+       s        Variable name to create
+       initial  Initial content (C string or NULL for empty string)
+
+NOTES
+       Requires GCC or Clang (uses __attribute__((cleanup)))
+
+EXAMPLES
+       {
+         cstr_construct_scoped(s, "auto-freed");
+         /* use s ... */
+       }  /* s is destroyed here automatically */
+
+SEE ALSO
+       cstr_construct, cstr_construct_mp_scoped
+
+------------------------------------------------------------------------------
+NAME
+       cstr_construct_mp - declare and initialise a cstr with custom memory management
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_construct_mp(s, initial, mprocs);
+
+DESCRIPTION
+       Combines cstr_declare() and cstr_init_mp() into a single statement. Creates
+       a cstr using the supplied custom memory management procedures.
+
+PARAMETERS
+       s        Variable name to create
+       initial  Initial content (C string or NULL for empty string)
+       mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
+
+SEE ALSO
+       cstr_construct, cstr_construct_mp_scoped, cstr_init_mp
+
+------------------------------------------------------------------------------
+NAME
+       cstr_construct_mp_scoped - declare and initialise a cstr with custom mprocs and RAII
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_construct_mp_scoped(s, initial, mprocs);
+
+DESCRIPTION
+       Combines cstr_declare_scoped() and cstr_init_mp() into a single statement.
+       The string is automatically destroyed when the variable leaves scope, using
+       the custom memory management procedures.
+
+PARAMETERS
+       s        Variable name to create
+       initial  Initial content (C string or NULL for empty string)
+       mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
+
+NOTES
+       Requires GCC or Clang (uses __attribute__((cleanup)))
+
+SEE ALSO
+       cstr_construct_scoped, cstr_construct_mp
+
+------------------------------------------------------------------------------
+NAME
+       cstr_destroy - destroy a cstr and set it to NULL
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_destroy(s);
+
+DESCRIPTION
+       Type-safe alias for cstring_destroy(). Destroys the string and sets the
+       pointer to NULL.
+
+PARAMETERS
+       s   cstr variable to destroy
+
+NOTES
+       Safe to call with a NULL pointer (no-op)
+
+SEE ALSO
+       cstring_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cstr_append - append a C string; calls fatal_err() on failure
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_append(s, str);
+
+DESCRIPTION
+       Calls cstring_append() and calls fatal_err() if the return value is not
+       ccol_success.
+
+PARAMETERS
+       s     cstr to modify
+       str   C string to append (must not be NULL)
+
+NOTES
+       Use cstring_append() directly if you need to handle errors gracefully
+
+SEE ALSO
+       cstring_append, cstr_prepend, cstr_insert, cstr_set
+
+------------------------------------------------------------------------------
+NAME
+       cstr_prepend - prepend a C string; calls fatal_err() on failure
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_prepend(s, str);
+
+DESCRIPTION
+       Calls cstring_prepend() and calls fatal_err() if the return value is not
+       ccol_success.
+
+PARAMETERS
+       s     cstr to modify
+       str   C string to prepend (must not be NULL)
+
+NOTES
+       Use cstring_prepend() directly if you need to handle errors gracefully
+
+SEE ALSO
+       cstring_prepend, cstr_append, cstr_insert
+
+------------------------------------------------------------------------------
+NAME
+       cstr_insert - insert a C string at a position; calls fatal_err() on failure
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_insert(s, pos, str);
+
+DESCRIPTION
+       Calls cstring_insert() and calls fatal_err() if the return value is not
+       ccol_success.
+
+PARAMETERS
+       s     cstr to modify
+       pos   Insertion position (0 … length, inclusive)
+       str   C string to insert (must not be NULL)
+
+NOTES
+       Use cstring_insert() directly if you need to handle errors gracefully
+
+SEE ALSO
+       cstring_insert, cstr_append, cstr_prepend
+
+------------------------------------------------------------------------------
+NAME
+       cstr_set - replace entire content; calls fatal_err() on failure
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_set(s, str);
+
+DESCRIPTION
+       Calls cstring_set() and calls fatal_err() if the return value is not
+       ccol_success.
+
+PARAMETERS
+       s     cstr to modify
+       str   New content (must not be NULL)
+
+NOTES
+       Use cstring_set() directly if you need to handle errors gracefully
+
+SEE ALSO
+       cstring_set, cstr_append, cstr_reset
+
+------------------------------------------------------------------------------
+NAME
+       cstr_replace - replace all occurrences of needle; calls fatal_err() on failure
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_replace(s, needle, replacement);
+
+DESCRIPTION
+       Calls cstring_replace() and calls fatal_err() if the return value is not
+       ccol_success.
+
+PARAMETERS
+       s              cstr to modify
+       needle         Substring to search for (must not be NULL or empty)
+       replacement    Substitute string (must not be NULL)
+
+NOTES
+       Use cstring_replace() directly if you need to handle errors gracefully
+
+SEE ALSO
+       cstring_replace, cstr_find
+
+------------------------------------------------------------------------------
+NAME
+       cstr_reserve - reserve capacity; calls fatal_err() on failure
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_reserve(s, cap);
+
+DESCRIPTION
+       Calls cstring_reserve() and calls fatal_err() if it returns false.
+
+PARAMETERS
+       s     cstr to modify
+       cap   Minimum number of bytes to reserve (including null terminator)
+
+NOTES
+       Use cstring_reserve() directly if you need to handle errors gracefully
+
+SEE ALSO
+       cstring_reserve
+
+------------------------------------------------------------------------------
+NAME
+       cstr_length - return the number of characters in the string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_length(s);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_length().
+
+PARAMETERS
+       s   cstr to query
+
+RETURN VALUE
+       Length in bytes (excluding null terminator)
+
+SEE ALSO
+       cstring_length, cstr_is_empty
+
+------------------------------------------------------------------------------
+NAME
+       cstr_c_str - return a pointer to the null-terminated character data
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_c_str(s);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_c_str().
+
+PARAMETERS
+       s   cstr to query
+
+RETURN VALUE
+       Pointer to null-terminated character data
+
+NOTES
+       Pointer is invalidated by any mutating operation
+
+SEE ALSO
+       cstring_c_str, cstr_length
+
+------------------------------------------------------------------------------
+NAME
+       cstr_at - return the character at a given index
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_at(s, idx);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_at().
+
+PARAMETERS
+       s     cstr to query
+       idx   Zero-based character index
+
+RETURN VALUE
+       Character at idx, or '\0' if idx >= length
+
+SEE ALSO
+       cstring_at
+
+------------------------------------------------------------------------------
+NAME
+       cstr_is_empty - check whether the string contains no characters
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_is_empty(s);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_is_empty().
+
+PARAMETERS
+       s   cstr to query
+
+RETURN VALUE
+       true if length is zero, false otherwise
+
+SEE ALSO
+       cstring_is_empty, cstr_length
+
+------------------------------------------------------------------------------
+NAME
+       cstr_reset - clear all characters and shrink capacity to minimum
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_reset(s);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_reset().
+
+PARAMETERS
+       s   cstr to reset
+
+SEE ALSO
+       cstring_reset, cstr_set
+
+------------------------------------------------------------------------------
+NAME
+       cstr_to_upper - convert all characters to uppercase in-place
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_to_upper(s);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_to_upper().
+
+PARAMETERS
+       s   cstr to modify
+
+SEE ALSO
+       cstring_to_upper, cstr_to_lower
+
+------------------------------------------------------------------------------
+NAME
+       cstr_to_lower - convert all characters to lowercase in-place
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_to_lower(s);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_to_lower().
+
+PARAMETERS
+       s   cstr to modify
+
+SEE ALSO
+       cstring_to_lower, cstr_to_upper
+
+------------------------------------------------------------------------------
+NAME
+       cstr_trim - strip leading and trailing whitespace in-place
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_trim(s);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_trim().
+
+PARAMETERS
+       s   cstr to modify
+
+SEE ALSO
+       cstring_trim
+
+------------------------------------------------------------------------------
+NAME
+       cstr_compare - compare the string to a C string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_compare(s, str);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_compare().
+
+PARAMETERS
+       s     cstr to compare
+       str   C string to compare against
+
+RETURN VALUE
+       Negative if s < str, zero if equal, positive if s > str
+
+SEE ALSO
+       cstring_compare, cstr_equals
+
+------------------------------------------------------------------------------
+NAME
+       cstr_equals - check whether the string equals a C string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_equals(s, str);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_equals().
+
+PARAMETERS
+       s     cstr to compare
+       str   C string to compare against
+
+RETURN VALUE
+       true if contents are equal, false otherwise
+
+SEE ALSO
+       cstring_equals, cstr_compare
+
+------------------------------------------------------------------------------
+NAME
+       cstr_starts_with - check whether the string begins with a prefix
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_starts_with(s, pfx);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_starts_with().
+
+PARAMETERS
+       s     cstr to test
+       pfx   Prefix string
+
+RETURN VALUE
+       true if the string starts with pfx, false otherwise
+
+SEE ALSO
+       cstring_starts_with, cstr_ends_with
+
+------------------------------------------------------------------------------
+NAME
+       cstr_ends_with - check whether the string ends with a suffix
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_ends_with(s, sfx);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_ends_with().
+
+PARAMETERS
+       s     cstr to test
+       sfx   Suffix string
+
+RETURN VALUE
+       true if the string ends with sfx, false otherwise
+
+SEE ALSO
+       cstring_ends_with, cstr_starts_with
+
+------------------------------------------------------------------------------
+NAME
+       cstr_find - find the first occurrence of a substring
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_find(s, needle);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_find().
+
+PARAMETERS
+       s        cstr to search
+       needle   Substring to find
+
+RETURN VALUE
+       Zero-based index of first occurrence, or ccol_invalid_size if not found
+
+SEE ALSO
+       cstring_find, cstr_rfind
+
+------------------------------------------------------------------------------
+NAME
+       cstr_rfind - find the last occurrence of a substring
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_rfind(s, needle);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_rfind().
+
+PARAMETERS
+       s        cstr to search
+       needle   Substring to find
+
+RETURN VALUE
+       Zero-based index of last occurrence, or ccol_invalid_size if not found
+
+SEE ALSO
+       cstring_rfind, cstr_find
+
+------------------------------------------------------------------------------
+NAME
+       cstr_substring - create a new string from a sub-range; calls fatal_err() on failure
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr result = cstr_substring(s, start, len);
+
+DESCRIPTION
+       GNU C statement expression that calls cstring_substring() and calls
+       fatal_err() if the result is NULL (allocation failure). Returns the new
+       cstring as a value so it can be used directly in expressions.
+
+PARAMETERS
+       s      Source cstr
+       start  Zero-based start index
+       len    Number of characters to include
+
+RETURN VALUE
+       New cstr containing the requested sub-range
+
+NOTES
+       This macro uses a GNU C statement expression ({...}) and requires GCC or
+       Clang
+       The range is clamped at the string end rather than rejected
+       Caller must destroy the returned cstring when done
+       Use cstring_substring() directly if you need to handle errors gracefully
+
+EXAMPLES
+       cstr_construct(src, "Hello, world!");
+       cstr sub = cstr_substring(src, 7, 5);   /* "world" */
+       printf("%s\n", cstr_c_str(sub));
+       cstr_destroy(sub);
+       cstr_destroy(src);
+
+SEE ALSO
+       cstring_substring, cstr_copy, cstr_split
+
+------------------------------------------------------------------------------
+NAME
+       cstr_copy - create an independent copy of a string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_copy(s, err);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_copy(). Allocates a new cstring with the
+       same content as s.
+
+PARAMETERS
+       s     cstr to copy
+       err   Optional pointer to receive an error string on failure
+
+RETURN VALUE
+       New cstr on success, NULL on failure
+
+NOTES
+       Caller must destroy the returned cstring when done
+
+SEE ALSO
+       cstring_copy, cstr_substring
+
+------------------------------------------------------------------------------
+NAME
+       cstr_split - split the string by a delimiter
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr_split(s, delim, err);
+
+DESCRIPTION
+       Pass-through wrapper for cstring_split(). Returns a cvec of individually
+       heap-allocated cstr tokens.
+
+PARAMETERS
+       s      cstr to split
+       delim  Delimiter string (must not be NULL or empty)
+       err    Optional pointer to receive an error string on failure
+
+RETURN VALUE
+       cvec of cstr tokens on success, NULL on failure
+
+NOTES
+       Caller must destroy every cstr in the vector and then the vector itself
+
+SEE ALSO
+       cstring_split, cstr_find, cstr_substring
+
+================================================================================
+                              END OF MAN PAGES
+================================================================================

@@ -1,0 +1,2452 @@
+================================================================================
+                      C COLLECTIONS LIBRARY - MAN PAGES
+================================================================================
+
+This document contains manual pages for the functions that the C collections
+library defines.
+
+================================================================================
+                           CVECTOR.H - DYNAMIC ARRAY
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cvector_create - create a vector with default memory management
+
+SYNOPSIS
+       #include <cvector.h>
+
+       cvec cvector_create(size_t elem_size, char **err);
+
+DESCRIPTION
+       Creates a new vector container that stores elements of the specified size.
+       The vector starts with a minimum capacity of 4 elements and automatically
+       resizes as needed. Uses standard malloc/free for memory management.
+
+       This is a static inline wrapper around cvector_create_full() with NULL
+       memory management procedures.
+
+PARAMETERS
+       elem_size  Size of each element in bytes (must be > 0)
+       err        Optional pointer to receive error string on failure
+                  (pass NULL to ignore)
+
+RETURN VALUE
+       Returns pointer to newly created vector on success
+       Returns NULL on failure (error string set in *err if provided)
+
+NOTES
+       Initial capacity is 4 elements
+       Capacity doubles when full, halves when < 1/4 filled
+       Must be destroyed with cvector_destroy() when done
+
+SEE ALSO
+       cvector_create_full, cvector_destroy, cvec_construct
+
+------------------------------------------------------------------------------
+NAME
+       cvector_create_full - create a vector with custom memory management
+
+SYNOPSIS
+       #include <cvector.h>
+
+       cvec cvector_create_full(size_t elem_size, 
+                                ccol_memmgmt_procs_t *mmgmt_procs,
+                                char **err);
+
+DESCRIPTION
+       Creates a new vector container with full customization of memory 
+       management. The vector stores elements of the specified size and 
+       automatically manages capacity.
+
+PARAMETERS
+       elem_size     Size of each element in bytes (must be > 0)
+       mmgmt_procs   Custom memory management procedures, or NULL for 
+                     default malloc/free
+       err           Optional pointer to receive error string on failure
+
+RETURN VALUE
+       Returns pointer to newly created vector on success
+       Returns NULL on failure
+
+NOTES
+       Initial capacity is 4 elements
+       Capacity scaling: 2x when full, 0.5x when < 1/4 filled
+       Minimum capacity: 4 elements
+
+SEE ALSO
+       cvector_create, cvector_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cvector_push_back - append an element to the end of the vector
+
+SYNOPSIS
+       #include <cvector.h>
+
+       ccol_retval_t cvector_push_back(cvec v, const void *new_elem);
+
+DESCRIPTION
+       Adds a new element to the end of the vector. If the vector is at capacity,
+       it automatically grows by doubling its capacity. The element is copied 
+       into the vector using an optimized assignment based on element size.
+
+PARAMETERS
+       v         Vector to append to
+       new_elem  Pointer to element to append (must not be NULL)
+
+RETURN VALUE
+       ccol_success          - Element successfully appended
+       ccol_invalid_args     - new_elem is NULL
+       ccol_container_full   - Vector has reached max_elem_count
+       ccol_not_enough_memory - Capacity expansion failed
+
+NOTES
+       Amortized O(1) complexity
+       Element is copied into the vector
+       Capacity doubles when full (2x scaling factor)
+       Asserts if v is NULL
+
+SEE ALSO
+       cvector_pop_back, cvec_push, cvec_push_rvalue
+
+------------------------------------------------------------------------------
+NAME
+       cvector_pop_back - remove and return the last element from the vector
+
+SYNOPSIS
+       #include <cvector.h>
+
+       ccol_retval_t cvector_pop_back(cvec v, void *target_elem);
+
+DESCRIPTION
+       Removes the last element from the vector and copies it to the target 
+       buffer. If the vector becomes less than 1/4 full, it automatically 
+       shrinks by halving its capacity (minimum capacity is 4).
+
+PARAMETERS
+       v            Vector to pop from
+       target_elem  Pointer to buffer to receive the element (must not be NULL)
+
+RETURN VALUE
+       ccol_success        - Element successfully popped
+       ccol_invalid_args   - target_elem is NULL
+       ccol_container_empty - Vector is empty
+
+NOTES
+       O(1) complexity
+       Element is copied to target_elem
+       Capacity halves when < 1/4 full (down to minimum of 4)
+       Asserts if v is NULL
+
+SEE ALSO
+       cvector_push_back, cvec_pop
+
+------------------------------------------------------------------------------
+NAME
+       cvector_at - access an element at a specific index
+
+SYNOPSIS
+       #include <cvector.h>
+
+       void *cvector_at(cvec v, size_t index);
+
+DESCRIPTION
+       Returns a pointer to the element at the specified index. The pointer can
+       be used to read or modify the element in-place.
+
+PARAMETERS
+       v      Vector to access
+       index  Zero-based index of element to access
+
+RETURN VALUE
+       Returns pointer to element at index on success
+       Returns NULL if index >= elem_count or vector is empty
+
+NOTES
+       O(1) complexity
+       Returned pointer is only valid until vector is resized
+       Asserts if v is NULL
+
+SEE ALSO
+       cvec_at, cvector_elem_count
+
+------------------------------------------------------------------------------
+NAME
+       cvector_elem_count - get the number of elements in the vector
+
+SYNOPSIS
+       #include <cvector.h>
+
+       size_t cvector_elem_count(cvec v);
+
+DESCRIPTION
+       Returns the current number of elements stored in the vector.
+
+PARAMETERS
+       v    Vector to query
+
+RETURN VALUE
+       Returns number of elements in the vector
+
+NOTES
+       O(1) complexity
+       Asserts if v is NULL
+
+SEE ALSO
+       cvec_size, cvector_at
+
+------------------------------------------------------------------------------
+NAME
+       cvector_reset - clear all elements and reset capacity
+
+SYNOPSIS
+       #include <cvector.h>
+
+       void cvector_reset(cvec v);
+
+DESCRIPTION
+       Removes all elements from the vector and attempts to shrink the capacity
+       back to the minimum (4 elements). If reallocation fails, the capacity
+       remains unchanged but the element count is still reset to 0.
+
+PARAMETERS
+       v    Vector to reset
+
+NOTES
+       Element count becomes 0
+       Capacity reset to minimum (4) if reallocation succeeds
+       Does not free individual elements - caller must do this first if needed
+       Asserts if v is NULL
+
+SEE ALSO
+       cvec_reset, cvector_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cvector_reserve - reserve capacity for future elements
+
+SYNOPSIS
+       #include <cvector.h>
+
+       bool cvector_reserve(cvec v, size_t new_capacity_count);
+
+DESCRIPTION
+       Pre-allocates capacity to hold at least new_capacity_count elements,
+       rounded up to the nearest power of two (minimum 4). Helps avoid multiple
+       reallocations when the expected size is known in advance.
+
+PARAMETERS
+       v                    Vector to reserve capacity for
+       new_capacity_count   Minimum number of elements to reserve
+
+RETURN VALUE
+       Returns true if reservation succeeds or capacity is already sufficient
+       Returns false if allocation fails or new_capacity_count > max_elem_count
+
+NOTES
+       Does nothing if requested capacity <= current capacity
+       Actual capacity may be larger due to power-of-2 rounding
+       Does not change element count
+       Asserts if v is NULL
+
+SEE ALSO
+       cvec_reserve
+
+------------------------------------------------------------------------------
+NAME
+       cvector_append_array - append array of elements to vector
+
+SYNOPSIS
+       #include <cvector.h>
+
+       bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count);
+
+DESCRIPTION
+       Appends an array of elements to the end of the vector. Automatically
+       reserves capacity if needed to hold all elements.
+
+PARAMETERS
+       v           Vector to append to
+       arr_ptr     Pointer to array of elements
+       elem_count  Number of elements in array
+
+RETURN VALUE
+       Returns true on success
+       Returns false if:
+         - new total count would overflow or exceed max_elem_count
+         - memory allocation fails
+
+NOTES
+       All elements are appended or none (atomic operation)
+       Automatically reserves capacity if needed
+       Elements are copied into the vector
+       Asserts if v is NULL
+
+SEE ALSO
+       cvec_append_array, cvector_append_cvector
+
+------------------------------------------------------------------------------
+NAME
+       cvector_append_cvector - append vector to vector
+
+SYNOPSIS
+       #include <cvector.h>
+
+       bool cvector_append_cvector(cvec v_to, cvec v_from);
+
+DESCRIPTION
+       Appends all elements from one vector to another. Both vectors must have
+       the same element size.
+
+PARAMETERS
+       v_to    Destination vector
+       v_from  Source vector
+
+RETURN VALUE
+       Returns true on success
+       Returns false if memory allocation fails
+
+NOTES
+       Element sizes must match (asserts if different)
+       All elements are appended or none
+       Automatically reserves capacity if needed
+       Asserts if v_to or v_from is NULL
+
+SEE ALSO
+       cvec_append_cvec, cvector_append_array
+
+------------------------------------------------------------------------------
+NAME
+       cvector_data_ptr - get pointer to internal data array
+
+SYNOPSIS
+       #include <cvector.h>
+
+       void *cvector_data_ptr(cvec v);
+
+DESCRIPTION
+       Returns a pointer to the internal contiguous data array. Useful for
+       passing vector data to C APIs that expect arrays.
+
+PARAMETERS
+       v    Vector to get data pointer from
+
+RETURN VALUE
+       Returns pointer to internal data array
+
+NOTES
+       Pointer becomes invalid after vector is resized
+       Pointer points to capacity elements, but only elem_count are valid
+       Asserts if v is NULL
+
+SEE ALSO
+       cvec_data_ptr, cvector_at
+
+================================================================================
+                         CHASHMAP.H - HASH MAP
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       chmap_create - create a hash map with default settings
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       chmap chmap_create(size_t initial_bucket_array_size,
+                          ccol_data_type key_type, 
+                          ccol_data_type val_type, 
+                          char **err);
+
+DESCRIPTION
+       Creates a hash map with default memory management and default hashing.
+       The implementation strategy (open-addressing vs separate chaining) is
+       automatically selected based on the key and value types.
+
+       Open-addressing is used when both key and value are integral types ≤8 
+       bytes (excluding long double). Separate chaining is used for non-integral
+       types or types >8 bytes.
+
+PARAMETERS
+       initial_bucket_array_size  Initial number of buckets (minimum 64)
+       key_type                   Type of keys (determines implementation)
+       val_type                   Type of values (determines implementation)
+       err                        Optional pointer to receive error string
+
+RETURN VALUE
+       Returns pointer to newly created hash map on success
+       Returns NULL on failure
+
+NOTES
+       Minimum bucket count is 64 (always power-of-2)
+       Open-addressing: Fibonacci hashing for integers, XXHash64 for buffers
+       Separate chaining: XXHash64 for all types
+       Map must be destroyed with chmap_destroy() when done
+
+SEE ALSO
+       chmap_create_full, chmap_create_mp, chmap_create_ch, chmap_destroy
+
+------------------------------------------------------------------------------
+NAME
+       chmap_create_full - create a hash map with full customization
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       chmap chmap_create_full(size_t initial_bucket_array_size,
+                               ccol_data_type key_type, 
+                               ccol_data_type val_type,
+                               ccol_memmgmt_procs_t *mmgmt_procs,
+                               ccol_hashing_proc_t custom_hashing_proc, 
+                               char **err);
+
+DESCRIPTION
+       Creates a hash map with full control over initial size, types, memory
+       management, and hashing function. The implementation strategy is
+       automatically selected based on key and value types.
+
+PARAMETERS
+       initial_bucket_array_size  Initial number of buckets
+       key_type                   Type of keys
+       val_type                   Type of values
+       mmgmt_procs                Custom memory management, or NULL
+       custom_hashing_proc        Custom hash function, or NULL
+       err                        Optional pointer to receive error string
+
+RETURN VALUE
+       Returns pointer to newly created hash map on success
+       Returns NULL on failure
+
+NOTES
+       Implementation selection:
+         - Open-addressing: Both key and value are integral types ≤8 bytes
+         - Separate chaining: Either key or value is non-integral or >8 bytes
+       Integral types: char, short, int, long, long long (signed/unsigned),
+                      float, double
+       Excludes long double from open-addressing (can be 10-16 bytes)
+
+SEE ALSO
+       chmap_create, chmap_destroy
+
+------------------------------------------------------------------------------
+NAME
+       chmap_insert_elem - insert a key-value pair into the hash map
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       ccol_retval_t chmap_insert_elem(chmap chm,
+                                        const cmap_pair *key_pair,
+                                        const cmap_pair *val_pair);
+
+DESCRIPTION
+       Inserts a key-value pair into the hash map. If the key already exists,
+       the old value is replaced with the new value. Automatically resizes the
+       map when load factor thresholds are exceeded.
+
+PARAMETERS
+       chm        Hash map to insert into
+       key_pair   Key to insert (copied into map)
+       val_pair   Value to associate with key (copied into map)
+
+RETURN VALUE
+       ccol_success           - Insertion succeeded
+       ccol_invalid_args      - chm, key_pair, or val_pair is NULL or size is 0
+       ccol_container_full    - Map has reached max_elem_count
+       ccol_not_enough_memory - Memory allocation failed
+
+NOTES
+       Average O(1) complexity
+       Key and value data are copied into the map
+       If key exists, old value is freed and replaced
+       Automatically resizes when load factor exceeded
+
+SEE ALSO
+       chmap_insert, chmap_delete_elem, chmap_get_elem_ref
+
+------------------------------------------------------------------------------
+NAME
+       chmap_delete_elem - remove a key-value pair from the hash map
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
+
+DESCRIPTION
+       Removes the key-value pair with the specified key from the hash map.
+       Frees memory for both key and value. Automatically shrinks the map when
+       load factor falls below threshold.
+
+PARAMETERS
+       chm        Hash map to remove from
+       key_pair   Key to remove
+
+RETURN VALUE
+       ccol_success        - Key removed successfully
+       ccol_invalid_args   - chm or key_pair is NULL or key size is 0
+       ccol_key_not_found  - Key does not exist in map
+
+NOTES
+       Average O(1) complexity
+       Frees memory for key and value
+       Open-addressing: shrinks when load factor < 0.25 (scale 0.5x)
+       Separate chaining: shrinks when elem_count < (bucket_count + 1) / 8 (scale 0.25x)
+
+SEE ALSO
+       chmap_remove, chmap_insert_elem
+
+------------------------------------------------------------------------------
+NAME
+       chmap_get_elem_ref - get reference to value by key
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       ccol_retval_t chmap_get_elem_ref(chmap chm,
+                                         const cmap_pair *key_pair,
+                                         cmap_pair **val_pair);
+
+DESCRIPTION
+       Retrieves a reference to the value associated with the given key. The
+       returned reference points to internal storage and can be used to read
+       or modify the value in-place.
+
+PARAMETERS
+       chm        Hash map to search
+       key_pair   Key to look up
+       val_pair   Pointer to receive reference to value
+
+RETURN VALUE
+       ccol_success        - Key found, *val_pair points to value
+       ccol_invalid_args   - chm, key_pair, or val_pair is NULL or key size is 0
+       ccol_key_not_found  - Key does not exist in map
+
+NOTES
+       Average O(1) complexity
+       Returned reference is valid until next insert/delete/resize
+       Reference can be used to modify value in-place
+
+SEE ALSO
+       chmap_get, chmap_get_ptr, chmap_insert_elem
+
+------------------------------------------------------------------------------
+NAME
+       chmap_elem_count - get the number of elements in the hash map
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       size_t chmap_elem_count(chmap chm);
+
+DESCRIPTION
+       Returns the current number of key-value pairs stored in the hash map.
+
+PARAMETERS
+       chm   Hash map to query
+
+RETURN VALUE
+       Returns number of elements in the map
+
+NOTES
+       O(1) complexity
+       Asserts if chm is NULL
+
+SEE ALSO
+       chmap_insert_elem, chmap_delete_elem
+
+------------------------------------------------------------------------------
+NAME
+       chmap_reset - clear all elements from the hash map
+
+SYNOPSIS
+       #include <chashmap.h>
+
+       ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
+
+DESCRIPTION
+       Removes all key-value pairs from the hash map and destroys all internal
+       data. Optionally resizes the bucket/slot array. The map remains usable
+       after reset regardless of whether the resize succeeds.
+
+PARAMETERS
+       chm                      Hash map to reset
+       new_bucket_array_size    New bucket count (0 = keep current size;
+                                values < 64 are raised to 64; otherwise
+                                rounded to the nearest power of two)
+
+RETURN VALUE
+       ccol_success           - All elements cleared (and resize succeeded if requested)
+       ccol_not_enough_memory - Resize failed; elements are still cleared
+
+NOTES
+       O(n) complexity where n is number of elements
+       All elements are destroyed regardless of return value
+       Asserts if chm is NULL
+
+SEE ALSO
+       chmap_destroy, chmap_delete_elem
+
+================================================================================
+                      CBSTMAP.H - BALANCED BST MAP
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_create - create a BST map with default settings
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       cbmap cbmap_create(bool keys_are_signed_ints, char **err);
+
+DESCRIPTION
+       Creates a self-balancing binary search tree map (AVL tree) with default
+       memory management and default comparison based on key signedness.
+
+PARAMETERS
+       keys_are_signed_ints  If true, treat integer keys as signed for comparison
+       err                   Optional pointer to receive error string on failure
+
+RETURN VALUE
+       Returns pointer to newly created BST map on success
+       Returns NULL on failure
+
+NOTES
+       Default comparison for unsigned: memcmp(key1, key2, size)
+       Default comparison for signed: proper signed integer comparison
+       Map maintains AVL balance: |height(left) - height(right)| ≤ 1
+       All operations are O(log n) for balanced tree
+       Map must be destroyed with cbmap_destroy() when done
+
+SEE ALSO
+       cbmap_create_full, cbmap_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_create_full - create a BST map with full customization
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       cbmap cbmap_create_full(bool keys_are_signed_ints,
+                               ccol_memmgmt_procs_t *mmgmt_procs,
+                               ccol_comparison_proc_t custom_comparison_proc,
+                               char **err);
+
+DESCRIPTION
+       Creates a self-balancing BST map with full control over key signedness,
+       memory management, and comparison function.
+
+PARAMETERS
+       keys_are_signed_ints     Treat integer keys as signed
+       mmgmt_procs              Custom memory management, or NULL
+       custom_comparison_proc   Custom comparison function, or NULL
+       err                      Optional pointer to receive error string
+
+RETURN VALUE
+       Returns pointer to newly created BST map on success
+       Returns NULL on failure
+
+NOTES
+       Default comparison for unsigned: memcmp
+       Default comparison for signed: proper signed comparison (1, 2, 4, 8 bytes)
+       Custom comparison receives void* pointers to key data
+       All tree operations are iterative using explicit stacks
+
+SEE ALSO
+       cbmap_create, cbmap_destroy
+
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_reset - clear all elements from the map
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       ccol_retval_t cbmap_reset(cbmap cbm);
+
+DESCRIPTION
+       Removes all key-value pairs from the map using iterative post-order
+       traversal. The map becomes empty but remains usable.
+
+PARAMETERS
+       cbm  BST map to reset
+
+RETURN VALUE
+       Returns ccol_success on success
+
+NOTES
+       O(n) complexity
+       All nodes are destroyed, keys and values freed
+       Map structure remains valid for reuse
+
+SEE ALSO
+       cbmap_destroy, cbmap_delete_elem
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_elem_count - get the number of elements in the map
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       size_t cbmap_elem_count(cbmap cbm);
+
+DESCRIPTION
+       Returns the current number of key-value pairs stored in the BST map.
+
+PARAMETERS
+       cbm  BST map to query
+
+RETURN VALUE
+       Returns number of elements in the map
+
+NOTES
+       O(1) complexity
+       Asserts if cbm is NULL
+
+SEE ALSO
+       cbmap_insert_elem, cbmap_delete_elem
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_insert_elem - insert a key-value pair into the BST map
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       ccol_retval_t cbmap_insert_elem(cbmap cbm,
+                                        const cmap_pair *key_pair,
+                                        const cmap_pair *val_pair);
+
+DESCRIPTION
+       Inserts a key-value pair into the BST map. If the key already exists,
+       the old value is replaced. Tree is automatically rebalanced using AVL
+       rotations after insertion.
+
+PARAMETERS
+       cbm        BST map to insert into
+       key_pair   Key to insert (copied into map)
+       val_pair   Value to associate with key (copied into map)
+
+RETURN VALUE
+       ccol_success           - Insertion succeeded
+       ccol_container_full    - Map has reached max_elem_count
+       ccol_not_enough_memory - Memory allocation failed
+
+NOTES
+       O(log n) complexity
+       Key and value data are copied into the map
+       If key exists, old value is freed and replaced
+       Tree is rebalanced using single/double rotations
+
+SEE ALSO
+       cbmap_insert, cbmap_delete_elem, cbmap_get_elem_ref
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_delete_elem - remove a key-value pair from the BST map
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
+
+DESCRIPTION
+       Removes the key-value pair with the specified key from the BST map.
+       Frees memory for both key and value. Tree is automatically rebalanced
+       using AVL rotations after deletion.
+
+PARAMETERS
+       cbm        BST map to remove from
+       key_pair   Key to remove
+
+RETURN VALUE
+       ccol_success        - Key removed successfully
+       ccol_key_not_found  - Key does not exist in map
+
+NOTES
+       O(log n) complexity
+       Frees memory for key and value
+       Tree is rebalanced using single/double rotations
+       Uses iterative implementation with explicit stack
+
+SEE ALSO
+       cbmap_remove, cbmap_insert_elem
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_get_elem_ref - get reference to value by key
+
+SYNOPSIS
+       #include <cbstmap.h>
+
+       ccol_retval_t cbmap_get_elem_ref(cbmap cbm,
+                                         const cmap_pair *key_pair,
+                                         cmap_pair **val_pair);
+
+DESCRIPTION
+       Retrieves a reference to the value associated with the given key. The
+       returned reference points to internal storage and can be used to read
+       or modify the value in-place.
+
+PARAMETERS
+       cbm        BST map to search
+       key_pair   Key to look up
+       val_pair   Pointer to receive reference to value
+
+RETURN VALUE
+       ccol_success        - Key found, *val_pair points to value
+       ccol_key_not_found  - Key does not exist in map
+
+NOTES
+       O(log n) complexity
+       Returned reference is valid until next insert/delete operation
+       Reference can be used to modify value in-place
+
+SEE ALSO
+       cbmap_get, cbmap_get_ptr, cbmap_insert_elem
+
+================================================================================
+                       CMEMPOOL.H - MEMORY POOLS
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       mempool_create - create a fixed-size memory pool
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       mempool *mempool_create(size_t elem_count, 
+                               size_t elem_size,
+                               bool fallback_to_dynamic_memory, 
+                               bool single_threaded,
+                               ccol_memmgmt_procs_t *mmgmt_procs, 
+                               char **err);
+
+DESCRIPTION
+       Creates a memory pool that manages a fixed number of fixed-size elements.
+       All allocations return elements of the same size. Provides O(1) allocation
+       and deallocation using a free list.
+
+PARAMETERS
+       elem_count                 Number of elements in the pool (must be > 0)
+       elem_size                  Size of each element in bytes (must be > 0,
+                                 minimum sizeof(uintptr_t))
+       fallback_to_dynamic_memory If true, allocate from heap when pool exhausted
+       single_threaded           If true, omit locking (faster but not thread-safe)
+       mmgmt_procs               Custom memory management, or NULL for default
+       err                       Optional pointer to receive error string
+
+RETURN VALUE
+       Returns pointer to newly created memory pool on success
+       Returns NULL on failure
+
+NOTES
+       Actual element size includes header overhead
+       If elem_size < sizeof(uintptr_t), it is rounded up
+       Thread-safe if single_threaded is false (uses read-write locks)
+       With fallback enabled, pool never fails allocation (until system OOM)
+       Pool must be destroyed with mempool_destroy() when done
+
+SEE ALSO
+       mempool_create_from_preallocated_buffer, mempool_destroy, mempool_alloc_entry
+
+------------------------------------------------------------------------------
+NAME
+       mempool_create_from_preallocated_buffer - create pool from user buffer
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       mempool *mempool_create_from_preallocated_buffer(
+           void *buffer, 
+           size_t buf_size, 
+           size_t elem_size,
+           bool fallback_to_dynamic_memory, 
+           bool single_threaded,
+           ccol_memmgmt_procs_t *mmgmt_procs, 
+           char **err);
+
+DESCRIPTION
+       Creates a memory pool using a user-provided buffer instead of allocating
+       from the heap. Useful for embedded systems or when heap allocation is
+       undesirable.
+
+PARAMETERS
+       buffer                     Pointer to preallocated buffer
+       buf_size                   Size of buffer in bytes
+       elem_size                  Size of each element in bytes
+       fallback_to_dynamic_memory If true, allocate from heap when pool exhausted
+       single_threaded           If true, omit locking
+       mmgmt_procs               Custom memory management, or NULL
+       err                       Optional pointer to receive error string
+
+RETURN VALUE
+       Returns pointer to newly created memory pool on success
+       Returns NULL on failure
+
+NOTES
+       Element count is calculated as buf_size / (elem_size + header_overhead)
+       Buffer is not freed by mempool_destroy() (user manages buffer lifetime)
+       Pool struct itself is still allocated via mmgmt_procs
+       If elem_size < sizeof(uintptr_t), it is adjusted
+
+SEE ALSO
+       DECLARE_PREALLOCATED_MEMPOOL_BUFFER, mempool_create, mempool_destroy
+
+------------------------------------------------------------------------------
+NAME
+       mempool_alloc_entry - allocate an entry from the pool
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       void *mempool_alloc_entry(mempool *mp);
+
+DESCRIPTION
+       Returns a pointer to an available entry from the pool. If the pool is
+       exhausted and fallback is enabled, allocates from the heap. Contents are
+       uninitialized.
+
+PARAMETERS
+       mp   Memory pool to allocate from
+
+RETURN VALUE
+       Returns pointer to allocated entry on success
+       Returns NULL if pool exhausted and no fallback enabled
+
+NOTES
+       O(1) complexity
+       Returned memory is uninitialized
+       Thread-safe if pool created with single_threaded=false
+       Entry must be freed with mempool_free_entry()
+
+SEE ALSO
+       mempool_calloc_entry, mempool_free_entry
+
+------------------------------------------------------------------------------
+NAME
+       mempool_calloc_entry - allocate zero-initialized entry from pool
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       void *mempool_calloc_entry(mempool *mp);
+
+DESCRIPTION
+       Like mempool_alloc_entry(), but zeros the entry before returning.
+
+PARAMETERS
+       mp   Memory pool to allocate from
+
+RETURN VALUE
+       Returns pointer to zero-initialized entry on success
+       Returns NULL if pool exhausted and no fallback enabled
+
+NOTES
+       O(1) complexity
+       Zeros only the user-visible portion (not the internal entry header)
+       Thread-safe if pool created with single_threaded=false
+
+SEE ALSO
+       mempool_alloc_entry, mempool_free_entry
+
+------------------------------------------------------------------------------
+NAME
+       r_mempool_create - create a ranged memory pool
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       r_mempool *r_mempool_create(
+           uint8_t smallest_size_power_of_two,
+           uint8_t largest_size_power_of_two,
+           uint8_t number_of_smallest_size_elems_power_of_two,
+           r_memory_fallback_policy_t fb_policy,
+           bool single_threaded,
+           ccol_memmgmt_procs_t *mmgmt_procs,
+           char **err);
+
+DESCRIPTION
+       Creates a ranged memory pool that manages multiple fixed-size pools
+       organized by power-of-2 sizes. Automatically selects the appropriate
+       sub-pool for each allocation request.
+
+PARAMETERS
+       smallest_size_power_of_two              Exponent for smallest pool size
+       largest_size_power_of_two               Exponent for largest pool size
+       number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
+       fb_policy                               Fallback policy for exhausted pools
+       single_threaded                         If true, omit locking
+       mmgmt_procs                             Custom memory management, or NULL
+       err                                     Optional pointer to receive error string
+
+RETURN VALUE
+       Returns pointer to newly created ranged memory pool on success
+       Returns NULL on failure
+
+NOTES
+       Each sub-pool has half the elements of the previous size
+       Minimum allowed smallest size is 16 bytes (power = 4)
+       Example: smallest=4 (16 bytes), largest=6 (64 bytes), count=8 (256 elems)
+         Creates pools: 16 bytes (256 elems), 32 bytes (128), 64 bytes (64)
+       Fallback policies:
+         - fallback_disabled: Returns NULL when pools exhausted
+         - fallback_at_first_exhaustion: Uses heap when first pool exhausted
+         - fallback_at_last_exhaustion: Uses heap only after all pools exhausted
+
+SEE ALSO
+       r_mempool_create_from_preallocated_buffer, r_mempool_destroy
+
+------------------------------------------------------------------------------
+NAME
+       r_mempool_alloc_entry - allocate an entry from the ranged pool
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       void *r_mempool_alloc_entry(r_mempool *rmp, size_t size);
+
+DESCRIPTION
+       Allocates memory of the requested size from the most appropriate sub-pool.
+       The size is rounded up to the nearest power-of-2 pool. If the optimal pool
+       is exhausted, tries larger pools. Fallback behavior depends on policy.
+
+PARAMETERS
+       rmp   Ranged memory pool to allocate from
+       size  Size in bytes to allocate (must be > 0 and <= largest_size)
+
+RETURN VALUE
+       Returns pointer to allocated entry on success
+       Returns NULL on failure
+
+NOTES
+       O(1) in common case, O(number_of_pools) worst case
+       Returned memory is uninitialized (use r_mempool_calloc_entry() for zeroed)
+       Size is rounded up to next power-of-2 pool size
+       Tries progressively larger pools if optimal pool is exhausted
+       Thread-safe if pool created with single_threaded=false
+       Entry must be freed with r_mempool_free_entry()
+
+SEE ALSO
+       r_mempool_calloc_entry, r_mempool_realloc_entry, r_mempool_free_entry
+
+------------------------------------------------------------------------------
+NAME
+       r_mempool_calloc_entry - allocate zero-initialized entry
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       void *r_mempool_calloc_entry(r_mempool *rmp, size_t size);
+
+DESCRIPTION
+       Like r_mempool_alloc_entry(), but zeros the requested number of bytes
+       before returning.
+
+PARAMETERS
+       rmp   Ranged memory pool to allocate from
+       size  Size in bytes to allocate
+
+RETURN VALUE
+       Returns pointer to zero-initialized entry on success
+       Returns NULL on failure
+
+NOTES
+       Zeros exactly 'size' bytes (not the full pool element)
+       Thread-safe if pool created with single_threaded=false
+
+SEE ALSO
+       r_mempool_alloc_entry, r_mempool_realloc_entry
+
+------------------------------------------------------------------------------
+NAME
+       r_mempool_realloc_entry - reallocate an entry to a different size
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size);
+
+DESCRIPTION
+       Changes the size of an allocated entry. If the new size maps to the same
+       pool as the old size, returns the original pointer. Otherwise, allocates
+       a new entry, copies min(old_size, new_size) bytes, and frees the old entry.
+
+PARAMETERS
+       rmp   Ranged memory pool
+       addr  Existing entry to reallocate, or NULL to allocate new
+       size  New size in bytes (must be > 0 and <= largest_size)
+
+RETURN VALUE
+       Returns pointer to reallocated entry on success
+       Returns NULL on failure
+
+NOTES
+       If addr is NULL, equivalent to r_mempool_alloc_entry()
+       If new size maps to same pool, returns original pointer (no copy)
+       Otherwise, allocates new, copies data, frees old
+       Copies min(old_user_size, new_user_size) bytes
+       Old entry is automatically freed if reallocation succeeds
+       Thread-safe if pool created with single_threaded=false
+
+SEE ALSO
+       r_mempool_alloc_entry, r_mempool_free_entry
+
+------------------------------------------------------------------------------
+NAME
+       r_mempool_used_count - get number of used entries for a size
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       size_t r_mempool_used_count(r_mempool *rmp, size_t size);
+
+DESCRIPTION
+       Returns the number of currently allocated entries from the pool that would
+       service the given size. Does not include dynamic allocations.
+
+PARAMETERS
+       rmp   Ranged memory pool to query
+       size  Size in bytes to query (maps to a specific sub-pool)
+
+RETURN VALUE
+       Returns number of entries in use for this size
+       Returns 0 on error
+
+NOTES
+       Returns 0 if size is invalid (0 or > largest_size)
+       Size is rounded up to next power-of-2 pool
+       Thread-safe if pool created with single_threaded=false
+       Dynamic allocations are tracked separately
+
+SEE ALSO
+       r_mempool_total_capacity, r_mempool_dynamic_allocs_count
+
+------------------------------------------------------------------------------
+NAME
+       r_mempool_total_capacity - get total capacity for a size
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       size_t r_mempool_total_capacity(r_mempool *rmp, size_t size);
+
+DESCRIPTION
+       Returns the total number of entries in the pool that services the given
+       size. Does not include dynamic allocations.
+
+PARAMETERS
+       rmp   Ranged memory pool to query
+       size  Size in bytes to query (maps to a specific sub-pool)
+
+RETURN VALUE
+       Returns total capacity for this size
+       Returns 0 on error
+
+NOTES
+       Returns 0 if size is invalid (0 or > largest_size)
+       Size is rounded up to next power-of-2 pool
+       Thread-safe if pool created with single_threaded=false
+
+SEE ALSO
+       r_mempool_used_count, r_mempool_dynamic_allocs_count
+
+------------------------------------------------------------------------------
+NAME
+       r_mempool_dynamic_allocs_count - get number of dynamic allocations
+
+SYNOPSIS
+       #include <cmempool.h>
+
+       size_t r_mempool_dynamic_allocs_count(r_mempool *rmp, size_t size);
+
+DESCRIPTION
+       Returns the number of heap-allocated entries for the given size. Behavior
+       depends on fallback policy.
+
+PARAMETERS
+       rmp   Ranged memory pool to query
+       size  Size in bytes to query
+
+RETURN VALUE
+       Returns number of dynamic allocations
+       Returns 0 on error or if disabled
+
+NOTES
+       Returns 0 if fallback_disabled
+       With fallback_at_first_exhaustion, tracks per-pool dynamic allocations
+       With fallback_at_last_exhaustion, tracks all dynamic allocations
+       Returns 0 if size is invalid
+       Thread-safe if pool created with single_threaded=false
+
+SEE ALSO
+       r_mempool_used_count, r_mempool_total_capacity
+
+================================================================================
+                   CTHREADCOMM.H - THREAD COMMUNICATION
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       circq_send_zc - send a message to the queue (blocking)
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t circq_send_zc(circular_queue *cq, c_message_t *msg);
+
+DESCRIPTION
+       Blocks until space is available in the queue, then transfers ownership of
+       the message data to the queue. The msg->data pointer is set to NULL on
+       success (zero-copy semantics).
+
+PARAMETERS
+       cq   Circular queue to send to
+       msg  Message to send (data ownership transfers on success)
+
+RETURN VALUE
+       ccol_success       - Message sent successfully
+       ccol_invalid_args  - cq or msg is NULL, or msg validation fails
+       ccol_not_permitted - Sending has been disabled
+
+NOTES
+       Blocks indefinitely until space is available or sending is disabled
+       After waking from blocking, rechecks if sending is still enabled
+       On failure, caller retains ownership of msg->data
+       msg->data == NULL with msg->size == 0 is valid (sentinel message)
+       msg->data == NULL with msg->size > 0 is invalid
+
+SEE ALSO
+       circq_try_send_zc, circq_timed_send_zc, circq_recv_zc
+
+------------------------------------------------------------------------------
+NAME
+       circq_try_send_zc - try to send without blocking
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t circq_try_send_zc(circular_queue *cq, c_message_t *msg);
+
+DESCRIPTION
+       Attempts to send immediately. If the queue is full, returns immediately
+       with ccol_container_full. On success, transfers ownership of msg->data.
+
+PARAMETERS
+       cq   Circular queue to send to
+       msg  Message to send (data ownership transfers on success)
+
+RETURN VALUE
+       ccol_success         - Message sent successfully
+       ccol_invalid_args    - cq or msg is NULL, or msg validation fails
+       ccol_not_permitted   - Sending has been disabled
+       ccol_container_full  - Queue is full
+
+NOTES
+       Never blocks
+       On failure, caller retains ownership of msg->data
+
+SEE ALSO
+       circq_send_zc, circq_timed_send_zc
+
+------------------------------------------------------------------------------
+NAME
+       circq_timed_send_zc - send with timeout
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t circq_timed_send_zc(circular_queue *cq, 
+                                          c_message_t *msg,
+                                          struct timespec *timeout);
+
+DESCRIPTION
+       Blocks up to the specified timeout waiting for space. If space becomes
+       available, sends the message and transfers ownership. If timeout expires
+       or sending is disabled, returns with appropriate error code.
+
+PARAMETERS
+       cq       Circular queue to send to
+       msg      Message to send (data ownership transfers on success)
+       timeout  Relative timeout duration
+
+RETURN VALUE
+       ccol_success              - Message sent successfully
+       ccol_invalid_args         - cq or msg is NULL, or msg validation fails
+       ccol_not_permitted        - Sending has been disabled
+       ccol_timed_out            - Timeout expired
+       ccol_unexpected_failure   - System error (check errno)
+
+NOTES
+       Blocks up to timeout duration
+       After waking, rechecks if sending is still enabled
+       On failure, caller retains ownership of msg->data
+       Uses CLOCK_REALTIME for timeout calculations
+
+SEE ALSO
+       circq_send_zc, circq_try_send_zc
+
+------------------------------------------------------------------------------
+NAME
+       circq_recv_zc - receive a message (blocking)
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t circq_recv_zc(circular_queue *cq, c_message_t *target_buf);
+
+DESCRIPTION
+       Blocks until a message is available, then transfers ownership of the
+       message data to the caller via target_buf. The caller must free
+       target_buf->data when done.
+
+PARAMETERS
+       cq          Circular queue to receive from
+       target_buf  Buffer to receive the message (receives ownership of data)
+
+RETURN VALUE
+       ccol_success       - Message received (caller must free target_buf->data)
+       ccol_invalid_args  - cq or target_buf is NULL
+
+NOTES
+       Blocks indefinitely until a message arrives
+       Caller receives ownership of target_buf->data and must free it
+       Thread-safe
+
+SEE ALSO
+       circq_try_recv_zc, circq_timed_recv_zc, circq_send_zc
+
+------------------------------------------------------------------------------
+NAME
+       circq_try_recv_zc - try to receive without blocking
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t circq_try_recv_zc(circular_queue *cq, 
+                                        c_message_t *target_buf);
+
+DESCRIPTION
+       Attempts to receive immediately. If the queue is empty, returns immediately
+       with ccol_container_empty. On success, transfers ownership.
+
+PARAMETERS
+       cq          Circular queue to receive from
+       target_buf  Buffer to receive the message
+
+RETURN VALUE
+       ccol_success         - Message received (caller must free target_buf->data)
+       ccol_invalid_args    - cq or target_buf is NULL
+       ccol_container_empty - Queue is empty
+
+NOTES
+       Never blocks
+       On success, caller receives ownership and must free target_buf->data
+
+SEE ALSO
+       circq_recv_zc, circq_timed_recv_zc
+
+------------------------------------------------------------------------------
+NAME
+       circq_timed_recv_zc - receive with timeout
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t circq_timed_recv_zc(circular_queue *cq, 
+                                          c_message_t *target_buf,
+                                          struct timespec *timeout);
+
+DESCRIPTION
+       Blocks up to the specified timeout waiting for a message. If a message
+       arrives, receives it and transfers ownership.
+
+PARAMETERS
+       cq          Circular queue to receive from
+       target_buf  Buffer to receive the message
+       timeout     Relative timeout duration
+
+RETURN VALUE
+       ccol_success              - Message received
+       ccol_invalid_args         - cq or target_buf is NULL
+       ccol_timed_out            - Timeout expired
+       ccol_unexpected_failure   - System error (check errno)
+
+NOTES
+       Blocks up to timeout duration
+       On success, caller receives ownership and must free target_buf->data
+       Uses CLOCK_REALTIME for timeout calculations
+
+SEE ALSO
+       circq_recv_zc, circq_try_recv_zc
+
+------------------------------------------------------------------------------
+NAME
+       chan_send_zc - send a message through the channel (blocking)
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t chan_send_zc(channel *ch, c_message_t *msg);
+
+DESCRIPTION
+       Automatically selects the appropriate queue based on calling thread:
+       - Owner thread sends to owner_to_workers queue
+       - Worker threads send to workers_to_owner queue
+       
+       Blocks until space is available and transfers ownership.
+
+PARAMETERS
+       ch   Channel to send through
+       msg  Message to send (data ownership transfers on success)
+
+RETURN VALUE
+       ccol_success       - Message sent successfully
+       ccol_invalid_args  - ch or msg is NULL, or msg validation fails
+       ccol_not_permitted - Sending has been disabled on the selected direction
+
+NOTES
+       Blocks until space is available in the selected queue
+       Direction is automatically determined by thread ID
+       On failure, caller retains ownership of msg->data
+
+SEE ALSO
+       chan_try_send_zc, chan_timed_send_zc, chan_recv_zc
+
+------------------------------------------------------------------------------
+NAME
+       chan_try_send_zc - try to send without blocking
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t chan_try_send_zc(channel *ch, c_message_t *msg);
+
+DESCRIPTION
+       Attempts to send immediately through the automatically-selected queue.
+       Returns immediately if the queue is full.
+
+PARAMETERS
+       ch   Channel to send through
+       msg  Message to send (data ownership transfers on success)
+
+RETURN VALUE
+       ccol_success         - Message sent successfully
+       ccol_invalid_args    - ch or msg is NULL, or msg validation fails
+       ccol_not_permitted   - Sending disabled on selected direction
+       ccol_container_full  - Selected queue is full
+
+NOTES
+       Never blocks
+       Direction is automatically determined by thread ID
+
+SEE ALSO
+       chan_send_zc, chan_timed_send_zc
+
+------------------------------------------------------------------------------
+NAME
+       chan_timed_send_zc - send with timeout
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t chan_timed_send_zc(channel *ch, 
+                                         c_message_t *msg,
+                                         struct timespec *timeout);
+
+DESCRIPTION
+       Blocks up to the specified timeout waiting for space in the automatically-
+       selected queue.
+
+PARAMETERS
+       ch       Channel to send through
+       msg      Message to send (data ownership transfers on success)
+       timeout  Relative timeout duration
+
+RETURN VALUE
+       ccol_success              - Message sent successfully
+       ccol_invalid_args         - ch or msg is NULL, or msg validation fails
+       ccol_not_permitted        - Sending disabled on selected direction
+       ccol_timed_out            - Timeout expired
+       ccol_unexpected_failure   - System error (check errno)
+
+NOTES
+       Blocks up to timeout duration
+       Direction is automatically determined by thread ID
+       Uses CLOCK_REALTIME for timeout calculations
+
+SEE ALSO
+       chan_send_zc, chan_try_send_zc
+
+------------------------------------------------------------------------------
+NAME
+       chan_recv_zc - receive a message from the channel (blocking)
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t chan_recv_zc(channel *ch, c_message_t *target_buf);
+
+DESCRIPTION
+       Automatically selects the appropriate queue based on calling thread:
+       - Owner thread receives from workers_to_owner queue
+       - Worker threads receive from owner_to_workers queue
+       
+       Blocks until a message arrives and transfers ownership.
+
+PARAMETERS
+       ch          Channel to receive from
+       target_buf  Buffer to receive the message (receives ownership of data)
+
+RETURN VALUE
+       ccol_success       - Message received (caller must free target_buf->data)
+       ccol_invalid_args  - ch or target_buf is NULL
+
+NOTES
+       Blocks until a message arrives in the selected queue
+       Direction is automatically determined by thread ID
+       Caller receives ownership of target_buf->data and must free it
+
+SEE ALSO
+       chan_try_recv_zc, chan_timed_recv_zc, chan_send_zc
+
+------------------------------------------------------------------------------
+NAME
+       chan_try_recv_zc - try to receive without blocking
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t chan_try_recv_zc(channel *ch, c_message_t *target_buf);
+
+DESCRIPTION
+       Attempts to receive immediately from the automatically-selected queue.
+       Returns immediately if the queue is empty.
+
+PARAMETERS
+       ch          Channel to receive from
+       target_buf  Buffer to receive the message
+
+RETURN VALUE
+       ccol_success         - Message received (caller must free target_buf->data)
+       ccol_invalid_args    - ch or target_buf is NULL
+       ccol_container_empty - Selected queue is empty
+
+NOTES
+       Never blocks
+       Direction is automatically determined by thread ID
+
+SEE ALSO
+       chan_recv_zc, chan_timed_recv_zc
+
+------------------------------------------------------------------------------
+NAME
+       chan_timed_recv_zc - receive with timeout
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t chan_timed_recv_zc(channel *ch, 
+                                         c_message_t *target_buf,
+                                         struct timespec *timeout);
+
+DESCRIPTION
+       Blocks up to the specified timeout waiting for a message in the
+       automatically-selected queue.
+
+PARAMETERS
+       ch          Channel to receive from
+       target_buf  Buffer to receive the message
+       timeout     Relative timeout duration
+
+RETURN VALUE
+       ccol_success              - Message received
+       ccol_invalid_args         - ch or target_buf is NULL
+       ccol_timed_out            - Timeout expired
+       ccol_unexpected_failure   - System error (check errno)
+
+NOTES
+       Blocks up to timeout duration
+       Direction is automatically determined by thread ID
+       Uses CLOCK_REALTIME for timeout calculations
+
+SEE ALSO
+       chan_recv_zc, chan_try_recv_zc
+
+------------------------------------------------------------------------------
+NAME
+       chan_disable_sending - disable sending on a channel direction
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t chan_disable_sending(channel *ch, channel_direction d);
+
+DESCRIPTION
+       Prevents new send operations on the specified direction and wakes all
+       threads currently blocked in send operations on that direction.
+
+PARAMETERS
+       ch   Channel to modify
+       d    Direction to disable (owner_to_workers or workers_to_owner)
+
+RETURN VALUE
+       ccol_success       - Sending disabled successfully
+       ccol_invalid_args  - ch is NULL or d is invalid
+
+NOTES
+       Wakes all blocked senders on the specified direction
+       Can be re-enabled with chan_enable_sending()
+       Does not affect the opposite direction
+
+SEE ALSO
+       chan_enable_sending
+
+------------------------------------------------------------------------------
+NAME
+       chan_enable_sending - enable sending on a channel direction
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t chan_enable_sending(channel *ch, channel_direction d);
+
+DESCRIPTION
+       Re-enables send operations on the specified direction that were previously
+       disabled and wakes all threads currently blocked waiting to send.
+
+PARAMETERS
+       ch   Channel to modify
+       d    Direction to enable (owner_to_workers or workers_to_owner)
+
+RETURN VALUE
+       ccol_success       - Sending enabled successfully
+       ccol_invalid_args  - ch is NULL or d is invalid
+
+NOTES
+       Wakes all blocked senders via broadcast
+       Threads can immediately attempt to send if space is available
+       Does not affect the opposite direction
+
+SEE ALSO
+       chan_disable_sending
+
+------------------------------------------------------------------------------
+NAME
+       chan_msg_count - get current message count for a direction
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       size_t chan_msg_count(channel *ch, channel_direction d);
+
+DESCRIPTION
+       Returns the number of messages currently stored in the specified direction's
+       queue.
+
+PARAMETERS
+       ch   Channel to query
+       d    Direction to query (owner_to_workers or workers_to_owner)
+
+RETURN VALUE
+       Returns number of messages in the specified direction
+       Returns (size_t)-1 on error (NULL channel or invalid direction)
+
+NOTES
+       Thread-safe snapshot of message count
+
+SEE ALSO
+       chan_send_zc, chan_recv_zc
+
+================================================================================
+                        CSORT.H - SORTING LIBRARY
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       csort_default_string_comparison_proc - default comparison for C strings
+
+SYNOPSIS
+       #include <csort.h>
+
+       int csort_default_string_comparison_proc(const void *first,
+                                                 const void *second);
+
+DESCRIPTION
+       Compares two strings using strcmp(). Both arguments must be pointers to
+       char pointers (char**). This is the default comparison function used by
+       csort for string types.
+
+PARAMETERS
+       first   Pointer to first char* (i.e., char**)
+       second  Pointer to second char* (i.e., char**)
+
+RETURN VALUE
+       Returns negative if *first < *second
+       Returns zero if strings are equal
+       Returns positive if *first > *second
+
+NOTES
+       Uses strcmp() semantics
+       Both strings must be null-terminated
+
+SEE ALSO
+       strcmp, csort_get_default_comparison_proc
+
+================================================================================
+                       CSTRING.H - DYNAMIC STRING
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cstring_create_full - create a string with custom memory management
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
+                                char **err);
+
+DESCRIPTION
+       Allocates and initialises a new cstring. If initial is non-NULL its content
+       is copied in; passing NULL creates an empty string. The internal buffer
+       capacity is rounded up to the nearest power of two (minimum 16 bytes).
+
+PARAMETERS
+       initial   Initial C string content, or NULL for an empty string
+       m_procs   Custom memory management procedures, or NULL for default malloc/free
+       err       Optional pointer to receive an error string on failure
+
+RETURN VALUE
+       Returns pointer to newly created cstring on success
+       Returns NULL on failure (details written to *err if err is non-NULL)
+
+NOTES
+       Minimum internal buffer capacity is 16 bytes
+       Capacity is always rounded up to the nearest power of two
+
+SEE ALSO
+       cstring_create, cstring_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cstring_create - create a string with default memory management
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr cstring_create(const char *initial, char **err);
+
+DESCRIPTION
+       Convenience wrapper around cstring_create_full() that uses the default
+       malloc/free allocators.
+
+PARAMETERS
+       initial   Initial C string content, or NULL for an empty string
+       err       Optional pointer to receive an error string on failure
+
+RETURN VALUE
+       Returns pointer to newly created cstring on success
+       Returns NULL on failure (details written to *err if err is non-NULL)
+
+NOTES
+       Equivalent to cstring_create_full(initial, NULL, err)
+
+SEE ALSO
+       cstring_create_full, cstring_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cstring_get_mprocs - get the memory management procedures for a string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       ccol_memmgmt_procs_t *cstring_get_mprocs(cstr s);
+
+DESCRIPTION
+       Returns the custom memory management procedures that were supplied when the
+       string was created. Returns NULL if the string is using the default
+       malloc/free allocators.
+
+PARAMETERS
+       s   String to query
+
+RETURN VALUE
+       Pointer to memory management procedures, or NULL if using defaults
+
+SEE ALSO
+       cstring_create_full
+
+------------------------------------------------------------------------------
+NAME
+       __cstring_destroy - destroy a string (internal)
+
+SYNOPSIS
+       #include <cstring.h>
+
+       void __cstring_destroy(cstr s);
+
+DESCRIPTION
+       Frees the internal data buffer and the container struct itself. Does not
+       NULL the caller's pointer variable. This is the low-level internal function;
+       use the cstring_destroy() macro or cstr_destroy() wrapper in application
+       code.
+
+PARAMETERS
+       s   String to destroy
+
+WARNINGS
+       Does not NULL the caller's pointer — use cstring_destroy() instead
+
+SEE ALSO
+       cstring_destroy, ___cstring_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cstring_length - return the number of characters in the string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       size_t cstring_length(cstr s);
+
+DESCRIPTION
+       Returns the number of characters currently stored in the string, not
+       including the terminating null byte.
+
+PARAMETERS
+       s   String to query
+
+RETURN VALUE
+       Length in bytes (excluding null terminator)
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_is_empty, cstring_c_str
+
+------------------------------------------------------------------------------
+NAME
+       cstring_c_str - return a pointer to the null-terminated character data
+
+SYNOPSIS
+       #include <cstring.h>
+
+       const char *cstring_c_str(cstr s);
+
+DESCRIPTION
+       Returns a read-only pointer to the internal null-terminated buffer.
+       The pointer becomes invalid after any mutating operation on the string.
+
+PARAMETERS
+       s   String to query
+
+RETURN VALUE
+       Pointer to null-terminated character data
+
+NOTES
+       Pointer is invalidated by any call that may reallocate (append, prepend,
+       insert, set, replace, reserve, reset)
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_length, cstring_at
+
+------------------------------------------------------------------------------
+NAME
+       cstring_at - return the character at a given index
+
+SYNOPSIS
+       #include <cstring.h>
+
+       char cstring_at(cstr s, size_t idx);
+
+DESCRIPTION
+       Returns the character at the specified zero-based index. Returns '\0' if
+       idx is out of bounds rather than asserting.
+
+PARAMETERS
+       s     String to query
+       idx   Zero-based character index
+
+RETURN VALUE
+       Character at idx, or '\0' if idx >= length
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_c_str, cstring_length
+
+------------------------------------------------------------------------------
+NAME
+       cstring_is_empty - check whether the string contains no characters
+
+SYNOPSIS
+       #include <cstring.h>
+
+       bool cstring_is_empty(cstr s);
+
+DESCRIPTION
+       Returns true if and only if the string's length is zero.
+
+PARAMETERS
+       s   String to query
+
+RETURN VALUE
+       true if length is zero, false otherwise
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_length, cstring_reset
+
+------------------------------------------------------------------------------
+NAME
+       cstring_append - append a C string to the end
+
+SYNOPSIS
+       #include <cstring.h>
+
+       ccol_retval_t cstring_append(cstr s, const char *str);
+
+DESCRIPTION
+       Appends the null-terminated C string str to the end of s. The internal
+       buffer is grown if necessary.
+
+PARAMETERS
+       s     String to modify
+       str   C string to append (must not be NULL)
+
+RETURN VALUE
+       ccol_success              - Append succeeded
+       ccol_invalid_args         - str is NULL
+       ccol_container_full       - Result would overflow size_t
+       ccol_not_enough_memory    - Reallocation failed
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_prepend, cstring_insert, cstring_set
+
+------------------------------------------------------------------------------
+NAME
+       cstring_prepend - prepend a C string to the beginning
+
+SYNOPSIS
+       #include <cstring.h>
+
+       ccol_retval_t cstring_prepend(cstr s, const char *str);
+
+DESCRIPTION
+       Inserts the null-terminated C string str before all existing characters
+       in s. Existing content is shifted right to make room.
+
+PARAMETERS
+       s     String to modify
+       str   C string to prepend (must not be NULL)
+
+RETURN VALUE
+       ccol_success              - Prepend succeeded
+       ccol_invalid_args         - str is NULL
+       ccol_container_full       - Result would overflow size_t
+       ccol_not_enough_memory    - Reallocation failed
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_append, cstring_insert
+
+------------------------------------------------------------------------------
+NAME
+       cstring_insert - insert a C string at a given position
+
+SYNOPSIS
+       #include <cstring.h>
+
+       ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str);
+
+DESCRIPTION
+       Inserts the null-terminated C string str at position pos within s.
+       Characters at positions >= pos are shifted right to make room. pos == 0
+       is equivalent to cstring_prepend(); pos == length is equivalent to
+       cstring_append().
+
+PARAMETERS
+       s     String to modify
+       pos   Insertion position (0 … length, inclusive)
+       str   C string to insert (must not be NULL)
+
+RETURN VALUE
+       ccol_success              - Insert succeeded
+       ccol_invalid_args         - str is NULL, or pos > length
+       ccol_container_full       - Result would overflow size_t
+       ccol_not_enough_memory    - Reallocation failed
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_append, cstring_prepend
+
+------------------------------------------------------------------------------
+NAME
+       cstring_set - replace the entire content with a new C string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       ccol_retval_t cstring_set(cstr s, const char *str);
+
+DESCRIPTION
+       Discards the current content of s and replaces it with a copy of str.
+       The buffer is grown if necessary; it is never shrunk.
+
+PARAMETERS
+       s     String to modify
+       str   New content (must not be NULL)
+
+RETURN VALUE
+       ccol_success              - Set succeeded
+       ccol_invalid_args         - str is NULL
+       ccol_not_enough_memory    - Reallocation failed
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_reset, cstring_append
+
+------------------------------------------------------------------------------
+NAME
+       cstring_reset - clear all characters and shrink capacity to minimum
+
+SYNOPSIS
+       #include <cstring.h>
+
+       void cstring_reset(cstr s);
+
+DESCRIPTION
+       Sets the length to zero and attempts to shrink the buffer back to the
+       minimum capacity (16 bytes). If the reallocation to shrink fails the
+       capacity is left unchanged; the length is always reset to zero regardless.
+
+PARAMETERS
+       s   String to reset
+
+NOTES
+       Always sets length to 0, even if the shrink reallocation fails
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_set, cstring_is_empty
+
+------------------------------------------------------------------------------
+NAME
+       cstring_reserve - pre-allocate capacity for at least min_capacity bytes
+
+SYNOPSIS
+       #include <cstring.h>
+
+       bool cstring_reserve(cstr s, size_t min_capacity);
+
+DESCRIPTION
+       Ensures the internal buffer has room for at least min_capacity bytes
+       (including the null terminator). The requested size is rounded up to the
+       nearest power of two (minimum 16). Does nothing if the current capacity
+       already satisfies the request.
+
+PARAMETERS
+       s              String to modify
+       min_capacity   Minimum number of bytes to reserve (including null terminator)
+
+RETURN VALUE
+       true on success or if capacity was already sufficient
+       false if reallocation failed or the requested size is too large
+
+NOTES
+       Capacity is always rounded up to the nearest power of two
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_create_full
+
+------------------------------------------------------------------------------
+NAME
+       cstring_to_upper - convert all characters to uppercase in-place
+
+SYNOPSIS
+       #include <cstring.h>
+
+       void cstring_to_upper(cstr s);
+
+DESCRIPTION
+       Applies toupper() to every character in the string in-place.
+
+PARAMETERS
+       s   String to modify
+
+NOTES
+       Only ASCII characters are reliably transformed; behaviour for non-ASCII
+       bytes depends on the current locale via toupper()
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_to_lower
+
+------------------------------------------------------------------------------
+NAME
+       cstring_to_lower - convert all characters to lowercase in-place
+
+SYNOPSIS
+       #include <cstring.h>
+
+       void cstring_to_lower(cstr s);
+
+DESCRIPTION
+       Applies tolower() to every character in the string in-place.
+
+PARAMETERS
+       s   String to modify
+
+NOTES
+       Only ASCII characters are reliably transformed; behaviour for non-ASCII
+       bytes depends on the current locale via tolower()
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_to_upper
+
+------------------------------------------------------------------------------
+NAME
+       cstring_trim - strip leading and trailing whitespace in-place
+
+SYNOPSIS
+       #include <cstring.h>
+
+       void cstring_trim(cstr s);
+
+DESCRIPTION
+       Removes all leading and trailing whitespace characters, as classified by
+       isspace(), from the string in-place. Internal whitespace is preserved.
+
+PARAMETERS
+       s   String to modify
+
+NOTES
+       Uses isspace() for whitespace classification
+       If the string consists entirely of whitespace it becomes empty
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_to_upper, cstring_to_lower
+
+------------------------------------------------------------------------------
+NAME
+       cstring_replace - replace every non-overlapping occurrence of needle
+
+SYNOPSIS
+       #include <cstring.h>
+
+       ccol_retval_t cstring_replace(cstr s, const char *needle,
+                                     const char *replacement);
+
+DESCRIPTION
+       Replaces every non-overlapping occurrence of needle in s with replacement.
+       The result is built into a fresh buffer and then swapped in, so replacement
+       may safely contain needle without causing infinite loops. When needle is not
+       found the function succeeds without modifying s.
+
+PARAMETERS
+       s              String to modify
+       needle         Substring to search for (must not be NULL or empty)
+       replacement    Substitute string (must not be NULL)
+
+RETURN VALUE
+       ccol_success              - Replace succeeded (including when needle not found)
+       ccol_invalid_args         - needle is NULL/empty, or replacement is NULL
+       ccol_container_full       - Result would overflow size_t
+       ccol_not_enough_memory    - Buffer allocation failed
+
+NOTES
+       Matching is non-overlapping and proceeds left-to-right
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_find, cstring_set
+
+------------------------------------------------------------------------------
+NAME
+       cstring_compare - compare the string to a C string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       int cstring_compare(cstr s, const char *str);
+
+DESCRIPTION
+       Compares the content of s to the null-terminated C string str using
+       strcmp() semantics.
+
+PARAMETERS
+       s     String to compare
+       str   C string to compare against (must not be NULL)
+
+RETURN VALUE
+       Negative if s < str
+       Zero if s == str
+       Positive if s > str
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_equals, cstring_starts_with, cstring_ends_with
+
+------------------------------------------------------------------------------
+NAME
+       cstring_equals - check whether the string equals a C string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       bool cstring_equals(cstr s, const char *str);
+
+DESCRIPTION
+       Returns true if and only if the content of s is identical to str.
+
+PARAMETERS
+       s     String to compare
+       str   C string to compare against
+
+RETURN VALUE
+       true if contents are equal, false otherwise
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_compare, cstring_starts_with, cstring_ends_with
+
+------------------------------------------------------------------------------
+NAME
+       cstring_starts_with - check whether the string begins with a prefix
+
+SYNOPSIS
+       #include <cstring.h>
+
+       bool cstring_starts_with(cstr s, const char *prefix);
+
+DESCRIPTION
+       Returns true if the content of s begins with prefix. An empty prefix
+       always matches.
+
+PARAMETERS
+       s        String to test
+       prefix   Prefix to look for (must not be NULL)
+
+RETURN VALUE
+       true if the string starts with prefix, false otherwise
+
+NOTES
+       An empty prefix always returns true
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_ends_with, cstring_find
+
+------------------------------------------------------------------------------
+NAME
+       cstring_ends_with - check whether the string ends with a suffix
+
+SYNOPSIS
+       #include <cstring.h>
+
+       bool cstring_ends_with(cstr s, const char *suffix);
+
+DESCRIPTION
+       Returns true if the content of s ends with suffix. An empty suffix
+       always matches.
+
+PARAMETERS
+       s        String to test
+       suffix   Suffix to look for (must not be NULL)
+
+RETURN VALUE
+       true if the string ends with suffix, false otherwise
+
+NOTES
+       An empty suffix always returns true
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_starts_with, cstring_rfind
+
+------------------------------------------------------------------------------
+NAME
+       cstring_find - find the first occurrence of a substring
+
+SYNOPSIS
+       #include <cstring.h>
+
+       size_t cstring_find(cstr s, const char *needle);
+
+DESCRIPTION
+       Searches the string for the first occurrence of needle and returns its
+       zero-based starting index.
+
+PARAMETERS
+       s        String to search
+       needle   Substring to find (must not be NULL)
+
+RETURN VALUE
+       Zero-based index of the first occurrence
+       ccol_invalid_size ((size_t)-1) if needle is not found
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_rfind, cstring_starts_with, cstring_ends_with
+
+------------------------------------------------------------------------------
+NAME
+       cstring_rfind - find the last occurrence of a substring
+
+SYNOPSIS
+       #include <cstring.h>
+
+       size_t cstring_rfind(cstr s, const char *needle);
+
+DESCRIPTION
+       Searches the string for the last occurrence of needle and returns its
+       zero-based starting index.
+
+PARAMETERS
+       s        String to search
+       needle   Substring to find (must not be NULL)
+
+RETURN VALUE
+       Zero-based index of the last occurrence
+       ccol_invalid_size ((size_t)-1) if needle is not found
+
+NOTES
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_find
+
+------------------------------------------------------------------------------
+NAME
+       cstring_substring - create a new string from a sub-range
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr cstring_substring(cstr s, size_t start, size_t length, char **err);
+
+DESCRIPTION
+       Allocates a new cstring containing characters in the range
+       [start, start + length). If start + length extends beyond the end of the
+       string the range is clamped to the actual end. If start is at or beyond
+       the string length an empty cstring is returned.
+
+PARAMETERS
+       s        Source string
+       start    Zero-based start index
+       length   Number of characters to include
+       err      Optional pointer to receive an error string on failure
+
+RETURN VALUE
+       New cstring on success
+       NULL on allocation failure (details written to *err if err is non-NULL)
+
+NOTES
+       Caller must destroy the returned cstring when done
+       The range is clamped rather than rejected when it extends past the end
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_copy, cstring_split, cstring_find
+
+------------------------------------------------------------------------------
+NAME
+       cstring_copy - create an independent copy of a string
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr cstring_copy(cstr s, char **err);
+
+DESCRIPTION
+       Allocates a new cstring with the same content as s. The two strings are
+       fully independent after the call.
+
+PARAMETERS
+       s     String to copy
+       err   Optional pointer to receive an error string on failure
+
+RETURN VALUE
+       New cstring on success
+       NULL on allocation failure (details written to *err if err is non-NULL)
+
+NOTES
+       Caller must destroy the returned cstring when done
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_substring, cstring_create
+
+------------------------------------------------------------------------------
+NAME
+       cstring_split - split the string by a delimiter
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cvec cstring_split(cstr s, const char *delimiter, char **err);
+
+DESCRIPTION
+       Splits s on every non-overlapping occurrence of delimiter and returns the
+       resulting tokens as a cvec of cstr (elem_size == sizeof(cstr)). Empty tokens
+       are preserved when the string begins or ends with the delimiter, or when two
+       consecutive delimiters appear. If delimiter is not found the vector contains
+       a single token equal to the original string.
+
+PARAMETERS
+       s            String to split
+       delimiter    Separator string (must not be NULL or empty)
+       err          Optional pointer to receive an error string on failure
+
+RETURN VALUE
+       cvec containing the tokens as individually heap-allocated cstr values
+       NULL on failure (details written to *err if err is non-NULL)
+
+NOTES
+       The caller is responsible for destroying every cstr inside the vector
+       as well as the vector itself:
+         cvec parts = cstring_split(s, ",", NULL);
+         for (size_t i = 0; i < cvector_elem_count(parts); i++) {
+           cstr *p = (cstr *)cvector_at(parts, i);
+           cstring_destroy(*p);
+         }
+         cvector_destroy(parts);
+       Asserts if s is NULL
+
+SEE ALSO
+       cstring_find, cstring_substring
+
+================================================================================
+                              END OF MAN PAGES
+================================================================================

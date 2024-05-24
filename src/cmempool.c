@@ -37,15 +37,15 @@ typedef uintptr_t *addr_t;
   (__internal_entry_header *)((uintptr_t)entry - \
                               offsetof(__internal_entry_header, next))
 
-#define EXT_SIZE_TO_USER_SIZE(ext_elem_size) \
-  (ext_elem_size - offsetof(__internal_entry_header, next))
+#define EXTENDED_SIZE_TO_USER_SIZE(extended_elem_size) \
+  (extended_elem_size - offsetof(__internal_entry_header, next))
 
-#define USER_SIZE_TO_EXT_SIZE(elem_size) \
+#define USER_SIZE_TO_EXTENDED_SIZE(elem_size) \
   (elem_size + offsetof(__internal_entry_header, next))
 
 struct mempool {
   const char *mempool_mark;  // This field is used for sanity checks
-  size_t ext_elem_size;
+  size_t extended_elem_size;
   size_t total_elem_count;
   bool fallback_to_dynamic_memory;
   size_t active_dynamic_memory_buffer_count;
@@ -102,29 +102,32 @@ void _mempool_destroy(mempool *mp) {
 }
 
 void mempool_init_internal_scalars(mempool *mp, size_t elem_count,
-                                   size_t ext_elem_size,
+                                   size_t extended_elem_size,
                                    bool fallback_to_dynamic_memory) {
   for (size_t i = 0; i < elem_count; ++i) {
     __internal_entry_header *header =
-        (__internal_entry_header *)((uintptr_t)mp->objects + i * ext_elem_size);
+        (__internal_entry_header *)((uintptr_t)mp->objects +
+                                    i * extended_elem_size);
     header->elem_status = elem_is_free;
     header->pool_ptr = mp;
 
     if (i == (elem_count - 1)) {
       header->next = NULL;
     } else {
-      header->next = (addr_t)((uintptr_t)mp->objects + (i + 1) * ext_elem_size);
+      header->next =
+          (addr_t)((uintptr_t)mp->objects + (i + 1) * extended_elem_size);
     }
   }
 
   mp->free_inst = mp->objects;
   mp->mempool_mark = _mempool_mark;
-  mp->ext_elem_size = ext_elem_size;
+  mp->extended_elem_size = extended_elem_size;
   mp->total_elem_count = elem_count;
   mp->fallback_to_dynamic_memory = fallback_to_dynamic_memory;
   mp->active_dynamic_memory_buffer_count = 0;
   mp->lower_addr_limit = (uintptr_t)mp->objects;
-  mp->upper_addr_limit = (uintptr_t)mp->objects + ext_elem_size * elem_count;
+  mp->upper_addr_limit =
+      (uintptr_t)mp->objects + extended_elem_size * elem_count;
   mp->free_elem_count = elem_count;
 }
 
@@ -161,8 +164,8 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
     return NULL;
   }
 
-  size_t ext_elem_size = USER_SIZE_TO_EXT_SIZE(elem_size);
-  mp->objects = _mem_calloc(mmgmt_procs, elem_count, ext_elem_size);
+  size_t extended_elem_size = USER_SIZE_TO_EXTENDED_SIZE(elem_size);
+  mp->objects = _mem_calloc(mmgmt_procs, elem_count, extended_elem_size);
   if (!mp->objects) {
     if (err) {
       *err = CCOL_ERR_STR("failed to allocate memory pool data area");
@@ -183,7 +186,7 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
     }
   }
 
-  mempool_init_internal_scalars(mp, elem_count, ext_elem_size,
+  mempool_init_internal_scalars(mp, elem_count, extended_elem_size,
                                 fallback_to_dynamic_memory);
 
   return mp;
@@ -205,8 +208,8 @@ mempool *mempool_create_from_preallocated_buffer(
     return NULL;
   }
 
-  size_t ext_elem_size = USER_SIZE_TO_EXT_SIZE(elem_size);
-  size_t elem_count = buf_size / ext_elem_size;
+  size_t extended_elem_size = USER_SIZE_TO_EXTENDED_SIZE(elem_size);
+  size_t elem_count = buf_size / extended_elem_size;
   if (elem_count == 0) {
     if (err) {
       *err = CCOL_ERR_STR("calculated elem_count is zero");
@@ -246,7 +249,7 @@ mempool *mempool_create_from_preallocated_buffer(
     }
   }
 
-  mempool_init_internal_scalars(mp, elem_count, ext_elem_size,
+  mempool_init_internal_scalars(mp, elem_count, extended_elem_size,
                                 fallback_to_dynamic_memory);
 
   return mp;
@@ -282,7 +285,7 @@ void *mempool_alloc_entry(mempool *mp) {
     // Seems like we exhausted our buffers and
     // we are asked to fallback to the dynamic
     // memory allocation mechanisms.
-    void *new_buffer = _mem_alloc(mp->m_procs, mp->ext_elem_size);
+    void *new_buffer = _mem_alloc(mp->m_procs, mp->extended_elem_size);
     if (new_buffer) {
       __internal_entry_header *header = (__internal_entry_header *)new_buffer;
       header->elem_status = elem_is_not_a_pool_member;
@@ -303,7 +306,7 @@ void *mempool_calloc_entry(mempool *mp) {
   void *result = mempool_alloc_entry(mp);
 
   if (result) {
-    mem_zero(result, EXT_SIZE_TO_USER_SIZE(mp->ext_elem_size));
+    mem_zero(result, EXTENDED_SIZE_TO_USER_SIZE(mp->extended_elem_size));
   }
 
   return result;
@@ -312,7 +315,7 @@ void *mempool_calloc_entry(mempool *mp) {
 static inline bool valid_mempool_addr(mempool *mp, uintptr_t c_entry) {
   return (c_entry >= mp->lower_addr_limit) &&
          (c_entry < mp->upper_addr_limit) &&
-         (c_entry - mp->lower_addr_limit) % mp->ext_elem_size == 0;
+         (c_entry - mp->lower_addr_limit) % mp->extended_elem_size == 0;
 }
 
 void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
@@ -811,13 +814,13 @@ void *mempool_pseudo_alloc_entry(mempool *mp, size_t elem_size) {
     elem_size = sizeof(addr_t);
   }
 
-  size_t ext_elem_size = USER_SIZE_TO_EXT_SIZE(elem_size);
+  size_t extended_elem_size = USER_SIZE_TO_EXTENDED_SIZE(elem_size);
 
   if (mp->should_use_locks) {
     rw_lock_wrlock(mp->lock);
   }
 
-  void *new_buffer = _mem_alloc(mp->m_procs, ext_elem_size);
+  void *new_buffer = _mem_alloc(mp->m_procs, extended_elem_size);
   if (new_buffer) {
     __internal_entry_header *header = (__internal_entry_header *)new_buffer;
     header->elem_status = elem_is_not_a_pool_member;
@@ -886,18 +889,19 @@ void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size) {
     __internal_entry_header *header = ENTRY_TO_HEADER(addr);
 
     size_t index = (size - 1) / rmp->smallest_size;
-    size_t new_ext_size =
-        rmp->mem_pools[rmp->reverse_size_lookup_array[index]]->ext_elem_size;
+    size_t new_ext_size = rmp->mem_pools[rmp->reverse_size_lookup_array[index]]
+                              ->extended_elem_size;
 
-    if (new_ext_size == header->pool_ptr->ext_elem_size) {
+    if (new_ext_size == header->pool_ptr->extended_elem_size) {
       // The requested size matches the current
       // size, return the original pointer.
       return addr;
     }
 
-    min_user_size = EXT_SIZE_TO_USER_SIZE(header->pool_ptr->ext_elem_size);
-    if (EXT_SIZE_TO_USER_SIZE(new_ext_size) < min_user_size) {
-      min_user_size = EXT_SIZE_TO_USER_SIZE(new_ext_size);
+    min_user_size =
+        EXTENDED_SIZE_TO_USER_SIZE(header->pool_ptr->extended_elem_size);
+    if (EXTENDED_SIZE_TO_USER_SIZE(new_ext_size) < min_user_size) {
+      min_user_size = EXTENDED_SIZE_TO_USER_SIZE(new_ext_size);
     }
   }
 

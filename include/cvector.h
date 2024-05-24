@@ -81,14 +81,18 @@ cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgmt_procs,
 /**
  * @brief Create a vector with default memory management
  *
- * Convenience macro that creates a vector using standard malloc/free.
+ * Convenience wrapper function that creates a vector using standard
+ * malloc/free.
  *
  * @param elem_size Size of each element in bytes
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created vector, or NULL on failure
  */
-#define cvector_create(elem_size, err) cvector_create_full(elem_size, NULL, err)
+static inline __attribute__((always_inline)) cvec
+cvector_create(size_t elem_size, char **err) {
+  return cvector_create_full(elem_size, NULL, err);
+}
 
 /**
  * @brief Get the memory management procedures for a vector

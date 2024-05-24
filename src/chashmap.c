@@ -53,7 +53,7 @@ typedef struct {
   uint64_t key_data;
   uint64_t val_data;
   uint8_t metadata;  // bit 0: occupied, bit 1: deleted
-} oa_slot;
+} __attribute__((packed)) oa_slot;
 
 #define SLOT_OCCUPIED 0x01
 #define SLOT_DELETED 0x02
@@ -69,7 +69,7 @@ typedef struct {
   ccol_hashing_proc_t custom_hashing_proc;
   ccol_data_type key_type;
   ccol_data_type val_type;
-} open_addr_map;
+} __attribute__((packed)) open_addr_map;
 
 /* ========================================================================== */
 /*                 SEPARATE CHAINING STRUCTURES                               */
@@ -92,12 +92,12 @@ typedef struct chmap_entry {
   size_t val_size;
   bool val_is_inline;
   ccol_memmgmt_procs_t* m_procs;
-} chmap_entry;
+} __attribute__((packed)) chmap_entry;
 
 typedef struct dllist_ref_node {
   struct dllist_ref_node* prev;
   struct dllist_ref_node* next;
-} dllist_ref_node;
+} __attribute__((packed)) dllist_ref_node;
 
 typedef struct llist_node {
   struct llist_node* next;

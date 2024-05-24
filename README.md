@@ -126,7 +126,8 @@ Most containers support three macro patterns:
 Example:
 ```c
 // Pattern 1: Separate declaration and initialization
-cvec_declare(vec1, int); // "cvec_declare_scoped(vec1, int);" would declare an auto-cleaning vector
+cvec_declare(vec1, int);
+// "cvec_declare_scoped(vec1, int);" would declare an auto-cleaning vector
 cvec_init(vec1);
 
 // Pattern 2: Combined declaration and initialization
@@ -293,7 +294,7 @@ Dynamic array with automatic resizing.
 
 - Amortized O(1) push and pop operations
 - Minimum capacity of 4 elements
-- Grows by 2× when full, shrinks by 0.5× when less than 1/4 full
+- Grows by 2× when full, shrinks by 0.5× when less than 1/4 occupied
 - Stable sorting via mergesort integration
 - Type-safe element access
 
@@ -499,7 +500,7 @@ cbmap_construct_unsigned(tree2, unsigned int, int);   // Unsigned integer keys
 int my_compare(const void *a, const void *b) {
     return strcmp(*(char**)a, *(char**)b);
 }
-cbmap_construct_ch(string_tree, char*, int, my_compare);
+cbmap_construct_cc(string_tree, char*, int, my_compare);
 
 // Insertion (always use variables - automatic rebalancing)
 int key = 42;

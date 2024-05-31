@@ -1846,6 +1846,18 @@ DESCRIPTION
        Returns a read-only pointer to the internal null-terminated buffer.
        The pointer becomes invalid after any mutating operation on the string.
 
+       This function is the recommended bridge when using a cstr with chashmap
+       or cbstmap. Those containers understand char * keys (with content-based
+       hashing and comparison) but have no special handling for the cstr type.
+       Extract the C string first and pass it as the key:
+
+           char *k = (char *)cstring_c_str(my_cstr);
+           chmap_insert(map, k, value);
+
+       The map copies the string content into its own storage immediately, so
+       the cstr can be mutated or destroyed afterwards without affecting the
+       map entry.
+
 PARAMETERS
        s   String to query
 

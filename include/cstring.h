@@ -40,6 +40,17 @@ SOFTWARE.
  * - Custom memory management support
  * - RAII-style automatic destruction via _ccol_destructor attribute
  * - Split returns a cvec of cstr for easy iteration
+ *
+ * Integration with maps (chashmap / cbstmap):
+ * cstr is NOT a recognised key or value type in the map containers. Those
+ * containers understand char * keys natively (content-based hashing, SSO).
+ * Use cstring_c_str() to obtain a char * view and pass that as the key:
+ *
+ *     char *k = (char *)cstring_c_str(my_cstr);
+ *     chmap_insert(map, k, value);
+ *
+ * The map copies the string content immediately, so the cstr can be
+ * mutated or destroyed afterwards without affecting the stored entry.
  */
 
 /** @brief Opaque string structure */

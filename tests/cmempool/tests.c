@@ -448,6 +448,29 @@ TEST(cmempools, c_allocations_and_deallocations_fallback_enabled) {
   REQUIRE_EQ((void *)mp, NULL);
 }
 
+TEST(cmempools, calloc_entry_zeroes_memory) {
+  // Verify that mempool_calloc_entry returns memory that is actually zeroed,
+  // including when the slot was previously used with non-zero content.
+  const size_t elem_size = sizeof(long long);
+  mempool *mp = mempool_create(4, elem_size, false, false, NULL, NULL);
+  REQUIRE_NE((void *)mp, NULL);
+
+  long long *slot = mempool_alloc_entry(mp);
+  REQUIRE_NE((void *)slot, NULL);
+  memset(slot, 0xFF, elem_size);
+  mempool_free_entry(slot);
+
+  slot = mempool_calloc_entry(mp);
+  REQUIRE_NE((void *)slot, NULL);
+
+  const char zeroes[sizeof(long long)] = {0};
+  REQUIRE_EQ(memcmp(slot, zeroes, elem_size), 0);
+
+  mempool_free_entry(slot);
+  mempool_destroy(mp);
+  REQUIRE_EQ((void *)mp, NULL);
+}
+
 // Preallocated memory pool tests
 DECLARE_PREALLOCATED_MEMPOOL_BUFFER(preallocated_mp_buffer, 32768, 256);
 char *preallocated_ptrs[32768] = {0}; // 8388608 / 256 = 32768

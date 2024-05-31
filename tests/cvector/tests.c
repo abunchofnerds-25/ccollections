@@ -1146,3 +1146,19 @@ TEST(cvectors, declarative_macros_mp) {
 
   cvec_destroy(vec);
 }
+
+TEST(cvectors, construct_scoped_lifecycle) {
+  {
+    cvec_construct_scoped(v, int);
+    REQUIRE_NE((void *)v, NULL);
+
+    for (int i = 1; i <= 5; ++i) {
+      cvec_push_rvalue(v, i);
+    }
+    REQUIRE_EQ(cvector_elem_count(v), 5);
+    for (int i = 0; i < 5; ++i) {
+      REQUIRE_EQ(cvec_at(v, i), i + 1);
+    }
+    // v is automatically destroyed at end of block (no cvec_destroy needed)
+  }
+}

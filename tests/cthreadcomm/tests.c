@@ -365,6 +365,27 @@ TEST(circular_queues, enable_disable_sending) {
   circular_queue_destroy(cq);
 }
 
+TEST(circular_queues, ring_wrap_around) {
+  // With capacity 2, sending and receiving 5 messages forces head and tail
+  // indices to wrap around the ring boundary multiple times.
+  circular_queue *cq = circular_queue_create_with_mprocs(2, NULL, NULL);
+
+  for (int i = 0; i < 5; ++i) {
+    char *buf = malloc(sizeof(char));
+    *buf = 'A' + i;
+    c_message_t out = {.data = buf, .size = 1};
+    REQUIRE_EQ(circq_send_zc(cq, &out), ccol_success);
+    REQUIRE_EQ(out.data, NULL);
+
+    c_message_t in = {.data = NULL, .size = 0};
+    REQUIRE_EQ(circq_recv_zc(cq, &in), ccol_success);
+    REQUIRE_EQ(*(char *)in.data, 'A' + i);
+    free(in.data);
+  }
+
+  circular_queue_destroy(cq);
+}
+
 void *cq_helper_thread(void *args) {
   circular_queue *cq = (circular_queue *)args;
   // Let's make the sender block while sending the second message.
@@ -546,6 +567,29 @@ TEST(dynamic_queues, basic_send_and_receive_NULL_msg) {
 
   REQUIRE_EQ(dynmq_recv_zc(dq, &m2), ccol_success);
   REQUIRE_EQ(m2.data, NULL);
+
+  dynamic_queue_destroy(dq);
+}
+
+TEST(dynamic_queues, fifo_ordering) {
+  dynamic_queue *dq = dynamic_queue_create_with_mprocs(NULL, NULL);
+
+  const char labels[] = {'A', 'B', 'C'};
+  for (int i = 0; i < 3; ++i) {
+    char *buf = malloc(sizeof(char));
+    *buf = labels[i];
+    c_message_t m = {.data = buf, .size = 1};
+    REQUIRE_EQ(dynmq_send_zc(dq, &m), ccol_success);
+    REQUIRE_EQ(m.data, NULL);
+  }
+  REQUIRE_EQ(dynmq_msg_count(dq), 3);
+
+  for (int i = 0; i < 3; ++i) {
+    c_message_t m = {.data = NULL, .size = 0};
+    REQUIRE_EQ(dynmq_recv_zc(dq, &m), ccol_success);
+    REQUIRE_EQ(*(char *)m.data, labels[i]);
+    free(m.data);
+  }
 
   dynamic_queue_destroy(dq);
 }

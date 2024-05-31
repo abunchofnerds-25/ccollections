@@ -17,6 +17,7 @@ The library is compiled as `libccollections.so` which includes:
 - **Dynamic arrays** (vectors) with automatic resizing
 - **Hash maps** with dual implementation strategy (open-addressing and separate chaining) depending on key and value types
 - **Ordered maps** using self-balancing AVL trees
+- **Dynamic strings** with automatic capacity management and a rich operation set
 - **Sorting utilities** with stable mergesort
 - **Memory pools** (fixed-size and ranged)
 - **Thread communication** primitives for message passing
@@ -30,6 +31,7 @@ The library is compiled as `libccollections.so` which includes:
   - [Vector (cvector)](#vector-cvector)
   - [Hash Map (chashmap)](#hash-map-chashmap)
   - [Binary Search Tree Map (cbstmap)](#binary-search-tree-map-cbstmap)
+  - [Dynamic String (cstring)](#dynamic-string-cstring)
   - [Sorting (csort)](#sorting-csort)
   - [Memory Pools (cmempool)](#memory-pools-cmempool)
   - [Thread Communication (cthreadcomm)](#thread-communication-cthreadcomm)
@@ -46,6 +48,7 @@ Link against `libccollections` and include the appropriate headers:
 #include <cvector.h>
 #include <chashmap.h>
 #include <cbstmap.h>
+#include <cstring.h>
 #include <csort.h>
 #include <cmempool.h>
 #include <cthreadcomm.h>
@@ -330,7 +333,7 @@ int last = cvec_pop(vec);  // Returns value
 
 // Sorting
 cvec_sort(vec);                              // Default comparison
-cvec_sort_with_comparison_proc(vec, my_cmp); // Custom comparison
+cvector_sort_with_comparison_proc(vec, my_cmp); // Custom comparison
 
 // Cleanup
 cvec_reset(vec);      // Clear all elements, reset capacity
@@ -395,7 +398,7 @@ chmap_construct(numbers, int, int);         // Open-addressing (both integral �
 chmap_construct(cache, char*, double);      // Separate chaining (string key)
 
 // With custom settings
-chmap_construct_full(map, char*, int, 128, my_mprocs, my_hash_func);
+chmap_construct_full(map, char*, int, my_mprocs, my_hash_func);
 
 // Insertion (always use variables - constants and rvalues don't work)
 int key = 42;
@@ -476,6 +479,8 @@ chmap_for_each(word_count, it, {
 chmap_destroy(word_count);
 ```
 
+> **Note on `cstr` keys/values:** `cstr` (from `cstring.h`) is not a recognized type in `chashmap`. Use `char *` keys bridged via `cstr_c_str()`. See [Using cstring with Maps](#using-cstring-with-maps) for details.
+
 ### Binary Search Tree Map (cbstmap)
 
 Ordered map using self-balancing AVL tree.
@@ -492,11 +497,11 @@ Ordered map using self-balancing AVL tree.
 #### Basic Operations
 
 ```c
-// Creation
-cbmap_construct(tree, int, char*);                    // Signed integer keys
-cbmap_construct_unsigned(tree2, unsigned int, int);   // Unsigned integer keys
+// Creation — key signedness is inferred automatically from the type
+cbmap_construct(tree, int, char*);          // int key → signed comparison path
+cbmap_construct(tree2, unsigned int, int);  // unsigned int key → unsigned comparison path
 
-// With custom comparison
+// With custom comparison (required for string keys and other non-integral types)
 int my_compare(const void *a, const void *b) {
     return strcmp(*(char**)a, *(char**)b);
 }
@@ -578,6 +583,124 @@ cbmap_for_each(scores, it, {
 cbmap_destroy(scores);
 ```
 
+> **Note on `cstr` keys/values:** `cstr` (from `cstring.h`) is not a recognized type in `cbstmap`. String keys require a custom comparison function (see `cbmap_construct_cc`); use `cstr_c_str()` to extract the `char *` content and pass that. See [Using cstring with Maps](#using-cstring-with-maps) for details.
+
+### Dynamic String (cstring)
+
+Heap-allocated, automatically resizing string with a rich set of operations.
+
+#### Features
+
+- Internal buffer always holds a null-terminated C string
+- Capacity grows to the next power-of-two (minimum 16 bytes) on demand
+- Full set of string operations: append, prepend, insert, replace, find, split, and more
+- Custom memory management support
+- RAII-style auto-destruction via `*_scoped` variants
+
+#### Basic Operations
+
+```c
+#include <cstring.h>
+
+// Creation
+cstr_construct(s, "Hello");           // From a C string literal
+cstr_construct(empty, NULL);          // Empty string
+cstr_construct_scoped(temp, "world"); // Auto-destroyed at end of scope
+
+// Querying
+size_t len = cstr_length(s);          // Character count (excluding '\0')
+const char *raw = cstr_c_str(s);      // Read-only pointer to internal buffer
+char ch = cstr_at(s, 0);             // Character at index
+bool empty = cstr_is_empty(s);
+
+// Modification
+cstr_append(s, ", world!");           // Append a C string
+cstr_prepend(s, ">>> ");              // Prepend a C string
+cstr_insert(s, 3, "XYZ");            // Insert at position
+cstr_set(s, "brand new content");     // Replace entire content
+cstr_reset(s);                        // Clear and shrink to minimum capacity
+cstr_reserve(s, 256);                 // Pre-allocate at least 256 bytes
+
+// Case conversion and trimming
+cstr_to_upper(s);
+cstr_to_lower(s);
+cstr_trim(s);                         // Strip leading/trailing whitespace
+
+// Replacement
+cstr_replace(s, "foo", "bar");        // Replace all non-overlapping occurrences
+
+// Comparison and search
+int cmp = cstr_compare(s, "hello");   // Like strcmp()
+bool eq  = cstr_equals(s, "hello");
+bool sw  = cstr_starts_with(s, "he");
+bool ew  = cstr_ends_with(s, "lo");
+
+size_t pos = cstr_find(s, "ll");      // First occurrence, or ccol_invalid_size
+size_t rpos = cstr_rfind(s, "l");     // Last occurrence, or ccol_invalid_size
+
+// Substring and copy (caller must destroy the returned cstr)
+cstr sub  = cstr_substring(s, 1, 3); // New string with 3 chars starting at index 1
+cstr copy = cstr_copy(s, NULL);
+cstr_destroy(sub);
+cstr_destroy(copy);
+
+// Cleanup
+cstr_destroy(s);
+```
+
+#### Example: Splitting a CSV Line
+
+```c
+cstr_construct(line, "alice,30,engineer");
+
+cvec parts = cstr_split(line, ",", NULL);
+cvec_redeclare(parts, cstr);
+
+for (size_t i = 0; i < cvec_size(parts); i++) {
+    printf("[%zu] %s\n", i, cstr_c_str(cvec_at(parts, i)));
+    cstr_destroy(cvec_at(parts, i));
+}
+cvec_destroy(parts);
+
+cstr_destroy(line);
+```
+
+Output:
+```
+[0] alice
+[1] 30
+[2] engineer
+```
+
+#### Using cstring with Maps
+
+`cstr` is intentionally **not** a recognized key or value type in `chashmap` or `cbstmap`. The maps understand `char *` (content-based hashing and comparison via SSO), so the correct pattern is to bridge through `cstr_c_str()`:
+
+```c
+chmap_construct(map, char*, int);
+
+cstr_construct(key, "hello");
+// Bridge: pass the internal C string as the key
+char *k = (char *)cstr_c_str(key);
+chmap_insert(map, k, 42);
+
+// Lookup works the same way
+char *lk = (char *)cstr_c_str(key);
+int val = chmap_get(map, lk);
+
+cstr_destroy(key);
+chmap_destroy(map);
+```
+
+The key point is that the map copies the string content into its own storage (SSO or heap), so the `cstr` can be destroyed independently without invalidating the map entry.
+
+**Why not store `cstr` directly in a map?** The map has no knowledge of the cstring type and therefore cannot call `cstr_destroy` when an entry is evicted or the map is destroyed. Using `cstr` values directly would require the caller to iterate and destroy every value before calling `chmap_destroy`, and there is no content-based hashing path for the opaque `cstr` pointer. Use `char *` keys (bridged via `cstr_c_str()`) or store the `cstr` pointers in a vector if lifetime management is needed.
+
+#### Memory Notes
+
+- `cstring_c_str()` returns a pointer into the string's internal buffer. The pointer becomes invalid after **any** mutating operation (append, insert, replace, etc.) since the buffer may be reallocated.
+- `cstring_substring()`, `cstring_copy()`, and `cstring_split()` return new heap-allocated objects that the caller must destroy.
+
 ### Sorting (csort)
 
 Generic stable sorting using iterative mergesort.
@@ -598,7 +721,7 @@ Generic stable sorting using iterative mergesort.
 cvec_construct(vec, int);
 // ... add elements ...
 cvec_sort(vec);                              // Default comparison
-cvec_sort_with_comparison_proc(vec, my_cmp); // Custom comparison
+cvector_sort_with_comparison_proc(vec, my_cmp); // Custom comparison
 
 // Sort a C array
 int numbers[] = {5, 2, 8, 1, 9};
@@ -814,11 +937,11 @@ dynamic_queue *dq = dynamic_queue_create(NULL);
 
 // Send never fails (unless memory exhausted) and never gets blocked
 c_message_t msg = { .data = strdup("Message"), .size = 8 };
-dynq_send_zc(dq, &msg);
+dynmq_send_zc(dq, &msg);
 
 // Receive works same as circular queue
 c_message_t received;
-dynq_recv_zc(dq, &received);
+dynmq_recv_zc(dq, &received);
 free(received.data);
 
 dynamic_queue_destroy(dq);
@@ -1121,10 +1244,10 @@ All containers support custom memory management through `ccol_memmgmt_procs_t`:
 
 ```c
 typedef struct {
-    ccol_memmgmt_procs_alloc_t alloc;      // malloc equivalent
+    ccol_memmgmt_procs_malloc_t malloc;    // malloc equivalent
+    ccol_memmgmt_procs_free_t free;        // free equivalent
     ccol_memmgmt_procs_calloc_t calloc;    // calloc equivalent
     ccol_memmgmt_procs_realloc_t realloc;  // realloc equivalent
-    ccol_memmgmt_procs_free_t free;        // free equivalent
 } ccol_memmgmt_procs_t;
 ```
 
@@ -1156,7 +1279,7 @@ void my_free(void *ptr) {
 
 // Setup custom allocators
 ccol_memmgmt_procs_t my_mprocs = {
-    .alloc = my_alloc,
+    .malloc = my_alloc,
     .calloc = my_calloc,
     .realloc = my_realloc,
     .free = my_free
@@ -1164,7 +1287,7 @@ ccol_memmgmt_procs_t my_mprocs = {
 
 // Use with any container
 cvec_construct_mp(vec, int, &my_mprocs);
-chmap_construct_mp(map, int, char*, 64, &my_mprocs);
+chmap_construct_mp(map, int, char*, &my_mprocs);
 mempool *pool = mempool_create(100, 64, false, false, &my_mprocs, NULL);
 ```
 
@@ -1196,14 +1319,14 @@ void pool_free(void *ptr) {
 }
 
 ccol_memmgmt_procs_t pool_mprocs = {
-    .alloc = pool_alloc,
+    .malloc = pool_alloc,
     .calloc = pool_calloc,
     .realloc = pool_realloc,
     .free = pool_free
 };
 
 // Map now allocates from the pool
-chmap_construct_mp(map, int, int, 64, &pool_mprocs);
+chmap_construct_mp(map, int, int, &pool_mprocs);
 
 // ... use map ...
 

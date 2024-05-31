@@ -1341,6 +1341,44 @@ void helper_function(chmap chm) {
   chmap_get_ptr(chm, "d3")->b--;
 }
 
+TEST(chash_maps, for_each_macro) {
+  chmap_construct(hm, int, int);
+
+  for (int i = 1; i <= 5; ++i) {
+    int val = i * 10;
+    chmap_insert(hm, i, val);
+  }
+
+  int sum = 0;
+  int count = 0;
+  chmap_for_each(hm, it, {
+    sum += *chmap_iter_val_ptr(it);
+    ++count;
+  });
+
+  REQUIRE_EQ(count, 5);
+  REQUIRE_EQ(sum, 150);  // 10+20+30+40+50
+
+  chmap_destroy(hm);
+}
+
+TEST(chash_maps, construct_scoped_lifecycle) {
+  {
+    chmap_construct_scoped(hm, int, int);
+    REQUIRE_NE((void *)hm, NULL);
+
+    for (int i = 1; i <= 5; ++i) {
+      int val = i * 100;
+      chmap_insert(hm, i, val);
+    }
+    for (int i = 1; i <= 5; ++i) {
+      REQUIRE_EQ(chmap_get(hm, i), i * 100);
+    }
+    REQUIRE_EQ(chmap_elem_count(hm), 5);
+    // hm is automatically destroyed at end of block (no chmap_destroy needed)
+  }
+}
+
 TEST(chash_maps, re_enabled_local_chm_macros) {
   chmap_construct(hm, char *, helper_struct);
 

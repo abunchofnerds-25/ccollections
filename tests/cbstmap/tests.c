@@ -892,3 +892,54 @@ TEST(cbst_maps, re_enabled_local_cbm_macros) {
 
   cbmap_destroy(bm);
 }
+
+TEST(cbst_maps, string_keys) {
+  cbmap_construct(bm, char *, int);
+
+  // Use strings of varied lengths so size != 4 or 8 (avoids endian-sensitive
+  // path in compare_keys for equal-length keys with differing first character)
+  char *k_alpha = "alpha";    // 6 bytes with null
+  char *k_beta = "beta";      // 5 bytes with null
+  char *k_gamma = "gamma";    // 6 bytes with null
+  char *k_missing = "zeta";   // 5 bytes with null, never inserted
+
+  int v1 = 100, v2 = 200, v3 = 300;
+  cbmap_insert(bm, k_alpha, v1);
+  cbmap_insert(bm, k_beta, v2);
+  cbmap_insert(bm, k_gamma, v3);
+
+  REQUIRE_EQ(cbmap_get(bm, k_alpha), v1);
+  REQUIRE_EQ(cbmap_get(bm, k_beta), v2);
+  REQUIRE_EQ(cbmap_get(bm, k_gamma), v3);
+
+  // Update existing key
+  int v_updated = 999;
+  cbmap_insert(bm, k_alpha, v_updated);
+  REQUIRE_EQ(cbmap_get(bm, k_alpha), v_updated);
+
+  // Remove a key and verify it's gone
+  REQUIRE_EQ(cbmap_remove(bm, k_beta), ccol_success);
+  REQUIRE_EQ((void *)cbmap_get_ptr(bm, k_beta), NULL);
+  REQUIRE_EQ(cbmap_remove(bm, k_beta), ccol_key_not_found);
+
+  // A key never inserted should not be found
+  REQUIRE_EQ((void *)cbmap_get_ptr(bm, k_missing), NULL);
+
+  cbmap_destroy(bm);
+}
+
+TEST(cbst_maps, construct_scoped_lifecycle) {
+  {
+    cbmap_construct_scoped(bm, int, int);
+    REQUIRE_NE((void *)bm, NULL);
+
+    for (int i = 0; i < 5; ++i) {
+      int val = i * 10;
+      cbmap_insert(bm, i, val);
+    }
+    for (int i = 0; i < 5; ++i) {
+      REQUIRE_EQ(cbmap_get(bm, i), i * 10);
+    }
+    // bm is automatically destroyed at end of block
+  }
+}

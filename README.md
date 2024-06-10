@@ -1048,7 +1048,7 @@ int main(void) {
 
 The library tries to follow consistent naming conventions:
 
-- **Container types**: `cvec`, `chmap`, `cbmap`, `mempool`, `r_mempool`, etc.
+- **Container types**: `cvec`, `chmap`, `cbmap`, `cstr`, `mempool`, `r_mempool`, etc.
 - **Creation**: `*_create()`, `*_create_full()`, `*_create_mp()`, etc.
 - **Destruction**: `*_destroy()` (macro that nullifies pointer)
 - **Operations**: `*_push()`, `*_pop()`, `*_insert()`, `*_get()`, `*_remove()`, etc.
@@ -1155,8 +1155,8 @@ if (result != ccol_success) {
 
 ### Containers Are Not Thread-Safe by Design
 
-**Important:** Vector, hash map, and BST map implementations **do not include internal locks**. This is by design,
-as locking only during the access operation (e.g., insert, get) would not provide a meaningful protection against
+**Important:** Vector, hash map, BST map, and dynamic string implementations **do not include internal locks**. This is by design,
+as locking only during the access operation (e.g., insert, get, append) would not provide a meaningful protection against
 race conditions in typical usage patterns.
 
 Consider this example:

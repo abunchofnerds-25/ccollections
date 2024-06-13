@@ -56,26 +56,26 @@ TEST(vec_of_hmaps, update_map_retrieved_from_vector) {
   cvec_construct(maps, chmap);
 
   for (int i = 0; i < 2; i++) {
-    chmap_construct(m, char*, int);
+    chmap_construct(m, char *, int);
     int v_a = i * 100;
     int v_b = i * 200;
     chmap_insert(m, "alpha", v_a);
-    chmap_insert(m, "beta",  v_b);
+    chmap_insert(m, "beta", v_b);
     cvec_push(maps, m);
   }
 
   // Upsert through the handle retrieved from the vector.
   chmap first = cvec_at(maps, 0);
-  chmap_redeclare(first, char*, int);
+  chmap_redeclare(first, char *, int);
   int new_val = 999;
   chmap_insert(first, "alpha", new_val);
   REQUIRE_EQ(chmap_get(first, "alpha"), 999);
 
   // The second map must remain unchanged.
   chmap second = cvec_at(maps, 1);
-  chmap_redeclare(second, char*, int);
+  chmap_redeclare(second, char *, int);
   REQUIRE_EQ(chmap_get(second, "alpha"), 100);
-  REQUIRE_EQ(chmap_get(second, "beta"),  200);
+  REQUIRE_EQ(chmap_get(second, "beta"), 200);
 
   for (size_t i = 0; i < cvec_size(maps); i++) {
     chmap_destroy(cvec_at(maps, i));
@@ -200,7 +200,7 @@ TEST(vec_of_bmaps, independent_maps_do_not_interfere) {
 // ============================================================================
 
 TEST(hmap_of_vecs, category_to_int_list) {
-  chmap_construct(hm, char*, cvec);
+  chmap_construct(hm, char *, cvec);
 
   cvec_construct(evens, int);
   for (int i = 0; i < 5; i++) cvec_push_rvalue(evens, i * 2);
@@ -234,7 +234,7 @@ TEST(hmap_of_vecs, category_to_int_list) {
 }
 
 TEST(hmap_of_vecs, append_to_inner_vector) {
-  chmap_construct(hm, char*, cvec);
+  chmap_construct(hm, char *, cvec);
 
   cvec_construct(nums, int);
   cvec_push_rvalue(nums, 10);
@@ -312,36 +312,36 @@ TEST(bmap_of_vecs, ordered_groups) {
 // ============================================================================
 
 TEST(hmap_of_hmaps, nested_string_key_lookup) {
-  chmap_construct(outer, char*, chmap);
+  chmap_construct(outer, char *, chmap);
 
   // "fruits" -> { apple:1, banana:2, cherry:3 }
-  chmap_construct(fruits, char*, int);
+  chmap_construct(fruits, char *, int);
   int v1 = 1, v2 = 2, v3 = 3;
-  chmap_insert(fruits, "apple",  v1);
+  chmap_insert(fruits, "apple", v1);
   chmap_insert(fruits, "banana", v2);
   chmap_insert(fruits, "cherry", v3);
   chmap_insert(outer, "fruits", fruits);
 
   // "vegs" -> { carrot:10, broccoli:20 }
-  chmap_construct(vegs, char*, int);
+  chmap_construct(vegs, char *, int);
   int v10 = 10, v20 = 20;
-  chmap_insert(vegs, "carrot",   v10);
+  chmap_insert(vegs, "carrot", v10);
   chmap_insert(vegs, "broccoli", v20);
   chmap_insert(outer, "vegs", vegs);
 
   REQUIRE_EQ(chmap_elem_count(outer), 2);
 
   chmap inner_f = chmap_get(outer, "fruits");
-  chmap_redeclare(inner_f, char*, int);
+  chmap_redeclare(inner_f, char *, int);
   REQUIRE_EQ(chmap_elem_count(inner_f), 3);
-  REQUIRE_EQ(chmap_get(inner_f, "apple"),  1);
+  REQUIRE_EQ(chmap_get(inner_f, "apple"), 1);
   REQUIRE_EQ(chmap_get(inner_f, "banana"), 2);
   REQUIRE_EQ(chmap_get(inner_f, "cherry"), 3);
 
   chmap inner_v = chmap_get(outer, "vegs");
-  chmap_redeclare(inner_v, char*, int);
+  chmap_redeclare(inner_v, char *, int);
   REQUIRE_EQ(chmap_elem_count(inner_v), 2);
-  REQUIRE_EQ(chmap_get(inner_v, "carrot"),   10);
+  REQUIRE_EQ(chmap_get(inner_v, "carrot"), 10);
   REQUIRE_EQ(chmap_get(inner_v, "broccoli"), 20);
 
   chmap_for_each(outer, it, {
@@ -352,7 +352,7 @@ TEST(hmap_of_hmaps, nested_string_key_lookup) {
 }
 
 TEST(hmap_of_hmaps, add_and_remove_inner_entries) {
-  chmap_construct(outer, char*, chmap);
+  chmap_construct(outer, char *, chmap);
 
   chmap_construct(inner, int, int);
   for (int i = 1; i <= 5; i++) {
@@ -652,7 +652,7 @@ TEST(vec_of_cstrings, dynamic_string_building) {
 // ============================================================================
 
 TEST(hmap_of_vec_of_cstrings, three_level_nesting) {
-  chmap_construct(catalog, char*, cvec);
+  chmap_construct(catalog, char *, cvec);
 
   // "greetings" -> ["hi", "hello", "hey"]
   cvec_construct(greetings, cstr);
@@ -677,7 +677,7 @@ TEST(hmap_of_vec_of_cstrings, three_level_nesting) {
   cvec gv = chmap_get(catalog, "greetings");
   cvec_redeclare(gv, cstr);
   REQUIRE_EQ(cvec_size(gv), 3);
-  REQUIRE_EQ(strcmp(cstring_c_str(cvec_at(gv, 0)), "hi"),  0);
+  REQUIRE_EQ(strcmp(cstring_c_str(cvec_at(gv, 0)), "hi"), 0);
   REQUIRE_EQ(strcmp(cstring_c_str(cvec_at(gv, 2)), "hey"), 0);
 
   cvec fv = chmap_get(catalog, "farewells");
@@ -709,7 +709,7 @@ TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
   // Group 0 -> { "a": [0,1,2], "b": [3,4] }
   // Group 1 -> { "x": [10,11], "y": [20,21,22,23] }
   for (int g = 0; g < 2; g++) {
-    chmap_construct(hm, char*, cvec);
+    chmap_construct(hm, char *, cvec);
     cvec_construct(va, int);
     cvec_construct(vb, int);
 
@@ -734,7 +734,7 @@ TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
   // Navigate: outer[0]["a"][1] == 1
   int k0 = 0;
   chmap hm0 = cbmap_get(outer, k0);
-  chmap_redeclare(hm0, char*, cvec);
+  chmap_redeclare(hm0, char *, cvec);
   cvec va0 = chmap_get(hm0, "a");
   cvec_redeclare(va0, int);
   REQUIRE_EQ(cvec_size(va0), 3);
@@ -743,7 +743,7 @@ TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
   // Navigate: outer[1]["y"][3] == 23
   int k1 = 1;
   chmap hm1 = cbmap_get(outer, k1);
-  chmap_redeclare(hm1, char*, cvec);
+  chmap_redeclare(hm1, char *, cvec);
   cvec vy1 = chmap_get(hm1, "y");
   cvec_redeclare(vy1, int);
   REQUIRE_EQ(cvec_size(vy1), 4);
@@ -752,7 +752,7 @@ TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
   // Cleanup: innermost cvec -> inner chmap -> outer cbmap.
   cbmap_for_each(outer, it, {
     chmap *hmp = cbmap_iter_val_ptr(it);
-    chmap_redeclare(*hmp, char*, cvec);
+    chmap_redeclare(*hmp, char *, cvec);
     chmap_for_each(*hmp, it, {
       cvec *vp = chmap_iter_val_ptr(it);
       cvector_destroy(*vp);

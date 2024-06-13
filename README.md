@@ -471,9 +471,7 @@ for (size_t i = 0; i < 6; i++) {
 
 // Print results
 chmap_for_each(word_count, it, {
-    const char *word = *chmap_iter_key_ptr(it);
-    int count = *chmap_iter_val_ptr(it);
-    printf("%s: %d\n", word, count);
+    printf("%s: %d\n", *chmap_iter_key_ptr(it), *chmap_iter_val_ptr(it));
 });
 
 chmap_destroy(word_count);
@@ -529,9 +527,7 @@ ccol_retval_t result = cbmap_remove(tree, remove_key);
 // Iteration - RECOMMENDED METHOD (traverses in sorted key order)
 // The cbmap_for_each macro is the standard way to iterate
 cbmap_for_each(tree, it, {
-    int k = *cbmap_iter_key_ptr(it);
-    char *v = *cbmap_iter_val_ptr(it);
-    printf("Key: %d, Value: %s\n", k, v);
+    printf("Key: %d, Value: %s\n", *cbmap_iter_key_ptr(it), *cbmap_iter_val_ptr(it));
 });
 
 // Manual iteration (if you need more control)
@@ -540,9 +536,7 @@ cbmap_for_each(tree, it, {
 // does not have that problem.
 cbmap_iter_declare(tree, it);
 for (it = cbmap_begin(tree); it != NULL; it = cbmap_iter_next(it)) {
-    int k = *cbmap_iter_key_ptr(it);
-    char *v = *cbmap_iter_val_ptr(it);
-    printf("Key: %d, Value: %s\n", k, v);
+    printf("Key: %d, Value: %s\n", *cbmap_iter_key_ptr(it), *cbmap_iter_val_ptr(it));
 }
 
 // Cleanup
@@ -550,34 +544,28 @@ cbmap_reset(tree);    // Remove all nodes
 cbmap_destroy(tree);  // Destroy and set to NULL
 ```
 
-#### Example: Range Queries
+#### Example: Sorted Iteration
 
 ```c
 cbmap_construct(scores, int, char*);
 
 // Insert student scores (use variables)
-int score1 = 95;
-char *name1 = "Alice";
-cbmap_insert(scores, score1, name1);
+int score = 95;
+cbmap_insert(scores, score, "Alice");
 
-int score2 = 82;
-char *name2 = "Bob";
-cbmap_insert(scores, score2, name2);
+score = 82;
+cbmap_insert(scores, score, "Bob");
 
-int score3 = 78;
-char *name3 = "Charlie";
-cbmap_insert(scores, score3, name3);
+score = 78;
+cbmap_insert(scores, score, "Charlie");
 
-int score4 = 91;
-char *name4 = "Diana";
-cbmap_insert(scores, score4, name4);
+score = 91;
+cbmap_insert(scores, score, "Diana");
 
 // Iterate in sorted order (by score)
 printf("Scores from lowest to highest:\n");
 cbmap_for_each(scores, it, {
-    int *score = cbmap_iter_key_ptr(it);
-    char **name = cbmap_iter_val_ptr(it);
-    printf("%s: %d\n", *name, *score);
+    printf("%s: %d\n", *cbmap_iter_val_ptr(it), *cbmap_iter_key_ptr(it));
 });
 
 cbmap_destroy(scores);
@@ -610,13 +598,13 @@ cstr_construct_scoped(temp, "world"); // Auto-destroyed at end of scope
 // Querying
 size_t len = cstr_length(s);          // Character count (excluding '\0')
 const char *raw = cstr_c_str(s);      // Read-only pointer to internal buffer
-char ch = cstr_at(s, 0);             // Character at index
+char ch = cstr_at(s, 0);              // Character at index
 bool empty = cstr_is_empty(s);
 
 // Modification
 cstr_append(s, ", world!");           // Append a C string
 cstr_prepend(s, ">>> ");              // Prepend a C string
-cstr_insert(s, 3, "XYZ");            // Insert at position
+cstr_insert(s, 3, "XYZ");             // Insert at position
 cstr_set(s, "brand new content");     // Replace entire content
 cstr_reset(s);                        // Clear and shrink to minimum capacity
 cstr_reserve(s, 256);                 // Pre-allocate at least 256 bytes
@@ -639,7 +627,7 @@ size_t pos = cstr_find(s, "ll");      // First occurrence, or ccol_invalid_size
 size_t rpos = cstr_rfind(s, "l");     // Last occurrence, or ccol_invalid_size
 
 // Substring and copy (caller must destroy the returned cstr)
-cstr sub  = cstr_substring(s, 1, 3); // New string with 3 chars starting at index 1
+cstr sub  = cstr_substring(s, 1, 3);  // New string with 3 chars starting at index 1
 cstr copy = cstr_copy(s, NULL);
 cstr_destroy(sub);
 cstr_destroy(copy);
@@ -929,7 +917,7 @@ circular_queue_destroy(cq);
 
 #### Dynamic Queue (Loosely Bounded)
 
-Linked-list based queue that is allowed to grow dynamically up to **`max(size_t)-1`**
+Linked-list based queue that is allowed to grow dynamically up to **max `(size_t)-1`**
 unconsumed messages, as long as there is enough memory:
 
 ```c

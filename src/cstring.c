@@ -43,7 +43,7 @@ void __cstring_destroy(cstr s) {
     _mem_free(s->m_procs, s->data);
 
     if (s->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = s->m_procs->free;
+      ccol_free_t free_func = s->m_procs->free;
       free_func(s->m_procs);
       free_func(s);
     } else {

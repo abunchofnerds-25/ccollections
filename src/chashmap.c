@@ -713,7 +713,7 @@ static void sc_destroy_llist_node(dllist_ref_node** head_of_all_elems,
       detach_node_from_dllist(head_of_all_elems, &elem->dllist_refs);
     }
     if (elem->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = elem->m_procs->free;
+      ccol_free_t free_func = elem->m_procs->free;
       free_func(elem);
     } else {
       mem_free(elem);
@@ -1388,7 +1388,7 @@ void __chmap_destroy(chmap chm) {
         ccol_memmgmt_procs_t* procs = chm->impl.oa_map->m_procs;
         oa_destroy(chm->impl.oa_map);
         if (procs) {
-          ccol_memmgmt_procs_free_t free_func = procs->free;
+          ccol_free_t free_func = procs->free;
           free_func(procs);
         }
       }
@@ -1397,7 +1397,7 @@ void __chmap_destroy(chmap chm) {
         ccol_memmgmt_procs_t* procs = chm->impl.sc_map->m_procs;
         sc_destroy(chm->impl.sc_map);
         if (procs) {
-          ccol_memmgmt_procs_free_t free_func = procs->free;
+          ccol_free_t free_func = procs->free;
           free_func(procs);
         }
       }

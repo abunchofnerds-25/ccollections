@@ -330,13 +330,13 @@ typedef enum ccollections_retval_t {
  * @param size Number of bytes to allocate
  * @return Pointer to allocated memory, or NULL on failure
  */
-typedef void *(*ccol_memmgmt_procs_malloc_t)(size_t size);
+typedef void *(*ccol_malloc_t)(size_t size);
 
 /**
  * @brief Custom free function pointer type
  * @param ptr Pointer to free
  */
-typedef void (*ccol_memmgmt_procs_free_t)(void *ptr);
+typedef void (*ccol_free_t)(void *ptr);
 
 /**
  * @brief Custom calloc function pointer type
@@ -344,8 +344,7 @@ typedef void (*ccol_memmgmt_procs_free_t)(void *ptr);
  * @param elem_size Size of each element
  * @return Pointer to allocated memory, or NULL on failure
  */
-typedef void *(*ccol_memmgmt_procs_calloc_t)(size_t elem_count,
-                                             size_t elem_size);
+typedef void *(*ccol_calloc_t)(size_t elem_count, size_t elem_size);
 
 /**
  * @brief Custom realloc function pointer type
@@ -353,7 +352,7 @@ typedef void *(*ccol_memmgmt_procs_calloc_t)(size_t elem_count,
  * @param size New size in bytes
  * @return Pointer to reallocated memory, or NULL on failure
  */
-typedef void *(*ccol_memmgmt_procs_realloc_t)(void *ptr, size_t size);
+typedef void *(*ccol_realloc_t)(void *ptr, size_t size);
 
 /**
  * @brief Custom memory management procedures
@@ -367,10 +366,10 @@ typedef void *(*ccol_memmgmt_procs_realloc_t)(void *ptr, size_t size);
  * malloc/free/calloc/realloc
  */
 typedef struct ccol_memmgmt_procs_t {
-  ccol_memmgmt_procs_malloc_t malloc;   /**< Custom malloc */
-  ccol_memmgmt_procs_free_t free;       /**< Custom free */
-  ccol_memmgmt_procs_calloc_t calloc;   /**< Custom calloc */
-  ccol_memmgmt_procs_realloc_t realloc; /**< Custom realloc */
+  ccol_malloc_t malloc;   /**< Custom malloc */
+  ccol_free_t free;       /**< Custom free */
+  ccol_calloc_t calloc;   /**< Custom calloc */
+  ccol_realloc_t realloc; /**< Custom realloc */
 } ccol_memmgmt_procs_t;
 
 /* ========================================================================== */

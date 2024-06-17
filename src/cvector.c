@@ -42,7 +42,7 @@ void __cvector_destroy(cvec v) {
     _mem_free(v->m_procs, v->data_ptr);
 
     if (v->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = v->m_procs->free;
+      ccol_free_t free_func = v->m_procs->free;
       free_func(v->m_procs);
       free_func(v);
     } else {

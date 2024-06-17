@@ -164,7 +164,7 @@ void __circular_queue_destroy(circular_queue *cq) {
     cond_var_destroy(cq->write_cond);
 
     if (cq->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = cq->m_procs->free;
+      ccol_free_t free_func = cq->m_procs->free;
       free_func(cq->m_procs);
       free_func(cq);
     } else {
@@ -567,7 +567,7 @@ void __dynamic_queue_destroy(dynamic_queue *dq) {
     destroy_dq_dllist(dq);
 
     if (dq->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = dq->m_procs->free;
+      ccol_free_t free_func = dq->m_procs->free;
       free_func(dq->m_procs);
       free_func(dq);
     } else {
@@ -800,7 +800,7 @@ void __channel_destroy(channel *ch) {
     circular_queue_destroy(ch->workers_to_owner_cq);
 
     if (ch->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = ch->m_procs->free;
+      ccol_free_t free_func = ch->m_procs->free;
       free_func(ch->m_procs);
       free_func(ch);
     } else {

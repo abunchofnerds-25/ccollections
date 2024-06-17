@@ -276,7 +276,7 @@ void __cbmap_destroy(cbmap cbm) {
     _clear_nodes(cbm);
 
     if (cbm->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = cbm->m_procs->free;
+      ccol_free_t free_func = cbm->m_procs->free;
       free_func(cbm->m_procs);
       free_func(cbm);
     } else {

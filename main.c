@@ -1,5 +1,6 @@
 #include <cbstmap.h>
 #include <chashmap.h>
+#include <cstring.h>
 #include <cvector.h>
 #include <math.h>
 #include <stdio.h>
@@ -172,10 +173,60 @@ void use_cvec() {
   cvec_construct_scoped(v, int);
 }
 
+void use_cstring() {
+  cstr_construct(s, "world");
+  cstr_prepend(s, "Hello, ");
+  cstr_append(s, "!");
+  assert(cstr_equals(s, "Hello, world!"));
+  assert(cstr_length(s) == 13);
+  assert(cstr_starts_with(s, "Hello"));
+  assert(cstr_ends_with(s, "world!"));
+
+  size_t pos = cstr_find(s, "world");
+  assert(pos == 7);
+
+  cstr sub = cstr_substring(s, 7, 5);
+  assert(cstr_equals(sub, "world"));
+  cstr_destroy(sub);
+
+  cstr_to_upper(s);
+  assert(cstr_equals(s, "HELLO, WORLD!"));
+  cstr_to_lower(s);
+  assert(cstr_equals(s, "hello, world!"));
+
+  cstr_replace(s, "world", "cstrings");
+  assert(cstr_equals(s, "hello, cstrings!"));
+
+  cstr_set(s, "  trimmed  ");
+  cstr_trim(s);
+  assert(cstr_equals(s, "trimmed"));
+
+  cstr_destroy(s);
+
+  cstr_construct(csv, "one,two,three,four");
+  cvec parts = cstr_split(csv, ",", NULL);
+  cvec_redeclare(parts, cstr);
+  assert(cvec_size(parts) == 4);
+  assert(cstr_equals(cvec_at(parts, 0), "one"));
+  assert(cstr_equals(cvec_at(parts, 1), "two"));
+  assert(cstr_equals(cvec_at(parts, 2), "three"));
+  assert(cstr_equals(cvec_at(parts, 3), "four"));
+  for (size_t i = 0; i < cvec_size(parts); ++i) {
+    cstr tok = cvec_at(parts, i);
+    cstr_destroy(tok);
+  }
+  cvec_destroy(parts);
+  cstr_destroy(csv);
+
+  cstr_construct_scoped(scoped, "auto-destroyed");
+  assert(!cstr_is_empty(scoped));
+}
+
 int main() {
   use_chmap();
   use_cbmap();
   use_cvec();
   use_nested_types_hmap_of_cvecs();
+  use_cstring();
   return 0;
 }

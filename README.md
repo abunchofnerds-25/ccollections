@@ -1232,10 +1232,10 @@ All containers support custom memory management through `ccol_memmgmt_procs_t`:
 
 ```c
 typedef struct {
-    ccol_memmgmt_procs_malloc_t malloc;    // malloc equivalent
-    ccol_memmgmt_procs_free_t free;        // free equivalent
-    ccol_memmgmt_procs_calloc_t calloc;    // calloc equivalent
-    ccol_memmgmt_procs_realloc_t realloc;  // realloc equivalent
+    ccol_malloc_t malloc;    // malloc equivalent
+    ccol_free_t free;        // free equivalent
+    ccol_calloc_t calloc;    // calloc equivalent
+    ccol_realloc_t realloc;  // realloc equivalent
 } ccol_memmgmt_procs_t;
 ```
 

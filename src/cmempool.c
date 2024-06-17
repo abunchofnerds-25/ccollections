@@ -92,7 +92,7 @@ void _mempool_destroy(mempool *mp) {
     }
 
     if (mp->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = mp->m_procs->free;
+      ccol_free_t free_func = mp->m_procs->free;
       free_func(mp->m_procs);
       free_func(mp);
     } else {
@@ -518,7 +518,7 @@ void _r_mempool_destroy(r_mempool *rmp) {
     }
 
     if (rmp->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = rmp->m_procs->free;
+      ccol_free_t free_func = rmp->m_procs->free;
       free_func(rmp->m_procs);
       free_func(rmp);
     } else {

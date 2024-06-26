@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -72,6 +72,11 @@ const size_t elem_is_not_a_pool_member = 0xfadefacefadeface;
 #error "Unexpected pointer size"
 #endif
 
+/* Destroys the memory pool. If dynamic fallback was enabled and some
+ * dynamically allocated entries have not been freed yet, the call asserts to
+ * make that leak visible – we'd rather crash loudly than silently lose memory.
+ * The backing objects buffer is only freed if it was not supplied by the caller
+ * as a preallocated buffer. */
 void _mempool_destroy(mempool *mp) {
   if (mp) {
     if (mp->fallback_to_dynamic_memory) {
@@ -101,6 +106,10 @@ void _mempool_destroy(mempool *mp) {
   }
 }
 
+/* Initialises the free-list headers across the objects buffer and sets all
+ * pool metadata fields. Each element's header stores a magic status sentinel
+ * and a back-pointer to the pool for validation in mempool_free_entry. The
+ * last element in the chain has next == NULL to terminate the list. */
 void mempool_init_internal_scalars(mempool *mp, size_t elem_count,
                                    size_t extended_elem_size,
                                    bool fallback_to_dynamic_memory) {
@@ -131,6 +140,10 @@ void mempool_init_internal_scalars(mempool *mp, size_t elem_count,
   mp->free_elem_count = elem_count;
 }
 
+/* Creates a fixed-size memory pool for elem_count elements of elem_size bytes
+ * each. The actual stored element size is extended by the size of the
+ * __internal_entry_header prepended to each slot. If elem_size < sizeof(addr_t)
+ * it is silently bumped to that minimum so the free-list next pointer fits. */
 mempool *mempool_create(size_t elem_count, size_t elem_size,
                         bool fallback_to_dynamic_memory, bool single_threaded,
                         ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
@@ -192,6 +205,11 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
   return mp;
 }
 
+/* Like mempool_create but uses an externally supplied buffer (e.g. a static
+ * array) as the element store. elem_count is derived from buf_size / extended
+ * element size. The buffer is never freed by the pool; the caller remains
+ * responsible for its lifetime. Useful for embedded or stack-allocated pools.
+ */
 mempool *mempool_create_from_preallocated_buffer(
     void *buffer, size_t buf_size, size_t elem_size,
     bool fallback_to_dynamic_memory, bool single_threaded,
@@ -255,6 +273,10 @@ mempool *mempool_create_from_preallocated_buffer(
   return mp;
 }
 
+/* Allocates one element from the pool in O(1) time by popping the head of the
+ * internal free list. If the pool is exhausted and fallback_to_dynamic_memory
+ * is enabled, a fresh heap allocation is made instead and tagged as
+ * elem_is_not_a_pool_member so it is routed through free on return. */
 void *mempool_alloc_entry(mempool *mp) {
   if (!mp) {
     ccol_assert(false);
@@ -302,6 +324,8 @@ void *mempool_alloc_entry(mempool *mp) {
   return result;
 }
 
+/* Allocates one element and zeroes the user-visible bytes before returning.
+ * The header portion preceding the user area is intentionally left intact. */
 void *mempool_calloc_entry(mempool *mp) {
   void *result = mempool_alloc_entry(mp);
 
@@ -312,12 +336,20 @@ void *mempool_calloc_entry(mempool *mp) {
   return result;
 }
 
+/* Checks whether c_entry falls within the pool's object buffer and lands on a
+ * valid element boundary (i.e. is a multiple of extended_elem_size from the
+ * base). Used to distinguish pool-owned entries from dynamic fallback entries
+ * during free. */
 static inline bool valid_mempool_addr(mempool *mp, uintptr_t c_entry) {
   return (c_entry >= mp->lower_addr_limit) &&
          (c_entry < mp->upper_addr_limit) &&
          (c_entry - mp->lower_addr_limit) % mp->extended_elem_size == 0;
 }
 
+/* Low-level free that takes a pointer to the entry header rather than the user
+ * pointer. Handles three cases: dynamic fallback entries (freed via the pool's
+ * allocator), valid pool-owned taken entries (pushed onto the free list), and
+ * any other state (double-free or corruption → assert). */
 void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
   if (!mp) {
     ccol_assert(false);
@@ -385,6 +417,10 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
   }
 }
 
+/* Public free entry point. Accepts a NULL pointer without asserting (matching
+ * the behaviour of standard free). Walks back from the user pointer to the
+ * internal header using ENTRY_TO_HEADER, verifies the mempool_mark sentinel,
+ * then calls __mempool_free_entry to perform the actual release. */
 void _mempool_free_entry(void *entry) {
   if (!entry) {
     // Let's resemble the dynamic memory allocation approach here.
@@ -411,6 +447,8 @@ void _mempool_free_entry(void *entry) {
   __mempool_free_entry(header->pool_ptr, header);
 }
 
+/* Returns the total number of elements the pool was sized for (free + in-use).
+ * Acquires the read lock when the pool is in multi-threaded mode. */
 size_t mempool_total_capacity(mempool *mp) {
   if (!mp) {
     ccol_assert(false);
@@ -431,6 +469,8 @@ size_t mempool_total_capacity(mempool *mp) {
   return result;
 }
 
+/* Returns the number of pool-owned elements currently in use (total - free).
+ * Does not include dynamic fallback allocations. */
 size_t mempool_used_count(mempool *mp) {
   if (!mp) {
     ccol_assert(false);
@@ -451,6 +491,8 @@ size_t mempool_used_count(mempool *mp) {
   return result;
 }
 
+/* Returns the number of dynamic fallback allocations currently outstanding.
+ * Non-zero means pool entries were exhausted at some point. */
 size_t mempool_dynamic_allocs_count(mempool *mp) {
   if (!mp) {
     ccol_assert(false);
@@ -489,6 +531,10 @@ struct r_mempool {
   size_t smallest_elem_count;
 };
 
+/* Destroys the ranged memory pool. If the fallback policy is
+ * fallback_at_last_exhaustion and outstanding dynamic entries exist, asserts
+ * to expose the leak (same philosophy as _mempool_destroy). Each internal
+ * sub-pool is destroyed individually before the sub-pool array is freed. */
 void _r_mempool_destroy(r_mempool *rmp) {
   if (rmp) {
     if (rmp->fb_policy == fallback_at_last_exhaustion) {
@@ -527,6 +573,11 @@ void _r_mempool_destroy(r_mempool *rmp) {
   }
 }
 
+/* Validates the power-of-two size parameters for an r_mempool and derives the
+ * number of internal sub-pools. The constraint
+ * smallest_elem_count_power_of_two >= (largest - smallest) ensures that each
+ * successively larger sub-pool can have at least one element (dividing the
+ * count by 2 for each doubling of size). Populates rmp fields on success. */
 bool assess_r_mempool_create_inputs(r_mempool *rmp,
                                     uint8_t smallest_size_power_of_two,
                                     uint8_t largest_size_power_of_two,
@@ -557,9 +608,9 @@ bool assess_r_mempool_create_inputs(r_mempool *rmp,
     return false;
   }
 
-  size_t smallest_size = 1 << smallest_size_power_of_two;
-  size_t largest_size = 1 << largest_size_power_of_two;
-  size_t smallest_elem_count = 1 << smallest_elem_count_power_of_two;
+  size_t smallest_size = (size_t)1 << smallest_size_power_of_two;
+  size_t largest_size = (size_t)1 << largest_size_power_of_two;
+  size_t smallest_elem_count = (size_t)1 << smallest_elem_count_power_of_two;
 
   if (largest_size > max_allowed_largest_size ||
       smallest_size < min_allowed_smallest_size) {
@@ -580,6 +631,10 @@ bool assess_r_mempool_create_inputs(r_mempool *rmp,
   return true;
 }
 
+/* Initialises the pseudo_pool embedded in rmp, which acts as a sentinel/tracker
+ * for global dynamic fallback allocations under the fallback_at_last_exhaustion
+ * policy. In that mode the pseudo_pool's active_dynamic_memory_buffer_count
+ * tracks all dynamic entries across all sub-pools. */
 bool init_r_mempool_pseudo_pool(r_mempool *rmp) {
   mem_zero(&rmp->pseudo_pool, sizeof(mempool));
   if (rmp->fb_policy == fallback_at_last_exhaustion) {
@@ -587,6 +642,7 @@ bool init_r_mempool_pseudo_pool(r_mempool *rmp) {
       if (rw_lock_init(rmp->pseudo_pool.lock) != 0) {
         return false;
       }
+      rmp->pseudo_pool.should_use_locks = true;
     }
     rmp->pseudo_pool.fallback_to_dynamic_memory = true;
     rmp->pseudo_pool.mempool_mark = _mempool_mark;
@@ -595,6 +651,10 @@ bool init_r_mempool_pseudo_pool(r_mempool *rmp) {
   return true;
 }
 
+/* Creates all sub-pools ranging from smallest_size to largest_size, each with
+ * half as many elements as the previous (compensating for twice the element
+ * size). The fallback policy per sub-pool is fallback_at_first_exhaustion iff
+ * the r_mempool's overall policy is also first-exhaustion. */
 bool init_r_mempool_internal_pools(r_mempool *rmp, char **err) {
   if (!init_r_mempool_pseudo_pool(rmp)) {
     if (err) {
@@ -604,7 +664,7 @@ bool init_r_mempool_internal_pools(r_mempool *rmp, char **err) {
   }
 
   rmp->mem_pools = (mempool **)_mem_alloc(
-      rmp->m_procs, rmp->number_of_mempools * sizeof(mempool));
+      rmp->m_procs, rmp->number_of_mempools * sizeof(mempool *));
   if (!rmp->mem_pools) {
     // The cleanup will be performed by the caller.
     if (err) {
@@ -612,7 +672,7 @@ bool init_r_mempool_internal_pools(r_mempool *rmp, char **err) {
     }
     return false;
   }
-  mem_zero(rmp->mem_pools, rmp->number_of_mempools * sizeof(mempool));
+  mem_zero(rmp->mem_pools, rmp->number_of_mempools * sizeof(mempool *));
 
   size_t first_size = rmp->smallest_size;
   size_t last_size = rmp->largest_size;
@@ -632,6 +692,11 @@ bool init_r_mempool_internal_pools(r_mempool *rmp, char **err) {
   return true;
 }
 
+/* Builds a lookup table that maps any allocation size (expressed as
+ * (size-1)/smallest_size) to the index of the appropriate sub-pool. This
+ * pre-computation allows r_mempool_alloc_entry to find the right sub-pool in
+ * O(1) instead of scanning. Entries double at each power-of-two boundary
+ * matching the doubling of sub-pool element sizes. */
 bool init_r_mempool_reverse_size_lookup_array(r_mempool *rmp, char **err) {
   rmp->reverse_size_lookup_array = (size_t *)_mem_alloc(
       rmp->m_procs, rmp->largest_size / rmp->smallest_size * sizeof(size_t));
@@ -657,6 +722,10 @@ bool init_r_mempool_reverse_size_lookup_array(r_mempool *rmp, char **err) {
   return true;
 }
 
+/* Creates a ranged memory pool spanning power-of-two sizes from
+ * 2^smallest_size_power_of_two to 2^largest_size_power_of_two bytes. The pool
+ * with the smallest element count holds 2^smallest_elem_count_power_of_two
+ * elements; larger sub-pools hold proportionally fewer elements. */
 r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
                             uint8_t largest_size_power_of_two,
                             uint8_t smallest_elem_count_power_of_two,
@@ -705,6 +774,11 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
   return rmp;
 }
 
+/* Carves the preallocated_buffer into contiguous sub-buffer segments, one per
+ * sub-pool, using the same size/count progression as
+ * init_r_mempool_internal_pools. Asserts that cumulative_size equals
+ * preallocated_buffer_size to ensure the caller has provided a buffer of
+ * exactly the right size. */
 bool init_preallocated_r_mempool_internal_pools(r_mempool *rmp,
                                                 void *preallocated_buffer,
                                                 size_t preallocated_buffer_size,
@@ -717,7 +791,7 @@ bool init_preallocated_r_mempool_internal_pools(r_mempool *rmp,
   }
 
   rmp->mem_pools = (mempool **)_mem_calloc(
-      rmp->m_procs, rmp->number_of_mempools, sizeof(mempool));
+      rmp->m_procs, rmp->number_of_mempools, sizeof(mempool *));
   if (!rmp->mem_pools) {
     // The cleanup will be performed by the caller.
     if (err) {
@@ -760,6 +834,9 @@ bool init_preallocated_r_mempool_internal_pools(r_mempool *rmp,
   return true;
 }
 
+/* Like r_mempool_create but uses an externally supplied buffer for all sub-pool
+ * element storage. The buffer is not freed by the r_mempool; the caller is
+ * responsible for its lifetime. */
 r_mempool *r_mempool_create_from_preallocated_buffer(
     void *buffer, size_t buf_size, uint8_t smallest_size_power_of_two,
     uint8_t largest_size_power_of_two, uint8_t smallest_elem_count_power_of_two,
@@ -807,6 +884,10 @@ r_mempool *r_mempool_create_from_preallocated_buffer(
   return rmp;
 }
 
+/* Allocates a dynamic entry tagged as elem_is_not_a_pool_member through the
+ * pseudo_pool, which acts as a tracker for global fallback allocations under
+ * the fallback_at_last_exhaustion policy. The pseudo_pool itself has no object
+ * buffer; it only maintains the active_dynamic_memory_buffer_count counter. */
 void *mempool_pseudo_alloc_entry(mempool *mp, size_t elem_size) {
   void *result = NULL;
 
@@ -836,6 +917,10 @@ void *mempool_pseudo_alloc_entry(mempool *mp, size_t elem_size) {
   return result;
 }
 
+/* Allocates a buffer of at least size bytes. The reverse_size_lookup_array is
+ * used to find the smallest sub-pool whose element size fits size; if that
+ * sub-pool is exhausted the next larger one is tried (escalation). Only if all
+ * sub-pools are exhausted does the fallback_at_last_exhaustion path kick in. */
 void *r_mempool_alloc_entry(r_mempool *rmp, size_t size) {
   if (!rmp) {
     ccol_assert(false);
@@ -845,13 +930,13 @@ void *r_mempool_alloc_entry(r_mempool *rmp, size_t size) {
     return NULL;
   }
 
-  size_t index = (size - 1) / rmp->smallest_size;
+  size_t pool_index =
+      rmp->reverse_size_lookup_array[(size - 1) / rmp->smallest_size];
 
   void *result = NULL;
 
-  for (; index <= rmp->number_of_mempools; ++index) {
-    result = mempool_alloc_entry(
-        rmp->mem_pools[rmp->reverse_size_lookup_array[index]]);
+  for (; pool_index < rmp->number_of_mempools; ++pool_index) {
+    result = mempool_alloc_entry(rmp->mem_pools[pool_index]);
     if (result) {
       break;
     }
@@ -864,6 +949,7 @@ void *r_mempool_alloc_entry(r_mempool *rmp, size_t size) {
   return result;
 }
 
+/* Allocates and zeroes a buffer of at least size bytes from the r_mempool. */
 void *r_mempool_calloc_entry(r_mempool *rmp, size_t size) {
   void *result = r_mempool_alloc_entry(rmp, size);
 
@@ -874,6 +960,11 @@ void *r_mempool_calloc_entry(r_mempool *rmp, size_t size) {
   return result;
 }
 
+/* Reallocates addr to a buffer of at least size bytes. If the requested size
+ * maps to the same extended element size as the current allocation, the
+ * original pointer is returned unchanged (no copy). Otherwise a new entry is
+ * allocated, the smaller of old/new user sizes is copied, and the old entry is
+ * freed. */
 void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size) {
   if (!rmp) {
     ccol_assert(false);
@@ -898,10 +989,17 @@ void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size) {
       return addr;
     }
 
-    min_user_size =
-        EXTENDED_SIZE_TO_USER_SIZE(header->pool_ptr->extended_elem_size);
-    if (EXTENDED_SIZE_TO_USER_SIZE(new_ext_size) < min_user_size) {
+    if (header->elem_status == elem_is_not_a_pool_member) {
+      // pseudo_pool entries have extended_elem_size = 0; computing
+      // EXTENDED_SIZE_TO_USER_SIZE(0) underflows. Use the new size as
+      // the copy bound — the original per-entry size is not recorded.
       min_user_size = EXTENDED_SIZE_TO_USER_SIZE(new_ext_size);
+    } else {
+      min_user_size =
+          EXTENDED_SIZE_TO_USER_SIZE(header->pool_ptr->extended_elem_size);
+      if (EXTENDED_SIZE_TO_USER_SIZE(new_ext_size) < min_user_size) {
+        min_user_size = EXTENDED_SIZE_TO_USER_SIZE(new_ext_size);
+      }
     }
   }
 
@@ -914,6 +1012,8 @@ void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size) {
   return new_entry;
 }
 
+/* Returns the used element count of the sub-pool that handles allocations of
+ * the given size. Returns 0 for sizes outside the pool's range. */
 size_t r_mempool_used_count(r_mempool *rmp, size_t size) {
   if (!rmp) {
     ccol_assert(false);
@@ -929,6 +1029,8 @@ size_t r_mempool_used_count(r_mempool *rmp, size_t size) {
       rmp->mem_pools[rmp->reverse_size_lookup_array[index]]);
 }
 
+/* Returns the total element capacity of the sub-pool that handles allocations
+ * of the given size. Returns 0 for sizes outside the pool's range. */
 size_t r_mempool_total_capacity(r_mempool *rmp, size_t size) {
   if (!rmp) {
     ccol_assert(false);
@@ -944,6 +1046,10 @@ size_t r_mempool_total_capacity(r_mempool *rmp, size_t size) {
       rmp->mem_pools[rmp->reverse_size_lookup_array[index]]);
 }
 
+/* Returns the number of outstanding dynamic fallback allocations for the
+ * given size. For fallback_at_last_exhaustion, the count is held in the single
+ * pseudo_pool regardless of size. For fallback_at_first_exhaustion, the count
+ * is per-sub-pool. Returns 0 for fallback_disabled or out-of-range sizes. */
 size_t r_mempool_dynamic_allocs_count(r_mempool *rmp, size_t size) {
   if (!rmp) {
     ccol_assert(false);

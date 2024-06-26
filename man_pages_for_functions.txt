@@ -451,10 +451,11 @@ PARAMETERS
        val_pair   Value to associate with key (copied into map)
 
 RETURN VALUE
-       ccol_success           - Insertion succeeded
-       ccol_invalid_args      - chm, key_pair, or val_pair is NULL or size is 0
-       ccol_container_full    - Map has reached max_elem_count
-       ccol_not_enough_memory - Memory allocation failed
+       ccol_success               - New key inserted successfully
+       ccol_key_already_present   - Key already existed; value updated successfully
+       ccol_invalid_args          - chm, key_pair, or val_pair is NULL or size is 0
+       ccol_container_full        - Map has reached max_elem_count
+       ccol_not_enough_memory     - Memory allocation failed
 
 NOTES
        Average O(1) complexity
@@ -733,9 +734,10 @@ PARAMETERS
        val_pair   Value to associate with key (copied into map)
 
 RETURN VALUE
-       ccol_success           - Insertion succeeded
-       ccol_container_full    - Map has reached max_elem_count
-       ccol_not_enough_memory - Memory allocation failed
+       ccol_success               - New key inserted successfully
+       ccol_key_already_present   - Key already existed; value updated successfully
+       ccol_container_full        - Map has reached max_elem_count
+       ccol_not_enough_memory     - Memory allocation failed
 
 NOTES
        O(log n) complexity

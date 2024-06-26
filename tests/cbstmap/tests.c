@@ -110,12 +110,12 @@ TEST(cbst_maps, basic_insertions_and_lookups) {
 
   REQUIRE_EQ(insert_int_to_int(cbmap, 10, 20), ccol_success);
   REQUIRE_EQ(cbmap_elem_count(cbmap), 1);
-  REQUIRE_EQ(insert_int_to_int(cbmap, 10, 30), ccol_success);
+  REQUIRE_EQ(insert_int_to_int(cbmap, 10, 30), ccol_key_already_present);
   REQUIRE_EQ(cbmap_elem_count(cbmap), 1);
 
   REQUIRE_EQ(insert_int_to_int(cbmap, 20, 40), ccol_success);
   REQUIRE_EQ(cbmap_elem_count(cbmap), 2);
-  REQUIRE_EQ(insert_int_to_int(cbmap, 20, 50), ccol_success);
+  REQUIRE_EQ(insert_int_to_int(cbmap, 20, 50), ccol_key_already_present);
   REQUIRE_EQ(cbmap_elem_count(cbmap), 2);
 
   REQUIRE_EQ(get_int_from_int(cbmap, 10, &val), ccol_success);
@@ -140,7 +140,7 @@ TEST(cbst_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
 
   REQUIRE_EQ(insert_int_to_int(cbmap, 10, 20), ccol_success);
   REQUIRE_EQ(cbmap_elem_count(cbmap), 1);
-  REQUIRE_EQ(insert_int_to_int(cbmap, 10, 30), ccol_success);
+  REQUIRE_EQ(insert_int_to_int(cbmap, 10, 30), ccol_key_already_present);
   REQUIRE_EQ(cbmap_elem_count(cbmap), 1);
 
   REQUIRE_EQ(insert_int_to_int(cbmap, 20, 40), ccol_success);

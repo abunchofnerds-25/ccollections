@@ -1049,7 +1049,7 @@ Functions and macros prefixed with underscore(s) are internal and should not be 
 
 - `_mem_alloc()`, `_mem_free()` - Internal memory management
 - `__cvector_destroy()`, `___cbmap_destroy()` - Internal destructors (use macros instead)
-- `___csort_qsort()` - Internal sort implementation (use `csort_sort()` macro)
+- `___csort_merge_sort()` - Internal sort implementation (use `csort_sort()` macro)
 - `_populate_cmap_pair()` - Internal helper for maps
 
 Always use the public macros and functions documented in this README.
@@ -1412,7 +1412,7 @@ free(received.data);
 
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -871,7 +871,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     _populate_cmap_pair(key_pair, key);                               \
     _populate_cmap_pair(val_pair, val);                               \
     ccol_retval_t r = cbmap_insert_elem(hm_name, key_pair, val_pair); \
-    if (r != ccol_success) {                                          \
+    if (r != ccol_success && r != ccol_key_already_present) {         \
       fatal_err("Failed to insert elem - r: %d", r);                  \
     }                                                                 \
   } while (0)

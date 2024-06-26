@@ -334,12 +334,12 @@ TEST(chash_maps, basic_insertions_and_lookups) {
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 2), ccol_success);
   REQUIRE_EQ(chmap_elem_count(chmap), 1);
-  REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
+  REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_key_already_present);
   REQUIRE_EQ(chmap_elem_count(chmap), 1);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 4), ccol_success);
   REQUIRE_EQ(chmap_elem_count(chmap), 2);
-  REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
+  REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_key_already_present);
   REQUIRE_EQ(chmap_elem_count(chmap), 2);
 
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_success);
@@ -367,12 +367,12 @@ TEST(chash_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 2), ccol_success);
   REQUIRE_EQ(chmap_elem_count(chmap), 1);
-  REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
+  REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_key_already_present);
   REQUIRE_EQ(chmap_elem_count(chmap), 1);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 4), ccol_success);
   REQUIRE_EQ(chmap_elem_count(chmap), 2);
-  REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
+  REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_key_already_present);
   REQUIRE_EQ(chmap_elem_count(chmap), 2);
 
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_success);
@@ -436,7 +436,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
         chmap_insert_elem(
             chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
-        ccol_success);
+        ccol_key_already_present);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
@@ -462,7 +462,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
         chmap_insert_elem(
             chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
-        ccol_success);
+        ccol_key_already_present);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
@@ -488,7 +488,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
         chmap_insert_elem(
             chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
-        ccol_success);
+        ccol_key_already_present);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
@@ -514,7 +514,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
         chmap_insert_elem(
             chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
-        ccol_success);
+        ccol_key_already_present);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(

@@ -300,7 +300,7 @@ DESCRIPTION
        mergesort algorithm. Works with any collection type (arrays, vectors,
        custom containers) as long as getter and comparison functions are provided.
 
-       This is a wrapper macro around ___csort_qsort().
+       This is a wrapper macro around ___csort_merge_sort().
 
 PARAMETERS
        collection       Pointer to collection to sort
@@ -443,7 +443,9 @@ SYNOPSIS
 
 DESCRIPTION
        Type-safe wrapper for chmap_insert_elem() that automatically handles
-       type conversion and cmap_pair creation. Calls fatal_err() on failure.
+       type conversion and cmap_pair creation. If the key already exists the
+       value is updated silently. Calls fatal_err() only on a true failure
+       (i.e. ccol_not_enough_memory or ccol_container_full).
 
 PARAMETERS
        hm_name  Hash map to insert into
@@ -451,7 +453,7 @@ PARAMETERS
        val      Value to associate with key
 
 NOTES
-       Terminates program on failure
+       Terminates program only on true failure, not on existing-key update
        Automatically takes address of key and value
        Handles both value types and string types correctly
 
@@ -642,7 +644,9 @@ SYNOPSIS
 
 DESCRIPTION
        Type-safe wrapper for cbmap_insert_elem() that automatically handles
-       type conversion and cmap_pair creation. Calls fatal_err() on failure.
+       type conversion and cmap_pair creation. If the key already exists the
+       value is updated silently. Calls fatal_err() only on a true failure
+       (i.e. ccol_not_enough_memory or ccol_container_full).
        Tree is automatically rebalanced after insertion.
 
 PARAMETERS
@@ -651,7 +655,7 @@ PARAMETERS
        val      Value to associate with key
 
 NOTES
-       Terminates program on failure
+       Terminates program only on true failure, not on existing-key update
        Automatically takes address of key and value
        Handles both value types and string types correctly
        Tree is automatically rebalanced after insertion

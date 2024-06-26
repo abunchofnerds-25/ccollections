@@ -916,6 +916,46 @@ TEST(r_mempools, c_exhaust_all_fallback_disabled) {
   r_mempool_destroy(rmp);
 }
 
+TEST(r_mempools, exhaust_last_subpool_returns_null_fallback_disabled) {
+  // Regression test for the off-by-one in r_mempool_alloc_entry.
+  // The loop condition was `pool_index <= number_of_mempools` instead of
+  // `pool_index < number_of_mempools`.  When the last sub-pool (index
+  // number_of_mempools-1) was full, the loop incremented pool_index to
+  // number_of_mempools and tried to dereference mem_pools[number_of_mempools],
+  // which is NULL (the array is only valid up to index number_of_mempools-1),
+  // causing an assertion crash instead of returning NULL.
+  //
+  // We target pool 2 (64-byte slots, 32 entries) directly so that the cascade
+  // starts at the last valid pool index and the bug manifests on the very first
+  // over-limit increment.
+  r_mempool *rmp = r_mempool_create(4, 6, 7, fallback_disabled, false, NULL, NULL);
+
+  // 2^7 smallest / 2^2 scale-down = 32 slots in the 64-byte pool
+  size_t capacity = 32;
+  void *ptrs[32];
+
+  for (size_t i = 0; i < capacity; ++i) {
+    ptrs[i] = r_mempool_alloc_entry(rmp, 64);
+    REQUIRE_NE((void *)ptrs[i], NULL);
+  }
+
+  REQUIRE_EQ(r_mempool_used_count(rmp, 64), r_mempool_total_capacity(rmp, 64));
+  REQUIRE_EQ(r_mempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(r_mempool_used_count(rmp, 32), 0);
+
+  // This must return NULL, not crash.
+  void *tmp = r_mempool_alloc_entry(rmp, 64);
+  REQUIRE_EQ((void *)tmp, NULL);
+
+  for (size_t i = 0; i < capacity; ++i) {
+    r_mempool_free_entry(ptrs[i]);
+  }
+
+  REQUIRE_EQ(r_mempool_used_count(rmp, 64), 0);
+
+  r_mempool_destroy(rmp);
+}
+
 TEST(r_mempools, try_exhausting_with_fallback_at_first_exhaustion) {
   r_mempool *rmp = r_mempool_create(4, 6, 7, fallback_at_first_exhaustion, false, NULL, NULL);
 

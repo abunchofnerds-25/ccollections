@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -37,6 +37,11 @@ struct cvector {
   void *data_ptr;
 };
 
+/* Releases all heap memory owned by the vector, including its data buffer and
+ * the container struct itself. If a custom allocator was provided at creation,
+ * the allocator struct is freed using its own free function before the vector
+ * struct is freed – this ordering matters because the free function pointer
+ * must still be accessible when freeing the container. */
 void __cvector_destroy(cvec v) {
   if (v) {
     _mem_free(v->m_procs, v->data_ptr);
@@ -51,6 +56,9 @@ void __cvector_destroy(cvec v) {
   }
 }
 
+/* Guards cvector_create_full against logically invalid arguments. An elem_size
+ * of zero would corrupt every byte-offset calculation, so it is rejected
+ * early rather than propagating a silent bad state. */
 bool verify_cvector_create_inputs(size_t elem_size,
                                   ccol_memmgmt_procs_t *mmgt_procs,
                                   char **err) {
@@ -68,6 +76,11 @@ bool verify_cvector_create_inputs(size_t elem_size,
   return true;
 }
 
+/* Allocates and initialises a new vector with the given element size and an
+ * optional custom allocator. The initial backing buffer holds minimum_capacity
+ * elements. On any allocation failure the partially constructed vector is torn
+ * down and NULL is returned; *err receives a static error string when provided.
+ */
 cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
                          char **err) {
   if (!verify_cvector_create_inputs(elem_size, mmgt_procs, err)) {
@@ -108,8 +121,13 @@ cvec cvector_create_full(size_t elem_size, ccol_memmgmt_procs_t *mmgt_procs,
   return v;
 }
 
+/* Returns the custom allocator struct stored in the vector, or NULL if the
+ * default malloc/free path is in use. */
 ccol_memmgmt_procs_t *cvector_get_mprocs(cvec v) { return v->m_procs; }
 
+/* Doubles the backing buffer capacity. The overflow guard prevents wrapping
+ * when capacity is already near the architecture limit. On reallocation
+ * failure the original pointer is restored so the vector remains usable. */
 bool scale_the_cvector_size_up(cvec v) {
   if (!v) {
     ccol_assert(false);
@@ -131,6 +149,9 @@ bool scale_the_cvector_size_up(cvec v) {
   return true;
 }
 
+/* Halves the backing buffer capacity, but never below minimum_capacity. On
+ * reallocation failure the original pointer is silently restored – shrinking
+ * is best-effort and a failure does not corrupt any existing data. */
 void scale_the_cvector_size_down(cvec v) {
   if (!v) {
     ccol_assert(false);
@@ -151,6 +172,9 @@ void scale_the_cvector_size_down(cvec v) {
   v->capacity /= scaling_factor;
 }
 
+/* Appends a copy of *new_elem at the end of the vector, growing the backing
+ * buffer by scaling_factor if the current capacity is exhausted. Returns
+ * ccol_not_enough_memory if the growth reallocation fails. */
 ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
   if (!v) {
     ccol_assert(false);
@@ -183,6 +207,10 @@ ccol_retval_t cvector_push_back(cvec v, const void *new_elem) {
   return result;
 }
 
+/* Removes the last element and copies it into *target_elem. When the element
+ * count drops below capacity / minimum_capacity the buffer is shrunk to avoid
+ * holding on to excessive memory. Returns ccol_container_empty on an empty
+ * vector without touching *target_elem. */
 ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
   if (!v) {
     ccol_assert(false);
@@ -210,6 +238,11 @@ ccol_retval_t cvector_pop_back(cvec v, void *target_elem) {
   return result;
 }
 
+/* Pre-allocates enough backing storage for at least new_capacity_count
+ * elements. The requested count is rounded up to the nearest power of two
+ * (minimum minimum_capacity) so that subsequent push_back calls hit a
+ * predictable capacity boundary. Does nothing if current capacity already
+ * satisfies the request. */
 bool cvector_reserve(cvec v, size_t new_capacity_count) {
   if (!v) {
     ccol_assert(false);
@@ -246,6 +279,9 @@ bool cvector_reserve(cvec v, size_t new_capacity_count) {
   return true;
 }
 
+/* Bulk-appends elem_count elements from arr_ptr to the vector, reserving
+ * additional capacity when needed. The total element count overflow check
+ * catches both a size_t wrap-around and exceeding max_elem_count. */
 bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count) {
   if (!v) {
     ccol_assert(false);
@@ -277,6 +313,9 @@ bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count) {
   return true;
 }
 
+/* Appends all elements of v_from to v_to by delegating to cvector_append_array.
+ * Both vectors must have the same elem_size; a mismatch is a fatal assertion
+ * because it indicates a programming error at the call site. */
 bool cvector_append_cvector(cvec v_to, cvec v_from) {
   if (!v_to || !v_from || v_to->elem_size != v_from->elem_size) {
     ccol_assert(false);
@@ -285,6 +324,9 @@ bool cvector_append_cvector(cvec v_to, cvec v_from) {
   return cvector_append_array(v_to, v_from->data_ptr, v_from->elem_count);
 }
 
+/* Returns a raw pointer to the first element of the contiguous backing buffer.
+ * Callers must not hold onto this pointer across any push_back or append
+ * call, as those may realloc the buffer to a different address. */
 void *cvector_data_ptr(cvec v) {
   if (!v) {
     ccol_assert(false);
@@ -293,6 +335,9 @@ void *cvector_data_ptr(cvec v) {
   return v->data_ptr;
 }
 
+/* Returns a pointer to the element at the given index, or NULL if the index is
+ * out of range. The empty-vector guard (elem_count > 0) ensures index is never
+ * compared against an uninitialised zero elem_count. */
 void *cvector_at(cvec v, size_t index) {
   if (!v) {
     ccol_assert(false);
@@ -305,6 +350,7 @@ void *cvector_at(cvec v, size_t index) {
   return NULL;
 }
 
+/* Returns the number of live elements currently stored in the vector. */
 size_t cvector_elem_count(cvec v) {
   if (!v) {
     ccol_assert(false);
@@ -313,6 +359,9 @@ size_t cvector_elem_count(cvec v) {
   return v->elem_count;
 }
 
+/* Clears all elements and attempts to shrink the backing buffer to
+ * minimum_capacity to reclaim memory. The element count is set to zero
+ * regardless of whether the reallocation succeeds. */
 void cvector_reset(cvec v) {
   if (!v) {
     ccol_assert(false);
@@ -331,6 +380,8 @@ void cvector_reset(cvec v) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
+/* Exposes the internal backing-buffer capacity for white-box unit tests that
+ * verify the grow/shrink thresholds. Not part of the public API. */
 size_t cvector_get_capacity(cvec v) {
   if (!v) {
     ccol_assert(false);

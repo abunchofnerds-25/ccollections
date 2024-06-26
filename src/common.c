@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -91,6 +91,11 @@ static uint64_t uint64_powers_of_two[POWERS_OF_TWO_LEN] = {
     4611686018427387904ULL,
     9223372036854775808ULL};
 
+/* Returns the smallest power of two that is >= _input, using binary search
+ * over a precomputed table. The table covers all 64-bit powers of two, so the
+ * result is architecture-dependent (capped at the pointer-size maximum).
+ * Returns ccol_invalid_size when _input exceeds the largest representable
+ * power of two for the current architecture. */
 size_t find_nearest_gte_power_of_two(size_t _input) {
   uint64_t input = _input;
   size_t result = 0;
@@ -317,6 +322,10 @@ typedef struct s32 {
   uint64_t _3_;
 } __attribute__((packed)) s32;
 
+/* Performs a copy of exactly n bytes (1-32) without calling into the C library.
+ * Each case uses a packed struct assignment so the compiler emits the minimum
+ * number of store instructions. This is always inlined to keep the switch
+ * inside the hot path of mem_cpy rather than adding a call frame. */
 inline __attribute__((always_inline)) void mem_cpy_small(void* dst,
                                                          const void* src,
                                                          size_t n) {
@@ -451,6 +460,10 @@ inline __attribute__((always_inline)) void mem_cpy_small(void* dst,
   }
 }
 
+/* Fast memcpy wrapper. For small buffers (<= 32 bytes) the alignment of both
+ * pointers is checked: if both satisfy uint64_t alignment the inlined
+ * struct-assignment fast path is taken; otherwise the C library memcpy handles
+ * the misaligned case. Larger buffers always delegate to memcpy. */
 inline __attribute__((always_inline)) void mem_cpy(void* dst, const void* src,
                                                    size_t n) {
   if (n <= SMALL_CHUNKS_SIZE) {
@@ -470,7 +483,8 @@ inline __attribute__((always_inline)) void mem_cpy(void* dst, const void* src,
   memcpy(dst, src, n);
 }
 
-// Direct inlined small zero implementations
+/* Zeroes exactly n bytes (1-32) without calling into the C library, mirroring
+ * the same packed struct technique used by mem_cpy_small. Always inlined. */
 inline __attribute__((always_inline)) void mem_zero_small(void* dst, size_t n) {
   // Handle common small sizes with direct assignments
   switch (n) {
@@ -603,6 +617,9 @@ inline __attribute__((always_inline)) void mem_zero_small(void* dst, size_t n) {
   }
 }
 
+/* Fast memset-to-zero wrapper using the same alignment + size dispatch strategy
+ * as mem_cpy: small aligned buffers use mem_zero_small, everything else falls
+ * through to memset. */
 void mem_zero(void* dst, size_t n) {
   if (n <= SMALL_CHUNKS_SIZE) {
     // Check alignment for fast path

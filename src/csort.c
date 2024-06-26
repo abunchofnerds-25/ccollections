@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -31,6 +31,8 @@ SOFTWARE.
 /*                      DEFAULT COMPARISON PROCEDURES                         */
 /* ========================================================================== */
 
+/* Compares two C-string pointers (const char **) lexicographically via strcmp.
+ * Used as the default comparator when the element type is ccol_char_ptr. */
 int csort_default_string_comparison_proc(const void *first,
                                          const void *second) {
   return strcmp(*(const char **)first, *(const char **)second);
@@ -43,6 +45,10 @@ int csort_default_string_comparison_proc(const void *first,
            (*(const type *)first < *(const type *)second);            \
   }
 
+/* The macro above expands to a family of typed comparison functions for all
+ * standard C numeric types. Each function dereferences its void* arguments to
+ * the concrete type and returns -1/0/+1 using the (a>b)-(a<b) idiom which
+ * avoids undefined behaviour from integer subtraction on edge values. */
 ___csort__define_default_integral_comparison_proc(char, char);
 ___csort__define_default_integral_comparison_proc(short, short);
 ___csort__define_default_integral_comparison_proc(int, int);
@@ -216,10 +222,13 @@ static void csort_mergesort_iterative(void *col, int low, int high,
 /*                         PUBLIC SORT INTERFACE                              */
 /* ========================================================================== */
 
-void ___csort_qsort(void *col, size_t length, size_t elem_size,
-                    csort_item_getter_proc_t getter_proc,
-                    ccol_comparison_proc_t comparison_proc,
-                    ccol_memmgmt_procs_t *mprocs) {
+/* Public entry point for csort. Validates inputs, then delegates to the
+ * iterative bottom-up mergesort. Despite the name inherited from early
+ * development, this is a stable mergesort, not quicksort. */
+void ___csort_merge_sort(void *col, size_t length, size_t elem_size,
+                         csort_item_getter_proc_t getter_proc,
+                         ccol_comparison_proc_t comparison_proc,
+                         ccol_memmgmt_procs_t *mprocs) {
   if (!col) {
     return;
   }

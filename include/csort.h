@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -133,10 +133,10 @@ int csort_default_string_comparison_proc(const void *first, const void *second);
  *
  * @see csort_sort
  */
-void ___csort_qsort(void *col, size_t length, size_t elem_size,
-                    csort_item_getter_proc_t getter_proc,
-                    ccol_comparison_proc_t comparison_proc,
-                    ccol_memmgmt_procs_t *mprocs);
+void ___csort_merge_sort(void *col, size_t length, size_t elem_size,
+                         csort_item_getter_proc_t getter_proc,
+                         ccol_comparison_proc_t comparison_proc,
+                         ccol_memmgmt_procs_t *mprocs);
 
 /* ========================================================================== */
 /*                         PUBLIC SORT INTERFACE                              */
@@ -156,7 +156,7 @@ void ___csort_qsort(void *col, size_t length, size_t elem_size,
  * @param comparison_proc Function to compare two elements
  * @param mprocs Memory management procedures (NULL for default malloc/free)
  *
- * @note This is a macro wrapper around ___csort_qsort
+ * @note This is a macro wrapper around ___csort_merge_sort
  * @note Sort is stable (preserves order of equal elements)
  * @note Time complexity: O(n log n) in all cases
  * @note Space complexity: O(n) for temporary merge buffer
@@ -183,9 +183,10 @@ void ___csort_qsort(void *col, size_t length, size_t elem_size,
  * @see csort_get_default_comparison_proc
  * @see cvec_sort (convenience wrapper for vectors)
  */
-#define csort_sort(col, length, elem_size, getter_proc, comparison_proc, \
-                   mprocs)                                               \
-  (___csort_qsort(col, length, elem_size, getter_proc, comparison_proc, mprocs))
+#define csort_sort(col, length, elem_size, getter_proc, comparison_proc,     \
+                   mprocs)                                                   \
+  (___csort_merge_sort(col, length, elem_size, getter_proc, comparison_proc, \
+                       mprocs))
 
 /* ========================================================================== */
 /*                   COMPARISON PROCEDURE DECLARATIONS                        */

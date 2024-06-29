@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -181,10 +181,11 @@ void _mempool_destroy(mempool *mp);
  *
  * @param mp Memory pool to destroy (will be set to NULL after destruction)
  *
- * @warning Pointers to the entries still allocated from the pool become
- * dangling
- * @warning Does not free dynamically allocated entries - they need to be freed
- * first
+ * @warning Unfreed, dynamically allocated pointers via the fallback memory
+ * management mechanism will make this function assert to make sure a potential
+ * leak does not go unnoticed. If no fallback is requested during the creation
+ * of this pool, such an assert does not happen. As a rule of thumb, the
+ * allocated buffers should always be freed.
  * @note Safe to call with NULL pointer
  * @note For preallocated pools, user must manage buffer lifetime
  */
@@ -228,7 +229,7 @@ void *mempool_alloc_entry(mempool *mp);
  * @return Pointer to zero-initialized entry, or NULL if pool exhausted and no
  * fallback
  *
- * @note O(1) allocation + memset cost
+ * @note O(1) allocation + mem_set cost
  * @note Only zeros user-visible portion (not internal header)
  * @note Thread-safe if pool was created with single_threaded=false
  *
@@ -513,8 +514,11 @@ void _r_mempool_destroy(r_mempool *rmp);
  * @param rmp Ranged memory pool to destroy (will be set to NULL after
  * destruction)
  *
- * @warning Pointers to the entries still allocated from the pool become
- * dangling
+ * @warning Unfreed, dynamically allocated pointers via the fallback memory
+ * management mechanism will make this function assert to make sure a potential
+ * leak does not go unnoticed. If no fallback is requested during the creation
+ * of this pool, such an assert does not happen. As a rule of thumb, the
+ * allocated buffers should always be freed.
  * @note Safe to call with NULL pointer
  * @note For preallocated pools, user must manage buffer lifetime
  */

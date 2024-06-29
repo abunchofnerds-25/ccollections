@@ -221,8 +221,8 @@ TEST(chash_maps, find_nearest_gte_power_of_two) {
                                9223372036854775808UL,
                                9223372036854775808UL,
                                9223372036854775808UL,
-                               9223372036854775808UL,
-                               9223372036854775808UL};
+                               ccol_invalid_size,
+                               ccol_invalid_size};
 
   int len = sizeof(test_inputs) / sizeof(size_t);
   REQUIRE_EQ(len, sizeof(expected_outputs) / sizeof(size_t));
@@ -334,12 +334,12 @@ TEST(chash_maps, basic_insertions_and_lookups) {
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 2), ccol_success);
   REQUIRE_EQ(chmap_elem_count(chmap), 1);
-  REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
+  REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_key_already_present);
   REQUIRE_EQ(chmap_elem_count(chmap), 1);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 4), ccol_success);
   REQUIRE_EQ(chmap_elem_count(chmap), 2);
-  REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
+  REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_key_already_present);
   REQUIRE_EQ(chmap_elem_count(chmap), 2);
 
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_success);
@@ -367,12 +367,12 @@ TEST(chash_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 2), ccol_success);
   REQUIRE_EQ(chmap_elem_count(chmap), 1);
-  REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
+  REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_key_already_present);
   REQUIRE_EQ(chmap_elem_count(chmap), 1);
 
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 4), ccol_success);
   REQUIRE_EQ(chmap_elem_count(chmap), 2);
-  REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
+  REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_key_already_present);
   REQUIRE_EQ(chmap_elem_count(chmap), 2);
 
   REQUIRE_EQ(get_int_from_string(chmap, "key1", &val), ccol_success);
@@ -436,7 +436,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
         chmap_insert_elem(
             chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
-        ccol_success);
+        ccol_key_already_present);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
@@ -462,7 +462,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
         chmap_insert_elem(
             chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
-        ccol_success);
+        ccol_key_already_present);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
@@ -488,7 +488,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
         chmap_insert_elem(
             chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
-        ccol_success);
+        ccol_key_already_present);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
@@ -514,7 +514,7 @@ TEST(chash_maps, insert_values_with_different_sizes) {
         chmap_insert_elem(
             chmap, &(cmap_pair){.ptr = (void *)key1, .size = strlen(key1)},
             &(cmap_pair){.ptr = (void *)&val, .size = sizeof(val)}),
-        ccol_success);
+        ccol_key_already_present);
 
     REQUIRE_EQ(
         chmap_get_elem_ref(
@@ -1298,7 +1298,7 @@ typedef struct helper_struct {
 } helper_struct;
 
 void helper_function(chmap chm) {
-  chmap_enable_local_macros(chm, char *, helper_struct);
+  chmap_redeclare(chm, char *, helper_struct);
 
   helper_struct d1 = (helper_struct){.a = 3, .b = 4};
   helper_struct d2 = (helper_struct){.a = 5, .b = 6};
@@ -1339,6 +1339,44 @@ void helper_function(chmap chm) {
   chmap_get_ptr(chm, "d2")->b--;
   chmap_get_ptr(chm, "d3")->a++;
   chmap_get_ptr(chm, "d3")->b--;
+}
+
+TEST(chash_maps, for_each_macro) {
+  chmap_construct(hm, int, int);
+
+  for (int i = 1; i <= 5; ++i) {
+    int val = i * 10;
+    chmap_insert(hm, i, val);
+  }
+
+  int sum = 0;
+  int count = 0;
+  chmap_for_each(hm, it, {
+    sum += *chmap_iter_val_ptr(it);
+    ++count;
+  });
+
+  REQUIRE_EQ(count, 5);
+  REQUIRE_EQ(sum, 150);  // 10+20+30+40+50
+
+  chmap_destroy(hm);
+}
+
+TEST(chash_maps, construct_scoped_lifecycle) {
+  {
+    chmap_construct_scoped(hm, int, int);
+    REQUIRE_NE((void *)hm, NULL);
+
+    for (int i = 1; i <= 5; ++i) {
+      int val = i * 100;
+      chmap_insert(hm, i, val);
+    }
+    for (int i = 1; i <= 5; ++i) {
+      REQUIRE_EQ(chmap_get(hm, i), i * 100);
+    }
+    REQUIRE_EQ(chmap_elem_count(hm), 5);
+    // hm is automatically destroyed at end of block (no chmap_destroy needed)
+  }
 }
 
 TEST(chash_maps, re_enabled_local_chm_macros) {

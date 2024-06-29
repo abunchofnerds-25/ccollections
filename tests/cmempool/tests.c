@@ -448,6 +448,29 @@ TEST(cmempools, c_allocations_and_deallocations_fallback_enabled) {
   REQUIRE_EQ((void *)mp, NULL);
 }
 
+TEST(cmempools, calloc_entry_zeroes_memory) {
+  // Verify that mempool_calloc_entry returns memory that is actually zeroed,
+  // including when the slot was previously used with non-zero content.
+  const size_t elem_size = sizeof(long long);
+  mempool *mp = mempool_create(4, elem_size, false, false, NULL, NULL);
+  REQUIRE_NE((void *)mp, NULL);
+
+  long long *slot = mempool_alloc_entry(mp);
+  REQUIRE_NE((void *)slot, NULL);
+  memset(slot, 0xFF, elem_size);
+  mempool_free_entry(slot);
+
+  slot = mempool_calloc_entry(mp);
+  REQUIRE_NE((void *)slot, NULL);
+
+  const char zeroes[sizeof(long long)] = {0};
+  REQUIRE_EQ(memcmp(slot, zeroes, elem_size), 0);
+
+  mempool_free_entry(slot);
+  mempool_destroy(mp);
+  REQUIRE_EQ((void *)mp, NULL);
+}
+
 // Preallocated memory pool tests
 DECLARE_PREALLOCATED_MEMPOOL_BUFFER(preallocated_mp_buffer, 32768, 256);
 char *preallocated_ptrs[32768] = {0}; // 8388608 / 256 = 32768
@@ -889,6 +912,46 @@ TEST(r_mempools, c_exhaust_all_fallback_disabled) {
   for (size_t size = 16; size <= 64; size *= 2) {
     REQUIRE_EQ(r_mempool_used_count(rmp, size), 0);
   }
+
+  r_mempool_destroy(rmp);
+}
+
+TEST(r_mempools, exhaust_last_subpool_returns_null_fallback_disabled) {
+  // Regression test for the off-by-one in r_mempool_alloc_entry.
+  // The loop condition was `pool_index <= number_of_mempools` instead of
+  // `pool_index < number_of_mempools`.  When the last sub-pool (index
+  // number_of_mempools-1) was full, the loop incremented pool_index to
+  // number_of_mempools and tried to dereference mem_pools[number_of_mempools],
+  // which is NULL (the array is only valid up to index number_of_mempools-1),
+  // causing an assertion crash instead of returning NULL.
+  //
+  // We target pool 2 (64-byte slots, 32 entries) directly so that the cascade
+  // starts at the last valid pool index and the bug manifests on the very first
+  // over-limit increment.
+  r_mempool *rmp = r_mempool_create(4, 6, 7, fallback_disabled, false, NULL, NULL);
+
+  // 2^7 smallest / 2^2 scale-down = 32 slots in the 64-byte pool
+  size_t capacity = 32;
+  void *ptrs[32];
+
+  for (size_t i = 0; i < capacity; ++i) {
+    ptrs[i] = r_mempool_alloc_entry(rmp, 64);
+    REQUIRE_NE((void *)ptrs[i], NULL);
+  }
+
+  REQUIRE_EQ(r_mempool_used_count(rmp, 64), r_mempool_total_capacity(rmp, 64));
+  REQUIRE_EQ(r_mempool_used_count(rmp, 16), 0);
+  REQUIRE_EQ(r_mempool_used_count(rmp, 32), 0);
+
+  // This must return NULL, not crash.
+  void *tmp = r_mempool_alloc_entry(rmp, 64);
+  REQUIRE_EQ((void *)tmp, NULL);
+
+  for (size_t i = 0; i < capacity; ++i) {
+    r_mempool_free_entry(ptrs[i]);
+  }
+
+  REQUIRE_EQ(r_mempool_used_count(rmp, 64), 0);
 
   r_mempool_destroy(rmp);
 }

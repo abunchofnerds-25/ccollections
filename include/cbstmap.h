@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -36,8 +36,7 @@ SOFTWARE.
  * - O(log n) insert, delete, and search operations
  * - In-order iteration (sorted key order)
  * - Custom comparison function support
- * - Signed/unsigned integer key handling
- * - Type-safe macros for common operations
+ * - Type-safe macros for common operations with signed/unsigned key handling
  *
  * Key characteristics:
  * - AVL tree maintains balance factor |height(left) - height(right)| ≤ 1
@@ -64,7 +63,8 @@ typedef cbinarymap *cbmap;
  * Creates a new self-balancing binary search tree map with specified key
  * signedness, custom memory management, and custom comparison function.
  *
- * @param keys_are_signed If true, treat integer keys as signed for comparison
+ * @param keys_are_signed_ints If true, treat integer keys as signed for
+ * comparison
  * @param mmgmt_procs Custom memory management procedures, or NULL for default
  * malloc/free
  * @param custom_comparison_proc Custom comparison function, or NULL for default
@@ -74,7 +74,7 @@ typedef cbinarymap *cbmap;
  *
  * @note Default comparison for unsigned: memcmp(key1, key2, size)
  * @note Default comparison for signed: proper signed integer comparison (1, 2,
- * 4, 8 bytes)
+ * 4, 8 bytes only, when used for other sizes the behaviour is undefined)
  * @note Custom comparison receives void* pointers to key data
  * @note Map maintains AVL balance: |height(left) - height(right)| ≤ 1
  * @note All operations are O(log n) for balanced tree
@@ -85,7 +85,8 @@ typedef cbinarymap *cbmap;
  * @see cbmap_create_ch
  * @see cbmap_destroy
  */
-cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t *mmgmt_procs,
+cbmap cbmap_create_full(bool keys_are_signed_ints,
+                        ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char **err);
 
@@ -95,14 +96,14 @@ cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t *mmgmt_procs,
  * Convenience wrapper for cbmap_create_full() with default memory management
  * and default comparison (based on key signedness).
  *
- * @param keys_are_signed If true, treat integer keys as signed
+ * @param keys_are_signed_ints If true, treat integer keys as signed
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created BST map, or NULL on failure
  */
 static inline __attribute__((always_inline)) cbmap
-cbmap_create(bool keys_are_signed, char **err) {
-  return cbmap_create_full(keys_are_signed, NULL, NULL, err);
+cbmap_create(bool keys_are_signed_ints, char **err) {
+  return cbmap_create_full(keys_are_signed_ints, NULL, NULL, err);
 }
 
 /**
@@ -111,15 +112,15 @@ cbmap_create(bool keys_are_signed, char **err) {
  * Convenience wrapper for cbmap_create_full() with custom memory management
  * but default comparison.
  *
- * @param keys_are_signed If true, treat integer keys as signed
+ * @param keys_are_signed_ints If true, treat integer keys as signed
  * @param mmgmt_procs Custom memory management procedures
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created BST map, or NULL on failure
  */
 static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
-    bool keys_are_signed, ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
-  return cbmap_create_full(keys_are_signed, mmgmt_procs, NULL, err);
+    bool keys_are_signed_ints, ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
+  return cbmap_create_full(keys_are_signed_ints, mmgmt_procs, NULL, err);
 }
 
 /**
@@ -128,19 +129,20 @@ static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
  * Convenience wrapper for cbmap_create_full() with custom comparison function
  * but default memory management.
  *
- * @param keys_are_signed If true, treat integer keys as signed (ignored if
+ * @param keys_are_signed_ints If true, treat integer keys as signed (ignored if
  * custom_comparison_proc provided)
  * @param custom_comparison_proc Custom comparison function
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created BST map, or NULL on failure
  *
- * @note keys_are_signed is ignored when custom_comparison_proc is provided
+ * @note keys_are_signed_ints is ignored when custom_comparison_proc is provided
  */
 static inline __attribute__((always_inline)) cbmap
-cbmap_create_ch(bool keys_are_signed,
+cbmap_create_ch(bool keys_are_signed_ints,
                 ccol_comparison_proc_t custom_comparison_proc, char **err) {
-  return cbmap_create_full(keys_are_signed, NULL, custom_comparison_proc, err);
+  return cbmap_create_full(keys_are_signed_ints, NULL, custom_comparison_proc,
+                           err);
 }
 
 /* ========================================================================== */
@@ -366,7 +368,7 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err);
     char *err;                                         \
     cmap_iterator *iter = cbmap_begin_iter(cbm, &err); \
     if (err != NULL) {                                 \
-      assert(false);                                   \
+      ccol_assert(false);                              \
     }                                                  \
     iter;                                              \
   })
@@ -537,12 +539,12 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * Example:
  * @code
  * void process(cbmap map) {
- *   cbmap_enable_local_macros(map, int, char*);
+ *   cbmap_redeclare(map, int, char*);
  *   cbmap_insert(map, 42, "hello");
  * }
  * @endcode
  */
-#define cbmap_enable_local_macros(hm_name, key_t, val_t)                     \
+#define cbmap_redeclare(hm_name, key_t, val_t)                               \
   typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL
 
@@ -565,6 +567,11 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */
+
+#define cbmap_declare_scoped(hm_name, key_t, val_t)                          \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy)
 
 /**
  * @brief Initialize a BST map with defaults
@@ -696,6 +703,19 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     }                                                                        \
   } while (0)
 
+#define cbmap_construct_scoped(hm_name, key_t, val_t)                        \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy);                          \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = cbmap_create_full(                                             \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, NULL, &err); \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
 /**
  * @brief Declare and initialize a BST map with custom memory management
  *
@@ -712,6 +732,20 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name =                                                                \
+        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
+                          mmgmt_procs, NULL, &err);                          \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
+#define cbmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs)        \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
   do {                                                                       \
     char *err = NULL;                                                        \
     hm_name =                                                                \
@@ -748,6 +782,21 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     }                                                                        \
   } while (0)
 
+#define cbmap_construct_cc_scoped(hm_name, key_t, val_t,                     \
+                                  custom_comparison_proc)                    \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name =                                                                \
+        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
+                          NULL, custom_comparison_proc, &err);               \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
 /**
  * @brief Declare and initialize a BST map with full customization
  *
@@ -767,6 +816,21 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name =                                                                \
+        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
+                          mmgmt_procs, custom_comparison_proc, &err);        \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
+#define cbmap_construct_full_scoped(hm_name, key_t, val_t, mmgmt_procs,      \
+                                    custom_comparison_proc)                  \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
   do {                                                                       \
     char *err = NULL;                                                        \
     hm_name =                                                                \
@@ -807,7 +871,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     _populate_cmap_pair(key_pair, key);                               \
     _populate_cmap_pair(val_pair, val);                               \
     ccol_retval_t r = cbmap_insert_elem(hm_name, key_pair, val_pair); \
-    if (r != ccol_success) {                                          \
+    if (r != ccol_success && r != ccol_key_already_present) {         \
       fatal_err("Failed to insert elem - r: %d", r);                  \
     }                                                                 \
   } while (0)
@@ -921,3 +985,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     }                                                                          \
     val;                                                                       \
   })
+
+#define cbmap_for_each(cbm, it, block)                                      \
+  do {                                                                      \
+    cbmap_iter_declare(cbm, it);                                            \
+    for (it = cbmap_begin(cbm); it != NULL; it = cbmap_iter_next(it)) block \
+  } while (0)

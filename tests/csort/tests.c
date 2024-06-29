@@ -130,7 +130,7 @@ TEST(csort, cvector_float_sort) {
   REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
-    cvector_push_back(cvec, &(float){((float)rand() / RAND_MAX * 10)});
+    cvector_push_back(cvec, &(float){((float)rand() / (float)RAND_MAX * 10)});
   }
 
   REQUIRE_EQ(cvector_elem_count(cvec), num_sample);
@@ -328,6 +328,47 @@ TEST(csort, cvector_custom_test_struct_sort) {
 
   cvector_destroy(cvec);
   REQUIRE_EQ((void *)cvec, NULL);
+}
+
+TEST(csort, empty_vector_sort) {
+  cvec_construct(v, int);
+  REQUIRE_EQ(cvector_elem_count(v), 0);
+  cvec_sort(v);
+  REQUIRE_EQ(cvector_elem_count(v), 0);
+  cvec_destroy(v);
+}
+
+TEST(csort, single_element_sort) {
+  cvec_construct(v, int);
+  cvec_push_rvalue(v, 42);
+  cvec_sort(v);
+  REQUIRE_EQ(cvector_elem_count(v), 1);
+  REQUIRE_EQ(cvec_at(v, 0), 42);
+  cvec_destroy(v);
+}
+
+TEST(csort, already_sorted_stays_sorted) {
+  cvec_construct(v, int);
+  for (int i = 0; i < 10; ++i) {
+    cvec_push_rvalue(v, i);
+  }
+  cvec_sort(v);
+  for (int i = 1; i < 10; ++i) {
+    REQUIRE_LE(cvec_at(v, i - 1), cvec_at(v, i));
+  }
+  cvec_destroy(v);
+}
+
+TEST(csort, reverse_sorted_input) {
+  cvec_construct(v, int);
+  for (int i = 9; i >= 0; --i) {
+    cvec_push_rvalue(v, i);
+  }
+  cvec_sort(v);
+  for (int i = 1; i < 10; ++i) {
+    REQUIRE_LE(cvec_at(v, i - 1), cvec_at(v, i));
+  }
+  cvec_destroy(v);
 }
 
 void *c_int_array_getter_proc_t(void *collection, size_t index) {

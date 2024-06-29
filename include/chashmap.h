@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -41,7 +41,7 @@ SOFTWARE.
  * - Linear probing with Fibonacci hashing for integers
  * - Load factor thresholds: 0.70 (grow) / 0.25 (shrink)
  * - Zero allocations per entry (contiguous array)
- * - Excellent cache locality and memory efficiency
+ * - Good cache locality and memory efficiency
  * - Excludes long double (can be >8 bytes on some architectures)
  *
  * **Separate chaining** (used for non-integral types or types >8 bytes):
@@ -602,12 +602,12 @@ static inline void ___chmap_destroy(chmap *chm) {
  * Example:
  * @code
  * void process(chmap map) {
- *   chmap_enable_local_macros(map, int, char*);
+ *   chmap_redeclare(map, int, char*);
  *   chmap_insert(map, 42, "hello");
  * }
  * @endcode
  */
-#define chmap_enable_local_macros(hm_name, key_t, val_t)                     \
+#define chmap_redeclare(hm_name, key_t, val_t)                               \
   typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL
 
@@ -630,6 +630,11 @@ static inline void ___chmap_destroy(chmap *chm) {
   typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
   chmap hm_name /* _ccol_destructor(___chmap_destroy) */
+
+#define chmap_declare_scoped(hm_name, key_t, val_t)                          \
+  typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
+  chmap hm_name _ccol_destructor(___chmap_destroy)
 
 /**
  * @brief Initialize a hash map with full customization
@@ -686,6 +691,23 @@ static inline void ___chmap_destroy(chmap *chm) {
   typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
   chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;             \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = chmap_create_full(                                             \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
+        custom_hashing_proc, &err);                                          \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
+#define chmap_construct_full_scoped(hm_name, key_t, val_t, mmgmt_procs,      \
+                                    custom_hashing_proc)                     \
+  typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
+  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                   \
   do {                                                                       \
     char *err = NULL;                                                        \
     hm_name = chmap_create_full(                                             \
@@ -766,6 +788,21 @@ static inline void ___chmap_destroy(chmap *chm) {
     }                                                                        \
   } while (0)
 
+#define chmap_construct_scoped(hm_name, key_t, val_t)                        \
+  typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
+  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                   \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = chmap_create(                                                  \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), &err);       \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
 /**
  * @brief Initialize a hash map with custom memory management
  *
@@ -807,6 +844,22 @@ static inline void ___chmap_destroy(chmap *chm) {
   typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
   chmap hm_name /* _ccol_destructor(___chmap_destroy) */ = NULL;             \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = chmap_create_mp(                                               \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                   \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
+        &err);                                                               \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
+  } while (0)
+
+#define chmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs)        \
+  typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL; \
+  typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL; \
+  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                   \
   do {                                                                       \
     char *err = NULL;                                                        \
     hm_name = chmap_create_mp(                                               \
@@ -871,6 +924,22 @@ static inline void ___chmap_destroy(chmap *chm) {
     }                                                                        \
   } while (0)
 
+#define chmap_construct_ch_scoped(hm_name, key_t, val_t, custom_hashing_proc) \
+  typeof(key_t) *hm_name##__chm_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(val_t) *hm_name##__chm_val_type_var __attribute__((unused)) = NULL;  \
+  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL;                    \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = chmap_create_ch(                                                \
+        DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,                                    \
+        determine_ccol_data_type(*hm_name##__chm_key_type_var),               \
+        determine_ccol_data_type(*hm_name##__chm_val_type_var),               \
+        custom_hashing_proc, &err);                                           \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
+  } while (0)
+
 /* ========================================================================== */
 /*                    TYPE-SAFE OPERATION MACROS                              */
 /* ========================================================================== */
@@ -907,7 +976,7 @@ static inline void ___chmap_destroy(chmap *chm) {
     _populate_cmap_pair(key_pair, key);                               \
     _populate_cmap_pair(val_pair, val);                               \
     ccol_retval_t r = chmap_insert_elem(hm_name, key_pair, val_pair); \
-    if (r != ccol_success) {                                          \
+    if (r != ccol_success && r != ccol_key_already_present) {         \
       fatal_err("Failed to insert elem - r: %d", r);                  \
     }                                                                 \
   } while (0)
@@ -1043,3 +1112,9 @@ static inline void ___chmap_destroy(chmap *chm) {
     }                                                                          \
     val;                                                                       \
   })
+
+#define chmap_for_each(chm, it, block)                                      \
+  do {                                                                      \
+    chmap_iter_declare(chm, it);                                            \
+    for (it = chmap_begin(chm); it != NULL; it = chmap_iter_next(it)) block \
+  } while (0)

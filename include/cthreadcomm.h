@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -57,7 +57,7 @@ typedef struct channel channel;
  * and is responsible for freeing the memory.
  */
 typedef struct c_message_t {
-  void *data;  /**< Pointer to message data (ownership is transferred on send) */
+  void *data; /**< Pointer to message data (ownership is transferred on send) */
   size_t size; /**< Size of data in bytes */
 } c_message_t;
 
@@ -114,9 +114,9 @@ void __circular_queue_destroy(circular_queue *cq);
 /**
  * @brief Destroy a circular queue and set pointer to NULL
  *
- * Frees all resources associated with the queue. Any messages still in the
- * queue will have their data pointers leaked - drain the queue before
- * destroying.
+ * Frees all resources associated with the queue. If there are any messages
+ * still in the queue, the function __circular_queue_destroy which is called
+ * by this macro will assert - drain the queue before destroying.
  *
  * @param cq Circular queue to destroy (will be set to NULL after destruction)
  *
@@ -379,8 +379,9 @@ void __dynamic_queue_destroy(dynamic_queue *dq);
  * @brief Destroy a dynamic queue and set pointer to NULL
  *
  * Frees all resources associated with the queue including all linked list
- * nodes. Any messages still in the queue will have their data pointers leaked -
- * drain the queue before destroying.
+ * nodes. If there are any messages still in the queue, the function
+ * __dynamic_queue_destroy which is called by this macro will assert - drain
+ * the queue before destroying.
  *
  * @param dq Dynamic queue to destroy (will be set to NULL after destruction)
  *
@@ -589,8 +590,9 @@ void __channel_destroy(channel *ch);
  * @brief Destroy a channel and set pointer to NULL
  *
  * Frees all resources associated with the channel including both internal
- * circular queues. Any messages still in either queue will have their data
- * pointers leaked - drain both directions before destroying.
+ * circular queues. If there are any messages still in any of the underlying
+ * queues, the function __channel_destroy which is called by this macro will
+ * assert - drain the both directions before destroying.
  *
  * @param ch Channel to destroy (will be set to NULL after destruction)
  *

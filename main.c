@@ -1,5 +1,6 @@
 #include <cbstmap.h>
 #include <chashmap.h>
+#include <cstring.h>
 #include <cvector.h>
 #include <math.h>
 #include <stdio.h>
@@ -27,7 +28,7 @@ void use_nested_types_hmap_of_cvecs() {
   chmap_iter_declare(hmap, it);
   for (it = chmap_begin(hmap); it != NULL; it = chmap_iter_next(it)) {
     cvec v = *chmap_iter_val_ptr(it);
-    cvec_enable_local_macros(v, int);
+    cvec_redeclare(v, int);
     int size = cvec_size(v);
     for (int i = 0; i < size; ++i) {
       int k = -1;
@@ -75,6 +76,21 @@ void use_chmap() {
     }
     ++elem_count;
   }
+
+  assert(elem_count == 21);
+
+  elem_count = 0;
+  chmap_for_each(hmap, it, {
+    if (strcmp(*chmap_iter_key_ptr(it), "ten") == 0) {
+      assert(*chmap_iter_val_ptr(it) == 10);
+    } else {
+      char expected_key[16];
+      snprintf(expected_key, sizeof(expected_key), "%d",
+               *chmap_iter_val_ptr(it));
+      assert(strcmp(*chmap_iter_key_ptr(it), expected_key) == 0);
+    }
+    ++elem_count;
+  });
 
   assert(elem_count == 21);
 
@@ -126,6 +142,11 @@ void use_cbmap() {
            ((*cbmap_iter_key_ptr(iter)) * (*cbmap_iter_key_ptr(iter))));
   }
 
+  cbmap_for_each(bmap, iter, {
+    assert(*cbmap_iter_val_ptr(iter) ==
+           ((*cbmap_iter_key_ptr(iter)) * (*cbmap_iter_key_ptr(iter))));
+  });
+
   for (int i = -30; i <= 10; ++i) {
     cbmap_remove(bmap, i);
   }
@@ -148,6 +169,57 @@ void use_cvec() {
   }
 
   cvec_destroy(vec);
+
+  cvec_construct_scoped(v, int);
+}
+
+void use_cstring() {
+  cstr_construct(s, "world");
+  cstr_prepend(s, "Hello, ");
+  cstr_append(s, "!");
+  assert(cstr_equals(s, "Hello, world!"));
+  assert(cstr_length(s) == 13);
+  assert(cstr_starts_with(s, "Hello"));
+  assert(cstr_ends_with(s, "world!"));
+
+  size_t pos = cstr_find(s, "world");
+  assert(pos == 7);
+
+  cstr sub = cstr_substring(s, 7, 5);
+  assert(cstr_equals(sub, "world"));
+  cstr_destroy(sub);
+
+  cstr_to_upper(s);
+  assert(cstr_equals(s, "HELLO, WORLD!"));
+  cstr_to_lower(s);
+  assert(cstr_equals(s, "hello, world!"));
+
+  cstr_replace(s, "world", "cstrings");
+  assert(cstr_equals(s, "hello, cstrings!"));
+
+  cstr_set(s, "  trimmed  ");
+  cstr_trim(s);
+  assert(cstr_equals(s, "trimmed"));
+
+  cstr_destroy(s);
+
+  cstr_construct(csv, "one,two,three,four");
+  cvec parts = cstr_split(csv, ",", NULL);
+  cvec_redeclare(parts, cstr);
+  assert(cvec_size(parts) == 4);
+  assert(cstr_equals(cvec_at(parts, 0), "one"));
+  assert(cstr_equals(cvec_at(parts, 1), "two"));
+  assert(cstr_equals(cvec_at(parts, 2), "three"));
+  assert(cstr_equals(cvec_at(parts, 3), "four"));
+  for (size_t i = 0; i < cvec_size(parts); ++i) {
+    cstr tok = cvec_at(parts, i);
+    cstr_destroy(tok);
+  }
+  cvec_destroy(parts);
+  cstr_destroy(csv);
+
+  cstr_construct_scoped(scoped, "auto-destroyed");
+  assert(!cstr_is_empty(scoped));
 }
 
 int main() {
@@ -155,5 +227,6 @@ int main() {
   use_cbmap();
   use_cvec();
   use_nested_types_hmap_of_cvecs();
+  use_cstring();
   return 0;
 }

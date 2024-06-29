@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -23,7 +23,6 @@ SOFTWARE.
 */
 
 #include <chashmap.h>
-#include <memops.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -36,8 +35,14 @@ const size_t minimum_scale_down_threshold =
 #define OPEN_ADDR_MIN_LOAD_FACTOR 0.25
 #define INLINE_STORAGE_THRESHOLD 23  // SSO: Small String Optimization threshold
 
-// Fibonacci hashing for integers
+// Fibonacci hashing for integers - architecture dependent
+#if SIZE_MAX == UINT64_MAX  // 64-bit architecture
 #define FIBONACCI_HASH_MULTIPLIER 11400714819323198485ULL
+#elif SIZE_MAX == UINT32_MAX  // 32-bit architecture
+#define FIBONACCI_HASH_MULTIPLIER 2654435769U
+#else
+#error "Unsupported architecture: SIZE_MAX is neither UINT32_MAX nor UINT64_MAX"
+#endif
 
 /* ========================================================================== */
 /*                    OPEN ADDRESSING STRUCTURES                              */
@@ -48,7 +53,7 @@ typedef struct {
   uint64_t key_data;
   uint64_t val_data;
   uint8_t metadata;  // bit 0: occupied, bit 1: deleted
-} oa_slot;
+} __attribute__((packed)) oa_slot;
 
 #define SLOT_OCCUPIED 0x01
 #define SLOT_DELETED 0x02
@@ -64,6 +69,7 @@ typedef struct {
   ccol_hashing_proc_t custom_hashing_proc;
   ccol_data_type key_type;
   ccol_data_type val_type;
+  cmap_pair get_accessor;
 } open_addr_map;
 
 /* ========================================================================== */
@@ -87,12 +93,12 @@ typedef struct chmap_entry {
   size_t val_size;
   bool val_is_inline;
   ccol_memmgmt_procs_t* m_procs;
-} chmap_entry;
+} __attribute__((packed)) chmap_entry;
 
 typedef struct dllist_ref_node {
   struct dllist_ref_node* prev;
   struct dllist_ref_node* next;
-} dllist_ref_node;
+} __attribute__((packed)) dllist_ref_node;
 
 typedef struct llist_node {
   struct llist_node* next;
@@ -134,6 +140,9 @@ struct chashmap {
 /*                      TYPE DETECTION                                        */
 /* ========================================================================== */
 
+/* Returns true for all ccol_data_type values that fit in ≤ 8 bytes and can be
+ * hashed with Fibonacci hashing (integers, floats, and pointers). Used to
+ * decide which map backend to instantiate at creation time. */
 static inline bool is_type_integral(ccol_data_type type) {
   switch (type) {
     case ccol_char:
@@ -156,6 +165,9 @@ static inline bool is_type_integral(ccol_data_type type) {
   }
 }
 
+/* Returns the byte size of the corresponding C type for a ccol_data_type enum
+ * value. Defaults to 8 for unknown types so open-addressing slots are always
+ * large enough to store a pointer-sized value. */
 static inline size_t get_type_size(ccol_data_type type) {
   switch (type) {
     case ccol_char:
@@ -186,6 +198,10 @@ static inline size_t get_type_size(ccol_data_type type) {
   }
 }
 
+/* Returns true when both key and value types are integral and ≤ 8 bytes, which
+ * is the condition under which the compact open-addressing backend is selected.
+ * Otherwise the separate-chaining backend is used to handle arbitrary-size keys
+ * and values including strings and user-defined structs. */
 static inline bool should_use_open_addressing(ccol_data_type key_type,
                                               ccol_data_type val_type) {
   return is_type_integral(key_type) && is_type_integral(val_type) &&
@@ -196,58 +212,56 @@ static inline bool should_use_open_addressing(ccol_data_type key_type,
 /*                         HASH FUNCTIONS                                     */
 /* ========================================================================== */
 
-#define XXH_PRIME64_1 0x9E3779B185EBCA87ULL
-#define XXH_PRIME64_2 0xC2B2AE3D27D4EB4FULL
-#define XXH_PRIME64_3 0x165667B19E3779F9ULL
-#define XXH_PRIME64_4 0x85EBCA77C2B2AE63ULL
-#define XXH_PRIME64_5 0x27D4EB2F165667C5ULL
+// XXHash constants adapted for both 32-bit and 64-bit
+#if SIZE_MAX == UINT64_MAX  // 64-bit architecture
 
-static inline uint64_t xxh_rotl64(uint64_t x, int r) {
+#define XXH_PRIME_1 0x9E3779B185EBCA87ULL
+#define XXH_PRIME_2 0xC2B2AE3D27D4EB4FULL
+#define XXH_PRIME_3 0x165667B19E3779F9ULL
+#define XXH_PRIME_4 0x85EBCA77C2B2AE63ULL
+#define XXH_PRIME_5 0x27D4EB2F165667C5ULL
+
+/* Rotate-left helper for the XXHash mixing step. */
+static inline size_t xxh_rotl(size_t x, int r) {
   return (x << r) | (x >> (64 - r));
 }
 
-static inline uint64_t xxh_round(uint64_t acc, uint64_t input) {
-  acc += input * XXH_PRIME64_2;
-  acc = xxh_rotl64(acc, 31);
-  acc *= XXH_PRIME64_1;
+/* Accumulates one 8-byte block into the XXHash running state acc. */
+static inline size_t xxh_round(size_t acc, size_t input) {
+  acc += input * XXH_PRIME_2;
+  acc = xxh_rotl(acc, 31);
+  acc *= XXH_PRIME_1;
   return acc;
 }
 
-static inline uint64_t xxh_avalanche(uint64_t hash) {
+/* Finalisation mix that ensures every bit of input affects every bit of the
+ * output hash (avalanche effect). Applied once at the end of xxhash64_buffer.
+ */
+static inline size_t xxh_avalanche(size_t hash) {
   hash ^= hash >> 33;
-  hash *= XXH_PRIME64_2;
+  hash *= XXH_PRIME_2;
   hash ^= hash >> 29;
-  hash *= XXH_PRIME64_3;
+  hash *= XXH_PRIME_3;
   hash ^= hash >> 32;
   return hash;
 }
 
-static inline uint64_t xxhash64_int64(uint64_t value, uint64_t seed) {
-  uint64_t hash = seed + XXH_PRIME64_5 + 8;
-  hash ^= xxh_round(0, value);
-  hash = xxh_rotl64(hash, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
-  return xxh_avalanche(hash);
-}
-
-static inline uint64_t xxhash64_int32(uint32_t value, uint64_t seed) {
-  uint64_t hash = seed + XXH_PRIME64_5 + 4;
-  hash ^= value * XXH_PRIME64_1;
-  hash = xxh_rotl64(hash, 23) * XXH_PRIME64_2 + XXH_PRIME64_3;
-  return xxh_avalanche(hash);
-}
-
-static inline uint64_t xxhash64_buffer(const void* input, size_t len,
-                                       uint64_t seed) {
+/* Hashes an arbitrary-length byte buffer using the XXHash64 algorithm (adapted
+ * for both 32-bit and 64-bit architectures). The seed parameter allows
+ * different hash domains. Used for non-integral key types in the
+ * separate-chaining backend. */
+static inline size_t xxhash64_buffer(const void* input, size_t len,
+                                     size_t seed) {
   const uint8_t* p = (const uint8_t*)input;
   const uint8_t* const end = p + len;
-  uint64_t hash;
+  size_t hash;
 
   if (len >= 32) {
     const uint8_t* const limit = end - 32;
-    uint64_t v1 = seed + XXH_PRIME64_1 + XXH_PRIME64_2;
-    uint64_t v2 = seed + XXH_PRIME64_2;
-    uint64_t v3 = seed + 0;
-    uint64_t v4 = seed - XXH_PRIME64_1;
+    size_t v1 = seed + XXH_PRIME_1 + XXH_PRIME_2;
+    size_t v2 = seed + XXH_PRIME_2;
+    size_t v3 = seed + 0;
+    size_t v4 = seed - XXH_PRIME_1;
 
     do {
       v1 = xxh_round(v1, *(uint64_t*)p);
@@ -260,49 +274,137 @@ static inline uint64_t xxhash64_buffer(const void* input, size_t len,
       p += 8;
     } while (p <= limit);
 
-    hash = xxh_rotl64(v1, 1) + xxh_rotl64(v2, 7) + xxh_rotl64(v3, 12) +
-           xxh_rotl64(v4, 18);
+    hash =
+        xxh_rotl(v1, 1) + xxh_rotl(v2, 7) + xxh_rotl(v3, 12) + xxh_rotl(v4, 18);
     hash ^= xxh_round(0, v1);
-    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = hash * XXH_PRIME_1 + XXH_PRIME_4;
     hash ^= xxh_round(0, v2);
-    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = hash * XXH_PRIME_1 + XXH_PRIME_4;
     hash ^= xxh_round(0, v3);
-    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = hash * XXH_PRIME_1 + XXH_PRIME_4;
     hash ^= xxh_round(0, v4);
-    hash = hash * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = hash * XXH_PRIME_1 + XXH_PRIME_4;
   } else {
-    hash = seed + XXH_PRIME64_5;
+    hash = seed + XXH_PRIME_5;
   }
 
   hash += len;
 
   while (p + 8 <= end) {
-    uint64_t k1 = xxh_round(0, *(uint64_t*)p);
+    size_t k1 = xxh_round(0, *(uint64_t*)p);
     hash ^= k1;
-    hash = xxh_rotl64(hash, 27) * XXH_PRIME64_1 + XXH_PRIME64_4;
+    hash = xxh_rotl(hash, 27) * XXH_PRIME_1 + XXH_PRIME_4;
     p += 8;
   }
 
   if (p + 4 <= end) {
-    hash ^= (uint64_t)(*(uint32_t*)p) * XXH_PRIME64_1;
-    hash = xxh_rotl64(hash, 23) * XXH_PRIME64_2 + XXH_PRIME64_3;
+    hash ^= (size_t)(*(uint32_t*)p) * XXH_PRIME_1;
+    hash = xxh_rotl(hash, 23) * XXH_PRIME_2 + XXH_PRIME_3;
     p += 4;
   }
 
   while (p < end) {
-    hash ^= (*p) * XXH_PRIME64_5;
-    hash = xxh_rotl64(hash, 11) * XXH_PRIME64_1;
+    hash ^= (*p) * XXH_PRIME_5;
+    hash = xxh_rotl(hash, 11) * XXH_PRIME_1;
     p++;
   }
 
   return xxh_avalanche(hash);
 }
 
-// Fast Fibonacci hashing for integers
-static inline size_t hash_int_fast(uint64_t key) {
+#else  // 32-bit architecture
+
+#define XXH_PRIME_1 0x9E3779B1U
+#define XXH_PRIME_2 0x85EBCA77U
+#define XXH_PRIME_3 0xC2B2AE3DU
+#define XXH_PRIME_4 0x27D4EB2FU
+#define XXH_PRIME_5 0x165667B1U
+
+/* 32-bit rotate-left helper for the XXHash mixing step. */
+static inline size_t xxh_rotl(size_t x, int r) {
+  return (x << r) | (x >> (32 - r));
+}
+
+/* 32-bit accumulation round for XXHash state. */
+static inline size_t xxh_round(size_t acc, size_t input) {
+  acc += input * XXH_PRIME_2;
+  acc = xxh_rotl(acc, 13);
+  acc *= XXH_PRIME_1;
+  return acc;
+}
+
+/* 32-bit avalanche finaliser for XXHash. */
+static inline size_t xxh_avalanche(size_t hash) {
+  hash ^= hash >> 15;
+  hash *= XXH_PRIME_2;
+  hash ^= hash >> 13;
+  hash *= XXH_PRIME_3;
+  hash ^= hash >> 16;
+  return hash;
+}
+
+/* 32-bit variant of xxhash64_buffer. Processes data in 4-byte chunks instead
+ * of 8-byte chunks to match the narrower register width. */
+static inline size_t xxhash64_buffer(const void* input, size_t len,
+                                     size_t seed) {
+  const uint8_t* p = (const uint8_t*)input;
+  const uint8_t* const end = p + len;
+  size_t hash;
+
+  if (len >= 16) {
+    const uint8_t* const limit = end - 16;
+    size_t v1 = seed + XXH_PRIME_1 + XXH_PRIME_2;
+    size_t v2 = seed + XXH_PRIME_2;
+    size_t v3 = seed + 0;
+    size_t v4 = seed - XXH_PRIME_1;
+
+    do {
+      v1 = xxh_round(v1, *(uint32_t*)p);
+      p += 4;
+      v2 = xxh_round(v2, *(uint32_t*)p);
+      p += 4;
+      v3 = xxh_round(v3, *(uint32_t*)p);
+      p += 4;
+      v4 = xxh_round(v4, *(uint32_t*)p);
+      p += 4;
+    } while (p <= limit);
+
+    hash =
+        xxh_rotl(v1, 1) + xxh_rotl(v2, 7) + xxh_rotl(v3, 12) + xxh_rotl(v4, 18);
+  } else {
+    hash = seed + XXH_PRIME_5;
+  }
+
+  hash += len;
+
+  while (p + 4 <= end) {
+    hash += (*(uint32_t*)p) * XXH_PRIME_3;
+    hash = xxh_rotl(hash, 17) * XXH_PRIME_4;
+    p += 4;
+  }
+
+  while (p < end) {
+    hash += (*p) * XXH_PRIME_5;
+    hash = xxh_rotl(hash, 11) * XXH_PRIME_1;
+    p++;
+  }
+
+  return xxh_avalanche(hash);
+}
+
+#endif
+
+/* Fibonacci hashing: multiplies key by the golden-ratio-derived constant to
+ * achieve excellent bit distribution with a single multiply. The constant is
+ * architecture-specific (64-bit or 32-bit) to match the native word size. */
+static inline size_t hash_int_fast(size_t key) {
   return key * FIBONACCI_HASH_MULTIPLIER;
 }
 
+/* Dispatches to the appropriate hash function based on key type. Integral and
+ * float types use Fibonacci hashing on their bit pattern; everything else
+ * (strings, structs, pointer-to-data) uses xxhash64_buffer. A custom hashing
+ * proc overrides all built-in strategies when provided. */
 static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
                                    ccol_data_type key_type,
                                    ccol_hashing_proc_t custom_proc) {
@@ -314,27 +416,50 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
   switch (key_type) {
     case ccol_char:
     case ccol_unsigned_char:
-      return hash_int_fast(*(uint8_t*)key_ptr);
+      return hash_int_fast((size_t)*(uint8_t*)key_ptr);
     case ccol_short:
     case ccol_unsigned_short:
-      return hash_int_fast(*(uint16_t*)key_ptr);
+      return hash_int_fast((size_t)*(uint16_t*)key_ptr);
     case ccol_int:
     case ccol_unsigned_int:
-      return hash_int_fast(*(uint32_t*)key_ptr);
+      return hash_int_fast((size_t)*(uint32_t*)key_ptr);
     case ccol_long:
     case ccol_unsigned_long:
+#if SIZE_MAX == UINT64_MAX
+      return hash_int_fast((size_t)*(uint64_t*)key_ptr);
+#else
+      return hash_int_fast((size_t)*(uint32_t*)key_ptr);
+#endif
     case ccol_long_long:
-    case ccol_unsigned_long_long:
-      return hash_int_fast(*(uint64_t*)key_ptr);
+    case ccol_unsigned_long_long: {
+#if SIZE_MAX == UINT64_MAX
+      return hash_int_fast((size_t)*(uint64_t*)key_ptr);
+#else
+      // On 32-bit, hash the 64-bit value by combining high and low parts
+      uint64_t val = *(uint64_t*)key_ptr;
+      uint32_t low = (uint32_t)val;
+      uint32_t high = (uint32_t)(val >> 32);
+      return hash_int_fast((size_t)(low ^ high));
+#endif
+    }
     case ccol_float: {
       uint32_t bits;
-      memcpy(&bits, key_ptr, 4);
-      return hash_int_fast(bits);
+      mem_cpy(&bits, key_ptr, 4);
+      return hash_int_fast((size_t)bits);
     }
     case ccol_double: {
+#if SIZE_MAX == UINT64_MAX
       uint64_t bits;
-      memcpy(&bits, key_ptr, 8);
-      return hash_int_fast(bits);
+      mem_cpy(&bits, key_ptr, 8);
+      return hash_int_fast((size_t)bits);
+#else
+      // On 32-bit, hash the 64-bit double by combining parts
+      uint64_t bits;
+      mem_cpy(&bits, key_ptr, 8);
+      uint32_t low = (uint32_t)bits;
+      uint32_t high = (uint32_t)(bits >> 32);
+      return hash_int_fast((size_t)(low ^ high));
+#endif
     }
     default:
       return xxhash64_buffer(key_ptr, key_size, 0);
@@ -345,11 +470,17 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
 /*                   OPEN ADDRESSING IMPLEMENTATION                           */
 /* ========================================================================== */
 
+/* Compares the key stored in a slot against key_ptr byte-for-byte. The key is
+ * stored inline in slot->key_data (up to 8 bytes), so memcmp directly against
+ * that field works for all supported integral key sizes. */
 static inline bool oa_keys_equal(const oa_slot* slot, const void* key_ptr,
                                  size_t key_size) {
   return memcmp(&slot->key_data, key_ptr, key_size) == 0;
 }
 
+/* Allocates and initialises the open-addressing map struct and its slot array.
+ * All slots are zeroed via calloc so their metadata bytes start as 0
+ * (neither SLOT_OCCUPIED nor SLOT_DELETED), which is the empty sentinel. */
 static open_addr_map* oa_create(size_t capacity, ccol_data_type key_type,
                                 ccol_data_type val_type, size_t key_size,
                                 size_t val_size, ccol_memmgmt_procs_t* m_procs,
@@ -377,6 +508,10 @@ static open_addr_map* oa_create(size_t capacity, ccol_data_type key_type,
   return map;
 }
 
+/* Resizes the slot array to new_capacity and reinserts all live entries.
+ * Deleted slots are not carried over so the deleted_count resets to zero,
+ * which reduces probing length after many deletions. The hash is recomputed
+ * for each entry because the slot array does not store hash values. */
 static void oa_rehash(open_addr_map* map, size_t new_capacity) {
   oa_slot* old_slots = map->slots;
   size_t old_capacity = map->capacity;
@@ -417,12 +552,18 @@ static void oa_rehash(open_addr_map* map, size_t new_capacity) {
   _mem_free(map->m_procs, old_slots);
 }
 
+/* Inserts or updates a key-value pair using linear probing. The load factor
+ * (count + deleted) / capacity is checked before insertion; exceeding
+ * OPEN_ADDR_MAX_LOAD_FACTOR triggers a 2× rehash. Deleted slots encountered
+ * during probing are reused so they don't accumulate without bound. */
 static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
                                const cmap_pair* val_pair) {
   double load_factor =
       (double)(map->count + map->deleted_count) / map->capacity;
   if (load_factor > OPEN_ADDR_MAX_LOAD_FACTOR) {
-    oa_rehash(map, map->capacity * 2);
+    if ((map->capacity * 2) <= max_power_of_two_size_t) {
+      oa_rehash(map, map->capacity * 2);
+    }
   }
 
   // Set val_size on first insert to match actual value size
@@ -467,7 +608,7 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
         !(map->slots[index].metadata & SLOT_DELETED) &&
         oa_keys_equal(&map->slots[index], key_pair->ptr, key_pair->size)) {
       mem_cpy(&map->slots[index].val_data, val_pair->ptr, val_pair->size);
-      return ccol_success;
+      return ccol_key_already_present;
     }
 
     index = (index + 1) % map->capacity;
@@ -476,6 +617,11 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
   return ccol_container_full;
 }
 
+/* Looks up key_pair using linear probing. An empty slot (no OCCUPIED or DELETED
+ * bit) terminates the search immediately – this is safe because insertions
+ * never leave a gap between a key and its probe chain. Returns a pointer to a
+ * file-static cmap_pair holding the slot's value address; callers must not
+ * store this pointer across any mutating operation. */
 static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
                             cmap_pair** val_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
@@ -498,10 +644,9 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
     if ((map->slots[index].metadata & SLOT_OCCUPIED) &&
         !(map->slots[index].metadata & SLOT_DELETED) &&
         oa_keys_equal(&map->slots[index], key_pair->ptr, key_pair->size)) {
-      static cmap_pair temp_pair;
-      temp_pair.ptr = &map->slots[index].val_data;
-      temp_pair.size = map->val_size;
-      *val_pair = &temp_pair;
+      map->get_accessor.ptr = &map->slots[index].val_data;
+      map->get_accessor.size = map->val_size;
+      *val_pair = &map->get_accessor;
       return ccol_success;
     }
 
@@ -511,6 +656,9 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
   return ccol_key_not_found;
 }
 
+/* Marks the matching slot DELETED (tombstone) rather than clearing it, so that
+ * probe chains through the slot remain intact. If the load factor after
+ * deletion falls below OPEN_ADDR_MIN_LOAD_FACTOR the table is halved. */
 static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
@@ -545,6 +693,9 @@ static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
   return ccol_key_not_found;
 }
 
+/* Frees the slot array and the map struct. Does not free the m_procs pointer
+ * itself; that is done by the unified __chmap_destroy since the same procs
+ * copy is shared between the map struct and its fields. */
 static void oa_destroy(open_addr_map* map) {
   if (map) {
     _mem_free(map->m_procs, map->slots);
@@ -552,17 +703,20 @@ static void oa_destroy(open_addr_map* map) {
   }
 }
 
+/* Clears all entries by replacing the slot array with a freshly zeroed one.
+ * If new_capacity is 0, the existing capacity is reused. */
 static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
   if (new_capacity == 0) {
     new_capacity = map->capacity;
   }
 
-  _mem_free(map->m_procs, map->slots);
-  map->slots =
+  oa_slot* new_slots =
       (oa_slot*)_mem_calloc(map->m_procs, new_capacity, sizeof(oa_slot));
-  if (!map->slots) {
+  if (!new_slots) {
     return ccol_not_enough_memory;
   }
+  _mem_free(map->m_procs, map->slots);
+  map->slots = new_slots;
 
   map->capacity = new_capacity;
   map->count = 0;
@@ -578,6 +732,9 @@ static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
 #define dllistRefNodePtr2LlistNodePtr(tracker) \
   (llist_node*)((uint8_t*)tracker - offsetof(llist_node, dllist_refs))
 
+/* Prepends node to the doubly-linked list rooted at *head. Insertion-order
+ * traversal is maintained by the dllist so the iterator visits nodes in the
+ * order they were first inserted. */
 static void attach_node_to_dllist(dllist_ref_node** head,
                                   dllist_ref_node* node) {
   node->prev = NULL;
@@ -591,6 +748,8 @@ static void attach_node_to_dllist(dllist_ref_node** head,
   }
 }
 
+/* Removes node from the doubly-linked list without freeing it. The three-way
+ * pointer update handles all cases: head node, tail node, and middle node. */
 static void detach_node_from_dllist(dllist_ref_node** head,
                                     dllist_ref_node* node) {
   if (node->next) {
@@ -604,6 +763,10 @@ static void detach_node_from_dllist(dllist_ref_node** head,
   }
 }
 
+/* Frees the key and value buffers for an entry (if they are heap-allocated
+ * rather than inline), detaches the node from the insertion-order dllist, then
+ * frees the node struct itself. Passing NULL for head_of_all_elems skips the
+ * dllist detach (used during full-map teardown where the list is abandoned). */
 static void sc_destroy_llist_node(dllist_ref_node** head_of_all_elems,
                                   llist_node* elem) {
   if (elem) {
@@ -617,7 +780,7 @@ static void sc_destroy_llist_node(dllist_ref_node** head_of_all_elems,
       detach_node_from_dllist(head_of_all_elems, &elem->dllist_refs);
     }
     if (elem->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = elem->m_procs->free;
+      ccol_free_t free_func = elem->m_procs->free;
       free_func(elem);
     } else {
       mem_free(elem);
@@ -625,6 +788,11 @@ static void sc_destroy_llist_node(dllist_ref_node** head_of_all_elems,
   }
 }
 
+/* Allocates a new llist_node and copies key and value data into it. Both key
+ * and value are stored inline (SSO: ≤ 23 bytes) or in a separate heap buffer
+ * (> 23 bytes). The accessor cmap_pair structs are set to point into whichever
+ * storage was chosen so callers always go through a stable pointer. The node is
+ * prepended to the insertion-order dllist on success. */
 static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
                                         chmap_entry* data, const void* key_ptr,
                                         const void* val_ptr) {
@@ -677,6 +845,9 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
   return new_elem;
 }
 
+/* Compares a node's key against key_ptr. The size check is a fast-reject;
+ * for 4- and 8-byte keys integer comparison is used instead of memcmp to
+ * allow the compiler to emit a single load+compare instruction. */
 static inline bool sc_compare_keys(const llist_node* node, const void* key_ptr,
                                    size_t key_size) {
   if (node->data.key_size != key_size) return false;
@@ -695,6 +866,9 @@ static inline bool sc_compare_keys(const llist_node* node, const void* key_ptr,
   }
 }
 
+/* Linear search through a bucket's singly-linked chain. Returns the matching
+ * node or NULL. Chains are expected to be short (O(1) average) due to the
+ * bucket scaling strategy. */
 static llist_node* sc_find_in_llist(llist_node* head, const void* key_ptr,
                                     size_t key_size) {
   llist_node* tracker = head;
@@ -707,6 +881,10 @@ static llist_node* sc_find_in_llist(llist_node* head, const void* key_ptr,
   return NULL;
 }
 
+/* Updates the value stored in an existing node, handling three cases based on
+ * the new value size vs. the stored size: same size (overwrite in place),
+ * smaller and fits inline (switch to inline storage and free old heap buffer),
+ * or larger (realloc or allocate new heap buffer). */
 static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
                                        size_t val_size) {
   if (val_size == elem->data.val_size) {
@@ -748,6 +926,9 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
   }
 }
 
+/* Removes the node matching key_ptr from a bucket's chain, sets *found, and
+ * returns the updated chain head. The previous-pointer tracking enables O(n)
+ * deletion without a doubly-linked bucket list. */
 static llist_node* sc_delete_from_llist(llist_node* head,
                                         dllist_ref_node** head_of_all_elems,
                                         const void* key_ptr, size_t key_size,
@@ -773,6 +954,8 @@ static llist_node* sc_delete_from_llist(llist_node* head,
   return head;
 }
 
+/* Destroys every node in a bucket chain and returns NULL. Used during
+ * map reset/destroy to clear all buckets in sequence. */
 static llist_node* sc_destroy_the_whole_llist(
     llist_node* head, dllist_ref_node** head_of_all_elems) {
   llist_node* tracker = head;
@@ -784,14 +967,25 @@ static llist_node* sc_destroy_the_whole_llist(
   return NULL;
 }
 
+/* Recalculates the scale-up and scale-down element count thresholds based on
+ * the current bucket array size. Must be called after every bucket array resize
+ * to keep the thresholds consistent with the new capacity. */
 static void sc_set_scaling_limits(sep_chain_map* map) {
   map->elem_count_to_scale_up = (map->bucket_arr_size) * 6 / 4;
   map->elem_count_to_scale_down = (map->bucket_arr_size) / 8;
 }
 
+/* Resizes the bucket array by scale_factor (up or down) and rehashes all
+ * existing nodes into their new bucket positions. Scaling uses & (new_size-1)
+ * rather than modulo, which is why all sizes are kept as powers of two. */
 static void sc_scale(sep_chain_map* map, bool up) {
   size_t new_size = up ? map->bucket_arr_size * scale_factor
                        : map->bucket_arr_size / scale_factor;
+
+  if (up && (new_size > max_power_of_two_size_t)) {
+    // That's beyond the scape-up limit
+    return;
+  }
 
   llist_node** new_arr =
       (llist_node**)_mem_calloc(map->m_procs, new_size, sizeof(llist_node*));
@@ -814,6 +1008,8 @@ static void sc_scale(sep_chain_map* map, bool up) {
   sc_set_scaling_limits(map);
 }
 
+/* Allocates and initialises the separate-chaining map struct and its bucket
+ * array. All bucket pointers are zeroed via calloc. */
 static sep_chain_map* sc_create(size_t bucket_arr_size, ccol_data_type key_type,
                                 ccol_data_type val_type,
                                 ccol_memmgmt_procs_t* m_procs,
@@ -841,6 +1037,11 @@ static sep_chain_map* sc_create(size_t bucket_arr_size, ccol_data_type key_type,
   return map;
 }
 
+/* Inserts or updates a key-value pair in the separate-chaining map. An existing
+ * key results in an in-place value update via sc_reset_val_of_llist_node. A new
+ * key triggers node creation; the node is prepended to the bucket's chain.
+ * Scales up the bucket array after insertion if elem_count_to_scale_up is hit.
+ */
 static ccol_retval_t sc_insert(sep_chain_map* map, const cmap_pair* key_pair,
                                const cmap_pair* val_pair) {
   if (map->elem_count == max_elem_count) {
@@ -860,7 +1061,7 @@ static ccol_retval_t sc_insert(sep_chain_map* map, const cmap_pair* key_pair,
       sc_find_in_llist(map->bucket_arr[index], key_pair->ptr, key_pair->size);
   if (existing) {
     return sc_reset_val_of_llist_node(existing, val_pair->ptr, val_pair->size)
-               ? ccol_success
+               ? ccol_key_already_present
                : ccol_not_enough_memory;
   }
 
@@ -880,6 +1081,9 @@ static ccol_retval_t sc_insert(sep_chain_map* map, const cmap_pair* key_pair,
   return ccol_success;
 }
 
+/* Looks up key_pair and sets *val_pair to point at the node's value accessor.
+ * The returned pointer is valid until the key is deleted or its value is
+ * updated to a different size. */
 static ccol_retval_t sc_get(sep_chain_map* map, const cmap_pair* key_pair,
                             cmap_pair** val_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
@@ -895,6 +1099,9 @@ static ccol_retval_t sc_get(sep_chain_map* map, const cmap_pair* key_pair,
   return ccol_key_not_found;
 }
 
+/* Deletes the entry matching key_pair from its bucket chain. Scales down the
+ * bucket array when elem_count drops below elem_count_to_scale_down and the
+ * array is large enough to shrink. */
 static ccol_retval_t sc_delete(sep_chain_map* map, const cmap_pair* key_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
@@ -915,6 +1122,10 @@ static ccol_retval_t sc_delete(sep_chain_map* map, const cmap_pair* key_pair) {
   return ccol_key_not_found;
 }
 
+/* Destroys all bucket chains, frees the bucket array, and frees the map struct.
+ * The insertion-order dllist head pointer is passed through to each chain
+ * teardown so it is updated correctly during destruction (even though the full
+ * list is being discarded anyway, this keeps the bookkeeping consistent). */
 static void sc_destroy(sep_chain_map* map) {
   if (map) {
     for (size_t i = 0; i < map->bucket_arr_size; i++) {
@@ -925,6 +1136,8 @@ static void sc_destroy(sep_chain_map* map) {
   }
 }
 
+/* Clears all entries and optionally resizes the bucket array to
+ * new_bucket_array_size. Pass 0 to retain the current size. */
 static ccol_retval_t sc_reset(sep_chain_map* map,
                               size_t new_bucket_array_size) {
   for (size_t i = 0; i < map->bucket_arr_size; i++) {
@@ -938,14 +1151,15 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
                                    new_bucket_array_size * sizeof(llist_node*));
     if (!map->bucket_arr) {
       map->bucket_arr = orig;
-      memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
+      mem_zero(map->bucket_arr, map->bucket_arr_size * sizeof(llist_node*));
       map->elem_count = 0;
+      sc_set_scaling_limits(map);
       return ccol_not_enough_memory;
     }
     map->bucket_arr_size = new_bucket_array_size;
   }
 
-  memset(map->bucket_arr, 0, map->bucket_arr_size * sizeof(llist_node*));
+  mem_zero(map->bucket_arr, map->bucket_arr_size * sizeof(llist_node*));
   map->elem_count = 0;
   sc_set_scaling_limits(map);
 
@@ -962,6 +1176,8 @@ typedef struct chmap_cmap_iterator {
     dllist_ref_node* sc_tracker;
     size_t oa_index;
   } iter;
+  cmap_pair oa_key_pair;
+  cmap_pair oa_val_pair;
   cmap_iterator user_iter;
 } chmap_cmap_iterator;
 
@@ -970,89 +1186,13 @@ typedef struct chmap_cmap_iterator {
                          offsetof(chmap_cmap_iterator, user_iter))
 
 /* ========================================================================== */
-/*                         HELPER FUNCTIONS                                   */
-/* ========================================================================== */
-
-#define POWERS_OF_TWO_LEN 64
-static size_t uint64_powers_of_two[POWERS_OF_TWO_LEN] = {
-    1ULL,
-    2ULL,
-    4ULL,
-    8ULL,
-    16ULL,
-    32ULL,
-    64ULL,
-    128ULL,
-    256ULL,
-    512ULL,
-    1024ULL,
-    2048ULL,
-    4096ULL,
-    8192ULL,
-    16384ULL,
-    32768ULL,
-    65536ULL,
-    131072ULL,
-    262144ULL,
-    524288ULL,
-    1048576ULL,
-    2097152ULL,
-    4194304ULL,
-    8388608ULL,
-    16777216ULL,
-    33554432ULL,
-    67108864ULL,
-    134217728ULL,
-    268435456ULL,
-    536870912ULL,
-    1073741824ULL,
-    2147483648ULL,
-    4294967296ULL,
-    8589934592ULL,
-    17179869184ULL,
-    34359738368ULL,
-    68719476736ULL,
-    137438953472ULL,
-    274877906944ULL,
-    549755813888ULL,
-    1099511627776ULL,
-    2199023255552ULL,
-    4398046511104ULL,
-    8796093022208ULL,
-    17592186044416ULL,
-    35184372088832ULL,
-    70368744177664ULL,
-    140737488355328ULL,
-    281474976710656ULL,
-    562949953421312ULL,
-    1125899906842624ULL,
-    2251799813685248ULL,
-    4503599627370496ULL,
-    9007199254740992ULL,
-    18014398509481984ULL,
-    36028797018963968ULL,
-    72057594037927936ULL,
-    144115188075855872ULL,
-    288230376151711744ULL,
-    576460752303423488ULL,
-    1152921504606846976ULL,
-    2305843009213693952ULL,
-    4611686018427387904ULL,
-    9223372036854775808ULL};
-
-size_t find_nearest_gte_power_of_two(size_t input) {
-  for (int i = 0; i < POWERS_OF_TWO_LEN; i++) {
-    if (uint64_powers_of_two[i] >= input) {
-      return uint64_powers_of_two[i];
-    }
-  }
-  return uint64_powers_of_two[POWERS_OF_TWO_LEN - 1];
-}
-
-/* ========================================================================== */
 /*                         UNIFIED API IMPLEMENTATION                         */
 /* ========================================================================== */
 
+/* Creates a new hash map. The implementation (open-addressing or separate-
+ * chaining) is chosen at creation time based on key and value types. The
+ * custom allocator, if provided, is copied into a privately-owned struct so
+ * the caller's copy can be freed independently. */
 chmap chmap_create_full(size_t initial_bucket_array_size,
                         ccol_data_type key_type, ccol_data_type val_type,
                         ccol_memmgmt_procs_t* mmgmt_procs,
@@ -1077,6 +1217,13 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
   } else {
     initial_bucket_array_size =
         find_nearest_gte_power_of_two(initial_bucket_array_size);
+    if (initial_bucket_array_size > max_elem_count) {
+      _mem_free(mmgmt_procs, chm);
+      if (err) {
+        *err = CCOL_ERR_STR("Initial bucket array size is too big");
+      }
+      return NULL;
+    }
   }
 
   if (should_use_open_addressing(key_type, val_type)) {
@@ -1094,7 +1241,7 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
         _mem_free(mmgmt_procs, chm);
         return NULL;
       }
-      memcpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
     }
 
     chm->impl.oa_map =
@@ -1118,7 +1265,7 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
         _mem_free(mmgmt_procs, chm);
         return NULL;
       }
-      memcpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
     }
 
     chm->impl.sc_map = sc_create(initial_bucket_array_size, key_type, val_type,
@@ -1135,6 +1282,8 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
   return chm;
 }
 
+/* Public insert/update dispatch: validates inputs then delegates to the
+ * backend-specific insert function. */
 ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
                                 const cmap_pair* val_pair) {
   if (!chm || !key_pair || !val_pair || !key_pair->ptr || !val_pair->ptr ||
@@ -1149,6 +1298,8 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair* key_pair,
   }
 }
 
+/* Returns a pointer-to-pointer to the value storage for key_pair. The inner
+ * pointer is valid until the next mutating operation on this key. */
 ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
                                  cmap_pair** val_pair) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0 || !val_pair) {
@@ -1162,6 +1313,9 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
   }
 }
 
+/* Looks up key_pair and copies up to target_buf_size bytes of the value into
+ * target_buf. If the stored value is smaller than target_buf_size, the
+ * remaining bytes are zeroed. */
 ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
                                   void* target_buf, size_t target_buf_size) {
   cmap_pair* val_pair = NULL;
@@ -1178,6 +1332,7 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
   return ret;
 }
 
+/* Public delete dispatch: validates inputs then delegates to the backend. */
 ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
   if (!chm || !key_pair || !key_pair->ptr || key_pair->size == 0) {
     return ccol_invalid_args;
@@ -1190,9 +1345,10 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair* key_pair) {
   }
 }
 
+/* Returns the number of live key-value pairs in the map. */
 size_t chmap_elem_count(chmap chm) {
   if (!chm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
@@ -1202,9 +1358,12 @@ size_t chmap_elem_count(chmap chm) {
   }
 }
 
+/* Clears all entries and optionally resizes the internal bucket array. The
+ * size is rounded up to the nearest power of two and clamped to
+ * minimum_allowed_bucket_array_size. Pass 0 to retain the current size. */
 ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
   if (!chm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (new_bucket_array_size > 0 &&
@@ -1213,6 +1372,10 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
   } else if (new_bucket_array_size > 0) {
     new_bucket_array_size =
         find_nearest_gte_power_of_two(new_bucket_array_size);
+    if (new_bucket_array_size > max_elem_count) {
+      // The requsted size is too big
+      return ccol_not_enough_memory;
+    }
   }
 
   if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
@@ -1222,13 +1385,17 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
   }
 }
 
+/* Creates an iterator positioned at the first element. For separate-chaining
+ * maps, iteration follows the insertion-order dllist. For open-addressing maps,
+ * the first occupied non-deleted slot is found by linear scan. Returns NULL
+ * for an empty map. The iterator heap-allocates chmap_cmap_iterator. */
 cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
   if (err) {
     *err = NULL;
   }
 
   if (!chm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (chm->impl_type == IMPL_SEPARATE_CHAINING) {
@@ -1281,19 +1448,21 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
     real_iter->parent_map = chm;
     real_iter->iter.oa_index = i;
 
-    static cmap_pair key_pair_static, val_pair_static;
-    key_pair_static.ptr = &map->slots[i].key_data;
-    key_pair_static.size = map->key_size;
-    val_pair_static.ptr = &map->slots[i].val_data;
-    val_pair_static.size = map->val_size;
+    real_iter->oa_key_pair.ptr = &map->slots[i].key_data;
+    real_iter->oa_key_pair.size = map->key_size;
+    real_iter->oa_val_pair.ptr = &map->slots[i].val_data;
+    real_iter->oa_val_pair.size = map->val_size;
 
-    real_iter->user_iter.key_pair = &key_pair_static;
-    real_iter->user_iter.val_pair = &val_pair_static;
+    real_iter->user_iter.key_pair = &real_iter->oa_key_pair;
+    real_iter->user_iter.val_pair = &real_iter->oa_val_pair;
 
     return &(real_iter->user_iter);
   }
 }
 
+/* Frees the iterator struct allocated by chashmap_begin_iter. Uses the m_procs
+ * stored in the underlying backend map since the iterator itself does not hold
+ * an allocator pointer. */
 void __chmap_iterator_destroy(cmap_iterator* iter) {
   if (iter) {
     chmap_cmap_iterator* real_iter = cmapIter2ChmapIter(iter);
@@ -1305,6 +1474,10 @@ void __chmap_iterator_destroy(cmap_iterator* iter) {
   }
 }
 
+/* Advances the iterator to the next element. For separate-chaining the dllist
+ * next pointer is followed. For open-addressing the slot array is scanned
+ * linearly for the next occupied non-deleted slot. Returns NULL (and destroys
+ * the iterator) when the end is reached. */
 cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
   chmap_cmap_iterator* real_iter = cmapIter2ChmapIter(iter);
 
@@ -1337,20 +1510,23 @@ cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
     } else {
       real_iter->iter.oa_index = i;
 
-      static cmap_pair key_pair_static, val_pair_static;
-      key_pair_static.ptr = &map->slots[i].key_data;
-      key_pair_static.size = map->key_size;
-      val_pair_static.ptr = &map->slots[i].val_data;
-      val_pair_static.size = map->val_size;
+      real_iter->oa_key_pair.ptr = &map->slots[i].key_data;
+      real_iter->oa_key_pair.size = map->key_size;
+      real_iter->oa_val_pair.ptr = &map->slots[i].val_data;
+      real_iter->oa_val_pair.size = map->val_size;
 
-      iter->key_pair = &key_pair_static;
-      iter->val_pair = &val_pair_static;
+      iter->key_pair = &real_iter->oa_key_pair;
+      iter->val_pair = &real_iter->oa_val_pair;
     }
   }
 
   return iter;
 }
 
+/* Destroys the underlying backend map and its privately-owned m_procs copy,
+ * then frees the top-level chashmap struct using the default allocator.
+ * The outer struct was always allocated with the default allocator regardless
+ * of the custom m_procs, hence the plain mem_free at the end. */
 void __chmap_destroy(chmap chm) {
   if (chm) {
     if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
@@ -1358,7 +1534,7 @@ void __chmap_destroy(chmap chm) {
         ccol_memmgmt_procs_t* procs = chm->impl.oa_map->m_procs;
         oa_destroy(chm->impl.oa_map);
         if (procs) {
-          ccol_memmgmt_procs_free_t free_func = procs->free;
+          ccol_free_t free_func = procs->free;
           free_func(procs);
         }
       }
@@ -1367,7 +1543,7 @@ void __chmap_destroy(chmap chm) {
         ccol_memmgmt_procs_t* procs = chm->impl.sc_map->m_procs;
         sc_destroy(chm->impl.sc_map);
         if (procs) {
-          ccol_memmgmt_procs_free_t free_func = procs->free;
+          ccol_free_t free_func = procs->free;
           free_func(procs);
         }
       }
@@ -1377,6 +1553,9 @@ void __chmap_destroy(chmap chm) {
 }
 
 #ifdef RUNNING_UNIT_TESTS
+/* Returns the current bucket array / slot array size for white-box unit tests
+ * that verify the resize thresholds of both backends. Not part of the public
+ * API. */
 size_t chmap_get_bucket_arr_size(chmap chm) {
   if (!chm) return 0;
 
@@ -1387,6 +1566,7 @@ size_t chmap_get_bucket_arr_size(chmap chm) {
   }
 }
 
+/* Returns the element count at which the next scale-up will be triggered. */
 size_t chmap_get_elem_count_to_scale_up(chmap chm) {
   if (!chm) return 0;
 
@@ -1397,6 +1577,7 @@ size_t chmap_get_elem_count_to_scale_up(chmap chm) {
   }
 }
 
+/* Returns the element count at which the next scale-down will be triggered. */
 size_t chmap_get_elem_count_to_scale_down(chmap chm) {
   if (!chm) return 0;
 

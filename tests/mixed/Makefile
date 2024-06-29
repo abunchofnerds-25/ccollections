@@ -1,12 +1,16 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS
-SRC_FILE_PREFIX = cthreadcomm
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/common.c
+SRC_FILES = ../../src/cvector.c \
+            ../../src/chashmap.c \
+            ../../src/cbstmap.c \
+            ../../src/cstring.c \
+            ../../src/common.c \
+            ../../src/csort.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 LFLAGS = -lm -lpthread
 
 build:
@@ -21,15 +25,15 @@ memtest: build
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
-	gcov tests-$(SRC_FILE_PREFIX) && \
+	gcov tests-mixed && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --capture --directory . \
-	--output-file $(SRC_FILE_PREFIX).c.info && \
-	genhtml --ignore-errors inconsistent $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
+	--output-file mixed.c.info && \
+	genhtml --ignore-errors inconsistent mixed.c.info --output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info
 
-all: build test memtest generate_coverage_report
+all: build test memtest
 
 clean:
-	rm -rf tests coverage *.gcno *.gcda *.gcov *.c.info
+	rm -rf tests coverage *.gcda *.gcdo *.gcno *.gcov
 
 default: build

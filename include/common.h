@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -43,6 +43,7 @@ SOFTWARE.
  */
 
 #include <assert.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -115,6 +116,14 @@ SOFTWARE.
 /** @brief Get current thread ID */
 #define get_thread_id pthread_self
 
+/**
+ * @brief Assertion macro for collections library
+ *
+ * Wrapper around standard assert() for consistency across the library.
+ * Enables runtime assertion checking in debug builds.
+ */
+#define ccol_assert assert
+
 /* ========================================================================== */
 /*                         ERROR HANDLING                                     */
 /* ========================================================================== */
@@ -157,7 +166,7 @@ SOFTWARE.
  * @param _err_fmt Printf-style format string
  * @param ... Format arguments
  *
- * @note Always terminates program via assert(false)
+ * @note Always terminates program via ccol_assert(false)
  * @note Message limited to 512 characters
  *
  * Example:
@@ -172,7 +181,7 @@ SOFTWARE.
     char _err_str[512] = {0};                                      \
     snprintf(_err_str, sizeof(_err_str), _err_fmt, ##__VA_ARGS__); \
     fprintf(stderr, "%s\n", _err_str);                             \
-    assert(false);                                                 \
+    ccol_assert(false);                                            \
   } while (0)
 
 /* ========================================================================== */
@@ -245,11 +254,31 @@ SOFTWARE.
 #define _mem_free(m_procs, ptr) (m_procs) ? m_procs->free(ptr) : mem_free(ptr)
 
 /**
+ * @brief The invalid size_t for size related operations
+ *
+ * The maximum value that can be contained by size_t
+ */
+#define ccol_invalid_size ((size_t)-1)
+
+/**
+ * @brief The maximum power of two that can be stored in a size_t
+ *
+ * on 32 bit archs -> 2^31
+ *
+ * on 64 bit archs -> 2^63
+ *
+ * As 2^(#arch_bits) would exceed size_t's storage area, the maximum
+ * integer power of two that can be contained by a size_t variable
+ * is the half of the 2^(#arch_bits).
+ */
+#define max_power_of_two_size_t ((size_t)1 << ((sizeof(size_t) * CHAR_BIT) - 1))
+
+/**
  * @brief Maximum element count for collections
  *
- * Set to SIZE_MAX - 1 to allow SIZE_MAX to indicate special conditions.
+ * It is the maximum power of 2 that can be stored by a size_t
  */
-#define max_elem_count (((size_t)-1) - 1)
+#define max_elem_count max_power_of_two_size_t
 
 /* ========================================================================== */
 /*                         RETURN VALUE CODES                                 */
@@ -301,13 +330,13 @@ typedef enum ccollections_retval_t {
  * @param size Number of bytes to allocate
  * @return Pointer to allocated memory, or NULL on failure
  */
-typedef void *(*ccol_memmgmt_procs_malloc_t)(size_t size);
+typedef void *(*ccol_malloc_t)(size_t size);
 
 /**
  * @brief Custom free function pointer type
  * @param ptr Pointer to free
  */
-typedef void (*ccol_memmgmt_procs_free_t)(void *ptr);
+typedef void (*ccol_free_t)(void *ptr);
 
 /**
  * @brief Custom calloc function pointer type
@@ -315,8 +344,7 @@ typedef void (*ccol_memmgmt_procs_free_t)(void *ptr);
  * @param elem_size Size of each element
  * @return Pointer to allocated memory, or NULL on failure
  */
-typedef void *(*ccol_memmgmt_procs_calloc_t)(size_t elem_count,
-                                             size_t elem_size);
+typedef void *(*ccol_calloc_t)(size_t elem_count, size_t elem_size);
 
 /**
  * @brief Custom realloc function pointer type
@@ -324,7 +352,7 @@ typedef void *(*ccol_memmgmt_procs_calloc_t)(size_t elem_count,
  * @param size New size in bytes
  * @return Pointer to reallocated memory, or NULL on failure
  */
-typedef void *(*ccol_memmgmt_procs_realloc_t)(void *ptr, size_t size);
+typedef void *(*ccol_realloc_t)(void *ptr, size_t size);
 
 /**
  * @brief Custom memory management procedures
@@ -338,10 +366,10 @@ typedef void *(*ccol_memmgmt_procs_realloc_t)(void *ptr, size_t size);
  * malloc/free/calloc/realloc
  */
 typedef struct ccol_memmgmt_procs_t {
-  ccol_memmgmt_procs_malloc_t malloc;   /**< Custom malloc */
-  ccol_memmgmt_procs_free_t free;       /**< Custom free */
-  ccol_memmgmt_procs_calloc_t calloc;   /**< Custom calloc */
-  ccol_memmgmt_procs_realloc_t realloc; /**< Custom realloc */
+  ccol_malloc_t malloc;   /**< Custom malloc */
+  ccol_free_t free;       /**< Custom free */
+  ccol_calloc_t calloc;   /**< Custom calloc */
+  ccol_realloc_t realloc; /**< Custom realloc */
 } ccol_memmgmt_procs_t;
 
 /* ========================================================================== */
@@ -468,24 +496,25 @@ typedef struct cmap_iterator {
  * @note If mmgmt_procs is NULL, sets container->m_procs to NULL (use defaults)
  * @note Allocates memory for m_procs using the provided allocator
  */
-#define ccol_populate_mem_mgmt_procs(container, mmgmt_procs, err)              \
-  ({                                                                           \
-    bool result = true;                                                        \
-    if (mmgmt_procs) {                                                         \
-      container->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t));  \
-      if (!container->m_procs) {                                               \
-        if (err) {                                                             \
-          *err = CCOL_ERR_STR(                                                 \
-              "Failed to allocate buffer for memory mgmt buffer");             \
-        }                                                                      \
-        result = false;                                                        \
-      } else {                                                                 \
-        memcpy(container->m_procs, mmgmt_procs, sizeof(ccol_memmgmt_procs_t)); \
-      }                                                                        \
-    } else {                                                                   \
-      container->m_procs = NULL;                                               \
-    }                                                                          \
-    result;                                                                    \
+#define ccol_populate_mem_mgmt_procs(container, mmgmt_procs, err)             \
+  ({                                                                          \
+    bool result = true;                                                       \
+    if (mmgmt_procs) {                                                        \
+      container->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t)); \
+      if (!container->m_procs) {                                              \
+        if (err) {                                                            \
+          *err = CCOL_ERR_STR(                                                \
+              "Failed to allocate buffer for memory mgmt buffer");            \
+        }                                                                     \
+        result = false;                                                       \
+      } else {                                                                \
+        mem_cpy(container->m_procs, mmgmt_procs,                              \
+                sizeof(ccol_memmgmt_procs_t));                                \
+      }                                                                       \
+    } else {                                                                  \
+      container->m_procs = NULL;                                              \
+    }                                                                         \
+    result;                                                                   \
   })
 
 /* ========================================================================== */
@@ -505,6 +534,43 @@ typedef struct cmap_iterator {
  * @note Supports: float, double, long double
  * @note Supports: const variants of all above types
  */
+#if defined __clang__
+#define is_integral_type(x)                                                 \
+  ({                                                                        \
+    _Pragma("GCC diagnostic push");                                         \
+    _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
+    bool result = _Generic((x),                                             \
+        char: true,                                                         \
+        short: true,                                                        \
+        int: true,                                                          \
+        long: true,                                                         \
+        long long: true,                                                    \
+        unsigned char: true,                                                \
+        unsigned short: true,                                               \
+        unsigned int: true,                                                 \
+        unsigned long: true,                                                \
+        unsigned long long: true,                                           \
+        float: true,                                                        \
+        double: true,                                                       \
+        long double: true,                                                  \
+        const char: true,                                                   \
+        const short: true,                                                  \
+        const int: true,                                                    \
+        const long: true,                                                   \
+        const long long: true,                                              \
+        const unsigned char: true,                                          \
+        const unsigned short: true,                                         \
+        const unsigned int: true,                                           \
+        const unsigned long: true,                                          \
+        const unsigned long long: true,                                     \
+        const float: true,                                                  \
+        const double: true,                                                 \
+        const long double: true,                                            \
+        default: false);                                                    \
+    _Pragma("GCC diagnostic pop");                                          \
+    result;                                                                 \
+  })
+#else
 #define is_integral_type(x)           \
   _Generic((x),                       \
       char: true,                     \
@@ -534,6 +600,7 @@ typedef struct cmap_iterator {
       const double: true,             \
       const long double: true,        \
       default: false)
+#endif
 
 /**
  * @brief Check if type is a pointer to integral or floating-point type
@@ -546,6 +613,43 @@ typedef struct cmap_iterator {
  *
  * @note Supports pointers to all types checked by is_integral_type()
  */
+#if defined __clang__
+#define is_integral_ptr(x)                                                  \
+  ({                                                                        \
+    _Pragma("GCC diagnostic push");                                         \
+    _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
+    bool result = _Generic((x),                                             \
+        char *: true,                                                       \
+        short *: true,                                                      \
+        int *: true,                                                        \
+        long *: true,                                                       \
+        long long *: true,                                                  \
+        unsigned char *: true,                                              \
+        unsigned short *: true,                                             \
+        unsigned int *: true,                                               \
+        unsigned long *: true,                                              \
+        unsigned long long *: true,                                         \
+        float *: true,                                                      \
+        double *: true,                                                     \
+        long double *: true,                                                \
+        const char *: true,                                                 \
+        const short *: true,                                                \
+        const int *: true,                                                  \
+        const long *: true,                                                 \
+        const long long *: true,                                            \
+        const unsigned char *: true,                                        \
+        const unsigned short *: true,                                       \
+        const unsigned int *: true,                                         \
+        const unsigned long *: true,                                        \
+        const unsigned long long *: true,                                   \
+        const float *: true,                                                \
+        const double *: true,                                               \
+        const long double *: true,                                          \
+        default: false);                                                    \
+    result;                                                                 \
+    _Pragma("GCC diagnostic pop");                                          \
+  })
+#else
 #define is_integral_ptr(x)              \
   _Generic((x),                         \
       char *: true,                     \
@@ -575,6 +679,7 @@ typedef struct cmap_iterator {
       const double *: true,             \
       const long double *: true,        \
       default: false)
+#endif
 
 /**
  * @brief Check if pointer points to signed integer type
@@ -686,6 +791,43 @@ typedef enum ccollections_data_type {
   ccol_other_types,
 } ccol_data_type;
 
+#if defined __clang__
+#define _determine_non_special_data_type(var)                               \
+  ({                                                                        \
+    _Pragma("GCC diagnostic push");                                         \
+    _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
+    ccol_data_type result = _Generic((var),                                 \
+        char: ccol_char,                                                    \
+        short: ccol_short,                                                  \
+        int: ccol_int,                                                      \
+        long: ccol_long,                                                    \
+        long long: ccol_long_long,                                          \
+        unsigned char: ccol_unsigned_char,                                  \
+        unsigned short: ccol_unsigned_short,                                \
+        unsigned int: ccol_unsigned_int,                                    \
+        unsigned long: ccol_unsigned_long,                                  \
+        unsigned long long: ccol_unsigned_long_long,                        \
+        float: ccol_float,                                                  \
+        double: ccol_double,                                                \
+        long double: ccol_long_double,                                      \
+        const char: ccol_char,                                              \
+        const short: ccol_short,                                            \
+        const int: ccol_int,                                                \
+        const long: ccol_long,                                              \
+        const long long: ccol_long_long,                                    \
+        const unsigned char: ccol_unsigned_char,                            \
+        const unsigned short: ccol_unsigned_short,                          \
+        const unsigned int: ccol_unsigned_int,                              \
+        const unsigned long: ccol_unsigned_long,                            \
+        const unsigned long long: ccol_unsigned_long_long,                  \
+        const float: ccol_float,                                            \
+        const double: ccol_double,                                          \
+        const long double: ccol_long_double,                                \
+        default: ccol_other_types);                                         \
+    _Pragma("GCC diagnostic pop");                                          \
+    result;                                                                 \
+  })
+#else
 #define _determine_non_special_data_type(var)            \
   _Generic((var),                                        \
       char: ccol_char,                                   \
@@ -715,6 +857,7 @@ typedef enum ccollections_data_type {
       const double: ccol_double,                         \
       const long double: ccol_long_double,               \
       default: ccol_other_types)
+#endif
 
 #define determine_ccol_data_type(data)                                 \
   ({                                                                   \
@@ -781,12 +924,132 @@ typedef enum ccollections_data_type {
     }                                                       \
   } while (0)
 
+/* ========================================================================== */
+/*                         UTILITY MACROS                                     */
+/* ========================================================================== */
+
+/**
+ * @brief Return minimum of two values
+ *
+ * Evaluates both arguments and returns the smaller value.
+ *
+ * @param a First value
+ * @param b Second value
+ * @return The smaller of a and b
+ *
+ * @warning Arguments may be evaluated multiple times
+ */
 #define ccol_min(a, b) ((a) < (b) ? (a) : (b))
+
+/**
+ * @brief Return maximum of two values
+ *
+ * Evaluates both arguments and returns the larger value.
+ *
+ * @param a First value
+ * @param b Second value
+ * @return The larger of a and b
+ *
+ * @warning Arguments may be evaluated multiple times
+ */
 #define ccol_max(a, b) ((a) > (b) ? (a) : (b))
 
+/**
+ * @brief Type-safe comparison macro
+ *
+ * Compares two values of the same type and returns standard comparison result.
+ * Casts pointers to the specified type before comparison.
+ *
+ * @param ptr1 Pointer to first value
+ * @param ptr2 Pointer to second value
+ * @param T Type to cast to
+ * @return Negative if *ptr1 < *ptr2, 0 if equal, positive if *ptr1 > *ptr2
+ *
+ * @note Uses three-way comparison: (a > b) - (a < b)
+ * @note Result is -1, 0, or 1 for integer types
+ */
 #define ccol_typed_cmp(ptr1, ptr2, T) \
   ({                                  \
     T var1 = *(T *)(ptr1);            \
     T var2 = *(T *)(ptr2);            \
     (var1 > var2) - (var1 < var2);    \
   })
+
+/* ========================================================================== */
+/*                    OPTIMIZED UTILITY FUNCTIONS                             */
+/* ========================================================================== */
+
+/**
+ * @brief Find nearest power of two that is greater than or equal to input
+ *
+ * Searches a precomputed table of powers of two (2^0 through 2^63) and
+ * returns the smallest power of two that is >= input. If input exceeds
+ * the largest power of two (2^63), returns ccol_invalid_size to indicate
+ * an error condition.
+ *
+ * @param input Value to round up to power of two
+ * @return Nearest power of two >= input, or ccol_invalid_size if too large
+ *
+ * @note O(1) lookup
+ * @note Returns 1 for input 0 or 1
+ * @note Returns ccol_invalid_size if input > 2^63
+ * @note Useful for capacity calculations in dynamic containers
+ *
+ * Example:
+ * @code
+ * find_nearest_gte_power_of_two(5)   -> 8
+ * find_nearest_gte_power_of_two(16)  -> 16
+ * find_nearest_gte_power_of_two(100) -> 128
+ * find_nearest_gte_power_of_two(UINT64_MAX) -> ccol_invalid_size
+ * @endcode
+ */
+size_t find_nearest_gte_power_of_two(size_t input);
+
+/**
+ * @brief Optimized memory copy for small and large buffers
+ *
+ * Uses direct assignments for small sizes (1-8 bytes) and falls back to
+ * memcpy for larger buffers. Small copies use packed structs for optimal
+ * performance and avoid function call overhead.
+ *
+ * @param dst Destination pointer (must not overlap with src)
+ * @param src Source pointer
+ * @param n Number of bytes to copy
+ *
+ * @note For n <= 32: Uses direct uint8/16/32/64 assignments
+ * @note For n > 32: Falls back to standard memcpy
+ * @note Does not handle overlapping regions (use memmove for that)
+ * @note Inlined for optimal performance
+ *
+ * @warning Behavior undefined if src and dst overlap
+ *
+ * Example:
+ * @code
+ * int src = 42;
+ * int dst;
+ * mem_cpy(&dst, &src, sizeof(int));  // Optimized for 4 bytes
+ * @endcode
+ */
+void mem_cpy(void *dst, const void *src, size_t n);
+
+/**
+ * @brief Optimized memory zeroing for small and large buffers
+ *
+ * Uses direct zero assignments for small sizes (1-8 bytes) and falls back
+ * to memset for larger buffers. Small zeros use packed structs for optimal
+ * performance and avoid function call overhead.
+ *
+ * @param dst Destination pointer to zero
+ * @param n Number of bytes to zero
+ *
+ * @note For n <= 32: Uses direct zero assignments to uint8/16/32/64
+ * @note For n > 32: Falls back to memset(dst, 0, n)
+ * @note Inlined for optimal performance
+ *
+ * Example:
+ * @code
+ * int array[100];
+ * mem_zero(array, sizeof(array));  // Zeros entire array
+ * @endcode
+ */
+void mem_zero(void *dst, size_t n);

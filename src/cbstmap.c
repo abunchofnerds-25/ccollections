@@ -1,7 +1,7 @@
 /*
 MIT License
 
-Copyright (c) 2024 A bunch of nerds
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,7 +25,6 @@ SOFTWARE.
 #include <assert.h>
 #include <cbstmap.h>
 #include <cvector.h>
-#include <memops.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,13 +45,13 @@ typedef struct cbinarymap {
   size_t elem_count;
   bmap_node *root;
   ccol_memmgmt_procs_t *m_procs;
-  bool keys_are_signed;
+  bool keys_are_signed_ints;
   ccol_comparison_proc_t custom_comparison_proc;
 } cbinarymap;
 
 typedef struct cbmap_cmap_iterator {  // Extended cmap_iterator for cbmap
   cbmap parent_map;
-  cvec_declare(nodes, bmap_node *);
+  cvec nodes;
   cmap_iterator user_iter;
 } cbmap_cmap_iterator;
 
@@ -67,6 +66,9 @@ typedef struct node_stack_entry {
   bmap_node **parent_link;  // Pointer to the parent's left or right pointer
 } node_stack_entry;
 
+/* Walks the leftmost spine of the subtree rooted at root and returns the node
+ * with the smallest key. Optionally records the number of steps taken in
+ * *depth (pass NULL to skip depth tracking). */
 bmap_node *get_min_node(bmap_node *root, size_t *depth) {
   if (depth) {
     *depth = 0;
@@ -84,6 +86,8 @@ bmap_node *get_min_node(bmap_node *root, size_t *depth) {
   return result;
 }
 
+/* Walks the rightmost spine and returns the node with the largest key.
+ * Symmetric to get_min_node. */
 bmap_node *get_max_node(bmap_node *root, size_t *depth) {
   if (depth) {
     *depth = 0;
@@ -101,25 +105,30 @@ bmap_node *get_max_node(bmap_node *root, size_t *depth) {
   return result;
 }
 
+/* Pushes node and all of its left descendants onto the iterator's node stack.
+ * This implements the "visit left subtree first" invariant of the iterative
+ * in-order traversal: the next pop will yield the smallest unvisited key in
+ * this subtree. */
 void push_all_lefts_into_iter_stack(cbmap_cmap_iterator *real_iter,
                                     bmap_node *node) {
-  cvec vn = real_iter->nodes;
-  cvec_enable_local_macros(vn, bmap_node *);
   while (node) {
-    cvec_push(vn, node);
+    ccol_assert(cvector_push_back(real_iter->nodes, &node) == ccol_success);
     node = node->left;
   }
 }
 
+/* Pops one node from the iterator stack (the current in-order node), pushes
+ * all left descendants of its right child, then updates the user-facing
+ * key/val pair pointers. When the stack is empty the iterator is destroyed
+ * and NULL is returned to signal end of traversal. */
 cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
-  cvec vn = real_iter->nodes;
-  cvec_enable_local_macros(vn, bmap_node *);
-  if (cvec_size(vn) == 0) {
+  if (cvector_elem_count(real_iter->nodes) == 0) {
     // Nowhere to advance
     __cbmap_iterator_destroy(&real_iter->user_iter);
     return NULL;
   }
-  bmap_node *node = cvec_pop(vn);
+  bmap_node *node;
+  ccol_assert(cvector_pop_back(real_iter->nodes, &node) == ccol_success);
   if (node->right) {
     push_all_lefts_into_iter_stack(real_iter, node->right);
   }
@@ -129,9 +138,12 @@ cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
   return &real_iter->user_iter;
 }
 
+/* Creates and returns an in-order iterator positioned at the first (smallest)
+ * key. The iterator uses an explicit stack (cvec of bmap_node*) to implement
+ * the traversal iteratively. Returns NULL when the map is empty. */
 cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (err) {
@@ -151,32 +163,47 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
     return NULL;
   }
 
-  // Initialize the stack of nodes within the real iterator.
-  cvec_init_with_mprocs(real_iter->nodes, cbm->m_procs);
+  real_iter->nodes =
+      cvector_create_full(sizeof(bmap_node *), cbm->m_procs, NULL);
+  if (!real_iter->nodes) {
+    _mem_free(cbm->m_procs, real_iter);
+    if (err) {
+      *err = CCOL_ERR_STR("Failed to create iterator node stack");
+    }
+    return NULL;
+  }
 
   real_iter->parent_map = cbm;
   push_all_lefts_into_iter_stack(real_iter, cbm->root);
   return cmap_real_iter_next(real_iter);
 }
 
+/* Advances the iterator to the next in-order node and returns it. Returns NULL
+ * (and destroys the iterator) when iteration is complete. */
 cmap_iterator *cbmap_iter_next(cmap_iterator *iter) {
   // Advance to the next node
   if (!iter) {
-    assert(false);
+    ccol_assert(false);
   }
 
   cbmap_cmap_iterator *real_iter = cmapIter2CbmapIter(iter);
   return cmap_real_iter_next(real_iter);
 }
 
+/* Releases the iterator's node stack and the iterator struct itself. Called
+ * automatically by cmap_real_iter_next when the end of traversal is reached,
+ * but can also be called early to abort mid-iteration. */
 void __cbmap_iterator_destroy(cmap_iterator *iter) {
   if (iter) {
     cbmap_cmap_iterator *real_iter = cmapIter2CbmapIter(iter);
-    cvec_destroy(real_iter->nodes);
+    cvector_destroy(real_iter->nodes);
     _mem_free(real_iter->parent_map->m_procs, real_iter);
   }
 }
 
+/* Validates the creation inputs for the BST map. Currently only validates the
+ * memory management procedures; the boolean key-sign flag needs no validation
+ * since all values are legal. */
 bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {
     return false;
@@ -185,7 +212,11 @@ bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   return true;
 }
 
-cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t *mmgmt_procs,
+/* Creates an empty AVL-balanced BST map. keys_are_signed_ints selects the
+ * signed comparison path; custom_comparison_proc overrides all built-in key
+ * comparison when non-NULL. */
+cbmap cbmap_create_full(bool keys_are_signed_ints,
+                        ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char **err) {
   if (err) {
@@ -211,12 +242,14 @@ cbmap cbmap_create_full(bool keys_are_signed, ccol_memmgmt_procs_t *mmgmt_procs,
 
   cbm->elem_count = 0;
   cbm->root = NULL;
-  cbm->keys_are_signed = keys_are_signed;
+  cbm->keys_are_signed_ints = keys_are_signed_ints;
   cbm->custom_comparison_proc = custom_comparison_proc;
 
   return cbm;
 }
 
+/* Frees the key buffer, value buffer, and the node struct itself. Does not
+ * touch left/right pointers; callers must have already unlinked the node. */
 void destroy_bmap_node(cbmap cbm, bmap_node *node) {
   if (node) {
     _mem_free(cbm->m_procs, node->key_pair.ptr);
@@ -225,52 +258,58 @@ void destroy_bmap_node(cbmap cbm, bmap_node *node) {
   }
 }
 
-// Iterative post-order traversal to clear all nodes
+/* Destroys all nodes via an iterative post-order traversal using an explicit
+ * stack (cvec). Post-order ensures both children are freed before the parent
+ * so the parent's left/right pointers remain valid during traversal. Resets
+ * root and elem_count to zero on completion. */
 void _clear_nodes(cbmap cbm) {
   if (!cbm->root) {
     return;
   }
 
   // Use a stack for iterative post-order traversal
-  cvec_declare(stack, bmap_node *);
-  cvec_init_with_mprocs(stack, cbm->m_procs);
+  cvec stack = cvector_create_full(sizeof(bmap_node *), cbm->m_procs, NULL);
+  ccol_assert(stack != NULL);
 
   bmap_node *current = cbm->root;
   bmap_node *last_visited = NULL;
 
-  while (cvec_size(stack) > 0 || current) {
+  while (cvector_elem_count(stack) > 0 || current) {
     // Go to the leftmost node
     if (current) {
-      cvec_push(stack, current);
+      ccol_assert(cvector_push_back(stack, &current) == ccol_success);
       current = current->left;
     } else {
       // Peek at the top of stack
-      bmap_node *peek = cvec_at(stack, cvec_size(stack) - 1);
+      bmap_node *peek =
+          *(bmap_node **)cvector_at(stack, cvector_elem_count(stack) - 1);
 
       // If right child exists and not yet processed
       if (peek->right && peek->right != last_visited) {
         current = peek->right;
       } else {
         // Process this node (both children done)
-        cvec_pop(stack);
+        bmap_node *_popped;
+        ccol_assert(cvector_pop_back(stack, &_popped) == ccol_success);
         destroy_bmap_node(cbm, peek);
         last_visited = peek;
       }
     }
   }
 
-  cvec_destroy(stack);
+  cvector_destroy(stack);
 
   cbm->root = NULL;
   cbm->elem_count = 0;
 }
 
+/* Destroys all nodes then frees the map struct and its custom allocator. */
 void __cbmap_destroy(cbmap cbm) {
   if (cbm) {
     _clear_nodes(cbm);
 
     if (cbm->m_procs) {
-      ccol_memmgmt_procs_free_t free_func = cbm->m_procs->free;
+      ccol_free_t free_func = cbm->m_procs->free;
       free_func(cbm->m_procs);
       free_func(cbm);
     } else {
@@ -279,17 +318,19 @@ void __cbmap_destroy(cbmap cbm) {
   }
 }
 
+/* Returns the number of key-value pairs stored in the map. */
 size_t cbmap_elem_count(cbmap cbm) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   return cbm->elem_count;
 }
 
+/* Removes all entries from the map, leaving it empty but otherwise reusable. */
 ccol_retval_t cbmap_reset(cbmap cbm) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   _clear_nodes(cbm);
@@ -297,6 +338,9 @@ ccol_retval_t cbmap_reset(cbmap cbm) {
   return ccol_success;
 }
 
+/* Compares two signed integers of size 1/2/4/8 bytes pointed to by ptr1 and
+ * ptr2. Using typed dereferences rather than memcmp avoids sign-extension
+ * issues (e.g. 0xFF in a signed byte is -1, not 255). */
 static inline int cmp_signed_small(void *ptr1, void *ptr2, size_t size) {
   switch (size) {
     case 1: {
@@ -314,11 +358,13 @@ static inline int cmp_signed_small(void *ptr1, void *ptr2, size_t size) {
     default: {
       // For non-standard sizes, just complain, as this should not
       // have been classified as a 'signed' number
-      assert(false);
+      ccol_assert(false);
     }
   }
 }
 
+/* Compares two unsigned integers of size 1/2/4/8 bytes, falling back to
+ * memcmp for non-standard sizes (struct keys, etc.). */
 static inline int cmp_unsigned_small(void *ptr1, void *ptr2, size_t size) {
   switch (size) {
     case 1: {
@@ -339,6 +385,10 @@ static inline int cmp_unsigned_small(void *ptr1, void *ptr2, size_t size) {
   }
 }
 
+/* Central key comparison dispatch. Priority: custom_comparison_proc >
+ * signed-int path > unsigned/memcmp path. Keys of differing sizes are compared
+ * on their common prefix then by length (shorter < longer), which gives
+ * consistent BST ordering for variable-length keys such as strings. */
 static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
                                const cmap_pair *key_pair2) {
   if (cbm->custom_comparison_proc) {
@@ -358,7 +408,7 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
            (key_pair1->size < key_pair2->size);
   }
 
-  if (cbm->keys_are_signed) {
+  if (cbm->keys_are_signed_ints) {
     // Properly handle signed integer comparison for standard sizes
     return cmp_signed_small(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
   }
@@ -366,6 +416,9 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
   return cmp_unsigned_small(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
 }
 
+/* Allocates a new BST node and copies the key and value data into separately
+ * allocated buffers. On any allocation failure, previously allocated buffers
+ * are freed before returning NULL. */
 bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
                            const cmap_pair *val_pair) {
   bmap_node *new_node = _mem_alloc(cbm->m_procs, sizeof(bmap_node));
@@ -398,7 +451,8 @@ bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
   return new_node;
 }
 
-// Implemented not to have a dependency on an external library
+/* Returns the absolute value of x. Implemented locally to avoid pulling in
+ * <math.h> or <stdlib.h> just for abs(). */
 int absolute(int x) {
   if (x < 0) {
     return -x;
@@ -406,7 +460,8 @@ int absolute(int x) {
   return x;
 }
 
-// Implemented not to have a dependency on an external library
+/* Returns the larger of x and y. Implemented locally for the same reason as
+ * absolute(). */
 int maximum(int x, int y) {
   if (x >= y) {
     return x;
@@ -414,6 +469,11 @@ int maximum(int x, int y) {
   return y;
 }
 
+/* Overwrites the value of an existing node. If the new value has a different
+ * size a reallocation is attempted; on failure the old value and size are
+ * preserved and *result is left unchanged so the caller sees
+ * ccol_not_enough_memory. On success, both the value bytes and the size field
+ * are updated and *result is set to ccol_key_already_present. */
 void update_bmap_node_value(cbmap cbm, bmap_node *node,
                             const cmap_pair *val_pair, ccol_retval_t *result) {
   if (node->val_pair.size != val_pair->size) {
@@ -425,11 +485,14 @@ void update_bmap_node_value(cbmap cbm, bmap_node *node,
       return;
     }
     node->val_pair.ptr = new_ptr;
+    node->val_pair.size = val_pair->size;
   }
   mem_cpy(node->val_pair.ptr, val_pair->ptr, val_pair->size);
   *result = ccol_key_already_present;
 }
 
+/* Returns the height of a node, defining -1 as the height of NULL (leaf
+ * sentinels). This sentinel value simplifies balance factor arithmetic. */
 int node_height(bmap_node *node) {
   if (!node) {
     return -1;
@@ -438,6 +501,8 @@ int node_height(bmap_node *node) {
   return node->height;
 }
 
+/* Returns the balance factor of a node as right_height - left_height.
+ * A value outside [-1, 1] means the node violates the AVL invariant. */
 int node_balance(bmap_node *node) {
   if (!node) {
     return 0;
@@ -446,6 +511,9 @@ int node_balance(bmap_node *node) {
   return node_height(node->right) - node_height(node->left);
 }
 
+/* Recomputes node->height from the heights of its children. Must be called
+ * after any rotation or structural change to keep the height metadata accurate
+ * for balance factor calculations up the ancestor chain. */
 void recalculate_node_height(bmap_node *node) {
   if (!node) {
     return;
@@ -454,6 +522,10 @@ void recalculate_node_height(bmap_node *node) {
   node->height = maximum(node_height(node->left), node_height(node->right)) + 1;
 }
 
+/* Restores the AVL invariant at parent if needed, performing one of four
+ * rotations: simple left, simple right, right-left double, or left-right
+ * double. Returns the new subtree root after the rotation (which may be a
+ * different node). Heights are recalculated bottom-up after each rotation. */
 bmap_node *check_node_balance(bmap_node *parent) {
   recalculate_node_height(parent);
   int balance = node_balance(parent);
@@ -514,22 +586,27 @@ bmap_node *check_node_balance(bmap_node *parent) {
   }
 
   if (absolute(node_balance(parent)) > 1) {
-    assert(false);
+    ccol_assert(false);
   }
   return parent;
 }
 
-// Iterative version of detach extreme node
+/* Detaches and returns the minimum (max=false) or maximum (max=true) node from
+ * the subtree rooted at root. The replacement node (the detached node's only
+ * child, if any) is linked into the parent's slot. The ancestor path is then
+ * rebalanced bottom-up using check_node_balance. Used by
+ * perform_element_removal to find an in-order successor/predecessor without
+ * recursive calls. */
 bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
                                      bmap_node **extreme,
                                      ccol_memmgmt_procs_t *mprocs) {
   if (!root) {
-    assert(false);
+    ccol_assert(false);
   }
 
   // Stack to track path from root to extreme node
-  cvec_declare(path, node_stack_entry);
-  cvec_init_with_mprocs(path, mprocs);
+  cvec path = cvector_create_full(sizeof(node_stack_entry), mprocs, NULL);
+  ccol_assert(path != NULL);
 
   // Find the extreme node and build the path
   bmap_node *current = root;
@@ -539,7 +616,7 @@ bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
     if (max) {
       if (current->right) {
         node_stack_entry entry = {current, parent_link};
-        cvec_push(path, entry);
+        ccol_assert(cvector_push_back(path, &entry) == ccol_success);
         parent_link = &(current->right);
         current = current->right;
       } else {
@@ -550,7 +627,7 @@ bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
     } else {
       if (current->left) {
         node_stack_entry entry = {current, parent_link};
-        cvec_push(path, entry);
+        ccol_assert(cvector_push_back(path, &entry) == ccol_success);
         parent_link = &(current->left);
         current = current->left;
       } else {
@@ -565,13 +642,14 @@ bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
   bmap_node *replacement = max ? current->left : current->right;
 
   // Update parent link or return replacement if extreme was root
-  if (cvec_size(path) == 0) {
-    cvec_destroy(path);
+  if (cvector_elem_count(path) == 0) {
+    cvector_destroy(path);
     return replacement;
   }
 
   // Update the last parent's child pointer
-  node_stack_entry last_entry = cvec_at(path, cvec_size(path) - 1);
+  node_stack_entry last_entry =
+      *(node_stack_entry *)cvector_at(path, cvector_elem_count(path) - 1);
   if (max) {
     last_entry.node->right = replacement;
   } else {
@@ -579,8 +657,8 @@ bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
   }
 
   // Rebalance from bottom to top
-  for (size_t i = cvec_size(path) - 1; i != (size_t)-1; i--) {
-    node_stack_entry entry = cvec_at(path, i);
+  for (size_t i = cvector_elem_count(path) - 1; i != (size_t)-1; i--) {
+    node_stack_entry entry = *(node_stack_entry *)cvector_at(path, i);
     bmap_node *balanced = check_node_balance(entry.node);
 
     // Update parent's pointer using the parent_link from the path
@@ -592,15 +670,18 @@ bmap_node *cbmap_detach_extreme_iter(bmap_node *root, bool max,
     }
   }
 
-  cvec_destroy(path);
+  cvector_destroy(path);
   return root;
 }
 
-// Iterative version of insert
+/* Inserts or updates a key-value pair. Uses an explicit path stack to record
+ * the ancestor chain so the tree can be rebalanced bottom-up after insertion
+ * without recursion. Returns ccol_key_already_present when the key already
+ * exists and its value was updated successfully. */
 ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
                                 const cmap_pair *val_pair) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (cbm->elem_count == max_elem_count) {
@@ -618,8 +699,10 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
   }
 
   // Stack to track path from root to insertion point
-  cvec_declare(path, node_stack_entry);
-  cvec_init_with_mprocs(path, cbm->m_procs);
+  cvec path = cvector_create_full(sizeof(node_stack_entry), cbm->m_procs, NULL);
+  if (!path) {
+    return ccol_not_enough_memory;
+  }
 
   bmap_node *current = cbm->root;
   bmap_node **parent_link = &(cbm->root);
@@ -632,13 +715,16 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
     if (comparison == 0) {
       // Key already exists - update value
       update_bmap_node_value(cbm, current, val_pair, &result);
-      cvec_destroy(path);
-      return ccol_success;  // Update succeeded
+      cvector_destroy(path);
+      return result;
     }
 
     // Push current node onto path
     node_stack_entry entry = {current, parent_link};
-    cvec_push(path, entry);
+    if (cvector_push_back(path, &entry) != ccol_success) {
+      cvector_destroy(path);
+      return ccol_not_enough_memory;
+    }
 
     if (comparison > 0) {
       parent_link = &(current->right);
@@ -652,7 +738,7 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
   // Create new node at insertion point
   bmap_node *new_node = create_new_node(cbm, key_pair, val_pair);
   if (!new_node) {
-    cvec_destroy(path);
+    cvector_destroy(path);
     return ccol_not_enough_memory;
   }
 
@@ -660,8 +746,8 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
   result = ccol_success;
 
   // Rebalance from bottom to top
-  for (size_t i = cvec_size(path) - 1; i != (size_t)-1; i--) {
-    node_stack_entry entry = cvec_at(path, i);
+  for (size_t i = cvector_elem_count(path) - 1; i != (size_t)-1; i--) {
+    node_stack_entry entry = *(node_stack_entry *)cvector_at(path, i);
     bmap_node *balanced = check_node_balance(entry.node);
 
     // Update parent's pointer to this node
@@ -673,15 +759,18 @@ ccol_retval_t cbmap_insert_elem(cbmap cbm, const cmap_pair *key_pair,
     }
   }
 
-  cvec_destroy(path);
+  cvector_destroy(path);
   cbm->elem_count++;
   return result;
 }
 
+/* Searches for key_pair and copies the associated value into target_buf.
+ * Returns ccol_invalid_args when target_buf_size does not match the stored
+ * value size exactly (this prevents silent truncation). */
 ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
                                   void *target_buf, size_t target_buf_size) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   bmap_node *tracker = cbm->root;
@@ -705,10 +794,13 @@ ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
   return ccol_key_not_found;
 }
 
+/* Searches for key_pair and sets *val_pair to point directly into the node's
+ * value buffer. The returned pointer is valid only as long as the key is not
+ * deleted or updated with a value of different size. */
 ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
                                  cmap_pair **val_pair) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   bmap_node *tracker = cbm->root;
@@ -729,6 +821,11 @@ ccol_retval_t cbmap_get_elem_ref(cbmap cbm, const cmap_pair *key_pair,
   return ccol_key_not_found;
 }
 
+/* Removes parent from the tree and returns the replacement subtree root.
+ * When both children exist, the deeper side donates its extreme node
+ * (right side → min node; left side → max node) to replace parent, which
+ * preserves the BST ordering and keeps the tree balanced with minimal rotation.
+ */
 bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
   bmap_node *left = parent->left;
   bmap_node *right = parent->right;
@@ -766,10 +863,12 @@ bmap_node *perform_element_removal(cbmap cbm, bmap_node *parent) {
   return parent;
 }
 
-// Iterative version of delete
+/* Deletes the entry with key_pair from the map. Uses the same explicit path
+ * stack as cbmap_insert_elem to rebalance ancestors bottom-up after the node
+ * is removed. Returns ccol_key_not_found when the key does not exist. */
 ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
   if (!cbm) {
-    assert(false);
+    ccol_assert(false);
   }
 
   if (!cbm->root) {
@@ -777,8 +876,10 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
   }
 
   // Stack to track path from root to node to delete
-  cvec_declare(path, node_stack_entry);
-  cvec_init_with_mprocs(path, cbm->m_procs);
+  cvec path = cvector_create_full(sizeof(node_stack_entry), cbm->m_procs, NULL);
+  if (!path) {
+    return ccol_not_enough_memory;
+  }
 
   bmap_node *current = cbm->root;
   bmap_node **parent_link = &(cbm->root);
@@ -798,7 +899,10 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
 
     // Push current node onto path
     node_stack_entry entry = {current, parent_link};
-    cvec_push(path, entry);
+    if (cvector_push_back(path, &entry) != ccol_success) {
+      cvector_destroy(path);
+      return ccol_not_enough_memory;
+    }
 
     if (comparison > 0) {
       parent_link = &(current->right);
@@ -811,8 +915,8 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
 
   if (result == ccol_success) {
     // Rebalance from bottom to top
-    for (size_t i = cvec_size(path) - 1; i != (size_t)-1; i--) {
-      node_stack_entry entry = cvec_at(path, i);
+    for (size_t i = cvector_elem_count(path) - 1; i != (size_t)-1; i--) {
+      node_stack_entry entry = *(node_stack_entry *)cvector_at(path, i);
       bmap_node *balanced = check_node_balance(entry.node);
 
       // Update parent's pointer to this node
@@ -827,6 +931,6 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair) {
     cbm->elem_count--;
   }
 
-  cvec_destroy(path);
+  cvector_destroy(path);
   return result;
 }

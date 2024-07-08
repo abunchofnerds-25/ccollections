@@ -70,6 +70,7 @@ typedef struct {
   ccol_data_type key_type;
   ccol_data_type val_type;
   cmap_pair get_accessor;
+  bool val_size_initialized;
 } open_addr_map;
 
 /* ========================================================================== */
@@ -264,14 +265,11 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
     size_t v4 = seed - XXH_PRIME_1;
 
     do {
-      v1 = xxh_round(v1, *(uint64_t*)p);
-      p += 8;
-      v2 = xxh_round(v2, *(uint64_t*)p);
-      p += 8;
-      v3 = xxh_round(v3, *(uint64_t*)p);
-      p += 8;
-      v4 = xxh_round(v4, *(uint64_t*)p);
-      p += 8;
+      uint64_t w;
+      memcpy(&w, p, sizeof(w)); v1 = xxh_round(v1, w); p += 8;
+      memcpy(&w, p, sizeof(w)); v2 = xxh_round(v2, w); p += 8;
+      memcpy(&w, p, sizeof(w)); v3 = xxh_round(v3, w); p += 8;
+      memcpy(&w, p, sizeof(w)); v4 = xxh_round(v4, w); p += 8;
     } while (p <= limit);
 
     hash =
@@ -291,14 +289,16 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
   hash += len;
 
   while (p + 8 <= end) {
-    size_t k1 = xxh_round(0, *(uint64_t*)p);
+    uint64_t w; memcpy(&w, p, sizeof(w));
+    size_t k1 = xxh_round(0, w);
     hash ^= k1;
     hash = xxh_rotl(hash, 27) * XXH_PRIME_1 + XXH_PRIME_4;
     p += 8;
   }
 
   if (p + 4 <= end) {
-    hash ^= (size_t)(*(uint32_t*)p) * XXH_PRIME_1;
+    uint32_t w; memcpy(&w, p, sizeof(w));
+    hash ^= (size_t)w * XXH_PRIME_1;
     hash = xxh_rotl(hash, 23) * XXH_PRIME_2 + XXH_PRIME_3;
     p += 4;
   }
@@ -359,14 +359,11 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
     size_t v4 = seed - XXH_PRIME_1;
 
     do {
-      v1 = xxh_round(v1, *(uint32_t*)p);
-      p += 4;
-      v2 = xxh_round(v2, *(uint32_t*)p);
-      p += 4;
-      v3 = xxh_round(v3, *(uint32_t*)p);
-      p += 4;
-      v4 = xxh_round(v4, *(uint32_t*)p);
-      p += 4;
+      uint32_t w;
+      memcpy(&w, p, sizeof(w)); v1 = xxh_round(v1, w); p += 4;
+      memcpy(&w, p, sizeof(w)); v2 = xxh_round(v2, w); p += 4;
+      memcpy(&w, p, sizeof(w)); v3 = xxh_round(v3, w); p += 4;
+      memcpy(&w, p, sizeof(w)); v4 = xxh_round(v4, w); p += 4;
     } while (p <= limit);
 
     hash =
@@ -378,7 +375,8 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
   hash += len;
 
   while (p + 4 <= end) {
-    hash += (*(uint32_t*)p) * XXH_PRIME_3;
+    uint32_t w; memcpy(&w, p, sizeof(w));
+    hash += w * XXH_PRIME_3;
     hash = xxh_rotl(hash, 17) * XXH_PRIME_4;
     p += 4;
   }
@@ -500,6 +498,7 @@ static open_addr_map* oa_create(size_t capacity, ccol_data_type key_type,
   map->deleted_count = 0;
   map->key_size = key_size;
   map->val_size = val_size;
+  map->val_size_initialized = false;
   map->m_procs = m_procs;
   map->custom_hashing_proc = custom_hashing_proc;
   map->key_type = key_type;
@@ -561,14 +560,15 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
   double load_factor =
       (double)(map->count + map->deleted_count) / map->capacity;
   if (load_factor > OPEN_ADDR_MAX_LOAD_FACTOR) {
-    if ((map->capacity * 2) <= max_power_of_two_size_t) {
+    if (map->capacity < max_power_of_two_size_t) {
       oa_rehash(map, map->capacity * 2);
     }
   }
 
   // Set val_size on first insert to match actual value size
-  if (map->count == 0 && val_pair->size <= 8) {
+  if (!map->val_size_initialized && val_pair->size <= 8) {
     map->val_size = val_pair->size;
+    map->val_size_initialized = true;
   }
 
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
@@ -721,6 +721,7 @@ static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
   map->capacity = new_capacity;
   map->count = 0;
   map->deleted_count = 0;
+  map->val_size_initialized = false;
 
   return ccol_success;
 }
@@ -814,7 +815,7 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
     new_elem->data.key_is_inline = false;
     new_elem->data.key_storage.ptr = _mem_alloc(data->m_procs, data->key_size);
     if (!new_elem->data.key_storage.ptr) {
-      sc_destroy_llist_node(head_of_all_elems, new_elem);
+      sc_destroy_llist_node(NULL, new_elem);
       return NULL;
     }
     mem_cpy(new_elem->data.key_storage.ptr, key_ptr, data->key_size);
@@ -832,7 +833,7 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
     new_elem->data.val_is_inline = false;
     new_elem->data.val_storage.ptr = _mem_alloc(data->m_procs, data->val_size);
     if (!new_elem->data.val_storage.ptr) {
-      sc_destroy_llist_node(head_of_all_elems, new_elem);
+      sc_destroy_llist_node(NULL, new_elem);
       return NULL;
     }
     mem_cpy(new_elem->data.val_storage.ptr, val_ptr, data->val_size);
@@ -857,10 +858,16 @@ static inline bool sc_compare_keys(const llist_node* node, const void* key_ptr,
           ? (const void*)&node->data.key_storage.inline_data
           : (const void*)node->data.key_storage.ptr;
 
-  if (key_size == sizeof(int)) {
-    return *(unsigned int*)node_key_ptr == *(unsigned int*)key_ptr;
-  } else if (key_size == sizeof(long)) {
-    return *(unsigned long*)node_key_ptr == *(unsigned long*)key_ptr;
+  if (key_size == sizeof(unsigned int)) {
+    unsigned int a, b;
+    memcpy(&a, node_key_ptr, sizeof(a));
+    memcpy(&b, key_ptr, sizeof(b));
+    return a == b;
+  } else if (key_size == sizeof(unsigned long)) {
+    unsigned long a, b;
+    memcpy(&a, node_key_ptr, sizeof(a));
+    memcpy(&b, key_ptr, sizeof(b));
+    return a == b;
   } else {
     return memcmp(node_key_ptr, key_ptr, key_size) == 0;
   }
@@ -971,7 +978,7 @@ static llist_node* sc_destroy_the_whole_llist(
  * the current bucket array size. Must be called after every bucket array resize
  * to keep the thresholds consistent with the new capacity. */
 static void sc_set_scaling_limits(sep_chain_map* map) {
-  map->elem_count_to_scale_up = (map->bucket_arr_size) * 6 / 4;
+  map->elem_count_to_scale_up = map->bucket_arr_size + map->bucket_arr_size / 2;
   map->elem_count_to_scale_down = (map->bucket_arr_size) / 8;
 }
 
@@ -979,13 +986,13 @@ static void sc_set_scaling_limits(sep_chain_map* map) {
  * existing nodes into their new bucket positions. Scaling uses & (new_size-1)
  * rather than modulo, which is why all sizes are kept as powers of two. */
 static void sc_scale(sep_chain_map* map, bool up) {
-  size_t new_size = up ? map->bucket_arr_size * scale_factor
-                       : map->bucket_arr_size / scale_factor;
-
-  if (up && (new_size > max_power_of_two_size_t)) {
-    // That's beyond the scape-up limit
+  if (up && (map->bucket_arr_size > max_power_of_two_size_t / scale_factor)) {
+    // That's beyond the scale-up limit
     return;
   }
+
+  size_t new_size = up ? map->bucket_arr_size * scale_factor
+                       : map->bucket_arr_size / scale_factor;
 
   llist_node** new_arr =
       (llist_node**)_mem_calloc(map->m_procs, new_size, sizeof(llist_node*));
@@ -1318,6 +1325,9 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair* key_pair,
  * remaining bytes are zeroed. */
 ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
                                   void* target_buf, size_t target_buf_size) {
+  if (!target_buf || target_buf_size == 0) {
+    return ccol_invalid_args;
+  }
   cmap_pair* val_pair = NULL;
   ccol_retval_t ret = chmap_get_elem_ref(chm, key_pair, &val_pair);
   if (ret == ccol_success && val_pair) {
@@ -1524,9 +1534,10 @@ cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
 }
 
 /* Destroys the underlying backend map and its privately-owned m_procs copy,
- * then frees the top-level chashmap struct using the default allocator.
- * The outer struct was always allocated with the default allocator regardless
- * of the custom m_procs, hence the plain mem_free at the end. */
+ * then frees the top-level chashmap struct. When a custom allocator was
+ * provided, chm was allocated through it, so the same free function is used
+ * for chm. The free_func local is captured before freeing procs so the
+ * function pointer remains valid after the procs struct itself is freed. */
 void __chmap_destroy(chmap chm) {
   if (chm) {
     if (chm->impl_type == IMPL_OPEN_ADDRESSING) {
@@ -1536,6 +1547,8 @@ void __chmap_destroy(chmap chm) {
         if (procs) {
           ccol_free_t free_func = procs->free;
           free_func(procs);
+          free_func(chm);
+          return;
         }
       }
     } else {
@@ -1545,6 +1558,8 @@ void __chmap_destroy(chmap chm) {
         if (procs) {
           ccol_free_t free_func = procs->free;
           free_func(procs);
+          free_func(chm);
+          return;
         }
       }
     }

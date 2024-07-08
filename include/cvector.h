@@ -787,7 +787,7 @@ static inline void ___cvector_destroy(cvec *cv) {
 #define cvec_append_cvec(v_to, v_from)                                      \
   do {                                                                      \
     if (!cvector_append_cvector((v_to), (v_from))) {                        \
-      fatal_err("cvector_append_cvector failed - %p - %p", (v_to), (v_to)); \
+      fatal_err("cvector_append_cvector failed - %p - %p", (v_to), (v_from)); \
     }                                                                       \
   } while (0)
 

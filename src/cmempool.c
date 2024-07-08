@@ -178,7 +178,7 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
   }
 
   size_t extended_elem_size = USER_SIZE_TO_EXTENDED_SIZE(elem_size);
-  mp->objects = _mem_calloc(mmgmt_procs, elem_count, extended_elem_size);
+  mp->objects = _mem_calloc(mp->m_procs, elem_count, extended_elem_size);
   if (!mp->objects) {
     if (err) {
       *err = CCOL_ERR_STR("failed to allocate memory pool data area");
@@ -194,6 +194,7 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
       if (err) {
         *err = CCOL_ERR_STR("failed to initialize the rw lock");
       }
+      mp->should_use_locks = false;
       mempool_destroy(mp);
       return NULL;
     }
@@ -262,6 +263,7 @@ mempool *mempool_create_from_preallocated_buffer(
       if (err) {
         *err = CCOL_ERR_STR("failed to init the rw lock");
       }
+      mp->should_use_locks = false;
       mempool_destroy(mp);
       return NULL;
     }
@@ -383,7 +385,7 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
     if (header->elem_status != elem_is_taken) {
       // This block seems to be tampered with
       addr_t addr = header->next;
-      if (valid_mempool_addr(mp, (uintptr_t)(*addr))) {
+      if (addr && valid_mempool_addr(mp, (uintptr_t)addr)) {
         // Was this address returned to the pool before?
         if (header->elem_status == elem_is_free) {
           // Double free!
@@ -558,7 +560,7 @@ void _r_mempool_destroy(r_mempool *rmp) {
     }
 
     if (rmp->fb_policy == fallback_at_last_exhaustion) {
-      if (rmp->should_use_locks) {
+      if (rmp->pseudo_pool.should_use_locks) {
         rw_lock_destroy(rmp->pseudo_pool.lock);
       }
     }
@@ -588,6 +590,15 @@ bool assess_r_mempool_create_inputs(r_mempool *rmp,
       smallest_elem_count_power_of_two == 0) {
     if (err) {
       *err = CCOL_ERR_STR("zero sizes are not acceptable");
+    }
+    return false;
+  }
+
+  if (largest_size_power_of_two >= sizeof(size_t) * CHAR_BIT ||
+      smallest_size_power_of_two >= sizeof(size_t) * CHAR_BIT ||
+      smallest_elem_count_power_of_two >= sizeof(size_t) * CHAR_BIT) {
+    if (err) {
+      *err = CCOL_ERR_STR("power of two exceeds size_t width");
     }
     return false;
   }
@@ -637,6 +648,7 @@ bool assess_r_mempool_create_inputs(r_mempool *rmp,
  * tracks all dynamic entries across all sub-pools. */
 bool init_r_mempool_pseudo_pool(r_mempool *rmp) {
   mem_zero(&rmp->pseudo_pool, sizeof(mempool));
+  rmp->pseudo_pool.m_procs = rmp->m_procs;
   if (rmp->fb_policy == fallback_at_last_exhaustion) {
     if (rmp->should_use_locks) {
       if (rw_lock_init(rmp->pseudo_pool.lock) != 0) {
@@ -675,11 +687,10 @@ bool init_r_mempool_internal_pools(r_mempool *rmp, char **err) {
   mem_zero(rmp->mem_pools, rmp->number_of_mempools * sizeof(mempool *));
 
   size_t first_size = rmp->smallest_size;
-  size_t last_size = rmp->largest_size;
   size_t first_count = rmp->smallest_elem_count;
 
   for (size_t esize = first_size, ecount = first_count, index = 0;
-       esize <= last_size; esize *= 2, ecount /= 2, ++index) {
+       index < rmp->number_of_mempools; esize *= 2, ecount /= 2, ++index) {
     rmp->mem_pools[index] = mempool_create(
         ecount, esize, rmp->fb_policy == fallback_at_first_exhaustion,
         !rmp->should_use_locks, rmp->m_procs, err);
@@ -801,13 +812,12 @@ bool init_preallocated_r_mempool_internal_pools(r_mempool *rmp,
   }
 
   size_t first_size = rmp->smallest_size;
-  size_t last_size = rmp->largest_size;
   size_t first_count = rmp->smallest_elem_count;
 
   size_t cumulative_size = 0;
 
   for (size_t esize = first_size, ecount = first_count, index = 0;
-       esize <= last_size; esize *= 2, ecount /= 2, ++index) {
+       index < rmp->number_of_mempools; esize *= 2, ecount /= 2, ++index) {
     // Using different adjacent segments of the preallocated buffer
     // with different sizes to accommodate different pools of memory.
     uint8_t *sub_buffer = (uint8_t *)preallocated_buffer + cumulative_size;
@@ -989,12 +999,17 @@ void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size) {
       return addr;
     }
 
-    if (header->elem_status == elem_is_not_a_pool_member) {
-      // pseudo_pool entries have extended_elem_size = 0; computing
-      // EXTENDED_SIZE_TO_USER_SIZE(0) underflows. Use the new size as
-      // the copy bound — the original per-entry size is not recorded.
-      min_user_size = EXTENDED_SIZE_TO_USER_SIZE(new_ext_size);
+    if (header->elem_status == elem_is_not_a_pool_member &&
+        header->pool_ptr->extended_elem_size == 0) {
+      // Pseudo-pool (fallback_at_last_exhaustion) entry: the original
+      // allocation size is not stored in the header, so it cannot be
+      // recovered. Setting min_user_size to 0 skips the mem_cpy entirely,
+      // avoiding a buffer over-read when the new size is larger than the
+      // original. Data is not preserved across pseudo-pool reallocs.
+      min_user_size = 0;
     } else {
+      // Regular pool entry OR a fallback_at_first_exhaustion dynamic entry —
+      // both have a valid extended_elem_size in pool_ptr.
       min_user_size =
           EXTENDED_SIZE_TO_USER_SIZE(header->pool_ptr->extended_elem_size);
       if (EXTENDED_SIZE_TO_USER_SIZE(new_ext_size) < min_user_size) {

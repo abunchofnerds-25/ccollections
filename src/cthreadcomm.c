@@ -39,25 +39,26 @@ void add_duration_to_timespec(struct timespec *target,
                               struct timespec *duration) {
   static const long int max_nsecs = 1000000000;
 
-  if (target->tv_nsec > max_nsecs) {
+  if (target->tv_nsec >= max_nsecs) {
     target->tv_sec += target->tv_nsec / max_nsecs;
     target->tv_nsec = target->tv_nsec % max_nsecs;
   }
 
-  if (duration->tv_nsec > max_nsecs) {
-    duration->tv_sec += duration->tv_nsec / max_nsecs;
-    duration->tv_nsec = duration->tv_nsec % max_nsecs;
+  struct timespec dur = *duration;  // local copy — avoid mutating caller's struct
+  if (dur.tv_nsec >= max_nsecs) {
+    dur.tv_sec += dur.tv_nsec / max_nsecs;
+    dur.tv_nsec = dur.tv_nsec % max_nsecs;
   }
 
-  target->tv_sec += duration->tv_sec;
+  target->tv_sec += dur.tv_sec;
 
   long int gap = max_nsecs - target->tv_nsec;
 
-  if (gap > duration->tv_nsec) {
-    target->tv_nsec += duration->tv_nsec;
+  if (gap > dur.tv_nsec) {
+    target->tv_nsec += dur.tv_nsec;
   } else {
     ++target->tv_sec;
-    target->tv_nsec = duration->tv_nsec - gap;
+    target->tv_nsec = dur.tv_nsec - gap;
   }
 }
 
@@ -281,7 +282,7 @@ ccol_retval_t circq_try_send_zc(circular_queue *cq, c_message_t *msg) {
  * extend the timeout. Returns ccol_timed_out on expiry. */
 ccol_retval_t circq_timed_send_zc(circular_queue *cq, c_message_t *msg,
                                   struct timespec *timeout_duration) {
-  if (!verify_circq_send_zc_params(cq, msg)) {
+  if (!verify_circq_send_zc_params(cq, msg) || !timeout_duration) {
     return ccol_invalid_args;
   }
 
@@ -356,8 +357,13 @@ ccol_retval_t circq_recv_zc(circular_queue *cq, c_message_t *target_buf) {
 
   mutex_lock(cq->mutex);
 
-  while (cq->msg_count == 0) {
+  while (cq->msg_count == 0 && !cq->writing_disabled) {
     cond_var_wait(cq->read_cond, cq->mutex);
+  }
+
+  if (cq->msg_count == 0) {
+    mutex_unlock(cq->mutex);
+    return ccol_not_permitted;
   }
 
   _recvfrom_cq(cq, target_buf);
@@ -393,7 +399,7 @@ ccol_retval_t circq_try_recv_zc(circular_queue *cq, c_message_t *target_buf) {
  */
 ccol_retval_t circq_timed_recv_zc(circular_queue *cq, c_message_t *target_buf,
                                   struct timespec *timeout) {
-  if (!verify_recvfrom_cq_zc_params(cq, target_buf)) {
+  if (!verify_recvfrom_cq_zc_params(cq, target_buf) || !timeout) {
     return ccol_invalid_args;
   }
 
@@ -405,7 +411,7 @@ ccol_retval_t circq_timed_recv_zc(circular_queue *cq, c_message_t *target_buf,
     clock_gettime(CLOCK_REALTIME, &abs_time);
     add_duration_to_timespec(&abs_time, timeout);
 
-    while (cq->msg_count == 0) {
+    while (cq->msg_count == 0 && !cq->writing_disabled) {
       if ((retval = cond_var_timedwait(cq->read_cond, cq->mutex, abs_time))) {
         if (retval != ETIMEDOUT) {
           mutex_unlock(cq->mutex);
@@ -415,6 +421,11 @@ ccol_retval_t circq_timed_recv_zc(circular_queue *cq, c_message_t *target_buf,
         return ccol_timed_out;
       }
     }
+  }
+
+  if (cq->msg_count == 0) {
+    mutex_unlock(cq->mutex);
+    return ccol_not_permitted;
   }
 
   _recvfrom_cq(cq, target_buf);
@@ -432,6 +443,7 @@ ccol_retval_t circq_disable_sending(circular_queue *cq) {
     mutex_lock(cq->mutex);
     cq->writing_disabled = true;
     cond_var_broadcast(cq->write_cond);  // Wake waiting senders
+    cond_var_broadcast(cq->read_cond);   // Wake blocked receivers so they can observe the disabled state
     mutex_unlock(cq->mutex);
     return ccol_success;
   }
@@ -716,8 +728,13 @@ ccol_retval_t dynmq_recv_zc(dynamic_queue *dq, c_message_t *target_buf) {
 
   mutex_lock(dq->mutex);
 
-  while (dq->msg_count == 0) {
+  while (dq->msg_count == 0 && !dq->writing_disabled) {
     cond_var_wait(dq->read_cond, dq->mutex);
+  }
+
+  if (dq->msg_count == 0) {
+    mutex_unlock(dq->mutex);
+    return ccol_not_permitted;
   }
 
   ccol_retval_t result = _recvfrom_dq(dq, target_buf);
@@ -751,7 +768,7 @@ ccol_retval_t dynmq_try_recv_zc(dynamic_queue *dq, c_message_t *target_buf) {
  * the circular queue timed variants. */
 ccol_retval_t dynmq_timed_recv_zc(dynamic_queue *dq, c_message_t *target_buf,
                                   struct timespec *timeout) {
-  if (!verify_recvfrom_dq_zc_params(dq, target_buf)) {
+  if (!verify_recvfrom_dq_zc_params(dq, target_buf) || !timeout) {
     return ccol_invalid_args;
   }
 
@@ -763,7 +780,7 @@ ccol_retval_t dynmq_timed_recv_zc(dynamic_queue *dq, c_message_t *target_buf,
     clock_gettime(CLOCK_REALTIME, &abs_time);
     add_duration_to_timespec(&abs_time, timeout);
 
-    while (dq->msg_count == 0) {
+    while (dq->msg_count == 0 && !dq->writing_disabled) {
       if ((retval = cond_var_timedwait(dq->read_cond, dq->mutex, abs_time))) {
         if (retval != ETIMEDOUT) {
           mutex_unlock(dq->mutex);
@@ -773,6 +790,11 @@ ccol_retval_t dynmq_timed_recv_zc(dynamic_queue *dq, c_message_t *target_buf,
         return ccol_timed_out;
       }
     }
+  }
+
+  if (dq->msg_count == 0) {
+    mutex_unlock(dq->mutex);
+    return ccol_not_permitted;
   }
 
   ccol_retval_t result = _recvfrom_dq(dq, target_buf);
@@ -789,6 +811,7 @@ ccol_retval_t dynmq_disable_sending(dynamic_queue *dq) {
   if (dq) {
     mutex_lock(dq->mutex);
     dq->writing_disabled = true;
+    cond_var_broadcast(dq->read_cond);  // Wake blocked receivers so they can observe the disabled state
     mutex_unlock(dq->mutex);
     return ccol_success;
   }

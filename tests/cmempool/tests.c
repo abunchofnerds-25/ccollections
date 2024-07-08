@@ -1377,6 +1377,196 @@ TEST(r_mempools, c_try_exhausting_with_fallback_at_last_exhaustion_no_locks) {
 }
 
 // Preallocated rmempool tests
+TEST(r_mempools, create_fails_power_exceeds_size_t_width) {
+  // Regression for Bug 6: (size_t)1 << n is UB when n >= sizeof(size_t)*CHAR_BIT.
+  // assess_r_mempool_create_inputs must reject all three power parameters
+  // that would trigger that shift.
+  char *err;
+
+  r_mempool *rmp = r_mempool_create(64, 65, 65, fallback_disabled, false, NULL, &err);
+  REQUIRE_EQ((void *)rmp, NULL);
+  REQUIRE_NE((void *)err, NULL);
+
+  rmp = r_mempool_create(4, 64, 64, fallback_disabled, false, NULL, &err);
+  REQUIRE_EQ((void *)rmp, NULL);
+  REQUIRE_NE((void *)err, NULL);
+
+  rmp = r_mempool_create(4, 6, 64, fallback_disabled, false, NULL, &err);
+  REQUIRE_EQ((void *)rmp, NULL);
+  REQUIRE_NE((void *)err, NULL);
+}
+
+TEST(r_mempools, realloc_first_exhaustion_entry_grows) {
+  // Regression for Bug A: when a fallback_at_first_exhaustion dynamic entry
+  // (elem_is_not_a_pool_member, pool_ptr->extended_elem_size != 0) is
+  // reallocated to a larger pool, min_user_size must be bounded by the old
+  // slot's user size, not the new requested size.  Before the fix, the copy
+  // used new_size bytes from a smaller allocation — a heap over-read caught
+  // by Valgrind / ASan.
+  r_mempool *rmp = r_mempool_create(4, 6, 7, fallback_at_first_exhaustion, false, NULL, NULL);
+  REQUIRE_NE((void *)rmp, NULL);
+
+  // Exhaust pool 0 completely (128 x 16-byte slots).
+  void *fill[128];
+  for (size_t i = 0; i < 128; ++i) {
+    fill[i] = r_mempool_alloc_entry(rmp, 16);
+    REQUIRE_NE(fill[i], NULL);
+  }
+  REQUIRE_EQ(r_mempool_used_count(rmp, 16), 128);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 0);
+
+  // Next 16-byte request spills to the heap (pool[0] fallback).  This entry
+  // is tagged elem_is_not_a_pool_member with pool_ptr == pool[0] and
+  // pool_ptr->extended_elem_size encoding a 16-byte user area.
+  char *entry = r_mempool_alloc_entry(rmp, 16);
+  REQUIRE_NE((void *)entry, NULL);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 1);
+
+  for (int i = 0; i < 16; ++i) {
+    entry[i] = (char)(i + 1);
+  }
+
+  // Realloc to 32 bytes (pool[1]).  Only the first 16 bytes of the old entry
+  // are valid — reading 32 bytes would over-run the original heap allocation.
+  char *grown = r_mempool_realloc_entry(rmp, entry, 32);
+  REQUIRE_NE((void *)grown, NULL);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 0);
+  REQUIRE_EQ(r_mempool_used_count(rmp, 32), 1);
+
+  for (int i = 0; i < 16; ++i) {
+    REQUIRE_EQ(grown[i], (char)(i + 1));
+  }
+
+  r_mempool_free_entry(grown);
+  for (size_t i = 0; i < 128; ++i) {
+    r_mempool_free_entry(fill[i]);
+  }
+
+  r_mempool_destroy(rmp);
+  REQUIRE_EQ((void *)rmp, NULL);
+}
+
+TEST(r_mempools, realloc_last_exhaustion_pseudo_pool_entry_shrinks) {
+  // Regression: r_mempool_realloc_entry must correctly identify
+  // fallback_at_last_exhaustion pseudo_pool entries (pool_ptr->extended_elem_size
+  // == 0) and avoid reading beyond the original allocation.  Because the
+  // original user size is not stored in the header, the copy is skipped
+  // entirely (min_user_size = 0) to prevent a buffer over-read on grow.
+  // Data is therefore NOT preserved across pseudo-pool reallocs; only the
+  // allocation/free bookkeeping is verified here.
+  r_mempool *rmp = r_mempool_create(4, 6, 7, fallback_at_last_exhaustion, false, NULL, NULL);
+  REQUIRE_NE((void *)rmp, NULL);
+
+  // Exhaust all three sub-pools so the next allocation uses the pseudo_pool.
+  void *fill[224];
+  size_t iter = 0;
+  for (size_t i = 0; i < 128; ++i) fill[iter++] = r_mempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i)  fill[iter++] = r_mempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i)  fill[iter++] = r_mempool_alloc_entry(rmp, 64);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 32), 0);
+
+  // Request 32 bytes when all pools are exhausted → pseudo_pool entry
+  // (pool_ptr == &rmp->pseudo_pool, extended_elem_size == 0).
+  char *entry = r_mempool_alloc_entry(rmp, 32);
+  REQUIRE_NE((void *)entry, NULL);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 32), 1);
+
+  // Shrink to 16 bytes.  The old entry is freed; a new one is returned.
+  // No data copy is performed (original size unrecoverable from the header).
+  char *shrunk = r_mempool_realloc_entry(rmp, entry, 16);
+  REQUIRE_NE((void *)shrunk, NULL);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 1);
+
+  r_mempool_free_entry(shrunk);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 0);
+
+  for (size_t i = 0; i < 224; ++i) {
+    r_mempool_free_entry(fill[i]);
+  }
+
+  r_mempool_destroy(rmp);
+  REQUIRE_EQ((void *)rmp, NULL);
+}
+
+TEST(r_mempools, realloc_last_exhaustion_pseudo_pool_entry_grows) {
+  // Regression: growing a pseudo_pool entry must not over-read the original
+  // allocation.  Before the fix, min_user_size was set to the NEW (larger)
+  // requested size, causing mem_cpy to read beyond the original heap block —
+  // caught by Valgrind/ASan as a buffer over-read.  With min_user_size = 0,
+  // no copy is performed; we only verify that the call succeeds and that
+  // free-list bookkeeping stays consistent.
+  r_mempool *rmp = r_mempool_create(4, 6, 7, fallback_at_last_exhaustion, false, NULL, NULL);
+  REQUIRE_NE((void *)rmp, NULL);
+
+  // Exhaust all three sub-pools.
+  void *fill[224];
+  size_t iter = 0;
+  for (size_t i = 0; i < 128; ++i) fill[iter++] = r_mempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i)  fill[iter++] = r_mempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i)  fill[iter++] = r_mempool_alloc_entry(rmp, 64);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 0);
+
+  // Allocate 16 bytes from pseudo_pool (all pools full).
+  char *entry = r_mempool_alloc_entry(rmp, 16);
+  REQUIRE_NE((void *)entry, NULL);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 1);
+
+  // Grow to 32 bytes.  The original size (16) is unrecoverable; the copy is
+  // skipped entirely.  A valid new 32-byte pseudo_pool entry is returned.
+  // fallback_at_last_exhaustion uses a single shared pseudo_pool counter for
+  // all sizes, so after the realloc the old 16-byte entry is freed and the
+  // new 32-byte entry is live — total pseudo_pool count stays at 1.
+  char *grown = r_mempool_realloc_entry(rmp, entry, 32);
+  REQUIRE_NE((void *)grown, NULL);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 1);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 32), 1);
+
+  r_mempool_free_entry(grown);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 32), 0);
+
+  for (size_t i = 0; i < 224; ++i) {
+    r_mempool_free_entry(fill[i]);
+  }
+
+  r_mempool_destroy(rmp);
+  REQUIRE_EQ((void *)rmp, NULL);
+}
+
+TEST(r_mempools, custom_allocator_propagated_to_pseudo_pool) {
+  // Regression for Bug 3: init_r_mempool_pseudo_pool did not copy rmp->m_procs
+  // into pseudo_pool.m_procs.  Under fallback_at_last_exhaustion, pseudo_pool
+  // entries were allocated with NULL m_procs (plain malloc) but freed with the
+  // custom allocator — an allocator mismatch detectable by Valgrind.
+  ccol_memmgmt_procs_t m_procs = {
+      .malloc = malloc, .calloc = calloc, .realloc = realloc, .free = free};
+
+  r_mempool *rmp =
+      r_mempool_create(4, 6, 7, fallback_at_last_exhaustion, false, &m_procs, NULL);
+  REQUIRE_NE((void *)rmp, NULL);
+
+  void *fill[224];
+  size_t iter = 0;
+  for (size_t i = 0; i < 128; ++i) fill[iter++] = r_mempool_alloc_entry(rmp, 16);
+  for (size_t i = 0; i < 64; ++i)  fill[iter++] = r_mempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i)  fill[iter++] = r_mempool_alloc_entry(rmp, 64);
+
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 0);
+
+  void *entry = r_mempool_alloc_entry(rmp, 16);
+  REQUIRE_NE(entry, NULL);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 1);
+
+  r_mempool_free_entry(entry);
+  REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 16), 0);
+
+  for (size_t i = 0; i < 224; ++i) {
+    r_mempool_free_entry(fill[i]);
+  }
+
+  r_mempool_destroy(rmp);
+  REQUIRE_EQ((void *)rmp, NULL);
+}
+
 TEST(preallocated_r_mempools, exhaust_all_fallback_disabled) {
   static DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(
       preallocated_rmp_buffer, // The name of the buffer.

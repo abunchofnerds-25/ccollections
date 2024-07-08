@@ -928,6 +928,102 @@ TEST(cbst_maps, string_keys) {
   cbmap_destroy(bm);
 }
 
+// Helper: collect iterated string keys into an array and return count.
+static int collect_string_keys(cbmap bm, const char *out[], int max_out) {
+  cbmap_redeclare(bm, char *, int);
+  int n = 0;
+  cbmap_iter_declare(bm, it);
+  for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
+    if (n < max_out) {
+      out[n] = *cbmap_iter_key_ptr(it);
+    }
+    ++n;
+  }
+  return n;
+}
+
+TEST(cbst_maps, string_keys_3_char_iteration_order) {
+  // 3-char strings occupy exactly 4 bytes (including the null terminator).
+  // Before the fix, compare_keys fell through to cmp_unsigned_small which used
+  // uint32_t comparison for size-4 keys. On little-endian that compares bytes
+  // from highest address to lowest, i.e. in reverse character order, yielding
+  // wrong lexicographic ordering. This test inserts strings in an order whose
+  // pre-fix sorted sequence differs from the correct lexicographic sequence and
+  // then asserts the correct order is produced by in-order iteration.
+  //
+  // Correct lexicographic order: "abc" < "acb" < "bac" < "bca" < "cab"
+  //
+  // Pre-fix uint32_t order (little-endian): "bca" < "cab" < "acb" < "bac" < "abc"
+  // (sorted by 0x00616362, 0x00626163, 0x00626361, 0x00636162, 0x00636261)
+  cbmap_construct(bm, char *, int);
+
+  char *keys[] = {"bca", "abc", "cab", "acb", "bac"};
+  for (int i = 0; i < 5; ++i) {
+    int val = i + 1;
+    cbmap_insert(bm, keys[i], val);
+  }
+
+  REQUIRE_EQ(cbmap_elem_count(bm), 5);
+
+  const char *expected[] = {"abc", "acb", "bac", "bca", "cab"};
+  const char *got[5];
+  int n = collect_string_keys(bm, got, 5);
+
+  REQUIRE_EQ(n, 5);
+  for (int i = 0; i < 5; ++i) {
+    REQUIRE_STREQ(got[i], expected[i]);
+  }
+
+  // Lookups must still work regardless of ordering.
+  REQUIRE_NE((void *)cbmap_get_ptr(bm, "abc"), NULL);
+  REQUIRE_NE((void *)cbmap_get_ptr(bm, "bca"), NULL);
+  REQUIRE_EQ((void *)cbmap_get_ptr(bm, "xyz"), NULL);
+
+  cbmap_destroy(bm);
+}
+
+TEST(cbst_maps, string_keys_7_char_iteration_order) {
+  // 7-char strings occupy exactly 8 bytes (including the null terminator).
+  // Before the fix, compare_keys used uint64_t comparison for size-8 keys. On
+  // little-endian that effectively reverses the character order: char[6] is
+  // the most significant byte, so two strings differing only at char[0] are
+  // ordered by their LAST character instead of their FIRST. This can flip the
+  // correct ordering.
+  //
+  // Correct lexicographic order:
+  //   "abcdefg" < "abcdefh" < "abcdegh" < "bacdefg" < "gfedcba"
+  //
+  // Pre-fix uint64_t order (little-endian):
+  //   "gfedcba" < "bacdefg" < "abcdefg" < "abcdefh" < "abcdegh"
+  // (sorted by 0x0061..., 0x0067...62, 0x0067...61, 0x0068...61, 0x0068...61)
+  cbmap_construct(bm, char *, int);
+
+  char *keys[] = {"bacdefg", "abcdefg", "gfedcba", "abcdegh", "abcdefh"};
+  for (int i = 0; i < 5; ++i) {
+    int val = i + 1;
+    cbmap_insert(bm, keys[i], val);
+  }
+
+  REQUIRE_EQ(cbmap_elem_count(bm), 5);
+
+  const char *expected[] = {"abcdefg", "abcdefh", "abcdegh", "bacdefg",
+                             "gfedcba"};
+  const char *got[5];
+  int n = collect_string_keys(bm, got, 5);
+
+  REQUIRE_EQ(n, 5);
+  for (int i = 0; i < 5; ++i) {
+    REQUIRE_STREQ(got[i], expected[i]);
+  }
+
+  // Lookups must still work.
+  REQUIRE_NE((void *)cbmap_get_ptr(bm, "abcdefg"), NULL);
+  REQUIRE_NE((void *)cbmap_get_ptr(bm, "gfedcba"), NULL);
+  REQUIRE_EQ((void *)cbmap_get_ptr(bm, "zzzzzzz"), NULL);
+
+  cbmap_destroy(bm);
+}
+
 TEST(cbst_maps, construct_scoped_lifecycle) {
   {
     cbmap_construct_scoped(bm, int, int);

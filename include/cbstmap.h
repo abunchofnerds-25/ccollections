@@ -47,6 +47,20 @@ SOFTWARE.
  * - Default comparison: memcmp for unsigned, proper signed comparison
  */
 
+/**
+ * @brief Check if a key type-variable pointer denotes a char-pointer key type
+ *
+ * Analogous to __is_signed_int_ptr: the key type-variable has type key_t*, so
+ * for char* keys the type-variable has type char** — that is what this checks.
+ */
+#define __is_char_ptr_key(_ptr)          \
+  _Generic((_ptr),                       \
+      char **: true,                     \
+      const char **: true,               \
+      unsigned char **: true,            \
+      const unsigned char **: true,      \
+      default: false)
+
 /** @brief Opaque binary search tree map structure */
 typedef struct cbinarymap cbinarymap;
 
@@ -85,7 +99,7 @@ typedef cbinarymap *cbmap;
  * @see cbmap_create_ch
  * @see cbmap_destroy
  */
-cbmap cbmap_create_full(bool keys_are_signed_ints,
+cbmap cbmap_create_full(bool keys_are_signed_ints, bool keys_are_strings,
                         ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char **err);
@@ -103,7 +117,7 @@ cbmap cbmap_create_full(bool keys_are_signed_ints,
  */
 static inline __attribute__((always_inline)) cbmap
 cbmap_create(bool keys_are_signed_ints, char **err) {
-  return cbmap_create_full(keys_are_signed_ints, NULL, NULL, err);
+  return cbmap_create_full(keys_are_signed_ints, false, NULL, NULL, err);
 }
 
 /**
@@ -120,7 +134,7 @@ cbmap_create(bool keys_are_signed_ints, char **err) {
  */
 static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
     bool keys_are_signed_ints, ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
-  return cbmap_create_full(keys_are_signed_ints, mmgmt_procs, NULL, err);
+  return cbmap_create_full(keys_are_signed_ints, false, mmgmt_procs, NULL, err);
 }
 
 /**
@@ -141,8 +155,8 @@ static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
 static inline __attribute__((always_inline)) cbmap
 cbmap_create_ch(bool keys_are_signed_ints,
                 ccol_comparison_proc_t custom_comparison_proc, char **err) {
-  return cbmap_create_full(keys_are_signed_ints, NULL, custom_comparison_proc,
-                           err);
+  return cbmap_create_full(keys_are_signed_ints, false, NULL,
+                           custom_comparison_proc, err);
 }
 
 /* ========================================================================== */
@@ -588,14 +602,15 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @see cbmap_declare
  * @see cbmap_construct
  */
-#define cbmap_init(hm_name)                                                  \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name = cbmap_create_full(                                             \
-        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, NULL, &err); \
-    if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
-    }                                                                        \
+#define cbmap_init(hm_name)                                                   \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = cbmap_create_full(                                              \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), NULL, NULL, &err);   \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
   } while (0)
 
 /**
@@ -609,15 +624,16 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note Terminates program on failure
  * @note Automatically detects signed vs unsigned keys
  */
-#define cbmap_init_mp(hm_name, mmgmt_procs)                                 \
-  do {                                                                      \
-    char *err = NULL;                                                       \
-    hm_name =                                                               \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var), \
-                          mmgmt_procs, NULL, &err);                         \
-    if (!hm_name) {                                                         \
-      fatal_err("%s", err);                                                 \
-    }                                                                       \
+#define cbmap_init_mp(hm_name, mmgmt_procs)                                  \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = cbmap_create_full(                                             \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                   \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), mmgmt_procs, NULL,  \
+        &err);                                                               \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
   } while (0)
 
 /**
@@ -631,15 +647,16 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note Terminates program on failure
  * @note Uses default memory management
  */
-#define cbmap_init_cc(hm_name, custom_comparison_proc)                      \
-  do {                                                                      \
-    char *err = NULL;                                                       \
-    hm_name =                                                               \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var), \
-                          NULL, custom_comparison_proc, &err);              \
-    if (!hm_name) {                                                         \
-      fatal_err("%s", err);                                                 \
-    }                                                                       \
+#define cbmap_init_cc(hm_name, custom_comparison_proc)                       \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = cbmap_create_full(                                             \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                   \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), NULL,               \
+        custom_comparison_proc, &err);                                       \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
   } while (0)
 
 /**
@@ -654,15 +671,16 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  *
  * @note Terminates program on failure
  */
-#define cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc)       \
-  do {                                                                      \
-    char *err = NULL;                                                       \
-    hm_name =                                                               \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var), \
-                          mmgmt_procs, custom_comparison_proc, &err);       \
-    if (!hm_name) {                                                         \
-      fatal_err("%s", err);                                                 \
-    }                                                                       \
+#define cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc)        \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = cbmap_create_full(                                             \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                   \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), mmgmt_procs,        \
+        custom_comparison_proc, &err);                                       \
+    if (!hm_name) {                                                          \
+      fatal_err("%s", err);                                                  \
+    }                                                                        \
   } while (0)
 
 /**
@@ -690,30 +708,32 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * cbmap_destroy(sorted_map);
  * @endcode
  */
-#define cbmap_construct(hm_name, key_t, val_t)                               \
-  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name = cbmap_create_full(                                             \
-        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, NULL, &err); \
-    if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
-    }                                                                        \
+#define cbmap_construct(hm_name, key_t, val_t)                                \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL;  \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = cbmap_create_full(                                              \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), NULL, NULL, &err);   \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
   } while (0)
 
-#define cbmap_construct_scoped(hm_name, key_t, val_t)                        \
-  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy);                          \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name = cbmap_create_full(                                             \
-        __is_signed_int_ptr(hm_name##__cbm_key_type_var), NULL, NULL, &err); \
-    if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
-    }                                                                        \
+#define cbmap_construct_scoped(hm_name, key_t, val_t)                         \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL;  \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy);                           \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = cbmap_create_full(                                              \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), NULL, NULL, &err);   \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
   } while (0)
 
 /**
@@ -728,32 +748,34 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  *
  * @note Terminates program on failure
  */
-#define cbmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs)               \
-  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name =                                                                \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
-                          mmgmt_procs, NULL, &err);                          \
-    if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
-    }                                                                        \
+#define cbmap_construct_mp(hm_name, key_t, val_t, mmgmt_procs)                \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL;  \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = cbmap_create_full(                                              \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), mmgmt_procs, NULL,   \
+        &err);                                                                \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
   } while (0)
 
-#define cbmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs)        \
-  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name =                                                                \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
-                          mmgmt_procs, NULL, &err);                          \
-    if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
-    }                                                                        \
+#define cbmap_construct_mp_scoped(hm_name, key_t, val_t, mmgmt_procs)         \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL;  \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = cbmap_create_full(                                              \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), mmgmt_procs, NULL,   \
+        &err);                                                                \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
   } while (0)
 
 /**
@@ -768,33 +790,35 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  *
  * @note Terminates program on failure
  */
-#define cbmap_construct_cc(hm_name, key_t, val_t, custom_comparison_proc)    \
-  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name =                                                                \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
-                          NULL, custom_comparison_proc, &err);               \
-    if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
-    }                                                                        \
+#define cbmap_construct_cc(hm_name, key_t, val_t, custom_comparison_proc)     \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL;  \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = cbmap_create_full(                                              \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), NULL,                \
+        custom_comparison_proc, &err);                                        \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
   } while (0)
 
-#define cbmap_construct_cc_scoped(hm_name, key_t, val_t,                     \
-                                  custom_comparison_proc)                    \
-  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name =                                                                \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
-                          NULL, custom_comparison_proc, &err);               \
-    if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
-    }                                                                        \
+#define cbmap_construct_cc_scoped(hm_name, key_t, val_t,                      \
+                                  custom_comparison_proc)                     \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL;  \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = cbmap_create_full(                                              \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), NULL,                \
+        custom_comparison_proc, &err);                                        \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
   } while (0)
 
 /**
@@ -811,34 +835,36 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  *
  * @note Terminates program on failure
  */
-#define cbmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,             \
-                             custom_comparison_proc)                         \
-  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;     \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name =                                                                \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
-                          mmgmt_procs, custom_comparison_proc, &err);        \
-    if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
-    }                                                                        \
+#define cbmap_construct_full(hm_name, key_t, val_t, mmgmt_procs,              \
+                             custom_comparison_proc)                          \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL;  \
+  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = cbmap_create_full(                                              \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), mmgmt_procs,         \
+        custom_comparison_proc, &err);                                        \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
   } while (0)
 
-#define cbmap_construct_full_scoped(hm_name, key_t, val_t, mmgmt_procs,      \
-                                    custom_comparison_proc)                  \
-  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                   \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name =                                                                \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
-                          mmgmt_procs, custom_comparison_proc, &err);        \
-    if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
-    }                                                                        \
+#define cbmap_construct_full_scoped(hm_name, key_t, val_t, mmgmt_procs,       \
+                                    custom_comparison_proc)                   \
+  typeof(key_t) *hm_name##__cbm_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(val_t) *hm_name##__cbm_val_type_var __attribute__((unused)) = NULL;  \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    hm_name = cbmap_create_full(                                              \
+        __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
+        __is_char_ptr_key(hm_name##__cbm_key_type_var), mmgmt_procs,         \
+        custom_comparison_proc, &err);                                        \
+    if (!hm_name) {                                                           \
+      fatal_err("%s", err);                                                   \
+    }                                                                         \
   } while (0)
 
 /* ========================================================================== */

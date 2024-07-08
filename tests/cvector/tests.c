@@ -731,6 +731,49 @@ TEST(cvectors, append_cvector_triggers_expansion) {
   cvector_destroy(v2);
 }
 
+TEST(cvectors, append_cvector_self_append) {
+  // No-realloc path: 2 elements, capacity=4, self-append fits without growing.
+  {
+    cvector *v = cvector_create(sizeof(int), NULL);
+    cvector_push_back(v, &(int){1});
+    cvector_push_back(v, &(int){2});
+
+    REQUIRE_EQ(cvector_get_capacity(v), minimum_capacity);
+    REQUIRE_EQ((int)cvector_append_cvector(v, v), true);
+    REQUIRE_EQ(cvector_elem_count(v), 4);
+    REQUIRE_EQ(cvector_get_capacity(v), minimum_capacity);  // no realloc
+
+    REQUIRE_EQ(*(int *)cvector_at(v, 0), 1);
+    REQUIRE_EQ(*(int *)cvector_at(v, 1), 2);
+    REQUIRE_EQ(*(int *)cvector_at(v, 2), 1);
+    REQUIRE_EQ(*(int *)cvector_at(v, 3), 2);
+
+    cvector_destroy(v);
+  }
+
+  // Realloc path: 3 elements, capacity=4, self-append needs 6 slots -> realloc.
+  {
+    cvector *v = cvector_create(sizeof(int), NULL);
+    cvector_push_back(v, &(int){10});
+    cvector_push_back(v, &(int){20});
+    cvector_push_back(v, &(int){30});
+
+    REQUIRE_EQ(cvector_get_capacity(v), minimum_capacity);
+    REQUIRE_EQ((int)cvector_append_cvector(v, v), true);
+    REQUIRE_EQ(cvector_elem_count(v), 6);
+    REQUIRE_NE(cvector_get_capacity(v), minimum_capacity);  // grew
+
+    REQUIRE_EQ(*(int *)cvector_at(v, 0), 10);
+    REQUIRE_EQ(*(int *)cvector_at(v, 1), 20);
+    REQUIRE_EQ(*(int *)cvector_at(v, 2), 30);
+    REQUIRE_EQ(*(int *)cvector_at(v, 3), 10);
+    REQUIRE_EQ(*(int *)cvector_at(v, 4), 20);
+    REQUIRE_EQ(*(int *)cvector_at(v, 5), 30);
+
+    cvector_destroy(v);
+  }
+}
+
 // ========================================================================
 // COMPLEX SCENARIOS
 // ========================================================================

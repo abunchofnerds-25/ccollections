@@ -108,6 +108,20 @@ TEST(add_duration_to_timespec, edge_cases) {
   }
 }
 
+TEST(add_duration_to_timespec, duration_not_mutated) {
+  // The function must not modify the caller's duration struct even when
+  // duration->tv_nsec is overflowed and would normally be normalised.
+  struct timespec t = {.tv_sec = 1, .tv_nsec = 600000000};
+  struct timespec d = {.tv_sec = 2, .tv_nsec = 1500000000};
+  add_duration_to_timespec(&t, &d);
+  // Verify the result is correct (function was actually called).
+  REQUIRE_EQ(t.tv_sec, 5);
+  REQUIRE_EQ(t.tv_nsec, 100000000);
+  // Duration struct must be unchanged.
+  REQUIRE_EQ(d.tv_sec, 2);
+  REQUIRE_EQ(d.tv_nsec, 1500000000);
+}
+
 // CIRCULAR_QUEUE TESTS
 
 TEST(circular_queues, create_fails) {
@@ -382,6 +396,98 @@ TEST(circular_queues, ring_wrap_around) {
     REQUIRE_EQ(*(char *)in.data, 'A' + i);
     free(in.data);
   }
+
+  circular_queue_destroy(cq);
+}
+
+TEST(circular_queues, timed_args_null_timeout) {
+  // NULL timeout must return ccol_invalid_args without crashing.
+  circular_queue *cq = circular_queue_create_with_mprocs(1, NULL, NULL);
+
+  c_message_t m = {.data = malloc(sizeof(char)), .size = 1};
+  REQUIRE_EQ(circq_timed_send_zc(cq, &m, NULL), ccol_invalid_args);
+  REQUIRE_NE(m.data, NULL);  // caller retains ownership on failure
+
+  c_message_t recv_m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(circq_timed_recv_zc(cq, &recv_m, NULL), ccol_invalid_args);
+
+  free(m.data);
+  circular_queue_destroy(cq);
+}
+
+TEST(circular_queues, recv_drains_then_not_permitted) {
+  // After sending is disabled, messages already in the queue must still be
+  // receivable. Once the queue empties, blocking recv must return
+  // ccol_not_permitted rather than deadlocking.
+  circular_queue *cq = circular_queue_create_with_mprocs(2, NULL, NULL);
+
+  c_message_t m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(circq_send_zc(cq, &m), ccol_success);
+  REQUIRE_EQ(circq_send_zc(cq, &m), ccol_success);
+
+  circq_disable_sending(cq);
+
+  // Existing messages must still drain successfully.
+  REQUIRE_EQ(circq_recv_zc(cq, &m), ccol_success);
+  REQUIRE_EQ(circq_recv_zc(cq, &m), ccol_success);
+
+  // Queue is now empty with sending disabled: must return immediately.
+  REQUIRE_EQ(circq_recv_zc(cq, &m), ccol_not_permitted);
+
+  circular_queue_destroy(cq);
+}
+
+typedef struct {
+  circular_queue *cq;
+  ccol_retval_t result;
+} cq_disable_recv_args;
+
+void *cq_blocking_recv_thread(void *raw) {
+  cq_disable_recv_args *a = (cq_disable_recv_args *)raw;
+  c_message_t m = {.data = NULL, .size = 0};
+  a->result = circq_recv_zc(a->cq, &m);
+  return NULL;
+}
+
+TEST(circular_queues, disable_sending_unblocks_recv) {
+  // A thread blocked in circq_recv_zc on an empty queue must be woken and
+  // return ccol_not_permitted when circq_disable_sending is called.
+  circular_queue *cq = circular_queue_create_with_mprocs(1, NULL, NULL);
+
+  cq_disable_recv_args args = {.cq = cq, .result = ccol_success};
+  pthread_t tid;
+  pthread_create(&tid, NULL, cq_blocking_recv_thread, &args);
+
+  usleep(50000);  // let the receiver block on the empty queue
+
+  struct timespec before, after;
+  getWallTime(before);
+  circq_disable_sending(cq);
+  pthread_join(tid, NULL);
+  getWallTime(after);
+
+  REQUIRE_EQ(args.result, ccol_not_permitted);
+  REQUIRE_LT(diffTimeUSec(before, after), 100000);  // must unblock quickly
+
+  circular_queue_destroy(cq);
+}
+
+TEST(circular_queues, timed_recv_not_permitted_on_disabled) {
+  // circq_timed_recv_zc must return ccol_not_permitted immediately when the
+  // queue is empty and sending is disabled, not wait out the full timeout.
+  circular_queue *cq = circular_queue_create_with_mprocs(1, NULL, NULL);
+
+  circq_disable_sending(cq);
+
+  struct timespec timeout = {.tv_sec = 1, .tv_nsec = 0};  // 1-second budget
+  struct timespec before, after;
+  c_message_t m = {.data = NULL, .size = 0};
+
+  getWallTime(before);
+  REQUIRE_EQ(circq_timed_recv_zc(cq, &m, &timeout), ccol_not_permitted);
+  getWallTime(after);
+  // Must return in well under 1 second (was ccol_timed_out without the fix).
+  REQUIRE_LT(diffTimeUSec(before, after), 100000);
 
   circular_queue_destroy(cq);
 }
@@ -678,6 +784,93 @@ TEST(dynamic_queues, enable_disable_sending) {
   REQUIRE_EQ(((char *)(m2.data))[1], '\0');
 
   free(m2.data);
+  dynamic_queue_destroy(dq);
+}
+
+TEST(dynamic_queues, timed_recv_null_timeout) {
+  // NULL timeout must return ccol_invalid_args without crashing.
+  dynamic_queue *dq = dynamic_queue_create_with_mprocs(NULL, NULL);
+
+  c_message_t m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(dynmq_timed_recv_zc(dq, &m, NULL), ccol_invalid_args);
+
+  dynamic_queue_destroy(dq);
+}
+
+TEST(dynamic_queues, recv_drains_then_not_permitted) {
+  // After sending is disabled, messages already in the queue must still be
+  // receivable. Once the queue empties, blocking recv must return
+  // ccol_not_permitted rather than deadlocking.
+  dynamic_queue *dq = dynamic_queue_create_with_mprocs(NULL, NULL);
+
+  c_message_t m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(dynmq_send_zc(dq, &m), ccol_success);
+  REQUIRE_EQ(dynmq_send_zc(dq, &m), ccol_success);
+
+  dynmq_disable_sending(dq);
+
+  // Existing messages must still drain successfully.
+  REQUIRE_EQ(dynmq_recv_zc(dq, &m), ccol_success);
+  REQUIRE_EQ(dynmq_recv_zc(dq, &m), ccol_success);
+
+  // Queue is now empty with sending disabled: must return immediately.
+  REQUIRE_EQ(dynmq_recv_zc(dq, &m), ccol_not_permitted);
+
+  dynamic_queue_destroy(dq);
+}
+
+typedef struct {
+  dynamic_queue *dq;
+  ccol_retval_t result;
+} dq_disable_recv_args;
+
+void *dq_blocking_recv_thread(void *raw) {
+  dq_disable_recv_args *a = (dq_disable_recv_args *)raw;
+  c_message_t m = {.data = NULL, .size = 0};
+  a->result = dynmq_recv_zc(a->dq, &m);
+  return NULL;
+}
+
+TEST(dynamic_queues, disable_sending_unblocks_recv) {
+  // A thread blocked in dynmq_recv_zc on an empty queue must be woken and
+  // return ccol_not_permitted when dynmq_disable_sending is called.
+  dynamic_queue *dq = dynamic_queue_create_with_mprocs(NULL, NULL);
+
+  dq_disable_recv_args args = {.dq = dq, .result = ccol_success};
+  pthread_t tid;
+  pthread_create(&tid, NULL, dq_blocking_recv_thread, &args);
+
+  usleep(50000);  // let the receiver block on the empty queue
+
+  struct timespec before, after;
+  getWallTime(before);
+  dynmq_disable_sending(dq);
+  pthread_join(tid, NULL);
+  getWallTime(after);
+
+  REQUIRE_EQ(args.result, ccol_not_permitted);
+  REQUIRE_LT(diffTimeUSec(before, after), 100000);  // must unblock quickly
+
+  dynamic_queue_destroy(dq);
+}
+
+TEST(dynamic_queues, timed_recv_not_permitted_on_disabled) {
+  // dynmq_timed_recv_zc must return ccol_not_permitted immediately when the
+  // queue is empty and sending is disabled, not wait out the full timeout.
+  dynamic_queue *dq = dynamic_queue_create_with_mprocs(NULL, NULL);
+
+  dynmq_disable_sending(dq);
+
+  struct timespec timeout = {.tv_sec = 1, .tv_nsec = 0};  // 1-second budget
+  struct timespec before, after;
+  c_message_t m = {.data = NULL, .size = 0};
+
+  getWallTime(before);
+  REQUIRE_EQ(dynmq_timed_recv_zc(dq, &m, &timeout), ccol_not_permitted);
+  getWallTime(after);
+  // Must return in well under 1 second (was ccol_timed_out without the fix).
+  REQUIRE_LT(diffTimeUSec(before, after), 100000);
+
   dynamic_queue_destroy(dq);
 }
 

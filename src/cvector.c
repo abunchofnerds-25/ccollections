@@ -44,7 +44,9 @@ struct cvector {
  * must still be accessible when freeing the container. */
 void __cvector_destroy(cvec v) {
   if (v) {
-    _mem_free(v->m_procs, v->data_ptr);
+    if (v->data_ptr) {
+      _mem_free(v->m_procs, v->data_ptr);
+    }
 
     if (v->m_procs) {
       ccol_free_t free_func = v->m_procs->free;
@@ -137,9 +139,14 @@ bool scale_the_cvector_size_up(cvec v) {
     return false;  // Would overflow
   }
 
+  size_t new_capacity = scaling_factor * v->capacity;
+  if (new_capacity > SIZE_MAX / v->elem_size) {
+    return false;  // byte size would overflow
+  }
+
   void *orig = v->data_ptr;
-  v->data_ptr = _mem_realloc(v->m_procs, v->data_ptr,
-                             scaling_factor * v->capacity * v->elem_size);
+  v->data_ptr =
+      _mem_realloc(v->m_procs, v->data_ptr, new_capacity * v->elem_size);
   if (!v->data_ptr) {
     v->data_ptr = orig;
     return false;
@@ -259,6 +266,10 @@ bool cvector_reserve(cvec v, size_t new_capacity_count) {
     return false;
   }
 
+  if (refined_new_capacity_count > SIZE_MAX / v->elem_size) {
+    return false;  // byte size would overflow
+  }
+
   if (refined_new_capacity_count <= v->capacity) {
     // We already have the requested capacity
     return true;
@@ -319,6 +330,16 @@ bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count) {
 bool cvector_append_cvector(cvec v_to, cvec v_from) {
   if (!v_to || !v_from || v_to->elem_size != v_from->elem_size) {
     ccol_assert(false);
+  }
+
+  if (v_to == v_from) {
+    /* Pre-reserve so cvector_append_array never reallocates mid-copy.
+     * Without this, realloc may free the source buffer while arr_ptr
+     * still points into it. */
+    size_t count = v_from->elem_count;
+    if (!cvector_reserve(v_to, v_to->elem_count + count)) {
+      return false;
+    }
   }
 
   return cvector_append_array(v_to, v_from->data_ptr, v_from->elem_count);

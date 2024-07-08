@@ -131,7 +131,14 @@ cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
 
   size_t init_len = initial ? strlen(initial) : 0;
   size_t init_cap = find_nearest_gte_power_of_two(init_len + 1);
-  if (init_cap == ccol_invalid_size || init_cap < cstring_minimum_capacity) {
+  if (init_cap == ccol_invalid_size) {
+    __cstring_destroy(s);
+    if (err) {
+      *err = CCOL_ERR_STR("initial string too large");
+    }
+    return NULL;
+  }
+  if (init_cap < cstring_minimum_capacity) {
     init_cap = cstring_minimum_capacity;
   }
 
@@ -228,8 +235,17 @@ ccol_retval_t cstring_append(cstr s, const char *str) {
     return ccol_container_full;
   }
 
+  /* str may alias s->data: save the offset before grow (realloc may move
+   * the buffer), then re-derive the pointer from the new base address. */
+  ptrdiff_t alias_off = (str >= s->data && str < s->data + s->capacity)
+                            ? (str - s->data) : -1;
+
   if (!cstring_grow_to(s, new_len + 1)) {
     return ccol_not_enough_memory;
+  }
+
+  if (alias_off >= 0) {
+    str = s->data + alias_off;
   }
 
   memcpy(s->data + s->length, str, str_len);
@@ -260,11 +276,26 @@ ccol_retval_t cstring_prepend(cstr s, const char *str) {
     return ccol_container_full;
   }
 
+  /* str may alias s->data.  Save the offset before grow (realloc may move
+   * the buffer).  After memmove, any alias at offset > 0 has also shifted
+   * right by str_len, so a second correction is needed. */
+  ptrdiff_t alias_off = (str >= s->data && str < s->data + s->capacity)
+                            ? (str - s->data) : -1;
+
   if (!cstring_grow_to(s, new_len + 1)) {
     return ccol_not_enough_memory;
   }
 
+  if (alias_off >= 0) {
+    str = s->data + alias_off;
+  }
+
   memmove(s->data + str_len, s->data, s->length + 1);
+
+  if (alias_off > 0) {
+    str = s->data + alias_off + str_len;
+  }
+
   memcpy(s->data, str, str_len);
   s->length = new_len;
 
@@ -292,12 +323,30 @@ ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str) {
     return ccol_container_full;
   }
 
+  /* str may alias s->data.  Save the offset before grow (realloc may move
+   * the buffer).  After memmove, any alias at offset > pos has shifted right
+   * by str_len and needs a second correction. */
+  ptrdiff_t alias_off = (str >= s->data && str < s->data + s->capacity)
+                            ? (str - s->data) : -1;
+
   if (!cstring_grow_to(s, new_len + 1)) {
     return ccol_not_enough_memory;
   }
 
+  if (alias_off >= 0) {
+    str = s->data + alias_off;
+  }
+
   memmove(s->data + pos + str_len, s->data + pos, s->length - pos + 1);
-  memcpy(s->data + pos, str, str_len);
+
+  if (alias_off >= 0 && (size_t)alias_off > pos) {
+    str = s->data + alias_off + str_len;
+  }
+
+  /* When alias_off <= pos the source region [alias_off, alias_off+str_len)
+   * can overlap the destination [pos, pos+str_len) with dst > src, making
+   * forward-copy memcpy corrupt data.  memmove handles that safely. */
+  memmove(s->data + pos, str, str_len);
   s->length = new_len;
 
   return ccol_success;
@@ -305,7 +354,8 @@ ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str) {
 
 /* Overwrites the entire string content with str, discarding the old content.
  * The null terminator is included in the memcpy (str_len + 1 bytes), so the
- * capacity check accounts for it. */
+ * capacity check accounts for it. Like the other mutating functions, str may
+ * alias s->data, so the offset is saved before any potential realloc. */
 ccol_retval_t cstring_set(cstr s, const char *str) {
   if (!s) {
     ccol_assert(false);
@@ -316,8 +366,15 @@ ccol_retval_t cstring_set(cstr s, const char *str) {
 
   size_t str_len = strlen(str);
 
+  ptrdiff_t alias_off = (str >= s->data && str < s->data + s->capacity)
+                            ? (str - s->data) : -1;
+
   if (!cstring_grow_to(s, str_len + 1)) {
     return ccol_not_enough_memory;
+  }
+
+  if (alias_off >= 0) {
+    str = s->data + alias_off;
   }
 
   memcpy(s->data, str, str_len + 1);
@@ -572,7 +629,12 @@ size_t cstring_find(cstr s, const char *needle) {
 /* Returns the byte offset of the last occurrence of needle, or
  * ccol_invalid_size if not found. Implemented as a linear scan with strstr
  * advancing one byte at a time past each match, because the C standard
- * library provides no reverse-search counterpart to strstr. */
+ * library provides no reverse-search counterpart to strstr.
+ *
+ * The +1 advance (not +nlen) is deliberate: it ensures overlapping occurrences
+ * are considered, so the truly rightmost match is always found.  For example,
+ * rfind("ababa", "aba") must return 2, not 0; advancing by nlen=3 would skip
+ * the match at offset 2 entirely. */
 size_t cstring_rfind(cstr s, const char *needle) {
   if (!s) {
     ccol_assert(false);

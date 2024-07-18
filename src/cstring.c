@@ -237,8 +237,8 @@ ccol_retval_t cstring_append(cstr s, const char *str) {
 
   /* str may alias s->data: save the offset before grow (realloc may move
    * the buffer), then re-derive the pointer from the new base address. */
-  ptrdiff_t alias_off = (str >= s->data && str < s->data + s->capacity)
-                            ? (str - s->data) : -1;
+  ptrdiff_t alias_off =
+      (str >= s->data && str < s->data + s->capacity) ? (str - s->data) : -1;
 
   if (!cstring_grow_to(s, new_len + 1)) {
     return ccol_not_enough_memory;
@@ -279,8 +279,8 @@ ccol_retval_t cstring_prepend(cstr s, const char *str) {
   /* str may alias s->data.  Save the offset before grow (realloc may move
    * the buffer).  After memmove, any alias at offset > 0 has also shifted
    * right by str_len, so a second correction is needed. */
-  ptrdiff_t alias_off = (str >= s->data && str < s->data + s->capacity)
-                            ? (str - s->data) : -1;
+  ptrdiff_t alias_off =
+      (str >= s->data && str < s->data + s->capacity) ? (str - s->data) : -1;
 
   if (!cstring_grow_to(s, new_len + 1)) {
     return ccol_not_enough_memory;
@@ -326,8 +326,8 @@ ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str) {
   /* str may alias s->data.  Save the offset before grow (realloc may move
    * the buffer).  After memmove, any alias at offset > pos has shifted right
    * by str_len and needs a second correction. */
-  ptrdiff_t alias_off = (str >= s->data && str < s->data + s->capacity)
-                            ? (str - s->data) : -1;
+  ptrdiff_t alias_off =
+      (str >= s->data && str < s->data + s->capacity) ? (str - s->data) : -1;
 
   if (!cstring_grow_to(s, new_len + 1)) {
     return ccol_not_enough_memory;
@@ -366,8 +366,8 @@ ccol_retval_t cstring_set(cstr s, const char *str) {
 
   size_t str_len = strlen(str);
 
-  ptrdiff_t alias_off = (str >= s->data && str < s->data + s->capacity)
-                            ? (str - s->data) : -1;
+  ptrdiff_t alias_off =
+      (str >= s->data && str < s->data + s->capacity) ? (str - s->data) : -1;
 
   if (!cstring_grow_to(s, str_len + 1)) {
     return ccol_not_enough_memory;

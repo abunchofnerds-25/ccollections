@@ -266,10 +266,18 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
 
     do {
       uint64_t w;
-      memcpy(&w, p, sizeof(w)); v1 = xxh_round(v1, w); p += 8;
-      memcpy(&w, p, sizeof(w)); v2 = xxh_round(v2, w); p += 8;
-      memcpy(&w, p, sizeof(w)); v3 = xxh_round(v3, w); p += 8;
-      memcpy(&w, p, sizeof(w)); v4 = xxh_round(v4, w); p += 8;
+      memcpy(&w, p, sizeof(w));
+      v1 = xxh_round(v1, w);
+      p += 8;
+      memcpy(&w, p, sizeof(w));
+      v2 = xxh_round(v2, w);
+      p += 8;
+      memcpy(&w, p, sizeof(w));
+      v3 = xxh_round(v3, w);
+      p += 8;
+      memcpy(&w, p, sizeof(w));
+      v4 = xxh_round(v4, w);
+      p += 8;
     } while (p <= limit);
 
     hash =
@@ -289,7 +297,8 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
   hash += len;
 
   while (p + 8 <= end) {
-    uint64_t w; memcpy(&w, p, sizeof(w));
+    uint64_t w;
+    memcpy(&w, p, sizeof(w));
     size_t k1 = xxh_round(0, w);
     hash ^= k1;
     hash = xxh_rotl(hash, 27) * XXH_PRIME_1 + XXH_PRIME_4;
@@ -297,7 +306,8 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
   }
 
   if (p + 4 <= end) {
-    uint32_t w; memcpy(&w, p, sizeof(w));
+    uint32_t w;
+    memcpy(&w, p, sizeof(w));
     hash ^= (size_t)w * XXH_PRIME_1;
     hash = xxh_rotl(hash, 23) * XXH_PRIME_2 + XXH_PRIME_3;
     p += 4;
@@ -360,10 +370,18 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
 
     do {
       uint32_t w;
-      memcpy(&w, p, sizeof(w)); v1 = xxh_round(v1, w); p += 4;
-      memcpy(&w, p, sizeof(w)); v2 = xxh_round(v2, w); p += 4;
-      memcpy(&w, p, sizeof(w)); v3 = xxh_round(v3, w); p += 4;
-      memcpy(&w, p, sizeof(w)); v4 = xxh_round(v4, w); p += 4;
+      memcpy(&w, p, sizeof(w));
+      v1 = xxh_round(v1, w);
+      p += 4;
+      memcpy(&w, p, sizeof(w));
+      v2 = xxh_round(v2, w);
+      p += 4;
+      memcpy(&w, p, sizeof(w));
+      v3 = xxh_round(v3, w);
+      p += 4;
+      memcpy(&w, p, sizeof(w));
+      v4 = xxh_round(v4, w);
+      p += 4;
     } while (p <= limit);
 
     hash =
@@ -375,7 +393,8 @@ static inline size_t xxhash64_buffer(const void* input, size_t len,
   hash += len;
 
   while (p + 4 <= end) {
-    uint32_t w; memcpy(&w, p, sizeof(w));
+    uint32_t w;
+    memcpy(&w, p, sizeof(w));
     hash += w * XXH_PRIME_3;
     hash = xxh_rotl(hash, 17) * XXH_PRIME_4;
     p += 4;

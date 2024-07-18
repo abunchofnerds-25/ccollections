@@ -44,7 +44,8 @@ void add_duration_to_timespec(struct timespec *target,
     target->tv_nsec = target->tv_nsec % max_nsecs;
   }
 
-  struct timespec dur = *duration;  // local copy — avoid mutating caller's struct
+  struct timespec dur =
+      *duration;  // local copy — avoid mutating caller's struct
   if (dur.tv_nsec >= max_nsecs) {
     dur.tv_sec += dur.tv_nsec / max_nsecs;
     dur.tv_nsec = dur.tv_nsec % max_nsecs;
@@ -443,7 +444,8 @@ ccol_retval_t circq_disable_sending(circular_queue *cq) {
     mutex_lock(cq->mutex);
     cq->writing_disabled = true;
     cond_var_broadcast(cq->write_cond);  // Wake waiting senders
-    cond_var_broadcast(cq->read_cond);   // Wake blocked receivers so they can observe the disabled state
+    cond_var_broadcast(cq->read_cond);   // Wake blocked receivers so they can
+                                         // observe the disabled state
     mutex_unlock(cq->mutex);
     return ccol_success;
   }
@@ -811,7 +813,8 @@ ccol_retval_t dynmq_disable_sending(dynamic_queue *dq) {
   if (dq) {
     mutex_lock(dq->mutex);
     dq->writing_disabled = true;
-    cond_var_broadcast(dq->read_cond);  // Wake blocked receivers so they can observe the disabled state
+    cond_var_broadcast(dq->read_cond);  // Wake blocked receivers so they can
+                                        // observe the disabled state
     mutex_unlock(dq->mutex);
     return ccol_success;
   }

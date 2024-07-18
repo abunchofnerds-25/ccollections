@@ -1434,9 +1434,12 @@ TEST(chash_maps, iterator_with_non_default_variable_name) {
     chmap_construct(hm, int, int);
     REQUIRE_NE((void *)hm, NULL);
 
-    int k1 = 10, v1 = 100; chmap_insert(hm, k1, v1);
-    int k2 = 20, v2 = 200; chmap_insert(hm, k2, v2);
-    int k3 = 30, v3 = 300; chmap_insert(hm, k3, v3);
+    int k1 = 10, v1 = 100;
+    chmap_insert(hm, k1, v1);
+    int k2 = 20, v2 = 200;
+    chmap_insert(hm, k2, v2);
+    int k3 = 30, v3 = 300;
+    chmap_insert(hm, k3, v3);
 
     int key_sum = 0;
     int val_sum = 0;
@@ -1464,7 +1467,8 @@ TEST(chash_maps, oa_repopulate_after_full_delete) {
   REQUIRE_NE((void *)hm, NULL);
 
   for (int i = 0; i < 20; ++i) {
-    int val = i * 10; chmap_insert(hm, i, val);
+    int val = i * 10;
+    chmap_insert(hm, i, val);
   }
   REQUIRE_EQ(chmap_elem_count(hm), 20);
 
@@ -1475,7 +1479,8 @@ TEST(chash_maps, oa_repopulate_after_full_delete) {
 
   // Repopulate and verify all values survive correctly
   for (int i = 0; i < 20; ++i) {
-    int val = i * 100; chmap_insert(hm, i, val);
+    int val = i * 100;
+    chmap_insert(hm, i, val);
   }
   REQUIRE_EQ(chmap_elem_count(hm), 20);
 
@@ -1495,12 +1500,18 @@ TEST(chash_maps, sc_large_key_and_large_value) {
 
   // 24-byte key (just over the 23-byte SSO limit), 24-byte value.
   char key1[25], val1[25], key2[25], val2[25], key3[25], val3[25];
-  memset(key1, 'a', 24); key1[24] = '\0';
-  memset(val1, '1', 24); val1[24] = '\0';
-  memset(key2, 'b', 24); key2[24] = '\0';
-  memset(val2, '2', 24); val2[24] = '\0';
-  memset(key3, 'c', 24); key3[24] = '\0';
-  memset(val3, '3', 24); val3[24] = '\0';
+  memset(key1, 'a', 24);
+  key1[24] = '\0';
+  memset(val1, '1', 24);
+  val1[24] = '\0';
+  memset(key2, 'b', 24);
+  key2[24] = '\0';
+  memset(val2, '2', 24);
+  val2[24] = '\0';
+  memset(key3, 'c', 24);
+  key3[24] = '\0';
+  memset(val3, '3', 24);
+  val3[24] = '\0';
 
   char *k1 = key1, *k2 = key2, *k3 = key3;
   char *v1 = val1, *v2 = val2, *v3 = val3;

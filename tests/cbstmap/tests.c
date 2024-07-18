@@ -898,10 +898,10 @@ TEST(cbst_maps, string_keys) {
 
   // Use strings of varied lengths so size != 4 or 8 (avoids endian-sensitive
   // path in compare_keys for equal-length keys with differing first character)
-  char *k_alpha = "alpha";    // 6 bytes with null
-  char *k_beta = "beta";      // 5 bytes with null
-  char *k_gamma = "gamma";    // 6 bytes with null
-  char *k_missing = "zeta";   // 5 bytes with null, never inserted
+  char *k_alpha = "alpha";   // 6 bytes with null
+  char *k_beta = "beta";     // 5 bytes with null
+  char *k_gamma = "gamma";   // 6 bytes with null
+  char *k_missing = "zeta";  // 5 bytes with null, never inserted
 
   int v1 = 100, v2 = 200, v3 = 300;
   cbmap_insert(bm, k_alpha, v1);
@@ -953,8 +953,9 @@ TEST(cbst_maps, string_keys_3_char_iteration_order) {
   //
   // Correct lexicographic order: "abc" < "acb" < "bac" < "bca" < "cab"
   //
-  // Pre-fix uint32_t order (little-endian): "bca" < "cab" < "acb" < "bac" < "abc"
-  // (sorted by 0x00616362, 0x00626163, 0x00626361, 0x00636162, 0x00636261)
+  // Pre-fix uint32_t order (little-endian): "bca" < "cab" < "acb" < "bac" <
+  // "abc" (sorted by 0x00616362, 0x00626163, 0x00626361, 0x00636162,
+  // 0x00636261)
   cbmap_construct(bm, char *, int);
 
   char *keys[] = {"bca", "abc", "cab", "acb", "bac"};
@@ -1007,7 +1008,7 @@ TEST(cbst_maps, string_keys_7_char_iteration_order) {
   REQUIRE_EQ(cbmap_elem_count(bm), 5);
 
   const char *expected[] = {"abcdefg", "abcdefh", "abcdegh", "bacdefg",
-                             "gfedcba"};
+                            "gfedcba"};
   const char *got[5];
   int n = collect_string_keys(bm, got, 5);
 

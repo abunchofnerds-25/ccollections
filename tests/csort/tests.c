@@ -458,8 +458,8 @@ TEST(csort, sort_is_stable) {
   cvec_construct(v, stability_elem_t);
 
   for (int i = 0; i < n; i++) {
-    cvector_push_back(
-        v, &(stability_elem_t){.key = keys[i], .original_index = i});
+    cvector_push_back(v,
+                      &(stability_elem_t){.key = keys[i], .original_index = i});
   }
 
   cvector_sort_with_comparison_proc(v, stability_elem_comparison_proc);

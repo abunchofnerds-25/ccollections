@@ -1458,6 +1458,78 @@ TEST(chash_maps, iterator_with_non_default_variable_name) {
   }
 }
 
+// Controlled calloc used to simulate OOM during oa_rehash without affecting
+// map creation or destruction.
+static bool g_calloc_fail = false;
+static void *controlled_calloc(size_t nmemb, size_t size) {
+  if (g_calloc_fail) return NULL;
+  return calloc(nmemb, size);
+}
+
+// Regression: oa_insert returned ccol_container_full when the probe wrapped
+// all the way around without finding a truly-empty slot, even though tombstone
+// (deleted) slots were available for reuse. The post-loop tombstone reuse path
+// is only reachable when all 64 slots are either live or tombstoned, which
+// requires the rehash calloc to fail (OOM). We simulate that here.
+TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
+  ccol_memmgmt_procs_t mp = {
+      .malloc = malloc, .free = free, .calloc = controlled_calloc,
+      .realloc = realloc};
+
+  // Use the minimum capacity (64) so that oa_delete's shrink guard
+  // (capacity > minimum_allowed_bucket_array_size) never fires and tombstones
+  // accumulate without a rehash clearing them.
+  char *err = NULL;
+  chashmap *hm = chmap_create_mp(1, ccol_int, ccol_int, &mp, &err);
+  REQUIRE_NE((void *)hm, NULL);
+
+  // Make all subsequent calloc calls fail so rehash can never enlarge the map.
+  // Inserts k0..k63 still succeed because, even though the load-factor check
+  // (count+deleted)/64 > 0.70 fires from key 45 onwards, the failed rehash
+  // leaves the original 64-slot array in place and there are still empty slots
+  // for the probe to find.
+  g_calloc_fail = true;
+  for (int i = 0; i < 64; i++) {
+    int val = i * 10;
+    REQUIRE_EQ(chmap_insert_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)},
+                                 &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
+               ccol_success);
+  }
+  REQUIRE_EQ(chmap_elem_count(hm), 64);
+
+  // Delete 10 keys — no calloc involved, and at capacity == minimum the shrink
+  // check in oa_delete is suppressed, so these become tombstones in place.
+  for (int i = 0; i < 10; i++) {
+    REQUIRE_EQ(chmap_delete_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)}),
+               ccol_success);
+  }
+  REQUIRE_EQ(chmap_elem_count(hm), 54);
+
+  // All 64 slots are now either live (54) or tombstoned (10). Inserting key 64
+  // triggers the load check ((54+10)/64 == 1.0 > 0.70), which tries to rehash,
+  // which calloc-fails, leaving the map unchanged. The probe then visits every
+  // slot without finding an empty one. The post-loop fix reuses the first
+  // tombstone slot it recorded instead of returning ccol_container_full.
+  int new_key = 64, new_val = 640;
+  REQUIRE_EQ(
+      chmap_insert_elem(hm,
+                        &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
+                        &(cmap_pair){.ptr = &new_val, .size = sizeof(new_val)}),
+      ccol_success);
+  REQUIRE_EQ(chmap_elem_count(hm), 55);
+
+  int retrieved = 0;
+  REQUIRE_EQ(
+      chmap_get_elem_copy(
+          hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
+          &retrieved, sizeof(retrieved)),
+      ccol_success);
+  REQUIRE_EQ(retrieved, 640);
+
+  g_calloc_fail = false;
+  chmap_destroy(hm);
+}
+
 // Regression: in the OA backend, val_size was re-written on every insert when
 // count == 0. This meant deleting all elements and reinserting could silently
 // mutate val_size. The fix gates the update on a val_size_initialized flag so

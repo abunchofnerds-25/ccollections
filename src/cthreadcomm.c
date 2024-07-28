@@ -258,7 +258,7 @@ ccol_retval_t circq_try_send_zc(circular_queue *cq, c_message_t *msg) {
   }
 
   // Assuming we won't have space for the new message.
-  int result = ccol_container_full;
+  ccol_retval_t result = ccol_container_full;
 
   mutex_lock(cq->mutex);
 

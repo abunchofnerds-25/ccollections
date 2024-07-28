@@ -633,6 +633,16 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
     index = (index + 1) % map->capacity;
   } while (index != start_index);
 
+  if (first_deleted < map->capacity) {
+    map->deleted_count--;
+    mem_zero(&map->slots[first_deleted].key_data, sizeof(uint64_t));
+    mem_zero(&map->slots[first_deleted].val_data, sizeof(uint64_t));
+    mem_cpy(&map->slots[first_deleted].key_data, key_pair->ptr, key_pair->size);
+    mem_cpy(&map->slots[first_deleted].val_data, val_pair->ptr, val_pair->size);
+    map->slots[first_deleted].metadata = SLOT_OCCUPIED;
+    map->count++;
+    return ccol_success;
+  }
   return ccol_container_full;
 }
 

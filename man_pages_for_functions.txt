@@ -632,16 +632,18 @@ SYNOPSIS
        #include <cbstmap.h>
 
        cbmap cbmap_create_full(bool keys_are_signed_ints,
+                               bool keys_are_strings,
                                ccol_memmgmt_procs_t *mmgmt_procs,
                                ccol_comparison_proc_t custom_comparison_proc,
                                char **err);
 
 DESCRIPTION
        Creates a self-balancing BST map with full control over key signedness,
-       memory management, and comparison function.
+       string key support, memory management, and comparison function.
 
 PARAMETERS
        keys_are_signed_ints     Treat integer keys as signed
+       keys_are_strings         If true, use strcmp for key comparison
        mmgmt_procs              Custom memory management, or NULL
        custom_comparison_proc   Custom comparison function, or NULL
        err                      Optional pointer to receive error string
@@ -653,6 +655,7 @@ RETURN VALUE
 NOTES
        Default comparison for unsigned: memcmp
        Default comparison for signed: proper signed comparison (1, 2, 4, 8 bytes)
+       Default comparison for strings: strcmp (when keys_are_strings is true)
        Custom comparison receives void* pointers to key data
        All tree operations are iterative using explicit stacks
 

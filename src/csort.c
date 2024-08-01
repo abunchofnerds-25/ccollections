@@ -64,7 +64,7 @@ ___csort__define_default_integral_comparison_proc(unsigned long long,
 ___csort__define_default_integral_comparison_proc(float, float);
 ___csort__define_default_integral_comparison_proc(double, double);
 ___csort__define_default_integral_comparison_proc(long double, long_double);
-#undef __define_default_integral_comparison_proc
+#undef ___csort__define_default_integral_comparison_proc
 
 /* ========================================================================== */
 /*                         MERGESORT IMPLEMENTATION                           */
@@ -86,13 +86,13 @@ ___csort__define_default_integral_comparison_proc(long double, long_double);
  * @param comparison_proc Function to compare two elements
  * @param temp_buffer Pre-allocated temporary buffer for merging
  */
-static void csort_merge(void *col, int left, int mid, int right,
+static void csort_merge(void *col, size_t left, size_t mid, size_t right,
                         size_t elem_size, csort_item_getter_proc_t getter_proc,
                         ccol_comparison_proc_t comparison_proc,
                         void *temp_buffer) {
-  int i, j, k;
-  int n1 = mid - left + 1;  // Size of left subarray
-  int n2 = right - mid;     // Size of right subarray
+  size_t i, j, k;
+  size_t n1 = mid - left + 1;  // Size of left subarray
+  size_t n2 = right - mid;     // Size of right subarray
 
   if (!getter_proc || !comparison_proc) {
     ccol_assert(false);
@@ -167,7 +167,7 @@ static void csort_merge(void *col, int left, int mid, int right,
  * @param comparison_proc Function to compare two elements
  * @param mprocs Memory management procedures for buffer allocation
  */
-static void csort_mergesort_iterative(void *col, int low, int high,
+static void csort_mergesort_iterative(void *col, size_t low, size_t high,
                                       size_t elem_size,
                                       csort_item_getter_proc_t getter_proc,
                                       ccol_comparison_proc_t comparison_proc,
@@ -176,7 +176,7 @@ static void csort_mergesort_iterative(void *col, int low, int high,
     return;
   }
 
-  int length = high - low + 1;
+  size_t length = high - low + 1;
 
   // Allocate temporary buffer for merging
   // This buffer will be reused for all merge operations
@@ -188,12 +188,12 @@ static void csort_mergesort_iterative(void *col, int low, int high,
 
   // Bottom-up merge sort: start with subarrays of size 1,
   // then merge pairs to get size 2, then 4, 8, etc.
-  for (int curr_size = 1; curr_size < length; curr_size *= 2) {
+  for (size_t curr_size = 1; curr_size < length; curr_size *= 2) {
     // Pick starting point of left subarray to be merged
-    for (int left_start = low; left_start <= high;
+    for (size_t left_start = low; left_start <= high;
          left_start += 2 * curr_size) {
       // Calculate the end of left subarray
-      int mid = left_start + curr_size - 1;
+      size_t mid = left_start + curr_size - 1;
 
       // If there's no right subarray (mid >= high), nothing to merge
       if (mid >= high) {
@@ -203,7 +203,7 @@ static void csort_mergesort_iterative(void *col, int low, int high,
       // Calculate the end of right subarray
       // It should be (left_start + 2*curr_size - 1) or high, whichever is
       // smaller
-      int right_end = left_start + 2 * curr_size - 1;
+      size_t right_end = left_start + 2 * curr_size - 1;
       if (right_end > high) {
         right_end = high;
       }

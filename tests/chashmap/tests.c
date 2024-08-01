@@ -1379,6 +1379,236 @@ TEST(chash_maps, construct_scoped_lifecycle) {
   }
 }
 
+// Regression: chmap_get_elem_copy must validate its output buffer parameters
+// before dereferencing them. Before the fix, NULL target_buf and zero
+// target_buf_size were not checked, so callers had no way to detect the error.
+TEST(chash_maps, get_elem_copy_rejects_null_buf_and_zero_size) {
+  chashmap *chmap = chmap_create(1, ccol_string, ccol_int, NULL);
+  REQUIRE_NE((void *)chmap, NULL);
+
+  REQUIRE_EQ(insert_string_to_int(chmap, "key1", 42), ccol_success);
+
+  int val = -1;
+  cmap_pair key = {.ptr = (void *)"key1", .size = strlen("key1")};
+
+  REQUIRE_EQ(chmap_get_elem_copy(chmap, &key, NULL, sizeof(int)),
+             ccol_invalid_args);
+  REQUIRE_EQ(chmap_get_elem_copy(chmap, &key, &val, 0), ccol_invalid_args);
+
+  // Confirm the map still works correctly after the rejected calls
+  REQUIRE_EQ(chmap_get_elem_copy(chmap, &key, &val, sizeof(int)), ccol_success);
+  REQUIRE_EQ(val, 42);
+
+  chmap_destroy(chmap);
+}
+
+// Regression: chmap_iter_key_ptr and chmap_iter_val_ptr used a hardcoded
+// variable name 'it' inside the macro body instead of the macro parameter.
+// All existing tests happened to name their iterator 'it', masking the bug.
+// This test uses a different name to exercise the corrected macro expansion.
+TEST(chash_maps, iterator_with_non_default_variable_name) {
+  // SC backend (char* -> int)
+  {
+    chmap_construct(hm, char *, int);
+    REQUIRE_NE((void *)hm, NULL);
+
+    REQUIRE_EQ(insert_string_to_int(hm, "alpha", 1), ccol_success);
+    REQUIRE_EQ(insert_string_to_int(hm, "beta", 2), ccol_success);
+    REQUIRE_EQ(insert_string_to_int(hm, "gamma", 3), ccol_success);
+
+    int sum = 0;
+    int count = 0;
+    chmap_iter_declare(hm, iter);
+    for (iter = chmap_begin(hm); iter != NULL; iter = chmap_iter_next(iter)) {
+      sum += *chmap_iter_val_ptr(iter);
+      ++count;
+    }
+    REQUIRE_EQ(count, 3);
+    REQUIRE_EQ(sum, 6);
+
+    chmap_destroy(hm);
+  }
+
+  // OA backend (int -> int)
+  {
+    chmap_construct(hm, int, int);
+    REQUIRE_NE((void *)hm, NULL);
+
+    int k1 = 10, v1 = 100;
+    chmap_insert(hm, k1, v1);
+    int k2 = 20, v2 = 200;
+    chmap_insert(hm, k2, v2);
+    int k3 = 30, v3 = 300;
+    chmap_insert(hm, k3, v3);
+
+    int key_sum = 0;
+    int val_sum = 0;
+    int count = 0;
+    chmap_iter_declare(hm, iter);
+    for (iter = chmap_begin(hm); iter != NULL; iter = chmap_iter_next(iter)) {
+      key_sum += *chmap_iter_key_ptr(iter);
+      val_sum += *chmap_iter_val_ptr(iter);
+      ++count;
+    }
+    REQUIRE_EQ(count, 3);
+    REQUIRE_EQ(key_sum, 60);   // 10+20+30
+    REQUIRE_EQ(val_sum, 600);  // 100+200+300
+
+    chmap_destroy(hm);
+  }
+}
+
+// Controlled calloc used to simulate OOM during oa_rehash without affecting
+// map creation or destruction.
+static bool g_calloc_fail = false;
+static void *controlled_calloc(size_t nmemb, size_t size) {
+  if (g_calloc_fail) return NULL;
+  return calloc(nmemb, size);
+}
+
+// Regression: oa_insert returned ccol_container_full when the probe wrapped
+// all the way around without finding a truly-empty slot, even though tombstone
+// (deleted) slots were available for reuse. The post-loop tombstone reuse path
+// is only reachable when all 64 slots are either live or tombstoned, which
+// requires the rehash calloc to fail (OOM). We simulate that here.
+TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
+  ccol_memmgmt_procs_t mp = {
+      .malloc = malloc, .free = free, .calloc = controlled_calloc,
+      .realloc = realloc};
+
+  // Use the minimum capacity (64) so that oa_delete's shrink guard
+  // (capacity > minimum_allowed_bucket_array_size) never fires and tombstones
+  // accumulate without a rehash clearing them.
+  char *err = NULL;
+  chashmap *hm = chmap_create_mp(1, ccol_int, ccol_int, &mp, &err);
+  REQUIRE_NE((void *)hm, NULL);
+
+  // Make all subsequent calloc calls fail so rehash can never enlarge the map.
+  // Inserts k0..k63 still succeed because, even though the load-factor check
+  // (count+deleted)/64 > 0.70 fires from key 45 onwards, the failed rehash
+  // leaves the original 64-slot array in place and there are still empty slots
+  // for the probe to find.
+  g_calloc_fail = true;
+  for (int i = 0; i < 64; i++) {
+    int val = i * 10;
+    REQUIRE_EQ(chmap_insert_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)},
+                                 &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
+               ccol_success);
+  }
+  REQUIRE_EQ(chmap_elem_count(hm), 64);
+
+  // Delete 10 keys — no calloc involved, and at capacity == minimum the shrink
+  // check in oa_delete is suppressed, so these become tombstones in place.
+  for (int i = 0; i < 10; i++) {
+    REQUIRE_EQ(chmap_delete_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)}),
+               ccol_success);
+  }
+  REQUIRE_EQ(chmap_elem_count(hm), 54);
+
+  // All 64 slots are now either live (54) or tombstoned (10). Inserting key 64
+  // triggers the load check ((54+10)/64 == 1.0 > 0.70), which tries to rehash,
+  // which calloc-fails, leaving the map unchanged. The probe then visits every
+  // slot without finding an empty one. The post-loop fix reuses the first
+  // tombstone slot it recorded instead of returning ccol_container_full.
+  int new_key = 64, new_val = 640;
+  REQUIRE_EQ(
+      chmap_insert_elem(hm,
+                        &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
+                        &(cmap_pair){.ptr = &new_val, .size = sizeof(new_val)}),
+      ccol_success);
+  REQUIRE_EQ(chmap_elem_count(hm), 55);
+
+  int retrieved = 0;
+  REQUIRE_EQ(
+      chmap_get_elem_copy(
+          hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
+          &retrieved, sizeof(retrieved)),
+      ccol_success);
+  REQUIRE_EQ(retrieved, 640);
+
+  g_calloc_fail = false;
+  chmap_destroy(hm);
+}
+
+// Regression: in the OA backend, val_size was re-written on every insert when
+// count == 0. This meant deleting all elements and reinserting could silently
+// mutate val_size. The fix gates the update on a val_size_initialized flag so
+// it only fires once per map lifetime (or once after an explicit reset).
+TEST(chash_maps, oa_repopulate_after_full_delete) {
+  chmap_construct(hm, int, int);
+  REQUIRE_NE((void *)hm, NULL);
+
+  for (int i = 0; i < 20; ++i) {
+    int val = i * 10;
+    chmap_insert(hm, i, val);
+  }
+  REQUIRE_EQ(chmap_elem_count(hm), 20);
+
+  for (int i = 0; i < 20; ++i) {
+    chmap_remove(hm, i);
+  }
+  REQUIRE_EQ(chmap_elem_count(hm), 0);
+
+  // Repopulate and verify all values survive correctly
+  for (int i = 0; i < 20; ++i) {
+    int val = i * 100;
+    chmap_insert(hm, i, val);
+  }
+  REQUIRE_EQ(chmap_elem_count(hm), 20);
+
+  for (int i = 0; i < 20; ++i) {
+    REQUIRE_EQ(chmap_get(hm, i), i * 100);
+  }
+
+  chmap_destroy(hm);
+}
+
+TEST(chash_maps, sc_large_key_and_large_value) {
+  // Keys and values larger than INLINE_STORAGE_THRESHOLD (23 bytes) take the
+  // heap-allocation path in sc_create_llist_node.  This test verifies that
+  // the happy path works correctly and that the node is properly attached to
+  // the insertion-order list after both allocations succeed.
+  chmap_construct(hm, char *, char *);
+
+  // 24-byte key (just over the 23-byte SSO limit), 24-byte value.
+  char key1[25], val1[25], key2[25], val2[25], key3[25], val3[25];
+  memset(key1, 'a', 24);
+  key1[24] = '\0';
+  memset(val1, '1', 24);
+  val1[24] = '\0';
+  memset(key2, 'b', 24);
+  key2[24] = '\0';
+  memset(val2, '2', 24);
+  val2[24] = '\0';
+  memset(key3, 'c', 24);
+  key3[24] = '\0';
+  memset(val3, '3', 24);
+  val3[24] = '\0';
+
+  char *k1 = key1, *k2 = key2, *k3 = key3;
+  char *v1 = val1, *v2 = val2, *v3 = val3;
+
+  chmap_insert(hm, k1, v1);
+  chmap_insert(hm, k2, v2);
+  chmap_insert(hm, k3, v3);
+
+  REQUIRE_EQ(chmap_elem_count(hm), (size_t)3);
+
+  REQUIRE_STREQ(chmap_get(hm, k1), val1);
+  REQUIRE_STREQ(chmap_get(hm, k2), val2);
+  REQUIRE_STREQ(chmap_get(hm, k3), val3);
+
+  // Verify iteration visits all three entries exactly once.
+  size_t visited = 0;
+  chmap_iter_declare(hm, it);
+  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
+    ++visited;
+  }
+  REQUIRE_EQ(visited, (size_t)3);
+
+  chmap_destroy(hm);
+}
+
 TEST(chash_maps, re_enabled_local_chm_macros) {
   chmap_construct(hm, char *, helper_struct);
 

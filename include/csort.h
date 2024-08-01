@@ -262,7 +262,7 @@ ___csort__declare_default_integral_comparison_proc(double, double);
 /** @brief Compare two long double values */
 ___csort__declare_default_integral_comparison_proc(long double, long_double);
 
-#undef __declare_default_integral_comparison_proc
+#undef ___csort__declare_default_integral_comparison_proc
 
 /* ========================================================================== */
 /*                   TYPE-GENERIC COMPARISON SELECTION                        */

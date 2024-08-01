@@ -394,3 +394,84 @@ TEST(csort, c_int_array_sort) {
     REQUIRE_LE(test_array[i - 1], test_array[i]);
   }
 }
+
+// The index-arithmetic bugs (int → size_t) only manifest for collections
+// larger than INT_MAX elements and cannot be exercised directly. The tests
+// below guard against regressions by running the algorithm over a much
+// larger range of sizes than the rest of the suite (which tops out at 10
+// elements) and verifying the stability property that mergesort claims.
+
+TEST(csort, large_collection_sort) {
+  // 1000 elements drives ~10 iterations of the outer doubling loop.
+  const int n = 1000;
+  cvec_construct(v, int);
+
+  srand(1234);
+  for (int i = 0; i < n; i++) {
+    cvec_push_rvalue(v, rand());
+  }
+
+  cvec_sort(v);
+
+  for (int i = 1; i < n; i++) {
+    REQUIRE_LE(cvec_at(v, i - 1), cvec_at(v, i));
+  }
+
+  cvec_destroy(v);
+}
+
+TEST(csort, power_of_two_collection_sort) {
+  // 256 = 2^8 hits the exact loop-exit boundary of the outer doubling loop.
+  const int n = 256;
+  cvec_construct(v, int);
+
+  for (int i = n - 1; i >= 0; i--) {
+    cvec_push_rvalue(v, i);
+  }
+
+  cvec_sort(v);
+
+  for (int i = 1; i < n; i++) {
+    REQUIRE_LE(cvec_at(v, i - 1), cvec_at(v, i));
+  }
+
+  cvec_destroy(v);
+}
+
+typedef struct {
+  int key;
+  int original_index;
+} stability_elem_t;
+
+int stability_elem_comparison_proc(const void *first, const void *second) {
+  const stability_elem_t *a = (const stability_elem_t *)first;
+  const stability_elem_t *b = (const stability_elem_t *)second;
+  return (a->key > b->key) - (a->key < b->key);
+}
+
+TEST(csort, sort_is_stable) {
+  // Mergesort claims to be stable: equal-key elements must retain their
+  // original relative order. Verify with 8 elements that have duplicate keys.
+  int keys[] = {3, 1, 2, 1, 3, 2, 1, 3};
+  const int n = 8;
+
+  cvec_construct(v, stability_elem_t);
+
+  for (int i = 0; i < n; i++) {
+    cvector_push_back(v,
+                      &(stability_elem_t){.key = keys[i], .original_index = i});
+  }
+
+  cvector_sort_with_comparison_proc(v, stability_elem_comparison_proc);
+
+  for (int i = 1; i < n; i++) {
+    stability_elem_t *prev = (stability_elem_t *)cvector_at(v, i - 1);
+    stability_elem_t *curr = (stability_elem_t *)cvector_at(v, i);
+    REQUIRE_LE(prev->key, curr->key);
+    if (prev->key == curr->key) {
+      REQUIRE_TRUE(prev->original_index < curr->original_index);
+    }
+  }
+
+  cvec_destroy(v);
+}

@@ -465,9 +465,9 @@ cmap_iterator *chmap_iter_next(cmap_iterator *iter);
   ({                                                   \
     const typeof(*iter##__chm_iter_key_type_var) *key; \
     if (is_char_ptr(*iter##__chm_iter_key_type_var)) { \
-      key = (typeof(key))(&it->key_pair->ptr);         \
+      key = (typeof(key))(&iter->key_pair->ptr);       \
     } else {                                           \
-      key = (typeof(key))(it->key_pair->ptr);          \
+      key = (typeof(key))(iter->key_pair->ptr);        \
     }                                                  \
     key;                                               \
   })
@@ -491,9 +491,9 @@ cmap_iterator *chmap_iter_next(cmap_iterator *iter);
   ({                                                   \
     typeof(*iter##__chm_iter_val_type_var) *val;       \
     if (is_char_ptr(*iter##__chm_iter_val_type_var)) { \
-      val = (typeof(val))(&it->val_pair->ptr);         \
+      val = (typeof(val))(&iter->val_pair->ptr);       \
     } else {                                           \
-      val = (typeof(val))(it->val_pair->ptr);          \
+      val = (typeof(val))(iter->val_pair->ptr);        \
     }                                                  \
     val;                                               \
   })

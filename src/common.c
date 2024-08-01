@@ -464,8 +464,7 @@ inline __attribute__((always_inline)) void mem_cpy_small(void* dst,
  * pointers is checked: if both satisfy uint64_t alignment the inlined
  * struct-assignment fast path is taken; otherwise the C library memcpy handles
  * the misaligned case. Larger buffers always delegate to memcpy. */
-inline __attribute__((always_inline)) void mem_cpy(void* dst, const void* src,
-                                                   size_t n) {
+void mem_cpy(void* dst, const void* src, size_t n) {
   if (n <= SMALL_CHUNKS_SIZE) {
     // Check if pointers are suitably aligned for fast path
     // Use pointer alignment check, since uint64_t is the largest direct access

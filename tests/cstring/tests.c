@@ -369,6 +369,45 @@ TEST(cstrings, set_null) {
   cstring_destroy(s);
 }
 
+TEST(cstrings, set_self_alias_no_realloc) {
+  // "hello" fits in minimum capacity (16), so set(s, c_str(s)) must not
+  // realloc and must leave the content unchanged.
+  cstr s = cstring_create("hello", NULL);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+  ccol_retval_t rv = cstring_set(s, cstring_c_str(s));
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "hello");
+  REQUIRE_EQ(cstring_length(s), (size_t)5);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, set_self_alias_triggers_realloc) {
+  // Build a string whose length fills the current capacity so that
+  // cstring_set(s, cstring_c_str(s)) forces a realloc.  With minimum
+  // capacity = 16 a 15-char string fills the buffer exactly; setting it
+  // to itself requires capacity >= 16, which is already held — use a
+  // 16-char string so cstring_grow_to needs capacity >= 17 and must realloc.
+  cstr s = cstring_create("1234567890123456", NULL);
+  REQUIRE_EQ(cstring_length(s), (size_t)16);
+  ccol_retval_t rv = cstring_set(s, cstring_c_str(s));
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "1234567890123456");
+  REQUIRE_EQ(cstring_length(s), (size_t)16);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, set_suffix_alias_triggers_realloc) {
+  // Pass a pointer into the middle of s->data as the source — the realloc
+  // must not make that pointer dangle before it is used in memcpy.
+  cstr s = cstring_create("1234567890123456", NULL);
+  // cstring_c_str(s) + 6 points to "7890123456"
+  ccol_retval_t rv = cstring_set(s, cstring_c_str(s) + 6);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "7890123456");
+  REQUIRE_EQ(cstring_length(s), (size_t)10);
+  cstring_destroy(s);
+}
+
 // ========================================================================
 // RESET
 // ========================================================================
@@ -1274,5 +1313,86 @@ TEST(cstrings, many_appends_correctness) {
 
   REQUIRE_EQ(cstring_length(s), 200);
   REQUIRE_STREQ(cstring_c_str(s), expected);
+  cstr_destroy(s);
+}
+
+// ========================================================================
+// SELF-ALIAS TESTS (use-after-realloc and overlapping-copy bug coverage)
+// Strings of length >= 9 ensure the doubled length exceeds the 16-byte
+// minimum capacity, triggering a realloc so the alias bugs are exercised.
+// ========================================================================
+
+TEST(cstrings, append_self_alias_triggers_realloc) {
+  // "123456789" len=9; append self → "123456789123456789" len=18
+  // 18+1 > 16 so cstring_grow_to must realloc; the old str pointer would
+  // be dangling without the alias fix.
+  cstr_construct(s, "123456789");
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+  ccol_retval_t rv = cstring_append(s, cstring_c_str(s));
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "123456789123456789");
+  REQUIRE_EQ(cstring_length(s), (size_t)18);
+  cstr_destroy(s);
+}
+
+TEST(cstrings, append_suffix_alias_triggers_realloc) {
+  // Append a pointer into the middle of the same buffer after realloc.
+  cstr_construct(s, "123456789");
+  // cstring_c_str(s) + 4 points to "56789"
+  ccol_retval_t rv = cstring_append(s, cstring_c_str(s) + 4);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "12345678956789");
+  cstr_destroy(s);
+}
+
+TEST(cstrings, prepend_self_alias_triggers_realloc) {
+  // "123456789" prepend self → "123456789123456789"
+  cstr_construct(s, "123456789");
+  ccol_retval_t rv = cstring_prepend(s, cstring_c_str(s));
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "123456789123456789");
+  REQUIRE_EQ(cstring_length(s), (size_t)18);
+  cstr_destroy(s);
+}
+
+TEST(cstrings, prepend_suffix_alias_triggers_realloc) {
+  // Prepend a pointer into the buffer (alias_off > 0).
+  // "123456789" prepend "56789" (offset 4) → "5678912345678 9"
+  cstr_construct(s, "123456789");
+  ccol_retval_t rv = cstring_prepend(s, cstring_c_str(s) + 4);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "56789123456789");
+  cstr_destroy(s);
+}
+
+TEST(cstrings, insert_self_alias_triggers_realloc) {
+  // "123456789" insert self at pos 0 → "123456789123456789"
+  cstr_construct(s, "123456789");
+  ccol_retval_t rv = cstring_insert(s, 0, cstring_c_str(s));
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "123456789123456789");
+  cstr_destroy(s);
+}
+
+TEST(cstrings, insert_alias_after_pos_triggers_realloc) {
+  // "123456789" insert "56789" (offset 4) at pos 2 → "12567893456789"
+  // alias_off (4) > pos (2): after the memmove the source shifts right by
+  // str_len (5), so the pointer must be re-derived again.
+  cstr_construct(s, "123456789");
+  ccol_retval_t rv = cstring_insert(s, 2, cstring_c_str(s) + 4);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "12567893456789");
+  cstr_destroy(s);
+}
+
+TEST(cstrings, insert_alias_overlapping_dst_gt_src) {
+  // "abcde", insert s->data+1 ("bcde") at pos 3.
+  // alias_off=1 <= pos=3, str_len=4: after memmove the copy source overlaps
+  // destination with dst > src — previously a forward memcpy would corrupt.
+  // Expected: "abc" + "bcde" + "de" = "abcbcdede"
+  cstr_construct(s, "abcde");
+  ccol_retval_t rv = cstring_insert(s, 3, cstring_c_str(s) + 1);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "abcbcdede");
   cstr_destroy(s);
 }

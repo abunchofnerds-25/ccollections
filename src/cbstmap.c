@@ -46,6 +46,7 @@ typedef struct cbinarymap {
   bmap_node *root;
   ccol_memmgmt_procs_t *m_procs;
   bool keys_are_signed_ints;
+  bool keys_are_strings;
   ccol_comparison_proc_t custom_comparison_proc;
 } cbinarymap;
 
@@ -215,7 +216,7 @@ bool verify_cbmap_create_inputs(ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
 /* Creates an empty AVL-balanced BST map. keys_are_signed_ints selects the
  * signed comparison path; custom_comparison_proc overrides all built-in key
  * comparison when non-NULL. */
-cbmap cbmap_create_full(bool keys_are_signed_ints,
+cbmap cbmap_create_full(bool keys_are_signed_ints, bool keys_are_strings,
                         ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char **err) {
@@ -243,6 +244,7 @@ cbmap cbmap_create_full(bool keys_are_signed_ints,
   cbm->elem_count = 0;
   cbm->root = NULL;
   cbm->keys_are_signed_ints = keys_are_signed_ints;
+  cbm->keys_are_strings = keys_are_strings;
   cbm->custom_comparison_proc = custom_comparison_proc;
 
   return cbm;
@@ -408,8 +410,11 @@ static inline int compare_keys(cbmap cbm, const cmap_pair *key_pair1,
            (key_pair1->size < key_pair2->size);
   }
 
+  if (cbm->keys_are_strings) {
+    return memcmp(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
+  }
+
   if (cbm->keys_are_signed_ints) {
-    // Properly handle signed integer comparison for standard sizes
     return cmp_signed_small(key_pair1->ptr, key_pair2->ptr, key_pair1->size);
   }
 
@@ -446,7 +451,7 @@ bmap_node *create_new_node(cbmap cbm, const cmap_pair *key_pair,
 
   new_node->left = NULL;
   new_node->right = NULL;
-  new_node->height = 0;
+  new_node->height = 1;
 
   return new_node;
 }
@@ -462,7 +467,7 @@ int absolute(int x) {
 
 /* Returns the larger of x and y. Implemented locally for the same reason as
  * absolute(). */
-int maximum(int x, int y) {
+size_t maximum(size_t x, size_t y) {
   if (x >= y) {
     return x;
   }
@@ -491,11 +496,11 @@ void update_bmap_node_value(cbmap cbm, bmap_node *node,
   *result = ccol_key_already_present;
 }
 
-/* Returns the height of a node, defining -1 as the height of NULL (leaf
- * sentinels). This sentinel value simplifies balance factor arithmetic. */
-int node_height(bmap_node *node) {
+/* Returns the height of a node, or 0 for NULL. Leaf nodes start at height 1,
+ * so the NULL sentinel is 0 and all arithmetic stays in size_t. */
+size_t node_height(bmap_node *node) {
   if (!node) {
-    return -1;
+    return 0;
   }
 
   return node->height;
@@ -508,7 +513,7 @@ int node_balance(bmap_node *node) {
     return 0;
   }
 
-  return node_height(node->right) - node_height(node->left);
+  return (int)node_height(node->right) - (int)node_height(node->left);
 }
 
 /* Recomputes node->height from the heights of its children. Must be called

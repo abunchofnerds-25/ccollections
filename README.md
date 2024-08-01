@@ -489,21 +489,20 @@ Ordered map using self-balancing AVL tree.
 - O(log n) insert, delete, and search
 - In-order iteration (sorted by key)
 - All operations are iterative (no recursion, stack-safe)
-- Configurable signed/unsigned key comparison
-- Custom comparison function support
+- Automatic key comparison for signed integer, unsigned integer, and `char*` string keys
+- Custom comparison function support for other key types
 
 #### Basic Operations
 
 ```c
-// Creation — key signedness is inferred automatically from the type
+// Creation — key type is inferred automatically
 cbmap_construct(tree, int, char*);          // int key → signed comparison path
 cbmap_construct(tree2, unsigned int, int);  // unsigned int key → unsigned comparison path
+cbmap_construct(string_tree, char*, int);   // char* key → strcmp comparison path (native)
 
-// With custom comparison (required for string keys and other non-integral types)
-int my_compare(const void *a, const void *b) {
-    return strcmp(*(char**)a, *(char**)b);
-}
-cbmap_construct_cc(string_tree, char*, int, my_compare);
+// With custom comparison (for key types not natively supported)
+int my_compare(const void *a, const void *b) { ... }
+cbmap_construct_cc(custom_tree, my_key_t, int, my_compare);
 
 // Insertion (always use variables - automatic rebalancing)
 int key = 42;
@@ -571,7 +570,7 @@ cbmap_for_each(scores, it, {
 cbmap_destroy(scores);
 ```
 
-> **Note on `cstr` keys/values:** `cstr` (from `cstring.h`) is not a recognized type in `cbstmap`. String keys require a custom comparison function (see `cbmap_construct_cc`); use `cstr_c_str()` to extract the `char *` content and pass that. See [Using cstring with Maps](#using-cstring-with-maps) for details.
+> **Note on `cstr` keys/values:** `cstr` (from `cstring.h`) is not a recognized key type in `cbstmap`. Use `cstr_c_str()` to extract the `char *` content and use that as the key — `char *` keys are natively supported with automatic `strcmp` comparison, so no custom comparison function is needed. See [Using cstring with Maps](#using-cstring-with-maps) for details.
 
 ### Dynamic String (cstring)
 
@@ -1045,12 +1044,7 @@ The library tries to follow consistent naming conventions:
 
 ### Internal Functions
 
-Functions and macros prefixed with underscore(s) are internal and should not be called directly:
-
-- `_mem_alloc()`, `_mem_free()` - Internal memory management
-- `__cvector_destroy()`, `___cbmap_destroy()` - Internal destructors (use macros instead)
-- `___csort_merge_sort()` - Internal sort implementation (use `csort_sort()` macro)
-- `_populate_cmap_pair()` - Internal helper for maps
+Functions and macros prefixed with underscore(s) are internal and should not be called directly.
 
 Always use the public macros and functions documented in this README.
 

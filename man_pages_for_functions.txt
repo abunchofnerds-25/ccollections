@@ -1669,6 +1669,318 @@ NOTES
 SEE ALSO
        chan_send_zc, chan_recv_zc
 
+------------------------------------------------------------------------------
+NAME
+       _selectable_from_chan - resolve a channel into a ccol_selectable for
+       the calling thread and requested direction
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_selectable _selectable_from_chan(channel *ch, ccol_select_dir dir);
+
+DESCRIPTION
+       Inspects the calling thread's ID and the requested direction to determine
+       which of the channel's two underlying circular queues to wrap:
+
+         ccol_select_read  — owner ← workers_to_owner_cq  (same as chan_recv_zc)
+                           worker ← owner_to_workers_cq
+         ccol_select_write — owner → owner_to_workers_cq  (same as chan_send_zc)
+                           worker → workers_to_owner_cq
+
+       The resolution is performed at the call site so that ccol_select() itself
+       never needs access to the opaque channel struct.  The channel pointer is
+       not stored; only the resolved circular_queue pointer and the dir value are
+       kept in the returned ccol_selectable.
+
+       The selectable_from_chan() macro is a thin wrapper around this function.
+
+PARAMETERS
+       ch   Channel to resolve.  Must not be NULL.
+       dir  ccol_select_read or ccol_select_write.
+
+RETURN VALUE
+       ccol_selectable of type ccol_selectable_circq wrapping the appropriate
+       circular_queue for the calling thread and direction.
+
+       If ch is NULL, returns a ccol_selectable_circq with a NULL queue pointer.
+       Passing that to ccol_select() will cause it to return ccol_invalid_args.
+
+NOTES
+       Direction is resolved once at call time, not re-evaluated on each
+       ccol_select() iteration.  If the calling thread's role changes between
+       construction and the actual ccol_select() call, reconstruct the selectable.
+
+       Prefer the selectable_from_chan() macro at call sites for stylistic
+       consistency with selectable_from_circq() and selectable_from_dynq().
+
+THREAD SAFETY
+       Reads ch->owner_tid and two pointer fields written once at channel creation
+       and never modified thereafter; safe to call concurrently from any thread.
+
+SEE ALSO
+       ccol_select, selectable_from_chan, chan_recv_zc, chan_send_zc
+
+------------------------------------------------------------------------------
+NAME
+       ccol_select - wait for a message on any of several queues (blocking,
+       zero-copy)
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index,
+                               size_t n, ccol_selectable *selectables);
+
+       ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index,
+                               size_t n, ccol_selectable *selectables,
+                               int timeout_ms);
+
+DESCRIPTION
+       Blocks the calling thread until at least one of the n selectables has a
+       message available.  When a message is found, ownership of its data pointer
+       is transferred into *buf (zero-copy, exactly as individual recv functions
+       do) and the 0-based index of the ready selectable is written into
+       *ready_index.
+
+       ccol_select_timed() accepts an additional timeout_ms argument.  Passing -1
+       produces the same behaviour as ccol_select() (wait indefinitely).  Passing 0
+       performs a non-blocking poll.  A positive value is the maximum number of
+       milliseconds to wait before returning ccol_timed_out.  The deadline is
+       computed once before the loop using CLOCK_MONOTONIC so that system time
+       adjustments cannot extend the timeout.
+
+       ccol_select() is equivalent to ccol_select_timed(buf, ready_index, n,
+       selectables, -1).
+
+       A ccol_selectable wraps a circular_queue, a dynamic_queue, or a raw file
+       descriptor.  Build one with selectable_from_circq(), selectable_from_dynq(),
+       selectable_from_chan(), or selectable_from_fd().  Channels are pre-resolved
+       to their underlying circular queue before being passed here; ccol_select()
+       treats them identically to plain circular queues.
+
+       When at least one fd selectable is present, both functions create an
+       epoll(7) instance internally (EPOLL_CLOEXEC) and watch both user file
+       descriptors and per-waiter eventfd(2) descriptors used to bridge queue
+       notifications into the epoll event loop.  User fds are registered once
+       before the main retry loop with level-triggered semantics (EPOLLIN or
+       EPOLLOUT) and remain registered for the entire call; closing the epoll
+       instance on return removes them automatically.  Per-queue eventfds are
+       created on the first registration and reused across iterations (drained
+       with a non-blocking read in Phase 3 instead of closed), so subsequent
+       iterations incur zero epoll_ctl or eventfd syscalls.  When no fd
+       selectables are present, the lighter condvar path is used and no epoll
+       instance is created.
+
+       One waiter node per selectable is heap-allocated at the start of the call
+       and freed on every return path.  There is no fixed cap on the number of
+       concurrent threads calling ccol_select() on the same queue.
+
+   Locking protocol
+       Each loop iteration has three phases:
+
+       Phase 1 (scan + register)
+           For each selectable, acquire the queue's mutex.  If data is present,
+           receive it immediately and return.  If the queue is empty and writing
+           is enabled, prepend a heap-allocated waiter node to the queue's
+           internal waiter list, then release the mutex.
+
+       Phase 2 (wait)
+           Condvar path (no fd selectables): lock the local sel_mtx and call
+           pthread_cond_wait() (or pthread_cond_timedwait() when a deadline is
+           set) on the local CLOCK_MONOTONIC sel_cond.  The ready flag is
+           checked in a while loop to absorb spurious wakeups and signals that
+           arrived between Phase 1 and the actual sleep.  Producers set the
+           ready flag under sel_mtx before signalling sel_cond, so no wakeup
+           is ever lost.  On ETIMEDOUT with ready still false, ccol_timed_out
+           is returned.
+           Epoll path (fd selectables present): call epoll_wait() with the
+           remaining timeout recomputed on each attempt (including EINTR
+           retries) so signal delivery cannot extend the deadline.  n_ready==0
+           means the deadline elapsed; ccol_timed_out is returned.
+
+       Phase 3 (deregister)
+           Re-acquire each queue's mutex, splice the waiter node out of the
+           list, and loop back to Phase 1 to find which queue has data.
+
+       Lock ordering: producers acquire (queue mutex, then sel_mtx).  ccol_select
+       holds each queue mutex alone in Phases 1 and 3, and sel_mtx alone in
+       Phase 2.  No two mutexes are ever held simultaneously by ccol_select, so
+       there is no lock-ordering cycle and therefore no deadlock.
+
+       Node lifetime: producer notification happens while the producer holds the
+       queue mutex.  Deregistration also requires the queue mutex.  A node
+       therefore cannot be removed from the list while a producer is traversing
+       it — the heap buffer backing the node array cannot be freed mid-traversal.
+
+PARAMETERS
+       buf           Buffer to receive the message.  On ccol_success the caller
+                     owns buf->data and is responsible for freeing it.
+       ready_index   Pointer to a size_t that receives the 0-based index of the
+                     selectable that yielded the message.  Valid only when
+                     ccol_success is returned.
+       n             Number of elements in the selectables array.  Must be >= 1.
+       selectables   Array of n ccol_selectable values to monitor.
+       timeout_ms    (ccol_select_timed only) Maximum milliseconds to wait.
+                     -1: infinite wait (same as ccol_select).  0: non-blocking
+                     poll.  Positive: wait up to that many milliseconds.
+
+RETURN VALUE
+       ccol_success            A selectable is ready and *ready_index is set.
+
+                               Queue read win: *buf is populated with the
+                               dequeued message (zero-copy ownership transfer);
+                               caller must free buf->data.
+
+                               fd read win: ccol_select() has already read all
+                               available data from the fd into buf->data (heap-
+                               allocated; caller must free) and set buf->size to
+                               the byte count.  EOF yields buf->data = NULL,
+                               buf->size = 0.
+
+                               Write-direction win (queue or fd): buf is left
+                               untouched; no queue slot is reserved and no I/O
+                               is performed on the fd.  Caller calls the
+                               appropriate send or write(2) afterwards.
+
+       ccol_timed_out          (ccol_select_timed only) timeout_ms elapsed
+                               before any selectable became ready.  buf and
+                               *ready_index are unmodified.
+
+       ccol_invalid_args       buf, ready_index, or selectables is NULL; n is 0;
+                               a queue selectable contains a NULL queue pointer;
+                               an fd selectable contains a negative fd; or an
+                               unrecognised type tag is present.
+       ccol_not_permitted      Every queue selectable is simultaneously empty and
+                               has writing disabled.  No queue message can ever
+                               arrive.  (Returned only when no fd selectables are
+                               present; if any fd selectable is present,
+                               ccol_select() never returns this value because the
+                               fd could become ready at any time.)
+       ccol_not_enough_memory  malloc failed to allocate the internal waiter node
+                               array (one node per selectable).
+       ccol_unexpected_failure epoll_create1(2), eventfd(2), epoll_ctl(2), or
+                               the internal read(2) from a ready fd failed with
+                               an unexpected errno.  Only possible when at least
+                               one fd selectable is present.  Treat as a fatal
+                               configuration error (e.g., fd-table exhaustion or
+                               memory pressure).
+       ccol_msg_too_large      The data available on a read-direction fd selectable
+                               exceeded the limit set in max_fd_read_bytes.  buf
+                               is left untouched.  The fd's kernel buffer still
+                               holds the (partially consumed) data; the caller
+                               may read the remainder directly.
+
+NOTES
+       Waiter nodes are heap-allocated (one per selectable) for the duration of
+       the call and freed on every return path, including error paths.  This
+       eliminates the VLA stack-overflow risk for large n.
+
+       Any number of threads may simultaneously call ccol_select() watching the
+       same queue.  The waiter list is a dynamically-linked list with no fixed
+       capacity.
+
+       When a message arrives in a queue watched by multiple ccol_select()
+       threads, only the head waiter is woken (single-wake).  If the queue still
+       has more messages after the first waiter claims one, it immediately wakes
+       the next waiter (cascading wake).  This prevents both thundering herd and
+       liveness gaps when multiple messages arrive in quick succession.
+
+       When writing is disabled on a queue mid-wait (via circq_disable_sending()
+       or dynmq_disable_sending()), ccol_select() wakes all registered waiters
+       (broadcast), deregisters from all queues, and re-evaluates whether any
+       queue can still produce messages.  If all queues are disabled and empty
+       and no fd selectables are present, ccol_not_permitted is returned.
+
+       File descriptors must be kept open for the entire duration of the
+       ccol_select() call.  Closing an fd that ccol_select() is currently
+       watching produces undefined behaviour.
+
+       For read-direction fd wins, ccol_select() performs the read internally.
+       To bound the heap allocation, set max_fd_read_bytes on the selectable
+       (via selectable_from_fd_limited()).  getsockopt(SO_TYPE) is used to detect
+       SOCK_DGRAM and SOCK_SEQPACKET fds:
+
+       Datagram fds (SOCK_DGRAM, SOCK_SEQPACKET): a single read(2) into a 66 KiB
+       buffer captures the full datagram without truncation for any standard
+       IPv4/IPv6 UDP payload (max 65,507 bytes).  The grow-retry loop is suppressed
+       regardless of O_NONBLOCK.  When max_fd_read_bytes is set and the datagram
+       size exceeds it, ccol_msg_too_large is returned.
+
+       Stream and non-socket fds (pipes, timerfd, signalfd, etc.): a 4 KiB initial
+       buffer is used.  If the fd has O_NONBLOCK, the loop grows the buffer (up to
+       max_fd_read_bytes + 1 when a limit is set) until EAGAIN.  If blocking,
+       exactly one read(2) call is made.  The fd's flags are inspected read-only
+       via fcntl(F_GETFL) and are never modified, so concurrent users of the same
+       fd are unaffected.
+
+       Uses POSIX mutexes and condition variables internally; epoll(7) and
+       eventfd(2) when fd selectables are present (Linux only).
+
+EXAMPLES
+       /* Fan-in from two circular queues and a channel: */
+       c_message_t msg;
+       size_t idx;
+       ccol_retval_t r = ccol_select(&msg, &idx, 3,
+           (ccol_selectable[]){
+               selectable_from_circq(q0),
+               selectable_from_circq(q1),
+               selectable_from_chan(ch),
+           });
+       if (r == ccol_success) {
+           printf("got message from selectable %zu\n", idx);
+           free(msg.data);
+       }
+
+       /* Equivalent using the convenience macro: */
+       r = ccol_select_va(&msg, &idx,
+               selectable_from_circq(q0, ccol_select_read),
+               selectable_from_dynq(dq, ccol_select_read),
+               selectable_from_chan(ch, ccol_select_read));
+
+       /* Mixed read+write: wake when q0 has room OR dq has a message: */
+       r = ccol_select_va(&msg, &idx,
+               selectable_from_circq(q0, ccol_select_write),
+               selectable_from_dynq(dq,  ccol_select_read));
+
+       /* Fan-in from a queue and a pipe read end: */
+       int pfd[2];
+       pipe(pfd);
+       r = ccol_select_va(&msg, &idx,
+               selectable_from_circq(q0, ccol_select_read),
+               selectable_from_fd(pfd[0], ccol_select_read));
+       if (r == ccol_success) {
+           if (idx == 0) {
+               /* queue won — buf has the dequeued message */
+               printf("queue message size: %zu\n", msg.size);
+               free(msg.data);
+           } else {
+               /* fd won — ccol_select already read the data into buf */
+               printf("read %zu bytes from fd\n", msg.size);
+               free(msg.data);   /* msg.data may be NULL on EOF */
+           }
+       }
+
+       /* Timed wait with 500 ms deadline: */
+       r = ccol_select_timed_va(&msg, &idx, 500,
+               selectable_from_circq(q0, ccol_select_read));
+       if (r == ccol_timed_out) {
+           printf("no message within 500 ms\n");
+       }
+
+       /* Bounded fd read: reject messages larger than 64 KiB: */
+       r = ccol_select_va(&msg, &idx,
+               selectable_from_fd_limited(pfd[0], ccol_select_read, 65536));
+       if (r == ccol_msg_too_large) {
+           printf("oversized message rejected\n");
+       }
+
+SEE ALSO
+       ccol_select_timed, ccol_select_va, ccol_select_timed_va,
+       _selectable_from_chan, selectable_from_circq, selectable_from_dynq,
+       selectable_from_chan, selectable_from_fd, selectable_from_fd_limited,
+       circq_recv_zc, dynmq_recv_zc, chan_recv_zc
+
 ================================================================================
                         CSORT.H - SORTING LIBRARY
 ================================================================================

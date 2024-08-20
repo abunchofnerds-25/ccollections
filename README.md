@@ -879,7 +879,8 @@ Thread-safe message passing primitives.
 - Three abstractions: circular queue, dynamic queue, and bidirectional channel
 - Blocking, non-blocking, and timed operations
 - Thread-safe
-- Message ownership transferr prevents data races
+- Message ownership transfer prevents data races
+- Multiplexed waiting across queues and raw file descriptors via `ccol_select`
 
 #### Circular Queue (Strictly Bounded)
 
@@ -916,7 +917,7 @@ circular_queue_destroy(cq);
 
 #### Dynamic Queue (Loosely Bounded)
 
-Linked-list based queue that is allowed to grow dynamically up to **max `(size_t)-1`**
+Linked-list based queue that is allowed to grow dynamically up to **`(size_t)-1`**
 unconsumed messages, as long as there is enough memory:
 
 ```c
@@ -1028,6 +1029,74 @@ int main(void) {
     return 0;
 }
 ```
+
+#### Multiplexed Waiting (ccol_select / ccol_select_timed)
+
+`ccol_select` blocks until any one of a set of queues or file descriptors becomes ready, similar to POSIX `select(2)` but integrated with the queue primitives above. `ccol_select_timed` adds a deadline so the call returns `ccol_timed_out` if no selectable fires within the allowed time.
+
+Build a selectable from any queue type or a raw fd, then pass the array to `ccol_select` / `ccol_select_timed` or the variadic convenience macros `ccol_select_va` / `ccol_select_timed_va`:
+
+```c
+#include <cthreadcomm.h>
+
+circular_queue *q0 = circular_queue_create(8, NULL);
+dynamic_queue  *dq  = dynamic_queue_create(NULL);
+int pfd[2];
+pipe(pfd);  /* pfd[0] = read end */
+
+c_message_t msg;
+size_t idx;
+
+/* Wait for a message from q0 or dq, or data on the pipe — whichever comes first */
+ccol_retval_t r = ccol_select_va(&msg, &idx,
+    selectable_from_circq(q0, ccol_select_read),
+    selectable_from_dynq(dq,  ccol_select_read),
+    selectable_from_fd(pfd[0], ccol_select_read));
+
+if (r == ccol_success) {
+    if (idx == 2) {
+        /* fd won — ccol_select already read the data into msg.data, */
+        /* it can be handled accordingly. msg.data is NULL on EOF */
+    } else {
+        /* queue won — caller owns msg.data */
+        /* specific handling for queue can happen here */
+    }
+    free(msg.data);
+}
+```
+
+**Timed variant** — `timeout_ms` follows the same convention as `poll(2)`: `-1` blocks indefinitely (same as `ccol_select`), `0` polls without blocking, and any positive value is a millisecond deadline measured on `CLOCK_MONOTONIC` (immune to NTP slew and `settimeofday`):
+
+```c
+/* Wait up to 200 ms; proceed if nothing fires */
+ccol_retval_t r = ccol_select_timed_va(&msg, &idx, 200,
+    selectable_from_circq(q0, ccol_select_read),
+    selectable_from_fd(pfd[0], ccol_select_read));
+
+if (r == ccol_timed_out) {
+    /* nothing was ready within 200 ms — take corrective action */
+}
+```
+
+**Bounded fd reads** — to prevent a misbehaving peer from exhausting process memory, use `selectable_from_fd_limited` instead of `selectable_from_fd`. If the incoming data exceeds the cap, `ccol_select` returns `ccol_msg_too_large` and discards the partial buffer:
+
+```c
+/* Accept at most 64 KiB per message on the pipe */
+ccol_retval_t r = ccol_select_va(&msg, &idx,
+    selectable_from_fd_limited(pfd[0], ccol_select_read, 65536));
+
+if (r == ccol_msg_too_large) {
+    /* peer sent more than 64 KiB — connection policy decision */
+}
+```
+
+Key properties:
+- **Queue wins**: zero-copy ownership transfer — the message is dequeued atomically.
+- **fd read wins**: `ccol_select` reads into `msg.data` (heap-allocated; caller must `free()`). `msg.size` is the byte count. EOF yields `msg.data = NULL`. Datagram sockets (`SOCK_DGRAM`, `SOCK_SEQPACKET`) get a 66 KiB initial buffer — larger than the maximum standard UDP payload (65,507 bytes) — so no truncation or datagram mixing occurs. Stream fds use a 4 KiB initial buffer with a grow loop for `O_NONBLOCK` fds.
+- **fd write wins**: `buf` is left untouched — only readiness is signalled, symmetric with write-direction queue wins. Caller calls `write(2)`.
+- **Mixed selectables**: queue-only calls use a condvar path (zero overhead); any fd selectable switches to an `epoll(7)` path automatically.
+- **Heap-allocated waiter nodes**: internal bookkeeping nodes are heap-allocated per call (one node per selectable), so arbitrarily large selectable arrays do not risk stack overflow.
+- **Return values**: `ccol_success`, `ccol_timed_out` (deadline expired), `ccol_invalid_args`, `ccol_not_enough_memory` (allocation failure), `ccol_msg_too_large` (fd read exceeded limit), `ccol_not_permitted` (all queues permanently closed, no fds present), or `ccol_unexpected_failure` (epoll/eventfd setup or the internal read failed).
 
 ## API Conventions
 

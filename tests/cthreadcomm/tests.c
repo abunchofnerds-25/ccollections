@@ -1276,3 +1276,754 @@ TEST(channels, enable_disable_sending) {
   pthread_join(tid, NULL);
   channel_destroy(ch);
 }
+
+// CCOL_SELECT TESTS
+
+// --- helpers ---
+
+typedef struct {
+  circular_queue *cq;
+  int delay_us;
+  int value;
+} sel_circq_args;
+
+typedef struct {
+  dynamic_queue *dq;
+  int delay_us;
+  int value;
+} sel_dynq_args;
+
+typedef struct {
+  circular_queue *cq0;
+  circular_queue *cq1;
+  int delay_us;
+} sel_disable_args;
+
+typedef struct {
+  channel *ch;
+  int delay_us;
+  int value;
+} sel_chan_args;
+
+static void *thr_send_to_circq(void *arg) {
+  sel_circq_args *a = (sel_circq_args *)arg;
+  usleep((useconds_t)a->delay_us);
+  int *data = malloc(sizeof(int));
+  assert(data);
+  *data = a->value;
+  c_message_t msg = {.data = data, .size = sizeof(int)};
+  assert(circq_send_zc(a->cq, &msg) == ccol_success);
+  return NULL;
+}
+
+static void *thr_send_to_dynq(void *arg) {
+  sel_dynq_args *a = (sel_dynq_args *)arg;
+  usleep((useconds_t)a->delay_us);
+  int *data = malloc(sizeof(int));
+  assert(data);
+  *data = a->value;
+  c_message_t msg = {.data = data, .size = sizeof(int)};
+  assert(dynmq_send_zc(a->dq, &msg) == ccol_success);
+  return NULL;
+}
+
+static void *thr_disable_both_circq(void *arg) {
+  sel_disable_args *a = (sel_disable_args *)arg;
+  usleep((useconds_t)a->delay_us);
+  circq_disable_sending(a->cq0);
+  circq_disable_sending(a->cq1);
+  return NULL;
+}
+
+static void *thr_send_via_channel(void *arg) {
+  sel_chan_args *a = (sel_chan_args *)arg;
+  usleep((useconds_t)a->delay_us);
+  int *data = malloc(sizeof(int));
+  assert(data);
+  *data = a->value;
+  c_message_t msg = {.data = data, .size = sizeof(int)};
+  assert(chan_send_zc(a->ch, &msg) == ccol_success);
+  return NULL;
+}
+
+// --- tests ---
+
+TEST(ccol_select, returns_invalid_args_on_bad_inputs) {
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  c_message_t msg = {.data = NULL, .size = 0};
+  size_t idx = 0;
+  ccol_selectable sel = selectable_from_circq(cq, ccol_select_read);
+
+  REQUIRE_EQ(ccol_select(NULL, &idx, 1, &sel), ccol_invalid_args);
+  REQUIRE_EQ(ccol_select(&msg, NULL, 1, &sel), ccol_invalid_args);
+  REQUIRE_EQ(ccol_select(&msg, &idx, 0, &sel), ccol_invalid_args);
+  REQUIRE_EQ(ccol_select(&msg, &idx, 1, NULL), ccol_invalid_args);
+
+  ccol_selectable null_sel = selectable_from_circq(NULL, ccol_select_read);
+  REQUIRE_EQ(ccol_select(&msg, &idx, 1, &null_sel), ccol_invalid_args);
+
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, receives_from_first_queue_when_message_already_present) {
+  circular_queue *q0 = circular_queue_create(4, NULL);
+  circular_queue *q1 = circular_queue_create(4, NULL);
+
+  int *data = malloc(sizeof(int));
+  *data = 7;
+  c_message_t send_msg = {.data = data, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(q0, &send_msg), ccol_success);
+
+  c_message_t recv_msg = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&recv_msg, &idx,
+                            selectable_from_circq(q0, ccol_select_read),
+                            selectable_from_circq(q1, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 0);
+  REQUIRE_EQ(*(int *)recv_msg.data, 7);
+
+  free(recv_msg.data);
+  circular_queue_destroy(q0);
+  circular_queue_destroy(q1);
+}
+
+TEST(ccol_select, receives_from_second_queue_when_message_already_present) {
+  circular_queue *q0 = circular_queue_create(4, NULL);
+  circular_queue *q1 = circular_queue_create(4, NULL);
+
+  int *data = malloc(sizeof(int));
+  *data = 42;
+  c_message_t send_msg = {.data = data, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(q1, &send_msg), ccol_success);
+
+  c_message_t recv_msg = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&recv_msg, &idx,
+                            selectable_from_circq(q0, ccol_select_read),
+                            selectable_from_circq(q1, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 1);
+  REQUIRE_EQ(*(int *)recv_msg.data, 42);
+
+  free(recv_msg.data);
+  circular_queue_destroy(q0);
+  circular_queue_destroy(q1);
+}
+
+TEST(ccol_select, blocks_until_message_arrives_on_circq) {
+  circular_queue *q0 = circular_queue_create(4, NULL);
+  circular_queue *q1 = circular_queue_create(4, NULL);
+
+  sel_circq_args args = {.cq = q1, .delay_us = 15000, .value = 99};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_send_to_circq, &args);
+
+  c_message_t recv_msg = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&recv_msg, &idx,
+                            selectable_from_circq(q0, ccol_select_read),
+                            selectable_from_circq(q1, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 1);
+  REQUIRE_EQ(*(int *)recv_msg.data, 99);
+
+  free(recv_msg.data);
+  pthread_join(tid, NULL);
+  circular_queue_destroy(q0);
+  circular_queue_destroy(q1);
+}
+
+TEST(ccol_select, returns_not_permitted_when_all_queues_disabled_before_call) {
+  circular_queue *q0 = circular_queue_create(4, NULL);
+  circular_queue *q1 = circular_queue_create(4, NULL);
+
+  circq_disable_sending(q0);
+  circq_disable_sending(q1);
+
+  c_message_t recv_msg = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&recv_msg, &idx,
+                            selectable_from_circq(q0, ccol_select_read),
+                            selectable_from_circq(q1, ccol_select_read)),
+             ccol_not_permitted);
+
+  circular_queue_destroy(q0);
+  circular_queue_destroy(q1);
+}
+
+TEST(ccol_select,
+     wakes_and_returns_not_permitted_when_queues_disabled_mid_wait) {
+  circular_queue *q0 = circular_queue_create(4, NULL);
+  circular_queue *q1 = circular_queue_create(4, NULL);
+
+  sel_disable_args args = {.cq0 = q0, .cq1 = q1, .delay_us = 15000};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_disable_both_circq, &args);
+
+  c_message_t recv_msg = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&recv_msg, &idx,
+                            selectable_from_circq(q0, ccol_select_read),
+                            selectable_from_circq(q1, ccol_select_read)),
+             ccol_not_permitted);
+
+  pthread_join(tid, NULL);
+  circular_queue_destroy(q0);
+  circular_queue_destroy(q1);
+}
+
+TEST(ccol_select, blocks_until_message_arrives_on_dynq) {
+  circular_queue *q0 = circular_queue_create(4, NULL);
+  dynamic_queue *dq = dynamic_queue_create(NULL);
+
+  sel_dynq_args args = {.dq = dq, .delay_us = 15000, .value = 55};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_send_to_dynq, &args);
+
+  c_message_t recv_msg = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&recv_msg, &idx,
+                            selectable_from_circq(q0, ccol_select_read),
+                            selectable_from_dynq(dq, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 1);
+  REQUIRE_EQ(*(int *)recv_msg.data, 55);
+
+  free(recv_msg.data);
+  pthread_join(tid, NULL);
+  circular_queue_destroy(q0);
+  dynamic_queue_destroy(dq);
+}
+
+TEST(ccol_select, channel_direction_resolved_correctly_for_owner_thread) {
+  channel *ch = channel_create_with_mprocs(4, NULL, NULL);
+
+  /* Worker thread sends via chan_send_zc, which routes to workers_to_owner_cq.
+   * selectable_from_chan() called from the owner thread here also
+   * resolves to workers_to_owner_cq, so ccol_select watches the correct queue.
+   */
+  sel_chan_args args = {.ch = ch, .delay_us = 15000, .value = 77};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_send_via_channel, &args);
+
+  c_message_t recv_msg = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&recv_msg, &idx,
+                            selectable_from_chan(ch, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 0);
+  REQUIRE_EQ(*(int *)recv_msg.data, 77);
+
+  free(recv_msg.data);
+  pthread_join(tid, NULL);
+  channel_destroy(ch);
+}
+
+// --- write-wait helpers ---
+
+typedef struct {
+  circular_queue *cq;
+  int delay_us;
+} sel_recv_circq_args;
+
+static void *thr_recv_from_circq(void *arg) {
+  sel_recv_circq_args *a = (sel_recv_circq_args *)arg;
+  usleep((useconds_t)a->delay_us);
+  c_message_t msg = {.data = NULL, .size = 0};
+  assert(circq_recv_zc(a->cq, &msg) == ccol_success);
+  free(msg.data);
+  return NULL;
+}
+
+typedef struct {
+  circular_queue *cq;
+  int delay_us;
+} sel_enable_circq_args;
+
+static void *thr_enable_circq_sending(void *arg) {
+  sel_enable_circq_args *a = (sel_enable_circq_args *)arg;
+  usleep((useconds_t)a->delay_us);
+  circq_enable_sending(a->cq);
+  return NULL;
+}
+
+typedef struct {
+  dynamic_queue *dq;
+  int delay_us;
+} sel_enable_dynq_args;
+
+static void *thr_enable_dynq_sending(void *arg) {
+  sel_enable_dynq_args *a = (sel_enable_dynq_args *)arg;
+  usleep((useconds_t)a->delay_us);
+  dynmq_enable_sending(a->dq);
+  return NULL;
+}
+
+// --- write-wait tests ---
+
+TEST(ccol_select, write_circq_writable_immediately) {
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  /* Sentinel: buf must not be touched for write-direction wins */
+  int sentinel = 0xDEAD;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_circq(cq, ccol_select_write)),
+      ccol_success);
+  REQUIRE_EQ(idx, 0);
+  /* buf must be untouched */
+  REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
+
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, write_circq_blocks_until_reader_frees_space) {
+  circular_queue *cq = circular_queue_create(2, NULL);
+
+  /* Fill the queue to capacity */
+  int *d0 = malloc(sizeof(int));
+  assert(d0);
+  *d0 = 10;
+  int *d1 = malloc(sizeof(int));
+  assert(d1);
+  *d1 = 20;
+  c_message_t m0 = {.data = d0, .size = sizeof(int)};
+  c_message_t m1 = {.data = d1, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(cq, &m0), ccol_success);
+  REQUIRE_EQ(circq_send_zc(cq, &m1), ccol_success);
+
+  sel_recv_circq_args args = {.cq = cq, .delay_us = 15000};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_recv_from_circq, &args);
+
+  int sentinel = 0xBEEF;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_circq(cq, ccol_select_write)),
+      ccol_success);
+  REQUIRE_EQ(idx, 0);
+  /* buf must be untouched — write-select does not consume a message */
+  REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
+
+  pthread_join(tid, NULL);
+
+  /* Drain the remaining message to satisfy destroy's assert */
+  c_message_t drain = {.data = NULL, .size = 0};
+  REQUIRE_EQ(circq_recv_zc(cq, &drain), ccol_success);
+  free(drain.data);
+
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, write_circq_wakes_when_sending_reenabled) {
+  circular_queue *cq = circular_queue_create(4, NULL);
+  circq_disable_sending(cq);
+
+  sel_enable_circq_args args = {.cq = cq, .delay_us = 15000};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_enable_circq_sending, &args);
+
+  int sentinel = 0xCAFE;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_circq(cq, ccol_select_write)),
+      ccol_success);
+  REQUIRE_EQ(idx, 0);
+  REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
+
+  pthread_join(tid, NULL);
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, write_dynq_writable_immediately) {
+  dynamic_queue *dq = dynamic_queue_create(NULL);
+
+  int sentinel = 0x1234;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_dynq(dq, ccol_select_write)),
+      ccol_success);
+  REQUIRE_EQ(idx, 0);
+  REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
+
+  dynamic_queue_destroy(dq);
+}
+
+TEST(ccol_select, write_dynq_wakes_when_sending_reenabled) {
+  dynamic_queue *dq = dynamic_queue_create(NULL);
+  dynmq_disable_sending(dq);
+
+  sel_enable_dynq_args args = {.dq = dq, .delay_us = 15000};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_enable_dynq_sending, &args);
+
+  int sentinel = 0x5678;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_dynq(dq, ccol_select_write)),
+      ccol_success);
+  REQUIRE_EQ(idx, 0);
+  REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
+
+  pthread_join(tid, NULL);
+  dynamic_queue_destroy(dq);
+}
+
+TEST(ccol_select, write_mixed_full_circq_and_readable_circq) {
+  /* q_write is full; q_read is empty and will receive a message.
+   * ccol_select should pick up q_read (read-direction) first. */
+  circular_queue *q_write = circular_queue_create(1, NULL);
+  circular_queue *q_read = circular_queue_create(4, NULL);
+
+  int *fill = malloc(sizeof(int));
+  assert(fill);
+  *fill = 42;
+  c_message_t fill_msg = {.data = fill, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(q_write, &fill_msg), ccol_success);
+
+  sel_circq_args args = {.cq = q_read, .delay_us = 15000, .value = 88};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_send_to_circq, &args);
+
+  c_message_t recv_msg = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&recv_msg, &idx,
+                            selectable_from_circq(q_write, ccol_select_write),
+                            selectable_from_circq(q_read, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 1);
+  REQUIRE_EQ(*(int *)recv_msg.data, 88);
+
+  free(recv_msg.data);
+  pthread_join(tid, NULL);
+
+  /* Drain q_write's fill message */
+  c_message_t drain = {.data = NULL, .size = 0};
+  REQUIRE_EQ(circq_recv_zc(q_write, &drain), ccol_success);
+  free(drain.data);
+
+  circular_queue_destroy(q_write);
+  circular_queue_destroy(q_read);
+}
+
+TEST(ccol_select, write_channel_owner_resolves_send_direction) {
+  channel *ch = channel_create_with_mprocs(4, NULL, NULL);
+
+  /* Owner calls selectable_from_chan with ccol_select_write: resolves
+   * to owner_to_workers_cq.  That queue is empty and writable, so ccol_select
+   * must return immediately. */
+  int sentinel = 0xABCD;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_chan(ch, ccol_select_write)),
+      ccol_success);
+  REQUIRE_EQ(idx, 0);
+  REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
+
+  channel_destroy(ch);
+}
+
+// --- fd selectable helpers ---
+
+typedef struct {
+  int write_fd;
+  int delay_us;
+  int value;
+} sel_fd_write_args;
+
+static void *thr_write_to_fd(void *arg) {
+  sel_fd_write_args *a = (sel_fd_write_args *)arg;
+  usleep((useconds_t)a->delay_us);
+  int v = a->value;
+  assert(write(a->write_fd, &v, sizeof(v)) == sizeof(v));
+  return NULL;
+}
+
+// --- fd selectable tests ---
+
+TEST(ccol_select, fd_readable_immediately) {
+  /* Write data to the pipe before calling ccol_select; it must return without
+   * blocking, report the correct index, and populate buf with the data. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  int val = 42;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&buf, &idx,
+                            selectable_from_fd(pfd[0], ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 0);
+  /* ccol_select read the data; buf owns a heap copy */
+  REQUIRE_NE((void *)buf.data, (void *)NULL);
+  REQUIRE_EQ(buf.size, sizeof(val));
+  REQUIRE_EQ(*(int *)buf.data, 42);
+  free(buf.data);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(ccol_select, fd_blocks_until_data_arrives) {
+  /* Thread writes to pipe after a delay; ccol_select must block and then wake
+   * up when data arrives, with buf populated. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  sel_fd_write_args args = {.write_fd = pfd[1], .delay_us = 15000, .value = 77};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_write_to_fd, &args);
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  struct timespec before, after;
+  getWallTime(before);
+  REQUIRE_EQ(ccol_select_va(&buf, &idx,
+                            selectable_from_fd(pfd[0], ccol_select_read)),
+             ccol_success);
+  getWallTime(after);
+  REQUIRE_EQ(idx, 0);
+  REQUIRE_GE(diffTimeUSec(before, after), 10000);  /* actually blocked */
+
+  /* ccol_select consumed the data; verify and free */
+  REQUIRE_NE((void *)buf.data, (void *)NULL);
+  REQUIRE_EQ(buf.size, sizeof(int));
+  REQUIRE_EQ(*(int *)buf.data, 77);
+  free(buf.data);
+
+  pthread_join(tid, NULL);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(ccol_select, fd_writable_immediately) {
+  /* A fresh pipe write-end is always writable; must return without blocking. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  int sentinel = 0xFEED;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&buf, &idx,
+                            selectable_from_fd(pfd[1], ccol_select_write)),
+             ccol_success);
+  REQUIRE_EQ(idx, 0);
+  /* buf untouched */
+  REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(ccol_select, fd_and_queue_fd_wins) {
+  /* Pipe already has data; circular queue is empty.  fd must win at index 0
+   * and buf must contain the pipe data. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  int val = 55;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&buf, &idx,
+                            selectable_from_fd(pfd[0], ccol_select_read),
+                            selectable_from_circq(cq, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 0);
+  REQUIRE_NE((void *)buf.data, (void *)NULL);
+  REQUIRE_EQ(buf.size, sizeof(val));
+  REQUIRE_EQ(*(int *)buf.data, 55);
+  free(buf.data);
+
+  close(pfd[0]);
+  close(pfd[1]);
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, fd_and_queue_queue_wins) {
+  /* Pipe has no data; a thread sends to the queue after a delay.  The queue
+   * must win, demonstrating that the eventfd bridge correctly wakes epoll_wait
+   * for a queue event in a mixed fd+queue selectable array. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  sel_circq_args args = {.cq = cq, .delay_us = 15000, .value = 33};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_send_to_circq, &args);
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&buf, &idx,
+                            selectable_from_fd(pfd[0], ccol_select_read),
+                            selectable_from_circq(cq, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 1);
+  REQUIRE_EQ(*(int *)buf.data, 33);
+
+  free(buf.data);
+  pthread_join(tid, NULL);
+  close(pfd[0]);
+  close(pfd[1]);
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, fd_and_dynq_dynq_wins) {
+  /* Same as above but with a dynamic_queue, ensuring the eventfd bridge works
+   * for dynq selectables in epoll mode. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  dynamic_queue *dq = dynamic_queue_create(NULL);
+
+  sel_dynq_args args = {.dq = dq, .delay_us = 15000, .value = 99};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_send_to_dynq, &args);
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_va(&buf, &idx,
+                            selectable_from_fd(pfd[0], ccol_select_read),
+                            selectable_from_dynq(dq, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, 1);
+  REQUIRE_EQ(*(int *)buf.data, 99);
+
+  free(buf.data);
+  pthread_join(tid, NULL);
+  close(pfd[0]);
+  close(pfd[1]);
+  dynamic_queue_destroy(dq);
+}
+
+TEST(ccol_select, fd_invalid_fd_returns_invalid_args) {
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  ccol_selectable bad = selectable_from_fd(-1, ccol_select_read);
+  REQUIRE_EQ(ccol_select(&buf, &idx, 1, &bad), ccol_invalid_args);
+}
+
+TEST(ccol_select, timed_circq_returns_timed_out) {
+  /* Queue is empty with writing enabled; ccol_select_timed must return
+   * ccol_timed_out after the deadline, not block indefinitely. */
+  circular_queue *cq = circular_queue_create(4, NULL);
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_timed_va(&buf, &idx, 50 /* ms */,
+                           selectable_from_circq(cq, ccol_select_read)),
+      ccol_timed_out);
+  /* buf and idx must be untouched on timeout */
+  REQUIRE_EQ((void *)buf.data, NULL);
+  REQUIRE_EQ(idx, (size_t)99);
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, timed_fd_returns_timed_out) {
+  /* Read end of a pipe with no data written; must time out. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_timed_va(&buf, &idx, 50 /* ms */,
+                           selectable_from_fd(pfd[0], ccol_select_read)),
+      ccol_timed_out);
+  REQUIRE_EQ((void *)buf.data, NULL);
+  REQUIRE_EQ(idx, (size_t)99);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(ccol_select, timed_poll_zero_ms_circq_empty) {
+  /* timeout_ms == 0: non-blocking poll; empty queue → immediate timed_out. */
+  circular_queue *cq = circular_queue_create(4, NULL);
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_timed_va(&buf, &idx, 0,
+                           selectable_from_circq(cq, ccol_select_read)),
+      ccol_timed_out);
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, timed_succeeds_before_deadline) {
+  /* Producer sends before the 500 ms deadline; select must return success. */
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  pthread_t tid;
+  c_message_t send_msg = {.data = malloc(4), .size = 4};
+  *(int *)send_msg.data = 1234;
+
+  /* A helper thread that sleeps 20 ms then sends. */
+  struct {
+    circular_queue *cq;
+    c_message_t msg;
+  } args = {cq, send_msg};
+
+  void *helper(void *arg) {
+    typeof(args) *a = arg;
+    struct timespec ts = {.tv_sec = 0, .tv_nsec = 20 * 1000000L};
+    nanosleep(&ts, NULL);
+    circq_send_zc(a->cq, &a->msg);
+    return NULL;
+  }
+  pthread_create(&tid, NULL, helper, &args);
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_timed_va(&buf, &idx, 500,
+                           selectable_from_circq(cq, ccol_select_read)),
+      ccol_success);
+  REQUIRE_EQ(idx, (size_t)0);
+  REQUIRE_NE((void *)buf.data, NULL);
+  REQUIRE_EQ(*(int *)buf.data, 1234);
+  free(buf.data);
+
+  pthread_join(tid, NULL);
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, timed_out_deregisters_waiter_node) {
+  /* Regression test for the use-after-free bug: after ccol_select_timed times
+   * out, the waiter node must be removed from the queue's waiter list before
+   * the node is freed.  If deregistration is missing, a subsequent send will
+   * dereference freed memory, which Valgrind or ASan would catch.  Running
+   * cleanly here confirms that deregistration happens on the timeout path. */
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_timed_va(&buf, &idx, 30 /* ms */,
+                           selectable_from_circq(cq, ccol_select_read)),
+      ccol_timed_out);
+
+  /* Send to the queue AFTER the timed-out select has returned.  If the waiter
+   * node was not deregistered, circq_send_zc → notify_one_sel_waiter will
+   * dereference the freed node here. */
+  c_message_t msg = {.data = malloc(4), .size = 4};
+  *(int *)msg.data = 42;
+  REQUIRE_EQ(circq_send_zc(cq, &msg), ccol_success);
+
+  /* Drain so the queue is empty before destroy. */
+  REQUIRE_EQ(circq_recv_zc(cq, &buf), ccol_success);
+  free(buf.data);
+
+  circular_queue_destroy(cq);
+}

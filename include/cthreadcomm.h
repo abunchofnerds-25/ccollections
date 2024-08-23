@@ -1012,8 +1012,10 @@ ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir);
  *                                with writing disabled AND there are no fd
  *                                selectables; write-direction selectables never
  *                                cause this return
- * @return ccol_unexpected_failure epoll_create1, eventfd, epoll_ctl, malloc, or
- *                                 the internal read from a ready fd failed
+ * @return ccol_not_enough_memory Internal waiter-node allocation (one node per
+ *                                selectable) failed; no state was changed
+ * @return ccol_unexpected_failure epoll_create1, eventfd, epoll_ctl, or the
+ *                                 fd-read buffer malloc or read(2) call failed
  * @return ccol_msg_too_large      The data on a read-direction fd selectable
  *                                 exceeded the limit set in max_fd_read_bytes;
  *                                 buf is left untouched
@@ -1050,6 +1052,7 @@ ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
  *                                unmodified.
  * @return ccol_invalid_args      (same conditions as ccol_select)
  * @return ccol_not_permitted     (same conditions as ccol_select)
+ * @return ccol_not_enough_memory (same conditions as ccol_select)
  * @return ccol_unexpected_failure (same conditions as ccol_select)
  * @return ccol_msg_too_large      (same conditions as ccol_select)
  *

@@ -1181,7 +1181,7 @@ SYNOPSIS
        selectable_from_chan(ch, dir);
 
 DESCRIPTION
-       Calls _selectable_from_chan(ch, dir), which inspects the calling
+       Calls ccol_selectable_from_chan(ch, dir), which inspects the calling
        thread's ID and the requested direction to pick the correct internal
        circular queue:
 
@@ -1217,7 +1217,7 @@ EXAMPLES
            selectable_from_chan(ch, ccol_select_write));
 
 SEE ALSO
-       _selectable_from_chan, ccol_select, ccol_select_va,
+       ccol_selectable_from_chan, ccol_select, ccol_select_va,
        selectable_from_circq, selectable_from_dynq, selectable_from_fd
 
 ------------------------------------------------------------------------------
@@ -1365,12 +1365,17 @@ PARAMETERS
        ...          One or more ccol_selectable values.  At least one is required.
 
 RETURN VALUE
-       ccol_success       Message received.  *ready_index set; caller frees
-                          buf->data.
-       ccol_timed_out     (ccol_select_timed_va only) deadline elapsed.
-       ccol_invalid_args  Any argument is NULL/zero, or a selectable contains a
-                          NULL queue pointer or unknown type tag.
-       ccol_not_permitted All selectables are empty with writing disabled.
+       ccol_success            Message received.  *ready_index set; caller frees
+                               buf->data.
+       ccol_timed_out          (ccol_select_timed_va only) deadline elapsed without
+                               any selectable becoming ready.
+       ccol_invalid_args       Any argument is NULL/zero, or a selectable contains a
+                               NULL queue pointer or unknown type tag.
+       ccol_not_permitted      All queue selectables are simultaneously empty with
+                               writing disabled and no fd selectables are present.
+       ccol_not_enough_memory  Waiter-node allocation failed (one node per selectable).
+       ccol_msg_too_large      An fd selectable read exceeded its max_fd_read_bytes limit.
+       ccol_unexpected_failure epoll/eventfd setup or the internal fd read(2) failed.
 
 WARNINGS
        Uses a GCC/Clang statement expression (__extension__({ ... })).  Not

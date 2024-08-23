@@ -1671,13 +1671,13 @@ SEE ALSO
 
 ------------------------------------------------------------------------------
 NAME
-       _selectable_from_chan - resolve a channel into a ccol_selectable for
+       ccol_selectable_from_chan - resolve a channel into a ccol_selectable for
        the calling thread and requested direction
 
 SYNOPSIS
        #include <cthreadcomm.h>
 
-       ccol_selectable _selectable_from_chan(channel *ch, ccol_select_dir dir);
+       ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir);
 
 DESCRIPTION
        Inspects the calling thread's ID and the requested direction to determine
@@ -1923,9 +1923,9 @@ EXAMPLES
        size_t idx;
        ccol_retval_t r = ccol_select(&msg, &idx, 3,
            (ccol_selectable[]){
-               selectable_from_circq(q0),
-               selectable_from_circq(q1),
-               selectable_from_chan(ch),
+               selectable_from_circq(q0, ccol_select_read),
+               selectable_from_circq(q1, ccol_select_read),
+               selectable_from_chan(ch, ccol_select_read),
            });
        if (r == ccol_success) {
            printf("got message from selectable %zu\n", idx);
@@ -1977,7 +1977,7 @@ EXAMPLES
 
 SEE ALSO
        ccol_select_timed, ccol_select_va, ccol_select_timed_va,
-       _selectable_from_chan, selectable_from_circq, selectable_from_dynq,
+       ccol_selectable_from_chan, selectable_from_circq, selectable_from_dynq,
        selectable_from_chan, selectable_from_fd, selectable_from_fd_limited,
        circq_recv_zc, dynmq_recv_zc, chan_recv_zc
 

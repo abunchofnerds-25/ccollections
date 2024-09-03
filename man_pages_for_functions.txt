@@ -1316,11 +1316,15 @@ PARAMETERS
        target_buf  Buffer to receive the message (receives ownership of data)
 
 RETURN VALUE
-       ccol_success       - Message received (caller must free target_buf->data)
-       ccol_invalid_args  - cq or target_buf is NULL
+       ccol_success        - Message received (caller must free target_buf->data)
+       ccol_invalid_args   - cq or target_buf is NULL
+       ccol_not_permitted  - Queue is empty and sending has been disabled;
+                             no further messages can ever arrive
 
 NOTES
        Blocks indefinitely until a message arrives
+       Returns ccol_not_permitted immediately (without blocking) when the
+         queue is empty and writing has already been disabled
        Caller receives ownership of target_buf->data and must free it
        Thread-safe
 
@@ -1390,6 +1394,40 @@ NOTES
 
 SEE ALSO
        circq_recv_zc, circq_try_recv_zc
+
+------------------------------------------------------------------------------
+NAME
+       dynmq_recv_zc - receive a message from a dynamic queue (blocking)
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_retval_t dynmq_recv_zc(dynamic_queue *dq, c_message_t *target_buf);
+
+DESCRIPTION
+       Blocks until a message is available in the dynamic queue, then removes
+       the head message and transfers ownership of its data pointer to the
+       caller via target_buf. The caller must free target_buf->data when done.
+
+PARAMETERS
+       dq          Dynamic queue to receive from
+       target_buf  Buffer to receive the message (receives ownership of data)
+
+RETURN VALUE
+       ccol_success        - Message received (caller must free target_buf->data)
+       ccol_invalid_args   - dq or target_buf is NULL
+       ccol_not_permitted  - Queue is empty and sending has been disabled;
+                             no further messages can ever arrive
+
+NOTES
+       Blocks indefinitely until a message arrives
+       Returns ccol_not_permitted immediately (without blocking) when the
+         queue is empty and writing has already been disabled
+       Caller receives ownership of target_buf->data and must free it
+       Thread-safe
+
+SEE ALSO
+       dynmq_try_recv_zc, dynmq_timed_recv_zc, dynmq_send_zc
 
 ------------------------------------------------------------------------------
 NAME

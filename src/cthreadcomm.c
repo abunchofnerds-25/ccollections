@@ -264,10 +264,12 @@ void _sendto_cq(circular_queue *cq, c_message_t *msg) {
 }
 
 /* Validates send arguments: the queue and message must be non-NULL, and a
- * message with a non-NULL data pointer must have a non-zero size (size == 0
- * with data != NULL would be an inconsistent state). */
+ * message must have a consistent data/size pair: data != NULL requires size > 0
+ * (no empty payload with a live pointer), and data == NULL requires size == 0
+ * (NULL with a non-zero size is an inconsistent sentinel). */
 bool verify_circq_send_zc_params(circular_queue *cq, c_message_t *msg) {
-  if (!cq || !msg || (msg->size == 0 && msg->data != NULL)) {
+  if (!cq || !msg || (msg->size == 0 && msg->data != NULL) ||
+      (msg->data == NULL && msg->size != 0)) {
     return false;
   }
 
@@ -363,6 +365,10 @@ ccol_retval_t circq_timed_send_zc(circular_queue *cq, c_message_t *msg,
           mutex_unlock(cq->mutex);
           return ccol_unexpected_failure;
         }
+        /* Re-check under the mutex: a consumer may have freed a slot between
+         * the kernel detecting the expiry and us reacquiring the mutex.
+         * Also re-check writing_disabled for the same reason. */
+        if (cq->msg_count < cq->max_size || cq->writing_disabled) break;
         mutex_unlock(cq->mutex);
         return ccol_timed_out;
       }
@@ -476,6 +482,10 @@ ccol_retval_t circq_timed_recv_zc(circular_queue *cq, c_message_t *target_buf,
           mutex_unlock(cq->mutex);
           return ccol_unexpected_failure;
         }
+        /* Re-check under the mutex: a producer may have added a message between
+         * the kernel detecting the expiry and us reacquiring the mutex.
+         * Also re-check writing_disabled for the same reason. */
+        if (cq->msg_count > 0 || cq->writing_disabled) break;
         mutex_unlock(cq->mutex);
         return ccol_timed_out;
       }
@@ -729,7 +739,8 @@ ccol_retval_t _sendto_dq(dynamic_queue *dq, c_message_t *msg) {
 /* Validates dynamic queue send arguments (mirrors verify_circq_send_zc_params
  * but for dynamic_queue). */
 bool verify_dynmq_send_zc_params(dynamic_queue *dq, c_message_t *msg) {
-  if (!dq || !msg || (msg->size == 0 && msg->data != NULL)) {
+  if (!dq || !msg || (msg->size == 0 && msg->data != NULL) ||
+      (msg->data == NULL && msg->size != 0)) {
     return false;
   }
 
@@ -852,6 +863,10 @@ ccol_retval_t dynmq_timed_recv_zc(dynamic_queue *dq, c_message_t *target_buf,
           mutex_unlock(dq->mutex);
           return ccol_unexpected_failure;
         }
+        /* Re-check under the mutex: a producer may have added a message between
+         * the kernel detecting the expiry and us reacquiring the mutex.
+         * Also re-check writing_disabled for the same reason. */
+        if (dq->msg_count > 0 || dq->writing_disabled) break;
         mutex_unlock(dq->mutex);
         return ccol_timed_out;
       }
@@ -1298,8 +1313,8 @@ static ccol_retval_t _read_from_fd(int fd, size_t max_bytes, c_message_t *msg) {
     /* Grow cap: use max_bytes + 1 as the ceiling.  The extra byte means
      * that if exactly max_bytes of data exists, the next read returns EAGAIN
      * (total < new_cap) rather than triggering a false-positive overflow.
-     * Guard against SIZE_MAX overflow. */
-    size_t new_cap = capacity * 2;
+     * Guard against SIZE_MAX overflow on the doubling itself. */
+    size_t new_cap = (capacity <= SIZE_MAX / 2) ? capacity * 2 : SIZE_MAX;
     if (max_bytes > 0) {
       size_t limit_cap = (max_bytes < SIZE_MAX) ? max_bytes + 1 : SIZE_MAX;
       if (new_cap > limit_cap) new_cap = limit_cap;

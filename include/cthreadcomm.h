@@ -216,6 +216,8 @@ ccol_retval_t circq_timed_send_zc(circular_queue *cq, c_message_t *msg,
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if cq or target_buf is NULL
+ * @return ccol_not_permitted if the queue is empty and sending has been
+ *         disabled (no further messages can ever arrive)
  *
  * @note Blocks indefinitely until a message arrives
  * @note Caller receives ownership of target_buf->data and must free it
@@ -429,6 +431,8 @@ ccol_retval_t dynmq_send_zc(dynamic_queue *dq, c_message_t *msg);
  *
  * @return ccol_success on success (caller must free target_buf->data)
  * @return ccol_invalid_args if dq or target_buf is NULL
+ * @return ccol_not_permitted if the queue is empty and sending has been
+ *         disabled (no further messages can ever arrive)
  *
  * @note Blocks indefinitely until a message arrives
  * @note Caller receives ownership of target_buf->data and must free it

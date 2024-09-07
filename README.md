@@ -1097,7 +1097,7 @@ Key properties:
 - **fd write wins**: `buf` is left untouched — only readiness is signalled, symmetric with write-direction queue wins. Caller calls `write(2)`.
 - **Mixed selectables**: queue-only calls use a condvar path (zero overhead); any fd selectable switches to an `epoll(7)` path automatically.
 - **Heap-allocated waiter nodes**: internal bookkeeping nodes are heap-allocated per call (one node per selectable), so arbitrarily large selectable arrays do not risk stack overflow.
-- **Return values**: `ccol_success`, `ccol_timed_out` (deadline expired), `ccol_invalid_args`, `ccol_not_enough_memory` (allocation failure), `ccol_msg_too_large` (fd read exceeded limit), `ccol_not_permitted` (all queues permanently closed, no fds present), or `ccol_unexpected_failure` (epoll/eventfd setup or the internal read failed).
+- **Return values**: `ccol_success`, `ccol_timed_out` (deadline expired), `ccol_invalid_args`, `ccol_not_enough_memory` (allocation failure), `ccol_msg_too_large` (fd read exceeded limit), or `ccol_unexpected_failure` (epoll/eventfd setup or the internal read failed).
 
 ## API Conventions
 

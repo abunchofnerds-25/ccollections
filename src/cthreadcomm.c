@@ -422,13 +422,8 @@ ccol_retval_t circq_recv_zc(circular_queue *cq, c_message_t *target_buf) {
 
   mutex_lock(cq->mutex);
 
-  while (cq->msg_count == 0 && !cq->writing_disabled) {
+  while (cq->msg_count == 0) {
     cond_var_wait(cq->read_cond, cq->mutex);
-  }
-
-  if (cq->msg_count == 0) {
-    mutex_unlock(cq->mutex);
-    return ccol_not_permitted;
   }
 
   _recvfrom_cq(cq, target_buf);
@@ -476,25 +471,19 @@ ccol_retval_t circq_timed_recv_zc(circular_queue *cq, c_message_t *target_buf,
     clock_gettime(CLOCK_REALTIME, &abs_time);
     add_duration_to_timespec(&abs_time, timeout);
 
-    while (cq->msg_count == 0 && !cq->writing_disabled) {
+    while (cq->msg_count == 0) {
       if ((retval = cond_var_timedwait(cq->read_cond, cq->mutex, abs_time))) {
         if (retval != ETIMEDOUT) {
           mutex_unlock(cq->mutex);
           return ccol_unexpected_failure;
         }
         /* Re-check under the mutex: a producer may have added a message between
-         * the kernel detecting the expiry and us reacquiring the mutex.
-         * Also re-check writing_disabled for the same reason. */
-        if (cq->msg_count > 0 || cq->writing_disabled) break;
+         * the kernel detecting the expiry and us reacquiring the mutex. */
+        if (cq->msg_count > 0) break;
         mutex_unlock(cq->mutex);
         return ccol_timed_out;
       }
     }
-  }
-
-  if (cq->msg_count == 0) {
-    mutex_unlock(cq->mutex);
-    return ccol_not_permitted;
   }
 
   _recvfrom_cq(cq, target_buf);
@@ -512,9 +501,6 @@ ccol_retval_t circq_disable_sending(circular_queue *cq) {
     mutex_lock(cq->mutex);
     cq->writing_disabled = true;
     cond_var_broadcast(cq->write_cond);  // Wake waiting senders
-    cond_var_broadcast(cq->read_cond);   // Wake blocked receivers so they can
-                                         // observe the disabled state
-    notify_all_sel_waiters(cq->sel_read_waiters_head);
     notify_all_sel_waiters(cq->sel_write_waiters_head);
     mutex_unlock(cq->mutex);
     return ccol_success;
@@ -805,13 +791,8 @@ ccol_retval_t dynmq_recv_zc(dynamic_queue *dq, c_message_t *target_buf) {
 
   mutex_lock(dq->mutex);
 
-  while (dq->msg_count == 0 && !dq->writing_disabled) {
+  while (dq->msg_count == 0) {
     cond_var_wait(dq->read_cond, dq->mutex);
-  }
-
-  if (dq->msg_count == 0) {
-    mutex_unlock(dq->mutex);
-    return ccol_not_permitted;
   }
 
   ccol_retval_t result = _recvfrom_dq(dq, target_buf);
@@ -857,25 +838,19 @@ ccol_retval_t dynmq_timed_recv_zc(dynamic_queue *dq, c_message_t *target_buf,
     clock_gettime(CLOCK_REALTIME, &abs_time);
     add_duration_to_timespec(&abs_time, timeout);
 
-    while (dq->msg_count == 0 && !dq->writing_disabled) {
+    while (dq->msg_count == 0) {
       if ((retval = cond_var_timedwait(dq->read_cond, dq->mutex, abs_time))) {
         if (retval != ETIMEDOUT) {
           mutex_unlock(dq->mutex);
           return ccol_unexpected_failure;
         }
         /* Re-check under the mutex: a producer may have added a message between
-         * the kernel detecting the expiry and us reacquiring the mutex.
-         * Also re-check writing_disabled for the same reason. */
-        if (dq->msg_count > 0 || dq->writing_disabled) break;
+         * the kernel detecting the expiry and us reacquiring the mutex. */
+        if (dq->msg_count > 0) break;
         mutex_unlock(dq->mutex);
         return ccol_timed_out;
       }
     }
-  }
-
-  if (dq->msg_count == 0) {
-    mutex_unlock(dq->mutex);
-    return ccol_not_permitted;
   }
 
   ccol_retval_t result = _recvfrom_dq(dq, target_buf);
@@ -885,16 +860,11 @@ ccol_retval_t dynmq_timed_recv_zc(dynamic_queue *dq, c_message_t *target_buf,
   return result;
 }
 
-/* Sets the writing_disabled flag on the dynamic queue. Broadcasts on
- * read_cond to wake blocked receivers that are waiting on an empty queue
- * with writing now disabled. */
+/* Sets the writing_disabled flag on the dynamic queue. */
 ccol_retval_t dynmq_disable_sending(dynamic_queue *dq) {
   if (dq) {
     mutex_lock(dq->mutex);
     dq->writing_disabled = true;
-    cond_var_broadcast(dq->read_cond);  // Wake blocked receivers so they can
-                                        // observe the disabled state
-    notify_all_sel_waiters(dq->sel_read_waiters_head);
     notify_all_sel_waiters(dq->sel_write_waiters_head);
     mutex_unlock(dq->mutex);
     return ccol_success;
@@ -1355,9 +1325,8 @@ static ccol_retval_t _read_from_fd(int fd, size_t max_bytes, c_message_t *msg) {
  *
  *   Phase 1 — Per-queue (under each queue's mutex, one at a time):
  *     Read direction: check msg_count > 0.  If yes, receive immediately.
- *       If no and writing is still enabled, prepend a waiter node to the
- *       queue's sel_read_waiters_head list.  If no and writing is disabled,
- *       skip (terminal — no message will ever arrive).
+ *       If no, prepend a waiter node to the queue's sel_read_waiters_head
+ *       list and wait regardless of writing_disabled state.
  *     Write direction: check msg_count < max_size && !writing_disabled for
  *       circular_queue; !writing_disabled && msg_count < max_elem_count for
  *       dynamic_queue.  If writable, mark found immediately (buf is NOT
@@ -1541,7 +1510,7 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
             }
             mutex_unlock(cq->mutex);
             found = (int)i;
-          } else if (!cq->writing_disabled) {
+          } else {
             /* epoll mode: allocate the eventfd and register it with epoll on
              * the first iteration; on subsequent iterations the existing efd
              * is reused (already in epoll) so only the list-link below runs. */
@@ -1570,9 +1539,6 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
             }
             cq->sel_read_waiters_head = &nodes[i];
             registered++;
-            mutex_unlock(cq->mutex);
-          } else {
-            /* empty + writing disabled: terminal for this selectable */
             mutex_unlock(cq->mutex);
           }
         } else {
@@ -1635,7 +1601,7 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
             }
             mutex_unlock(dq->mutex);
             found = (int)i;
-          } else if (!dq->writing_disabled) {
+          } else {
             if (has_fd_sels && nodes[i].efd < 0) {
               nodes[i].efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
               if (nodes[i].efd < 0) {
@@ -1661,9 +1627,6 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
             }
             dq->sel_read_waiters_head = &nodes[i];
             registered++;
-            mutex_unlock(dq->mutex);
-          } else {
-            /* empty + writing disabled: terminal for this selectable */
             mutex_unlock(dq->mutex);
           }
         } else {
@@ -1712,14 +1675,6 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
       deregister_all_sel_waiters(n, nodes, selectables);
       *ready_index = (size_t)found;
       retval = ccol_success;
-      break;
-    }
-
-    if (registered == 0 && fd_sel_count == 0) {
-      /* Every read-direction queue selectable was empty with writing
-       * disabled, and there are no fd selectables to wait on.  No future
-       * event can unblock us. */
-      retval = ccol_not_permitted;
       break;
     }
 

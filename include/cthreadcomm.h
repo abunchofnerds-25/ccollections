@@ -216,12 +216,10 @@ ccol_retval_t circq_timed_send_zc(circular_queue *cq, c_message_t *msg,
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if cq or target_buf is NULL
- * @return ccol_not_permitted if the queue is empty and sending has been
- *         disabled (no further messages can ever arrive)
  *
  * @note Blocks indefinitely until a message arrives
+ * @note Remains blocked even when sending is temporarily disabled
  * @note Caller receives ownership of target_buf->data and must free it
- * @note No disable mechanism for receiving (only sending can be disabled)
  *
  * @see circq_try_recv_zc
  * @see circq_timed_recv_zc
@@ -431,10 +429,9 @@ ccol_retval_t dynmq_send_zc(dynamic_queue *dq, c_message_t *msg);
  *
  * @return ccol_success on success (caller must free target_buf->data)
  * @return ccol_invalid_args if dq or target_buf is NULL
- * @return ccol_not_permitted if the queue is empty and sending has been
- *         disabled (no further messages can ever arrive)
  *
  * @note Blocks indefinitely until a message arrives
+ * @note Remains blocked even when sending is temporarily disabled
  * @note Caller receives ownership of target_buf->data and must free it
  *
  * @see dynmq_try_recv_zc
@@ -1012,10 +1009,6 @@ ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir);
  * @return ccol_invalid_args      Any argument is NULL/zero; a queue selectable
  *                                contains a NULL queue pointer; an fd selectable
  *                                has fd < 0; or an unknown type/dir value
- * @return ccol_not_permitted     Every read-direction queue selectable is empty
- *                                with writing disabled AND there are no fd
- *                                selectables; write-direction selectables never
- *                                cause this return
  * @return ccol_not_enough_memory Internal waiter-node allocation (one node per
  *                                selectable) failed; no state was changed
  * @return ccol_unexpected_failure epoll_create1, eventfd, epoll_ctl, or the
@@ -1055,7 +1048,6 @@ ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
  *                                becoming ready; buf and *ready_index are
  *                                unmodified.
  * @return ccol_invalid_args      (same conditions as ccol_select)
- * @return ccol_not_permitted     (same conditions as ccol_select)
  * @return ccol_not_enough_memory (same conditions as ccol_select)
  * @return ccol_unexpected_failure (same conditions as ccol_select)
  * @return ccol_msg_too_large      (same conditions as ccol_select)

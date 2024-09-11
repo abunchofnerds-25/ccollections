@@ -1015,7 +1015,9 @@ ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir);
  *                                 fd-read buffer malloc or read(2) call failed
  * @return ccol_msg_too_large      The data on a read-direction fd selectable
  *                                 exceeded the limit set in max_fd_read_bytes;
- *                                 buf is left untouched
+ *                                 buf is left untouched; *ready_index IS set
+ *                                 to the triggering fd's index so the caller
+ *                                 can identify which fd to handle
  *
  * @note For read wins (queue or fd): caller is responsible for freeing buf->data
  * @note For write-direction fd wins: buf is untouched; caller calls write(2)
@@ -1035,8 +1037,10 @@ ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
  *
  * @param buf         Buffer to receive the message for read-direction wins
  *                    (caller gains ownership); ignored for write-direction wins
- * @param ready_index Set to the index of the selectable that became ready
- *                    (valid only when ccol_success is returned)
+ * @param ready_index Set to the index of the selectable that became ready.
+ *                    Valid when ccol_success or ccol_msg_too_large is returned.
+ *                    Unmodified on ccol_timed_out, ccol_invalid_args,
+ *                    ccol_not_enough_memory, or ccol_unexpected_failure.
  * @param n           Number of selectables (must be >= 1)
  * @param selectables Array of n ccol_selectable values to monitor
  * @param timeout_ms  Maximum time to wait in milliseconds.  Pass -1 for an
@@ -1050,7 +1054,8 @@ ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
  * @return ccol_invalid_args      (same conditions as ccol_select)
  * @return ccol_not_enough_memory (same conditions as ccol_select)
  * @return ccol_unexpected_failure (same conditions as ccol_select)
- * @return ccol_msg_too_large      (same conditions as ccol_select)
+ * @return ccol_msg_too_large      (same conditions as ccol_select;
+ *                                 *ready_index is set to the fd's index)
  *
  * @note Uses CLOCK_MONOTONIC for the deadline so system time adjustments do
  *       not affect the timeout.

@@ -1895,9 +1895,13 @@ RETURN VALUE
                                memory pressure).
        ccol_msg_too_large      The data available on a read-direction fd selectable
                                exceeded the limit set in max_fd_read_bytes.  buf
-                               is left untouched.  The fd's kernel buffer still
-                               holds the (partially consumed) data; the caller
-                               may read the remainder directly.
+                               is left untouched.  *ready_index IS set to the
+                               index of the offending fd selectable so the caller
+                               can identify it.  Note: ccol_select() may have
+                               already consumed some or all bytes from the fd's
+                               kernel buffer during the read attempt; for datagram
+                               fds the entire datagram is consumed (lost).  The
+                               caller should not assume unread bytes remain.
 
 NOTES
        Waiter nodes are heap-allocated (one per selectable) for the duration of

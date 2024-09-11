@@ -1372,7 +1372,9 @@ RETURN VALUE
        ccol_invalid_args       Any argument is NULL/zero, or a selectable contains a
                                NULL queue pointer or unknown type tag.
        ccol_not_enough_memory  Waiter-node allocation failed (one node per selectable).
-       ccol_msg_too_large      An fd selectable read exceeded its max_fd_read_bytes limit.
+       ccol_msg_too_large      An fd selectable read exceeded its max_fd_read_bytes limit;
+                               buf is left untouched; *ready_index IS set to the offending
+                               fd's index; some or all fd bytes may already be consumed.
        ccol_unexpected_failure epoll/eventfd setup or the internal fd read(2) failed.
 
 WARNINGS

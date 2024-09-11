@@ -1458,7 +1458,7 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
     }
   }
 
-  ccol_retval_t retval = ccol_not_permitted;
+  ccol_retval_t retval = ccol_success;
 
   /* In epoll mode, register all user fds in the epoll set once before the
    * retry loop.  Level-triggered epoll keeps a ready fd firing on every
@@ -1773,7 +1773,10 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
            * wins — buf is left untouched; the caller calls write(2). */
           retval = ccol_success;
         }
-        if (retval == ccol_success) {
+        /* Set ready_index for both ccol_success and ccol_msg_too_large so the
+         * caller can identify which fd to handle (e.g. read the remainder).
+         * Not set for ccol_unexpected_failure (unrecoverable system error). */
+        if (retval == ccol_success || retval == ccol_msg_too_large) {
           *ready_index = fired_idx;
         }
         break;

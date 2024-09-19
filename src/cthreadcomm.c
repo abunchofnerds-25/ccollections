@@ -49,8 +49,8 @@ void add_duration_to_timespec(struct timespec *target,
     target->tv_nsec = target->tv_nsec % max_nsecs;
   }
 
-  struct timespec dur =
-      *duration;  // local copy — avoid mutating caller's struct
+  /* local copy — avoid mutating caller's struct */
+  struct timespec dur = *duration;
   if (dur.tv_nsec >= max_nsecs) {
     dur.tv_sec += dur.tv_nsec / max_nsecs;
     dur.tv_nsec = dur.tv_nsec % max_nsecs;
@@ -82,22 +82,27 @@ typedef struct ccol_sel_waiter {
   struct ccol_sel_waiter *next;
 } ccol_sel_waiter;
 
+/* Wakes a single waiter node.  Must be called while the owning queue's mutex
+ * is held so that the node pointer remains valid throughout. */
+static void _notify_waiter(ccol_sel_waiter *w) {
+  pthread_mutex_lock(w->sel_mtx);
+  *w->ready = true;
+  pthread_mutex_unlock(w->sel_mtx);
+  pthread_cond_signal(w->sel_cond);
+  if (w->efd >= 0) {
+    uint64_t one = 1;
+    (void)write(w->efd, &one, sizeof(one));
+  }
+}
+
 /* Wakes the single head waiter on a queue.  Used for message/slot events where
  * exactly one resource became available; waking more than one waiter would
  * cause a thundering herd.  The cascade mechanism inside ccol_select's Phase 1
  * propagates the wake further when additional resources remain after the first
  * woken thread claims its resource.  Must be called while the queue's own mutex
- * is held so that the waiter node (on a foreign thread's stack) remains valid. */
+ * is held. */
 static void notify_one_sel_waiter(ccol_sel_waiter *head) {
-  if (!head) return;
-  pthread_mutex_lock(head->sel_mtx);
-  *head->ready = true;
-  pthread_mutex_unlock(head->sel_mtx);
-  pthread_cond_signal(head->sel_cond);
-  if (head->efd >= 0) {
-    uint64_t one = 1;
-    (void)write(head->efd, &one, sizeof(one));
-  }
+  if (head) _notify_waiter(head);
 }
 
 /* Wakes every thread currently blocked in ccol_select on this queue.  Used
@@ -105,16 +110,8 @@ static void notify_one_sel_waiter(ccol_sel_waiter *head) {
  * every blocked thread must re-evaluate regardless of resource availability.
  * Must be called while the queue's own mutex is held. */
 static void notify_all_sel_waiters(ccol_sel_waiter *head) {
-  for (ccol_sel_waiter *w = head; w != NULL; w = w->next) {
-    pthread_mutex_lock(w->sel_mtx);
-    *w->ready = true;
-    pthread_mutex_unlock(w->sel_mtx);
-    pthread_cond_signal(w->sel_cond);
-    if (w->efd >= 0) {
-      uint64_t one = 1;
-      (void)write(w->efd, &one, sizeof(one));
-    }
-  }
+  for (ccol_sel_waiter *w = head; w != NULL; w = w->next)
+    _notify_waiter(w);
 }
 
 struct circular_queue {
@@ -221,10 +218,6 @@ circular_queue *circular_queue_create_with_mprocs(
 void __circular_queue_destroy(circular_queue *cq) {
   if (cq) {
     if (circq_msg_count(cq) > 0) {
-      // The data pointers of the messages that
-      // haven't been consumed are going to be
-      // leaked. That's a bug on the caller side.
-      // Let's make it noticed.
       ccol_assert(false);
     }
 
@@ -253,7 +246,7 @@ void __circular_queue_destroy(circular_queue *cq) {
 void _sendto_cq(circular_queue *cq, c_message_t *msg) {
   cq->msg_array[cq->write_index].data = msg->data;
   cq->msg_array[cq->write_index++].size = (msg->data == NULL) ? 0 : msg->size;
-  msg->data = NULL;  // The sender loses the ownership of the msg pointer.
+  msg->data = NULL;
   if (cq->write_index == cq->max_size) {
     cq->write_index = 0;
   }
@@ -316,7 +309,6 @@ ccol_retval_t circq_try_send_zc(circular_queue *cq, c_message_t *msg) {
     return ccol_invalid_args;
   }
 
-  // Assuming we won't have space for the new message.
   ccol_retval_t result = ccol_container_full;
 
   mutex_lock(cq->mutex);
@@ -327,7 +319,6 @@ ccol_retval_t circq_try_send_zc(circular_queue *cq, c_message_t *msg) {
   }
 
   if (cq->msg_count < cq->max_size) {
-    // We have space for the new message, proceed.
     _sendto_cq(cq, msg);
     result = ccol_success;
   }
@@ -500,7 +491,7 @@ ccol_retval_t circq_disable_sending(circular_queue *cq) {
   if (cq) {
     mutex_lock(cq->mutex);
     cq->writing_disabled = true;
-    cond_var_broadcast(cq->write_cond);  // Wake waiting senders
+    cond_var_broadcast(cq->write_cond);
     notify_all_sel_waiters(cq->sel_write_waiters_head);
     mutex_unlock(cq->mutex);
     return ccol_success;
@@ -514,7 +505,7 @@ ccol_retval_t circq_enable_sending(circular_queue *cq) {
   if (cq) {
     mutex_lock(cq->mutex);
     cq->writing_disabled = false;
-    cond_var_broadcast(cq->write_cond);  // Wake waiting senders
+    cond_var_broadcast(cq->write_cond);
     notify_all_sel_waiters(cq->sel_write_waiters_head);
     mutex_unlock(cq->mutex);
     return ccol_success;
@@ -536,7 +527,7 @@ size_t circq_msg_count(circular_queue *cq) {
   return result;
 }
 
-// Dynamic queue related section starts here.
+/* Dynamic queue related section starts here. */
 typedef struct dllist_node {
   struct dllist_node *prev;
   c_message_t msg;
@@ -621,7 +612,6 @@ ccol_retval_t remove_msg_from_dq_head(dynamic_queue *dq,
   if (dq->head) {
     dq->head->prev = NULL;
   } else {
-    // The head just became NULL, let's not forget about the tail
     dq->tail = NULL;
   }
 
@@ -686,10 +676,6 @@ dynamic_queue *dynamic_queue_create_with_mprocs(
 void __dynamic_queue_destroy(dynamic_queue *dq) {
   if (dq) {
     if (dynmq_msg_count(dq) > 0) {
-      // The data pointers of the messages that
-      // haven't been consumed are going to be
-      // leaked. That's a bug on the caller side.
-      // Let's make it noticed.
       ccol_assert(false);
     }
 
@@ -900,7 +886,7 @@ size_t dynmq_msg_count(dynamic_queue *dq) {
   return result;
 }
 
-// Channel related section starts here.
+/* Channel related section starts here. */
 struct channel {
   thread_id_t owner_tid;
   circular_queue *owner_to_workers_cq;
@@ -1107,7 +1093,18 @@ size_t chan_msg_count(channel *ch, channel_direction d) {
   return ccol_invalid_size;
 }
 
-// ccol_select related section starts here.
+/* ccol_select related section starts here. */
+
+/* Splices node out of a waiter doubly-linked list under the queue's mutex.
+ * head must be the address of the appropriate sel_{read,write}_waiters_head
+ * pointer in the owning queue. */
+static void _sel_unlink_waiter(ccol_sel_waiter *node, ccol_sel_waiter **head,
+                                pthread_mutex_t *mtx) {
+  pthread_mutex_lock(mtx);
+  if (node->prev) node->prev->next = node->next; else *head = node->next;
+  if (node->next) node->next->prev = node->prev;
+  pthread_mutex_unlock(mtx);
+}
 
 /* Removes the waiter node at index i from its queue's waiter list.  Acquires
  * and releases the queue's mutex internally.  Sets nodes[i].sel_mtx to NULL
@@ -1116,40 +1113,20 @@ size_t chan_msg_count(channel *ch, channel_direction d) {
 static void deregister_sel_waiter(size_t i, ccol_sel_waiter *nodes,
                                   ccol_selectable *selectables) {
   /* fd selectables have no waiter list — nothing to unlink. */
-  if (selectables[i].type == ccol_selectable_fd) {
-    return;
-  }
+  if (selectables[i].type == ccol_selectable_fd) return;
 
   if (selectables[i].type == ccol_selectable_circq) {
     circular_queue *cq = selectables[i].cq;
     ccol_sel_waiter **head = (selectables[i].dir == ccol_select_read)
                                  ? &cq->sel_read_waiters_head
                                  : &cq->sel_write_waiters_head;
-    mutex_lock(cq->mutex);
-    if (nodes[i].prev) {
-      nodes[i].prev->next = nodes[i].next;
-    } else {
-      *head = nodes[i].next;
-    }
-    if (nodes[i].next) {
-      nodes[i].next->prev = nodes[i].prev;
-    }
-    mutex_unlock(cq->mutex);
+    _sel_unlink_waiter(&nodes[i], head, &cq->mutex);
   } else {
     dynamic_queue *dq = selectables[i].dq;
     ccol_sel_waiter **head = (selectables[i].dir == ccol_select_read)
                                  ? &dq->sel_read_waiters_head
                                  : &dq->sel_write_waiters_head;
-    mutex_lock(dq->mutex);
-    if (nodes[i].prev) {
-      nodes[i].prev->next = nodes[i].next;
-    } else {
-      *head = nodes[i].next;
-    }
-    if (nodes[i].next) {
-      nodes[i].next->prev = nodes[i].prev;
-    }
-    mutex_unlock(dq->mutex);
+    _sel_unlink_waiter(&nodes[i], head, &dq->mutex);
   }
 
   /* Drain without closing: the eventfd is reused across iterations.
@@ -1315,6 +1292,275 @@ static ccol_retval_t _read_from_fd(int fd, size_t max_bytes, c_message_t *msg) {
   return ccol_success;
 }
 
+/* Allocates an eventfd for nodes[i] (if not already present) and registers it
+ * with epfd under EPOLLIN.  The eventfd is allocated once and reused across
+ * loop iterations; subsequent calls with nodes[i].efd >= 0 are no-ops.
+ * Returns true on success or false on any system error (eventfd/epoll_ctl). */
+static bool _sel_ensure_efd(size_t i, ccol_sel_waiter *nodes, int epfd) {
+  if (nodes[i].efd >= 0) return true;
+  nodes[i].efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+  if (nodes[i].efd < 0) return false;
+  struct epoll_event ev = {.data.u64 = (uint64_t)i, .events = EPOLLIN};
+  if (epoll_ctl(epfd, EPOLL_CTL_ADD, nodes[i].efd, &ev) < 0) {
+    close(nodes[i].efd);
+    nodes[i].efd = -1;
+    return false;
+  }
+  return true;
+}
+
+/* Fills in nodes[i] and prepends it to *head.  Called under the owning queue's
+ * mutex; the caller unlocks after this returns. */
+static void _sel_link_waiter(size_t i, ccol_sel_waiter *nodes,
+                              pthread_mutex_t *sel_mtx, pthread_cond_t *sel_cond,
+                              bool *ready, ccol_sel_waiter **head) {
+  nodes[i].sel_mtx = sel_mtx;
+  nodes[i].sel_cond = sel_cond;
+  nodes[i].ready = ready;
+  nodes[i].prev = NULL;
+  nodes[i].next = *head;
+  if (*head) (*head)->prev = &nodes[i];
+  *head = &nodes[i];
+}
+
+/* Returns ccol_success if all arguments are valid, ccol_invalid_args otherwise. */
+static ccol_retval_t _sel_validate_args(const c_message_t *buf,
+                                        const size_t *ready_index, size_t n,
+                                        const ccol_selectable *selectables) {
+  if (!buf || !ready_index || n == 0 || !selectables) return ccol_invalid_args;
+  for (size_t i = 0; i < n; i++) {
+    if (selectables[i].type == ccol_selectable_circq) {
+      if (!selectables[i].cq) return ccol_invalid_args;
+    } else if (selectables[i].type == ccol_selectable_dynq) {
+      if (!selectables[i].dq) return ccol_invalid_args;
+    } else if (selectables[i].type == ccol_selectable_fd) {
+      if (selectables[i].fd < 0) return ccol_invalid_args;
+    } else {
+      return ccol_invalid_args;
+    }
+    if (selectables[i].dir != ccol_select_read &&
+        selectables[i].dir != ccol_select_write)
+      return ccol_invalid_args;
+  }
+  return ccol_success;
+}
+
+/* Computes an absolute CLOCK_MONOTONIC deadline from timeout_ms.  Returns true
+ * and fills *deadline when timeout_ms >= 0; returns false (infinite wait) when
+ * timeout_ms < 0. */
+static bool _sel_compute_deadline(int timeout_ms, struct timespec *deadline) {
+  if (timeout_ms < 0) return false;
+  clock_gettime(CLOCK_MONOTONIC, deadline);
+  deadline->tv_sec  += timeout_ms / 1000;
+  deadline->tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if (deadline->tv_nsec >= 1000000000L) {
+    deadline->tv_sec++;
+    deadline->tv_nsec -= 1000000000L;
+  }
+  return true;
+}
+
+/* Creates an epoll instance and registers every fd selectable with
+ * level-triggered interest flags.  Returns the epfd on success or -1 on any
+ * system error.  Closing the returned epfd auto-removes all registered fds. */
+static int _sel_setup_epoll(size_t n, ccol_selectable *selectables) {
+  int epfd = epoll_create1(EPOLL_CLOEXEC);
+  if (epfd < 0) return -1;
+  for (size_t i = 0; i < n; i++) {
+    if (selectables[i].type != ccol_selectable_fd) continue;
+    struct epoll_event ev;
+    ev.data.u64 = (uint64_t)i;
+    ev.events = (selectables[i].dir == ccol_select_read)
+                    ? (uint32_t)(EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP)
+                    : (uint32_t)(EPOLLOUT | EPOLLERR | EPOLLHUP);
+    if (epoll_ctl(epfd, EPOLL_CTL_ADD, selectables[i].fd, &ev) < 0) {
+      close(epfd);
+      return -1;
+    }
+  }
+  return epfd;
+}
+
+/* Scans every non-fd selectable for readiness and links waiter nodes into
+ * queue lists for those not yet ready.  Returns the found index (>= 0) when a
+ * ready selectable is detected and its resource consumed or slot confirmed, -1
+ * when no selectable was ready and all waiters are now registered, or -2 on a
+ * system error (eventfd/epoll_ctl).  On -2 the faulting queue's mutex has
+ * already been released; previously registered nodes remain linked and the
+ * caller must call deregister_all_sel_waiters before freeing them. */
+static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
+                                     ccol_sel_waiter *nodes, bool has_fd_sels,
+                                     int epfd, pthread_mutex_t *sel_mtx,
+                                     pthread_cond_t *sel_cond, bool *ready,
+                                     c_message_t *buf) {
+  int found = -1;
+  for (size_t i = 0; i < n && found < 0; i++) {
+    if (selectables[i].type == ccol_selectable_fd) continue;
+
+    if (selectables[i].type == ccol_selectable_circq) {
+      circular_queue *cq = selectables[i].cq;
+      mutex_lock(cq->mutex);
+
+      if (selectables[i].dir == ccol_select_read) {
+        if (cq->msg_count > 0) {
+          _recvfrom_cq(cq, buf);
+          if (cq->msg_count > 0 && cq->sel_read_waiters_head)
+            notify_one_sel_waiter(cq->sel_read_waiters_head);
+          mutex_unlock(cq->mutex);
+          found = (int)i;
+        } else {
+          if (has_fd_sels && !_sel_ensure_efd(i, nodes, epfd)) {
+            mutex_unlock(cq->mutex); return -2;
+          }
+          _sel_link_waiter(i, nodes, sel_mtx, sel_cond, ready,
+                           &cq->sel_read_waiters_head);
+          mutex_unlock(cq->mutex);
+        }
+      } else {
+        /* ccol_select_write: writable if there is room and sending is on */
+        if (cq->msg_count < cq->max_size && !cq->writing_disabled) {
+          if (cq->msg_count + 1 < cq->max_size && cq->sel_write_waiters_head)
+            notify_one_sel_waiter(cq->sel_write_waiters_head);
+          mutex_unlock(cq->mutex);
+          found = (int)i;
+        } else {
+          if (has_fd_sels && !_sel_ensure_efd(i, nodes, epfd)) {
+            mutex_unlock(cq->mutex); return -2;
+          }
+          _sel_link_waiter(i, nodes, sel_mtx, sel_cond, ready,
+                           &cq->sel_write_waiters_head);
+          mutex_unlock(cq->mutex);
+        }
+      }
+    } else {
+      /* ccol_selectable_dynq */
+      dynamic_queue *dq = selectables[i].dq;
+      mutex_lock(dq->mutex);
+
+      if (selectables[i].dir == ccol_select_read) {
+        if (dq->msg_count > 0) {
+          if (_recvfrom_dq(dq, buf) != ccol_success)
+            fatal_err("ccol_select: _recvfrom_dq invariant violation");
+          if (dq->msg_count > 0 && dq->sel_read_waiters_head)
+            notify_one_sel_waiter(dq->sel_read_waiters_head);
+          mutex_unlock(dq->mutex);
+          found = (int)i;
+        } else {
+          if (has_fd_sels && !_sel_ensure_efd(i, nodes, epfd)) {
+            mutex_unlock(dq->mutex); return -2;
+          }
+          _sel_link_waiter(i, nodes, sel_mtx, sel_cond, ready,
+                           &dq->sel_read_waiters_head);
+          mutex_unlock(dq->mutex);
+        }
+      } else {
+        /* ccol_select_write: writable unless writing_disabled or at capacity */
+        if (!dq->writing_disabled && dq->msg_count < max_elem_count) {
+          if (dq->msg_count + 1 < max_elem_count && dq->sel_write_waiters_head)
+            notify_one_sel_waiter(dq->sel_write_waiters_head);
+          mutex_unlock(dq->mutex);
+          found = (int)i;
+        } else {
+          if (has_fd_sels && !_sel_ensure_efd(i, nodes, epfd)) {
+            mutex_unlock(dq->mutex); return -2;
+          }
+          _sel_link_waiter(i, nodes, sel_mtx, sel_cond, ready,
+                           &dq->sel_write_waiters_head);
+          mutex_unlock(dq->mutex);
+        }
+      }
+    }
+  }
+  return found;
+}
+
+/* Waits on sel_cond until *ready is set by a producer or the deadline elapses.
+ * Returns true if the deadline elapsed with *ready still false; false on a
+ * normal wakeup.  Always resets *ready to false before returning. */
+static bool _sel_wait_condvar(pthread_mutex_t *sel_mtx, pthread_cond_t *sel_cond,
+                               bool *ready, bool has_deadline,
+                               const struct timespec *deadline) {
+  pthread_mutex_lock(sel_mtx);
+  if (has_deadline) {
+    bool timed_out_flag = false;
+    while (!*ready) {
+      int wait_ret = pthread_cond_timedwait(sel_cond, sel_mtx, deadline);
+      if (wait_ret == ETIMEDOUT) {
+        if (!*ready) timed_out_flag = true;
+        break;
+      }
+    }
+    *ready = false;
+    pthread_mutex_unlock(sel_mtx);
+    return timed_out_flag;
+  }
+  while (!*ready)
+    pthread_cond_wait(sel_cond, sel_mtx);
+  *ready = false;
+  pthread_mutex_unlock(sel_mtx);
+  return false;
+}
+
+typedef enum {
+  _SEL_EPOLL_CONTINUE, /* queue eventfd fired; fall through to Phase 3 */
+  _SEL_EPOLL_BREAK,    /* done or timed out; *out_retval and *ready_index set */
+  _SEL_EPOLL_FAILURE,  /* unexpected system error; nodes still registered */
+} _sel_epoll_outcome;
+
+/* Blocks on epoll_wait until any registered descriptor is ready or the deadline
+ * elapses.  Returns _SEL_EPOLL_CONTINUE when a queue eventfd fires (the caller
+ * runs Phase 3 and loops back to Phase 1), _SEL_EPOLL_BREAK when the overall
+ * result is determined (*out_retval and *ready_index are set by this function),
+ * or _SEL_EPOLL_FAILURE on a system error (nodes remain registered; the caller
+ * must deregister before freeing). */
+static _sel_epoll_outcome _sel_wait_epoll(int epfd, bool has_deadline,
+                                          const struct timespec *deadline,
+                                          size_t n, ccol_selectable *selectables,
+                                          ccol_sel_waiter *nodes, c_message_t *buf,
+                                          size_t *ready_index,
+                                          ccol_retval_t *out_retval) {
+  struct epoll_event ev;
+  int n_ready;
+  int epoll_to;
+  do {
+    if (has_deadline) {
+      struct timespec now;
+      clock_gettime(CLOCK_MONOTONIC, &now);
+      long long remaining_ms =
+          ((long long)(deadline->tv_sec - now.tv_sec)) * 1000LL +
+          ((long long)(deadline->tv_nsec - now.tv_nsec)) / 1000000LL;
+      if (remaining_ms <= 0) { n_ready = 0; break; }
+      epoll_to = (remaining_ms > INT_MAX) ? INT_MAX : (int)remaining_ms;
+    } else {
+      epoll_to = -1;
+    }
+    n_ready = epoll_wait(epfd, &ev, 1, epoll_to);
+  } while (n_ready < 0 && errno == EINTR);
+
+  if (n_ready == 0) {
+    deregister_all_sel_waiters(n, nodes, selectables);
+    *out_retval = ccol_timed_out;
+    return _SEL_EPOLL_BREAK;
+  }
+  if (n_ready < 0) return _SEL_EPOLL_FAILURE;
+
+  size_t fired_idx = (size_t)ev.data.u64;
+  if (selectables[fired_idx].type == ccol_selectable_fd) {
+    deregister_all_sel_waiters(n, nodes, selectables);
+    if (selectables[fired_idx].dir == ccol_select_read) {
+      *out_retval = _read_from_fd(selectables[fired_idx].fd,
+                                  selectables[fired_idx].max_fd_read_bytes, buf);
+    } else {
+      *out_retval = ccol_success;
+    }
+    if (*out_retval == ccol_success || *out_retval == ccol_msg_too_large)
+      *ready_index = fired_idx;
+    return _SEL_EPOLL_BREAK;
+  }
+  /* A queue eventfd fired: fall through to Phase 3. */
+  return _SEL_EPOLL_CONTINUE;
+}
+
 /* Blocks until at least one of the n selectables is ready (or timeout_ms
  * elapses), then sets *ready_index and (for read-direction queue wins)
  * populates *buf.  timeout_ms == -1 means wait indefinitely.
@@ -1378,33 +1624,12 @@ static ccol_retval_t _read_from_fd(int fd, size_t max_bytes, c_message_t *msg) {
  * syscalls. */
 ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
                                 ccol_selectable *selectables, int timeout_ms) {
-  if (!buf || !ready_index || n == 0 || !selectables) {
-    return ccol_invalid_args;
-  }
-  for (size_t i = 0; i < n; i++) {
-    if (selectables[i].type == ccol_selectable_circq) {
-      if (!selectables[i].cq) return ccol_invalid_args;
-    } else if (selectables[i].type == ccol_selectable_dynq) {
-      if (!selectables[i].dq) return ccol_invalid_args;
-    } else if (selectables[i].type == ccol_selectable_fd) {
-      if (selectables[i].fd < 0) return ccol_invalid_args;
-    } else {
-      return ccol_invalid_args;
-    }
-    if (selectables[i].dir != ccol_select_read &&
-        selectables[i].dir != ccol_select_write) {
-      return ccol_invalid_args;
-    }
-  }
+  ccol_retval_t v = _sel_validate_args(buf, ready_index, n, selectables);
+  if (v != ccol_success) return v;
 
-  /* Determine whether any fd selectables are present once; this drives the
-   * choice between the condvar path (no overhead) and the epoll path. */
   bool has_fd_sels = false;
   for (size_t i = 0; i < n; i++) {
-    if (selectables[i].type == ccol_selectable_fd) {
-      has_fd_sels = true;
-      break;
-    }
+    if (selectables[i].type == ccol_selectable_fd) { has_fd_sels = true; break; }
   }
 
   /* One waiter node per selectable.  sel_mtx == NULL means "not currently
@@ -1417,13 +1642,13 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
     nodes[i].efd = -1;
   }
 
-  mutex_t sel_mtx;
-  cond_var_t sel_cond;
+  pthread_mutex_t sel_mtx;
+  pthread_cond_t sel_cond;
   bool ready = false;
-  mutex_init(sel_mtx);
+  pthread_mutex_init(&sel_mtx, NULL);
   /* Always initialise with CLOCK_MONOTONIC so timed waits are immune to
-   * wall-clock adjustments.  Infinite waits (cond_var_wait) ignore the clock
-   * attribute so this is safe even when no timeout is used. */
+   * wall-clock adjustments.  Infinite waits ignore the clock attribute so
+   * this is safe even when no timeout is used. */
   {
     pthread_condattr_t cond_attr;
     pthread_condattr_init(&cond_attr);
@@ -1432,245 +1657,28 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
     pthread_condattr_destroy(&cond_attr);
   }
 
-  /* Compute the absolute CLOCK_MONOTONIC deadline once before the loop so
-   * that repeated spurious wakeups or EINTR retries cannot extend the timeout.
-   * has_deadline == false means wait indefinitely (timeout_ms == -1). */
-  bool has_deadline = (timeout_ms >= 0);
+  bool has_deadline;
   struct timespec deadline = {0, 0};
-  if (has_deadline) {
-    clock_gettime(CLOCK_MONOTONIC, &deadline);
-    deadline.tv_sec += timeout_ms / 1000;
-    deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
-    if (deadline.tv_nsec >= 1000000000L) {
-      deadline.tv_sec++;
-      deadline.tv_nsec -= 1000000000L;
-    }
-  }
+  has_deadline = _sel_compute_deadline(timeout_ms, &deadline);
 
   int epfd = -1;
   if (has_fd_sels) {
-    epfd = epoll_create1(EPOLL_CLOEXEC);
+    epfd = _sel_setup_epoll(n, selectables);
     if (epfd < 0) {
       free(nodes);
-      mutex_destroy(sel_mtx);
-      cond_var_destroy(sel_cond);
+      pthread_mutex_destroy(&sel_mtx);
+      pthread_cond_destroy(&sel_cond);
       return ccol_unexpected_failure;
     }
   }
 
   ccol_retval_t retval = ccol_success;
 
-  /* In epoll mode, register all user fds in the epoll set once before the
-   * retry loop.  Level-triggered epoll keeps a ready fd firing on every
-   * epoll_wait call until the caller consumes it, so no per-iteration
-   * ADD/DEL is needed.  Closing epfd on return auto-removes every entry.
-   * No queue waiters are registered yet, so a failure here can return
-   * directly without going through cleanup_unexpected_failure. */
-  size_t fd_sel_count = 0;
-  if (has_fd_sels) {
-    for (size_t i = 0; i < n; i++) {
-      if (selectables[i].type != ccol_selectable_fd) continue;
-      struct epoll_event ev;
-      ev.data.u64 = (uint64_t)i;
-      ev.events = (selectables[i].dir == ccol_select_read)
-                      ? (uint32_t)(EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP)
-                      : (uint32_t)(EPOLLOUT | EPOLLERR | EPOLLHUP);
-      if (epoll_ctl(epfd, EPOLL_CTL_ADD, selectables[i].fd, &ev) < 0) {
-        close(epfd);
-        free(nodes);
-        mutex_destroy(sel_mtx);
-        cond_var_destroy(sel_cond);
-        return ccol_unexpected_failure;
-      }
-      fd_sel_count++;
-    }
-  }
-
   for (;;) {
     /* === Phase 1: scan + register === */
-    int found = -1;
-    size_t registered = 0;
-
-    for (size_t i = 0; i < n && found < 0; i++) {
-      if (selectables[i].type == ccol_selectable_fd) continue;
-
-      if (selectables[i].type == ccol_selectable_circq) {
-        circular_queue *cq = selectables[i].cq;
-        mutex_lock(cq->mutex);
-
-        if (selectables[i].dir == ccol_select_read) {
-          if (cq->msg_count > 0) {
-            _recvfrom_cq(cq, buf);
-            /* Cascade: if more messages remain and other read waiters are
-             * registered, wake one so it can claim the next message.  This
-             * prevents a liveness gap when the producer woke only this thread
-             * (the head) for multiple messages. */
-            if (cq->msg_count > 0 && cq->sel_read_waiters_head) {
-              notify_one_sel_waiter(cq->sel_read_waiters_head);
-            }
-            mutex_unlock(cq->mutex);
-            found = (int)i;
-          } else {
-            /* epoll mode: allocate the eventfd and register it with epoll on
-             * the first iteration; on subsequent iterations the existing efd
-             * is reused (already in epoll) so only the list-link below runs. */
-            if (has_fd_sels && nodes[i].efd < 0) {
-              nodes[i].efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-              if (nodes[i].efd < 0) {
-                mutex_unlock(cq->mutex);
-                goto cleanup_unexpected_failure;
-              }
-              struct epoll_event ev = {.data.u64 = (uint64_t)i,
-                                       .events = EPOLLIN};
-              if (epoll_ctl(epfd, EPOLL_CTL_ADD, nodes[i].efd, &ev) < 0) {
-                close(nodes[i].efd);
-                nodes[i].efd = -1;
-                mutex_unlock(cq->mutex);
-                goto cleanup_unexpected_failure;
-              }
-            }
-            nodes[i].sel_mtx = &sel_mtx;
-            nodes[i].sel_cond = &sel_cond;
-            nodes[i].ready = &ready;
-            nodes[i].prev = NULL;
-            nodes[i].next = cq->sel_read_waiters_head;
-            if (cq->sel_read_waiters_head) {
-              cq->sel_read_waiters_head->prev = &nodes[i];
-            }
-            cq->sel_read_waiters_head = &nodes[i];
-            registered++;
-            mutex_unlock(cq->mutex);
-          }
-        } else {
-          /* ccol_select_write: writable if there is room and sending is on */
-          if (cq->msg_count < cq->max_size && !cq->writing_disabled) {
-            /* Cascade: if more slots remain and other write waiters are
-             * registered, wake one.  The cascade is self-limiting: if the
-             * queue fills by the time the woken thread reaches Phase 1, it
-             * re-registers rather than cascading further. */
-            if (cq->msg_count + 1 < cq->max_size && cq->sel_write_waiters_head) {
-              notify_one_sel_waiter(cq->sel_write_waiters_head);
-            }
-            mutex_unlock(cq->mutex);
-            found = (int)i;
-          } else {
-            if (has_fd_sels && nodes[i].efd < 0) {
-              nodes[i].efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-              if (nodes[i].efd < 0) {
-                mutex_unlock(cq->mutex);
-                goto cleanup_unexpected_failure;
-              }
-              struct epoll_event ev = {.data.u64 = (uint64_t)i,
-                                       .events = EPOLLIN};
-              if (epoll_ctl(epfd, EPOLL_CTL_ADD, nodes[i].efd, &ev) < 0) {
-                close(nodes[i].efd);
-                nodes[i].efd = -1;
-                mutex_unlock(cq->mutex);
-                goto cleanup_unexpected_failure;
-              }
-            }
-            nodes[i].sel_mtx = &sel_mtx;
-            nodes[i].sel_cond = &sel_cond;
-            nodes[i].ready = &ready;
-            nodes[i].prev = NULL;
-            nodes[i].next = cq->sel_write_waiters_head;
-            if (cq->sel_write_waiters_head) {
-              cq->sel_write_waiters_head->prev = &nodes[i];
-            }
-            cq->sel_write_waiters_head = &nodes[i];
-            registered++;
-            mutex_unlock(cq->mutex);
-          }
-        }
-      } else {
-        /* ccol_selectable_dynq */
-        dynamic_queue *dq = selectables[i].dq;
-        mutex_lock(dq->mutex);
-
-        if (selectables[i].dir == ccol_select_read) {
-          if (dq->msg_count > 0) {
-            if (_recvfrom_dq(dq, buf) != ccol_success) {
-              /* Invariant violation: msg_count > 0 was verified under the lock.
-               * _recvfrom_dq only fails when the list is empty, which cannot be
-               * true here. Crash loudly rather than silently corrupt state. */
-              fatal_err("ccol_select: _recvfrom_dq invariant violation");
-            }
-            /* Cascade: wake one more read waiter if messages remain. */
-            if (dq->msg_count > 0 && dq->sel_read_waiters_head) {
-              notify_one_sel_waiter(dq->sel_read_waiters_head);
-            }
-            mutex_unlock(dq->mutex);
-            found = (int)i;
-          } else {
-            if (has_fd_sels && nodes[i].efd < 0) {
-              nodes[i].efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-              if (nodes[i].efd < 0) {
-                mutex_unlock(dq->mutex);
-                goto cleanup_unexpected_failure;
-              }
-              struct epoll_event ev = {.data.u64 = (uint64_t)i,
-                                       .events = EPOLLIN};
-              if (epoll_ctl(epfd, EPOLL_CTL_ADD, nodes[i].efd, &ev) < 0) {
-                close(nodes[i].efd);
-                nodes[i].efd = -1;
-                mutex_unlock(dq->mutex);
-                goto cleanup_unexpected_failure;
-              }
-            }
-            nodes[i].sel_mtx = &sel_mtx;
-            nodes[i].sel_cond = &sel_cond;
-            nodes[i].ready = &ready;
-            nodes[i].prev = NULL;
-            nodes[i].next = dq->sel_read_waiters_head;
-            if (dq->sel_read_waiters_head) {
-              dq->sel_read_waiters_head->prev = &nodes[i];
-            }
-            dq->sel_read_waiters_head = &nodes[i];
-            registered++;
-            mutex_unlock(dq->mutex);
-          }
-        } else {
-          /* ccol_select_write: writable unless writing_disabled or at capacity */
-          if (!dq->writing_disabled && dq->msg_count < max_elem_count) {
-            /* Cascade: wake one more write waiter; the cascade self-limits
-             * at max_elem_count just as the read cascade self-limits at 0. */
-            if (dq->msg_count + 1 < max_elem_count && dq->sel_write_waiters_head) {
-              notify_one_sel_waiter(dq->sel_write_waiters_head);
-            }
-            mutex_unlock(dq->mutex);
-            found = (int)i;
-          } else {
-            if (has_fd_sels && nodes[i].efd < 0) {
-              nodes[i].efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-              if (nodes[i].efd < 0) {
-                mutex_unlock(dq->mutex);
-                goto cleanup_unexpected_failure;
-              }
-              struct epoll_event ev = {.data.u64 = (uint64_t)i,
-                                       .events = EPOLLIN};
-              if (epoll_ctl(epfd, EPOLL_CTL_ADD, nodes[i].efd, &ev) < 0) {
-                close(nodes[i].efd);
-                nodes[i].efd = -1;
-                mutex_unlock(dq->mutex);
-                goto cleanup_unexpected_failure;
-              }
-            }
-            nodes[i].sel_mtx = &sel_mtx;
-            nodes[i].sel_cond = &sel_cond;
-            nodes[i].ready = &ready;
-            nodes[i].prev = NULL;
-            nodes[i].next = dq->sel_write_waiters_head;
-            if (dq->sel_write_waiters_head) {
-              dq->sel_write_waiters_head->prev = &nodes[i];
-            }
-            dq->sel_write_waiters_head = &nodes[i];
-            registered++;
-            mutex_unlock(dq->mutex);
-          }
-        }
-      }
-    }
-
+    int found = _sel_phase1_scan_register(n, selectables, nodes, has_fd_sels,
+                                          epfd, &sel_mtx, &sel_cond, &ready, buf);
+    if (found == -2) goto cleanup_unexpected_failure;
     if (found >= 0) {
       deregister_all_sel_waiters(n, nodes, selectables);
       *ready_index = (size_t)found;
@@ -1680,109 +1688,20 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
 
     /* === Phase 2: wait === */
     if (!has_fd_sels) {
-      /* Condvar path: the while-loop guards against spurious wakeups and
-       * against signals that arrived after Phase 1 but before cond_wait.
-       * When a deadline is set, pthread_cond_timedwait is used; ETIMEDOUT
-       * with ready still false means no selectable fired in time. */
-      mutex_lock(sel_mtx);
-      if (has_deadline) {
-        bool timed_out_flag = false;
-        while (!ready) {
-          int wait_ret =
-              pthread_cond_timedwait(&sel_cond, &sel_mtx, &deadline);
-          if (wait_ret == ETIMEDOUT) {
-            /* Check ready once more: a producer may have set it between the
-             * timeout expiry and our re-acquisition of sel_mtx. */
-            if (!ready) {
-              timed_out_flag = true;
-            }
-            break;
-          }
-          /* 0 or EINTR: re-check ready in the loop condition. */
-        }
-        ready = false;
-        mutex_unlock(sel_mtx);
-        if (timed_out_flag) {
-          /* Deregister before breaking: the nodes are still linked into the
-           * queues' waiter lists; freeing them without unlinking first would
-           * leave dangling pointers that any subsequent producer would
-           * dereference → use-after-free. */
-          deregister_all_sel_waiters(n, nodes, selectables);
-          retval = ccol_timed_out;
-          break;
-        }
-      } else {
-        while (!ready) {
-          cond_var_wait(sel_cond, sel_mtx);
-        }
-        ready = false;
-        mutex_unlock(sel_mtx);
-      }
-    } else {
-      /* Epoll path: block until any registered fd or queue eventfd is ready.
-       * When a deadline is set, the remaining time is recomputed before each
-       * epoll_wait call so EINTR retries do not extend the timeout.
-       * n_ready == 0 means the deadline elapsed → ccol_timed_out. */
-      struct epoll_event ev;
-      int n_ready;
-      int epoll_to;
-      do {
-        if (has_deadline) {
-          struct timespec now;
-          clock_gettime(CLOCK_MONOTONIC, &now);
-          long long remaining_ms =
-              ((long long)(deadline.tv_sec - now.tv_sec)) * 1000LL +
-              ((long long)(deadline.tv_nsec - now.tv_nsec)) / 1000000LL;
-          if (remaining_ms <= 0) {
-            n_ready = 0;
-            break;
-          }
-          epoll_to = (remaining_ms > INT_MAX) ? INT_MAX : (int)remaining_ms;
-        } else {
-          epoll_to = -1;
-        }
-        n_ready = epoll_wait(epfd, &ev, 1, epoll_to);
-      } while (n_ready < 0 && errno == EINTR);
-
-      if (n_ready == 0) {
-        /* Deregister before breaking: same use-after-free risk as the condvar
-         * timeout path above — queue waiter lists still hold pointers to nodes
-         * that are about to be freed. */
+      bool timed_out = _sel_wait_condvar(&sel_mtx, &sel_cond, &ready,
+                                         has_deadline, &deadline);
+      if (timed_out) {
         deregister_all_sel_waiters(n, nodes, selectables);
         retval = ccol_timed_out;
         break;
       }
-
-      if (n_ready < 0) {
-        goto cleanup_unexpected_failure;
-      }
-
-      size_t fired_idx = (size_t)ev.data.u64;
-      if (selectables[fired_idx].type == ccol_selectable_fd) {
-        /* A user fd became ready.  Deregister queue waiters before touching
-         * buf so that any concurrent producer still in-flight finds no
-         * waiter node to notify (preventing a stale write to a freed heap
-         * node).  User fd entries are removed automatically when epfd is
-         * closed. */
-        deregister_all_sel_waiters(n, nodes, selectables);
-        if (selectables[fired_idx].dir == ccol_select_read) {
-          retval = _read_from_fd(selectables[fired_idx].fd,
-                                 selectables[fired_idx].max_fd_read_bytes, buf);
-        } else {
-          /* Write-direction fd win: symmetric with write-direction queue
-           * wins — buf is left untouched; the caller calls write(2). */
-          retval = ccol_success;
-        }
-        /* Set ready_index for both ccol_success and ccol_msg_too_large so the
-         * caller can identify which fd to handle (e.g. read the remainder).
-         * Not set for ccol_unexpected_failure (unrecoverable system error). */
-        if (retval == ccol_success || retval == ccol_msg_too_large) {
-          *ready_index = fired_idx;
-        }
-        break;
-      }
-      /* A queue eventfd fired.  Fall through to Phase 3 so we deregister
-       * all waiters and loop back to Phase 1 to re-evaluate. */
+    } else {
+      _sel_epoll_outcome outcome =
+          _sel_wait_epoll(epfd, has_deadline, &deadline, n, selectables,
+                          nodes, buf, ready_index, &retval);
+      if (outcome == _SEL_EPOLL_BREAK)   break;
+      if (outcome == _SEL_EPOLL_FAILURE) goto cleanup_unexpected_failure;
+      /* _SEL_EPOLL_CONTINUE: fall through to Phase 3 */
     }
 
     /* === Phase 3: deregister, then loop back to Phase 1 ===
@@ -1799,23 +1718,19 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
     if (nodes[i].efd >= 0) close(nodes[i].efd);
   }
   if (epfd >= 0) close(epfd);
-  mutex_destroy(sel_mtx);
-  cond_var_destroy(sel_cond);
+  pthread_mutex_destroy(&sel_mtx);
+  pthread_cond_destroy(&sel_cond);
   free(nodes);
   return retval;
 
 cleanup_unexpected_failure:
-  /* Reached only in epoll mode when a syscall (eventfd, epoll_ctl) fails.
-   * Deregister queue waiters linked before the failure, close any eventfds
-   * that were allocated, then close epfd (auto-removes user fds and any
-   * eventfd entries). */
   deregister_all_sel_waiters(n, nodes, selectables);
   for (size_t i = 0; i < n; i++) {
     if (nodes[i].efd >= 0) close(nodes[i].efd);
   }
   if (epfd >= 0) close(epfd);
-  mutex_destroy(sel_mtx);
-  cond_var_destroy(sel_cond);
+  pthread_mutex_destroy(&sel_mtx);
+  pthread_cond_destroy(&sel_cond);
   free(nodes);
   return ccol_unexpected_failure;
 }

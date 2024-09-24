@@ -1474,7 +1474,8 @@ TEST(ccol_select, timed_returns_timed_out_when_all_queues_disabled) {
   circular_queue_destroy(q1);
 }
 
-TEST(ccol_select, stays_blocked_through_disable_then_wakes_after_reenable_and_send) {
+TEST(ccol_select,
+     stays_blocked_through_disable_then_wakes_after_reenable_and_send) {
   // ccol_select must remain blocked when sending is disabled on all queues.
   // Once sending is re-enabled and a message arrives, it must return success.
   circular_queue *q0 = circular_queue_create(4, NULL);
@@ -1786,9 +1787,9 @@ TEST(ccol_select, fd_readable_immediately) {
 
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(ccol_select_va(&buf, &idx,
-                            selectable_from_fd(pfd[0], ccol_select_read)),
-             ccol_success);
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_fd(pfd[0], ccol_select_read)),
+      ccol_success);
   REQUIRE_EQ(idx, 0);
   /* ccol_select read the data; buf owns a heap copy */
   REQUIRE_NE((void *)buf.data, (void *)NULL);
@@ -1814,12 +1815,12 @@ TEST(ccol_select, fd_blocks_until_data_arrives) {
   size_t idx = 99;
   struct timespec before, after;
   getWallTime(before);
-  REQUIRE_EQ(ccol_select_va(&buf, &idx,
-                            selectable_from_fd(pfd[0], ccol_select_read)),
-             ccol_success);
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_fd(pfd[0], ccol_select_read)),
+      ccol_success);
   getWallTime(after);
   REQUIRE_EQ(idx, 0);
-  REQUIRE_GE(diffTimeUSec(before, after), 10000);  /* actually blocked */
+  REQUIRE_GE(diffTimeUSec(before, after), 10000); /* actually blocked */
 
   /* ccol_select consumed the data; verify and free */
   REQUIRE_NE((void *)buf.data, (void *)NULL);
@@ -1840,9 +1841,9 @@ TEST(ccol_select, fd_writable_immediately) {
   int sentinel = 0xFEED;
   c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
   size_t idx = 99;
-  REQUIRE_EQ(ccol_select_va(&buf, &idx,
-                            selectable_from_fd(pfd[1], ccol_select_write)),
-             ccol_success);
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_fd(pfd[1], ccol_select_write)),
+      ccol_success);
   REQUIRE_EQ(idx, 0);
   /* buf untouched */
   REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
@@ -1864,10 +1865,10 @@ TEST(ccol_select, fd_and_queue_fd_wins) {
 
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(ccol_select_va(&buf, &idx,
-                            selectable_from_fd(pfd[0], ccol_select_read),
-                            selectable_from_circq(cq, ccol_select_read)),
-             ccol_success);
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_fd(pfd[0], ccol_select_read),
+                     selectable_from_circq(cq, ccol_select_read)),
+      ccol_success);
   REQUIRE_EQ(idx, 0);
   REQUIRE_NE((void *)buf.data, (void *)NULL);
   REQUIRE_EQ(buf.size, sizeof(val));
@@ -1894,10 +1895,10 @@ TEST(ccol_select, fd_and_queue_queue_wins) {
 
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(ccol_select_va(&buf, &idx,
-                            selectable_from_fd(pfd[0], ccol_select_read),
-                            selectable_from_circq(cq, ccol_select_read)),
-             ccol_success);
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_fd(pfd[0], ccol_select_read),
+                     selectable_from_circq(cq, ccol_select_read)),
+      ccol_success);
   REQUIRE_EQ(idx, 1);
   REQUIRE_EQ(*(int *)buf.data, 33);
 
@@ -1922,10 +1923,10 @@ TEST(ccol_select, fd_and_dynq_dynq_wins) {
 
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(ccol_select_va(&buf, &idx,
-                            selectable_from_fd(pfd[0], ccol_select_read),
-                            selectable_from_dynq(dq, ccol_select_read)),
-             ccol_success);
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx, selectable_from_fd(pfd[0], ccol_select_read),
+                     selectable_from_dynq(dq, ccol_select_read)),
+      ccol_success);
   REQUIRE_EQ(idx, 1);
   REQUIRE_EQ(*(int *)buf.data, 99);
 
@@ -1949,10 +1950,9 @@ TEST(ccol_select, timed_circq_returns_timed_out) {
   circular_queue *cq = circular_queue_create(4, NULL);
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&buf, &idx, 50 /* ms */,
-                           selectable_from_circq(cq, ccol_select_read)),
-      ccol_timed_out);
+  REQUIRE_EQ(ccol_select_timed_va(&buf, &idx, 50 /* ms */,
+                                  selectable_from_circq(cq, ccol_select_read)),
+             ccol_timed_out);
   /* buf and idx must be untouched on timeout */
   REQUIRE_EQ((void *)buf.data, NULL);
   REQUIRE_EQ(idx, (size_t)99);
@@ -1965,10 +1965,9 @@ TEST(ccol_select, timed_fd_returns_timed_out) {
   REQUIRE_EQ(pipe(pfd), 0);
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&buf, &idx, 50 /* ms */,
-                           selectable_from_fd(pfd[0], ccol_select_read)),
-      ccol_timed_out);
+  REQUIRE_EQ(ccol_select_timed_va(&buf, &idx, 50 /* ms */,
+                                  selectable_from_fd(pfd[0], ccol_select_read)),
+             ccol_timed_out);
   REQUIRE_EQ((void *)buf.data, NULL);
   REQUIRE_EQ(idx, (size_t)99);
   close(pfd[0]);
@@ -1980,11 +1979,23 @@ TEST(ccol_select, timed_poll_zero_ms_circq_empty) {
   circular_queue *cq = circular_queue_create(4, NULL);
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&buf, &idx, 0,
-                           selectable_from_circq(cq, ccol_select_read)),
-      ccol_timed_out);
+  REQUIRE_EQ(ccol_select_timed_va(&buf, &idx, 0,
+                                  selectable_from_circq(cq, ccol_select_read)),
+             ccol_timed_out);
   circular_queue_destroy(cq);
+}
+
+typedef struct helper_thread_args {
+  circular_queue *cq;
+  c_message_t msg;
+} helper_thread_args;
+
+void *helper_thread_main(void *arg) {
+  helper_thread_args *a = arg;
+  struct timespec ts = {.tv_sec = 0, .tv_nsec = 20 * 1000000L};
+  nanosleep(&ts, NULL);
+  circq_send_zc(a->cq, &a->msg);
+  return NULL;
 }
 
 TEST(ccol_select, timed_succeeds_before_deadline) {
@@ -1996,26 +2007,15 @@ TEST(ccol_select, timed_succeeds_before_deadline) {
   *(int *)send_msg.data = 1234;
 
   /* A helper thread that sleeps 20 ms then sends. */
-  struct {
-    circular_queue *cq;
-    c_message_t msg;
-  } args = {cq, send_msg};
+  helper_thread_args args = {cq, send_msg};
 
-  void *helper(void *arg) {
-    typeof(args) *a = arg;
-    struct timespec ts = {.tv_sec = 0, .tv_nsec = 20 * 1000000L};
-    nanosleep(&ts, NULL);
-    circq_send_zc(a->cq, &a->msg);
-    return NULL;
-  }
-  pthread_create(&tid, NULL, helper, &args);
+  pthread_create(&tid, NULL, helper_thread_main, &args);
 
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&buf, &idx, 500,
-                           selectable_from_circq(cq, ccol_select_read)),
-      ccol_success);
+  REQUIRE_EQ(ccol_select_timed_va(&buf, &idx, 500,
+                                  selectable_from_circq(cq, ccol_select_read)),
+             ccol_success);
   REQUIRE_EQ(idx, (size_t)0);
   REQUIRE_NE((void *)buf.data, NULL);
   REQUIRE_EQ(*(int *)buf.data, 1234);
@@ -2035,10 +2035,9 @@ TEST(ccol_select, timed_out_deregisters_waiter_node) {
 
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_timed_va(&buf, &idx, 30 /* ms */,
-                           selectable_from_circq(cq, ccol_select_read)),
-      ccol_timed_out);
+  REQUIRE_EQ(ccol_select_timed_va(&buf, &idx, 30 /* ms */,
+                                  selectable_from_circq(cq, ccol_select_read)),
+             ccol_timed_out);
 
   /* Send to the queue AFTER the timed-out select has returned.  If the waiter
    * node was not deregistered, circq_send_zc → notify_one_sel_waiter will

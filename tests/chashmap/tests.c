@@ -1472,9 +1472,10 @@ static void *controlled_calloc(size_t nmemb, size_t size) {
 // is only reachable when all 64 slots are either live or tombstoned, which
 // requires the rehash calloc to fail (OOM). We simulate that here.
 TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
-  ccol_memmgmt_procs_t mp = {
-      .malloc = malloc, .free = free, .calloc = controlled_calloc,
-      .realloc = realloc};
+  ccol_memmgmt_procs_t mp = {.malloc = malloc,
+                             .free = free,
+                             .calloc = controlled_calloc,
+                             .realloc = realloc};
 
   // Use the minimum capacity (64) so that oa_delete's shrink guard
   // (capacity > minimum_allowed_bucket_array_size) never fires and tombstones
@@ -1491,17 +1492,19 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
   g_calloc_fail = true;
   for (int i = 0; i < 64; i++) {
     int val = i * 10;
-    REQUIRE_EQ(chmap_insert_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)},
-                                 &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
-               ccol_success);
+    REQUIRE_EQ(
+        chmap_insert_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)},
+                          &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
+        ccol_success);
   }
   REQUIRE_EQ(chmap_elem_count(hm), 64);
 
   // Delete 10 keys — no calloc involved, and at capacity == minimum the shrink
   // check in oa_delete is suppressed, so these become tombstones in place.
   for (int i = 0; i < 10; i++) {
-    REQUIRE_EQ(chmap_delete_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)}),
-               ccol_success);
+    REQUIRE_EQ(
+        chmap_delete_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)}),
+        ccol_success);
   }
   REQUIRE_EQ(chmap_elem_count(hm), 54);
 
@@ -1511,19 +1514,17 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
   // slot without finding an empty one. The post-loop fix reuses the first
   // tombstone slot it recorded instead of returning ccol_container_full.
   int new_key = 64, new_val = 640;
-  REQUIRE_EQ(
-      chmap_insert_elem(hm,
-                        &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
-                        &(cmap_pair){.ptr = &new_val, .size = sizeof(new_val)}),
-      ccol_success);
+  REQUIRE_EQ(chmap_insert_elem(
+                 hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
+                 &(cmap_pair){.ptr = &new_val, .size = sizeof(new_val)}),
+             ccol_success);
   REQUIRE_EQ(chmap_elem_count(hm), 55);
 
   int retrieved = 0;
-  REQUIRE_EQ(
-      chmap_get_elem_copy(
-          hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
-          &retrieved, sizeof(retrieved)),
-      ccol_success);
+  REQUIRE_EQ(chmap_get_elem_copy(
+                 hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
+                 &retrieved, sizeof(retrieved)),
+             ccol_success);
   REQUIRE_EQ(retrieved, 640);
 
   g_calloc_fail = false;

@@ -110,8 +110,7 @@ static void notify_one_sel_waiter(ccol_sel_waiter *head) {
  * every blocked thread must re-evaluate regardless of resource availability.
  * Must be called while the queue's own mutex is held. */
 static void notify_all_sel_waiters(ccol_sel_waiter *head) {
-  for (ccol_sel_waiter *w = head; w != NULL; w = w->next)
-    _notify_waiter(w);
+  for (ccol_sel_waiter *w = head; w != NULL; w = w->next) _notify_waiter(w);
 }
 
 struct circular_queue {
@@ -1099,9 +1098,12 @@ size_t chan_msg_count(channel *ch, channel_direction d) {
  * head must be the address of the appropriate sel_{read,write}_waiters_head
  * pointer in the owning queue. */
 static void _sel_unlink_waiter(ccol_sel_waiter *node, ccol_sel_waiter **head,
-                                pthread_mutex_t *mtx) {
+                               pthread_mutex_t *mtx) {
   pthread_mutex_lock(mtx);
-  if (node->prev) node->prev->next = node->next; else *head = node->next;
+  if (node->prev)
+    node->prev->next = node->next;
+  else
+    *head = node->next;
   if (node->next) node->next->prev = node->prev;
   pthread_mutex_unlock(mtx);
 }
@@ -1211,7 +1213,7 @@ ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir) {
  *   - On any unexpected read error or malloc/realloc failure,
  *     ccol_unexpected_failure is returned and no heap memory is leaked. */
 #define _FD_READ_STREAM_INITIAL_SIZE 4096u
-#define _FD_READ_DGRAM_INITIAL_SIZE  (66u * 1024u)
+#define _FD_READ_DGRAM_INITIAL_SIZE (66u * 1024u)
 static ccol_retval_t _read_from_fd(int fd, size_t max_bytes, c_message_t *msg) {
   int sock_type = 0;
   socklen_t sock_type_len = sizeof(sock_type);
@@ -1219,8 +1221,8 @@ static ccol_retval_t _read_from_fd(int fd, size_t max_bytes, c_message_t *msg) {
       (getsockopt(fd, SOL_SOCKET, SO_TYPE, &sock_type, &sock_type_len) == 0) &&
       (sock_type == SOCK_DGRAM || sock_type == SOCK_SEQPACKET);
 
-  size_t capacity = is_dgram ? _FD_READ_DGRAM_INITIAL_SIZE
-                             : _FD_READ_STREAM_INITIAL_SIZE;
+  size_t capacity =
+      is_dgram ? _FD_READ_DGRAM_INITIAL_SIZE : _FD_READ_STREAM_INITIAL_SIZE;
   void *data = malloc(capacity);
   if (!data) return ccol_unexpected_failure;
 
@@ -1312,8 +1314,8 @@ static bool _sel_ensure_efd(size_t i, ccol_sel_waiter *nodes, int epfd) {
 /* Fills in nodes[i] and prepends it to *head.  Called under the owning queue's
  * mutex; the caller unlocks after this returns. */
 static void _sel_link_waiter(size_t i, ccol_sel_waiter *nodes,
-                              pthread_mutex_t *sel_mtx, pthread_cond_t *sel_cond,
-                              bool *ready, ccol_sel_waiter **head) {
+                             pthread_mutex_t *sel_mtx, pthread_cond_t *sel_cond,
+                             bool *ready, ccol_sel_waiter **head) {
   nodes[i].sel_mtx = sel_mtx;
   nodes[i].sel_cond = sel_cond;
   nodes[i].ready = ready;
@@ -1323,7 +1325,8 @@ static void _sel_link_waiter(size_t i, ccol_sel_waiter *nodes,
   *head = &nodes[i];
 }
 
-/* Returns ccol_success if all arguments are valid, ccol_invalid_args otherwise. */
+/* Returns ccol_success if all arguments are valid, ccol_invalid_args otherwise.
+ */
 static ccol_retval_t _sel_validate_args(const c_message_t *buf,
                                         const size_t *ready_index, size_t n,
                                         const ccol_selectable *selectables) {
@@ -1351,7 +1354,7 @@ static ccol_retval_t _sel_validate_args(const c_message_t *buf,
 static bool _sel_compute_deadline(int timeout_ms, struct timespec *deadline) {
   if (timeout_ms < 0) return false;
   clock_gettime(CLOCK_MONOTONIC, deadline);
-  deadline->tv_sec  += timeout_ms / 1000;
+  deadline->tv_sec += timeout_ms / 1000;
   deadline->tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
   if (deadline->tv_nsec >= 1000000000L) {
     deadline->tv_sec++;
@@ -1410,7 +1413,8 @@ static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
           found = (int)i;
         } else {
           if (has_fd_sels && !_sel_ensure_efd(i, nodes, epfd)) {
-            mutex_unlock(cq->mutex); return -2;
+            mutex_unlock(cq->mutex);
+            return -2;
           }
           _sel_link_waiter(i, nodes, sel_mtx, sel_cond, ready,
                            &cq->sel_read_waiters_head);
@@ -1425,7 +1429,8 @@ static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
           found = (int)i;
         } else {
           if (has_fd_sels && !_sel_ensure_efd(i, nodes, epfd)) {
-            mutex_unlock(cq->mutex); return -2;
+            mutex_unlock(cq->mutex);
+            return -2;
           }
           _sel_link_waiter(i, nodes, sel_mtx, sel_cond, ready,
                            &cq->sel_write_waiters_head);
@@ -1447,7 +1452,8 @@ static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
           found = (int)i;
         } else {
           if (has_fd_sels && !_sel_ensure_efd(i, nodes, epfd)) {
-            mutex_unlock(dq->mutex); return -2;
+            mutex_unlock(dq->mutex);
+            return -2;
           }
           _sel_link_waiter(i, nodes, sel_mtx, sel_cond, ready,
                            &dq->sel_read_waiters_head);
@@ -1462,7 +1468,8 @@ static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
           found = (int)i;
         } else {
           if (has_fd_sels && !_sel_ensure_efd(i, nodes, epfd)) {
-            mutex_unlock(dq->mutex); return -2;
+            mutex_unlock(dq->mutex);
+            return -2;
           }
           _sel_link_waiter(i, nodes, sel_mtx, sel_cond, ready,
                            &dq->sel_write_waiters_head);
@@ -1477,9 +1484,10 @@ static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
 /* Waits on sel_cond until *ready is set by a producer or the deadline elapses.
  * Returns true if the deadline elapsed with *ready still false; false on a
  * normal wakeup.  Always resets *ready to false before returning. */
-static bool _sel_wait_condvar(pthread_mutex_t *sel_mtx, pthread_cond_t *sel_cond,
-                               bool *ready, bool has_deadline,
-                               const struct timespec *deadline) {
+static bool _sel_wait_condvar(pthread_mutex_t *sel_mtx,
+                              pthread_cond_t *sel_cond, bool *ready,
+                              bool has_deadline,
+                              const struct timespec *deadline) {
   pthread_mutex_lock(sel_mtx);
   if (has_deadline) {
     bool timed_out_flag = false;
@@ -1494,8 +1502,7 @@ static bool _sel_wait_condvar(pthread_mutex_t *sel_mtx, pthread_cond_t *sel_cond
     pthread_mutex_unlock(sel_mtx);
     return timed_out_flag;
   }
-  while (!*ready)
-    pthread_cond_wait(sel_cond, sel_mtx);
+  while (!*ready) pthread_cond_wait(sel_cond, sel_mtx);
   *ready = false;
   pthread_mutex_unlock(sel_mtx);
   return false;
@@ -1513,12 +1520,10 @@ typedef enum {
  * result is determined (*out_retval and *ready_index are set by this function),
  * or _SEL_EPOLL_FAILURE on a system error (nodes remain registered; the caller
  * must deregister before freeing). */
-static _sel_epoll_outcome _sel_wait_epoll(int epfd, bool has_deadline,
-                                          const struct timespec *deadline,
-                                          size_t n, ccol_selectable *selectables,
-                                          ccol_sel_waiter *nodes, c_message_t *buf,
-                                          size_t *ready_index,
-                                          ccol_retval_t *out_retval) {
+static _sel_epoll_outcome _sel_wait_epoll(
+    int epfd, bool has_deadline, const struct timespec *deadline, size_t n,
+    ccol_selectable *selectables, ccol_sel_waiter *nodes, c_message_t *buf,
+    size_t *ready_index, ccol_retval_t *out_retval) {
   struct epoll_event ev;
   int n_ready;
   int epoll_to;
@@ -1529,7 +1534,10 @@ static _sel_epoll_outcome _sel_wait_epoll(int epfd, bool has_deadline,
       long long remaining_ms =
           ((long long)(deadline->tv_sec - now.tv_sec)) * 1000LL +
           ((long long)(deadline->tv_nsec - now.tv_nsec)) / 1000000LL;
-      if (remaining_ms <= 0) { n_ready = 0; break; }
+      if (remaining_ms <= 0) {
+        n_ready = 0;
+        break;
+      }
       epoll_to = (remaining_ms > INT_MAX) ? INT_MAX : (int)remaining_ms;
     } else {
       epoll_to = -1;
@@ -1548,8 +1556,9 @@ static _sel_epoll_outcome _sel_wait_epoll(int epfd, bool has_deadline,
   if (selectables[fired_idx].type == ccol_selectable_fd) {
     deregister_all_sel_waiters(n, nodes, selectables);
     if (selectables[fired_idx].dir == ccol_select_read) {
-      *out_retval = _read_from_fd(selectables[fired_idx].fd,
-                                  selectables[fired_idx].max_fd_read_bytes, buf);
+      *out_retval =
+          _read_from_fd(selectables[fired_idx].fd,
+                        selectables[fired_idx].max_fd_read_bytes, buf);
     } else {
       *out_retval = ccol_success;
     }
@@ -1629,12 +1638,16 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
 
   bool has_fd_sels = false;
   for (size_t i = 0; i < n; i++) {
-    if (selectables[i].type == ccol_selectable_fd) { has_fd_sels = true; break; }
+    if (selectables[i].type == ccol_selectable_fd) {
+      has_fd_sels = true;
+      break;
+    }
   }
 
   /* One waiter node per selectable.  sel_mtx == NULL means "not currently
    * registered in any queue's list."  efd == -1 means "no eventfd allocated"
-   * (condvar-only mode).  Heap-allocated to avoid stack overflow for large n. */
+   * (condvar-only mode).  Heap-allocated to avoid stack overflow for large n.
+   */
   ccol_sel_waiter *nodes = malloc(n * sizeof(ccol_sel_waiter));
   if (!nodes) return ccol_not_enough_memory;
   for (size_t i = 0; i < n; i++) {
@@ -1676,8 +1689,9 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
 
   for (;;) {
     /* === Phase 1: scan + register === */
-    int found = _sel_phase1_scan_register(n, selectables, nodes, has_fd_sels,
-                                          epfd, &sel_mtx, &sel_cond, &ready, buf);
+    int found =
+        _sel_phase1_scan_register(n, selectables, nodes, has_fd_sels, epfd,
+                                  &sel_mtx, &sel_cond, &ready, buf);
     if (found == -2) goto cleanup_unexpected_failure;
     if (found >= 0) {
       deregister_all_sel_waiters(n, nodes, selectables);
@@ -1697,9 +1711,9 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
       }
     } else {
       _sel_epoll_outcome outcome =
-          _sel_wait_epoll(epfd, has_deadline, &deadline, n, selectables,
-                          nodes, buf, ready_index, &retval);
-      if (outcome == _SEL_EPOLL_BREAK)   break;
+          _sel_wait_epoll(epfd, has_deadline, &deadline, n, selectables, nodes,
+                          buf, ready_index, &retval);
+      if (outcome == _SEL_EPOLL_BREAK) break;
       if (outcome == _SEL_EPOLL_FAILURE) goto cleanup_unexpected_failure;
       /* _SEL_EPOLL_CONTINUE: fall through to Phase 3 */
     }

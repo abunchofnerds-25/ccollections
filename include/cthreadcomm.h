@@ -917,10 +917,10 @@ typedef struct {
  *  @note EPOLLRDHUP, EPOLLERR, and EPOLLHUP are always included for read
  *        selectables; EPOLLERR and EPOLLHUP for write selectables.
  */
-#define selectable_from_fd(fd_, sel_dir)                              \
-  ((ccol_selectable){.type = ccol_selectable_fd,                      \
-                     .dir = (sel_dir),                                \
-                     .max_fd_read_bytes = 0,                          \
+#define selectable_from_fd(fd_, sel_dir)         \
+  ((ccol_selectable){.type = ccol_selectable_fd, \
+                     .dir = (sel_dir),           \
+                     .max_fd_read_bytes = 0,     \
                      .fd = (fd_)})
 
 /** @brief Build a selectable from a raw file descriptor with a read size limit
@@ -938,12 +938,13 @@ typedef struct {
  *
  *  @param fd_        File descriptor to watch (must be >= 0)
  *  @param sel_dir    ccol_select_read or ccol_select_write
- *  @param max_bytes_ Maximum bytes to read; 0 is equivalent to selectable_from_fd
+ *  @param max_bytes_ Maximum bytes to read; 0 is equivalent to
+ * selectable_from_fd
  */
-#define selectable_from_fd_limited(fd_, sel_dir, max_bytes_)          \
-  ((ccol_selectable){.type = ccol_selectable_fd,                      \
-                     .dir = (sel_dir),                                \
-                     .max_fd_read_bytes = (max_bytes_),               \
+#define selectable_from_fd_limited(fd_, sel_dir, max_bytes_) \
+  ((ccol_selectable){.type = ccol_selectable_fd,             \
+                     .dir = (sel_dir),                       \
+                     .max_fd_read_bytes = (max_bytes_),      \
                      .fd = (fd_)})
 
 /**
@@ -1007,8 +1008,8 @@ ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir);
  *                                populated (caller must free buf->data).
  *                                For write-direction wins buf is untouched.
  * @return ccol_invalid_args      Any argument is NULL/zero; a queue selectable
- *                                contains a NULL queue pointer; an fd selectable
- *                                has fd < 0; or an unknown type/dir value
+ *                                contains a NULL queue pointer; an fd
+ * selectable has fd < 0; or an unknown type/dir value
  * @return ccol_not_enough_memory Internal waiter-node allocation (one node per
  *                                selectable) failed; no state was changed
  * @return ccol_unexpected_failure epoll_create1, eventfd, epoll_ctl, or the
@@ -1019,7 +1020,8 @@ ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir);
  *                                 to the triggering fd's index so the caller
  *                                 can identify which fd to handle
  *
- * @note For read wins (queue or fd): caller is responsible for freeing buf->data
+ * @note For read wins (queue or fd): caller is responsible for freeing
+ * buf->data
  * @note For write-direction fd wins: buf is untouched; caller calls write(2)
  * @note When no fd selectables are present, only POSIX condition variables are
  *       used; no additional system calls occur beyond normal queue operations
@@ -1030,7 +1032,8 @@ ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
                           ccol_selectable *selectables);
 
 /**
- * @brief Wait for readability or writability on any of n selectables with timeout
+ * @brief Wait for readability or writability on any of n selectables with
+ * timeout
  *
  * Identical to ccol_select() except that the call returns ccol_timed_out if no
  * selectable becomes ready within timeout_ms milliseconds.
@@ -1112,7 +1115,7 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
  *
  * @note Uses a GCC/Clang statement expression; not valid under strict ISO C
  */
-#define ccol_select_timed_va(buf, ready_index, timeout_ms, ...)              \
+#define ccol_select_timed_va(buf, ready_index, timeout_ms, ...)               \
   __extension__({                                                             \
     ccol_selectable _cqsel_arr[] = {__VA_ARGS__};                             \
     ccol_select_timed((buf), (ready_index),                                   \

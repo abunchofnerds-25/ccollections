@@ -292,13 +292,14 @@ SOFTWARE.
  * zero indicates success.
  */
 typedef enum ccollections_retval_t {
-  ccol_unexpected_failure = -9, /**< Unexpected/unknown error */
-  ccol_container_empty,         /**< Container has no elements */
-  ccol_container_full,          /**< Container at maximum capacity */
-  ccol_timed_out,               /**< Operation timed out */
-  ccol_not_permitted,           /**< Operation not allowed in current state */
-  ccol_invalid_args,            /**< Invalid arguments provided */
-  ccol_key_not_found,           /**< Key does not exist in map */
+  ccol_unexpected_failure = -10, /**< Unexpected/unknown error */
+  ccol_msg_too_large,   /**< Message data exceeded the configured size limit */
+  ccol_container_empty, /**< Container has no elements */
+  ccol_container_full,  /**< Container at maximum capacity */
+  ccol_timed_out,       /**< Operation timed out */
+  ccol_not_permitted,   /**< Operation not allowed in current state */
+  ccol_invalid_args,    /**< Invalid arguments provided */
+  ccol_key_not_found,   /**< Key does not exist in map */
   ccol_key_already_present, /**< Key already exists (for update operations) */
   ccol_not_enough_memory,   /**< Memory allocation failed */
   ccol_success              /**< Operation succeeded */

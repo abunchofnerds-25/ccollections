@@ -1076,6 +1076,348 @@ NOTES
 SEE ALSO
        channel_create, __channel_destroy
 
+------------------------------------------------------------------------------
+NAME
+       selectable_from_circq - build a ccol_selectable from a circular_queue
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       selectable_from_circq(q, dir);
+
+DESCRIPTION
+       Constructs a ccol_selectable tagged-union value of type ccol_selectable_circq
+       wrapping the given circular_queue pointer with the specified direction.
+
+         ccol_select_read  — wait for at least one message to arrive (read-wait)
+         ccol_select_write — wait until the queue has room for a send (write-wait)
+
+       This is a macro that expands to a compound literal; it has no run-time
+       overhead beyond loading the pointer.
+
+       For write-direction wins, ccol_select() leaves buf untouched — no message
+       is consumed.  The caller must subsequently call circq_try_send_zc() since
+       the available slot is not reserved (TOCTOU, same as POSIX select(2)).
+
+PARAMETERS
+       q    circular_queue pointer to wrap.  Passing NULL produces a selectable
+            that ccol_select() will reject with ccol_invalid_args.
+       dir  ccol_select_read or ccol_select_write.
+
+RETURN VALUE
+       ccol_selectable value (not a pointer).
+
+EXAMPLES
+       circular_queue *q0 = circular_queue_create(8, NULL);
+       circular_queue *q1 = circular_queue_create(8, NULL);
+
+       c_message_t msg;
+       size_t idx;
+       /* Read-wait on two queues: */
+       ccol_select_va(&msg, &idx,
+           selectable_from_circq(q0, ccol_select_read),
+           selectable_from_circq(q1, ccol_select_read));
+
+       /* Mixed: wait until q0 has room to send or q1 has a message: */
+       ccol_select_va(&msg, &idx,
+           selectable_from_circq(q0, ccol_select_write),
+           selectable_from_circq(q1, ccol_select_read));
+
+SEE ALSO
+       ccol_select, ccol_select_va, selectable_from_dynq, selectable_from_chan,
+       selectable_from_fd
+
+------------------------------------------------------------------------------
+NAME
+       selectable_from_dynq - build a ccol_selectable from a dynamic_queue
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       selectable_from_dynq(q, dir);
+
+DESCRIPTION
+       Constructs a ccol_selectable tagged-union value of type ccol_selectable_dynq
+       wrapping the given dynamic_queue pointer with the specified direction.
+
+         ccol_select_read  — wait for at least one message to arrive (read-wait)
+         ccol_select_write — wait until sending is enabled (!writing_disabled)
+
+       Because a dynamic_queue is unbounded, it is always considered writable as
+       long as writing is not disabled.  ccol_select_write on a dynamic_queue is
+       only necessary when dynmq_disable_sending() has been called and the caller
+       needs to know when the queue becomes writable again.
+
+PARAMETERS
+       q    dynamic_queue pointer to wrap.  Passing NULL produces a selectable
+            that ccol_select() will reject with ccol_invalid_args.
+       dir  ccol_select_read or ccol_select_write.
+
+RETURN VALUE
+       ccol_selectable value (not a pointer).
+
+EXAMPLES
+       dynamic_queue *dq = dynamic_queue_create(NULL);
+       circular_queue *q0 = circular_queue_create(8, NULL);
+
+       c_message_t msg;
+       size_t idx;
+       ccol_select_va(&msg, &idx,
+           selectable_from_circq(q0, ccol_select_read),
+           selectable_from_dynq(dq, ccol_select_read));
+
+SEE ALSO
+       ccol_select, ccol_select_va, selectable_from_circq, selectable_from_chan,
+       selectable_from_fd
+
+------------------------------------------------------------------------------
+NAME
+       selectable_from_chan - build a ccol_selectable from a channel, resolving
+       the queue for the calling thread and the requested direction
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       selectable_from_chan(ch, dir);
+
+DESCRIPTION
+       Calls ccol_selectable_from_chan(ch, dir), which inspects the calling
+       thread's ID and the requested direction to pick the correct internal
+       circular queue:
+
+         ccol_select_read:  owner ← workers_to_owner_cq  (same as chan_recv_zc)
+                          worker ← owner_to_workers_cq
+         ccol_select_write: owner → owner_to_workers_cq  (same as chan_send_zc)
+                          worker → workers_to_owner_cq
+
+       Direction is resolved once, at the point this macro is evaluated.  If
+       the calling thread's role can change, reconstruct the selectable before
+       each ccol_select() call.
+
+PARAMETERS
+       ch   channel pointer.  Passing NULL produces a selectable that ccol_select()
+            will reject with ccol_invalid_args.
+       dir  ccol_select_read or ccol_select_write.
+
+RETURN VALUE
+       ccol_selectable value of type ccol_selectable_circq (a channel always resolves
+       to one of its internal circular queues).
+
+EXAMPLES
+       /* Owner reads from two channels: */
+       c_message_t msg;
+       size_t idx;
+       ccol_select_va(&msg, &idx,
+           selectable_from_chan(ch0, ccol_select_read),
+           selectable_from_chan(ch1, ccol_select_read));
+
+       /* Owner waits for room to send on one channel: */
+       c_message_t dummy = {0};
+       ccol_select_va(&dummy, &idx,
+           selectable_from_chan(ch, ccol_select_write));
+
+SEE ALSO
+       ccol_selectable_from_chan, ccol_select, ccol_select_va,
+       selectable_from_circq, selectable_from_dynq, selectable_from_fd
+
+------------------------------------------------------------------------------
+NAME
+       selectable_from_fd - build a ccol_selectable from a raw file descriptor
+       (no read size limit)
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       selectable_from_fd(fd, dir);
+       selectable_from_fd_limited(fd, dir, max_bytes);
+
+DESCRIPTION
+       Constructs a ccol_selectable tagged-union value of type ccol_selectable_fd
+       wrapping the given file descriptor with the specified I/O direction.
+
+         ccol_select_read  — wake when the fd becomes readable (data available or
+                            EOF / error condition)
+         ccol_select_write — wake when the fd becomes writable (send buffer has room)
+
+       Both macros expand to compound literals; they have no run-time overhead.
+
+       selectable_from_fd() sets max_fd_read_bytes to 0 (unlimited).
+       selectable_from_fd_limited() accepts an explicit max_bytes limit; if the
+       data available on the fd exceeds that limit, ccol_select() returns
+       ccol_msg_too_large without placing any data in buf (no partial reads).
+
+       For non-blocking stream fds, the internal grow loop uses max_bytes + 1 as
+       its ceiling so that a message of exactly max_bytes succeeds: the next read
+       after filling the buffer returns EAGAIN, so total < capacity and the function
+       returns ccol_success.  Only when total > max_bytes (more data than the limit)
+       is ccol_msg_too_large returned.
+
+       For ccol_select_read direction: when ccol_select() returns ccol_success,
+       buf->data points to a heap buffer containing all data that was available on
+       the fd at the moment of the read, and buf->size holds the byte count.  The
+       caller gains ownership of buf->data and must call free() on it.  EOF yields
+       buf->data = NULL, buf->size = 0.  This is the same ownership model as queue
+       read wins.
+
+       For ccol_select_write direction: buf is left untouched — ccol_select() only
+       signals that the fd has room in its kernel send buffer.  The caller must
+       subsequently call write(2) (symmetric with write-direction queue wins, where
+       no queue slot is reserved).  max_bytes is ignored for write-direction fds.
+
+       Read behaviour detail: ccol_select() inspects the fd with getsockopt(SO_TYPE)
+       to determine whether it is a datagram socket (SOCK_DGRAM or SOCK_SEQPACKET).
+
+       Datagram fds: a single read(2) is performed into a 66 KiB buffer.  This
+       exceeds the maximum standard IPv4/IPv6 UDP payload (65,507 bytes), so the
+       full datagram is always captured without truncation.  The grow-retry loop is
+       suppressed for datagram fds regardless of O_NONBLOCK.  When max_bytes is set
+       and the datagram size exceeds it, ccol_msg_too_large is returned.
+
+       Stream fds and non-socket fds (pipes, timerfd, signalfd, etc.): a 4 KiB
+       initial buffer is used.  If the fd has O_NONBLOCK, the read loop grows the
+       buffer (up to max_bytes + 1 when a limit is set) until EAGAIN to drain all
+       data that arrived before the wakeup.  If the fd is in blocking mode, exactly
+       one read(2) call is made (safe because epoll already confirmed readiness).
+
+       Mixing fd selectables with queue selectables in the same ccol_select() call
+       is supported.  The implementation switches to an epoll(7)-based wait path
+       when any fd selectable is present.  If only queue selectables are supplied
+       the lighter condvar path is used instead.
+
+PARAMETERS
+       fd        An open file descriptor.  Must be >= 0.  Passing a negative value
+                 produces a selectable that ccol_select() will reject with
+                 ccol_invalid_args.
+       dir       ccol_select_read or ccol_select_write.
+       max_bytes (selectable_from_fd_limited only) Maximum bytes to read from the
+                 fd on a ccol_select_read win.  0 is equivalent to selectable_from_fd
+                 (unlimited).
+
+RETURN VALUE
+       ccol_selectable value (not a pointer).
+
+EXAMPLES
+       int pfd[2];
+       pipe(pfd);  /* pfd[0] read end, pfd[1] write end */
+       int src = 42;
+       write(pfd[1], &src, sizeof(src));
+
+       /* Wake when the pipe read end has data OR q has a message: */
+       c_message_t msg;
+       size_t idx;
+       ccol_retval_t r = ccol_select_va(&msg, &idx,
+           selectable_from_circq(q, ccol_select_read),
+           selectable_from_fd(pfd[0], ccol_select_read));
+       if (r == ccol_success && idx == 1) {
+           /* fd won — data already read into msg.data */
+           int val = *(int *)msg.data;
+           free(msg.data);
+       }
+
+       /* Watch a socket for writability (buf untouched, no data read): */
+       ccol_select_va(&msg, &idx,
+           selectable_from_fd(sock_fd, ccol_select_write));
+
+       /* Reject fd messages larger than 64 KiB: */
+       r = ccol_select_va(&msg, &idx,
+           selectable_from_fd_limited(pfd[0], ccol_select_read, 65536));
+       if (r == ccol_msg_too_large) {
+           /* data exceeded limit; fd kernel buffer still holds the bytes */
+       }
+
+SEE ALSO
+       ccol_select, ccol_select_timed, ccol_select_va, ccol_select_timed_va,
+       selectable_from_circq, selectable_from_dynq, selectable_from_chan
+
+------------------------------------------------------------------------------
+NAME
+       ccol_select_va - wait for a message on an inline list of selectables
+       (convenience macro)
+
+SYNOPSIS
+       #include <cthreadcomm.h>
+
+       ccol_select_va(buf, ready_index, ...);
+       ccol_select_timed_va(buf, ready_index, timeout_ms, ...);
+
+DESCRIPTION
+       ccol_select_va() builds a ccol_selectable array from the variadic arguments,
+       computes the element count at compile time, and forwards everything to
+       ccol_select().
+
+       ccol_select_timed_va() does the same but calls ccol_select_timed() with the
+       given timeout_ms (milliseconds; -1 = infinite, 0 = poll, positive = deadline).
+
+       Each variadic argument must be a ccol_selectable value, typically produced
+       by selectable_from_circq(), selectable_from_dynq(), selectable_from_chan(),
+       or selectable_from_fd() with a ccol_select_read or ccol_select_write dir.
+       All arguments are evaluated exactly once.
+
+       The macros expand to GCC/Clang statement expressions and yield a value
+       of type ccol_retval_t, so they can be used in assignments and conditions.
+
+PARAMETERS
+       buf          c_message_t * to receive the message.  On ccol_success the
+                    caller owns buf->data.
+       ready_index  size_t * set to the 0-based index of the ready selectable.
+                    Valid only when ccol_success is returned.
+       timeout_ms   (ccol_select_timed_va only) milliseconds to wait; -1 = infinite.
+       ...          One or more ccol_selectable values.  At least one is required.
+
+RETURN VALUE
+       ccol_success            Message received.  *ready_index set; caller frees
+                               buf->data.
+       ccol_timed_out          (ccol_select_timed_va only) deadline elapsed without
+                               any selectable becoming ready.
+       ccol_invalid_args       Any argument is NULL/zero, or a selectable contains a
+                               NULL queue pointer or unknown type tag.
+       ccol_not_enough_memory  Waiter-node allocation failed (one node per selectable).
+       ccol_msg_too_large      An fd selectable read exceeded its max_fd_read_bytes limit;
+                               buf is left untouched; *ready_index IS set to the offending
+                               fd's index; some or all fd bytes may already be consumed.
+       ccol_unexpected_failure epoll/eventfd setup or the internal fd read(2) failed.
+
+WARNINGS
+       Uses a GCC/Clang statement expression (__extension__({ ... })).  Not
+       valid under strict ISO C (-pedantic).  Compiles cleanly with -Wall
+       -Wextra -Werror on both GCC and Clang without -pedantic.
+
+NOTES
+       The selectable array is a compound literal on the stack; no heap
+       allocation occurs beyond that already performed by ccol_select_timed().
+
+EXAMPLES
+       c_message_t msg;
+       size_t idx;
+
+       /* Two circular queues and a channel, all read-wait: */
+       ccol_retval_t r = ccol_select_va(&msg, &idx,
+           selectable_from_circq(q0, ccol_select_read),
+           selectable_from_circq(q1, ccol_select_read),
+           selectable_from_chan(ch, ccol_select_read));
+       if (r == ccol_success) {
+           printf("ready selectable: %zu\n", idx);
+           free(msg.data);
+       }
+
+       /* Mixed: write-wait on q0, read-wait on ch: */
+       c_message_t dummy = {0};
+       ccol_select_va(&dummy, &idx,
+           selectable_from_circq(q0, ccol_select_write),
+           selectable_from_chan(ch, ccol_select_read));
+
+       /* Timed wait with 200 ms deadline: */
+       r = ccol_select_timed_va(&msg, &idx, 200,
+           selectable_from_circq(q0, ccol_select_read));
+       if (r == ccol_timed_out) {
+           puts("no message within 200 ms");
+       }
+
+SEE ALSO
+       ccol_select, ccol_select_timed, selectable_from_circq,
+       selectable_from_dynq, selectable_from_chan, selectable_from_fd,
+       selectable_from_fd_limited, _selectable_from_chan
+
 ================================================================================
                        CSTRING.H - DYNAMIC STRING
 ================================================================================

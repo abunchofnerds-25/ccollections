@@ -7,22 +7,23 @@ A library of generic, type-safe data structures for C, built on C11 and GNU C ex
 ## Table of Contents
 
 1. [Rationale](#1-rationale)
-2. [Design Principles](#2-design-principles)
-   - [Type Safety Without Code Generation](#21-type-safety-without-code-generation)
-   - [Container Lifecycle Macros](#22-container-lifecycle-macros)
-   - [Cross-Scope Type Recovery](#23-cross-scope-type-recovery)
-   - [Error Handling](#24-error-handling)
-3. [Building and Linking](#3-building-and-linking)
-4. [Dynamic Array — `cvector`](#4-dynamic-array--cvector)
-5. [Dynamic String — `cstring`](#5-dynamic-string--cstring)
-6. [Sorting — `csort`](#6-sorting--csort)
-7. [Hash Map — `chashmap`](#7-hash-map--chashmap)
-8. [Ordered Map — `cbstmap`](#8-ordered-map--cbstmap)
-9. [Memory Pools — `cmempool`](#9-memory-pools--cmempool)
-10. [Thread Communication — `cthreadcomm`](#10-thread-communication--cthreadcomm)
-11. [Thread Safety](#11-thread-safety)
-12. [Custom Memory Management](#12-custom-memory-management)
-13. [License](#13-license)
+2. [Alternatives Considered](#2-alternatives-considered)
+3. [Design Principles](#3-design-principles)
+   - [Type Safety Without Code Generation](#31-type-safety-without-code-generation)
+   - [Container Lifecycle Macros](#32-container-lifecycle-macros)
+   - [Cross-Scope Type Recovery](#33-cross-scope-type-recovery)
+   - [Error Handling](#34-error-handling)
+4. [Building and Linking](#4-building-and-linking)
+5. [Dynamic Array — `cvector`](#5-dynamic-array--cvector)
+6. [Dynamic String — `cstring`](#6-dynamic-string--cstring)
+7. [Sorting — `csort`](#7-sorting--csort)
+8. [Hash Map — `chashmap`](#8-hash-map--chashmap)
+9. [Ordered Map — `cbstmap`](#9-ordered-map--cbstmap)
+10. [Memory Pools — `cmempool`](#10-memory-pools--cmempool)
+11. [Thread Communication — `cthreadcomm`](#11-thread-communication--cthreadcomm)
+12. [Thread Safety](#12-thread-safety)
+13. [Custom Memory Management](#13-custom-memory-management)
+14. [License](#14-license)
 
 ---
 
@@ -36,9 +37,25 @@ The library is not a minimalist experiment. It covers the data structures needed
 
 ---
 
-## 2. Design Principles
+## 2. Alternatives Considered
 
-### 2.1 Type Safety Without Code Generation
+Several well-established libraries provide generic data structures for C programs. Understanding the motivation for this library requires understanding what each alternative offers and where its design constraints create friction in certain contexts.
+
+**GLib.** The GNOME utility library provides a comprehensive set of containers — `GHashTable`, `GArray`, `GPtrArray`, `GList`, `GTree` — and is mature, extensively tested, and widely deployed. Its primary trade-off is that all interfaces accept `gpointer` (a typedef for `void *`), so type information is absent at the call site. Correct usage requires explicit casts, and type errors manifest at runtime rather than at compile time. GLib is also a substantial dependency: importing it for its data structures alone introduces a large runtime with its own threading model, type system, and object hierarchy. For projects already built on GTK or GNOME infrastructure this cost is already paid, but for a self-contained systems library it represents significant overhead.
+
+**uthash.** Troy Hanson's single-header hash table is zero-dependency and widely used in embedded and systems code. Its design is intrusive: a hash handle is embedded directly in the user's struct, and the map is accessed via a pointer to that struct. This eliminates separate allocation for key/value pairs and gives very low overhead, but it constrains the data model — a struct can participate in only one uthash table unless multiple handles are embedded manually. While string keys are supported natively, other key types require additional macro boilerplate. uthash also covers only the hash table use case; it does not address ordered maps, dynamic strings, memory pools, or inter-thread communication.
+
+**klib.** Heng Li's klib takes a philosophy similar in spirit to this library: generic containers implemented entirely in C headers using macros. `kvec` and `khash` are efficient and appear in performance-sensitive open-source code. The key distinction is that klib uses preprocessor token-pasting to generate a new family of typed functions for each instantiation (`KHASH_MAP_INIT_INT`, `KHASH_MAP_INIT_STR`, and similar). Adding a new key/value type combination requires an explicit instantiation declaration; there is no mechanism to infer or dispatch on type automatically at the call site. The library covers hash maps and dynamic arrays but does not provide ordered maps, dynamic strings, memory pools, or threading primitives.
+
+**stb_ds.** Sean Barrett's `stb_ds.h` provides hash maps and dynamic arrays in a single-header, zero-dependency style valued for its simplicity and portability. Internally, values are accessed through typed pointer casts over `void *` storage, and type consistency is the caller's responsibility. The library does not cover ordered maps, dynamic strings, memory pools, or inter-thread messaging, and it provides no mechanism for automatic cleanup or custom allocator injection.
+
+**Where this library differs.** The design goal was a library that satisfies four requirements simultaneously: compile-time type awareness at the call site without code generation or external tools; a uniform macro API across all container kinds so that learning one container transfers immediately to the next; structural integration between components — any container can be backed by a memory pool using a common allocator interface; and thread communication primitives that follow the same ownership and lifecycle model as the rest of the library. No single library in common use addresses all four of these requirements together. The trade-off is a dependency on a C11-capable compiler with GNU extensions, and `_Generic` expressions that produce verbose error messages when an unsupported type is supplied — constraints that are acceptable in the contexts for which this library was designed.
+
+---
+
+## 3. Design Principles
+
+### 3.1 Type Safety Without Code Generation
 
 Every container macro inspects its argument with `_Generic` at the call site and records a `ccol_data_type` enum in the container's header struct. This enum drives all subsequent type-dependent decisions at runtime:
 
@@ -49,7 +66,7 @@ Every container macro inspects its argument with `_Generic` at the call site and
 
 The key macros are defined in `include/common.h`: `is_integral_type()`, `is_char_ptr()`, `is_char_array()`, and `determine_ccol_data_type()`.
 
-### 2.2 Container Lifecycle Macros
+### 3.2 Container Lifecycle Macros
 
 All containers follow a three-level macro hierarchy that separates declaration, initialisation, and the combination of both:
 
@@ -73,7 +90,7 @@ void process(void) {
 }
 ```
 
-### 2.3 Cross-Scope Type Recovery
+### 3.3 Cross-Scope Type Recovery
 
 The type-dispatching macros rely on a hidden companion variable created by `*_declare` or `*_construct`. When a container is passed across a function boundary, this variable is not present in the new scope. The `*_redeclare` macro re-establishes it, allowing all type-safe macros to function correctly:
 
@@ -94,7 +111,7 @@ int main(void) {
 
 Omitting `*_redeclare` before using a type-dispatching macro in a new scope is the most common source of mistakes when working with this library.
 
-### 2.4 Error Handling
+### 3.4 Error Handling
 
 Functions return `ccol_retval_t`, an enum whose value zero indicates success and whose negative values indicate specific failure conditions:
 
@@ -118,7 +135,7 @@ The convenience macros call `fatal_err()` on unrecoverable failures—caller bug
 
 ---
 
-## 3. Building and Linking
+## 4. Building and Linking
 
 Clone the repository and run `make` to produce `libccollections.so` and a demonstration binary:
 
@@ -163,7 +180,7 @@ The compiler must support C11 and GNU extensions (`-std=gnu11`). The library com
 
 ---
 
-## 4. Dynamic Array — `cvector`
+## 5. Dynamic Array — `cvector`
 
 `cvector` is a heap-allocated, automatically resizing array. It provides amortised O(1) insertion at the end, O(1) indexed access, and stable O(n log n) sorting. A vector maintains a minimum capacity of four elements, doubles its allocation when full, and halves it when occupancy drops below one quarter.
 
@@ -175,10 +192,15 @@ The compiler must support C11 and GNU extensions (`-std=gnu11`). The library com
 /* Construct a vector of integers */
 cvec_construct(scores, int);
 
-/* Push values */
+/* Push rvalues */
 cvec_push_rvalue(scores, 95);
 cvec_push_rvalue(scores, 82);
 cvec_push_rvalue(scores, 78);
+/* Push lvalues */
+int val = 87;
+cvec_push(scores, val);
+val = 98;
+cvec_push(scores, val);
 
 /* Index-based access — cvec_at returns a modifiable lvalue */
 printf("First score: %d\n", cvec_at(scores, 0));
@@ -235,24 +257,46 @@ void compute(void) {
 
 ### Reference: Core Operations
 
-| Macro / Function | Description |
+**Lifecycle**
+
+| Macro | Description |
 |---|---|
-| `cvec_construct(v, T)` | Declare and initialise |
-| `cvec_construct_scoped(v, T)` | Declare, initialise, and register auto-cleanup |
-| `cvec_construct_mp(v, T, mprocs)` | Declare and initialise with custom allocator |
-| `cvec_push(v, var)` | Append an lvalue |
-| `cvec_push_rvalue(v, expr)` | Append an rvalue or expression |
-| `cvec_pop(v)` | Remove and return the last element |
-| `cvec_at(v, i)` | Access element at index `i` (modifiable lvalue) |
-| `cvec_size(v)` | Number of elements currently stored |
-| `cvec_sort(v)` | Sort in place using the default comparator |
-| `cvector_sort_with_comparison_proc(v, cmp)` | Sort with a custom comparator |
-| `cvec_reset(v)` | Remove all elements and reset capacity |
+| `cvec_declare(v, T)` | Declare the variable without initialising it |
+| `cvec_declare_scoped(v, T)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
+| `cvec_redeclare(v, T)` | Restore type information in a new scope after passing the vector across a function boundary |
+| `cvec_init(v)` | Initialise a previously declared vector using the default allocator; calls `fatal_err()` on failure |
+| `cvec_init_mp(v, mprocs)` | Initialise a previously declared vector with a custom allocator; calls `fatal_err()` on failure |
+| `cvec_construct(v, T)` | Declare and initialise in one step using the default allocator |
+| `cvec_construct_scoped(v, T)` | Declare, initialise, and register auto-cleanup using the default allocator |
+| `cvec_construct_mp(v, T, mprocs)` | Declare and initialise with a custom allocator |
+| `cvec_construct_mp_scoped(v, T, mprocs)` | Declare, initialise with a custom allocator, and register auto-cleanup |
+| `cvec_reset(v)` | Remove all elements and shrink capacity back to the minimum (4 elements) |
 | `cvec_destroy(v)` | Destroy and set pointer to `NULL` |
+
+**Element Access and Modification**
+
+| Macro | Description |
+|---|---|
+| `cvec_push(v, var)` | Append a copy of an lvalue; calls `fatal_err()` on failure |
+| `cvec_push_rvalue(v, expr)` | Append an rvalue or expression (literal, computed value); calls `fatal_err()` on failure |
+| `cvec_pop(v)` | Remove and return the last element as a value; calls `fatal_err()` if the vector is empty |
+| `cvec_at(v, i)` | Return a modifiable lvalue reference to the element at index `i`; no bounds checking |
+| `cvec_size(v)` | Return the number of elements currently stored |
+| `cvec_reserve(v, n)` | Pre-allocate capacity for at least `n` elements; calls `fatal_err()` on failure |
+| `cvec_data_ptr(v)` | Return a raw pointer to the internal data array; invalidated by any resize |
+
+**Bulk Operations and Sorting**
+
+| Macro | Description |
+|---|---|
+| `cvec_append_array(v, arr_ptr, count)` | Append `count` elements from a plain C array in a single operation; calls `fatal_err()` on failure |
+| `cvec_append_cvec(v_dst, v_src)` | Append all elements of `v_src` to `v_dst`; both must have the same element type; calls `fatal_err()` on failure |
+| `cvec_sort(v)` | Sort in place using the default comparator for the element type |
+| `cvector_sort_with_comparison_proc(v, cmp)` | Sort in place using a caller-supplied comparator (`int cmp(const void *, const void *)`) |
 
 ---
 
-## 5. Dynamic String — `cstring`
+## 6. Dynamic String — `cstring`
 
 `cstring` is a heap-allocated string with automatic capacity management. Its internal buffer always holds a null-terminated C string, making it directly compatible with standard library functions. Capacity grows to the next power of two on demand, with a minimum of 16 bytes.
 
@@ -340,9 +384,68 @@ cstr_destroy(key);
 chmap_destroy(map);
 ```
 
+### Reference: Core Operations
+
+**Lifecycle**
+
+| Macro / Function | Description |
+|---|---|
+| `cstr_declare(s)` | Declare the variable without initialising it |
+| `cstr_declare_scoped(s)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
+| `cstr_init(s, initial)` | Initialise a previously declared string; `initial` may be a C string or `NULL` for empty; calls `fatal_err()` on failure |
+| `cstr_init_mp(s, initial, mprocs)` | Initialise a previously declared string with a custom allocator; calls `fatal_err()` on failure |
+| `cstr_construct(s, initial)` | Declare and initialise in one step using the default allocator |
+| `cstr_construct_scoped(s, initial)` | Declare, initialise, and register auto-cleanup |
+| `cstr_construct_mp(s, initial, mprocs)` | Declare and initialise with a custom allocator |
+| `cstr_construct_mp_scoped(s, initial, mprocs)` | Declare, initialise with a custom allocator, and register auto-cleanup |
+| `cstr_reserve(s, cap)` | Pre-allocate at least `cap` bytes (rounded up to next power of two, minimum 16); calls `fatal_err()` on failure |
+| `cstr_reset(s)` | Clear all characters and shrink capacity back to the minimum |
+| `cstr_destroy(s)` | Destroy and set pointer to `NULL` |
+
+**Query**
+
+| Macro / Function | Description |
+|---|---|
+| `cstr_length(s)` | Return the number of characters, excluding the null terminator |
+| `cstr_c_str(s)` | Return a read-only pointer to the null-terminated internal buffer; invalidated by any mutating operation |
+| `cstr_at(s, idx)` | Return the character at zero-based index `idx`; returns `'\0'` if out of bounds |
+| `cstr_is_empty(s)` | Return `true` if the string contains no characters |
+
+**Modification**
+
+| Macro / Function | Description |
+|---|---|
+| `cstr_append(s, str)` | Append C string `str` to the end; calls `fatal_err()` on failure |
+| `cstr_prepend(s, str)` | Prepend C string `str` to the beginning; calls `fatal_err()` on failure |
+| `cstr_insert(s, pos, str)` | Insert C string `str` at zero-based position `pos`; calls `fatal_err()` on failure |
+| `cstr_set(s, str)` | Replace the entire content with C string `str`; calls `fatal_err()` on failure |
+| `cstr_to_upper(s)` | Convert all characters to uppercase in place |
+| `cstr_to_lower(s)` | Convert all characters to lowercase in place |
+| `cstr_trim(s)` | Strip leading and trailing whitespace in place (classified by `isspace()`) |
+| `cstr_replace(s, needle, replacement)` | Replace every non-overlapping occurrence of `needle` with `replacement`; calls `fatal_err()` on failure |
+
+**Search and Comparison**
+
+| Macro / Function | Description |
+|---|---|
+| `cstr_compare(s, str)` | Lexicographic comparison against C string `str`; semantics identical to `strcmp()` |
+| `cstr_equals(s, str)` | Return `true` if the content equals C string `str` |
+| `cstr_starts_with(s, prefix)` | Return `true` if the string begins with `prefix`; empty prefix always matches |
+| `cstr_ends_with(s, suffix)` | Return `true` if the string ends with `suffix`; empty suffix always matches |
+| `cstr_find(s, needle)` | Return the zero-based index of the first occurrence of `needle`, or `ccol_invalid_size` if not found |
+| `cstr_rfind(s, needle)` | Return the zero-based index of the last occurrence of `needle`, or `ccol_invalid_size` if not found |
+
+**Derived Strings**
+
+| Macro / Function | Description |
+|---|---|
+| `cstr_substring(s, start, len)` | Create and return a new `cstr` containing `len` characters starting at `start`; range is clamped to string bounds; caller must destroy the result; calls `fatal_err()` on failure |
+| `cstr_copy(s, err)` | Create and return an independent copy of the string; caller must destroy the result |
+| `cstr_split(s, delim, err)` | Tokenise the string by `delim` and return a `cvec` of `cstr` values; caller must destroy each token and then the vector |
+
 ---
 
-## 6. Sorting — `csort`
+## 7. Sorting — `csort`
 
 `csort` provides a stable, iterative bottom-up mergesort. It operates on any collection type through a getter abstraction, and provides default comparators for all standard C arithmetic types selected via `_Generic`. The integration with `cvector` is the most common usage path.
 
@@ -387,7 +490,7 @@ csort_sort(people, 3, sizeof(Person), person_getter, compare_by_age, NULL);
 
 ---
 
-## 7. Hash Map — `chashmap`
+## 8. Hash Map — `chashmap`
 
 `chashmap` is an associative container with O(1) average-case insertion, lookup, and deletion. A distinctive feature is that it selects one of two internal implementations at compile time, based on the types of the key and value.
 
@@ -415,9 +518,8 @@ int id = 42;
 long count = 1000;
 chmap_insert(counters, id, count);
 
-char *word = "hello";
 int freq = 5;
-chmap_insert(index, word, freq);
+chmap_insert(index, "hello", freq);
 
 /* Retrieval */
 int lookup = 42;
@@ -454,7 +556,7 @@ for (it = chmap_begin(index); it != NULL; it = chmap_iter_next(it)) {
 }
 ```
 
-Iteration order is unspecified for both implementations.
+Iteration order differs by implementation: separate chaining iterates in insertion order via its internal doubly-linked list; open-addressing iterates in slot order, which is neither insertion order nor sorted order.
 
 ### Example: Word Frequency Count
 
@@ -504,9 +606,55 @@ chmap_for_each(coords, it, {
 chmap_destroy(coords);
 ```
 
+### Reference: Core Operations
+
+**Lifecycle**
+
+| Macro | Description |
+|---|---|
+| `chmap_declare(m, K, V)` | Declare the variable without initialising it |
+| `chmap_declare_scoped(m, K, V)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
+| `chmap_redeclare(m, K, V)` | Restore type information in a new scope after passing the map across a function boundary |
+| `chmap_init(m)` | Initialise a previously declared map using the default allocator and default hash; calls `fatal_err()` on failure |
+| `chmap_init_mp(m, mprocs)` | Initialise with a custom allocator and default hash; calls `fatal_err()` on failure |
+| `chmap_init_ch(m, hash_fn)` | Initialise with the default allocator and a custom hash function; calls `fatal_err()` on failure |
+| `chmap_init_full(m, mprocs, hash_fn)` | Initialise with a custom allocator and a custom hash function; calls `fatal_err()` on failure |
+| `chmap_construct(m, K, V)` | Declare and initialise in one step using the default allocator and default hash |
+| `chmap_construct_scoped(m, K, V)` | Declare, initialise, and register auto-cleanup |
+| `chmap_construct_mp(m, K, V, mprocs)` | Declare and initialise with a custom allocator |
+| `chmap_construct_mp_scoped(m, K, V, mprocs)` | Declare, initialise with a custom allocator, and register auto-cleanup |
+| `chmap_construct_ch(m, K, V, hash_fn)` | Declare and initialise with a custom hash function |
+| `chmap_construct_ch_scoped(m, K, V, hash_fn)` | Declare, initialise with a custom hash function, and register auto-cleanup |
+| `chmap_construct_full(m, K, V, mprocs, hash_fn)` | Declare and initialise with a custom allocator and a custom hash function |
+| `chmap_construct_full_scoped(m, K, V, mprocs, hash_fn)` | Declare, initialise with a custom allocator and a custom hash function, and register auto-cleanup |
+| `chmap_reset(m, new_size)` | Remove all entries and resize the bucket array to `new_size`; pass `0` to keep the current bucket count |
+| `chmap_destroy(m)` | Destroy and set pointer to `NULL` |
+
+**Element Operations**
+
+| Macro / Function | Description |
+|---|---|
+| `chmap_insert(m, key, val)` | Insert or update (upsert); keys and values must be lvalues; calls `fatal_err()` on non-key-collision failure |
+| `chmap_get(m, key)` | Return the value associated with `key`; calls `fatal_err()` if the key is absent |
+| `chmap_get_ptr(m, key)` | Return a pointer to the value, or `NULL` if the key is absent; pointer is invalidated by any subsequent insert, remove, or resize |
+| `chmap_remove(m, key)` | Remove the entry for `key`; returns `ccol_success` or `ccol_key_not_found` |
+| `chmap_elem_count(m)` | Return the number of entries currently stored |
+
+**Iteration**
+
+| Macro / Function | Description |
+|---|---|
+| `chmap_for_each(m, it, { })` | Recommended iteration pattern; declares the iterator in its own scope and traverses all entries |
+| `chmap_iter_declare(m, it)` | Declare a manual iterator variable; required before using `chmap_begin` in a `for` loop |
+| `chmap_begin(m)` | Return an iterator positioned at the first entry, or `NULL` if the map is empty; calls `fatal_err()` on allocation failure |
+| `chmap_iter_next(it)` | Advance to the next entry; returns `NULL` at the end and automatically destroys the iterator |
+| `chmap_iter_key_ptr(it)` | Return a typed pointer to the current entry's key |
+| `chmap_iter_val_ptr(it)` | Return a typed pointer to the current entry's value; the value may be modified in place |
+| `chmap_iter_destroy(it)` | Destroy a manual iterator before it reaches the end; sets pointer to `NULL` |
+
 ---
 
-## 8. Ordered Map — `cbstmap`
+## 9. Ordered Map — `cbstmap`
 
 `cbstmap` is an associative container implemented as a fully iterative (non-recursive) AVL tree. It maintains keys in sorted order and provides O(log n) insertion, deletion, and lookup. In-order iteration visits entries from smallest to largest key.
 
@@ -601,9 +749,55 @@ cbmap_insert(env, k, "/usr/local/bin:/usr/bin");
 cbmap_destroy(env);
 ```
 
+### Reference: Core Operations
+
+**Lifecycle**
+
+| Macro | Description |
+|---|---|
+| `cbmap_declare(m, K, V)` | Declare the variable without initialising it |
+| `cbmap_declare_scoped(m, K, V)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
+| `cbmap_redeclare(m, K, V)` | Restore type information in a new scope after passing the map across a function boundary |
+| `cbmap_init(m)` | Initialise a previously declared map using the default allocator and automatic key comparison; calls `fatal_err()` on failure |
+| `cbmap_init_mp(m, mprocs)` | Initialise with a custom allocator and automatic key comparison; calls `fatal_err()` on failure |
+| `cbmap_init_cc(m, cmp_fn)` | Initialise with the default allocator and a custom comparison function; calls `fatal_err()` on failure |
+| `cbmap_init_full(m, mprocs, cmp_fn)` | Initialise with a custom allocator and a custom comparison function; calls `fatal_err()` on failure |
+| `cbmap_construct(m, K, V)` | Declare and initialise in one step; key comparison is selected automatically from the key type |
+| `cbmap_construct_scoped(m, K, V)` | Declare, initialise, and register auto-cleanup |
+| `cbmap_construct_mp(m, K, V, mprocs)` | Declare and initialise with a custom allocator |
+| `cbmap_construct_mp_scoped(m, K, V, mprocs)` | Declare, initialise with a custom allocator, and register auto-cleanup |
+| `cbmap_construct_cc(m, K, V, cmp_fn)` | Declare and initialise with a custom comparison function; required for key types that are not natively supported |
+| `cbmap_construct_cc_scoped(m, K, V, cmp_fn)` | Declare, initialise with a custom comparison function, and register auto-cleanup |
+| `cbmap_construct_full(m, K, V, mprocs, cmp_fn)` | Declare and initialise with a custom allocator and a custom comparison function |
+| `cbmap_construct_full_scoped(m, K, V, mprocs, cmp_fn)` | Declare, initialise with a custom allocator and a custom comparison function, and register auto-cleanup |
+| `cbmap_reset(m)` | Remove all entries; the tree structure remains valid for reuse |
+| `cbmap_destroy(m)` | Destroy and set pointer to `NULL` |
+
+**Element Operations**
+
+| Macro / Function | Description |
+|---|---|
+| `cbmap_insert(m, key, val)` | Insert or update (upsert); keys and values must be lvalues; tree is rebalanced automatically; calls `fatal_err()` on non-key-collision failure |
+| `cbmap_get(m, key)` | Return the value associated with `key`; calls `fatal_err()` if the key is absent; O(log n) |
+| `cbmap_get_ptr(m, key)` | Return a pointer to the value, or `NULL` if the key is absent; pointer is invalidated by any subsequent insert or remove; O(log n) |
+| `cbmap_remove(m, key)` | Remove the entry for `key`; tree is rebalanced automatically; returns `ccol_success` or `ccol_key_not_found`; O(log n) |
+| `cbmap_elem_count(m)` | Return the number of entries currently stored |
+
+**Iteration**
+
+| Macro / Function | Description |
+|---|---|
+| `cbmap_for_each(m, it, { })` | Recommended iteration pattern; declares the iterator in its own scope and traverses all entries in ascending key order |
+| `cbmap_iter_declare(m, it)` | Declare a manual iterator variable; required before using `cbmap_begin` in a `for` loop |
+| `cbmap_begin(m)` | Return an iterator positioned at the entry with the smallest key, or `NULL` if the map is empty |
+| `cbmap_iter_next(it)` | Advance to the next entry in sorted key order; returns `NULL` at the end and automatically destroys the iterator |
+| `cbmap_iter_key_ptr(it)` | Return a typed pointer to the current entry's key |
+| `cbmap_iter_val_ptr(it)` | Return a typed pointer to the current entry's value; the value may be modified in place |
+| `cbmap_iter_destroy(it)` | Destroy a manual iterator before it reaches the end; sets pointer to `NULL` |
+
 ---
 
-## 9. Memory Pools — `cmempool`
+## 10. Memory Pools — `cmempool`
 
 The library provides two pool allocators: a fixed-size pool (`mempool`) and a ranged pool (`r_mempool`). Both offer O(1) allocation and deallocation, optional thread safety, and an optional fallback to the system allocator when the pool is exhausted.
 
@@ -665,7 +859,9 @@ The following table illustrates the structure produced by `r_mempool_create(4, 1
 
 ```c
 r_mempool *rpool = r_mempool_create(
-    4, 12, 9,
+    4,  /* smallest_size_power_of_two */
+    12, /* largest_size_power_of_two */
+    9,  /* number_of_smallest_size_elems_power_of_two */
     fallback_at_last_exhaustion,  /* Fall back to malloc when a sub-pool is full */
     /*single_threaded=*/false,
     NULL,   /* Use default allocator */
@@ -684,13 +880,34 @@ r_mempool_free_entry(large);
 r_mempool_destroy(rpool);
 ```
 
+#### Pre-allocated Buffer (Embedded and Real-Time Contexts)
+
+For contexts where heap allocation must be avoided entirely, a ranged pool, too, can be constructed from a statically declared buffer:
+
+```c
+DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(rmempool_buf, /* pool buffer name */
+    4,  /* smallest_size_power_of_two */
+    12, /* largest_size_power_of_two */
+    9,  /* number_of_smallest_size_elems_power_of_two */);
+
+mempool *pool = r_mempool_create_from_preallocated_buffer(
+    rmempool_buf, sizeof(rmempool_buf), 4, 12, 9,
+    fallback_at_last_exhaustion, /*single_threaded=*/true,
+    NULL, NULL);
+
+void *slot = r_mempool_alloc_entry(pool, 100);
+/* ... */
+r_mempool_free_entry(slot);
+r_mempool_destroy(pool);  /* The buffer itself is not freed */
+```
+
 ### Driving Other Containers from a Pool
 
-Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 12](#12-custom-memory-management) for the complete pattern.
+Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 13](#13-custom-memory-management) for the complete pattern.
 
 ---
 
-## 10. Thread Communication — `cthreadcomm`
+## 11. Thread Communication — `cthreadcomm`
 
 The thread communication module provides three primitives for safe message passing between threads: a bounded circular queue, an unbounded dynamic queue, and a bidirectional channel. All three use a zero-copy ownership transfer model: the sender's pointer is set to `NULL` on a successful send, and the receiver becomes the sole owner of the data.
 
@@ -890,7 +1107,7 @@ ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
 
 ---
 
-## 11. Thread Safety
+## 12. Thread Safety
 
 ### Intentionally Unguarded Containers
 
@@ -945,7 +1162,7 @@ The following components include their own synchronisation and are safe to use f
 
 ---
 
-## 12. Custom Memory Management
+## 13. Custom Memory Management
 
 Every container accepts a `ccol_memmgmt_procs_t *` at creation time. Passing `NULL` selects the standard `malloc`/`calloc`/`realloc`/`free` family.
 
@@ -1006,7 +1223,7 @@ r_mempool_destroy(node_pool);
 
 ---
 
-## 13. License
+## 14. License
 
 MIT License
 

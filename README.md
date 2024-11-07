@@ -21,9 +21,10 @@ A library of generic, type-safe data structures for C, built on C11 and GNU C ex
 9. [Ordered Map — `cbstmap`](#9-ordered-map--cbstmap)
 10. [Memory Pools — `cmempool`](#10-memory-pools--cmempool)
 11. [Thread Communication — `cthreadcomm`](#11-thread-communication--cthreadcomm)
-12. [Thread Safety](#12-thread-safety)
-13. [Custom Memory Management](#13-custom-memory-management)
-14. [License](#14-license)
+12. [LRU Cache — `clrucache`](#12-lru-cache--clrucache)
+13. [Thread Safety](#13-thread-safety)
+14. [Custom Memory Management](#14-custom-memory-management)
+15. [License](#15-license)
 
 ---
 
@@ -903,7 +904,7 @@ r_mempool_destroy(pool);  /* The buffer itself is not freed */
 
 ### Driving Other Containers from a Pool
 
-Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 13](#13-custom-memory-management) for the complete pattern.
+Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 14](#14-custom-memory-management) for the complete pattern.
 
 ---
 
@@ -1107,7 +1108,157 @@ ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
 
 ---
 
-## 12. Thread Safety
+## 12. LRU Cache — `clrucache`
+
+`clrucache` is a fully thread-safe generic LRU (Least-Recently-Used) cache backed by a hash map for O(1) lookup and a doubly-linked list for O(1) eviction. When the cache is full, inserting a new entry evicts the least-recently-used live entry first, optionally notifying the caller via an eviction callback. An optional remote getter and setter integrate the cache transparently with an external backing store — a database, a network service, or any other source.
+
+**Header:** `#include <clrucache.h>`
+
+### Concurrency Guarantees
+
+All operations are serialised via a single global mutex combined with per-entry condition variables. The key properties are:
+
+- Multiple threads requesting the same uncached key coalesce: exactly one remote fetch executes; all others block and receive the same result when it completes.
+- A getter for a key that is currently being set blocks until the set completes, so it always reads a consistent value.
+- Multiple setters for the same key are serialised.
+
+The eviction callback is invoked while the cache mutex is held. It **must not** call back into the cache.
+
+### Basic Usage
+
+```c
+/* Cache mapping int keys to double values, capacity 128 */
+clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+/* Store a value */
+int k = 42;
+double v = 3.14;
+clru_set(cache, k, v);
+
+/* Retrieve a value */
+double out;
+if (clru_get(cache, k, &out, sizeof(out)) == ccol_success) {
+    printf("%.2f\n", out);
+}
+
+clru_destroy(cache);
+```
+
+### Remote Getter — Read-Through
+
+A remote getter is called on a cache miss. The cache takes ownership of the heap-allocated value returned by the getter. Concurrent requests for the same missing key coalesce: only one fetch executes, and all waiters receive the result.
+
+```c
+void *load_from_db(const void *key, size_t key_size, size_t *val_size_out) {
+    double *result = malloc(sizeof(double));
+    if (!result) return NULL;
+    *result = /* ... query database ... */;
+    *val_size_out = sizeof(double);
+    return result;
+}
+
+clru_construct(cache, int, double, 256, load_from_db, NULL, NULL);
+
+int k = 7;
+double val;
+/* On a miss, load_from_db is called exactly once regardless of concurrent threads */
+if (clru_get(cache, k, &val, sizeof(val)) == ccol_success) {
+    printf("%.2f\n", val);
+}
+
+clru_destroy(cache);
+```
+
+### Remote Setter — Write-Through
+
+A remote setter is called synchronously before the cache is updated. If the remote call fails, the cache is not updated and `clru_set` returns `ccol_unexpected_failure`.
+
+```c
+bool write_to_db(const void *key, size_t key_size,
+                 const void *val, size_t val_size) {
+    return /* write key/value to external store */;
+}
+
+clru_construct(cache, int, double, 256, NULL, write_to_db, NULL);
+
+int k = 7;
+double v = 2.71;
+if (clru_set(cache, k, v) == ccol_unexpected_failure) {
+    /* remote write failed; cache is unchanged */
+}
+
+clru_destroy(cache);
+```
+
+### Eviction Callback
+
+```c
+void on_evict(const void *key, size_t key_size,
+              const void *val, size_t val_size) {
+    printf("evicted key=%d\n", *(const int *)key);
+    /* Must NOT call back into the cache — mutex is held */
+}
+
+clru_construct(cache, int, double, 4, NULL, NULL, on_evict);
+/* When the 5th unique key is inserted, the LRU entry is evicted */
+clru_destroy(cache);
+```
+
+### Cross-Scope Usage
+
+Pass the cache handle across function boundaries and use `clru_redeclare` to restore type information:
+
+```c
+void populate(clru_cache c) {
+    clru_redeclare(c, int, double);
+    int k = 1;
+    double v = 1.0;
+    clru_set(c, k, v);
+}
+
+int main(void) {
+    clru_construct(cache, int, double, 64, NULL, NULL, NULL);
+    populate(cache);
+    clru_destroy(cache);
+    return 0;
+}
+```
+
+### Scoped Variant
+
+```c
+void process(void) {
+    clru_construct_scoped(cache, int, double, 64, NULL, NULL, NULL);
+    /* cache is destroyed automatically when the function returns */
+}
+```
+
+### Reference: Core Operations
+
+**Lifecycle**
+
+| Macro / Function | Description |
+|---|---|
+| `clru_declare(name, KeyT, ValT)` | Declare the cache variable and companion type variables without initialising |
+| `clru_declare_scoped(name, KeyT, ValT)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
+| `clru_redeclare(name, KeyT, ValT)` | Restore type information in a new scope after passing the cache across a function boundary |
+| `clru_init(name, capacity, getter, setter, evict_cb)` | Initialise a previously declared cache; calls `fatal_err()` on failure |
+| `clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb)` | Declare and initialise in one step |
+| `clru_construct_scoped(name, KeyT, ValT, capacity, getter, setter, evict_cb)` | Declare, initialise, and register auto-cleanup |
+| `clru_destroy(name)` | Destroy the cache and set the pointer to `NULL` |
+| `clrucache_size(cache)` | Return the number of live entries currently stored |
+| `clrucache_capacity(cache)` | Return the configured capacity |
+
+**Get / Set**
+
+| Macro / Function | Description |
+|---|---|
+| `clru_get(name, key, val_buf, buf_sz)` | Copy the value for `key` into `val_buf`; returns `ccol_success`, `ccol_key_not_found`, or another error code |
+| `clru_set(name, key, val)` | Store `val` for `key`; if a remote setter was provided it is called first; returns `ccol_success` or `ccol_unexpected_failure` on remote failure |
+
+---
+
+## 13. Thread Safety
 
 ### Intentionally Unguarded Containers
 
@@ -1159,10 +1310,11 @@ The following components include their own synchronisation and are safe to use f
 | `circular_queue` | Always thread-safe |
 | `dynamic_queue` | Always thread-safe |
 | `channel` | Always thread-safe |
+| `clrucache` | Always thread-safe |
 
 ---
 
-## 13. Custom Memory Management
+## 14. Custom Memory Management
 
 Every container accepts a `ccol_memmgmt_procs_t *` at creation time. Passing `NULL` selects the standard `malloc`/`calloc`/`realloc`/`free` family.
 
@@ -1223,7 +1375,7 @@ r_mempool_destroy(node_pool);
 
 ---
 
-## 14. License
+## 15. License
 
 MIT License
 

@@ -384,14 +384,15 @@ cmap_iterator *chashmap_begin_iter(chmap chm, char **err);
  * @note Terminates program on allocation failure
  * @note Returns NULL if map is empty (normal case)
  */
-#define chmap_begin(chm)                                  \
-  ({                                                      \
-    char *err;                                            \
-    cmap_iterator *iter = chashmap_begin_iter(chm, &err); \
-    if (err != NULL) {                                    \
-      fatal_err("failed to create iterator: %s", err);    \
-    }                                                     \
-    iter;                                                 \
+#define chmap_begin(chm)                                                  \
+  ({                                                                      \
+    char *err;                                                            \
+    cmap_iterator *iter = chashmap_begin_iter(chm, &err);                 \
+    if (err != NULL) {                                                    \
+      fatal_err("chmap_begin('%s'): failed to create iterator: %s", #chm, \
+                err);                                                     \
+    }                                                                     \
+    iter;                                                                 \
   })
 
 /**
@@ -663,7 +664,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         custom_hashing_proc, &err);                                          \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -699,7 +701,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         custom_hashing_proc, &err);                                          \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -716,7 +719,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         custom_hashing_proc, &err);                                          \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -740,7 +744,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_key_type_var),        \
         determine_ccol_data_type(*hm_name##__chm_val_type_var), &err); \
     if (!hm_name) {                                                    \
-      fatal_err("%s", err);                                            \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,        \
+                err ? err : "unknown error");                          \
     }                                                                  \
   } while (0)
 
@@ -784,7 +789,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
         determine_ccol_data_type(*hm_name##__chm_val_type_var), &err);       \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -799,7 +805,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_key_type_var),              \
         determine_ccol_data_type(*hm_name##__chm_val_type_var), &err);       \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -824,7 +831,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         &err);                                                               \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -852,7 +860,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         &err);                                                               \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -868,7 +877,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_val_type_var), mmgmt_procs, \
         &err);                                                               \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -892,7 +902,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_val_type_var), \
         custom_hashing_proc, &err);                             \
     if (!hm_name) {                                             \
-      fatal_err("%s", err);                                     \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name, \
+                err ? err : "unknown error");                   \
     }                                                           \
   } while (0)
 
@@ -920,7 +931,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_val_type_var),              \
         custom_hashing_proc, &err);                                          \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -936,7 +948,8 @@ static inline void ___chmap_destroy(chmap *chm) {
         determine_ccol_data_type(*hm_name##__chm_val_type_var),               \
         custom_hashing_proc, &err);                                           \
     if (!hm_name) {                                                           \
-      fatal_err("%s", err);                                                   \
+      fatal_err("Failed to create hash map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                 \
     }                                                                         \
   } while (0)
 
@@ -977,7 +990,9 @@ static inline void ___chmap_destroy(chmap *chm) {
     _populate_cmap_pair(val_pair, val);                               \
     ccol_retval_t r = chmap_insert_elem(hm_name, key_pair, val_pair); \
     if (r != ccol_success && r != ccol_key_already_present) {         \
-      fatal_err("Failed to insert elem - r: %d", r);                  \
+      _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);        \
+      fatal_err("chmap_insert('%s'): r: %d (%s)", #hm_name, r,        \
+                ccol_retval_to_str(r));                               \
     }                                                                 \
   } while (0)
 
@@ -1039,26 +1054,30 @@ static inline void ___chmap_destroy(chmap *chm) {
  * char* val = chmap_get(map, 42); // val == "hello"
  * @endcode
  */
-#define chmap_get(hm_name, key)                                              \
-  ({                                                                         \
-    typeof(*hm_name##__chm_val_type_var) *val = NULL;                        \
-    cmap_pair *key_pair = &(cmap_pair){};                                    \
-    cmap_pair *val_pair = NULL;                                              \
-    _populate_cmap_pair(key_pair, key);                                      \
-    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);      \
-    if (r != ccol_success) {                                                 \
-      fatal_err("Failed to get elem ref - r: %d", r);                        \
-    }                                                                        \
-    if (is_char_ptr(*hm_name##__chm_val_type_var)) {                         \
-      val = (typeof(*hm_name##__chm_val_type_var) *)&(val_pair->ptr);        \
-    } else if (val_pair->size != sizeof(*val)) {                             \
-      fatal_err(                                                             \
-          "Failed to get elem ref - val_pair->size: %lu - sizeof(val): %lu", \
-          (unsigned long)val_pair->size, (unsigned long)sizeof(val));        \
-    } else {                                                                 \
-      val = (typeof(*hm_name##__chm_val_type_var) *)(val_pair->ptr);         \
-    }                                                                        \
-    *val;                                                                    \
+#define chmap_get(hm_name, key)                                             \
+  ({                                                                        \
+    typeof(*hm_name##__chm_val_type_var) *val = NULL;                       \
+    cmap_pair *key_pair = &(cmap_pair){};                                   \
+    cmap_pair *val_pair = NULL;                                             \
+    _populate_cmap_pair(key_pair, key);                                     \
+    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
+    if (r != ccol_success) {                                                \
+      _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);              \
+      fatal_err("chmap_get('%s'): r: %d (%s)", #hm_name, r,                 \
+                ccol_retval_to_str(r));                                     \
+    }                                                                       \
+    if (is_char_ptr(*hm_name##__chm_val_type_var)) {                        \
+      val = (typeof(*hm_name##__chm_val_type_var) *)&(val_pair->ptr);       \
+    } else if (val_pair->size != sizeof(*val)) {                            \
+      fatal_err(                                                            \
+          "chmap_get('%s'): value size mismatch — stored: %lu bytes, "      \
+          "requested: %lu bytes; wrong type or missing chmap_redeclare()?", \
+          #hm_name, (unsigned long)val_pair->size,                          \
+          (unsigned long)sizeof(*val));                                     \
+    } else {                                                                \
+      val = (typeof(*hm_name##__chm_val_type_var) *)(val_pair->ptr);        \
+    }                                                                       \
+    *val;                                                                   \
   })
 
 /**
@@ -1092,25 +1111,27 @@ static inline void ___chmap_destroy(chmap *chm) {
  * }
  * @endcode
  */
-#define chmap_get_ptr(hm_name, key)                                            \
-  ({                                                                           \
-    typeof(*hm_name##__chm_val_type_var) *val = NULL;                          \
-    cmap_pair *key_pair = &(cmap_pair){};                                      \
-    cmap_pair *val_pair = NULL;                                                \
-    _populate_cmap_pair(key_pair, key);                                        \
-    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);        \
-    if (r == ccol_success) {                                                   \
-      if (is_char_ptr(*hm_name##__chm_val_type_var)) {                         \
-        val = (typeof(*hm_name##__chm_val_type_var) *)&(val_pair->ptr);        \
-      } else if (val_pair->size != sizeof(*val)) {                             \
-        fatal_err(                                                             \
-            "Failed to get elem ref - val_pair->size: %lu - sizeof(val): %lu", \
-            (unsigned long)val_pair->size, (unsigned long)sizeof(val));        \
-      } else {                                                                 \
-        val = (typeof(*hm_name##__chm_val_type_var) *)(val_pair->ptr);         \
-      }                                                                        \
-    }                                                                          \
-    val;                                                                       \
+#define chmap_get_ptr(hm_name, key)                                           \
+  ({                                                                          \
+    typeof(*hm_name##__chm_val_type_var) *val = NULL;                         \
+    cmap_pair *key_pair = &(cmap_pair){};                                     \
+    cmap_pair *val_pair = NULL;                                               \
+    _populate_cmap_pair(key_pair, key);                                       \
+    ccol_retval_t r = chmap_get_elem_ref(hm_name, key_pair, &val_pair);       \
+    if (r == ccol_success) {                                                  \
+      if (is_char_ptr(*hm_name##__chm_val_type_var)) {                        \
+        val = (typeof(*hm_name##__chm_val_type_var) *)&(val_pair->ptr);       \
+      } else if (val_pair->size != sizeof(*val)) {                            \
+        fatal_err(                                                            \
+            "chmap_get_ptr('%s'): value size mismatch — stored: %lu bytes, "  \
+            "requested: %lu bytes; wrong type or missing chmap_redeclare()?", \
+            #hm_name, (unsigned long)val_pair->size,                          \
+            (unsigned long)sizeof(*val));                                     \
+      } else {                                                                \
+        val = (typeof(*hm_name##__chm_val_type_var) *)(val_pair->ptr);        \
+      }                                                                       \
+    }                                                                         \
+    val;                                                                      \
   })
 
 #define chmap_for_each(chm, it, block)                                      \

@@ -377,14 +377,15 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err);
  * @note Asserts on allocation failure
  * @note Returns NULL if map is empty (normal case)
  */
-#define cbmap_begin(cbm)                               \
-  ({                                                   \
-    char *err;                                         \
-    cmap_iterator *iter = cbmap_begin_iter(cbm, &err); \
-    if (err != NULL) {                                 \
-      ccol_assert(false);                              \
-    }                                                  \
-    iter;                                              \
+#define cbmap_begin(cbm)                                                  \
+  ({                                                                      \
+    char *err;                                                            \
+    cmap_iterator *iter = cbmap_begin_iter(cbm, &err);                    \
+    if (err != NULL) {                                                    \
+      fatal_err("cbmap_begin('%s'): failed to create iterator: %s", #cbm, \
+                err);                                                     \
+    }                                                                     \
+    iter;                                                                 \
   })
 
 /**
@@ -609,7 +610,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
         __is_signed_int_ptr(hm_name##__cbm_key_type_var),                  \
         __is_char_ptr_key(hm_name##__cbm_key_type_var), NULL, NULL, &err); \
     if (!hm_name) {                                                        \
-      fatal_err("%s", err);                                                \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,             \
+                err ? err : "unknown error");                              \
     }                                                                      \
   } while (0)
 
@@ -632,7 +634,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),   \
                           mmgmt_procs, NULL, &err);                         \
     if (!hm_name) {                                                         \
-      fatal_err("%s", err);                                                 \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                               \
     }                                                                       \
   } while (0)
 
@@ -655,7 +658,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),   \
                           NULL, custom_comparison_proc, &err);              \
     if (!hm_name) {                                                         \
-      fatal_err("%s", err);                                                 \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                               \
     }                                                                       \
   } while (0)
 
@@ -679,7 +683,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),   \
                           mmgmt_procs, custom_comparison_proc, &err);       \
     if (!hm_name) {                                                         \
-      fatal_err("%s", err);                                                 \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,              \
+                err ? err : "unknown error");                               \
     }                                                                       \
   } while (0)
 
@@ -718,7 +723,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
         __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
         __is_char_ptr_key(hm_name##__cbm_key_type_var), NULL, NULL, &err);   \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -732,7 +738,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
         __is_signed_int_ptr(hm_name##__cbm_key_type_var),                    \
         __is_char_ptr_key(hm_name##__cbm_key_type_var), NULL, NULL, &err);   \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -759,7 +766,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
                           mmgmt_procs, NULL, &err);                          \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -774,7 +782,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
                           mmgmt_procs, NULL, &err);                          \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -801,7 +810,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
                           NULL, custom_comparison_proc, &err);               \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -817,7 +827,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
                           NULL, custom_comparison_proc, &err);               \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -847,7 +858,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
                           mmgmt_procs, custom_comparison_proc, &err);        \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -863,7 +875,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
                           mmgmt_procs, custom_comparison_proc, &err);        \
     if (!hm_name) {                                                          \
-      fatal_err("%s", err);                                                  \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                \
     }                                                                        \
   } while (0)
 
@@ -898,7 +911,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     _populate_cmap_pair(val_pair, val);                               \
     ccol_retval_t r = cbmap_insert_elem(hm_name, key_pair, val_pair); \
     if (r != ccol_success && r != ccol_key_already_present) {         \
-      fatal_err("Failed to insert elem - r: %d", r);                  \
+      _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);        \
+      fatal_err("cbmap_insert('%s'): r: %d (%s)", #hm_name, r,        \
+                ccol_retval_to_str(r));                               \
     }                                                                 \
   } while (0)
 
@@ -947,26 +962,30 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @see cbmap_get_ptr
  * @see cbmap_insert
  */
-#define cbmap_get(hm_name, key)                                              \
-  ({                                                                         \
-    typeof(*hm_name##__cbm_val_type_var) *val = NULL;                        \
-    cmap_pair *key_pair = &(cmap_pair){};                                    \
-    cmap_pair *val_pair = NULL;                                              \
-    _populate_cmap_pair(key_pair, key);                                      \
-    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);      \
-    if (r != ccol_success) {                                                 \
-      fatal_err("Failed to get elem ref - r: %d", r);                        \
-    }                                                                        \
-    if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                         \
-      val = (typeof(*hm_name##__cbm_val_type_var) *)&(val_pair->ptr);        \
-    } else if (val_pair->size != sizeof(*val)) {                             \
-      fatal_err(                                                             \
-          "Failed to get elem ref - val_pair->size: %lu - sizeof(val): %lu", \
-          (unsigned long)val_pair->size, (unsigned long)sizeof(val));        \
-    } else {                                                                 \
-      val = (typeof(*hm_name##__cbm_val_type_var) *)(val_pair->ptr);         \
-    }                                                                        \
-    *val;                                                                    \
+#define cbmap_get(hm_name, key)                                             \
+  ({                                                                        \
+    typeof(*hm_name##__cbm_val_type_var) *val = NULL;                       \
+    cmap_pair *key_pair = &(cmap_pair){};                                   \
+    cmap_pair *val_pair = NULL;                                             \
+    _populate_cmap_pair(key_pair, key);                                     \
+    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
+    if (r != ccol_success) {                                                \
+      _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);              \
+      fatal_err("cbmap_get('%s'): r: %d (%s)", #hm_name, r,                 \
+                ccol_retval_to_str(r));                                     \
+    }                                                                       \
+    if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                        \
+      val = (typeof(*hm_name##__cbm_val_type_var) *)&(val_pair->ptr);       \
+    } else if (val_pair->size != sizeof(*val)) {                            \
+      fatal_err(                                                            \
+          "cbmap_get('%s'): value size mismatch — stored: %lu bytes, "      \
+          "requested: %lu bytes; wrong type or missing cbmap_redeclare()?", \
+          #hm_name, (unsigned long)val_pair->size,                          \
+          (unsigned long)sizeof(*val));                                     \
+    } else {                                                                \
+      val = (typeof(*hm_name##__cbm_val_type_var) *)(val_pair->ptr);        \
+    }                                                                       \
+    *val;                                                                   \
   })
 
 /**
@@ -991,25 +1010,27 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @see cbmap_get
  * @see cbmap_get_elem_ref
  */
-#define cbmap_get_ptr(hm_name, key)                                            \
-  ({                                                                           \
-    typeof(*hm_name##__cbm_val_type_var) *val = NULL;                          \
-    cmap_pair *key_pair = &(cmap_pair){};                                      \
-    cmap_pair *val_pair = NULL;                                                \
-    _populate_cmap_pair(key_pair, key);                                        \
-    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);        \
-    if (r == ccol_success) {                                                   \
-      if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                         \
-        val = (typeof(*hm_name##__cbm_val_type_var) *)&(val_pair->ptr);        \
-      } else if (val_pair->size != sizeof(*val)) {                             \
-        fatal_err(                                                             \
-            "Failed to get elem ref - val_pair->size: %lu - sizeof(val): %lu", \
-            (unsigned long)val_pair->size, sizeof(val));                       \
-      } else {                                                                 \
-        val = (typeof(*hm_name##__cbm_val_type_var) *)(val_pair->ptr);         \
-      }                                                                        \
-    }                                                                          \
-    val;                                                                       \
+#define cbmap_get_ptr(hm_name, key)                                           \
+  ({                                                                          \
+    typeof(*hm_name##__cbm_val_type_var) *val = NULL;                         \
+    cmap_pair *key_pair = &(cmap_pair){};                                     \
+    cmap_pair *val_pair = NULL;                                               \
+    _populate_cmap_pair(key_pair, key);                                       \
+    ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);       \
+    if (r == ccol_success) {                                                  \
+      if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                        \
+        val = (typeof(*hm_name##__cbm_val_type_var) *)&(val_pair->ptr);       \
+      } else if (val_pair->size != sizeof(*val)) {                            \
+        fatal_err(                                                            \
+            "cbmap_get_ptr('%s'): value size mismatch — stored: %lu bytes, "  \
+            "requested: %lu bytes; wrong type or missing cbmap_redeclare()?", \
+            #hm_name, (unsigned long)val_pair->size,                          \
+            (unsigned long)sizeof(*val));                                     \
+      } else {                                                                \
+        val = (typeof(*hm_name##__cbm_val_type_var) *)(val_pair->ptr);        \
+      }                                                                       \
+    }                                                                         \
+    val;                                                                      \
   })
 
 #define cbmap_for_each(cbm, it, block)                                      \

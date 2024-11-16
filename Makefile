@@ -56,3 +56,19 @@ run:
 
 run-in-valgrind:
 	@LD_LIBRARY_PATH=. valgrind --leak-check=full -s --show-leak-kinds=all ./main
+
+HEADER_INSTALL_DIR = /usr/include
+LIBRARY_INSTALL_DIR = /usr/lib
+
+SUDO := $(shell [ "$$(id -u)" -eq 0 ] && echo "" || echo "sudo")
+
+install: $(LIBRARY_NAME)
+	$(SUDO) install -d $(HEADER_INSTALL_DIR)
+	$(SUDO) install -m 644 $(HEADER_FILES) $(HEADER_INSTALL_DIR)
+	$(SUDO) install -m 755 $(LIBRARY_NAME) $(LIBRARY_INSTALL_DIR)
+	$(SUDO) ldconfig
+
+uninstall:
+	$(SUDO) rm -f $(addprefix $(HEADER_INSTALL_DIR)/,$(notdir $(HEADER_FILES)))
+	$(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(LIBRARY_NAME)
+	$(SUDO) ldconfig

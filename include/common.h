@@ -43,6 +43,7 @@ SOFTWARE.
  */
 
 #include <assert.h>
+#include <ctype.h>
 #include <limits.h>
 #include <pthread.h>
 #include <stdbool.h>
@@ -176,12 +177,11 @@ SOFTWARE.
  * }
  * @endcode
  */
-#define fatal_err(_err_fmt, ...)                                   \
-  do {                                                             \
-    char _err_str[512] = {0};                                      \
-    snprintf(_err_str, sizeof(_err_str), _err_fmt, ##__VA_ARGS__); \
-    fprintf(stderr, "%s\n", _err_str);                             \
-    ccol_assert(false);                                            \
+#define fatal_err(_err_fmt, ...)                                        \
+  do {                                                                  \
+    fprintf(stderr, "%s:%d: fatal: " _err_fmt "\n", __FILE__, __LINE__, \
+            ##__VA_ARGS__);                                             \
+    ccol_assert(false);                                                 \
   } while (0)
 
 /* ========================================================================== */
@@ -304,6 +304,62 @@ typedef enum ccollections_retval_t {
   ccol_not_enough_memory,   /**< Memory allocation failed */
   ccol_success              /**< Operation succeeded */
 } ccol_retval_t;
+
+/** Returns a string literal for @p r, suitable for use in fatal_err() messages.
+ */
+static inline const char *ccol_retval_to_str(ccol_retval_t r) {
+  switch (r) {
+    case ccol_success:
+      return "ccol_success";
+    case ccol_not_enough_memory:
+      return "ccol_not_enough_memory";
+    case ccol_key_already_present:
+      return "ccol_key_already_present";
+    case ccol_key_not_found:
+      return "ccol_key_not_found";
+    case ccol_invalid_args:
+      return "ccol_invalid_args";
+    case ccol_not_permitted:
+      return "ccol_not_permitted";
+    case ccol_timed_out:
+      return "ccol_timed_out";
+    case ccol_container_full:
+      return "ccol_container_full";
+    case ccol_container_empty:
+      return "ccol_container_empty";
+    case ccol_msg_too_large:
+      return "ccol_msg_too_large";
+    case ccol_unexpected_failure:
+      return "ccol_unexpected_failure";
+    default:
+      return "unknown";
+  }
+}
+
+/**
+ * Hex-dumps @p size bytes at @p data to stderr in xxd-like format (offset,
+ * hex columns, printable-ASCII sidebar). Called automatically by cbmap/chmap
+ * macros before a fatal_err() on a failed insert/lookup, so the offending key
+ * is visible even when it is opaque binary data.
+ */
+static inline void _ccol_dump_key_to_stderr(const void *data, size_t size) {
+  const unsigned char *p = (const unsigned char *)data;
+  fprintf(stderr, "Key dump (%zu byte%s):\n", size, size == 1 ? "" : "s");
+  for (size_t i = 0; i < size; i += 16) {
+    fprintf(stderr, "  %08zx  ", i);
+    for (size_t j = 0; j < 16; j++) {
+      if (i + j < size)
+        fprintf(stderr, "%02x ", p[i + j]);
+      else
+        fprintf(stderr, "   ");
+      if (j == 7) fprintf(stderr, " ");
+    }
+    fprintf(stderr, " |");
+    for (size_t j = 0; j < 16 && i + j < size; j++)
+      fprintf(stderr, "%c", isprint(p[i + j]) ? (char)p[i + j] : '.');
+    fprintf(stderr, "|\n");
+  }
+}
 
 /**
  * @brief Attribute for automatic cleanup on scope exit

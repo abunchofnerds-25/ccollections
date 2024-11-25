@@ -380,7 +380,7 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err);
 #define cbmap_begin(cbm)                                                  \
   ({                                                                      \
     char *err;                                                            \
-    cmap_iterator *iter = cbmap_begin_iter(cbm, &err);                    \
+    cmap_iterator *iter = cbmap_begin_iter((cbm), &err);                  \
     if (err != NULL) {                                                    \
       fatal_err("cbmap_begin('%s'): failed to create iterator: %s", #cbm, \
                 err);                                                     \
@@ -426,9 +426,9 @@ cmap_iterator *cbmap_iter_next(cmap_iterator *iter);
   ({                                                   \
     const typeof(*iter##__cbm_iter_key_type_var) *key; \
     if (is_char_ptr(*iter##__cbm_iter_key_type_var)) { \
-      key = (typeof(key))(&iter->key_pair->ptr);       \
+      key = (typeof(key))(&(iter)->key_pair->ptr);     \
     } else {                                           \
-      key = (typeof(key))(iter->key_pair->ptr);        \
+      key = (typeof(key))((iter)->key_pair->ptr);      \
     }                                                  \
     key;                                               \
   })
@@ -452,9 +452,9 @@ cmap_iterator *cbmap_iter_next(cmap_iterator *iter);
   ({                                                   \
     typeof(*iter##__cbm_iter_val_type_var) *val;       \
     if (is_char_ptr(*iter##__cbm_iter_val_type_var)) { \
-      val = (typeof(val))(&iter->val_pair->ptr);       \
+      val = (typeof(val))(&(iter)->val_pair->ptr);     \
     } else {                                           \
-      val = (typeof(val))(iter->val_pair->ptr);        \
+      val = (typeof(val))((iter)->val_pair->ptr);      \
     }                                                  \
     val;                                               \
   })
@@ -516,10 +516,10 @@ void __cbmap_destroy(cbmap cbm);
  * @note Frees all key and value data
  * @note Uses iterative post-order traversal (no recursion)
  */
-#define cbmap_destroy(cbm) \
-  do {                     \
-    __cbmap_destroy(cbm);  \
-    cbm = NULL;            \
+#define cbmap_destroy(cbm)  \
+  do {                      \
+    __cbmap_destroy((cbm)); \
+    cbm = NULL;             \
   } while (0)
 
 /**
@@ -632,7 +632,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     hm_name =                                                               \
         cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var), \
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),   \
-                          mmgmt_procs, NULL, &err);                         \
+                          (mmgmt_procs), NULL, &err);                       \
     if (!hm_name) {                                                         \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,              \
                 err ? err : "unknown error");                               \
@@ -656,7 +656,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     hm_name =                                                               \
         cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var), \
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),   \
-                          NULL, custom_comparison_proc, &err);              \
+                          NULL, (custom_comparison_proc), &err);            \
     if (!hm_name) {                                                         \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,              \
                 err ? err : "unknown error");                               \
@@ -681,7 +681,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     hm_name =                                                               \
         cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var), \
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),   \
-                          mmgmt_procs, custom_comparison_proc, &err);       \
+                          (mmgmt_procs), (custom_comparison_proc), &err);   \
     if (!hm_name) {                                                         \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,              \
                 err ? err : "unknown error");                               \
@@ -764,7 +764,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     hm_name =                                                                \
         cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
-                          mmgmt_procs, NULL, &err);                          \
+                          (mmgmt_procs), NULL, &err);                        \
     if (!hm_name) {                                                          \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
                 err ? err : "unknown error");                                \
@@ -780,7 +780,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     hm_name =                                                                \
         cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
-                          mmgmt_procs, NULL, &err);                          \
+                          (mmgmt_procs), NULL, &err);                        \
     if (!hm_name) {                                                          \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
                 err ? err : "unknown error");                                \
@@ -808,7 +808,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     hm_name =                                                                \
         cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
-                          NULL, custom_comparison_proc, &err);               \
+                          NULL, (custom_comparison_proc), &err);             \
     if (!hm_name) {                                                          \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
                 err ? err : "unknown error");                                \
@@ -825,7 +825,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     hm_name =                                                                \
         cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
-                          NULL, custom_comparison_proc, &err);               \
+                          NULL, (custom_comparison_proc), &err);             \
     if (!hm_name) {                                                          \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
                 err ? err : "unknown error");                                \
@@ -856,7 +856,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     hm_name =                                                                \
         cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
-                          mmgmt_procs, custom_comparison_proc, &err);        \
+                          (mmgmt_procs), (custom_comparison_proc), &err);    \
     if (!hm_name) {                                                          \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
                 err ? err : "unknown error");                                \
@@ -873,7 +873,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     hm_name =                                                                \
         cbmap_create_full(__is_signed_int_ptr(hm_name##__cbm_key_type_var),  \
                           __is_char_ptr_key(hm_name##__cbm_key_type_var),    \
-                          mmgmt_procs, custom_comparison_proc, &err);        \
+                          (mmgmt_procs), (custom_comparison_proc), &err);    \
     if (!hm_name) {                                                          \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
                 err ? err : "unknown error");                                \
@@ -907,8 +907,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                \
     cmap_pair *key_pair = &(cmap_pair){};                             \
     cmap_pair *val_pair = &(cmap_pair){};                             \
-    _populate_cmap_pair(key_pair, key);                               \
-    _populate_cmap_pair(val_pair, val);                               \
+    _populate_cmap_pair(key_pair, (key));                             \
+    _populate_cmap_pair(val_pair, (val));                             \
     ccol_retval_t r = cbmap_insert_elem(hm_name, key_pair, val_pair); \
     if (r != ccol_success && r != ccol_key_already_present) {         \
       _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);        \
@@ -937,7 +937,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 #define cbmap_remove(hm_name, key)                          \
   ({                                                        \
     cmap_pair *key_pair = &(cmap_pair){};                   \
-    _populate_cmap_pair(key_pair, key);                     \
+    _populate_cmap_pair(key_pair, (key));                   \
     ccol_retval_t r = cbmap_delete_elem(hm_name, key_pair); \
     r;                                                      \
   })
@@ -967,7 +967,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     typeof(*hm_name##__cbm_val_type_var) *val = NULL;                       \
     cmap_pair *key_pair = &(cmap_pair){};                                   \
     cmap_pair *val_pair = NULL;                                             \
-    _populate_cmap_pair(key_pair, key);                                     \
+    _populate_cmap_pair(key_pair, (key));                                   \
     ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);     \
     if (r != ccol_success) {                                                \
       _ccol_dump_key_to_stderr(key_pair->ptr, key_pair->size);              \
@@ -1015,7 +1015,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     typeof(*hm_name##__cbm_val_type_var) *val = NULL;                         \
     cmap_pair *key_pair = &(cmap_pair){};                                     \
     cmap_pair *val_pair = NULL;                                               \
-    _populate_cmap_pair(key_pair, key);                                       \
+    _populate_cmap_pair(key_pair, (key));                                     \
     ccol_retval_t r = cbmap_get_elem_ref(hm_name, key_pair, &val_pair);       \
     if (r == ccol_success) {                                                  \
       if (is_char_ptr(*hm_name##__cbm_val_type_var)) {                        \
@@ -1033,8 +1033,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     val;                                                                      \
   })
 
-#define cbmap_for_each(cbm, it, block)                                      \
-  do {                                                                      \
-    cbmap_iter_declare(cbm, it);                                            \
-    for (it = cbmap_begin(cbm); it != NULL; it = cbmap_iter_next(it)) block \
+#define cbmap_for_each(cbm, it, block)                                        \
+  do {                                                                        \
+    cbmap_iter_declare(cbm, it);                                              \
+    for (it = cbmap_begin((cbm)); it != NULL; it = cbmap_iter_next(it)) block \
   } while (0)

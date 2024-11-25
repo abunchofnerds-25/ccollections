@@ -122,12 +122,12 @@ void __cstring_destroy(cstr s);
  *
  * @param s  String variable to destroy (set to NULL on return)
  */
-#define cstring_destroy(s)  \
-  do {                      \
-    if (s) {                \
-      __cstring_destroy(s); \
-      s = NULL;             \
-    }                       \
+#define cstring_destroy(s)    \
+  do {                        \
+    if ((s)) {                \
+      __cstring_destroy((s)); \
+      s = NULL;               \
+    }                         \
   } while (0)
 
 /**
@@ -569,7 +569,7 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
  *
  * @param s  cstr variable to destroy
  */
-#define cstr_destroy(s) cstring_destroy(s)
+#define cstr_destroy(s) cstring_destroy((s))
 
 /* ========================================================================== */
 /*                         OPERATION MACROS                                   */
@@ -650,14 +650,14 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
   })
 
 /* Simple pass-through wrappers */
-#define cstr_length(s) cstring_length(s)
-#define cstr_c_str(s) cstring_c_str(s)
+#define cstr_length(s) cstring_length((s))
+#define cstr_c_str(s) cstring_c_str((s))
 #define cstr_at(s, idx) cstring_at((s), (idx))
-#define cstr_is_empty(s) cstring_is_empty(s)
-#define cstr_reset(s) cstring_reset(s)
-#define cstr_to_upper(s) cstring_to_upper(s)
-#define cstr_to_lower(s) cstring_to_lower(s)
-#define cstr_trim(s) cstring_trim(s)
+#define cstr_is_empty(s) cstring_is_empty((s))
+#define cstr_reset(s) cstring_reset((s))
+#define cstr_to_upper(s) cstring_to_upper((s))
+#define cstr_to_lower(s) cstring_to_lower((s))
+#define cstr_trim(s) cstring_trim((s))
 #define cstr_compare(s, str) cstring_compare((s), (str))
 #define cstr_equals(s, str) cstring_equals((s), (str))
 #define cstr_starts_with(s, pfx) cstring_starts_with((s), (pfx))

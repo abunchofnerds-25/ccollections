@@ -473,7 +473,7 @@ static inline void ___cvector_destroy(cvec *cv) {
   do {                                                                   \
     char *err = NULL;                                                    \
     v = cvector_create(sizeof(*v##__cvec_type_var), &err);               \
-    if (!v) {                                                            \
+    if (!(v)) {                                                          \
       fatal_err("cvec_init('%s'): %s", #v, err ? err : "unknown error"); \
     }                                                                    \
   } while (0)
@@ -503,8 +503,8 @@ static inline void ___cvector_destroy(cvec *cv) {
 #define cvec_init_mp(v, mprocs)                                             \
   do {                                                                      \
     char *err = NULL;                                                       \
-    v = cvector_create_full(sizeof(*v##__cvec_type_var), mprocs, &err);     \
-    if (!v) {                                                               \
+    v = cvector_create_full(sizeof(*v##__cvec_type_var), (mprocs), &err);   \
+    if (!(v)) {                                                             \
       fatal_err("cvec_init_mp('%s'): %s", #v, err ? err : "unknown error"); \
     }                                                                       \
   } while (0)
@@ -607,7 +607,7 @@ static inline void ___cvector_destroy(cvec *cv) {
  */
 #define cvec_push(v, new_elem)                                                \
   do {                                                                        \
-    ccol_retval_t r = cvector_push_back(v, (const void *)&new_elem);          \
+    ccol_retval_t r = cvector_push_back((v), (const void *)&(new_elem));      \
     if (r != ccol_success) {                                                  \
       fatal_err("cvec_push('%s'): r: %d (%s)", #v, r, ccol_retval_to_str(r)); \
     }                                                                         \
@@ -637,13 +637,13 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvec_push_rvalue(vec, x + y);
  * @endcode
  */
-#define cvec_push_rvalue(v, new_elem)                                      \
-  do {                                                                     \
-    ccol_retval_t r = cvector_push_back(v, &(typeof(new_elem)){new_elem}); \
-    if (r != ccol_success) {                                               \
-      fatal_err("cvec_push_rvalue('%s'): r: %d (%s)", #v, r,               \
-                ccol_retval_to_str(r));                                    \
-    }                                                                      \
+#define cvec_push_rvalue(v, new_elem)                                          \
+  do {                                                                         \
+    ccol_retval_t r = cvector_push_back((v), &(typeof(new_elem)){(new_elem)}); \
+    if (r != ccol_success) {                                                   \
+      fatal_err("cvec_push_rvalue('%s'): r: %d (%s)", #v, r,                   \
+                ccol_retval_to_str(r));                                        \
+    }                                                                          \
   } while (0)
 
 /**
@@ -672,7 +672,7 @@ static inline void ___cvector_destroy(cvec *cv) {
 #define cvec_pop(v)                                                           \
   ({                                                                          \
     typeof(*v##__cvec_type_var) _tmp;                                         \
-    ccol_retval_t r = cvector_pop_back(v, &_tmp);                             \
+    ccol_retval_t r = cvector_pop_back((v), &_tmp);                           \
     if (r != ccol_success) {                                                  \
       fatal_err("cvec_pop('%s'): r: %d (%s)%s", #v, r, ccol_retval_to_str(r), \
                 r == ccol_container_empty ? " — vector is empty" : "");       \
@@ -704,7 +704,8 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvec_at(vec, 0) = 5;        // now the first element is 5
  * @endcode
  */
-#define cvec_at(v, index) *(typeof(*v##__cvec_type_var) *)(cvector_at(v, index))
+#define cvec_at(v, index) \
+  *(typeof(*v##__cvec_type_var) *)(cvector_at((v), (index)))
 
 /**
  * @brief Get the number of elements (type-safe wrapper)
@@ -717,7 +718,7 @@ static inline void ___cvector_destroy(cvec *cv) {
  *
  * @see cvector_elem_count
  */
-#define cvec_size(v) cvector_elem_count(v)
+#define cvec_size(v) cvector_elem_count((v))
 
 /**
  * @brief Clear all elements and reset capacity (type-safe wrapper)
@@ -728,7 +729,7 @@ static inline void ___cvector_destroy(cvec *cv) {
  *
  * @see cvector_reset
  */
-#define cvec_reset(v) cvector_reset(v)
+#define cvec_reset(v) cvector_reset((v))
 
 /**
  * @brief Reserve capacity (type-safe wrapper with error handling)
@@ -837,15 +838,15 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvector_sort_with_comparison_proc(vec, compare_ints);
  * @endcode
  */
-#define cvector_sort_with_comparison_proc(v, comparison_proc)              \
-  do {                                                                     \
-    if (!v) {                                                              \
-      fatal_err("cvector_sort_with_comparison_proc('%s'): vector is NULL", \
-                #v);                                                       \
-    }                                                                      \
-    csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)),    \
-               (csort_item_getter_proc_t)cvector_at, comparison_proc,      \
-               cvector_get_mprocs(v));                                     \
+#define cvector_sort_with_comparison_proc(v, comparison_proc)               \
+  do {                                                                      \
+    if (!(v)) {                                                             \
+      fatal_err("cvector_sort_with_comparison_proc('%s'): vector is NULL",  \
+                #v);                                                        \
+    }                                                                       \
+    csort_sort((v), cvector_elem_count((v)), sizeof(*(v##__cvec_type_var)), \
+               (csort_item_getter_proc_t)cvector_at, (comparison_proc),     \
+               cvector_get_mprocs((v)));                                    \
   } while (0)
 
 /**

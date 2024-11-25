@@ -183,10 +183,10 @@ void ___csort_merge_sort(void *col, size_t length, size_t elem_size,
  * @see csort_get_default_comparison_proc
  * @see cvec_sort (convenience wrapper for vectors)
  */
-#define csort_sort(col, length, elem_size, getter_proc, comparison_proc,     \
-                   mprocs)                                                   \
-  (___csort_merge_sort(col, length, elem_size, getter_proc, comparison_proc, \
-                       mprocs))
+#define csort_sort(col, length, elem_size, getter_proc, comparison_proc, \
+                   mprocs)                                               \
+  (___csort_merge_sort((col), (length), (elem_size), (getter_proc),      \
+                       (comparison_proc), (mprocs)))
 
 /* ========================================================================== */
 /*                   COMPARISON PROCEDURE DECLARATIONS                        */
@@ -318,7 +318,7 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
 #define csort_get_default_comparison_proc(x)                                             \
   ({                                                                                     \
     ccol_comparison_proc_t comparison_proc = NULL;                                       \
-    if (is_integral_type(x)) {                                                           \
+    if (is_integral_type((x))) {                                                         \
       _Pragma("GCC diagnostic push");                                                    \
       _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\"");            \
       comparison_proc = _Generic((x),                                                    \
@@ -369,7 +369,7 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
                                      long_double),                                       \
           default: NULL);                                                                \
       _Pragma("GCC diagnostic pop");                                                     \
-    } else if (is_char_ptr(x)) {                                                         \
+    } else if (is_char_ptr((x))) {                                                       \
       comparison_proc = csort_default_string_comparison_proc;                            \
     }                                                                                    \
     comparison_proc;                                                                     \
@@ -378,7 +378,7 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
 #define csort_get_default_comparison_proc(x)                                             \
   ({                                                                                     \
     ccol_comparison_proc_t comparison_proc = NULL;                                       \
-    if (is_integral_type(x)) {                                                           \
+    if (is_integral_type((x))) {                                                         \
       comparison_proc = _Generic((x),                                                    \
           char: ___csort__get_default_integral_comparison_proc_name(char),               \
           short: ___csort__get_default_integral_comparison_proc_name(short),             \
@@ -426,7 +426,7 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
           const long double: ___csort__get_default_integral_comparison_proc_name(        \
                                      long_double),                                       \
           default: NULL);                                                                \
-    } else if (is_char_ptr(x)) {                                                         \
+    } else if (is_char_ptr((x))) {                                                       \
       comparison_proc = csort_default_string_comparison_proc;                            \
     }                                                                                    \
     comparison_proc;                                                                     \

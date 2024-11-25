@@ -61,55 +61,55 @@ SOFTWARE.
 #define mutex_t pthread_mutex_t
 
 /** @brief Destroy a mutex */
-#define mutex_destroy(m) pthread_mutex_destroy(&m)
+#define mutex_destroy(m) pthread_mutex_destroy(&(m))
 
 /** @brief Initialize a mutex with default attributes */
-#define mutex_init(m) pthread_mutex_init(&m, NULL)
+#define mutex_init(m) pthread_mutex_init(&(m), NULL)
 
 /** @brief Lock a mutex (blocking) */
-#define mutex_lock(m) pthread_mutex_lock(&m)
+#define mutex_lock(m) pthread_mutex_lock(&(m))
 
 /** @brief Unlock a mutex */
-#define mutex_unlock(m) pthread_mutex_unlock(&m)
+#define mutex_unlock(m) pthread_mutex_unlock(&(m))
 
 /** @brief Read-write lock type (wraps pthread_rwlock_t) */
 #define rw_lock_t pthread_rwlock_t
 
 /** @brief Destroy a read-write lock */
-#define rw_lock_destroy(a) pthread_rwlock_destroy(&a)
+#define rw_lock_destroy(a) pthread_rwlock_destroy(&(a))
 
 /** @brief Initialize a read-write lock with default attributes */
-#define rw_lock_init(a) pthread_rwlock_init(&a, NULL)
+#define rw_lock_init(a) pthread_rwlock_init(&(a), NULL)
 
 /** @brief Acquire write lock (exclusive access) */
-#define rw_lock_wrlock(a) pthread_rwlock_wrlock(&a)
+#define rw_lock_wrlock(a) pthread_rwlock_wrlock(&(a))
 
 /** @brief Acquire read lock (shared access) */
-#define rw_lock_rdlock(a) pthread_rwlock_rdlock(&a)
+#define rw_lock_rdlock(a) pthread_rwlock_rdlock(&(a))
 
 /** @brief Release read-write lock */
-#define rw_lock_unlock(a) pthread_rwlock_unlock(&a)
+#define rw_lock_unlock(a) pthread_rwlock_unlock(&(a))
 
 /** @brief Condition variable type (wraps pthread_cond_t) */
 #define cond_var_t pthread_cond_t
 
 /** @brief Destroy a condition variable */
-#define cond_var_destroy(c) pthread_cond_destroy(&c)
+#define cond_var_destroy(c) pthread_cond_destroy(&(c))
 
 /** @brief Initialize a condition variable with default attributes */
-#define cond_var_init(c) pthread_cond_init(&c, NULL)
+#define cond_var_init(c) pthread_cond_init(&(c), NULL)
 
 /** @brief Wait on condition variable (releases mutex while waiting) */
-#define cond_var_wait(c, m) pthread_cond_wait(&c, &m)
+#define cond_var_wait(c, m) pthread_cond_wait(&(c), &(m))
 
 /** @brief Timed wait on condition variable with absolute timeout */
-#define cond_var_timedwait(c, m, t) pthread_cond_timedwait(&c, &m, &t)
+#define cond_var_timedwait(c, m, t) pthread_cond_timedwait(&(c), &(m), &(t))
 
 /** @brief Signal one waiting thread on condition variable */
-#define cond_var_signal(c) pthread_cond_signal(&c)
+#define cond_var_signal(c) pthread_cond_signal(&(c))
 
 /** @brief Signal all waiting threads on condition variable */
-#define cond_var_broadcast(c) pthread_cond_broadcast(&c)
+#define cond_var_broadcast(c) pthread_cond_broadcast(&(c))
 
 /** @brief Thread ID type (wraps pthread_t) */
 #define thread_id_t pthread_t
@@ -193,7 +193,7 @@ SOFTWARE.
  * @param size Number of bytes to allocate
  * @return Pointer to allocated memory, or NULL on failure
  */
-#define mem_alloc(size) malloc(size)
+#define mem_alloc(size) malloc((size))
 
 /**
  * @brief Allocate and zero-initialize memory (default: calloc)
@@ -201,7 +201,7 @@ SOFTWARE.
  * @param elem_size Size of each element
  * @return Pointer to allocated memory, or NULL on failure
  */
-#define mem_calloc(elem_count, elem_size) calloc(elem_count, elem_size)
+#define mem_calloc(elem_count, elem_size) calloc((elem_count), (elem_size))
 
 /**
  * @brief Reallocate memory (default: realloc)
@@ -209,13 +209,13 @@ SOFTWARE.
  * @param new_size New size in bytes
  * @return Pointer to reallocated memory, or NULL on failure
  */
-#define mem_realloc(ptr, new_size) realloc(ptr, new_size)
+#define mem_realloc(ptr, new_size) realloc((ptr), (new_size))
 
 /**
  * @brief Free memory (default: free)
  * @param ptr Pointer to free
  */
-#define mem_free(ptr) free(ptr)
+#define mem_free(ptr) free((ptr))
 
 /**
  * @brief Allocate memory using custom or default allocator
@@ -224,7 +224,7 @@ SOFTWARE.
  * @return Pointer to allocated memory, or NULL on failure
  */
 #define _mem_alloc(m_procs, size) \
-  (m_procs) ? m_procs->malloc(size) : mem_alloc(size)
+  (m_procs) ? (m_procs)->malloc((size)) : mem_alloc((size))
 
 /**
  * @brief Allocate zeroed memory using custom or default allocator
@@ -233,8 +233,9 @@ SOFTWARE.
  * @param e_size Size of each element
  * @return Pointer to allocated memory, or NULL on failure
  */
-#define _mem_calloc(m_procs, e_count, e_size) \
-  (m_procs) ? m_procs->calloc(e_count, e_size) : mem_calloc(e_count, e_size)
+#define _mem_calloc(m_procs, e_count, e_size)        \
+  (m_procs) ? (m_procs)->calloc((e_count), (e_size)) \
+            : mem_calloc((e_count), (e_size))
 
 /**
  * @brief Reallocate memory using custom or default allocator
@@ -243,15 +244,17 @@ SOFTWARE.
  * @param new_size New size in bytes
  * @return Pointer to reallocated memory, or NULL on failure
  */
-#define _mem_realloc(m_procs, ptr, new_size) \
-  (m_procs) ? m_procs->realloc(ptr, new_size) : mem_realloc(ptr, new_size)
+#define _mem_realloc(m_procs, ptr, new_size)        \
+  (m_procs) ? (m_procs)->realloc((ptr), (new_size)) \
+            : mem_realloc((ptr), (new_size))
 
 /**
  * @brief Free memory using custom or default allocator
  * @param m_procs Memory management procedures (or NULL for default)
  * @param ptr Pointer to free
  */
-#define _mem_free(m_procs, ptr) (m_procs) ? m_procs->free(ptr) : mem_free(ptr)
+#define _mem_free(m_procs, ptr) \
+  (m_procs) ? (m_procs)->free((ptr)) : mem_free((ptr))
 
 /**
  * @brief The invalid size_t for size related operations
@@ -525,18 +528,18 @@ typedef struct cmap_iterator {
  * @note If mmgt_procs is NULL, returns true (will use default malloc/free)
  * @note All four functions must be provided if structure is non-NULL
  */
-#define ccol_verify_memmgmt_procs(mmgt_procs, err)                    \
-  ({                                                                  \
-    bool result = true;                                               \
-    if (mmgt_procs && (!mmgt_procs->malloc || !mmgt_procs->calloc ||  \
-                       !mmgt_procs->realloc || !mmgt_procs->free)) {  \
-      if (err) {                                                      \
-        *err = CCOL_ERR_STR(                                          \
-            "Detected at least one NULL memory management function"); \
-      }                                                               \
-      result = false;                                                 \
-    }                                                                 \
-    result;                                                           \
+#define ccol_verify_memmgmt_procs(mmgt_procs, err)                         \
+  ({                                                                       \
+    bool result = true;                                                    \
+    if ((mmgt_procs) && (!(mmgt_procs)->malloc || !(mmgt_procs)->calloc || \
+                         !(mmgt_procs)->realloc || !(mmgt_procs)->free)) { \
+      if ((err)) {                                                         \
+        *(err) = CCOL_ERR_STR(                                             \
+            "Detected at least one NULL memory management function");      \
+      }                                                                    \
+      result = false;                                                      \
+    }                                                                      \
+    result;                                                                \
   })
 
 /**
@@ -553,25 +556,26 @@ typedef struct cmap_iterator {
  * @note If mmgmt_procs is NULL, sets container->m_procs to NULL (use defaults)
  * @note Allocates memory for m_procs using the provided allocator
  */
-#define ccol_populate_mem_mgmt_procs(container, mmgmt_procs, err)             \
-  ({                                                                          \
-    bool result = true;                                                       \
-    if (mmgmt_procs) {                                                        \
-      container->m_procs = mmgmt_procs->malloc(sizeof(ccol_memmgmt_procs_t)); \
-      if (!container->m_procs) {                                              \
-        if (err) {                                                            \
-          *err = CCOL_ERR_STR(                                                \
-              "Failed to allocate buffer for memory mgmt buffer");            \
-        }                                                                     \
-        result = false;                                                       \
-      } else {                                                                \
-        mem_cpy(container->m_procs, mmgmt_procs,                              \
-                sizeof(ccol_memmgmt_procs_t));                                \
-      }                                                                       \
-    } else {                                                                  \
-      container->m_procs = NULL;                                              \
-    }                                                                         \
-    result;                                                                   \
+#define ccol_populate_mem_mgmt_procs(container, mmgmt_procs, err)  \
+  ({                                                               \
+    bool result = true;                                            \
+    if ((mmgmt_procs)) {                                           \
+      (container)->m_procs =                                       \
+          (mmgmt_procs)->malloc(sizeof(ccol_memmgmt_procs_t));     \
+      if (!(container)->m_procs) {                                 \
+        if ((err)) {                                               \
+          *(err) = CCOL_ERR_STR(                                   \
+              "Failed to allocate buffer for memory mgmt buffer"); \
+        }                                                          \
+        result = false;                                            \
+      } else {                                                     \
+        mem_cpy((container)->m_procs, (mmgmt_procs),               \
+                sizeof(ccol_memmgmt_procs_t));                     \
+      }                                                            \
+    } else {                                                       \
+      (container)->m_procs = NULL;                                 \
+    }                                                              \
+    result;                                                        \
   })
 
 /* ========================================================================== */
@@ -919,16 +923,16 @@ typedef enum ccollections_data_type {
 #define determine_ccol_data_type(data)                                 \
   ({                                                                   \
     ccol_data_type r = ccol_other_types;                               \
-    if (is_char_array(data)) {                                         \
+    if (is_char_array((data))) {                                       \
       r = ccol_string;                                                 \
-    } else if (is_char_ptr(data)) {                                    \
+    } else if (is_char_ptr((data))) {                                  \
       r = ccol_string;                                                 \
     } else {                                                           \
       if (__builtin_classify_type((data)) == 5 && /* is a pointer */   \
           sizeof((data)) == sizeof(uintptr_t)) {  /* other pointers */ \
         r = ccol_pointer;                                              \
       } else {                                                         \
-        r = _determine_non_special_data_type(data);                    \
+        r = _determine_non_special_data_type((data));                  \
       }                                                                \
     }                                                                  \
     r;                                                                 \
@@ -965,19 +969,19 @@ typedef enum ccollections_data_type {
  */
 #define _populate_cmap_pair(pair, data)                     \
   do {                                                      \
-    if (is_char_array(data)) {                              \
-      pair->ptr = (char *)&(data);                          \
-      pair->size = strlen((char *)pair->ptr) + 1;           \
-    } else if (is_char_ptr(data)) {                         \
-      char *_ptr = (char *)&data;                           \
+    if (is_char_array((data))) {                            \
+      (pair)->ptr = (char *)&(data);                        \
+      (pair)->size = strlen((char *)(pair)->ptr) + 1;       \
+    } else if (is_char_ptr((data))) {                       \
+      char *_ptr = (char *)&(data);                         \
       _Pragma("GCC diagnostic push");                       \
       _Pragma("GCC diagnostic ignored \"-Warray-bounds\""); \
-      pair->ptr = *((char **)_ptr);                         \
+      (pair)->ptr = *((char **)_ptr);                       \
       _Pragma("GCC diagnostic pop");                        \
-      pair->size = strlen((char *)pair->ptr) + 1;           \
+      (pair)->size = strlen((char *)(pair)->ptr) + 1;       \
     } else {                                                \
-      pair->ptr = &(data);                                  \
-      pair->size = sizeof((data));                          \
+      (pair)->ptr = &(data);                                \
+      (pair)->size = sizeof((data));                        \
     }                                                       \
   } while (0)
 
@@ -1027,8 +1031,8 @@ typedef enum ccollections_data_type {
  */
 #define ccol_typed_cmp(ptr1, ptr2, T) \
   ({                                  \
-    T var1 = *(T *)(ptr1);            \
-    T var2 = *(T *)(ptr2);            \
+    T var1 = *(T *)((ptr1));          \
+    T var2 = *(T *)((ptr2));          \
     (var1 > var2) - (var1 < var2);    \
   })
 

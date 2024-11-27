@@ -1025,6 +1025,99 @@ TEST(cbst_maps, string_keys_7_char_iteration_order) {
   cbmap_destroy(bm);
 }
 
+TEST(cbst_maps, char_type_variants_as_string_keys) {
+  // signed char * (= int8_t *) must be treated as a string key with correct
+  // lexicographic ordering in in-order iteration.
+  {
+    cbmap_construct(bm, signed char *, int);
+
+    signed char *k_banana = (signed char *)"banana";
+    signed char *k_apple = (signed char *)"apple";
+    signed char *k_cherry = (signed char *)"cherry";
+    int v1 = 1, v2 = 2, v3 = 3;
+
+    cbmap_insert(bm, k_banana, v1);
+    cbmap_insert(bm, k_apple, v2);
+    cbmap_insert(bm, k_cherry, v3);
+
+    REQUIRE_EQ(cbmap_elem_count(bm), 3);
+    REQUIRE_EQ(cbmap_get(bm, k_banana), 1);
+    REQUIRE_EQ(cbmap_get(bm, k_apple), 2);
+    REQUIRE_EQ(cbmap_get(bm, k_cherry), 3);
+
+    // In-order iteration must yield lexicographic order.
+    const char *expected_sc[] = {"apple", "banana", "cherry"};
+    int idx = 0;
+    cbmap_iter_declare(bm, it);
+    for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
+      REQUIRE_STREQ((const char *)*cbmap_iter_key_ptr(it), expected_sc[idx]);
+      ++idx;
+    }
+    REQUIRE_EQ(idx, 3);
+
+    // char * with identical string content must find the same entries.
+    char *ck = "banana";
+    REQUIRE_EQ(cbmap_get(bm, ck), 1);
+
+    cbmap_destroy(bm);
+  }
+
+  // unsigned char * (= uint8_t *) — identical check.
+  {
+    cbmap_construct(bm, unsigned char *, int);
+
+    unsigned char *k_mango = (unsigned char *)"mango";
+    unsigned char *k_kiwi = (unsigned char *)"kiwi";
+    unsigned char *k_lime = (unsigned char *)"lime";
+    int v10 = 10, v20 = 20, v30 = 30;
+
+    cbmap_insert(bm, k_mango, v10);
+    cbmap_insert(bm, k_kiwi, v20);
+    cbmap_insert(bm, k_lime, v30);
+
+    REQUIRE_EQ(cbmap_elem_count(bm), 3);
+    REQUIRE_EQ(cbmap_get(bm, k_mango), 10);
+    REQUIRE_EQ(cbmap_get(bm, k_kiwi), 20);
+    REQUIRE_EQ(cbmap_get(bm, k_lime), 30);
+
+    // In-order: kiwi < lime < mango.
+    const char *expected_uc[] = {"kiwi", "lime", "mango"};
+    int idx = 0;
+    cbmap_iter_declare(bm, it);
+    for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
+      REQUIRE_STREQ((const char *)*cbmap_iter_key_ptr(it), expected_uc[idx]);
+      ++idx;
+    }
+    REQUIRE_EQ(idx, 3);
+
+    // signed char * with identical content must also find entries.
+    signed char *sk = (signed char *)"kiwi";
+    REQUIRE_EQ(cbmap_get(bm, sk), 20);
+
+    cbmap_destroy(bm);
+  }
+
+  // char * map looked up via signed char * and unsigned char *.
+  {
+    cbmap_construct(bm, char *, int);
+
+    char *k1 = "one";
+    char *k2 = "two";
+    char *k3 = "three";
+    int v100 = 100, v200 = 200, v300 = 300;
+    cbmap_insert(bm, k1, v100);
+    cbmap_insert(bm, k2, v200);
+    cbmap_insert(bm, k3, v300);
+
+    signed char *sk2 = (signed char *)"two";
+    unsigned char *uk1 = (unsigned char *)"one";
+    REQUIRE_EQ(cbmap_get(bm, sk2), 200);
+    REQUIRE_EQ(cbmap_get(bm, uk1), 100);
+
+    cbmap_destroy(bm);
+  }
+}
+
 TEST(cbst_maps, construct_scoped_lifecycle) {
   {
     cbmap_construct_scoped(bm, int, int);

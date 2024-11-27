@@ -602,6 +602,7 @@ typedef struct cmap_iterator {
     _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
     bool result = _Generic((x),                                             \
         char: true,                                                         \
+        signed char: true,                                                  \
         short: true,                                                        \
         int: true,                                                          \
         long: true,                                                         \
@@ -615,6 +616,7 @@ typedef struct cmap_iterator {
         double: true,                                                       \
         long double: true,                                                  \
         const char: true,                                                   \
+        const signed char: true,                                            \
         const short: true,                                                  \
         const int: true,                                                    \
         const long: true,                                                   \
@@ -635,6 +637,7 @@ typedef struct cmap_iterator {
 #define is_integral_type(x)           \
   _Generic((x),                       \
       char: true,                     \
+      signed char: true,              \
       short: true,                    \
       int: true,                      \
       long: true,                     \
@@ -648,6 +651,7 @@ typedef struct cmap_iterator {
       double: true,                   \
       long double: true,              \
       const char: true,               \
+      const signed char: true,        \
       const short: true,              \
       const int: true,                \
       const long: true,               \
@@ -681,6 +685,7 @@ typedef struct cmap_iterator {
     _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
     bool result = _Generic((x),                                             \
         char *: true,                                                       \
+        signed char *: true,                                                \
         short *: true,                                                      \
         int *: true,                                                        \
         long *: true,                                                       \
@@ -694,6 +699,7 @@ typedef struct cmap_iterator {
         double *: true,                                                     \
         long double *: true,                                                \
         const char *: true,                                                 \
+        const signed char *: true,                                          \
         const short *: true,                                                \
         const int *: true,                                                  \
         const long *: true,                                                 \
@@ -714,6 +720,7 @@ typedef struct cmap_iterator {
 #define is_integral_ptr(x)              \
   _Generic((x),                         \
       char *: true,                     \
+      signed char *: true,              \
       short *: true,                    \
       int *: true,                      \
       long *: true,                     \
@@ -727,6 +734,7 @@ typedef struct cmap_iterator {
       double *: true,                   \
       long double *: true,              \
       const char *: true,               \
+      const signed char *: true,        \
       const short *: true,              \
       const int *: true,                \
       const long *: true,               \
@@ -758,11 +766,13 @@ typedef struct cmap_iterator {
 #define __is_signed_int_ptr(_ptr) \
   _Generic((_ptr),                \
       char *: true,               \
+      signed char *: true,        \
       short *: true,              \
       int *: true,                \
       long *: true,               \
       long long *: true,          \
       const char *: true,         \
+      const signed char *: true,  \
       const short *: true,        \
       const int *: true,          \
       const long *: true,         \
@@ -790,6 +800,8 @@ typedef struct cmap_iterator {
     bool result = _Generic((data),                                          \
         char *: true,                                                       \
         const char *: true,                                                 \
+        signed char *: true,                                                \
+        const signed char *: true,                                          \
         unsigned char *: true,                                              \
         const unsigned char *: true,                                        \
         default: false);                                                    \
@@ -812,6 +824,8 @@ typedef struct cmap_iterator {
   (is_char_ptr((data)) && _Generic((&(data)), \
        char **: false,                        \
        const char **: false,                  \
+       signed char **: false,                 \
+       const signed char **: false,           \
        unsigned char **: false,               \
        const unsigned char **: false,         \
        default: true))
@@ -820,6 +834,8 @@ typedef struct cmap_iterator {
   _Generic((data),                 \
       char *: true,                \
       const char *: true,          \
+      signed char *: true,         \
+      const signed char *: true,   \
       unsigned char *: true,       \
       const unsigned char *: true, \
       default: false)
@@ -828,6 +844,8 @@ typedef struct cmap_iterator {
   (is_char_ptr((data)) && _Generic((&(data)), \
        char **: false,                        \
        const char **: false,                  \
+       signed char **: false,                 \
+       const signed char **: false,           \
        unsigned char **: false,               \
        const unsigned char **: false,         \
        default: true))
@@ -859,6 +877,7 @@ typedef enum ccollections_data_type {
     _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
     ccol_data_type result = _Generic((var),                                 \
         char: ccol_char,                                                    \
+        signed char: ccol_char,                                             \
         short: ccol_short,                                                  \
         int: ccol_int,                                                      \
         long: ccol_long,                                                    \
@@ -872,6 +891,7 @@ typedef enum ccollections_data_type {
         double: ccol_double,                                                \
         long double: ccol_long_double,                                      \
         const char: ccol_char,                                              \
+        const signed char: ccol_char,                                       \
         const short: ccol_short,                                            \
         const int: ccol_int,                                                \
         const long: ccol_long,                                              \
@@ -892,6 +912,7 @@ typedef enum ccollections_data_type {
 #define _determine_non_special_data_type(var)            \
   _Generic((var),                                        \
       char: ccol_char,                                   \
+      signed char: ccol_char,                            \
       short: ccol_short,                                 \
       int: ccol_int,                                     \
       long: ccol_long,                                   \
@@ -905,6 +926,7 @@ typedef enum ccollections_data_type {
       double: ccol_double,                               \
       long double: ccol_long_double,                     \
       const char: ccol_char,                             \
+      const signed char: ccol_char,                      \
       const short: ccol_short,                           \
       const int: ccol_int,                               \
       const long: ccol_long,                             \

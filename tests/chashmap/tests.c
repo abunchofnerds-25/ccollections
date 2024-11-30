@@ -1610,6 +1610,75 @@ TEST(chash_maps, sc_large_key_and_large_value) {
   chmap_destroy(hm);
 }
 
+TEST(chash_maps, char_type_variants_as_string_keys) {
+  // signed char * (= int8_t *) must route through the string path and behave
+  // identically to char * for all map operations.
+  {
+    chmap_construct(hm, signed char *, int);
+
+    signed char *k1 = (signed char *)"hello";
+    signed char *k2 = (signed char *)"world";
+    int v1 = 10, v2 = 20;
+
+    chmap_insert(hm, k1, v1);
+    chmap_insert(hm, k2, v2);
+    REQUIRE_EQ(chmap_elem_count(hm), 2);
+    REQUIRE_EQ(chmap_get(hm, k1), 10);
+    REQUIRE_EQ(chmap_get(hm, k2), 20);
+
+    // char * with identical string content must find the same entries.
+    char *ck1 = "hello";
+    char *ck2 = "world";
+    REQUIRE_EQ(chmap_get(hm, ck1), 10);
+    REQUIRE_EQ(chmap_get(hm, ck2), 20);
+
+    chmap_remove(hm, k2);
+    REQUIRE_EQ(chmap_elem_count(hm), 1);
+
+    chmap_destroy(hm);
+  }
+
+  // unsigned char * (= uint8_t *) — identical check.
+  {
+    chmap_construct(hm, unsigned char *, int);
+
+    unsigned char *k1 = (unsigned char *)"alpha";
+    unsigned char *k2 = (unsigned char *)"beta";
+    int v1 = 30, v2 = 40;
+
+    chmap_insert(hm, k1, v1);
+    chmap_insert(hm, k2, v2);
+    REQUIRE_EQ(chmap_elem_count(hm), 2);
+    REQUIRE_EQ(chmap_get(hm, k1), 30);
+    REQUIRE_EQ(chmap_get(hm, k2), 40);
+
+    char *ck1 = "alpha";
+    char *ck2 = "beta";
+    REQUIRE_EQ(chmap_get(hm, ck1), 30);
+    REQUIRE_EQ(chmap_get(hm, ck2), 40);
+
+    chmap_destroy(hm);
+  }
+
+  // char * map looked up via signed char * and unsigned char *.
+  {
+    chmap_construct(hm, char *, int);
+
+    char *k1 = "foo";
+    char *k2 = "bar";
+    int v1 = 50, v2 = 60;
+    chmap_insert(hm, k1, v1);
+    chmap_insert(hm, k2, v2);
+
+    signed char *sk1 = (signed char *)"foo";
+    unsigned char *uk2 = (unsigned char *)"bar";
+    REQUIRE_EQ(chmap_get(hm, sk1), 50);
+    REQUIRE_EQ(chmap_get(hm, uk2), 60);
+
+    chmap_destroy(hm);
+  }
+}
+
 TEST(chash_maps, re_enabled_local_chm_macros) {
   chmap_construct(hm, char *, helper_struct);
 

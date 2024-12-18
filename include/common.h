@@ -509,6 +509,10 @@ typedef struct cmap_pair {
 typedef struct cmap_iterator {
   cmap_pair *key_pair; /**< Pointer to current key */
   cmap_pair *val_pair; /**< Pointer to current value */
+  struct cmap_iterator *(*_next_fn)(struct cmap_iterator *); /**< Advance fn */
+  void (*_free_fn)(struct cmap_iterator *);                  /**< Destroy fn */
+  bool _direct_ptr; /**< true → val_pair->ptr IS the element (vec); false → map
+                       SSO rules apply */
 } cmap_iterator;
 
 /* ========================================================================== */

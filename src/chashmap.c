@@ -1428,6 +1428,8 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
  * maps, iteration follows the insertion-order dllist. For open-addressing maps,
  * the first occupied non-deleted slot is found by linear scan. Returns NULL
  * for an empty map. The iterator heap-allocates chmap_cmap_iterator. */
+static cmap_iterator* chmap_iter_next(cmap_iterator* iter);
+
 cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
   if (err) {
     *err = NULL;
@@ -1458,6 +1460,9 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
     llist_node* host = dllistRefNodePtr2LlistNodePtr(tracker);
     real_iter->user_iter.key_pair = &(host->key_pair_accessor);
     real_iter->user_iter.val_pair = &(host->val_pair_accessor);
+    real_iter->user_iter._next_fn = chmap_iter_next;
+    real_iter->user_iter._free_fn = __chmap_iterator_destroy;
+    real_iter->user_iter._direct_ptr = false;
 
     return &(real_iter->user_iter);
   } else {
@@ -1494,6 +1499,9 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
 
     real_iter->user_iter.key_pair = &real_iter->oa_key_pair;
     real_iter->user_iter.val_pair = &real_iter->oa_val_pair;
+    real_iter->user_iter._next_fn = chmap_iter_next;
+    real_iter->user_iter._free_fn = __chmap_iterator_destroy;
+    real_iter->user_iter._direct_ptr = false;
 
     return &(real_iter->user_iter);
   }
@@ -1517,7 +1525,7 @@ void __chmap_iterator_destroy(cmap_iterator* iter) {
  * next pointer is followed. For open-addressing the slot array is scanned
  * linearly for the next occupied non-deleted slot. Returns NULL (and destroys
  * the iterator) when the end is reached. */
-cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
+static cmap_iterator* chmap_iter_next(cmap_iterator* iter) {
   chmap_cmap_iterator* real_iter = cmapIter2ChmapIter(iter);
 
   if (real_iter->parent_map->impl_type == IMPL_SEPARATE_CHAINING) {

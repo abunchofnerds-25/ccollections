@@ -400,6 +400,69 @@ void cvector_reset(cvec v) {
   v->elem_count = 0;
 }
 
+/* Internal iterator implementation — NOT exposed in the public header.
+ * The cmap_iterator base field MUST be first so that a cmap_iterator *
+ * pointing at it is also a valid cvec_iter_impl_t *. */
+typedef struct {
+  cmap_iterator base;         /* public face — key_pair / val_pair / fn ptrs */
+  cmap_pair key_pair_storage; /* index storage (base.key_pair points here) */
+  cmap_pair val_pair_storage; /* element ptr storage (base.val_pair → here) */
+  size_t index;               /* key_pair_storage.ptr points to this field */
+  cvec vec;                   /* back-reference for advancing and freeing */
+} cvec_iter_impl_t;
+
+static void cvec_iter_impl_free(cmap_iterator *it) {
+  cvec_iter_impl_t *impl = (cvec_iter_impl_t *)it;
+  _mem_free(impl->vec->m_procs, impl);
+}
+
+static cmap_iterator *cvec_cmap_iter_next(cmap_iterator *it) {
+  if (!it) {
+    ccol_assert(false);
+  }
+  cvec_iter_impl_t *impl = (cvec_iter_impl_t *)it;
+  size_t next_index = impl->index + 1;
+  if (next_index >= impl->vec->elem_count) {
+    cvec_iter_impl_free(it);
+    return NULL;
+  }
+  impl->index = next_index;
+  impl->val_pair_storage.ptr =
+      (char *)impl->vec->data_ptr + next_index * impl->vec->elem_size;
+  return it;
+}
+
+cmap_iterator *cvector_cmap_begin_iter(cvec v, char **err) {
+  if (err) {
+    *err = NULL;
+  }
+  if (!v) {
+    ccol_assert(false);
+  }
+  if (v->elem_count == 0) {
+    return NULL;
+  }
+  cvec_iter_impl_t *impl = _mem_calloc(v->m_procs, 1, sizeof(cvec_iter_impl_t));
+  if (!impl) {
+    if (err) {
+      *err = CCOL_ERR_STR("Failed to allocate iterator");
+    }
+    return NULL;
+  }
+  impl->index = 0;
+  impl->vec = v;
+  impl->key_pair_storage.ptr = &impl->index;
+  impl->key_pair_storage.size = sizeof(size_t);
+  impl->val_pair_storage.ptr = v->data_ptr;
+  impl->val_pair_storage.size = v->elem_size;
+  impl->base.key_pair = &impl->key_pair_storage;
+  impl->base.val_pair = &impl->val_pair_storage;
+  impl->base._next_fn = cvec_cmap_iter_next;
+  impl->base._free_fn = cvec_iter_impl_free;
+  impl->base._direct_ptr = true;
+  return &impl->base;
+}
+
 #ifdef RUNNING_UNIT_TESTS
 /* Exposes the internal backing-buffer capacity for white-box unit tests that
  * verify the grow/shrink thresholds. Not part of the public API. */

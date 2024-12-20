@@ -142,6 +142,8 @@ cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
 /* Creates and returns an in-order iterator positioned at the first (smallest)
  * key. The iterator uses an explicit stack (cvec of bmap_node*) to implement
  * the traversal iteratively. Returns NULL when the map is empty. */
+static cmap_iterator *cbmap_iter_next(cmap_iterator *iter);
+
 cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
   if (!cbm) {
     ccol_assert(false);
@@ -175,13 +177,16 @@ cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
   }
 
   real_iter->parent_map = cbm;
+  real_iter->user_iter._next_fn = cbmap_iter_next;
+  real_iter->user_iter._free_fn = __cbmap_iterator_destroy;
+  real_iter->user_iter._direct_ptr = false;
   push_all_lefts_into_iter_stack(real_iter, cbm->root);
   return cmap_real_iter_next(real_iter);
 }
 
 /* Advances the iterator to the next in-order node and returns it. Returns NULL
  * (and destroys the iterator) when iteration is complete. */
-cmap_iterator *cbmap_iter_next(cmap_iterator *iter) {
+static cmap_iterator *cbmap_iter_next(cmap_iterator *iter) {
   // Advance to the next node
   if (!iter) {
     ccol_assert(false);

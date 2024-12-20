@@ -25,14 +25,14 @@ void use_nested_types_hmap_of_cvecs() {
     cvec_push_rvalue(*v, i * i * i);
   }
 
-  chmap_iter_declare(hmap, it);
-  for (it = chmap_begin(hmap); it != NULL; it = chmap_iter_next(it)) {
-    cvec v = *chmap_iter_val_ptr(it);
+  ccol_iter_declare(hmap, it);
+  for (it = ccol_begin(hmap); it != NULL; it = ccol_iter_next(it)) {
+    cvec v = *ccol_iter_val_ptr(it);
     cvec_redeclare(v, int);
     int size = cvec_size(v);
     for (int i = 0; i < size; ++i) {
       int k = -1;
-      sscanf(*chmap_iter_key_ptr(it), "%d", &k);
+      sscanf(*ccol_iter_key_ptr(it), "%d", &k);
       assert(cvec_at(v, i) == pow(k, i + 1));
     }
     cvec_destroy(v);
@@ -64,15 +64,15 @@ void use_chmap() {
 
   int elem_count = 0;
 
-  chmap_iter_declare(hmap, it);
-  for (it = chmap_begin(hmap); it != NULL; it = chmap_iter_next(it)) {
-    if (strcmp(*chmap_iter_key_ptr(it), "ten") == 0) {
-      assert(*chmap_iter_val_ptr(it) == 10);
+  ccol_iter_declare(hmap, it);
+  for (it = ccol_begin(hmap); it != NULL; it = ccol_iter_next(it)) {
+    if (strcmp(*ccol_iter_key_ptr(it), "ten") == 0) {
+      assert(*ccol_iter_val_ptr(it) == 10);
     } else {
       char expected_key[16];
       snprintf(expected_key, sizeof(expected_key), "%d",
-               *chmap_iter_val_ptr(it));
-      assert(strcmp(*chmap_iter_key_ptr(it), expected_key) == 0);
+               *ccol_iter_val_ptr(it));
+      assert(strcmp(*ccol_iter_key_ptr(it), expected_key) == 0);
     }
     ++elem_count;
   }
@@ -80,14 +80,14 @@ void use_chmap() {
   assert(elem_count == 21);
 
   elem_count = 0;
-  chmap_for_each(hmap, it, {
-    if (strcmp(*chmap_iter_key_ptr(it), "ten") == 0) {
-      assert(*chmap_iter_val_ptr(it) == 10);
+  ccol_for_each(hmap, it, {
+    if (strcmp(*ccol_iter_key_ptr(it), "ten") == 0) {
+      assert(*ccol_iter_val_ptr(it) == 10);
     } else {
       char expected_key[16];
       snprintf(expected_key, sizeof(expected_key), "%d",
-               *chmap_iter_val_ptr(it));
-      assert(strcmp(*chmap_iter_key_ptr(it), expected_key) == 0);
+               *ccol_iter_val_ptr(it));
+      assert(strcmp(*ccol_iter_key_ptr(it), expected_key) == 0);
     }
     ++elem_count;
   });
@@ -136,15 +136,15 @@ void use_cbmap() {
     assert(val == (key * key));
   }
 
-  cbmap_iter_declare(bmap, iter);
-  for (iter = cbmap_begin(bmap); iter != NULL; iter = cbmap_iter_next(iter)) {
-    assert(*cbmap_iter_val_ptr(iter) ==
-           ((*cbmap_iter_key_ptr(iter)) * (*cbmap_iter_key_ptr(iter))));
+  ccol_iter_declare(bmap, iter);
+  for (iter = ccol_begin(bmap); iter != NULL; iter = ccol_iter_next(iter)) {
+    assert(*ccol_iter_val_ptr(iter) ==
+           ((*ccol_iter_key_ptr(iter)) * (*ccol_iter_key_ptr(iter))));
   }
 
-  cbmap_for_each(bmap, iter, {
-    assert(*cbmap_iter_val_ptr(iter) ==
-           ((*cbmap_iter_key_ptr(iter)) * (*cbmap_iter_key_ptr(iter))));
+  ccol_for_each(bmap, iter, {
+    assert(*ccol_iter_val_ptr(iter) ==
+           ((*ccol_iter_key_ptr(iter)) * (*ccol_iter_key_ptr(iter))));
   });
 
   for (int i = -30; i <= 10; ++i) {
@@ -156,6 +156,18 @@ void use_cbmap() {
 
 void use_cvec() {
   cvec_construct(vec, int);
+
+  for (int i = 0; i < 10; ++i) {
+    cvec_push_rvalue(vec, i * i);
+  }
+
+  ccol_for_each(vec, it, {
+    int idx = *ccol_iter_key_ptr(it);
+    int val = *ccol_iter_val_ptr(it);
+    assert((idx * idx) == val);
+  });
+
+  cvec_reset(vec);
 
   for (int i = 1; i <= 10; ++i) {
     cvec_push(vec, i);

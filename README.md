@@ -19,12 +19,13 @@ A library of generic, type-safe data structures for C, built on C11 and GNU C ex
 7. [Sorting — `csort`](#7-sorting--csort)
 8. [Hash Map — `chashmap`](#8-hash-map--chashmap)
 9. [Ordered Map — `cbstmap`](#9-ordered-map--cbstmap)
-10. [Memory Pools — `cmempool`](#10-memory-pools--cmempool)
-11. [Thread Communication — `cthreadcomm`](#11-thread-communication--cthreadcomm)
-12. [LRU Cache — `clrucache`](#12-lru-cache--clrucache)
-13. [Thread Safety](#13-thread-safety)
-14. [Custom Memory Management](#14-custom-memory-management)
-15. [License](#15-license)
+10. [Unified Iteration — `citerators`](#10-unified-iteration--citerators)
+11. [Memory Pools — `cmempool`](#11-memory-pools--cmempool)
+12. [Thread Communication — `cthreadcomm`](#12-thread-communication--cthreadcomm)
+13. [LRU Cache — `clrucache`](#13-lru-cache--clrucache)
+14. [Thread Safety](#14-thread-safety)
+15. [Custom Memory Management](#15-custom-memory-management)
+16. [License](#16-license)
 
 ---
 
@@ -176,6 +177,8 @@ Include only the headers you need:
 #include <cmempool.h>
 #include <cthreadcomm.h>
 ```
+
+`cvector.h`, `chashmap.h`, and `cbstmap.h` each automatically include `citerators.h`, so the unified iteration API (`ccol_begin`, `ccol_for_each`, `ccol_iter_declare`, and related macros) is available whenever any one of those container headers is included. Use `#include <ccollections.h>` to get all three containers and the full iteration API in a single include.
 
 The compiler must support C11 and GNU extensions (`-std=gnu11`). The library compiles cleanly under both GCC and Clang; diagnostic pragma guards for each compiler are present in the headers.
 
@@ -540,22 +543,24 @@ chmap_destroy(index);
 
 ### Iteration
 
-The `chmap_for_each` macro is the recommended iteration pattern. It declares the iterator variable in its own scope, avoiding name collisions:
+The `ccol_for_each` macro is the recommended iteration pattern. It declares the iterator variable in its own scope, avoiding name collisions:
 
 ```c
-chmap_for_each(index, it, {
-    printf("%s: %d\n", *chmap_iter_key_ptr(it), *chmap_iter_val_ptr(it));
+ccol_for_each(index, it, {
+    printf("%s: %d\n", *ccol_iter_key_ptr(it), *ccol_iter_val_ptr(it));
 });
 ```
 
 When direct control over iteration is required, the iterator can be managed manually. Note that the iterator variable must be declared outside the loop:
 
 ```c
-chmap_iter_declare(index, it);
-for (it = chmap_begin(index); it != NULL; it = chmap_iter_next(it)) {
-    printf("%s -> %d\n", *chmap_iter_key_ptr(it), *chmap_iter_val_ptr(it));
+ccol_iter_declare(index, it);
+for (it = ccol_begin(index); it != NULL; it = ccol_iter_next(it)) {
+    printf("%s -> %d\n", *ccol_iter_key_ptr(it), *ccol_iter_val_ptr(it));
 }
 ```
+
+The unified iteration macros are provided by `citerators.h`, which is automatically included when you include `chashmap.h`. See [Section 10](#10-unified-iteration--citerators) for the full API reference.
 
 Iteration order differs by implementation: separate chaining iterates in insertion order via its internal doubly-linked list; open-addressing iterates in slot order, which is neither insertion order nor sorted order.
 
@@ -578,8 +583,8 @@ for (size_t i = 0; i < n; i++) {
     }
 }
 
-chmap_for_each(freq, it, {
-    printf("%-8s %d\n", *chmap_iter_key_ptr(it), *chmap_iter_val_ptr(it));
+ccol_for_each(freq, it, {
+    printf("%-8s %d\n", *ccol_iter_key_ptr(it), *ccol_iter_val_ptr(it));
 });
 
 chmap_destroy(freq);
@@ -601,8 +606,8 @@ int key = 1;
 chmap_insert(coords, key, p);
 
 /* Before destroying the map, free all pointed-to objects */
-chmap_for_each(coords, it, {
-    free(*chmap_iter_val_ptr(it));
+ccol_for_each(coords, it, {
+    free(*ccol_iter_val_ptr(it));
 });
 chmap_destroy(coords);
 ```
@@ -643,15 +648,17 @@ chmap_destroy(coords);
 
 **Iteration**
 
-| Macro / Function | Description |
+These macros come from `citerators.h`, which `chashmap.h` includes automatically. See [Section 10](#10-unified-iteration--citerators) for the full reference.
+
+| Macro | Description |
 |---|---|
-| `chmap_for_each(m, it, { })` | Recommended iteration pattern; declares the iterator in its own scope and traverses all entries |
-| `chmap_iter_declare(m, it)` | Declare a manual iterator variable; required before using `chmap_begin` in a `for` loop |
-| `chmap_begin(m)` | Return an iterator positioned at the first entry, or `NULL` if the map is empty; calls `fatal_err()` on allocation failure |
-| `chmap_iter_next(it)` | Advance to the next entry; returns `NULL` at the end and automatically destroys the iterator |
-| `chmap_iter_key_ptr(it)` | Return a typed pointer to the current entry's key |
-| `chmap_iter_val_ptr(it)` | Return a typed pointer to the current entry's value; the value may be modified in place |
-| `chmap_iter_destroy(it)` | Destroy a manual iterator before it reaches the end; sets pointer to `NULL` |
+| `ccol_for_each(m, it, { })` | Recommended iteration pattern; declares the iterator in its own scope and traverses all entries |
+| `ccol_iter_declare(m, it)` | Declare a manual iterator variable with RAII cleanup; required before using `ccol_begin` in a `for` loop |
+| `ccol_begin(m)` | Return an iterator positioned at the first entry, or `NULL` if the map is empty; calls `fatal_err()` on allocation failure |
+| `ccol_iter_next(it)` | Advance to the next entry; returns `NULL` at the end and automatically destroys the iterator |
+| `ccol_iter_key_ptr(it)` | Return a typed const pointer to the current entry's key |
+| `ccol_iter_val_ptr(it)` | Return a typed pointer to the current entry's value; the value may be modified in place |
+| `ccol_iter_destroy(it)` | Destroy a manual iterator before it reaches the end; sets pointer to `NULL` |
 
 ---
 
@@ -703,8 +710,8 @@ s = 82;     cbmap_insert(scores, s, "Bob");
 s = 95;     cbmap_insert(scores, s, "Alice");
 
 /* In-order traversal visits entries from score 78 to 95 */
-cbmap_for_each(scores, it, {
-    printf("%3d  %s\n", *cbmap_iter_key_ptr(it), *cbmap_iter_val_ptr(it));
+ccol_for_each(scores, it, {
+    printf("%3d  %s\n", *ccol_iter_key_ptr(it), *ccol_iter_val_ptr(it));
 });
 
 cbmap_destroy(scores);
@@ -786,19 +793,113 @@ cbmap_destroy(env);
 
 **Iteration**
 
-| Macro / Function | Description |
+These macros come from `citerators.h`, which `cbstmap.h` includes automatically. See [Section 10](#10-unified-iteration--citerators) for the full reference.
+
+| Macro | Description |
 |---|---|
-| `cbmap_for_each(m, it, { })` | Recommended iteration pattern; declares the iterator in its own scope and traverses all entries in ascending key order |
-| `cbmap_iter_declare(m, it)` | Declare a manual iterator variable; required before using `cbmap_begin` in a `for` loop |
-| `cbmap_begin(m)` | Return an iterator positioned at the entry with the smallest key, or `NULL` if the map is empty |
-| `cbmap_iter_next(it)` | Advance to the next entry in sorted key order; returns `NULL` at the end and automatically destroys the iterator |
-| `cbmap_iter_key_ptr(it)` | Return a typed pointer to the current entry's key |
-| `cbmap_iter_val_ptr(it)` | Return a typed pointer to the current entry's value; the value may be modified in place |
-| `cbmap_iter_destroy(it)` | Destroy a manual iterator before it reaches the end; sets pointer to `NULL` |
+| `ccol_for_each(m, it, { })` | Recommended iteration pattern; declares the iterator in its own scope and traverses all entries in ascending key order |
+| `ccol_iter_declare(m, it)` | Declare a manual iterator variable with RAII cleanup; required before using `ccol_begin` in a `for` loop |
+| `ccol_begin(m)` | Return an iterator positioned at the entry with the smallest key, or `NULL` if the map is empty |
+| `ccol_iter_next(it)` | Advance to the next entry in sorted key order; returns `NULL` at the end and automatically destroys the iterator |
+| `ccol_iter_key_ptr(it)` | Return a typed const pointer to the current entry's key |
+| `ccol_iter_val_ptr(it)` | Return a typed pointer to the current entry's value; the value may be modified in place |
+| `ccol_iter_destroy(it)` | Destroy a manual iterator before it reaches the end; sets pointer to `NULL` |
 
 ---
 
-## 10. Memory Pools — `cmempool`
+## 10. Unified Iteration — `citerators`
+
+`citerators.h` provides a single, type-dispatched iteration API that works uniformly across `cvector`, `chashmap`, and `cbstmap`. There is no need to include it explicitly: each container header includes `citerators.h` at its own end, so any translation unit that includes a single container header automatically gets the full unified API.
+
+**Header:** included automatically by `cvector.h`, `chashmap.h`, and `cbstmap.h`. All three containers are available via `ccollections.h`.
+
+### `ccol_for_each` — The Recommended Pattern
+
+```c
+chmap_construct(word_count, char*, int);
+/* ... populate ... */
+
+ccol_for_each(word_count, it, {
+    printf("%-12s %d\n", *ccol_iter_key_ptr(it), *ccol_iter_val_ptr(it));
+});
+
+chmap_destroy(word_count);
+```
+
+The macro declares the iterator variable `it` in its own block scope. The iterator is destroyed automatically when the loop ends (whether by reaching the end or by `break`), so no explicit cleanup is needed.
+
+### Manual Iterator Management
+
+When you need early termination, multiple passes, or conditional logic that does not fit cleanly into a body block, manage the iterator by hand:
+
+```c
+cbmap_construct(registry, int, char*);
+/* ... populate ... */
+
+ccol_iter_declare(registry, it);
+for (it = ccol_begin(registry); it != NULL; it = ccol_iter_next(it)) {
+    if (strcmp(*ccol_iter_val_ptr(it), "target") == 0) {
+        ccol_iter_destroy(it);
+        break;
+    }
+    printf("%d\n", *ccol_iter_key_ptr(it));
+}
+
+cbmap_destroy(registry);
+```
+
+`ccol_iter_declare` attaches `__attribute__((cleanup))` to the iterator variable so it is destroyed automatically on scope exit even if `ccol_iter_destroy` is not called explicitly.
+
+### Iterating a Vector
+
+For `cvector`, the iterator key is the element index (`size_t`) and the iterator value is the element itself:
+
+```c
+cvec_construct(scores, int);
+cvec_push_rvalue(scores, 95);
+cvec_push_rvalue(scores, 82);
+cvec_push_rvalue(scores, 78);
+
+ccol_for_each(scores, it, {
+    printf("[%zu] = %d\n", *ccol_iter_key_ptr(it), *ccol_iter_val_ptr(it));
+});
+
+cvec_destroy(scores);
+```
+
+Output:
+```
+[0] = 95
+[1] = 82
+[2] = 78
+```
+
+### Reference: Core Operations
+
+| Macro | Header | Description |
+|---|---|---|
+| `ccol_begin(container)` | `citerators.h` | Return an iterator at the first element, or `NULL` if empty; calls `fatal_err()` on allocation failure |
+| `ccol_end` | `citerators.h` | The end sentinel: `NULL` |
+| `ccol_for_each(container, it, { })` | `citerators.h` | Declare `it`, loop from `ccol_begin` to `ccol_end`, destroy on exit |
+| `ccol_iter_declare(container, it)` | `citerators.h` | Declare a typed iterator variable with RAII cleanup; required before using `ccol_begin` in a `for` loop |
+| `ccol_iter_next(it)` | `citerators.h` | Advance to the next element; returns `NULL` at the end and destroys the iterator |
+| `ccol_iter_key_ptr(it)` | `citerators.h` | Return a typed `const KeyT *` to the current key (index for vectors, map key for maps) |
+| `ccol_iter_val_ptr(it)` | `citerators.h` | Return a typed `ValT *` to the current value; mutations are reflected in the container |
+| `ccol_iter_destroy(it)` | `citerators.h` | Destroy the iterator before reaching the end; sets it to `NULL` |
+
+**Container-to-iterator key type mapping:**
+
+| Container | Key type returned by `ccol_iter_key_ptr` | Value type returned by `ccol_iter_val_ptr` |
+|---|---|---|
+| `cvec` | `const size_t *` (element index) | `const ElemT *` |
+| `chmap` | `const KeyT *` | `ValT *` |
+| `cbmap` | `const KeyT *` | `ValT *` |
+
+> **Do not modify the container while iterating.** Insertions or deletions during a loop produce undefined behaviour.
+
+---
+
+## 11. Memory Pools — `cmempool`
 
 The library provides two pool allocators: a fixed-size pool (`mempool`) and a ranged pool (`r_mempool`). Both offer O(1) allocation and deallocation, optional thread safety, and an optional fallback to the system allocator when the pool is exhausted.
 
@@ -904,11 +1005,11 @@ r_mempool_destroy(pool);  /* The buffer itself is not freed */
 
 ### Driving Other Containers from a Pool
 
-Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 14](#14-custom-memory-management) for the complete pattern.
+Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 15](#15-custom-memory-management) for the complete pattern.
 
 ---
 
-## 11. Thread Communication — `cthreadcomm`
+## 12. Thread Communication — `cthreadcomm`
 
 The thread communication module provides three primitives for safe message passing between threads: a bounded circular queue, an unbounded dynamic queue, and a bidirectional channel. All three use a zero-copy ownership transfer model: the sender's pointer is set to `NULL` on a successful send, and the receiver becomes the sole owner of the data.
 
@@ -1108,7 +1209,7 @@ ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
 
 ---
 
-## 12. LRU Cache — `clrucache`
+## 13. LRU Cache — `clrucache`
 
 `clrucache` is a fully thread-safe generic LRU (Least-Recently-Used) cache backed by a hash map for O(1) lookup and a doubly-linked list for O(1) eviction. When the cache is full, inserting a new entry evicts the least-recently-used live entry first, optionally notifying the caller via an eviction callback. An optional remote getter and setter integrate the cache transparently with an external backing store — a database, a network service, or any other source.
 
@@ -1258,7 +1359,7 @@ void process(void) {
 
 ---
 
-## 13. Thread Safety
+## 14. Thread Safety
 
 ### Intentionally Unguarded Containers
 
@@ -1314,7 +1415,7 @@ The following components include their own synchronisation and are safe to use f
 
 ---
 
-## 14. Custom Memory Management
+## 15. Custom Memory Management
 
 Every container accepts a `ccol_memmgmt_procs_t *` at creation time. Passing `NULL` selects the standard `malloc`/`calloc`/`realloc`/`free` family.
 
@@ -1375,7 +1476,7 @@ r_mempool_destroy(node_pool);
 
 ---
 
-## 15. License
+## 16. License
 
 MIT License
 

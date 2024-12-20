@@ -2524,6 +2524,268 @@ NOTES
 
 SEE ALSO
        clru_get, clrucache_set_full
+              CITERATORS.H - UNIFIED ITERATION API
+================================================================================
+
+Automatically included by cvector.h, chashmap.h, and cbstmap.h.  Any
+translation unit that includes one of those container headers gets this entire
+API without an additional #include.  Use #include <ccollections.h> to pull in
+all three containers and the iteration API together.
+
+------------------------------------------------------------------------------
+NAME
+       ccol_iter_declare - declare a typed iterator variable with RAII cleanup
+
+SYNOPSIS
+       #include <citerators.h>   /* or any container header */
+
+       ccol_iter_declare(container, it);
+
+DESCRIPTION
+       Declares a cmap_iterator pointer named it bound to the type information
+       of container.  The declaration attaches __attribute__((cleanup)) so the
+       iterator is destroyed automatically when it leaves scope — no explicit
+       ccol_iter_destroy() call is required.
+
+       Also declares two hidden companion type variables that allow
+       ccol_iter_key_ptr() and ccol_iter_val_ptr() to return correctly-typed
+       pointers for container.
+
+PARAMETERS
+       container  Container variable previously declared with a *_declare /
+                  *_construct macro.  Must be cvec, chmap, or cbmap.
+       it         Name to use for the iterator variable.
+
+NOTES
+       container must be in scope and its type companion variables must be
+       visible (same scope or a parent scope).
+       Requires GCC or Clang (uses __attribute__((cleanup))).
+
+EXAMPLES
+       ccol_iter_declare(my_map, it);
+       for (it = ccol_begin(my_map); it != NULL; it = ccol_iter_next(it)) {
+           printf("%d\n", *ccol_iter_val_ptr(it));
+       }
+
+SEE ALSO
+       ccol_begin, ccol_iter_next, ccol_for_each, ccol_iter_destroy
+
+------------------------------------------------------------------------------
+NAME
+       ccol_begin - begin iteration over any supported container
+
+SYNOPSIS
+       #include <citerators.h>   /* or any container header */
+
+       cmap_iterator *ccol_begin(container);
+
+DESCRIPTION
+       Returns an iterator positioned at the first element of container.
+       The correct begin_iter function is selected at compile time via
+       _Generic on the type of container.  Supported types: cvec, chmap,
+       cbmap.
+
+       Returns NULL without error when the container is empty.
+       Calls fatal_err() on allocation failure.
+
+PARAMETERS
+       container  A cvec, chmap, or cbmap variable.
+
+RETURN VALUE
+       cmap_iterator* positioned at the first element, or NULL if empty.
+
+NOTES
+       Use ccol_iter_declare(container, it) before calling ccol_begin in a
+       for loop to obtain typed accessors for the iterator.
+
+EXAMPLES
+       ccol_iter_declare(vec, it);
+       for (it = ccol_begin(vec); it != NULL; it = ccol_iter_next(it)) {
+           printf("[%zu] = %d\n", *ccol_iter_key_ptr(it),
+                                   *ccol_iter_val_ptr(it));
+       }
+
+SEE ALSO
+       ccol_iter_declare, ccol_iter_next, ccol_for_each, ccol_end
+
+------------------------------------------------------------------------------
+NAME
+       ccol_end - end sentinel for iteration
+
+SYNOPSIS
+       #include <citerators.h>   /* or any container header */
+
+       ccol_end
+
+DESCRIPTION
+       Expands to NULL.  All container iterators compare equal to NULL when
+       the end of the sequence has been reached.
+
+SEE ALSO
+       ccol_begin, ccol_iter_next
+
+------------------------------------------------------------------------------
+NAME
+       ccol_for_each - iterate over all elements of any supported container
+
+SYNOPSIS
+       #include <citerators.h>   /* or any container header */
+
+       ccol_for_each(container, it, { body });
+
+DESCRIPTION
+       Declares a cmap_iterator* variable named it with RAII cleanup, then
+       loops from ccol_begin(container) to NULL using ccol_iter_next().  The
+       body is executed once for each element; it gives typed access via
+       ccol_iter_key_ptr(it) and ccol_iter_val_ptr(it).
+
+       The iterator is destroyed automatically when the loop exits, whether
+       by reaching the end, by break, or by return.
+
+PARAMETERS
+       container  A cvec, chmap, or cbmap variable.
+       it         Name for the iterator variable.
+       body       Compound statement executed per element (passed as variadic
+                  argument; commas inside nested function calls are safe).
+
+NOTES
+       Do NOT modify the container inside the body — insertions and deletions
+       invalidate the iterator and produce undefined behaviour.
+       Requires GCC or Clang (uses statement expressions and cleanup).
+
+EXAMPLES
+       chmap_construct(freq, char*, int);
+       /* ... populate ... */
+       ccol_for_each(freq, it, {
+           printf("%-12s %d\n", *ccol_iter_key_ptr(it),
+                                *ccol_iter_val_ptr(it));
+       });
+       chmap_destroy(freq);
+
+SEE ALSO
+       ccol_iter_declare, ccol_begin, ccol_iter_next,
+       ccol_iter_key_ptr, ccol_iter_val_ptr
+
+------------------------------------------------------------------------------
+NAME
+       ccol_iter_next - advance a unified iterator to the next element
+
+SYNOPSIS
+       #include <citerators.h>   /* or any container header */
+
+       cmap_iterator *ccol_iter_next(it);
+
+DESCRIPTION
+       Advances the iterator to the next element by calling the iterator's
+       own _next_fn callback.  When the end of the sequence is reached, the
+       iterator is automatically destroyed and NULL is returned.
+
+PARAMETERS
+       it   Iterator variable declared with ccol_iter_declare() or inside
+            ccol_for_each().
+
+RETURN VALUE
+       Returns the (updated) iterator, or NULL when past the last element.
+
+NOTES
+       After ccol_iter_next() returns NULL, the iterator has been destroyed;
+       do not call ccol_iter_destroy() on it afterwards.
+
+SEE ALSO
+       ccol_begin, ccol_iter_declare, ccol_iter_destroy
+
+------------------------------------------------------------------------------
+NAME
+       ccol_iter_key_ptr - get a typed const pointer to the current key
+
+SYNOPSIS
+       #include <citerators.h>   /* or any container header */
+
+       const KeyT *ccol_iter_key_ptr(it);
+
+DESCRIPTION
+       Returns a typed const pointer to the key of the element currently
+       pointed to by it.
+
+       For cvec iterators the key is the element index (size_t).
+       For chmap and cbmap iterators the key is the actual map key.
+       Char-pointer keys are returned as (const char **) pointing into the
+       map's internal storage; all other key types are returned as a direct
+       typed pointer.
+
+PARAMETERS
+       it   Iterator variable declared with ccol_iter_declare() or inside
+            ccol_for_each().
+
+RETURN VALUE
+       const KeyT* to the current key.  Do not free or mutate the pointed-to
+       value through this pointer.
+
+NOTES
+       The returned pointer is valid only while the iterator is alive and
+       the container has not been modified.
+       Uses a GNU C statement expression; requires GCC or Clang.
+
+SEE ALSO
+       ccol_iter_val_ptr, ccol_iter_declare
+
+------------------------------------------------------------------------------
+NAME
+       ccol_iter_val_ptr - get a typed pointer to the current value
+
+SYNOPSIS
+       #include <citerators.h>   /* or any container header */
+
+       ValT *ccol_iter_val_ptr(it);
+
+DESCRIPTION
+       Returns a typed pointer to the value of the element currently pointed
+       to by it.  Mutations through this pointer are reflected in the
+       underlying container.
+
+PARAMETERS
+       it   Iterator variable declared with ccol_iter_declare() or inside
+            ccol_for_each().
+
+RETURN VALUE
+       ValT* to the current element.
+
+NOTES
+       The returned pointer is valid only while the iterator is alive and
+       the container has not been modified.
+       Uses a GNU C statement expression; requires GCC or Clang.
+
+SEE ALSO
+       ccol_iter_key_ptr, ccol_iter_declare
+
+------------------------------------------------------------------------------
+NAME
+       ccol_iter_destroy - destroy a unified iterator before the end
+
+SYNOPSIS
+       #include <citerators.h>   /* or any container header */
+
+       ccol_iter_destroy(it);
+
+DESCRIPTION
+       Destroys the iterator by calling its own _free_fn callback and sets it
+       to NULL.  Must be called when breaking out of a manual for loop before
+       the iterator reaches NULL naturally.
+
+       When using ccol_iter_declare(), RAII cleanup handles destruction
+       automatically on scope exit — ccol_iter_destroy() is only necessary
+       when you need to release resources before the end of the scope.
+       Inside ccol_for_each(), the iterator is always destroyed on exit.
+
+PARAMETERS
+       it   Iterator variable declared with ccol_iter_declare().
+
+NOTES
+       Safe to call when it is already NULL (no-op).
+       After this call, it is NULL and must not be used again.
+
+SEE ALSO
+       ccol_iter_declare, ccol_iter_next, ccol_for_each
 
 ================================================================================
                               END OF MAN PAGES

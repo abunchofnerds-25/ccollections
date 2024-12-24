@@ -147,12 +147,9 @@ static int eviction_key_captured = -1;
 static int eviction_val_captured = -1;
 static int eviction_count = 0;
 
-static void record_eviction(const void *key, size_t key_size, const void *val,
-                            size_t val_size) {
-  (void)key_size;
-  (void)val_size;
-  eviction_key_captured = *(const int *)key;
-  eviction_val_captured = *(const int *)val;
+static void record_eviction(const cmap_pair *key, const cmap_pair *val) {
+  eviction_key_captured = *(const int *)key->ptr;
+  eviction_val_captured = *(const int *)val->ptr;
   eviction_count++;
 }
 
@@ -246,23 +243,21 @@ TEST(eviction, capacity_one_always_evicts) {
 
 static int remote_get_call_count = 0;
 
-static void *simple_remote_getter(const void *key, size_t key_size,
-                                  size_t *val_size_out) {
-  (void)key_size;
+static bool simple_remote_getter(const cmap_pair *key, cmap_pair *val) {
   remote_get_call_count++;
-  int k = *(const int *)key;
+  int k = *(const int *)key->ptr;
   int *v = (int *)malloc(sizeof(int));
+  if (!v) return false;
   *v = k * 2; /* value = key * 2 */
-  *val_size_out = sizeof(int);
-  return v;
+  val->ptr = v;
+  val->size = sizeof(int);
+  return true;
 }
 
-static void *failing_remote_getter(const void *key, size_t key_size,
-                                   size_t *val_size_out) {
+static bool failing_remote_getter(const cmap_pair *key, cmap_pair *val) {
   (void)key;
-  (void)key_size;
-  (void)val_size_out;
-  return NULL; /* always fails */
+  (void)val;
+  return false; /* always fails */
 }
 
 TEST(remote_getter, fetches_on_cache_miss) {
@@ -341,13 +336,11 @@ static int remote_set_call_count = 0;
 static int remote_set_last_key = -1;
 static int remote_set_last_val = -1;
 
-static bool recording_remote_setter(const void *key, size_t key_size,
-                                    const void *val, size_t val_size) {
-  (void)key_size;
-  (void)val_size;
+static bool recording_remote_setter(const cmap_pair *key,
+                                    const cmap_pair *val) {
   remote_set_call_count++;
-  remote_set_last_key = *(const int *)key;
-  remote_set_last_val = *(const int *)val;
+  remote_set_last_key = *(const int *)key->ptr;
+  remote_set_last_val = *(const int *)val->ptr;
   return remote_set_should_succeed;
 }
 
@@ -423,19 +416,19 @@ typedef struct {
 
 static volatile int coalesce_getter_calls = 0;
 
-static void *slow_remote_getter(const void *key, size_t key_size,
-                                size_t *val_size_out) {
-  (void)key_size;
+static bool slow_remote_getter(const cmap_pair *key, cmap_pair *val) {
   __atomic_fetch_add(&coalesce_getter_calls, 1, __ATOMIC_SEQ_CST);
 
   /* Simulate a slow remote call */
   usleep(100000); /* 100 ms */
 
-  int k = *(const int *)key;
+  int k = *(const int *)key->ptr;
   int *v = (int *)malloc(sizeof(int));
+  if (!v) return false;
   *v = k + 1000;
-  *val_size_out = sizeof(int);
-  return v;
+  val->ptr = v;
+  val->size = sizeof(int);
+  return true;
 }
 
 static void *getter_thread(void *arg) {
@@ -485,12 +478,9 @@ static volatile bool setter_may_finish = false;
 static volatile int setter_key_seen = -1;
 static volatile int setter_val_seen = -1;
 
-static bool gating_remote_setter(const void *key, size_t key_size,
-                                 const void *val, size_t val_size) {
-  (void)key_size;
-  (void)val_size;
-  setter_key_seen = *(const int *)key;
-  setter_val_seen = *(const int *)val;
+static bool gating_remote_setter(const cmap_pair *key, const cmap_pair *val) {
+  setter_key_seen = *(const int *)key->ptr;
+  setter_val_seen = *(const int *)val->ptr;
   setter_started = true;
   /* Spin until the test lets us finish */
   while (!setter_may_finish) {
@@ -568,13 +558,10 @@ TEST(concurrency, getters_wait_for_sync_setter) {
 static volatile int serial_setter_order[8];
 static volatile int serial_setter_idx = 0;
 
-static bool ordering_remote_setter(const void *key, size_t key_size,
-                                   const void *val, size_t val_size) {
+static bool ordering_remote_setter(const cmap_pair *key, const cmap_pair *val) {
   (void)key;
-  (void)key_size;
-  (void)val_size;
   usleep(5000); /* 5 ms, simulate latency */
-  int v = *(const int *)val;
+  int v = *(const int *)val->ptr;
   int idx = __atomic_fetch_add(&serial_setter_idx, 1, __ATOMIC_SEQ_CST);
   serial_setter_order[idx] = v;
   return true;

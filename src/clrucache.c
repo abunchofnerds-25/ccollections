@@ -183,8 +183,9 @@ static void evict_lru(clrucache *cache) {
   if (victim == &cache->lru_head) return; /* empty LRU list */
 
   if (cache->eviction_cb && victim->value) {
-    cache->eviction_cb(victim->key, victim->key_size, victim->value,
-                       victim->value_size);
+    cmap_pair kp = {.ptr = victim->key, .size = victim->key_size};
+    cmap_pair vp = {.ptr = victim->value, .size = victim->value_size};
+    cache->eviction_cb(&kp, &vp);
   }
 
   lru_remove(victim);
@@ -362,30 +363,29 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
     /* ---- We are the fetcher: release mutex, call remote getter ---- */
     mutex_unlock(cache->mutex);
 
-    size_t fetched_size = 0;
-    void *fetched =
-        cache->remote_getter(key_pair->ptr, key_pair->size, &fetched_size);
+    cmap_pair fetched = {};
+    bool fetch_ok = cache->remote_getter(key_pair, &fetched);
 
     mutex_lock(cache->mutex);
     entry->fetch_in_progress = false;
 
-    if (fetched && fetched_size > 0) {
+    if (fetch_ok && fetched.ptr && fetched.size > 0) {
       make_room(cache);
-      entry->value = fetched;
-      entry->value_size = fetched_size;
+      entry->value = fetched.ptr;
+      entry->value_size = fetched.size;
       lru_add_to_front(cache, entry);
       cache->size++;
 
-      size_t copy_sz = ccol_min(val_buf_size, fetched_size);
-      mem_cpy(val_buf, fetched, copy_sz);
-      if (val_size_out) *val_size_out = fetched_size;
+      size_t copy_sz = ccol_min(val_buf_size, fetched.size);
+      mem_cpy(val_buf, fetched.ptr, copy_sz);
+      if (val_size_out) *val_size_out = fetched.size;
 
       cond_var_broadcast(entry->cond);
       mutex_unlock(cache->mutex);
       return ccol_success;
     } else {
       /* Remote getter failed: remove placeholder, notify waiters */
-      if (fetched) _mem_free(cache->m_procs, fetched); /* size==0 edge case */
+      if (fetched.ptr) _mem_free(cache->m_procs, fetched.ptr); /* size==0 edge case */
       cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
       chmap_delete_elem(cache->map, &kp);
       entry->evicted = true;
@@ -528,8 +528,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 
   bool remote_ok = true;
   if (cache->remote_setter) {
-    remote_ok = cache->remote_setter(key_pair->ptr, key_pair->size,
-                                     val_pair->ptr, val_pair->size);
+    remote_ok = cache->remote_setter(key_pair, val_pair);
   }
 
   mutex_lock(cache->mutex);

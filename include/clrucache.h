@@ -61,30 +61,28 @@ SOFTWARE.
  * @brief Remote getter callback
  *
  * Called when the requested key is not in the cache and a remote source
- * exists. The implementation must heap-allocate the returned value (the cache
- * takes ownership and will free it). Returns NULL on failure.
+ * exists. On success the implementation must heap-allocate the value data,
+ * assign it to val->ptr, and set val->size to the byte length. The cache
+ * takes ownership of val->ptr and will free it. On failure the callback
+ * must leave val->ptr as NULL and return false.
  *
- * @param key      Pointer to key data
- * @param key_size Size of key in bytes
- * @param val_size_out Set to the byte size of the returned value
- * @return Heap-allocated value, or NULL if the key cannot be retrieved
+ * @param key  Key pair (ptr + size)
+ * @param val  Output pair to populate on success (ptr + size)
+ * @return true on success, false on failure
  */
-typedef void *(*clru_remote_getter_t)(const void *key, size_t key_size,
-                                      size_t *val_size_out);
+typedef bool (*clru_remote_getter_t)(const cmap_pair *key, cmap_pair *val);
 
 /**
  * @brief Remote setter callback
  *
  * Attempts to persist a key-value pair to the remote source.
  *
- * @param key      Pointer to key data
- * @param key_size Size of key in bytes
- * @param val      Pointer to value data
- * @param val_size Size of value in bytes
+ * @param key  Key pair (ptr + size)
+ * @param val  Value pair (ptr + size)
  * @return true on success, false on failure
  */
-typedef bool (*clru_remote_setter_t)(const void *key, size_t key_size,
-                                     const void *val, size_t val_size);
+typedef bool (*clru_remote_setter_t)(const cmap_pair *key,
+                                     const cmap_pair *val);
 
 /**
  * @brief Eviction callback
@@ -92,13 +90,10 @@ typedef bool (*clru_remote_setter_t)(const void *key, size_t key_size,
  * Invoked synchronously (while the cache mutex is held) when an entry is
  * evicted to make room for a new one. Must not call back into the cache.
  *
- * @param key      Pointer to evicted key data
- * @param key_size Size of evicted key in bytes
- * @param val      Pointer to evicted value data
- * @param val_size Size of evicted value in bytes
+ * @param key  Evicted key pair (ptr + size)
+ * @param val  Evicted value pair (ptr + size)
  */
-typedef void (*clru_eviction_cb_t)(const void *key, size_t key_size,
-                                   const void *val, size_t val_size);
+typedef void (*clru_eviction_cb_t)(const cmap_pair *key, const cmap_pair *val);
 
 /* ========================================================================== */
 /*                         OPAQUE TYPE                                        */

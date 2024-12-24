@@ -2108,7 +2108,36 @@ NOTES
        Equivalent to cstring_create_full(initial, NULL, err)
 
 SEE ALSO
-       cstring_create_full, cstring_destroy
+       cstring_create_full, cstring_new, cstring_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cstring_new - create a string with default memory management (optimistic)
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr cstring_new(const char *initial);
+
+DESCRIPTION
+       Convenience wrapper around cstring_create_full() that uses the default
+       malloc/free allocators and provides no error output. Intended for call
+       sites where allocation failure is treated as fatal and no error string
+       is required.
+
+PARAMETERS
+       initial   Initial C string content, or NULL for an empty string
+
+RETURN VALUE
+       Returns pointer to newly created cstring on success
+       Returns NULL on failure (no error detail is provided)
+
+NOTES
+       Equivalent to cstring_create_full(initial, NULL, NULL)
+       Use cstring_create() when an error string on failure is needed
+
+SEE ALSO
+       cstring_create, cstring_create_full, cstring_destroy
 
 ------------------------------------------------------------------------------
 NAME
@@ -2845,14 +2874,19 @@ PARAMETERS
        val_type     ccol_data_type of values (used for type tracking only;
                     the internal map always stores heap pointers).
        getter       Remote getter callback, or NULL. Called on cache miss to
-                    fetch the value from an external source. The returned
-                    value must be heap-allocated; the cache takes ownership.
+                    fetch the value from an external source. On success it
+                    must heap-allocate the value data, assign it to val->ptr,
+                    set val->size to the byte length, and return true. The
+                    cache takes ownership of val->ptr and frees it. On
+                    failure it must leave val->ptr as NULL and return false.
        setter       Remote setter callback, or NULL. Called synchronously
-                    before each cache update. If it returns false the cache
+                    before each cache update. Receives the key and value as
+                    const cmap_pair* pointers. If it returns false the cache
                     is not updated.
        eviction_cb  Eviction callback, or NULL. Called while the cache mutex
-                    is held when an entry is evicted to make room. Must not
-                    call back into the cache.
+                    is held when an entry is evicted to make room. Receives
+                    the evicted key and value as const cmap_pair* pointers.
+                    Must not call back into the cache.
        mprocs       Custom memory management procedures, or NULL for default
                     malloc/free.
        err          Optional pointer to receive an error string on failure.
@@ -2928,8 +2962,7 @@ DESCRIPTION
        for the same key coalesce: only the first caller runs the fetch; all
        others block until the result is available. On getter success the
        fetched value is cached and copied into val_buf for all waiters. On
-       getter failure (returns NULL or zero size), all waiters receive
-       ccol_key_not_found.
+       getter failure (returns NULL), all waiters receive ccol_key_not_found.
 
        If a set is in progress for the same key this call blocks until the
        set completes and the cache is in a consistent state.

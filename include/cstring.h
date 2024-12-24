@@ -99,6 +99,24 @@ cstring_create(const char *initial, char **err) {
 }
 
 /**
+ * @brief Create a string using the default memory management in an
+ * optimistic manner
+ *
+ * Convenience wrapper around cstring_create_full() that uses the default
+ * memory management mechanisms and does not provide an error buffer,
+ * expecting a probable success.
+ *
+ * @param initial The initial C string, or NULL for an empty string
+ *
+ * @return Pointer to newly created string, or NULL on failure.
+ *
+ */
+static inline __attribute__((always_inline)) cstr
+cstring_new(const char *initial) {
+  return cstring_create_full(initial, NULL, NULL);
+}
+
+/**
  * @brief Get the memory management procedures for a string
  *
  * @param s  String to query

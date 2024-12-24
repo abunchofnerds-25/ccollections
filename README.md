@@ -402,6 +402,7 @@ chmap_destroy(map);
 | `cstr_construct_scoped(s, initial)` | Declare, initialise, and register auto-cleanup |
 | `cstr_construct_mp(s, initial, mprocs)` | Declare and initialise with a custom allocator |
 | `cstr_construct_mp_scoped(s, initial, mprocs)` | Declare, initialise with a custom allocator, and register auto-cleanup |
+| `cstring_new(initial)` | Allocate and return a new `cstr` using default allocators; returns `NULL` on failure with no error detail (equivalent to `cstring_create_full(initial, NULL, NULL)`) |
 | `cstr_reserve(s, cap)` | Pre-allocate at least `cap` bytes (rounded up to next power of two, minimum 16); calls `fatal_err()` on failure |
 | `cstr_reset(s)` | Clear all characters and shrink capacity back to the minimum |
 | `cstr_destroy(s)` | Destroy and set pointer to `NULL` |
@@ -1250,12 +1251,13 @@ clru_destroy(cache);
 A remote getter is called on a cache miss. The cache takes ownership of the heap-allocated value returned by the getter. Concurrent requests for the same missing key coalesce: only one fetch executes, and all waiters receive the result.
 
 ```c
-void *load_from_db(const void *key, size_t key_size, size_t *val_size_out) {
+bool load_from_db(const cmap_pair *key, cmap_pair *val) {
     double *result = malloc(sizeof(double));
-    if (!result) return NULL;
+    if (!result) return false;
     *result = /* ... query database ... */;
-    *val_size_out = sizeof(double);
-    return result;
+    val->ptr  = result;
+    val->size = sizeof(double);
+    return true;
 }
 
 clru_construct(cache, int, double, 256, load_from_db, NULL, NULL);
@@ -1275,8 +1277,7 @@ clru_destroy(cache);
 A remote setter is called synchronously before the cache is updated. If the remote call fails, the cache is not updated and `clru_set` returns `ccol_unexpected_failure`.
 
 ```c
-bool write_to_db(const void *key, size_t key_size,
-                 const void *val, size_t val_size) {
+bool write_to_db(const cmap_pair *key, const cmap_pair *val) {
     return /* write key/value to external store */;
 }
 
@@ -1294,9 +1295,8 @@ clru_destroy(cache);
 ### Eviction Callback
 
 ```c
-void on_evict(const void *key, size_t key_size,
-              const void *val, size_t val_size) {
-    printf("evicted key=%d\n", *(const int *)key);
+void on_evict(const cmap_pair *key, const cmap_pair *val) {
+    printf("evicted key=%d\n", *(const int *)key->ptr);
     /* Must NOT call back into the cache — mutex is held */
 }
 

@@ -2944,16 +2944,16 @@ SYNOPSIS
 
        ccol_retval_t clrucache_get_full(clru_cache cache,
                                         const cmap_pair *key_pair,
-                                        void *val_buf,
-                                        size_t val_buf_size,
-                                        size_t *val_size_out);
+                                        cmap_pair *val_out);
 
 DESCRIPTION
-       Looks up key_pair in the cache and copies up to val_buf_size bytes of
-       the associated value into val_buf.
+       Looks up key_pair in the cache and, on success, heap-allocates a copy
+       of the associated value (via standard malloc), assigns the pointer to
+       val_out->ptr, and sets val_out->size to the stored byte size. The
+       caller is responsible for freeing val_out->ptr with free().
 
        Cache hit: the entry is moved to the most-recently-used position and
-       its value is copied into val_buf.
+       a heap-allocated copy of its value is written into val_out.
 
        Cache miss without a remote getter: returns ccol_key_not_found.
 
@@ -2961,33 +2961,34 @@ DESCRIPTION
        the remote getter is called outside the mutex. Concurrent get calls
        for the same key coalesce: only the first caller runs the fetch; all
        others block until the result is available. On getter success the
-       fetched value is cached and copied into val_buf for all waiters. On
-       getter failure (returns NULL), all waiters receive ccol_key_not_found.
+       fetched value is cached and a heap-allocated copy is written into
+       val_out for all waiters. On getter failure, all waiters receive
+       ccol_key_not_found.
 
        If a set is in progress for the same key this call blocks until the
        set completes and the cache is in a consistent state.
 
 PARAMETERS
-       cache         Cache handle.
-       key_pair      Key to look up (ptr and size fields must be set).
-       val_buf       Buffer to receive the value. Must not be NULL.
-       val_buf_size  Size of val_buf in bytes. Must be > 0.
-       val_size_out  If non-NULL, set to the actual stored value size on
-                     success. Allows the caller to detect truncation when
-                     val_buf_size < stored size.
+       cache     Cache handle.
+       key_pair  Key to look up (ptr and size fields must be set).
+       val_out   Output pair populated on success. val_out->ptr is set to a
+                 heap-allocated copy of the value (caller must free() it);
+                 val_out->size is set to the stored value size. Must not be
+                 NULL.
 
 RETURN VALUE
-       ccol_success           Value copied into val_buf.
+       ccol_success           val_out populated; caller owns val_out->ptr.
        ccol_key_not_found     Key absent and no getter, or getter failed.
-       ccol_invalid_args      cache, key_pair, or val_buf is NULL; or
-                              val_buf_size is 0.
-       ccol_not_enough_memory Placeholder entry allocation failed during a
-                              remote fetch.
+       ccol_invalid_args      cache, key_pair, or val_out is NULL.
+       ccol_not_enough_memory Allocation failed (placeholder entry or output
+                              copy).
 
 NOTES
-       The value is always copied into the caller-supplied buffer. The cache
-       never exposes a pointer into its internal storage (such a pointer
-       would dangle after eviction).
+       The returned val_out->ptr is allocated with the standard malloc
+       regardless of any custom allocator configured on the cache. Free it
+       with free().
+       The cache never exposes a pointer into its internal storage (such a
+       pointer would dangle after eviction).
        O(1) average-case complexity for the hash map lookup.
 
 SEE ALSO

@@ -1237,9 +1237,9 @@ int k = 42;
 double v = 3.14;
 clru_set(cache, k, v);
 
-/* Retrieve a value */
-double out;
-if (clru_get(cache, k, &out, sizeof(out)) == ccol_success) {
+/* Retrieve a value — val_ptr is a pointer to the value type, not cmap_pair */
+double out = 0.0;
+if (clru_get(cache, k, &out) == ccol_success) {
     printf("%.2f\n", out);
 }
 
@@ -1263,9 +1263,9 @@ bool load_from_db(const cmap_pair *key, cmap_pair *val) {
 clru_construct(cache, int, double, 256, load_from_db, NULL, NULL);
 
 int k = 7;
-double val;
+double val = 0.0;
 /* On a miss, load_from_db is called exactly once regardless of concurrent threads */
-if (clru_get(cache, k, &val, sizeof(val)) == ccol_success) {
+if (clru_get(cache, k, &val) == ccol_success) {
     printf("%.2f\n", val);
 }
 
@@ -1305,21 +1305,66 @@ clru_construct(cache, int, double, 4, NULL, NULL, on_evict);
 clru_destroy(cache);
 ```
 
-### Cross-Scope Usage
+### Memory Ownership for Retrieved Values
 
-Pass the cache handle across function boundaries and use `clru_redeclare` to restore type information:
+`clru_get` memory behavior depends on the value type. Only `char *` values cause a heap allocation; for all other types no heap allocation occurs.
+
+**Non-`char *` value types** — the macro copies the value directly into `*val_ptr` with no heap allocation. The caller receives the value in a plain typed variable; `free()` is neither needed nor valid:
 
 ```c
-void populate(clru_cache c) {
+clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+int k = 42;
+double v = 3.14;
+clru_set(cache, k, v);
+
+double out = 0.0;
+if (clru_get(cache, k, &out) == ccol_success) {
+    printf("%.2f\n", out);
+    /* No free() — no heap allocation occurred */
+}
+
+clru_destroy(cache);
+```
+
+**`char *` value types** — the macro transfers ownership of the heap-allocated string to the caller via `*(char **)val_ptr`. The caller **must** call `free()` on it when done:
+
+```c
+clru_construct(str_cache, int, char *, 64, NULL, NULL, NULL);
+
+int k = 1;
+char *greeting = "hello";
+clru_set(str_cache, k, greeting);
+
+char *s = NULL;
+if (clru_get(str_cache, k, &s) == ccol_success) {
+    printf("%s\n", s);
+    free(s);   /* Required — clru_get transferred heap ownership to the caller */
+}
+
+clru_destroy(str_cache);
+```
+
+Each call to `clru_get` produces an independent heap allocation for the string. Two successive calls to `clru_get` for the same key return two independent pointers that must each be freed separately.
+
+### Cross-Scope Usage
+
+Pass the cache handle across function boundaries and use `clru_redeclare` to restore type information. This is required before calling `clru_get` or `clru_set` — both macros rely on the companion type variables to determine the value type. Note that `clru_redeclare` requires a simple local identifier, not a struct-member expression like `ga->cache`; declare a local alias first if necessary.
+
+```c
+void read_and_write(clru_cache c) {
     clru_redeclare(c, int, double);
     int k = 1;
     double v = 1.0;
     clru_set(c, k, v);
+
+    double out = 0.0;
+    clru_get(c, k, &out);
 }
 
 int main(void) {
     clru_construct(cache, int, double, 64, NULL, NULL, NULL);
-    populate(cache);
+    read_and_write(cache);
     clru_destroy(cache);
     return 0;
 }
@@ -1354,7 +1399,7 @@ void process(void) {
 
 | Macro / Function | Description |
 |---|---|
-| `clru_get(name, key, val_buf, buf_sz)` | Copy the value for `key` into `val_buf`; returns `ccol_success`, `ccol_key_not_found`, or another error code |
+| `clru_get(name, key, val_ptr)` | Retrieve the value for `key`. `val_ptr` is a pointer to the value type (`ValT *`), **not** `cmap_pair *`. For non-`char *` val types, the value is copied directly into `*val_ptr` — no heap allocation occurs. For `char *` val types, `*(char **)val_ptr` is set to a heap-allocated string that the caller must `free()`. Returns `ccol_success`, `ccol_key_not_found`, or another error code. |
 | `clru_set(name, key, val)` | Store `val` for `key`; if a remote setter was provided it is called first; returns `ccol_success` or `ccol_unexpected_failure` on remote failure |
 
 ---

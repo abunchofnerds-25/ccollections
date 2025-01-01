@@ -319,9 +319,8 @@ void __clrucache_destroy(clru_cache cache) {
 /* ========================================================================== */
 
 ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
-                                 void *val_buf, size_t val_buf_size,
-                                 size_t *val_size_out) {
-  if (!cache || !key_pair || !val_buf || val_buf_size == 0)
+                                 cmap_pair *val_out) {
+  if (!cache || !key_pair || !val_out)
     return ccol_invalid_args;
 
   mutex_lock(cache->mutex);
@@ -376,9 +375,16 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
       lru_add_to_front(cache, entry);
       cache->size++;
 
-      size_t copy_sz = ccol_min(val_buf_size, fetched.size);
-      mem_cpy(val_buf, fetched.ptr, copy_sz);
-      if (val_size_out) *val_size_out = fetched.size;
+      void *copy = malloc(fetched.size);
+      if (!copy) {
+        /* Entry is cached; caller just can't get a copy this time. */
+        cond_var_broadcast(entry->cond);
+        mutex_unlock(cache->mutex);
+        return ccol_not_enough_memory;
+      }
+      mem_cpy(copy, fetched.ptr, fetched.size);
+      val_out->ptr = copy;
+      val_out->size = fetched.size;
 
       cond_var_broadcast(entry->cond);
       mutex_unlock(cache->mutex);
@@ -413,16 +419,22 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
     }
   }
 
-  /* ---- Entry is LIVE: copy value and refresh LRU position ---- */
+  /* ---- Entry is LIVE: copy value out and refresh LRU position ---- */
   /* Invariant: if map_lookup returned a non-NULL entry and no in-progress
    * operation was pending, the entry must be LIVE (in LRU, with a value).
    * Eviction removes the entry from the map before setting evicted=true, so
    * a non-NULL map_lookup result is always a valid LIVE entry here. */
   assert(!entry->evicted && entry->value != NULL && entry->in_lru);
   lru_move_to_front(cache, entry);
-  size_t copy_sz = ccol_min(val_buf_size, entry->value_size);
-  mem_cpy(val_buf, entry->value, copy_sz);
-  if (val_size_out) *val_size_out = entry->value_size;
+
+  void *copy = malloc(entry->value_size);
+  if (!copy) {
+    mutex_unlock(cache->mutex);
+    return ccol_not_enough_memory;
+  }
+  mem_cpy(copy, entry->value, entry->value_size);
+  val_out->ptr = copy;
+  val_out->size = entry->value_size;
 
   mutex_unlock(cache->mutex);
   return ccol_success;
@@ -586,6 +598,107 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
   if (should_free) entry_free(cache, entry);
 
   return remote_ok ? ccol_success : ccol_unexpected_failure;
+}
+
+/* ========================================================================== */
+/*                         __clrucache_get_into                               */
+/* ========================================================================== */
+
+ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
+                                   void *buf, size_t buf_size) {
+  if (!cache || !key_pair || !buf || buf_size == 0)
+    return ccol_invalid_args;
+
+  mutex_lock(cache->mutex);
+
+  clru_entry *entry = map_lookup(cache, key_pair);
+
+  if (!entry) {
+    if (!cache->remote_getter) {
+      mutex_unlock(cache->mutex);
+      return ccol_key_not_found;
+    }
+
+    entry = entry_alloc(cache);
+    if (!entry) {
+      mutex_unlock(cache->mutex);
+      return ccol_not_enough_memory;
+    }
+
+    entry->key = _mem_alloc(cache->m_procs, key_pair->size);
+    if (!entry->key) {
+      entry_free(cache, entry);
+      mutex_unlock(cache->mutex);
+      return ccol_not_enough_memory;
+    }
+    mem_cpy(entry->key, key_pair->ptr, key_pair->size);
+    entry->key_size = key_pair->size;
+    entry->fetch_in_progress = true;
+
+    ccol_retval_t ins = map_upsert(cache, key_pair, entry);
+    if (ins != ccol_success) {
+      entry_free(cache, entry);
+      mutex_unlock(cache->mutex);
+      return ins;
+    }
+
+    mutex_unlock(cache->mutex);
+
+    cmap_pair fetched = {};
+    bool fetch_ok = cache->remote_getter(key_pair, &fetched);
+
+    mutex_lock(cache->mutex);
+    entry->fetch_in_progress = false;
+
+    if (fetch_ok && fetched.ptr && fetched.size > 0) {
+      make_room(cache);
+      entry->value = fetched.ptr;
+      entry->value_size = fetched.size;
+      lru_add_to_front(cache, entry);
+      cache->size++;
+
+      assert(fetched.size <= buf_size);
+      mem_cpy(buf, fetched.ptr, fetched.size);
+
+      cond_var_broadcast(entry->cond);
+      mutex_unlock(cache->mutex);
+      return ccol_success;
+    } else {
+      if (fetched.ptr) _mem_free(cache->m_procs, fetched.ptr);
+      cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
+      chmap_delete_elem(cache->map, &kp);
+      entry->evicted = true;
+      cond_var_broadcast(entry->cond);
+      bool should_free = (entry->waiters == 0);
+      mutex_unlock(cache->mutex);
+      if (should_free) entry_free(cache, entry);
+      return ccol_key_not_found;
+    }
+  }
+
+  if (entry->fetch_in_progress || entry->set_in_progress) {
+    entry->waiters++;
+    while (entry->fetch_in_progress || entry->set_in_progress) {
+      cond_var_wait(entry->cond, cache->mutex);
+    }
+    entry->waiters--;
+
+    if (entry->evicted || !entry->value) {
+      bool should_free = (entry->evicted && entry->waiters == 0);
+      mutex_unlock(cache->mutex);
+      if (should_free) entry_free(cache, entry);
+      return ccol_key_not_found;
+    }
+  }
+
+  assert(!entry->evicted && entry->value != NULL && entry->in_lru);
+  lru_move_to_front(cache, entry);
+
+  assert(entry->value_size <= buf_size);
+  mem_cpy(buf, entry->value, entry->value_size);
+
+  mutex_unlock(cache->mutex);
+  return ccol_success;
 }
 
 /* ========================================================================== */

@@ -22,7 +22,7 @@ TEST(basic, set_and_get_int_key_int_value) {
   REQUIRE_EQ(r, ccol_success);
 
   int out = 0;
-  r = clru_get(cache, k, &out, sizeof(out));
+  r = clru_get(cache, k, &out);
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(out, 100);
 
@@ -33,7 +33,7 @@ TEST(basic, get_missing_key_returns_not_found) {
   clru_construct(cache, int, int, 10, NULL, NULL, NULL);
 
   int out = 0;
-  ccol_retval_t r = clru_get(cache, 99, &out, sizeof(out));
+  ccol_retval_t r = clru_get(cache, 99, &out);
   REQUIRE_EQ(r, ccol_key_not_found);
 
   clru_destroy(cache);
@@ -47,7 +47,7 @@ TEST(basic, overwrite_value) {
   clru_set(cache, k, v2);
 
   int out = 0;
-  clru_get(cache, k, &out, sizeof(out));
+  clru_get(cache, k, &out);
   REQUIRE_EQ(out, 20);
 
   clru_destroy(cache);
@@ -61,12 +61,12 @@ TEST(basic, string_key_int_value) {
   REQUIRE_EQ(r, ccol_success);
 
   int out = 0;
-  r = clru_get(cache, "hello", &out, sizeof(out));
+  r = clru_get(cache, "hello", &out);
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(out, 55);
 
   int miss = 0;
-  r = clru_get(cache, "world", &miss, sizeof(miss));
+  r = clru_get(cache, "world", &miss);
   REQUIRE_EQ(r, ccol_key_not_found);
 
   clru_destroy(cache);
@@ -89,17 +89,14 @@ TEST(basic, size_and_capacity) {
 TEST(basic, invalid_args_get) {
   clru_construct(cache, int, int, 4, NULL, NULL, NULL);
 
-  int k = 1, out = 0;
+  int k = 1;
   cmap_pair kp = {};
   _populate_cmap_pair(&kp, k);
+  cmap_pair val_out = {};
 
-  REQUIRE_EQ(clrucache_get_full(NULL, &kp, &out, sizeof(out), NULL),
-             ccol_invalid_args);
-  REQUIRE_EQ(clrucache_get_full(cache, NULL, &out, sizeof(out), NULL),
-             ccol_invalid_args);
-  REQUIRE_EQ(clrucache_get_full(cache, &kp, NULL, sizeof(out), NULL),
-             ccol_invalid_args);
-  REQUIRE_EQ(clrucache_get_full(cache, &kp, &out, 0, NULL), ccol_invalid_args);
+  REQUIRE_EQ(clrucache_get_full(NULL, &kp, &val_out), ccol_invalid_args);
+  REQUIRE_EQ(clrucache_get_full(cache, NULL, &val_out), ccol_invalid_args);
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, NULL), ccol_invalid_args);
 
   clru_destroy(cache);
 }
@@ -133,7 +130,7 @@ TEST(basic, size_unchanged_on_overwrite) {
   REQUIRE_EQ(clrucache_size(cache), (size_t)1);
 
   int out = 0;
-  clru_get(cache, k, &out, sizeof(out));
+  clru_get(cache, k, &out);
   REQUIRE_EQ(out, 200);
 
   clru_destroy(cache);
@@ -168,7 +165,7 @@ TEST(eviction, lru_order_respected) {
 
   /* Access key 0 so it becomes MRU; key 1 is now LRU */
   int out = 0;
-  clru_get(cache, 0, &out, sizeof(out));
+  clru_get(cache, 0, &out);
 
   /* Insert key 3 — should evict key 1 (LRU) */
   clru_set(cache, 3, 30);
@@ -179,15 +176,15 @@ TEST(eviction, lru_order_respected) {
   REQUIRE_EQ(clrucache_size(cache), (size_t)3);
 
   /* Key 1 should now be gone */
-  ccol_retval_t r = clru_get(cache, 1, &out, sizeof(out));
+  ccol_retval_t r = clru_get(cache, 1, &out);
   REQUIRE_EQ(r, ccol_key_not_found);
 
   /* Keys 0, 2, 3 should still be present */
-  clru_get(cache, 0, &out, sizeof(out));
+  clru_get(cache, 0, &out);
   REQUIRE_EQ(out, 0);
-  clru_get(cache, 2, &out, sizeof(out));
+  clru_get(cache, 2, &out);
   REQUIRE_EQ(out, 20);
-  clru_get(cache, 3, &out, sizeof(out));
+  clru_get(cache, 3, &out);
   REQUIRE_EQ(out, 30);
 
   clru_destroy(cache);
@@ -229,9 +226,9 @@ TEST(eviction, capacity_one_always_evicts) {
   REQUIRE_EQ(eviction_val_captured, 200);
 
   int out = 0;
-  REQUIRE_EQ(clru_get(cache, 10, &out, sizeof(out)), ccol_key_not_found);
-  REQUIRE_EQ(clru_get(cache, 20, &out, sizeof(out)), ccol_key_not_found);
-  REQUIRE_EQ(clru_get(cache, 30, &out, sizeof(out)), ccol_success);
+  REQUIRE_EQ(clru_get(cache, 10, &out), ccol_key_not_found);
+  REQUIRE_EQ(clru_get(cache, 20, &out), ccol_key_not_found);
+  REQUIRE_EQ(clru_get(cache, 30, &out), ccol_success);
   REQUIRE_EQ(out, 300);
 
   clru_destroy(cache);
@@ -265,13 +262,13 @@ TEST(remote_getter, fetches_on_cache_miss) {
   clru_construct(cache, int, int, 10, simple_remote_getter, NULL, NULL);
 
   int out = 0;
-  ccol_retval_t r = clru_get(cache, 7, &out, sizeof(out));
+  ccol_retval_t r = clru_get(cache, 7, &out);
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(out, 14); /* 7 * 2 */
   REQUIRE_EQ(remote_get_call_count, 1);
 
   /* Second access should hit the cache (no remote call) */
-  clru_get(cache, 7, &out, sizeof(out));
+  clru_get(cache, 7, &out);
   REQUIRE_EQ(remote_get_call_count, 1);
 
   clru_destroy(cache);
@@ -281,26 +278,26 @@ TEST(remote_getter, returns_not_found_on_getter_failure) {
   clru_construct(cache, int, int, 10, failing_remote_getter, NULL, NULL);
 
   int out = 0;
-  ccol_retval_t r = clru_get(cache, 5, &out, sizeof(out));
+  ccol_retval_t r = clru_get(cache, 5, &out);
   REQUIRE_EQ(r, ccol_key_not_found);
 
   clru_destroy(cache);
 }
 
-TEST(remote_getter, val_size_out_populated) {
+TEST(remote_getter, val_out_populated) {
   remote_get_call_count = 0;
   clru_construct(cache, int, int, 10, simple_remote_getter, NULL, NULL);
 
-  int k = 5, out = 0;
+  int k = 5;
   cmap_pair kp = {};
   _populate_cmap_pair(&kp, k);
 
-  size_t val_size = 0;
-  ccol_retval_t r =
-      clrucache_get_full(cache, &kp, &out, sizeof(out), &val_size);
+  cmap_pair val_out = {};
+  ccol_retval_t r = clrucache_get_full(cache, &kp, &val_out);
   REQUIRE_EQ(r, ccol_success);
-  REQUIRE_EQ(out, 10); /* 5 * 2 */
-  REQUIRE_EQ(val_size, sizeof(int));
+  REQUIRE_EQ(*(int *)val_out.ptr, 10); /* 5 * 2 */
+  REQUIRE_EQ(val_out.size, sizeof(int));
+  free(val_out.ptr);
 
   clru_destroy(cache);
 }
@@ -310,17 +307,17 @@ TEST(remote_getter, re_fetches_after_eviction) {
   clru_construct(cache, int, int, 1, simple_remote_getter, NULL, NULL);
 
   int out = 0;
-  clru_get(cache, 10, &out, sizeof(out));
+  clru_get(cache, 10, &out);
   REQUIRE_EQ(out, 20); /* 10 * 2 */
   REQUIRE_EQ(remote_get_call_count, 1);
 
   /* Fetch a different key — evicts key=10 (only slot available) */
-  clru_get(cache, 20, &out, sizeof(out));
+  clru_get(cache, 20, &out);
   REQUIRE_EQ(out, 40); /* 20 * 2 */
   REQUIRE_EQ(remote_get_call_count, 2);
 
   /* Fetch key=10 again — must call the remote getter (was evicted) */
-  clru_get(cache, 10, &out, sizeof(out));
+  clru_get(cache, 10, &out);
   REQUIRE_EQ(out, 20);
   REQUIRE_EQ(remote_get_call_count, 3);
 
@@ -358,7 +355,7 @@ TEST(sync_setter, success_updates_cache) {
   REQUIRE_EQ(remote_set_last_val, 42);
 
   int out = 0;
-  clru_get(cache, k, &out, sizeof(out));
+  clru_get(cache, k, &out);
   REQUIRE_EQ(out, 42);
 
   clru_destroy(cache);
@@ -375,7 +372,7 @@ TEST(sync_setter, failure_does_not_update_cache) {
   REQUIRE_EQ(r, ccol_unexpected_failure);
 
   int out = 0;
-  r = clru_get(cache, k, &out, sizeof(out));
+  r = clru_get(cache, k, &out);
   REQUIRE_EQ(r, ccol_key_not_found);
 
   clru_destroy(cache);
@@ -397,7 +394,7 @@ TEST(sync_setter, failure_preserves_existing_value) {
 
   /* Old value should still be there */
   int out = 0;
-  clru_get(cache, k, &out, sizeof(out));
+  clru_get(cache, k, &out);
   REQUIRE_EQ(out, 10);
 
   clru_destroy(cache);
@@ -433,7 +430,9 @@ static bool slow_remote_getter(const cmap_pair *key, cmap_pair *val) {
 
 static void *getter_thread(void *arg) {
   getter_arg_t *ga = (getter_arg_t *)arg;
-  ga->retval = clru_get(ga->cache, ga->key, &ga->result, sizeof(ga->result));
+  clru_cache cache = ga->cache;
+  clru_redeclare(cache, int, int);
+  ga->retval = clru_get(cache, ga->key, &ga->result);
   return NULL;
 }
 
@@ -500,7 +499,9 @@ typedef struct {
 
 static void *waiter_thread(void *arg) {
   waiter_arg_t *wa = (waiter_arg_t *)arg;
-  wa->retval = clru_get(wa->cache, wa->key, &wa->result, sizeof(wa->result));
+  clru_cache cache = wa->cache;
+  clru_redeclare(cache, int, int);
+  wa->retval = clru_get(cache, wa->key, &wa->result);
   wa->done = true;
   return NULL;
 }
@@ -659,7 +660,7 @@ TEST(macros, scoped_construct_auto_destroys) {
     int k = 1, v = 2;
     clru_set(cache, k, v);
     int out = 0;
-    clru_get(cache, k, &out, sizeof(out));
+    clru_get(cache, k, &out);
     REQUIRE_EQ(out, 2);
     /* cache is destroyed automatically when block exits */
   }
@@ -674,7 +675,7 @@ TEST(macros, scoped_construct_auto_destroys) {
 static ccol_retval_t use_cache_in_other_scope(clru_cache cache, int key,
                                               int *out) {
   clru_redeclare(cache, int, int);
-  return clru_get(cache, key, out, sizeof(*out));
+  return clru_get(cache, key, out);
 }
 
 TEST(macros, redeclare_works_across_scope) {
@@ -687,6 +688,240 @@ TEST(macros, redeclare_works_across_scope) {
   ccol_retval_t r = use_cache_in_other_scope(cache, k, &result);
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(result, 33);
+
+  clru_destroy(cache);
+}
+
+/* ========================================================================== */
+/*            VALUE TYPE COVERAGE — clru_get & clrucache_get_full             */
+/* ========================================================================== */
+
+typedef struct {
+  int x;
+  double y;
+} point_t;
+
+static bool str_val_remote_getter(const cmap_pair *key, cmap_pair *val) {
+  int k = *(const int *)key->ptr;
+  char buf[64];
+  snprintf(buf, sizeof(buf), "remote_%d", k);
+  size_t len = strlen(buf) + 1;
+  char *s = (char *)malloc(len);
+  if (!s) return false;
+  memcpy(s, buf, len);
+  val->ptr = s;
+  val->size = len;
+  return true;
+}
+
+/* --- non-char* scalar: double --------------------------------------------- */
+
+TEST(get_val_types, double_value_via_macro) {
+  clru_construct(cache, int, double, 8, NULL, NULL, NULL);
+
+  clru_set(cache, 1, 2.5);
+
+  double out = 0.0;
+  REQUIRE_EQ(clru_get(cache, 1, &out), ccol_success);
+  REQUIRE_EQ(out, 2.5);
+
+  clru_destroy(cache);
+}
+
+/* --- non-char* struct value ----------------------------------------------- */
+
+TEST(get_val_types, struct_value_via_macro) {
+  clru_construct(cache, int, point_t, 8, NULL, NULL, NULL);
+
+  point_t v = {.x = 7, .y = 2.5};
+  clru_set(cache, 42, v);
+
+  point_t out = {};
+  REQUIRE_EQ(clru_get(cache, 42, &out), ccol_success);
+  REQUIRE_EQ(out.x, 7);
+  REQUIRE_EQ(out.y, 2.5);
+
+  clru_destroy(cache);
+}
+
+/* --- clrucache_get_full: each call produces a fresh independent allocation - */
+
+TEST(get_val_types, full_api_returns_independent_copies) {
+  clru_construct(cache, int, int, 8, NULL, NULL, NULL);
+
+  clru_set(cache, 5, 99);
+
+  int k = 5;
+  cmap_pair kp = {};
+  _populate_cmap_pair(&kp, k);
+
+  cmap_pair a = {}, b = {};
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, &a), ccol_success);
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, &b), ccol_success);
+
+  REQUIRE_PTR_NE(a.ptr, b.ptr);
+  REQUIRE_EQ(*(int *)a.ptr, 99);
+  REQUIRE_EQ(*(int *)b.ptr, 99);
+  REQUIRE_EQ(a.size, sizeof(int));
+  REQUIRE_EQ(b.size, sizeof(int));
+  free(a.ptr);
+  free(b.ptr);
+
+  clru_destroy(cache);
+}
+
+/* --- on a miss, val_out fields are not modified ---------------------------- */
+
+TEST(get_val_types, missing_key_val_out_untouched) {
+  clru_construct(cache, int, int, 8, NULL, NULL, NULL);
+
+  int k = 99;
+  cmap_pair kp = {};
+  _populate_cmap_pair(&kp, k);
+
+  void *sentinel_ptr = (void *)0x1;
+  size_t sentinel_sz = 0xBEEFUL;
+  cmap_pair val_out = {.ptr = sentinel_ptr, .size = sentinel_sz};
+
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, &val_out), ccol_key_not_found);
+  REQUIRE_PTR_EQ(val_out.ptr, sentinel_ptr);
+  REQUIRE_EQ(val_out.size, sentinel_sz);
+
+  clru_destroy(cache);
+}
+
+/* --- overwrite: subsequent get returns the new value ----------------------- */
+
+TEST(get_val_types, overwrite_reflected_in_subsequent_get) {
+  clru_construct(cache, int, double, 8, NULL, NULL, NULL);
+
+  clru_set(cache, 1, 1.0);
+  clru_set(cache, 1, 2.5);
+
+  double out = 0.0;
+  REQUIRE_EQ(clru_get(cache, 1, &out), ccol_success);
+  REQUIRE_EQ(out, 2.5);
+
+  clru_destroy(cache);
+}
+
+/* --- char* value: macro transfers heap ownership to caller ----------------- */
+
+TEST(get_val_types, char_ptr_value_macro_transfers_ownership) {
+  clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
+
+  clru_set(cache, 10, "hello");
+
+  char *out = NULL;
+  REQUIRE_EQ(clru_get(cache, 10, &out), ccol_success);
+  REQUIRE_NOT_NULL(out);
+  REQUIRE_STREQ(out, "hello");
+  free(out);
+
+  clru_destroy(cache);
+}
+
+/* --- char* value: two consecutive gets return distinct heap pointers ------- */
+
+TEST(get_val_types, char_ptr_value_two_gets_are_independent_copies) {
+  clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
+
+  clru_set(cache, 7, "world");
+
+  char *a = NULL, *b = NULL;
+  REQUIRE_EQ(clru_get(cache, 7, &a), ccol_success);
+  REQUIRE_EQ(clru_get(cache, 7, &b), ccol_success);
+
+  REQUIRE_NOT_NULL(a);
+  REQUIRE_NOT_NULL(b);
+  REQUIRE_PTR_NE(a, b);
+  REQUIRE_STREQ(a, "world");
+  REQUIRE_STREQ(b, "world");
+  free(a);
+  free(b);
+
+  clru_destroy(cache);
+}
+
+/* --- char* value via clrucache_get_full: size == strlen + 1 ---------------- */
+
+TEST(get_val_types, char_ptr_value_full_api_size_includes_null_terminator) {
+  clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
+
+  clru_set(cache, 3, "test_string");
+
+  int k = 3;
+  cmap_pair kp = {};
+  _populate_cmap_pair(&kp, k);
+
+  cmap_pair val_out = {};
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, &val_out), ccol_success);
+  REQUIRE_NOT_NULL(val_out.ptr);
+  REQUIRE_EQ(val_out.size, strlen("test_string") + 1);
+  REQUIRE_STREQ((char *)val_out.ptr, "test_string");
+  free(val_out.ptr);
+
+  clru_destroy(cache);
+}
+
+/* --- both key and value are char* ----------------------------------------- */
+
+TEST(get_val_types, char_ptr_key_and_char_ptr_value) {
+  clru_construct(cache, char *, char *, 8, NULL, NULL, NULL);
+
+  clru_set(cache, "k1", "v1");
+  clru_set(cache, "k2", "v2");
+
+  char *out = NULL;
+  REQUIRE_EQ(clru_get(cache, "k1", &out), ccol_success);
+  REQUIRE_STREQ(out, "v1");
+  free(out);
+
+  out = NULL;
+  REQUIRE_EQ(clru_get(cache, "k2", &out), ccol_success);
+  REQUIRE_STREQ(out, "v2");
+  free(out);
+
+  REQUIRE_EQ(clru_get(cache, "missing", &out), ccol_key_not_found);
+
+  clru_destroy(cache);
+}
+
+/* --- char* value from remote getter: macro path delivers owned string ------ */
+
+TEST(get_val_types, char_ptr_value_from_remote_getter_macro) {
+  clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
+
+  char *out = NULL;
+  REQUIRE_EQ(clru_get(cache, 42, &out), ccol_success);
+  REQUIRE_NOT_NULL(out);
+  REQUIRE_STREQ(out, "remote_42");
+  free(out);
+
+  /* Second call hits the cache; content must still match */
+  out = NULL;
+  REQUIRE_EQ(clru_get(cache, 42, &out), ccol_success);
+  REQUIRE_STREQ(out, "remote_42");
+  free(out);
+
+  clru_destroy(cache);
+}
+
+/* --- char* value from remote getter: clrucache_get_full direct path -------- */
+
+TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
+  clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
+
+  int k = 7;
+  cmap_pair kp = {};
+  _populate_cmap_pair(&kp, k);
+
+  cmap_pair val_out = {};
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, &val_out), ccol_success);
+  REQUIRE_NOT_NULL(val_out.ptr);
+  REQUIRE_EQ(val_out.size, strlen("remote_7") + 1);
+  REQUIRE_STREQ((char *)val_out.ptr, "remote_7");
+  free(val_out.ptr);
 
   clru_destroy(cache);
 }

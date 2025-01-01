@@ -139,6 +139,18 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
  */
 void __clrucache_destroy(clru_cache cache);
 
+/**
+ * @brief Copy a value directly into a caller-provided buffer (internal —
+ *        use clru_get() macro instead)
+ *
+ * Unlike clrucache_get_full(), this function performs no heap allocation: it
+ * copies the stored value into buf while holding the cache mutex and returns.
+ * buf_size must be >= the stored value size; the clru_get() macro satisfies
+ * this by passing sizeof(*val_ptr), which always matches ValT.
+ */
+ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
+                                   void *buf, size_t buf_size);
+
 /* ========================================================================== */
 /*                         OPERATIONS                                         */
 /* ========================================================================== */
@@ -146,7 +158,9 @@ void __clrucache_destroy(clru_cache cache);
 /**
  * @brief Get a value by key
  *
- * Copies up to val_buf_size bytes of the value into val_buf.
+ * On success, heap-allocates a copy of the stored value (using standard
+ * malloc), assigns it to val_out->ptr, and sets val_out->size to the stored
+ * byte size. The caller is responsible for freeing val_out->ptr with free().
  *
  * On a cache miss, if a remote getter was provided it is called once (other
  * concurrent getters for the same key block until it completes). The fetched
@@ -155,17 +169,16 @@ void __clrucache_destroy(clru_cache cache);
  * Blocks if a setter is in progress for this key (both sync and async modes
  * block until the cache is in a consistent state).
  *
- * @param cache        Cache handle
- * @param key_pair     Key to look up
- * @param val_buf      Buffer to receive the value
- * @param val_buf_size Size of val_buf in bytes
- * @param val_size_out If non-NULL, set to the actual stored value size
+ * @param cache     Cache handle
+ * @param key_pair  Key to look up
+ * @param val_out   On success: val_out->ptr is a heap-allocated copy of the
+ *                  value (caller must free() it); val_out->size is the stored
+ *                  value size
  * @return ccol_success, ccol_key_not_found, ccol_invalid_args, or
  *         ccol_not_enough_memory
  */
 ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
-                                 void *val_buf, size_t val_buf_size,
-                                 size_t *val_size_out);
+                                 cmap_pair *val_out);
 
 /**
  * @brief Set a value by key
@@ -319,24 +332,57 @@ static inline void ___clrucache_destroy(clru_cache *cp) {
 /**
  * @brief Get a value by key (type-safe convenience wrapper)
  *
- * @param name     Cache variable
+ * For non-char* val types: copies the value into *val_ptr and frees the
+ * internal heap allocation. For char* val types: transfers ownership of the
+ * heap-allocated string to *(char **)val_ptr; the caller must free() it.
+ *
+ * When passing the cache across scopes (e.g. into a thread function), declare
+ * a local alias and use clru_redeclare() before calling clru_get() so that
+ * the val-type detection works correctly.
+ *
+ * @param name     Cache variable (must have been declared with clru_construct
+ *                 or clru_declare, or restored with clru_redeclare)
  * @param key      Key expression (lvalue or literal string)
- * @param val_buf  Pointer to buffer receiving the value
- * @param buf_sz   sizeof(*val_buf) or the buffer size in bytes
+ * @param val_ptr  Pointer to the value type (ValT *), NOT cmap_pair *.
+ *                 For non-char* val types: e.g. double * for a double-valued
+ *                 cache; the value is copied in and the internal allocation
+ *                 freed — no heap visible to the caller.
+ *                 For char* val types: pointer to a char* variable; ownership
+ *                 of the heap-allocated string is transferred to the caller,
+ *                 who must free() it.
  * @return ccol_retval_t (ccol_success or ccol_key_not_found etc.)
  *
  * Example:
  * @code
- * int k = 5; double v;
- * if (clru_get(cache, k, &v, sizeof(v)) == ccol_success) { ... }
+ * int k = 5; int v = 0;
+ * if (clru_get(cache, k, &v) == ccol_success) { ... }
+ *
+ * char *str = NULL;
+ * if (clru_get(str_cache, k, &str) == ccol_success) { free(str); }
  * @endcode
  */
-#define clru_get(name, key, val_buf, buf_sz)                          \
-  ({                                                                  \
-    __typeof__(key) _clru_k = (key);                                  \
-    cmap_pair _clru_kp = {};                                          \
-    _populate_cmap_pair(&_clru_kp, _clru_k);                          \
-    clrucache_get_full((name), &_clru_kp, (val_buf), (buf_sz), NULL); \
+#define clru_get(name, key, val_ptr)                                         \
+  ({                                                                         \
+    __typeof__(key) _clru_k = (key);                                         \
+    cmap_pair _clru_kp = {};                                                 \
+    _populate_cmap_pair(&_clru_kp, _clru_k);                                 \
+    ccol_retval_t _clru_r;                                                   \
+    if (is_char_ptr(*(name##__clru_val_type_var))) {                         \
+      /* char* path: heap-allocate a copy and transfer ownership to caller */\
+      cmap_pair _clru_vout = {};                                              \
+      _clru_r = clrucache_get_full((name), &_clru_kp, &_clru_vout);          \
+      if (_clru_r == ccol_success && _clru_vout.ptr) {                       \
+        /* Write the heap pointer via memcpy to avoid strict-aliasing        \
+         * violations when val_ptr is not char**. */                         \
+        void *_clru_str_out = _clru_vout.ptr;                                \
+        memcpy((val_ptr), &_clru_str_out, sizeof(void *));                   \
+      }                                                                      \
+    } else {                                                                 \
+      /* Non-char* path: copy directly into *val_ptr — no heap allocation */ \
+      _clru_r = __clrucache_get_into((name), &_clru_kp,                      \
+                                     (val_ptr), sizeof(*(val_ptr)));         \
+    }                                                                        \
+    _clru_r;                                                                 \
   })
 
 /**

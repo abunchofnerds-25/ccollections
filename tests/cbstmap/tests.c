@@ -285,10 +285,10 @@ TEST(cbst_maps, in_order_iteration) {
   // Iterate and verify in-order traversal
   int prev_key = -1;
   int count = 0;
-  cbmap_iter_declare(bmap, it);
-  for (it = cbmap_begin(bmap); it != NULL; it = cbmap_iter_next(it)) {
-    int key = *cbmap_iter_key_ptr(it);
-    int val = *cbmap_iter_val_ptr(it);
+  ccol_iter_declare(bmap, it);
+  for (it = ccol_begin(bmap); it != NULL; it = ccol_iter_next(it)) {
+    int key = *ccol_iter_key_ptr(it);
+    int val = *ccol_iter_val_ptr(it);
 
     // Verify sorted order
     REQUIRE_TRUE(key > prev_key);
@@ -324,9 +324,9 @@ TEST(cbst_maps, avl_balancing_worst_case_insertions) {
 
   // Verify in-order iteration
   int expected_key = 0;
-  cbmap_iter_declare(bmap, it);
-  for (it = cbmap_begin(bmap); it != NULL; it = cbmap_iter_next(it)) {
-    int key = *cbmap_iter_key_ptr(it);
+  ccol_iter_declare(bmap, it);
+  for (it = ccol_begin(bmap); it != NULL; it = ccol_iter_next(it)) {
+    int key = *ccol_iter_key_ptr(it);
     REQUIRE_EQ(key, expected_key);
     ++expected_key;
   }
@@ -354,9 +354,9 @@ TEST(cbst_maps, avl_balancing_reverse_order) {
 
   // Verify in-order iteration (should be ascending)
   int expected_key = 0;
-  cbmap_iter_declare(bmap, it);
-  for (it = cbmap_begin(bmap); it != NULL; it = cbmap_iter_next(it)) {
-    int key = *cbmap_iter_key_ptr(it);
+  ccol_iter_declare(bmap, it);
+  for (it = ccol_begin(bmap); it != NULL; it = ccol_iter_next(it)) {
+    int key = *ccol_iter_key_ptr(it);
     REQUIRE_EQ(key, expected_key);
     ++expected_key;
   }
@@ -393,9 +393,9 @@ TEST(cbst_maps, deletions_maintain_balance) {
 
   // Verify in-order iteration still works
   int count = 0;
-  cbmap_iter_declare(bmap, it);
-  for (it = cbmap_begin(bmap); it != NULL; it = cbmap_iter_next(it)) {
-    int key = *cbmap_iter_key_ptr(it);
+  ccol_iter_declare(bmap, it);
+  for (it = ccol_begin(bmap); it != NULL; it = ccol_iter_next(it)) {
+    int key = *ccol_iter_key_ptr(it);
     REQUIRE_TRUE(key % 2 == 1);  // Should be odd numbers only
     ++count;
   }
@@ -559,18 +559,18 @@ TEST(cbst_maps, iteration_with_macros) {
 
   int records[6] = {0};  // from 0 to 5, so that 3, 4 and 5 are valid indices
   int counter = 0;
-  cbmap_iter_declare(bm, it);
-  for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
-    key = *cbmap_iter_key_ptr(it);
+  ccol_iter_declare(bm, it);
+  for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
+    key = *ccol_iter_key_ptr(it);
     if (key == 3) {
       REQUIRE_EQ(records[3]++, 0);
-      REQUIRE_STREQ(*cbmap_iter_val_ptr(it), "hello");
+      REQUIRE_STREQ(*ccol_iter_val_ptr(it), "hello");
     } else if (key == 4) {
       REQUIRE_EQ(records[4]++, 0);
-      REQUIRE_STREQ(*cbmap_iter_val_ptr(it), "world");
+      REQUIRE_STREQ(*ccol_iter_val_ptr(it), "world");
     } else if (key == 5) {
       REQUIRE_EQ(records[5]++, 0);
-      REQUIRE_STREQ(*cbmap_iter_val_ptr(it), "test");
+      REQUIRE_STREQ(*ccol_iter_val_ptr(it), "test");
     } else {
       REQUIRE_TRUE(false);
     }
@@ -646,18 +646,18 @@ TEST(cbst_maps, map_int_to_struct_ptr) {
   cbmap_insert(bm, key, ptr);
 
   int counter = 0;
-  cbmap_iter_declare(bm, it);
-  for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
-    int key = *cbmap_iter_key_ptr(it);
+  ccol_iter_declare(bm, it);
+  for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
+    int key = *ccol_iter_key_ptr(it);
     if (key == 1) {
-      REQUIRE_EQ((*cbmap_iter_val_ptr(it))->a, 3);
-      REQUIRE_EQ((*cbmap_iter_val_ptr(it))->b, 4);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->a, 3);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->b, 4);
     } else if (key == 2) {
-      REQUIRE_EQ((*cbmap_iter_val_ptr(it))->a, 5);
-      REQUIRE_EQ((*cbmap_iter_val_ptr(it))->b, 6);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->a, 5);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->b, 6);
     } else if (key == 3) {
-      REQUIRE_EQ((*cbmap_iter_val_ptr(it))->a, 7);
-      REQUIRE_EQ((*cbmap_iter_val_ptr(it))->b, 8);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->a, 7);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->b, 8);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -699,9 +699,9 @@ TEST(cbst_maps, negative_keys) {
 
   // Verify in-order iteration includes negative numbers in order
   int expected = -50;
-  cbmap_iter_declare(bm, it);
-  for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
-    int key = *cbmap_iter_key_ptr(it);
+  ccol_iter_declare(bm, it);
+  for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
+    int key = *ccol_iter_key_ptr(it);
     REQUIRE_EQ(key, expected);
     ++expected;
   }
@@ -752,8 +752,8 @@ TEST(cbst_maps, empty_tree_iteration) {
 
   // Iterate over empty tree
   int count = 0;
-  cbmap_iter_declare(bm, it);
-  for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
+  ccol_iter_declare(bm, it);
+  for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
     ++count;
   }
 
@@ -770,10 +770,10 @@ TEST(cbst_maps, single_element_tree) {
   cbmap_insert(bm, key, val);
 
   int count = 0;
-  cbmap_iter_declare(bm, it);
-  for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
-    REQUIRE_EQ(*cbmap_iter_key_ptr(it), 42);
-    REQUIRE_EQ(*cbmap_iter_val_ptr(it), 420);
+  ccol_iter_declare(bm, it);
+  for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
+    REQUIRE_EQ(*ccol_iter_key_ptr(it), 42);
+    REQUIRE_EQ(*ccol_iter_val_ptr(it), 420);
     ++count;
   }
 
@@ -803,9 +803,9 @@ TEST(cbst_maps, stress_test_many_insertions) {
 
   // Verify in-order iteration
   int expected = 0;
-  cbmap_iter_declare(bm, it);
-  for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
-    int key = *cbmap_iter_key_ptr(it);
+  ccol_iter_declare(bm, it);
+  for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
+    int key = *ccol_iter_key_ptr(it);
     REQUIRE_EQ(key, expected);
     ++expected;
   }
@@ -932,10 +932,10 @@ TEST(cbst_maps, string_keys) {
 static int collect_string_keys(cbmap bm, const char *out[], int max_out) {
   cbmap_redeclare(bm, char *, int);
   int n = 0;
-  cbmap_iter_declare(bm, it);
-  for (it = cbmap_begin(bm); it != NULL; it = cbmap_iter_next(it)) {
+  ccol_iter_declare(bm, it);
+  for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
     if (n < max_out) {
-      out[n] = *cbmap_iter_key_ptr(it);
+      out[n] = *ccol_iter_key_ptr(it);
     }
     ++n;
   }
@@ -1023,6 +1023,99 @@ TEST(cbst_maps, string_keys_7_char_iteration_order) {
   REQUIRE_EQ((void *)cbmap_get_ptr(bm, "zzzzzzz"), NULL);
 
   cbmap_destroy(bm);
+}
+
+TEST(cbst_maps, char_type_variants_as_string_keys) {
+  // signed char * (= int8_t *) must be treated as a string key with correct
+  // lexicographic ordering in in-order iteration.
+  {
+    cbmap_construct(bm, signed char *, int);
+
+    signed char *k_banana = (signed char *)"banana";
+    signed char *k_apple = (signed char *)"apple";
+    signed char *k_cherry = (signed char *)"cherry";
+    int v1 = 1, v2 = 2, v3 = 3;
+
+    cbmap_insert(bm, k_banana, v1);
+    cbmap_insert(bm, k_apple, v2);
+    cbmap_insert(bm, k_cherry, v3);
+
+    REQUIRE_EQ(cbmap_elem_count(bm), 3);
+    REQUIRE_EQ(cbmap_get(bm, k_banana), 1);
+    REQUIRE_EQ(cbmap_get(bm, k_apple), 2);
+    REQUIRE_EQ(cbmap_get(bm, k_cherry), 3);
+
+    // In-order iteration must yield lexicographic order.
+    const char *expected_sc[] = {"apple", "banana", "cherry"};
+    int idx = 0;
+    ccol_iter_declare(bm, it);
+    for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
+      REQUIRE_STREQ((const char *)*ccol_iter_key_ptr(it), expected_sc[idx]);
+      ++idx;
+    }
+    REQUIRE_EQ(idx, 3);
+
+    // char * with identical string content must find the same entries.
+    char *ck = "banana";
+    REQUIRE_EQ(cbmap_get(bm, ck), 1);
+
+    cbmap_destroy(bm);
+  }
+
+  // unsigned char * (= uint8_t *) — identical check.
+  {
+    cbmap_construct(bm, unsigned char *, int);
+
+    unsigned char *k_mango = (unsigned char *)"mango";
+    unsigned char *k_kiwi = (unsigned char *)"kiwi";
+    unsigned char *k_lime = (unsigned char *)"lime";
+    int v10 = 10, v20 = 20, v30 = 30;
+
+    cbmap_insert(bm, k_mango, v10);
+    cbmap_insert(bm, k_kiwi, v20);
+    cbmap_insert(bm, k_lime, v30);
+
+    REQUIRE_EQ(cbmap_elem_count(bm), 3);
+    REQUIRE_EQ(cbmap_get(bm, k_mango), 10);
+    REQUIRE_EQ(cbmap_get(bm, k_kiwi), 20);
+    REQUIRE_EQ(cbmap_get(bm, k_lime), 30);
+
+    // In-order: kiwi < lime < mango.
+    const char *expected_uc[] = {"kiwi", "lime", "mango"};
+    int idx = 0;
+    ccol_iter_declare(bm, it);
+    for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
+      REQUIRE_STREQ((const char *)*ccol_iter_key_ptr(it), expected_uc[idx]);
+      ++idx;
+    }
+    REQUIRE_EQ(idx, 3);
+
+    // signed char * with identical content must also find entries.
+    signed char *sk = (signed char *)"kiwi";
+    REQUIRE_EQ(cbmap_get(bm, sk), 20);
+
+    cbmap_destroy(bm);
+  }
+
+  // char * map looked up via signed char * and unsigned char *.
+  {
+    cbmap_construct(bm, char *, int);
+
+    char *k1 = "one";
+    char *k2 = "two";
+    char *k3 = "three";
+    int v100 = 100, v200 = 200, v300 = 300;
+    cbmap_insert(bm, k1, v100);
+    cbmap_insert(bm, k2, v200);
+    cbmap_insert(bm, k3, v300);
+
+    signed char *sk2 = (signed char *)"two";
+    unsigned char *uk1 = (unsigned char *)"one";
+    REQUIRE_EQ(cbmap_get(bm, sk2), 200);
+    REQUIRE_EQ(cbmap_get(bm, uk1), 100);
+
+    cbmap_destroy(bm);
+  }
 }
 
 TEST(cbst_maps, construct_scoped_lifecycle) {

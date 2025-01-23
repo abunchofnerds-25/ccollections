@@ -2809,5 +2809,129 @@ SEE ALSO
        cstring_find, cstring_substring
 
 ================================================================================
+              CITERATORS.H - UNIFIED ITERATION API
+================================================================================
+
+These three functions are the underlying begin-iteration entry points for each
+container type.  They are used internally by ccol_begin() and are not normally
+called directly by application code — use the ccol_begin() macro instead, which
+selects the correct function at compile time based on container type.
+
+------------------------------------------------------------------------------
+NAME
+       cvector_cmap_begin_iter - begin iteration over a cvector
+
+SYNOPSIS
+       #include <citerators.h>   /* or #include <cvector.h> */
+
+       cmap_iterator *cvector_cmap_begin_iter(struct cvector *v, char **err);
+
+DESCRIPTION
+       Allocates and returns a cmap_iterator positioned at the first element of
+       the vector v.  If the vector is empty, returns NULL without setting *err.
+       If allocation fails, returns NULL and writes a diagnostic string to *err
+       (if err is non-NULL).
+
+       The iterator visits elements in index order (0, 1, 2, ...).  For each
+       element, key_pair->ptr holds a size_t index and val_pair->ptr points
+       to the element value.  The iterator's _direct_ptr flag is set, so
+       ccol_iter_val_ptr() returns a pointer directly into the vector's storage.
+
+PARAMETERS
+       v    Vector to iterate.  Must not be NULL.
+       err  Optional pointer to receive an error string on allocation failure.
+
+RETURN VALUE
+       Returns a heap-allocated cmap_iterator on success.
+       Returns NULL if the vector is empty (not an error).
+       Returns NULL on allocation failure (*err set if err is non-NULL).
+
+NOTES
+       The returned iterator must be destroyed by advancing it to the end with
+       ccol_iter_next() or by calling ccol_iter_destroy() explicitly.
+       ccol_iter_declare() attaches automatic cleanup via __attribute__((cleanup)).
+       Do not modify the vector while iterating.
+
+SEE ALSO
+       ccol_begin, ccol_iter_declare, ccol_iter_next, ccol_for_each
+
+------------------------------------------------------------------------------
+NAME
+       chashmap_begin_iter - begin iteration over a chashmap
+
+SYNOPSIS
+       #include <citerators.h>   /* or #include <chashmap.h> */
+
+       cmap_iterator *chashmap_begin_iter(struct chashmap *v, char **err);
+
+DESCRIPTION
+       Allocates and returns a cmap_iterator positioned at the first entry of
+       the hash map v.  If the map is empty, returns NULL without setting *err.
+       If allocation fails, returns NULL and writes a diagnostic string to *err
+       (if err is non-NULL).
+
+       Iteration order depends on the internal implementation selected at
+       creation time:
+         Open-addressing:    slot order (not insertion order, not sorted)
+         Separate chaining:  insertion order via the internal linked list
+
+       For each entry, key_pair holds the key and val_pair holds the value.
+       The _direct_ptr flag is clear for maps; ccol_iter_key_ptr() and
+       ccol_iter_val_ptr() handle char-pointer (SSO) keys correctly.
+
+PARAMETERS
+       v    Hash map to iterate.  Must not be NULL.
+       err  Optional pointer to receive an error string on allocation failure.
+
+RETURN VALUE
+       Returns a heap-allocated cmap_iterator on success.
+       Returns NULL if the map is empty (not an error).
+       Returns NULL on allocation failure (*err set if err is non-NULL).
+
+NOTES
+       The returned iterator must be destroyed by advancing it to the end with
+       ccol_iter_next() or by calling ccol_iter_destroy() explicitly.
+       Do not modify the map while iterating.
+
+SEE ALSO
+       ccol_begin, ccol_iter_declare, ccol_iter_next, ccol_for_each
+
+------------------------------------------------------------------------------
+NAME
+       cbmap_begin_iter - begin iteration over a cbstmap in sorted key order
+
+SYNOPSIS
+       #include <citerators.h>   /* or #include <cbstmap.h> */
+
+       cmap_iterator *cbmap_begin_iter(struct cbinarymap *v, char **err);
+
+DESCRIPTION
+       Allocates and returns a cmap_iterator positioned at the entry with the
+       smallest key in the BST map v.  If the map is empty, returns NULL
+       without setting *err.  If allocation fails, returns NULL and writes a
+       diagnostic string to *err (if err is non-NULL).
+
+       Iteration proceeds in ascending key order (in-order traversal of the
+       AVL tree) using an iterative algorithm with an internal stack.  For each
+       entry, key_pair holds the key and val_pair holds the value.
+
+PARAMETERS
+       v    BST map to iterate.  Must not be NULL.
+       err  Optional pointer to receive an error string on allocation failure.
+
+RETURN VALUE
+       Returns a heap-allocated cmap_iterator on success.
+       Returns NULL if the map is empty (not an error).
+       Returns NULL on allocation failure (*err set if err is non-NULL).
+
+NOTES
+       The returned iterator must be destroyed by advancing it to the end with
+       ccol_iter_next() or by calling ccol_iter_destroy() explicitly.
+       Do not modify the map while iterating.
+
+SEE ALSO
+       ccol_begin, ccol_iter_declare, ccol_iter_next, ccol_for_each
+
+================================================================================
                               END OF MAN PAGES
 ================================================================================

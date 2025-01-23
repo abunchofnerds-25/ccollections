@@ -389,6 +389,34 @@ static inline void ___cvector_destroy(cvec *cv) {
 }
 
 /* ========================================================================== */
+/*                         ITERATOR */
+/* ========================================================================== */
+
+/**
+ * @brief Create an iterator positioned at the first element.
+ *
+ * Returns a @c cmap_iterator* whose @c key_pair->ptr points to the internal
+ * index field and whose @c val_pair->ptr points directly into the vector's
+ * buffer.  The @c _direct_ptr flag is set to @c true so the unified accessor
+ * macros (@c ccol_iter_key_ptr / @c ccol_iter_val_ptr) bypass the map SSO
+ * path and return typed pointers straight into the buffer.
+ *
+ * @param v    Vector to iterate (must not be NULL)
+ * @param err  Optional pointer to receive an error string on failure
+ *
+ * @return Pointer to a @c cmap_iterator, or NULL if the vector is empty or
+ *         allocation fails
+ *
+ * @note The iterator is destroyed automatically when cvec_iter_next() reaches
+ *       the end, or call ccol_iter_destroy() to abort early.
+ * @note Modifying the vector during iteration invalidates the iterator.
+ *
+ * @see cvec_begin
+ * @see ccol_iter_next
+ */
+cmap_iterator *cvector_cmap_begin_iter(cvec v, char **err);
+
+/* ========================================================================== */
 /*                         TYPE-SAFE CONVENIENCE MACROS                       */
 /* ========================================================================== */
 
@@ -403,7 +431,8 @@ static inline void ___cvector_destroy(cvec *cv) {
  *
  * @note Vector must be initialized with cvec_init() or cvec_construct() before
  * use
- * @note Type variable is named v##__cvec_type_var and used internally by macros
+ * @note Type variable is named v##__ccol_val_type_var and used internally by
+ * macros
  *
  * @see cvec_init
  * @see cvec_construct
@@ -416,12 +445,14 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvec_destroy(my_vec);
  * @endcode
  */
-#define cvec_declare(v, type) \
-  type *v##__cvec_type_var;   \
+#define cvec_declare(v, type)                                    \
+  size_t *v##__ccol_key_type_var __attribute__((unused)) = NULL; \
+  type *v##__ccol_val_type_var;                                  \
   cvec v
 
-#define cvec_declare_scoped(v, type) \
-  type *v##__cvec_type_var;          \
+#define cvec_declare_scoped(v, type)                             \
+  size_t *v##__ccol_key_type_var __attribute__((unused)) = NULL; \
+  type *v##__ccol_val_type_var;                                  \
   cvec v _ccol_destructor(___cvector_destroy)
 
 /**
@@ -444,8 +475,9 @@ static inline void ___cvector_destroy(cvec *cv) {
  * }
  * @endcode
  */
-#define cvec_redeclare(v, type) \
-  type *v##__cvec_type_var __attribute__((unused)) = NULL
+#define cvec_redeclare(v, type)                                  \
+  size_t *v##__ccol_key_type_var __attribute__((unused)) = NULL; \
+  type *v##__ccol_val_type_var __attribute__((unused)) = NULL
 
 /**
  * @brief Initialize a declared vector (with error handling)
@@ -469,13 +501,13 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvec_init(my_vec);  // Terminates on failure
  * @endcode
  */
-#define cvec_init(v)                                                       \
-  do {                                                                     \
-    char *err = NULL;                                                      \
-    v = cvector_create(sizeof(*v##__cvec_type_var), &err);                 \
-    if (!v) {                                                              \
-      fatal_err("cvector_create failed: %s", err ? err : "unknown error"); \
-    }                                                                      \
+#define cvec_init(v)                                                     \
+  do {                                                                   \
+    char *err = NULL;                                                    \
+    v = cvector_create(sizeof(*v##__ccol_val_type_var), &err);           \
+    if (!(v)) {                                                          \
+      fatal_err("cvec_init('%s'): %s", #v, err ? err : "unknown error"); \
+    }                                                                    \
   } while (0)
 
 /**
@@ -500,14 +532,13 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvec_init_mp(my_vec, &my_mprocs);
  * @endcode
  */
-#define cvec_init_mp(v, mprocs)                                         \
-  do {                                                                  \
-    char *err = NULL;                                                   \
-    v = cvector_create_full(sizeof(*v##__cvec_type_var), mprocs, &err); \
-    if (!v) {                                                           \
-      fatal_err("cvector_create_full failed: %s",                       \
-                err ? err : "unknown error");                           \
-    }                                                                   \
+#define cvec_init_mp(v, mprocs)                                               \
+  do {                                                                        \
+    char *err = NULL;                                                         \
+    v = cvector_create_full(sizeof(*v##__ccol_val_type_var), (mprocs), &err); \
+    if (!(v)) {                                                               \
+      fatal_err("cvec_init_mp('%s'): %s", #v, err ? err : "unknown error");   \
+    }                                                                         \
   } while (0)
 
 /**
@@ -606,12 +637,12 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvec_push(vec, x);
  * @endcode
  */
-#define cvec_push(v, new_elem)                                       \
-  do {                                                               \
-    ccol_retval_t r = cvector_push_back(v, (const void *)&new_elem); \
-    if (r != ccol_success) {                                         \
-      fatal_err("cvector_push_back failed: %d", r);                  \
-    }                                                                \
+#define cvec_push(v, new_elem)                                                \
+  do {                                                                        \
+    ccol_retval_t r = cvector_push_back((v), (const void *)&(new_elem));      \
+    if (r != ccol_success) {                                                  \
+      fatal_err("cvec_push('%s'): r: %d (%s)", #v, r, ccol_retval_to_str(r)); \
+    }                                                                         \
   } while (0)
 
 /**
@@ -638,12 +669,13 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvec_push_rvalue(vec, x + y);
  * @endcode
  */
-#define cvec_push_rvalue(v, new_elem)                                      \
-  do {                                                                     \
-    ccol_retval_t r = cvector_push_back(v, &(typeof(new_elem)){new_elem}); \
-    if (r != ccol_success) {                                               \
-      fatal_err("cvector_push_back failed: %d", r);                        \
-    }                                                                      \
+#define cvec_push_rvalue(v, new_elem)                                          \
+  do {                                                                         \
+    ccol_retval_t r = cvector_push_back((v), &(typeof(new_elem)){(new_elem)}); \
+    if (r != ccol_success) {                                                   \
+      fatal_err("cvec_push_rvalue('%s'): r: %d (%s)", #v, r,                   \
+                ccol_retval_to_str(r));                                        \
+    }                                                                          \
   } while (0)
 
 /**
@@ -669,14 +701,15 @@ static inline void ___cvector_destroy(cvec *cv) {
  * int val = cvec_pop(vec);  // val == 42
  * @endcode
  */
-#define cvec_pop(v)                                \
-  ({                                               \
-    typeof(*v##__cvec_type_var) _tmp;              \
-    ccol_retval_t r = cvector_pop_back(v, &_tmp);  \
-    if (r != ccol_success) {                       \
-      fatal_err("cvector_pop_back failed: %d", r); \
-    }                                              \
-    _tmp;                                          \
+#define cvec_pop(v)                                                           \
+  ({                                                                          \
+    typeof(*v##__ccol_val_type_var) _tmp;                                     \
+    ccol_retval_t r = cvector_pop_back((v), &_tmp);                           \
+    if (r != ccol_success) {                                                  \
+      fatal_err("cvec_pop('%s'): r: %d (%s)%s", #v, r, ccol_retval_to_str(r), \
+                r == ccol_container_empty ? " — vector is empty" : "");       \
+    }                                                                         \
+    _tmp;                                                                     \
   })
 
 /**
@@ -703,7 +736,8 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvec_at(vec, 0) = 5;        // now the first element is 5
  * @endcode
  */
-#define cvec_at(v, index) *(typeof(*v##__cvec_type_var) *)(cvector_at(v, index))
+#define cvec_at(v, index) \
+  *(typeof(*v##__ccol_val_type_var) *)(cvector_at((v), (index)))
 
 /**
  * @brief Get the number of elements (type-safe wrapper)
@@ -716,7 +750,7 @@ static inline void ___cvector_destroy(cvec *cv) {
  *
  * @see cvector_elem_count
  */
-#define cvec_size(v) cvector_elem_count(v)
+#define cvec_size(v) cvector_elem_count((v))
 
 /**
  * @brief Clear all elements and reset capacity (type-safe wrapper)
@@ -727,7 +761,7 @@ static inline void ___cvector_destroy(cvec *cv) {
  *
  * @see cvector_reset
  */
-#define cvec_reset(v) cvector_reset(v)
+#define cvec_reset(v) cvector_reset((v))
 
 /**
  * @brief Reserve capacity (type-safe wrapper with error handling)
@@ -741,12 +775,14 @@ static inline void ___cvector_destroy(cvec *cv) {
  *
  * @see cvector_reserve
  */
-#define cvec_reserve(v, new_capacity_count)               \
-  do {                                                    \
-    if (!cvector_reserve((v), (new_capacity_count))) {    \
-      fatal_err("cvector_reserve failed - %p - %lu", (v), \
-                (size_t)(new_capacity_count));            \
-    }                                                     \
+#define cvec_reserve(v, new_capacity_count)                              \
+  do {                                                                   \
+    if (!cvector_reserve((v), (new_capacity_count))) {                   \
+      fatal_err(                                                         \
+          "cvec_reserve('%s'): failed to reserve %lu elements — out of " \
+          "memory?",                                                     \
+          #v, (size_t)(new_capacity_count));                             \
+    }                                                                    \
   } while (0)
 
 /**
@@ -763,12 +799,14 @@ static inline void ___cvector_destroy(cvec *cv) {
  *
  * @see cvector_append_array
  */
-#define cvec_append_array(v, arr_ptr, elem_count)                              \
-  do {                                                                         \
-    if (!cvector_append_array((v), (arr_ptr), (elem_count))) {                 \
-      fatal_err("cvector_append_array failed - %p - %p - %lu", (v), (arr_ptr), \
-                (size_t)(elem_count));                                         \
-    }                                                                          \
+#define cvec_append_array(v, arr_ptr, elem_count)                            \
+  do {                                                                       \
+    if (!cvector_append_array((v), (arr_ptr), (elem_count))) {               \
+      fatal_err(                                                             \
+          "cvec_append_array('%s'): failed to append %lu elements — out of " \
+          "memory?",                                                         \
+          #v, (size_t)(elem_count));                                         \
+    }                                                                        \
   } while (0)
 
 /**
@@ -784,11 +822,12 @@ static inline void ___cvector_destroy(cvec *cv) {
  *
  * @see cvector_append_cvector
  */
-#define cvec_append_cvec(v_to, v_from)                                        \
-  do {                                                                        \
-    if (!cvector_append_cvector((v_to), (v_from))) {                          \
-      fatal_err("cvector_append_cvector failed - %p - %p", (v_to), (v_from)); \
-    }                                                                         \
+#define cvec_append_cvec(v_to, v_from)                                   \
+  do {                                                                   \
+    if (!cvector_append_cvector((v_to), (v_from))) {                     \
+      fatal_err("cvec_append_cvec('%s' <- '%s'): out of memory?", #v_to, \
+                #v_from);                                                \
+    }                                                                    \
   } while (0)
 
 /**
@@ -831,14 +870,16 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvector_sort_with_comparison_proc(vec, compare_ints);
  * @endcode
  */
-#define cvector_sort_with_comparison_proc(v, comparison_proc)           \
-  do {                                                                  \
-    if (!v) {                                                           \
-      ccol_assert(false);                                               \
-    }                                                                   \
-    csort_sort(v, cvector_elem_count(v), sizeof(*(v##__cvec_type_var)), \
-               (csort_item_getter_proc_t)cvector_at, comparison_proc,   \
-               cvector_get_mprocs(v));                                  \
+#define cvector_sort_with_comparison_proc(v, comparison_proc)              \
+  do {                                                                     \
+    if (!(v)) {                                                            \
+      fatal_err("cvector_sort_with_comparison_proc('%s'): vector is NULL", \
+                #v);                                                       \
+    }                                                                      \
+    csort_sort((v), cvector_elem_count((v)),                               \
+               sizeof(*(v##__ccol_val_type_var)),                          \
+               (csort_item_getter_proc_t)cvector_at, (comparison_proc),    \
+               cvector_get_mprocs((v)));                                   \
   } while (0)
 
 /**
@@ -866,9 +907,11 @@ static inline void ___cvector_destroy(cvec *cv) {
  * cvec_sort(vec);  // vec is now [1, 2, 3]
  * @endcode
  */
-#define cvec_sort(v)                                              \
-  do {                                                            \
-    ccol_comparison_proc_t comparison_proc =                      \
-        csort_get_default_comparison_proc(*(v##__cvec_type_var)); \
-    cvector_sort_with_comparison_proc(v, comparison_proc);        \
+#define cvec_sort(v)                                                  \
+  do {                                                                \
+    ccol_comparison_proc_t comparison_proc =                          \
+        csort_get_default_comparison_proc(*(v##__ccol_val_type_var)); \
+    cvector_sort_with_comparison_proc(v, comparison_proc);            \
   } while (0)
+
+#include <citerators.h>

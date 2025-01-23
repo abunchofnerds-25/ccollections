@@ -127,8 +127,8 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
  * @endcode
  */
 #define DECLARE_PREALLOCATED_MEMPOOL_BUFFER(name, elem_count, elem_size) \
-  uint8_t                                                                \
-      name[elem_count * (elem_size + offsetof(__internal_entry_header, next))]
+  uint8_t name[(elem_count) *                                            \
+               ((elem_size) + offsetof(__internal_entry_header, next))]
 
 /**
  * @brief Create a memory pool from a preallocated buffer
@@ -191,7 +191,7 @@ void _mempool_destroy(mempool *mp);
  */
 #define mempool_destroy(mp) \
   do {                      \
-    _mempool_destroy(mp);   \
+    _mempool_destroy((mp)); \
     mp = NULL;              \
   } while (0)
 
@@ -270,7 +270,7 @@ void _mempool_free_entry(void *entry);
  */
 #define mempool_free_entry(entry) \
   do {                            \
-    _mempool_free_entry(entry);   \
+    _mempool_free_entry((entry)); \
     entry = NULL;                 \
   } while (0)
 
@@ -416,10 +416,10 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
  * @note For internal use - use DECLARE_PREALLOCATED_RMEMPOOL_BUFFER instead
  */
 #define CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(SS, LS, SC) \
-  ((LS - SS + 1) * (1 << SC) * (1 << SS) +                      \
-   (2 * (1 << SC) * offsetof(__internal_entry_header, next) *   \
-    ((1 << (LS - SS + 1)) - 1)) /                               \
-       (1 << (LS - SS + 1)))
+  (((LS) - (SS) + 1) * (1 << (SC)) * (1 << (SS)) +              \
+   (2 * (1 << (SC)) * offsetof(__internal_entry_header, next) * \
+    ((1 << ((LS) - (SS) + 1)) - 1)) /                           \
+       (1 << ((LS) - (SS) + 1)))
 
 /**
  * @brief Declare a preallocated buffer for a ranged memory pool
@@ -453,8 +453,8 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
     name, smallest_size_power_of_two, largest_size_power_of_two, \
     number_of_smallest_size_elems_power_of_two)                  \
   uint8_t name[CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(      \
-      smallest_size_power_of_two, largest_size_power_of_two,     \
-      number_of_smallest_size_elems_power_of_two)]
+      (smallest_size_power_of_two), (largest_size_power_of_two), \
+      (number_of_smallest_size_elems_power_of_two))]
 
 /**
  * @brief Create a ranged memory pool from a preallocated buffer
@@ -524,7 +524,7 @@ void _r_mempool_destroy(r_mempool *rmp);
  */
 #define r_mempool_destroy(rmp) \
   do {                         \
-    _r_mempool_destroy(rmp);   \
+    _r_mempool_destroy((rmp)); \
     rmp = NULL;                \
   } while (0)
 
@@ -681,4 +681,4 @@ void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size);
  * @see mempool_free_entry
  * @see r_mempool_alloc_entry
  */
-#define r_mempool_free_entry(entry) mempool_free_entry(entry)
+#define r_mempool_free_entry(entry) mempool_free_entry((entry))

@@ -143,8 +143,8 @@ TEST(vec_of_bmaps, sorted_traversal_per_map) {
     REQUIRE_EQ(cbmap_elem_count(bm), 5);
 
     int prev_key = -1;
-    cbmap_for_each(bm, it, {
-      const int *key = cbmap_iter_key_ptr(it);
+    ccol_for_each(bm, it, {
+      const int *key = ccol_iter_key_ptr(it);
       REQUIRE_TRUE(*key > prev_key);
       prev_key = *key;
     });
@@ -226,8 +226,8 @@ TEST(hmap_of_vecs, category_to_int_list) {
     REQUIRE_EQ(cvec_at(od, i), i * 2 + 1);
   }
 
-  chmap_for_each(hm, it, {
-    cvec *vp = chmap_iter_val_ptr(it);
+  ccol_for_each(hm, it, {
+    cvec *vp = ccol_iter_val_ptr(it);
     cvector_destroy(*vp);
   });
   chmap_destroy(hm);
@@ -254,8 +254,8 @@ TEST(hmap_of_vecs, append_to_inner_vector) {
   REQUIRE_EQ(cvec_at(reread, 2), 30);
   REQUIRE_EQ(cvec_at(reread, 3), 40);
 
-  chmap_for_each(hm, it, {
-    cvec *vp = chmap_iter_val_ptr(it);
+  ccol_for_each(hm, it, {
+    cvec *vp = ccol_iter_val_ptr(it);
     cvector_destroy(*vp);
   });
   chmap_destroy(hm);
@@ -284,11 +284,11 @@ TEST(bmap_of_vecs, ordered_groups) {
 
   // In-order traversal must visit groups in key order 0, 1, 2, 3.
   int expected_group = 0;
-  cbmap_for_each(bm, it, {
-    const int *key = cbmap_iter_key_ptr(it);
+  ccol_for_each(bm, it, {
+    const int *key = ccol_iter_key_ptr(it);
     REQUIRE_EQ(*key, expected_group);
 
-    cvec *vp = cbmap_iter_val_ptr(it);
+    cvec *vp = ccol_iter_val_ptr(it);
     cvec_redeclare(*vp, int);
     REQUIRE_EQ(cvec_size(*vp), (size_t)group_sizes[expected_group]);
     REQUIRE_EQ(cvec_at(*vp, 0), expected_group * 100);
@@ -297,8 +297,8 @@ TEST(bmap_of_vecs, ordered_groups) {
   });
   REQUIRE_EQ(expected_group, 4);
 
-  cbmap_for_each(bm, it, {
-    cvec *vp = cbmap_iter_val_ptr(it);
+  ccol_for_each(bm, it, {
+    cvec *vp = ccol_iter_val_ptr(it);
     cvector_destroy(*vp);
   });
   cbmap_destroy(bm);
@@ -344,8 +344,8 @@ TEST(hmap_of_hmaps, nested_string_key_lookup) {
   REQUIRE_EQ(chmap_get(inner_v, "carrot"), 10);
   REQUIRE_EQ(chmap_get(inner_v, "broccoli"), 20);
 
-  chmap_for_each(outer, it, {
-    chmap *mp = chmap_iter_val_ptr(it);
+  ccol_for_each(outer, it, {
+    chmap *mp = ccol_iter_val_ptr(it);
     chmap_destroy(*mp);
   });
   chmap_destroy(outer);
@@ -376,8 +376,8 @@ TEST(hmap_of_hmaps, add_and_remove_inner_entries) {
   REQUIRE_EQ((void *)chmap_get_ptr(sq2, k1), NULL);
   REQUIRE_EQ(chmap_get(sq2, k6), 36);
 
-  chmap_for_each(outer, it, {
-    chmap *mp = chmap_iter_val_ptr(it);
+  ccol_for_each(outer, it, {
+    chmap *mp = ccol_iter_val_ptr(it);
     chmap_destroy(*mp);
   });
   chmap_destroy(outer);
@@ -409,18 +409,18 @@ TEST(bmap_of_bmaps, nested_sorted_maps) {
   REQUIRE_EQ(cbmap_elem_count(outer), 3);
 
   int expected_outer_key = 0;
-  cbmap_for_each(outer, it, {
-    const int *outer_key = cbmap_iter_key_ptr(it);
+  ccol_for_each(outer, it, {
+    const int *outer_key = ccol_iter_key_ptr(it);
     REQUIRE_EQ(*outer_key, expected_outer_key);
 
-    cbmap *inner_p = cbmap_iter_val_ptr(it);
+    cbmap *inner_p = ccol_iter_val_ptr(it);
     cbmap_redeclare(*inner_p, int, int);
     REQUIRE_EQ(cbmap_elem_count(*inner_p), 5);
 
     // Inner traversal must be sorted 0..4 with expected values.
     int expected_inner_key = 0;
-    cbmap_for_each(*inner_p, inner_it, {
-      const int *k = cbmap_iter_key_ptr(inner_it);
+    ccol_for_each(*inner_p, inner_it, {
+      const int *k = ccol_iter_key_ptr(inner_it);
       REQUIRE_EQ(*k, expected_inner_key);
       int key_copy = *k;
       int v = cbmap_get(*inner_p, key_copy);
@@ -433,8 +433,8 @@ TEST(bmap_of_bmaps, nested_sorted_maps) {
   });
   REQUIRE_EQ(expected_outer_key, 3);
 
-  cbmap_for_each(outer, it, {
-    cbmap *inner_p = cbmap_iter_val_ptr(it);
+  ccol_for_each(outer, it, {
+    cbmap *inner_p = ccol_iter_val_ptr(it);
     cbmap_destroy(*inner_p);
   });
   cbmap_destroy(outer);
@@ -686,8 +686,8 @@ TEST(hmap_of_vec_of_cstrings, three_level_nesting) {
   REQUIRE_EQ(strcmp(cstring_c_str(cvec_at(fv, 1)), "goodbye"), 0);
 
   // Cleanup: for each cvec, destroy all cstr elements then the cvec itself.
-  chmap_for_each(catalog, it, {
-    cvec *vp = chmap_iter_val_ptr(it);
+  ccol_for_each(catalog, it, {
+    cvec *vp = ccol_iter_val_ptr(it);
     cvec_redeclare(*vp, cstr);
     for (size_t i = 0; i < cvec_size(*vp); i++) {
       cstr_destroy(cvec_at(*vp, i));
@@ -750,11 +750,11 @@ TEST(bmap_of_hmap_of_vecs, three_level_nesting) {
   REQUIRE_EQ(cvec_at(vy1, 3), 23);
 
   // Cleanup: innermost cvec -> inner chmap -> outer cbmap.
-  cbmap_for_each(outer, it, {
-    chmap *hmp = cbmap_iter_val_ptr(it);
+  ccol_for_each(outer, it, {
+    chmap *hmp = ccol_iter_val_ptr(it);
     chmap_redeclare(*hmp, char *, cvec);
-    chmap_for_each(*hmp, it, {
-      cvec *vp = chmap_iter_val_ptr(it);
+    ccol_for_each(*hmp, it, {
+      cvec *vp = ccol_iter_val_ptr(it);
       cvector_destroy(*vp);
     });
     chmap_destroy(*hmp);

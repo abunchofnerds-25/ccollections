@@ -100,7 +100,7 @@ circular_queue *circular_queue_create_with_mprocs(
  * @return Pointer to newly created circular queue, or NULL on failure
  */
 #define circular_queue_create(max_size, err_str) \
-  circular_queue_create_with_mprocs(max_size, NULL, err_str)
+  circular_queue_create_with_mprocs((max_size), NULL, (err_str))
 
 /**
  * @brief Destroy a circular queue (internal function)
@@ -123,10 +123,10 @@ void __circular_queue_destroy(circular_queue *cq);
  * @warning Messages remaining in the queue are not automatically freed
  * @note Safe to call with NULL pointer
  */
-#define circular_queue_destroy(cq) \
-  do {                             \
-    __circular_queue_destroy(cq);  \
-    cq = NULL;                     \
+#define circular_queue_destroy(cq)  \
+  do {                              \
+    __circular_queue_destroy((cq)); \
+    cq = NULL;                      \
   } while (0)
 
 /**
@@ -364,7 +364,7 @@ dynamic_queue *dynamic_queue_create_with_mprocs(
  * @return Pointer to newly created dynamic queue, or NULL on failure
  */
 #define dynamic_queue_create(err_str) \
-  dynamic_queue_create_with_mprocs(NULL, err_str)
+  dynamic_queue_create_with_mprocs(NULL, (err_str))
 
 /**
  * @brief Destroy a dynamic queue (internal function)
@@ -388,10 +388,10 @@ void __dynamic_queue_destroy(dynamic_queue *dq);
  * @warning Messages remaining in the queue are not automatically freed
  * @note Safe to call with NULL pointer
  */
-#define dynamic_queue_destroy(dq) \
-  do {                            \
-    __dynamic_queue_destroy(dq);  \
-    dq = NULL;                    \
+#define dynamic_queue_destroy(dq)  \
+  do {                             \
+    __dynamic_queue_destroy((dq)); \
+    dq = NULL;                     \
   } while (0)
 
 /**
@@ -576,7 +576,7 @@ channel *channel_create_with_mprocs(size_t max_size,
  * @return Pointer to newly created channel, or NULL on failure
  */
 #define channel_create(max_size, err_str) \
-  channel_create_with_mprocs(max_size, NULL, err_str)
+  channel_create_with_mprocs((max_size), NULL, (err_str))
 
 /**
  * @brief Destroy a channel (internal function)
@@ -600,10 +600,10 @@ void __channel_destroy(channel *ch);
  * @warning Messages remaining in either direction are not automatically freed
  * @note Safe to call with NULL pointer
  */
-#define channel_destroy(ch) \
-  do {                      \
-    __channel_destroy(ch);  \
-    ch = NULL;              \
+#define channel_destroy(ch)  \
+  do {                       \
+    __channel_destroy((ch)); \
+    ch = NULL;               \
   } while (0)
 
 /**

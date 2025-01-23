@@ -741,10 +741,10 @@ TEST(chash_maps, for_each_elem_wr) {
   REQUIRE_EQ(insert_string_to_int(chmap, "key1", 3), ccol_success);
   REQUIRE_EQ(insert_string_to_int(chmap, "key2", 5), ccol_success);
 
-  chmap_iter_declare(chmap, it);
-  for (it = chmap_begin(chmap); it != NULL; it = chmap_iter_next(it)) {
+  ccol_iter_declare(chmap, it);
+  for (it = ccol_begin(chmap); it != NULL; it = ccol_iter_next(it)) {
     // *(int*)(it->val_pair->ptr) += 7;
-    *chmap_iter_val_ptr(it) += 7;
+    *ccol_iter_val_ptr(it) += 7;
   }
 
   int val = -1;
@@ -767,9 +767,9 @@ TEST(chash_maps, for_each_elem_rd) {
 
   // Add 3 and 5 on top of sum. It should be 8
   // when the following statement is completed.
-  chmap_iter_declare(chmap, it);
-  for (it = chmap_begin(chmap); it != NULL; it = chmap_iter_next(it)) {
-    sum += *chmap_iter_val_ptr(it);
+  ccol_iter_declare(chmap, it);
+  for (it = ccol_begin(chmap); it != NULL; it = ccol_iter_next(it)) {
+    sum += *ccol_iter_val_ptr(it);
   }
 
   REQUIRE_EQ(sum, 8);
@@ -1087,18 +1087,18 @@ TEST(chash_maps, iteration) {
 
   int records[6] = {0};  // from 0 to 5, so that 3, 4 and 5 are valid indices
   int counter = 0;
-  chmap_iter_declare(hm, it);
-  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
-    key = *chmap_iter_key_ptr(it);
+  ccol_iter_declare(hm, it);
+  for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
+    key = *ccol_iter_key_ptr(it);
     if (key == 3) {
       REQUIRE_EQ(records[3]++, 0);
-      REQUIRE_STREQ(*chmap_iter_val_ptr(it), "hello");
+      REQUIRE_STREQ(*ccol_iter_val_ptr(it), "hello");
     } else if (key == 4) {
       REQUIRE_EQ(records[4]++, 0);
-      REQUIRE_STREQ(*chmap_iter_val_ptr(it), "hi");
+      REQUIRE_STREQ(*ccol_iter_val_ptr(it), "hi");
     } else if (key == 5) {
       REQUIRE_EQ(records[5]++, 0);
-      REQUIRE_STREQ(*chmap_iter_val_ptr(it), "there");
+      REQUIRE_STREQ(*ccol_iter_val_ptr(it), "there");
     } else {
       REQUIRE_TRUE(false);
     }
@@ -1141,24 +1141,24 @@ TEST(chash_maps, map_string_to_void_ptrs) {
   int records[4] = {0};
   int counter = 0;
 
-  chmap_iter_declare(hm, it);
-  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
-    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
+  ccol_iter_declare(hm, it);
+  for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
+    if (strcmp(*ccol_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->a, 3);
-      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->b, 4);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
+      REQUIRE_EQ((*(some_struct **)ccol_iter_val_ptr(it))->a, 3);
+      REQUIRE_EQ((*(some_struct **)ccol_iter_val_ptr(it))->b, 4);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->a, 5);
-      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->b, 6);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
+      REQUIRE_EQ((*(some_struct **)ccol_iter_val_ptr(it))->a, 5);
+      REQUIRE_EQ((*(some_struct **)ccol_iter_val_ptr(it))->b, 6);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->a, 7);
-      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->b, 8);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d4") == 0) {
+      REQUIRE_EQ((*(some_struct **)ccol_iter_val_ptr(it))->a, 7);
+      REQUIRE_EQ((*(some_struct **)ccol_iter_val_ptr(it))->b, 8);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d4") == 0) {
       REQUIRE_EQ(records[3]++, 0);
-      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->a, 9);
-      REQUIRE_EQ((*(some_struct **)chmap_iter_val_ptr(it))->b, 10);
+      REQUIRE_EQ((*(some_struct **)ccol_iter_val_ptr(it))->a, 9);
+      REQUIRE_EQ((*(some_struct **)ccol_iter_val_ptr(it))->b, 10);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -1192,20 +1192,20 @@ TEST(chash_maps, map_string_to_struct_ptrs) {
   int records[3] = {0};
   int counter = 0;
 
-  chmap_iter_declare(hm, it);
-  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
-    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
+  ccol_iter_declare(hm, it);
+  for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
+    if (strcmp(*ccol_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ((*chmap_iter_val_ptr(it))->a, 3);
-      REQUIRE_EQ((*chmap_iter_val_ptr(it))->b, 4);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->a, 3);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->b, 4);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ((*chmap_iter_val_ptr(it))->a, 5);
-      REQUIRE_EQ((*chmap_iter_val_ptr(it))->b, 6);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->a, 5);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->b, 6);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ((*chmap_iter_val_ptr(it))->a, 7);
-      REQUIRE_EQ((*chmap_iter_val_ptr(it))->b, 8);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->a, 7);
+      REQUIRE_EQ((*ccol_iter_val_ptr(it))->b, 8);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -1236,20 +1236,20 @@ TEST(chash_maps, map_string_to_a_struct) {
   int records[3] = {0};
   int counter = 0;
 
-  chmap_iter_declare(hm, it);
-  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
-    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
+  ccol_iter_declare(hm, it);
+  for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
+    if (strcmp(*ccol_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 3);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 4);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 3);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 4);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 5);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 6);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 5);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 6);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 7);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 8);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 7);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 8);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -1268,19 +1268,19 @@ TEST(chash_maps, map_string_to_a_struct) {
   memset(records, 0, sizeof(records));
   counter = 0;
 
-  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
-    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
+  for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
+    if (strcmp(*ccol_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 4);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 3);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 4);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 3);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 6);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 5);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 6);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 5);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 8);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 7);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 8);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 7);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -1311,20 +1311,20 @@ void helper_function(chmap chm) {
   int records[3] = {0};
   int counter = 0;
 
-  chmap_iter_declare(chm, it);
-  for (it = chmap_begin(chm); it != NULL; it = chmap_iter_next(it)) {
-    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
+  ccol_iter_declare(chm, it);
+  for (it = ccol_begin(chm); it != NULL; it = ccol_iter_next(it)) {
+    if (strcmp(*ccol_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 3);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 4);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 3);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 4);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 5);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 6);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 5);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 6);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 7);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 8);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 7);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 8);
     } else {
       REQUIRE_TRUE(false);
     }
@@ -1351,8 +1351,8 @@ TEST(chash_maps, for_each_macro) {
 
   int sum = 0;
   int count = 0;
-  chmap_for_each(hm, it, {
-    sum += *chmap_iter_val_ptr(it);
+  ccol_for_each(hm, it, {
+    sum += *ccol_iter_val_ptr(it);
     ++count;
   });
 
@@ -1418,9 +1418,9 @@ TEST(chash_maps, iterator_with_non_default_variable_name) {
 
     int sum = 0;
     int count = 0;
-    chmap_iter_declare(hm, iter);
-    for (iter = chmap_begin(hm); iter != NULL; iter = chmap_iter_next(iter)) {
-      sum += *chmap_iter_val_ptr(iter);
+    ccol_iter_declare(hm, iter);
+    for (iter = ccol_begin(hm); iter != NULL; iter = ccol_iter_next(iter)) {
+      sum += *ccol_iter_val_ptr(iter);
       ++count;
     }
     REQUIRE_EQ(count, 3);
@@ -1444,10 +1444,10 @@ TEST(chash_maps, iterator_with_non_default_variable_name) {
     int key_sum = 0;
     int val_sum = 0;
     int count = 0;
-    chmap_iter_declare(hm, iter);
-    for (iter = chmap_begin(hm); iter != NULL; iter = chmap_iter_next(iter)) {
-      key_sum += *chmap_iter_key_ptr(iter);
-      val_sum += *chmap_iter_val_ptr(iter);
+    ccol_iter_declare(hm, iter);
+    for (iter = ccol_begin(hm); iter != NULL; iter = ccol_iter_next(iter)) {
+      key_sum += *ccol_iter_key_ptr(iter);
+      val_sum += *ccol_iter_val_ptr(iter);
       ++count;
     }
     REQUIRE_EQ(count, 3);
@@ -1601,13 +1601,82 @@ TEST(chash_maps, sc_large_key_and_large_value) {
 
   // Verify iteration visits all three entries exactly once.
   size_t visited = 0;
-  chmap_iter_declare(hm, it);
-  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
+  ccol_iter_declare(hm, it);
+  for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
     ++visited;
   }
   REQUIRE_EQ(visited, (size_t)3);
 
   chmap_destroy(hm);
+}
+
+TEST(chash_maps, char_type_variants_as_string_keys) {
+  // signed char * (= int8_t *) must route through the string path and behave
+  // identically to char * for all map operations.
+  {
+    chmap_construct(hm, signed char *, int);
+
+    signed char *k1 = (signed char *)"hello";
+    signed char *k2 = (signed char *)"world";
+    int v1 = 10, v2 = 20;
+
+    chmap_insert(hm, k1, v1);
+    chmap_insert(hm, k2, v2);
+    REQUIRE_EQ(chmap_elem_count(hm), 2);
+    REQUIRE_EQ(chmap_get(hm, k1), 10);
+    REQUIRE_EQ(chmap_get(hm, k2), 20);
+
+    // char * with identical string content must find the same entries.
+    char *ck1 = "hello";
+    char *ck2 = "world";
+    REQUIRE_EQ(chmap_get(hm, ck1), 10);
+    REQUIRE_EQ(chmap_get(hm, ck2), 20);
+
+    chmap_remove(hm, k2);
+    REQUIRE_EQ(chmap_elem_count(hm), 1);
+
+    chmap_destroy(hm);
+  }
+
+  // unsigned char * (= uint8_t *) — identical check.
+  {
+    chmap_construct(hm, unsigned char *, int);
+
+    unsigned char *k1 = (unsigned char *)"alpha";
+    unsigned char *k2 = (unsigned char *)"beta";
+    int v1 = 30, v2 = 40;
+
+    chmap_insert(hm, k1, v1);
+    chmap_insert(hm, k2, v2);
+    REQUIRE_EQ(chmap_elem_count(hm), 2);
+    REQUIRE_EQ(chmap_get(hm, k1), 30);
+    REQUIRE_EQ(chmap_get(hm, k2), 40);
+
+    char *ck1 = "alpha";
+    char *ck2 = "beta";
+    REQUIRE_EQ(chmap_get(hm, ck1), 30);
+    REQUIRE_EQ(chmap_get(hm, ck2), 40);
+
+    chmap_destroy(hm);
+  }
+
+  // char * map looked up via signed char * and unsigned char *.
+  {
+    chmap_construct(hm, char *, int);
+
+    char *k1 = "foo";
+    char *k2 = "bar";
+    int v1 = 50, v2 = 60;
+    chmap_insert(hm, k1, v1);
+    chmap_insert(hm, k2, v2);
+
+    signed char *sk1 = (signed char *)"foo";
+    unsigned char *uk2 = (unsigned char *)"bar";
+    REQUIRE_EQ(chmap_get(hm, sk1), 50);
+    REQUIRE_EQ(chmap_get(hm, uk2), 60);
+
+    chmap_destroy(hm);
+  }
 }
 
 TEST(chash_maps, re_enabled_local_chm_macros) {
@@ -1618,20 +1687,20 @@ TEST(chash_maps, re_enabled_local_chm_macros) {
   int records[3] = {0};
   int counter = 0;
 
-  chmap_iter_declare(hm, it);
-  for (it = chmap_begin(hm); it != NULL; it = chmap_iter_next(it)) {
-    if (strcmp(*chmap_iter_key_ptr(it), "d1") == 0) {
+  ccol_iter_declare(hm, it);
+  for (it = ccol_begin(hm); it != NULL; it = ccol_iter_next(it)) {
+    if (strcmp(*ccol_iter_key_ptr(it), "d1") == 0) {
       REQUIRE_EQ(records[0]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 4);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 3);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d2") == 0) {
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 4);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 3);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d2") == 0) {
       REQUIRE_EQ(records[1]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 6);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 5);
-    } else if (strcmp(*chmap_iter_key_ptr(it), "d3") == 0) {
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 6);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 5);
+    } else if (strcmp(*ccol_iter_key_ptr(it), "d3") == 0) {
       REQUIRE_EQ(records[2]++, 0);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->a, 8);
-      REQUIRE_EQ(chmap_iter_val_ptr(it)->b, 7);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->a, 8);
+      REQUIRE_EQ(ccol_iter_val_ptr(it)->b, 7);
     } else {
       REQUIRE_TRUE(false);
     }

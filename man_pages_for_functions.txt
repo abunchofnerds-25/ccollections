@@ -2108,7 +2108,36 @@ NOTES
        Equivalent to cstring_create_full(initial, NULL, err)
 
 SEE ALSO
-       cstring_create_full, cstring_destroy
+       cstring_create_full, cstring_new, cstring_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cstring_new - create a string with default memory management (optimistic)
+
+SYNOPSIS
+       #include <cstring.h>
+
+       cstr cstring_new(const char *initial);
+
+DESCRIPTION
+       Convenience wrapper around cstring_create_full() that uses the default
+       malloc/free allocators and provides no error output. Intended for call
+       sites where allocation failure is treated as fatal and no error string
+       is required.
+
+PARAMETERS
+       initial   Initial C string content, or NULL for an empty string
+
+RETURN VALUE
+       Returns pointer to newly created cstring on success
+       Returns NULL on failure (no error detail is provided)
+
+NOTES
+       Equivalent to cstring_create_full(initial, NULL, NULL)
+       Use cstring_create() when an error string on failure is needed
+
+SEE ALSO
+       cstring_create, cstring_create_full, cstring_destroy
 
 ------------------------------------------------------------------------------
 NAME
@@ -2809,128 +2838,260 @@ SEE ALSO
        cstring_find, cstring_substring
 
 ================================================================================
-              CITERATORS.H - UNIFIED ITERATION API
+                       CLRUCACHE.H - LRU CACHE
 ================================================================================
 
-These three functions are the underlying begin-iteration entry points for each
-container type.  They are used internally by ccol_begin() and are not normally
-called directly by application code — use the ccol_begin() macro instead, which
-selects the correct function at compile time based on container type.
+------------------------------------------------------------------------------
+NAME
+       clrucache_create_full - create an LRU cache with full control
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       clru_cache clrucache_create_full(size_t capacity,
+                                        ccol_data_type key_type,
+                                        ccol_data_type val_type,
+                                        clru_remote_getter_t getter,
+                                        clru_remote_setter_t setter,
+                                        clru_eviction_cb_t eviction_cb,
+                                        ccol_memmgmt_procs_t *mprocs,
+                                        char **err);
+
+DESCRIPTION
+       Creates a thread-safe LRU cache backed by a hash map (O(1) lookup) and
+       a doubly-linked list (O(1) eviction). The cache holds up to capacity
+       live entries; inserting beyond that limit evicts the least-recently-used
+       entry first.
+
+       This is the low-level constructor. Prefer the clru_construct() macro
+       family in application code.
+
+PARAMETERS
+       capacity     Maximum number of live entries before eviction occurs.
+                    Must be > 0.
+       key_type     ccol_data_type of keys, as returned by
+                    determine_ccol_data_type().
+       val_type     ccol_data_type of values (used for type tracking only;
+                    the internal map always stores heap pointers).
+       getter       Remote getter callback, or NULL. Called on cache miss to
+                    fetch the value from an external source. On success it
+                    must heap-allocate the value data, assign it to val->ptr,
+                    set val->size to the byte length, and return true. The
+                    cache takes ownership of val->ptr and frees it. On
+                    failure it must leave val->ptr as NULL and return false.
+       setter       Remote setter callback, or NULL. Called synchronously
+                    before each cache update. Receives the key and value as
+                    const cmap_pair* pointers. If it returns false the cache
+                    is not updated.
+       eviction_cb  Eviction callback, or NULL. Called while the cache mutex
+                    is held when an entry is evicted to make room. Receives
+                    the evicted key and value as const cmap_pair* pointers.
+                    Must not call back into the cache.
+       mprocs       Custom memory management procedures, or NULL for default
+                    malloc/free.
+       err          Optional pointer to receive an error string on failure.
+
+RETURN VALUE
+       Returns a new cache handle on success.
+       Returns NULL on failure; *err is set if err is non-NULL.
+
+NOTES
+       Thread-safe: all operations on the returned handle are protected by
+       an internal mutex and per-entry condition variables.
+       The eviction callback is invoked while the cache mutex is held — it
+       must not re-enter the cache.
+       The destroy function must be called only after all other threads have
+       finished using the cache.
+
+SEE ALSO
+       clru_construct, clru_init, __clrucache_destroy, clrucache_get_full,
+       clrucache_set_full
 
 ------------------------------------------------------------------------------
 NAME
-       cvector_cmap_begin_iter - begin iteration over a cvector
+       __clrucache_destroy - destroy an LRU cache (internal)
 
 SYNOPSIS
-       #include <citerators.h>   /* or #include <cvector.h> */
+       #include <clrucache.h>
 
-       cmap_iterator *cvector_cmap_begin_iter(struct cvector *v, char **err);
+       void __clrucache_destroy(clru_cache cache);
 
 DESCRIPTION
-       Allocates and returns a cmap_iterator positioned at the first element of
-       the vector v.  If the vector is empty, returns NULL without setting *err.
-       If allocation fails, returns NULL and writes a diagnostic string to *err
-       (if err is non-NULL).
+       Evicts all remaining live entries (invoking the eviction callback for
+       each while the mutex is held), destroys the internal hash map, frees
+       the mutex, and releases all memory.
 
-       The iterator visits elements in index order (0, 1, 2, ...).  For each
-       element, key_pair->ptr holds a size_t index and val_pair->ptr points
-       to the element value.  The iterator's _direct_ptr flag is set, so
-       ccol_iter_val_ptr() returns a pointer directly into the vector's storage.
+       This is the low-level destructor. In application code use the
+       clru_destroy() macro, which also sets the pointer to NULL.
 
 PARAMETERS
-       v    Vector to iterate.  Must not be NULL.
-       err  Optional pointer to receive an error string on allocation failure.
+       cache  Cache handle to destroy. Passing NULL is a no-op.
 
-RETURN VALUE
-       Returns a heap-allocated cmap_iterator on success.
-       Returns NULL if the vector is empty (not an error).
-       Returns NULL on allocation failure (*err set if err is non-NULL).
-
-NOTES
-       The returned iterator must be destroyed by advancing it to the end with
-       ccol_iter_next() or by calling ccol_iter_destroy() explicitly.
-       ccol_iter_declare() attaches automatic cleanup via __attribute__((cleanup)).
-       Do not modify the vector while iterating.
+WARNINGS
+       Must be called only after all other threads have stopped using the
+       cache. Outstanding blocked get or set calls will corrupt memory if
+       __clrucache_destroy is called while they are in progress.
 
 SEE ALSO
-       ccol_begin, ccol_iter_declare, ccol_iter_next, ccol_for_each
+       clru_destroy, clrucache_create_full
 
 ------------------------------------------------------------------------------
 NAME
-       chashmap_begin_iter - begin iteration over a chashmap
+       clrucache_get_full - retrieve a value by key
 
 SYNOPSIS
-       #include <citerators.h>   /* or #include <chashmap.h> */
+       #include <clrucache.h>
 
-       cmap_iterator *chashmap_begin_iter(struct chashmap *v, char **err);
+       ccol_retval_t clrucache_get_full(clru_cache cache,
+                                        const cmap_pair *key_pair,
+                                        cmap_pair *val_out);
 
 DESCRIPTION
-       Allocates and returns a cmap_iterator positioned at the first entry of
-       the hash map v.  If the map is empty, returns NULL without setting *err.
-       If allocation fails, returns NULL and writes a diagnostic string to *err
-       (if err is non-NULL).
+       Looks up key_pair in the cache and, on success, heap-allocates a copy
+       of the associated value (via standard malloc), assigns the pointer to
+       val_out->ptr, and sets val_out->size to the stored byte size. The
+       caller is responsible for freeing val_out->ptr with free().
 
-       Iteration order depends on the internal implementation selected at
-       creation time:
-         Open-addressing:    slot order (not insertion order, not sorted)
-         Separate chaining:  insertion order via the internal linked list
+       Cache hit: the entry is moved to the most-recently-used position and
+       a heap-allocated copy of its value is written into val_out.
 
-       For each entry, key_pair holds the key and val_pair holds the value.
-       The _direct_ptr flag is clear for maps; ccol_iter_key_ptr() and
-       ccol_iter_val_ptr() handle char-pointer (SSO) keys correctly.
+       Cache miss without a remote getter: returns ccol_key_not_found.
+
+       Cache miss with a remote getter: a placeholder entry is inserted and
+       the remote getter is called outside the mutex. Concurrent get calls
+       for the same key coalesce: only the first caller runs the fetch; all
+       others block until the result is available. On getter success the
+       fetched value is cached and a heap-allocated copy is written into
+       val_out for all waiters. On getter failure, all waiters receive
+       ccol_key_not_found.
+
+       If a set is in progress for the same key this call blocks until the
+       set completes and the cache is in a consistent state.
 
 PARAMETERS
-       v    Hash map to iterate.  Must not be NULL.
-       err  Optional pointer to receive an error string on allocation failure.
+       cache     Cache handle.
+       key_pair  Key to look up (ptr and size fields must be set).
+       val_out   Output pair populated on success. val_out->ptr is set to a
+                 heap-allocated copy of the value (caller must free() it);
+                 val_out->size is set to the stored value size. Must not be
+                 NULL.
 
 RETURN VALUE
-       Returns a heap-allocated cmap_iterator on success.
-       Returns NULL if the map is empty (not an error).
-       Returns NULL on allocation failure (*err set if err is non-NULL).
+       ccol_success           val_out populated; caller owns val_out->ptr.
+       ccol_key_not_found     Key absent and no getter, or getter failed.
+       ccol_invalid_args      cache, key_pair, or val_out is NULL.
+       ccol_not_enough_memory Allocation failed (placeholder entry or output
+                              copy).
 
 NOTES
-       The returned iterator must be destroyed by advancing it to the end with
-       ccol_iter_next() or by calling ccol_iter_destroy() explicitly.
-       Do not modify the map while iterating.
+       The returned val_out->ptr is allocated with the standard malloc
+       regardless of any custom allocator configured on the cache. Free it
+       with free().
+       The cache never exposes a pointer into its internal storage (such a
+       pointer would dangle after eviction).
+       O(1) average-case complexity for the hash map lookup.
 
 SEE ALSO
-       ccol_begin, ccol_iter_declare, ccol_iter_next, ccol_for_each
+       clru_get, clrucache_set_full, clrucache_create_full
 
 ------------------------------------------------------------------------------
 NAME
-       cbmap_begin_iter - begin iteration over a cbstmap in sorted key order
+       clrucache_set_full - store a value by key (write-through)
 
 SYNOPSIS
-       #include <citerators.h>   /* or #include <cbstmap.h> */
+       #include <clrucache.h>
 
-       cmap_iterator *cbmap_begin_iter(struct cbinarymap *v, char **err);
+       ccol_retval_t clrucache_set_full(clru_cache cache,
+                                        const cmap_pair *key_pair,
+                                        const cmap_pair *val_pair);
 
 DESCRIPTION
-       Allocates and returns a cmap_iterator positioned at the entry with the
-       smallest key in the BST map v.  If the map is empty, returns NULL
-       without setting *err.  If allocation fails, returns NULL and writes a
-       diagnostic string to *err (if err is non-NULL).
+       Associates key_pair with val_pair in the cache.
 
-       Iteration proceeds in ascending key order (in-order traversal of the
-       AVL tree) using an iterative algorithm with an internal stack.  For each
-       entry, key_pair holds the key and val_pair holds the value.
+       If a remote setter was provided at construction it is called
+       synchronously outside the mutex before the cache is updated. On
+       setter failure the function returns ccol_unexpected_failure and the
+       cache is left unchanged for that key (an existing value is preserved).
+
+       Multiple setters for the same key are serialised. Concurrent getters
+       for the same key block until the set completes.
+
+       If the cache is at capacity and the key is new, the least-recently-
+       used live entry is evicted first.
 
 PARAMETERS
-       v    BST map to iterate.  Must not be NULL.
-       err  Optional pointer to receive an error string on allocation failure.
+       cache     Cache handle.
+       key_pair  Key to store (ptr and size fields must be set).
+       val_pair  Value to associate with the key (ptr and size must be set;
+                 size must be > 0).
 
 RETURN VALUE
-       Returns a heap-allocated cmap_iterator on success.
-       Returns NULL if the map is empty (not an error).
-       Returns NULL on allocation failure (*err set if err is non-NULL).
+       ccol_success             Value stored (and remote setter succeeded if
+                                one was provided).
+       ccol_unexpected_failure  Remote setter returned false; cache unchanged.
+       ccol_invalid_args        cache, key_pair, or val_pair is NULL; or
+                                val_pair->size is 0.
+       ccol_not_enough_memory   Memory allocation for the new value failed.
 
 NOTES
-       The returned iterator must be destroyed by advancing it to the end with
-       ccol_iter_next() or by calling ccol_iter_destroy() explicitly.
-       Do not modify the map while iterating.
+       O(1) average-case complexity for the hash map operations.
 
 SEE ALSO
-       ccol_begin, ccol_iter_declare, ccol_iter_next, ccol_for_each
+       clru_set, clrucache_get_full, clrucache_create_full
+
+------------------------------------------------------------------------------
+NAME
+       clrucache_size - return the number of live entries in the cache
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       size_t clrucache_size(clru_cache cache);
+
+DESCRIPTION
+       Returns the current number of live (fully initialised, not evicted)
+       entries in the cache. Placeholder entries created during an in-progress
+       fetch or set are not counted.
+
+PARAMETERS
+       cache  Cache handle.
+
+RETURN VALUE
+       Number of live entries, or 0 if cache is NULL.
+
+NOTES
+       Acquires the cache mutex for the duration of the read.
+       O(1) complexity.
+
+SEE ALSO
+       clrucache_capacity, clrucache_create_full
+
+------------------------------------------------------------------------------
+NAME
+       clrucache_capacity - return the maximum capacity of the cache
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       size_t clrucache_capacity(clru_cache cache);
+
+DESCRIPTION
+       Returns the maximum number of live entries the cache can hold before
+       eviction begins. This is the value supplied as capacity to
+       clrucache_create_full() at construction time.
+
+PARAMETERS
+       cache  Cache handle.
+
+RETURN VALUE
+       Capacity (always >= 1 for a valid handle), or 0 if cache is NULL.
+
+NOTES
+       Does not acquire the mutex; capacity is immutable after construction.
+       O(1) complexity.
+
+SEE ALSO
+       clrucache_size, clrucache_create_full
 
 ================================================================================
                               END OF MAN PAGES

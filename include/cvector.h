@@ -414,7 +414,7 @@ static inline void ___cvector_destroy(cvec *cv) {
  * @see cvec_begin
  * @see ccol_iter_next
  */
-cmap_iterator *cvector_cmap_begin_iter(cvec v, char **err);
+cmap_iterator *cvector_begin_iter(cvec v, char **err);
 
 /* ========================================================================== */
 /*                         TYPE-SAFE CONVENIENCE MACROS                       */

@@ -22,9 +22,10 @@ A library of generic, type-safe data structures for C, built on C11 and GNU C ex
 10. [Unified Iteration — `citerators`](#10-unified-iteration--citerators)
 11. [Memory Pools — `cmempool`](#11-memory-pools--cmempool)
 12. [Thread Communication — `cthreadcomm`](#12-thread-communication--cthreadcomm)
-13. [Thread Safety](#13-thread-safety)
-14. [Custom Memory Management](#14-custom-memory-management)
-15. [License](#15-license)
+13. [LRU Cache — `clrucache`](#13-lru-cache--clrucache)
+14. [Thread Safety](#14-thread-safety)
+15. [Custom Memory Management](#15-custom-memory-management)
+16. [License](#16-license)
 
 ---
 
@@ -401,6 +402,7 @@ chmap_destroy(map);
 | `cstr_construct_scoped(s, initial)` | Declare, initialise, and register auto-cleanup |
 | `cstr_construct_mp(s, initial, mprocs)` | Declare and initialise with a custom allocator |
 | `cstr_construct_mp_scoped(s, initial, mprocs)` | Declare, initialise with a custom allocator, and register auto-cleanup |
+| `cstring_new(initial)` | Allocate and return a new `cstr` using default allocators; returns `NULL` on failure with no error detail (equivalent to `cstring_create_full(initial, NULL, NULL)`) |
 | `cstr_reserve(s, cap)` | Pre-allocate at least `cap` bytes (rounded up to next power of two, minimum 16); calls `fatal_err()` on failure |
 | `cstr_reset(s)` | Clear all characters and shrink capacity back to the minimum |
 | `cstr_destroy(s)` | Destroy and set pointer to `NULL` |
@@ -1004,7 +1006,7 @@ r_mempool_destroy(pool);  /* The buffer itself is not freed */
 
 ### Driving Other Containers from a Pool
 
-Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 14](#14-custom-memory-management) for the complete pattern.
+Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 15](#15-custom-memory-management) for the complete pattern.
 
 ---
 
@@ -1208,7 +1210,201 @@ ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
 
 ---
 
-## 13. Thread Safety
+## 13. LRU Cache — `clrucache`
+
+`clrucache` is a fully thread-safe generic LRU (Least-Recently-Used) cache backed by a hash map for O(1) lookup and a doubly-linked list for O(1) eviction. When the cache is full, inserting a new entry evicts the least-recently-used live entry first, optionally notifying the caller via an eviction callback. An optional remote getter and setter integrate the cache transparently with an external backing store — a database, a network service, or any other source.
+
+**Header:** `#include <clrucache.h>`
+
+### Concurrency Guarantees
+
+All operations are serialised via a single global mutex combined with per-entry condition variables. The key properties are:
+
+- Multiple threads requesting the same uncached key coalesce: exactly one remote fetch executes; all others block and receive the same result when it completes.
+- A getter for a key that is currently being set blocks until the set completes, so it always reads a consistent value.
+- Multiple setters for the same key are serialised.
+
+The eviction callback is invoked while the cache mutex is held. It **must not** call back into the cache.
+
+### Basic Usage
+
+```c
+/* Cache mapping int keys to double values, capacity 128 */
+clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+/* Store a value */
+int k = 42;
+double v = 3.14;
+clru_set(cache, k, v);
+
+/* Retrieve a value — val_ptr is a pointer to the value type, not cmap_pair */
+double out = 0.0;
+if (clru_get(cache, k, &out) == ccol_success) {
+    printf("%.2f\n", out);
+}
+
+clru_destroy(cache);
+```
+
+### Remote Getter — Read-Through
+
+A remote getter is called on a cache miss. The cache takes ownership of the heap-allocated value returned by the getter. Concurrent requests for the same missing key coalesce: only one fetch executes, and all waiters receive the result.
+
+```c
+bool load_from_db(const cmap_pair *key, cmap_pair *val) {
+    double *result = malloc(sizeof(double));
+    if (!result) return false;
+    *result = /* ... query database ... */;
+    val->ptr  = result;
+    val->size = sizeof(double);
+    return true;
+}
+
+clru_construct(cache, int, double, 256, load_from_db, NULL, NULL);
+
+int k = 7;
+double val = 0.0;
+/* On a miss, load_from_db is called exactly once regardless of concurrent threads */
+if (clru_get(cache, k, &val) == ccol_success) {
+    printf("%.2f\n", val);
+}
+
+clru_destroy(cache);
+```
+
+### Remote Setter — Write-Through
+
+A remote setter is called synchronously before the cache is updated. If the remote call fails, the cache is not updated and `clru_set` returns `ccol_unexpected_failure`.
+
+```c
+bool write_to_db(const cmap_pair *key, const cmap_pair *val) {
+    return /* write key/value to external store */;
+}
+
+clru_construct(cache, int, double, 256, NULL, write_to_db, NULL);
+
+int k = 7;
+double v = 2.71;
+if (clru_set(cache, k, v) == ccol_unexpected_failure) {
+    /* remote write failed; cache is unchanged */
+}
+
+clru_destroy(cache);
+```
+
+### Eviction Callback
+
+```c
+void on_evict(const cmap_pair *key, const cmap_pair *val) {
+    printf("evicted key=%d\n", *(const int *)key->ptr);
+    /* Must NOT call back into the cache — mutex is held */
+}
+
+clru_construct(cache, int, double, 4, NULL, NULL, on_evict);
+/* When the 5th unique key is inserted, the LRU entry is evicted */
+clru_destroy(cache);
+```
+
+### Memory Ownership for Retrieved Values
+
+`clru_get` memory behavior depends on the value type. Only `char *` values cause a heap allocation; for all other types no heap allocation occurs.
+
+**Non-`char *` value types** — the macro copies the value directly into `*val_ptr` with no heap allocation. The caller receives the value in a plain typed variable; `free()` is neither needed nor valid:
+
+```c
+clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+int k = 42;
+double v = 3.14;
+clru_set(cache, k, v);
+
+double out = 0.0;
+if (clru_get(cache, k, &out) == ccol_success) {
+    printf("%.2f\n", out);
+    /* No free() — no heap allocation occurred */
+}
+
+clru_destroy(cache);
+```
+
+**`char *` value types** — the macro transfers ownership of the heap-allocated string to the caller via `*(char **)val_ptr`. The caller **must** call `free()` on it when done:
+
+```c
+clru_construct(str_cache, int, char *, 64, NULL, NULL, NULL);
+
+int k = 1;
+char *greeting = "hello";
+clru_set(str_cache, k, greeting);
+
+char *s = NULL;
+if (clru_get(str_cache, k, &s) == ccol_success) {
+    printf("%s\n", s);
+    free(s);   /* Required — clru_get transferred heap ownership to the caller */
+}
+
+clru_destroy(str_cache);
+```
+
+Each call to `clru_get` produces an independent heap allocation for the string. Two successive calls to `clru_get` for the same key return two independent pointers that must each be freed separately.
+
+### Cross-Scope Usage
+
+Pass the cache handle across function boundaries and use `clru_redeclare` to restore type information. This is required before calling `clru_get` or `clru_set` — both macros rely on the companion type variables to determine the value type. Note that `clru_redeclare` requires a simple local identifier, not a struct-member expression like `ga->cache`; declare a local alias first if necessary.
+
+```c
+void read_and_write(clru_cache c) {
+    clru_redeclare(c, int, double);
+    int k = 1;
+    double v = 1.0;
+    clru_set(c, k, v);
+
+    double out = 0.0;
+    clru_get(c, k, &out);
+}
+
+int main(void) {
+    clru_construct(cache, int, double, 64, NULL, NULL, NULL);
+    read_and_write(cache);
+    clru_destroy(cache);
+    return 0;
+}
+```
+
+### Scoped Variant
+
+```c
+void process(void) {
+    clru_construct_scoped(cache, int, double, 64, NULL, NULL, NULL);
+    /* cache is destroyed automatically when the function returns */
+}
+```
+
+### Reference: Core Operations
+
+**Lifecycle**
+
+| Macro / Function | Description |
+|---|---|
+| `clru_declare(name, KeyT, ValT)` | Declare the cache variable and companion type variables without initialising |
+| `clru_declare_scoped(name, KeyT, ValT)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
+| `clru_redeclare(name, KeyT, ValT)` | Restore type information in a new scope after passing the cache across a function boundary |
+| `clru_init(name, capacity, getter, setter, evict_cb)` | Initialise a previously declared cache; calls `fatal_err()` on failure |
+| `clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb)` | Declare and initialise in one step |
+| `clru_construct_scoped(name, KeyT, ValT, capacity, getter, setter, evict_cb)` | Declare, initialise, and register auto-cleanup |
+| `clru_destroy(name)` | Destroy the cache and set the pointer to `NULL` |
+| `clrucache_size(cache)` | Return the number of live entries currently stored |
+| `clrucache_capacity(cache)` | Return the configured capacity |
+
+**Get / Set**
+
+| Macro / Function | Description |
+|---|---|
+| `clru_get(name, key, val_ptr)` | Retrieve the value for `key`. `val_ptr` is a pointer to the value type (`ValT *`), **not** `cmap_pair *`. For non-`char *` val types, the value is copied directly into `*val_ptr` — no heap allocation occurs. For `char *` val types, `*(char **)val_ptr` is set to a heap-allocated string that the caller must `free()`. Returns `ccol_success`, `ccol_key_not_found`, or another error code. |
+| `clru_set(name, key, val)` | Store `val` for `key`; if a remote setter was provided it is called first; returns `ccol_success` or `ccol_unexpected_failure` on remote failure |
+
+---
+
+## 14. Thread Safety
 
 ### Intentionally Unguarded Containers
 
@@ -1260,10 +1456,11 @@ The following components include their own synchronisation and are safe to use f
 | `circular_queue` | Always thread-safe |
 | `dynamic_queue` | Always thread-safe |
 | `channel` | Always thread-safe |
+| `clrucache` | Always thread-safe |
 
 ---
 
-## 14. Custom Memory Management
+## 15. Custom Memory Management
 
 Every container accepts a `ccol_memmgmt_procs_t *` at creation time. Passing `NULL` selects the standard `malloc`/`calloc`/`realloc`/`free` family.
 
@@ -1324,7 +1521,7 @@ r_mempool_destroy(node_pool);
 
 ---
 
-## 15. License
+## 16. License
 
 MIT License
 

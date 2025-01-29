@@ -432,7 +432,7 @@ static cmap_iterator *cvec_cmap_iter_next(cmap_iterator *it) {
   return it;
 }
 
-cmap_iterator *cvector_cmap_begin_iter(cvec v, char **err) {
+cmap_iterator *cvector_begin_iter(cvec v, char **err) {
   if (err) {
     *err = NULL;
   }

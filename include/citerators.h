@@ -53,7 +53,7 @@ struct cvector;
 struct chashmap;
 struct cbinarymap;
 
-cmap_iterator *cvector_cmap_begin_iter(struct cvector *v, char **err);
+cmap_iterator *cvector_begin_iter(struct cvector *v, char **err);
 cmap_iterator *chashmap_begin_iter(struct chashmap *v, char **err);
 cmap_iterator *cbmap_begin_iter(struct cbinarymap *v, char **err);
 
@@ -181,7 +181,7 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
  * selected branch is ever executed. */
 static inline __attribute__((always_inline)) cmap_iterator *__ccol_cvec_begin(
     void *v, char **err) {
-  return cvector_cmap_begin_iter((struct cvector *)v, err);
+  return cvector_begin_iter((struct cvector *)v, err);
 }
 static inline __attribute__((always_inline)) cmap_iterator *__ccol_chmap_begin(
     void *v, char **err) {

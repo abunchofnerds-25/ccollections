@@ -2204,6 +2204,379 @@ SEE ALSO
        cstring_split, cstr_find, cstr_substring
 
 ================================================================================
+                       CLRUCACHE.H - LRU CACHE
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       clru_destroy - destroy an LRU cache and set pointer to NULL
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       clru_destroy(name);
+
+DESCRIPTION
+       Calls __clrucache_destroy() to evict all remaining entries (invoking
+       the eviction callback for each while the mutex is held), destroy the
+       internal map, and free all memory. Then sets name to NULL.
+
+PARAMETERS
+       name  Cache variable to destroy (will be set to NULL after destruction)
+
+NOTES
+       Safe to call when name is NULL (no-op).
+       Must be called only after all other threads have stopped using the cache.
+
+SEE ALSO
+       clru_construct, __clrucache_destroy, clrucache_create_full
+
+------------------------------------------------------------------------------
+NAME
+       clru_declare - declare an uninitialised LRU cache variable with type tracking
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       clru_declare(name, KeyT, ValT);
+
+DESCRIPTION
+       Declares the clru_cache pointer variable name plus two hidden companion
+       type variables that carry KeyT and ValT type information into subsequent
+       clru_init(), clru_get(), and clru_set() macro calls.
+
+       Must be followed by clru_init() before the cache is used.
+
+PARAMETERS
+       name  Variable name for the cache handle
+       KeyT  Key type (e.g., int, char *, struct MyKey)
+       ValT  Value type (e.g., double, struct MyVal)
+
+EXAMPLES
+       clru_declare(cache, int, double);
+       clru_init(cache, 128, NULL, NULL, NULL);
+       /* ... use cache ... */
+       clru_destroy(cache);
+
+SEE ALSO
+       clru_declare_scoped, clru_init, clru_construct
+
+------------------------------------------------------------------------------
+NAME
+       clru_declare_scoped - declare an LRU cache with automatic RAII destruction
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       clru_declare_scoped(name, KeyT, ValT);
+
+DESCRIPTION
+       Like clru_declare() but attaches __attribute__((cleanup(___clrucache_destroy)))
+       so that the cache is destroyed automatically when the variable leaves
+       scope. Must be followed by clru_init() before use.
+
+PARAMETERS
+       name  Variable name for the cache handle
+       KeyT  Key type
+       ValT  Value type
+
+NOTES
+       Requires GCC or Clang (uses __attribute__((cleanup))).
+
+SEE ALSO
+       clru_declare, clru_construct_scoped
+
+------------------------------------------------------------------------------
+NAME
+       clru_init - initialise a previously declared LRU cache variable
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       clru_init(name, capacity, getter, setter, evict_cb);
+
+DESCRIPTION
+       Calls clrucache_create_full() with the key and value types inferred from
+       the companion variables created by clru_declare(), and assigns the result
+       to name. Calls fatal_err() if creation fails.
+
+PARAMETERS
+       name       Cache variable (must have been declared with clru_declare
+                  or clru_declare_scoped)
+       capacity   Maximum number of live entries before eviction
+       getter     Remote getter callback, or NULL
+       setter     Remote setter callback, or NULL
+       evict_cb   Eviction callback, or NULL
+
+NOTES
+       Calls fatal_err() on allocation failure.
+       Use clrucache_create_full() directly if you need to handle errors
+       gracefully.
+
+EXAMPLES
+       clru_declare(cache, int, double);
+       clru_init(cache, 64, NULL, NULL, NULL);
+       clru_destroy(cache);
+
+SEE ALSO
+       clru_declare, clru_construct, clrucache_create_full
+
+------------------------------------------------------------------------------
+NAME
+       clru_construct - declare and initialise an LRU cache in one step
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb);
+
+DESCRIPTION
+       Combines clru_declare() and clru_init() into a single statement. This
+       is the most common way to create an LRU cache. Calls fatal_err() if
+       creation fails.
+
+PARAMETERS
+       name      Variable name for the cache handle
+       KeyT      Key type
+       ValT      Value type
+       capacity  Maximum number of live entries before eviction
+       getter    Remote getter callback, or NULL
+       setter    Remote setter callback, or NULL
+       evict_cb  Eviction callback, or NULL
+
+EXAMPLES
+       clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+       int k = 42;
+       double v = 3.14;
+       clru_set(cache, k, v);
+
+       /* val_ptr is a pointer to the value type (double *), not cmap_pair * */
+       double out = 0.0;
+       if (clru_get(cache, k, &out) == ccol_success) {
+           printf("%.2f\n", out);
+       }
+
+       clru_destroy(cache);
+
+SEE ALSO
+       clru_construct_scoped, clru_declare, clru_init, clru_destroy
+
+------------------------------------------------------------------------------
+NAME
+       clru_construct_scoped - declare, initialise, and auto-destroy an LRU cache
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       clru_construct_scoped(name, KeyT, ValT, capacity, getter, setter,
+                             evict_cb);
+
+DESCRIPTION
+       Like clru_construct() but the cache is automatically destroyed when the
+       variable leaves scope.
+
+PARAMETERS
+       name      Variable name for the cache handle
+       KeyT      Key type
+       ValT      Value type
+       capacity  Maximum number of live entries before eviction
+       getter    Remote getter callback, or NULL
+       setter    Remote setter callback, or NULL
+       evict_cb  Eviction callback, or NULL
+
+NOTES
+       Requires GCC or Clang (uses __attribute__((cleanup))).
+
+EXAMPLES
+       void process(void) {
+           clru_construct_scoped(cache, int, double, 64, NULL, NULL, NULL);
+           /* cache is destroyed automatically when process() returns */
+       }
+
+SEE ALSO
+       clru_construct, clru_declare_scoped
+
+------------------------------------------------------------------------------
+NAME
+       clru_redeclare - restore type-tracking variables for a cache passed
+       across scopes
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       clru_redeclare(name, KeyT, ValT);
+
+DESCRIPTION
+       The type-dispatching macros clru_get() and clru_set() rely on hidden
+       companion variables created by clru_declare() or clru_construct(). When
+       a clru_cache handle is passed to another function, those companion
+       variables are absent. clru_redeclare() re-creates them so that all
+       type-safe macros work correctly in the new scope.
+
+PARAMETERS
+       name  Existing clru_cache variable to re-attach type information to
+       KeyT  Key type (must match the type used at construction)
+       ValT  Value type (must match the type used at construction)
+
+EXAMPLES
+       void use_cache(clru_cache c) {
+           clru_redeclare(c, int, double);
+           double out = 0.0;
+           if (clru_get(c, 42, &out) == ccol_success) {
+               printf("%.2f\n", out);
+           }
+       }
+
+NOTES
+       Omitting clru_redeclare() before calling clru_get() or clru_set() in a
+       new scope is the most common error when passing caches across function
+       boundaries.
+
+SEE ALSO
+       clru_declare, clru_construct, clru_get, clru_set
+
+------------------------------------------------------------------------------
+NAME
+       clru_get - retrieve a value by key (type-safe convenience wrapper)
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       ccol_retval_t clru_get(name, key, val_ptr);
+
+DESCRIPTION
+       Type-safe GNU C statement expression that serialises key into a
+       cmap_pair and retrieves the stored value. The behaviour on success
+       depends on the value type declared at cache construction:
+
+       Non-char* val types: the value is copied directly into *val_ptr with
+       no heap allocation. val_ptr is a pointer to ValT (e.g. double * for a
+       cache<int, double>), NOT a cmap_pair *.
+
+       char* val types: ownership of the heap-allocated string is transferred
+       directly to the caller via *(char **)val_ptr. The caller must free()
+       that pointer when done.
+
+       Use clrucache_get_full() directly only if you need the raw cmap_pair
+       output; clru_get() hides that entirely.
+
+PARAMETERS
+       name     Cache variable (must have companion type variables in scope,
+                either from clru_construct / clru_declare or clru_redeclare).
+                When passing a cache across function boundaries, call
+                clru_redeclare() with a simple local alias first — the
+                val-type detection relies on the name##__clru_val_type_var
+                companion variable.
+       key      Key expression. Must be an lvalue or a string literal; assign
+                computed values to a variable first.
+       val_ptr  Pointer to the value type (ValT *), NOT cmap_pair *.
+                For non-char* val types: receives the value directly (e.g.
+                double * for a double-valued cache); no heap allocation
+                occurs.
+                For char* val types: pointer to a char* variable; on success
+                it is set to the heap-allocated string and the caller must
+                free() it.
+
+RETURN VALUE
+       ccol_success           Value delivered via val_ptr.
+       ccol_key_not_found     Key absent and no getter, or getter failed.
+       ccol_invalid_args      cache or key_pair is NULL.
+       ccol_not_enough_memory Internal allocation failed.
+
+EXAMPLES
+       /* Non-string value type: val_ptr is double *, not cmap_pair *;
+          the value is copied directly into *val_ptr — no heap allocation */
+       clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+       int k = 5;
+       double v = 2.71;
+       clru_set(cache, k, v);
+
+       double out = 0.0;
+       if (clru_get(cache, k, &out) == ccol_success) {
+           printf("%.2f\n", out);
+       }
+
+       clru_destroy(cache);
+
+       /* String value type: caller must free the returned string */
+       clru_construct(str_cache, int, char *, 64, NULL, NULL, NULL);
+
+       char *greeting = "hello";
+       clru_set(str_cache, 1, greeting);
+
+       char *result = NULL;
+       if (clru_get(str_cache, 1, &result) == ccol_success) {
+           printf("%s\n", result);
+           free(result);
+       }
+
+       clru_destroy(str_cache);
+
+WARNINGS
+       For char* val types: the string placed in *(char **)val_ptr is a
+       heap-allocated copy whose ownership is transferred to the caller.
+       The caller MUST call free() on it when done; failing to do so is a
+       memory leak.  Each call to clru_get for a char* value produces an
+       independent allocation, so two successive calls for the same key
+       yield two independent pointers that must each be freed separately.
+
+       For non-char* val types: no heap allocation occurs.  The value is
+       copied directly into *val_ptr; the caller must NOT call free() on it.
+
+NOTES
+       Uses a GNU C statement expression ({...}) — requires GCC or Clang.
+       The cache never exposes a pointer into its internal storage; the value
+       is always copied out before the mutex is released.
+
+SEE ALSO
+       clru_set, clrucache_get_full
+
+------------------------------------------------------------------------------
+NAME
+       clru_set - store a value by key (type-safe convenience wrapper)
+
+SYNOPSIS
+       #include <clrucache.h>
+
+       ccol_retval_t clru_set(name, key, val);
+
+DESCRIPTION
+       Type-safe GNU C statement expression that serialises key and val into
+       cmap_pair values and calls clrucache_set_full().
+
+       If a remote setter was configured at construction it is called
+       synchronously before the cache is updated. On setter failure the
+       function returns ccol_unexpected_failure and the cache is left unchanged.
+
+PARAMETERS
+       name  Cache variable
+       key   Key expression. Must be an lvalue or a string literal.
+       val   Value expression. Must be an lvalue or a string literal.
+
+RETURN VALUE
+       ccol_success             Value stored (remote setter succeeded, if any).
+       ccol_unexpected_failure  Remote setter returned false; cache unchanged.
+       ccol_invalid_args        Null pointer or zero-size argument.
+       ccol_not_enough_memory   Memory allocation for the new value failed.
+
+EXAMPLES
+       clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+       int k = 42;
+       double v = 3.14;
+       clru_set(cache, k, v);
+
+       clru_destroy(cache);
+
+NOTES
+       Uses a GNU C statement expression ({...}) — requires GCC or Clang.
+       Both key and val must be lvalues; the macro takes their addresses
+       internally. Assign literals or expressions to named variables first.
+
+SEE ALSO
+       clru_get, clrucache_set_full
               CITERATORS.H - UNIFIED ITERATION API
 ================================================================================
 
@@ -2277,8 +2650,6 @@ RETURN VALUE
 NOTES
        Use ccol_iter_declare(container, it) before calling ccol_begin in a
        for loop to obtain typed accessors for the iterator.
-       Internally dispatches to cvector_cmap_begin_iter(), chashmap_begin_iter(),
-       or cbmap_begin_iter() depending on the container type.
 
 EXAMPLES
        ccol_iter_declare(vec, it);

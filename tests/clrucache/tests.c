@@ -925,3 +925,83 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
 
   clru_destroy(cache);
 }
+
+/* ========================================================================== */
+/*                         CUSTOM ALLOCATOR                                   */
+/* ========================================================================== */
+
+static size_t _lru_custom_alloc_count = 0;
+static size_t _lru_custom_free_count  = 0;
+
+static void *_lru_custom_malloc(size_t sz)           { _lru_custom_alloc_count++; return malloc(sz); }
+static void  _lru_custom_free(void *p)               { if (p) _lru_custom_free_count++; free(p); }
+static void *_lru_custom_calloc(size_t n, size_t sz) { _lru_custom_alloc_count++; return calloc(n, sz); }
+static void *_lru_custom_realloc(void *p, size_t sz) { _lru_custom_alloc_count++; return realloc(p, sz); }
+
+TEST(custom_alloc, get_full_copy_uses_custom_allocator) {
+  _lru_custom_alloc_count = 0;
+  _lru_custom_free_count  = 0;
+  ccol_memmgmt_procs_t mprocs = {_lru_custom_malloc, _lru_custom_free,
+                                  _lru_custom_calloc, _lru_custom_realloc};
+
+  char *err = NULL;
+  clru_cache cache = clrucache_create_full(
+      8, ccol_int, ccol_int, NULL, NULL, NULL, &mprocs, &err);
+  REQUIRE_NOT_NULL(cache);
+
+  int k = 1, v = 42;
+  cmap_pair kp = {}, vp = {};
+  _populate_cmap_pair(&kp, k);
+  _populate_cmap_pair(&vp, v);
+  REQUIRE_EQ(clrucache_set_full(cache, &kp, &vp), ccol_success);
+
+  cmap_pair val_out = {};
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, &val_out), ccol_success);
+  REQUIRE_NOT_NULL(val_out.ptr);
+  REQUIRE_EQ(*(int *)val_out.ptr, 42);
+
+  /* The copy returned by clrucache_get_full was allocated with the custom
+   * allocator; free it via that same allocator */
+  _lru_custom_free(val_out.ptr);
+
+  __clrucache_destroy(cache);
+  REQUIRE_EQ(_lru_custom_alloc_count, _lru_custom_free_count);
+}
+
+TEST(custom_alloc, char_ptr_get_full_uses_custom_allocator) {
+  _lru_custom_alloc_count = 0;
+  _lru_custom_free_count  = 0;
+  ccol_memmgmt_procs_t mprocs = {_lru_custom_malloc, _lru_custom_free,
+                                  _lru_custom_calloc, _lru_custom_realloc};
+
+  char *err = NULL;
+  clru_cache cache = clrucache_create_full(
+      8, ccol_string, ccol_string, NULL, NULL, NULL, &mprocs, &err);
+  REQUIRE_NOT_NULL(cache);
+
+  char *k = "hello", *v = "world";
+  cmap_pair kp = {}, vp = {};
+  _populate_cmap_pair(&kp, k);
+  _populate_cmap_pair(&vp, v);
+  REQUIRE_EQ(clrucache_set_full(cache, &kp, &vp), ccol_success);
+
+  cmap_pair val_out = {};
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, &val_out), ccol_success);
+  REQUIRE_NOT_NULL(val_out.ptr);
+  REQUIRE_STREQ((char *)val_out.ptr, "world");
+
+  /* char* copy was allocated with the custom allocator; free via it */
+  _lru_custom_free(val_out.ptr);
+
+  __clrucache_destroy(cache);
+  REQUIRE_EQ(_lru_custom_alloc_count, _lru_custom_free_count);
+}
+
+TEST(custom_alloc, invalid_mprocs_returns_null) {
+  ccol_memmgmt_procs_t bad = {_lru_custom_malloc, NULL,
+                               _lru_custom_calloc, _lru_custom_realloc};
+  char *err = NULL;
+  clru_cache cache = clrucache_create_full(
+      8, ccol_int, ccol_int, NULL, NULL, NULL, &bad, &err);
+  REQUIRE_NULL(cache);
+}

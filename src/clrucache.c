@@ -53,7 +53,7 @@ SOFTWARE.
  * Locking discipline:
  *   A single cache->mutex protects ALL fields of the cache struct AND all
  *   fields of every entry. Per-entry condition variables share this same mutex
- *   (valid for pthread_cond_wait). This eliminates lock-ordering issues.
+ *   (valid for cond_wait). This eliminates lock-ordering issues.
  *
  *   Slow operations (remote getter/setter) always happen OUTSIDE the mutex.
  *   Any thread releasing the mutex while holding a pointer to an entry MUST
@@ -320,8 +320,7 @@ void __clrucache_destroy(clru_cache cache) {
 
 ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
                                  cmap_pair *val_out) {
-  if (!cache || !key_pair || !val_out)
-    return ccol_invalid_args;
+  if (!cache || !key_pair || !val_out) return ccol_invalid_args;
 
   mutex_lock(cache->mutex);
 
@@ -375,7 +374,7 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
       lru_add_to_front(cache, entry);
       cache->size++;
 
-      void *copy = malloc(fetched.size);
+      void *copy = _mem_alloc(cache->m_procs, fetched.size);
       if (!copy) {
         /* Entry is cached; caller just can't get a copy this time. */
         cond_var_broadcast(entry->cond);
@@ -391,7 +390,8 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
       return ccol_success;
     } else {
       /* Remote getter failed: remove placeholder, notify waiters */
-      if (fetched.ptr) _mem_free(cache->m_procs, fetched.ptr); /* size==0 edge case */
+      if (fetched.ptr)
+        _mem_free(cache->m_procs, fetched.ptr); /* size==0 edge case */
       cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
       chmap_delete_elem(cache->map, &kp);
       entry->evicted = true;
@@ -427,7 +427,7 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
   assert(!entry->evicted && entry->value != NULL && entry->in_lru);
   lru_move_to_front(cache, entry);
 
-  void *copy = malloc(entry->value_size);
+  void *copy = _mem_alloc(cache->m_procs, entry->value_size);
   if (!copy) {
     mutex_unlock(cache->mutex);
     return ccol_not_enough_memory;
@@ -606,8 +606,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 
 ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
                                    void *buf, size_t buf_size) {
-  if (!cache || !key_pair || !buf || buf_size == 0)
-    return ccol_invalid_args;
+  if (!cache || !key_pair || !buf || buf_size == 0) return ccol_invalid_args;
 
   mutex_lock(cache->mutex);
 

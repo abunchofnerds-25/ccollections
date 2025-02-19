@@ -30,7 +30,7 @@ memtest:
 generate_coverage_report:
 	$(foreach folder,$(TEST_FOLDERS),cd $(folder) && make generate_coverage_report && cd -;)
 
-all: $(LIBRARY_NAME) main
+all: $(LIBRARY_NAME)
 
 $(LIBRARY_NAME): $(OBJ_FILES)
 	$(CC) -o $(LIBRARY_NAME) $(OBJ_FILES) $(LFLAGS)
@@ -38,24 +38,9 @@ $(LIBRARY_NAME): $(OBJ_FILES)
 $(OBJECT_DIR)/%.o: $(SOURCE_DIR)/%.c $(HEADER_FILES)
 	$(CC) -c -fPIC $(CFLAGS) $< -o $@
 
-main: main.c $(LIBRARY_NAME)
-	$(CC) -L. $(CFLAGS) main.c -o main -l$(SHORT_LIBRARY_NAME) -lm
-
 clean:
-	rm -rf $(LIBRARY_NAME) $(OBJECT_DIR) main tests/*/tests tests/*/coverage \
+	rm -rf $(LIBRARY_NAME) $(OBJECT_DIR) tests/*/tests tests/*/coverage \
 	tests/*/*.gcno tests/*/*.gcda tests/*/*.gcov tests/*/*.c.info
-
-run-in-gdb:
-	@LD_LIBRARY_PATH=. gdb ./main
-
-run-in-gdb-tui:
-	@LD_LIBRARY_PATH=. gdb -tui ./main
-
-run:
-	@LD_LIBRARY_PATH=. ./main
-
-run-in-valgrind:
-	@LD_LIBRARY_PATH=. valgrind --leak-check=full -s --show-leak-kinds=all ./main
 
 HEADER_INSTALL_DIR = /usr/include
 LIBRARY_INSTALL_DIR = /usr/lib

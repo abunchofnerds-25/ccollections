@@ -2841,5 +2841,214 @@ SEE ALSO
        ccol_iter_declare, ccol_iter_next, ccol_for_each
 
 ================================================================================
+                       CLOGGER.H - STRUCTURED LOGGER
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       log_trace - emit a log line at TRACE level
+
+SYNOPSIS
+       #include <clogger.h>
+
+       log_trace(clog lg, const char *fmt, ...);
+
+DESCRIPTION
+       Expands to a call to _clog_write() that captures __FILE__, __LINE__,
+       and __func__ automatically and emits a log line at CLOG_TRACE level.
+       No backtrace is appended.
+
+       The output format is:
+         ts=<ISO-8601-UTC> level=TRACE src=<file>:<line> func=<fn> [fields] msg=<text>
+
+       The call is a no-op when lg is NULL or when the logger's current
+       minimum level is above CLOG_TRACE.
+
+PARAMETERS
+       lg     Logger handle (clog). Passing NULL is a no-op.
+       fmt    printf-style format string.
+       ...    Format arguments (optional).
+
+NOTES
+       TRACE is the finest-grained level. Enable it only when diagnosing
+       low-level behaviour; it generates high-volume output.
+       All log_* macros share the same thread-safety guarantee: the entire
+       format-and-write cycle is protected by the per-logger mutex, ensuring
+       no partial lines are interleaved between threads.
+
+EXAMPLES
+       log_trace(lg, "entered function, x=%d", x);
+
+SEE ALSO
+       log_debug, log_info, log_warn, log_error, log_fatal, _clog_write,
+       clog_open_fd_mp, clog_set_level
+
+------------------------------------------------------------------------------
+NAME
+       log_debug - emit a log line at DEBUG level
+
+SYNOPSIS
+       #include <clogger.h>
+
+       log_debug(clog lg, const char *fmt, ...);
+
+DESCRIPTION
+       Expands to a call to _clog_write() at CLOG_DEBUG level with automatic
+       source location capture. No backtrace is appended.
+
+PARAMETERS
+       lg     Logger handle (clog). Passing NULL is a no-op.
+       fmt    printf-style format string.
+       ...    Format arguments (optional).
+
+EXAMPLES
+       log_debug(lg, "cache miss for key=%d", key);
+
+SEE ALSO
+       log_trace, log_info, log_warn, log_error, log_fatal, _clog_write
+
+------------------------------------------------------------------------------
+NAME
+       log_info - emit a log line at INFO level
+
+SYNOPSIS
+       #include <clogger.h>
+
+       log_info(clog lg, const char *fmt, ...);
+
+DESCRIPTION
+       Expands to a call to _clog_write() at CLOG_INFO level with automatic
+       source location capture. No backtrace is appended.
+
+       INFO is the recommended default minimum level for production services.
+
+PARAMETERS
+       lg     Logger handle (clog). Passing NULL is a no-op.
+       fmt    printf-style format string.
+       ...    Format arguments (optional).
+
+EXAMPLES
+       log_info(lg, "server started on port %d", port);
+       log_info(lg, "request handled in %ldms", elapsed_ms);
+
+SEE ALSO
+       log_trace, log_debug, log_warn, log_error, log_fatal, _clog_write
+
+------------------------------------------------------------------------------
+NAME
+       log_warn - emit a log line at WARN level
+
+SYNOPSIS
+       #include <clogger.h>
+
+       log_warn(clog lg, const char *fmt, ...);
+
+DESCRIPTION
+       Expands to a call to _clog_write() at CLOG_WARN level with automatic
+       source location capture. No backtrace is appended.
+
+       Use WARN for recoverable abnormalities that do not interrupt normal
+       operation but merit attention.
+
+PARAMETERS
+       lg     Logger handle (clog). Passing NULL is a no-op.
+       fmt    printf-style format string.
+       ...    Format arguments (optional).
+
+EXAMPLES
+       log_warn(lg, "retry %d/%d connecting to %s", attempt, max, host);
+       log_warn(lg, "config key %s missing, using default", key);
+
+SEE ALSO
+       log_info, log_error, log_fatal, _clog_write
+
+------------------------------------------------------------------------------
+NAME
+       log_error - emit a log line at ERROR level with a backtrace
+
+SYNOPSIS
+       #include <clogger.h>
+
+       log_error(clog lg, const char *fmt, ...);
+
+DESCRIPTION
+       Expands to a call to _clog_write() at CLOG_ERROR level with automatic
+       source location capture. After writing the structured log line, a
+       stack backtrace is appended as tab-indented continuation lines:
+
+         ts=... level=ERROR src=file.c:42 func=handle msg="db timeout"
+         \t#0 ./myapp(handle+0x1a) [0x7f...]
+         \t#1 ./myapp(main+0x42) [0x7f...]
+
+       The continuation lines do not start with "ts=", allowing log
+       aggregators to group them with the preceding ERROR record.
+
+       Backtrace frames 0 and 1 (internal logger frames) are skipped so
+       that frame #0 is the caller of log_error. Backtrace depth is capped
+       at 64 frames.
+
+       Backtrace requires the binary to be linked with -rdynamic for symbol
+       resolution. On platforms without execinfo.h the backtrace lines are
+       omitted silently and the log line is emitted normally.
+
+PARAMETERS
+       lg     Logger handle (clog). Passing NULL is a no-op.
+       fmt    printf-style format string.
+       ...    Format arguments (optional).
+
+NOTES
+       log_error does NOT terminate the process. Use log_fatal if process
+       termination is desired (note: log_fatal also does not call abort() or
+       exit(); that is the caller's responsibility).
+       The backtrace write is also protected by the per-logger mutex, so
+       the backtrace and the preceding log line always appear contiguously
+       even under concurrent logging from multiple threads.
+
+EXAMPLES
+       log_error(lg, "failed to open %s: %s", path, strerror(errno));
+       log_error(lg, "unexpected state %d in FSM", state);
+
+SEE ALSO
+       log_fatal, log_warn, _clog_write, clog_open_fd_mp
+
+------------------------------------------------------------------------------
+NAME
+       log_fatal - emit a log line at FATAL level with a backtrace
+
+SYNOPSIS
+       #include <clogger.h>
+
+       log_fatal(clog lg, const char *fmt, ...);
+
+DESCRIPTION
+       Identical to log_error() except the severity level is CLOG_FATAL.
+       A stack backtrace is appended after the log line.
+
+       This macro does NOT terminate the process. It is the caller's
+       responsibility to call abort(), exit(), or take other action after
+       logging the fatal condition.
+
+PARAMETERS
+       lg     Logger handle (clog). Passing NULL is a no-op.
+       fmt    printf-style format string.
+       ...    Format arguments (optional).
+
+NOTES
+       Typical usage pattern:
+         log_fatal(lg, "unrecoverable state: %s", reason);
+         abort();
+
+       The fact that log_fatal does not call abort() itself allows the caller
+       to perform any final cleanup (flush queues, release locks, write a
+       crash report) before terminating.
+
+EXAMPLES
+       log_fatal(lg, "assertion failed: invariant violated at step %d", step);
+       abort();
+
+SEE ALSO
+       log_error, _clog_write, clog_open_fd_mp
+
+================================================================================
                               END OF MAN PAGES
 ================================================================================

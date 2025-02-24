@@ -443,12 +443,13 @@ TEST(fields, invalid_key_is_rejected) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
   REQUIRE_NE((void *)lg, (void *)NULL);
 
-  /* These keys must be silently ignored (empty, space, '=', control char, ']'). */
-  clog_set_field(lg, "", "v");        /* empty key — violates RFC 5424 1*32PRINTUSASCII */
+  /* These keys must be silently ignored (empty, space, '=', control char, DEL, ']'). */
+  clog_set_field(lg, "", "v");               /* empty — violates RFC 5424 1*32PRINTUSASCII */
   clog_set_field(lg, "bad key", "v");
   clog_set_field(lg, "bad=key", "v");
-  clog_set_field(lg, "bad\x01key", "v");
-  clog_set_field(lg, "bad]key", "v"); /* ']' breaks RFC 5424 SD elements */
+  clog_set_field(lg, "bad\x01key", "v");    /* C0 control character */
+  clog_set_field(lg, "bad\x7f" "key", "v"); /* DEL (0x7f) — not PRINTUSASCII */
+  clog_set_field(lg, "bad]key", "v");        /* ']' breaks RFC 5424 SD elements */
   /* This key is valid and must appear. */
   clog_set_field(lg, "good_key", "ok");
 
@@ -519,6 +520,37 @@ TEST(fields, del_byte_in_value_is_escaped) {
   cleanup_dir(dir, "app.log");
 }
 
+TEST(fields, del_byte_in_key_is_rejected) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* DEL (0x7f) is not in PRINTUSASCII (0x21–0x7e).  Keys are emitted verbatim
+   * in logfmt, so a DEL key would silently corrupt the output.  It must be
+   * rejected like C0 control characters. */
+  clog_set_field(lg, "bad\x7f" "key", "v");
+  clog_set_field(lg, "good_key", "ok");
+
+  log_info(lg, "test");
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* No raw DEL must appear in the output. */
+  REQUIRE_EQ(memchr(buf, 0x7f, strlen(buf)), NULL);
+  /* The rejected key must not emit =v. */
+  REQUIRE_EQ(strstr(buf, "=v"), NULL);
+  /* The valid key must be present. */
+  REQUIRE_NE(strstr(buf, "good_key=ok"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
 /* ========================================================================== */
 /*                         SIZE-BASED ROTATION                                */
 /* ========================================================================== */
@@ -578,6 +610,62 @@ TEST(rotation, max_rotated_files_respected) {
   int rotated = count_files_with_prefix(dir, "app.log.");
   /* The pruner keeps at most max_rotated_files on disk */
   REQUIRE_EQ((rotated <= 2), 1);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(rotation, logger_recovers_after_file_externally_deleted) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  /* Pre-fill the file so bytes_written starts just 1 byte below the rotation
+   * threshold.  The very first log write (which is at least 80 bytes) will
+   * push the counter over the limit and trigger rotation. */
+  {
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    REQUIRE_NE(fd, -1);
+    char filler[9999];
+    memset(filler, 'x', sizeof filler);
+    ssize_t w = write(fd, filler, sizeof filler);
+    (void)w;
+    close(fd);
+  }
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled  = true,
+      .max_file_size          = 10000,
+      .time_rotation_enabled  = false,
+      .max_rotated_files      = 0,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* Simulate an external agent deleting the log file while the logger has it
+   * open.  The fd remains valid; the directory entry is gone. */
+  REQUIRE_EQ(unlink(path), 0);
+
+  /* First write: bytes_written (9999 + line_len) >= 10000.  Rotation triggers.
+   * rename(path, rotated) returns ENOENT (source gone).  The fixed _rotate
+   * treats ENOENT as a clean-slate: it creates a fresh file at `path` via
+   * O_CREAT and continues normally. */
+  log_info(lg, "triggers rotation");
+
+  /* Second write: bytes_written reset to 0 after rotation; line_len < 10000.
+   * No further rotation — this line lands in the recreated file at `path`. */
+  log_info(lg, "after recovery");
+
+  clog_close(lg);
+
+  /* The logger must have recreated the file at the original path. */
+  struct stat st;
+  REQUIRE_EQ(stat(path, &st), 0);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+  REQUIRE_NE(strstr(buf, "after recovery"), NULL);
 
   cleanup_dir(dir, "app.log");
 }
@@ -1208,6 +1296,35 @@ TEST(json, special_chars_escaped_in_field_value) {
 
   /* Backslash must be escaped as \\ */
   REQUIRE_NE(strstr(buf, "C:\\\\Users\\\\foo"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(json, del_byte_escaped_in_json) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_JSON);
+
+  /* DEL (0x7f) in a field value and in the message must be escaped as 
+   * in JSON output.  String literal concatenation prevents GCC from treating
+   * \x7fe as a multi-digit hex escape sequence. */
+  clog_set_field(lg, "k", "val\x7f" "end");
+  log_info(lg, "msg\x7f" "end");
+
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* Raw DEL must not appear in the output. */
+  REQUIRE_EQ(memchr(buf, 0x7f, strlen(buf)), NULL);
+  /* DEL must be encoded as the JSON Unicode escape . */
+  REQUIRE_NE(strstr(buf, "\\u007f"), NULL);
 
   cleanup_dir(dir, "app.log");
 }

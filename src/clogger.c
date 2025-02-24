@@ -59,7 +59,7 @@ SOFTWARE.
 /* Rotation suffix format: ".YYYYMMDDHHMMSS" = 15 chars */
 #define CLOG_ROTATION_FMT ".%Y%m%d%H%M%S"
 #define CLOG_ROTATION_FMT_LEN 15
-/* Extra headroom for collision suffix "_NNNN" */
+/* Extra headroom for collision suffix "_0001"–"_9999" */
 #define CLOG_ROTATION_EXTRA 8
 
 static const char *const _LEVEL_STR[] = {"TRACE", "DEBUG", "INFO",  "WARN",
@@ -149,10 +149,6 @@ static int _buf_ensure(clog_buf_t *b, size_t need) {
   while (new_cap - b->len < need) {
     if (new_cap >= CLOG_BUF_MAX) return -1;
     new_cap *= 2;
-  }
-  if (new_cap > CLOG_BUF_MAX) {
-    if (CLOG_BUF_MAX - b->len < need) return -1;
-    new_cap = CLOG_BUF_MAX;
   }
   char *p = _mem_realloc(b->m_procs, b->data, new_cap);
   if (!p) return -1;
@@ -274,7 +270,7 @@ static int _buf_append_json_content(clog_buf_t *b, const char *s) {
       char esc[2] = {'\\', *p};
       if (_buf_append(b, esc, 2) != 0) return -1;
       run = p + 1;
-    } else if (c < 0x20) {
+    } else if (c < 0x20 || c == 0x7f) {
       if (p > run && _buf_append(b, run, (size_t)(p - run)) != 0) return -1;
       char esc[7];
       int esc_len;
@@ -501,12 +497,13 @@ static int _rotate(clog_shared_t *sh) {
       strftime(rotated + plen, sizeof(rotated) - plen, CLOG_ROTATION_FMT, &tm);
   if (slen == 0) return -1;
 
-  /* Resolve collisions: append _1, _2, … until the name is free */
+  /* Resolve collisions: append _0001, _0002, … until the name is free.
+   * Zero-padded so alphabetical sort in _prune_rotated matches creation order. */
   if (access(rotated, F_OK) == 0) {
     size_t base = plen + slen;
     bool found = false;
     for (int n = 1; n < 10000; n++) {
-      int w = snprintf(rotated + base, sizeof(rotated) - base, "_%d", n);
+      int w = snprintf(rotated + base, sizeof(rotated) - base, "_%04d", n);
       if (w < 0) return -1;
       if (access(rotated, F_OK) != 0) { found = true; break; }
     }
@@ -515,8 +512,11 @@ static int _rotate(clog_shared_t *sh) {
 
   /* Rename while the old fd is still open (POSIX allows renaming open files).
    * We only close the old fd once we have a replacement; this way a failed
-   * open() leaves the logger alive — writes continue to the rotated file. */
-  rename(sh->file_path, rotated);
+   * open() leaves the logger alive — writes continue to the rotated file.
+   * ENOENT means the file was deleted externally; treat it as a clean slate
+   * (O_CREAT below will create a fresh file).  Any other rename error is a
+   * hard failure — leave the logger writing to the still-open original fd. */
+  if (rename(sh->file_path, rotated) != 0 && errno != ENOENT) return -1;
 
   if (sh->rotation.max_rotated_files > 0)
     _prune_rotated(sh->file_path, sh->rotation.max_rotated_files, sh->m_procs);
@@ -525,7 +525,7 @@ static int _rotate(clog_shared_t *sh) {
       open(sh->file_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
   if (new_fd < 0) {
     /* Recovery: restore the original path so the still-open fd remains useful. */
-    rename(rotated, sh->file_path);
+    (void)rename(rotated, sh->file_path);
     return -1;
   }
 
@@ -588,6 +588,7 @@ static void __attribute__((noinline)) _emit_backtrace_json(clog_buf_t *b) {
   if (!syms) return;
 
   int initial_frame = 2;
+  size_t bt_start = b->len;
   if (_buf_append(b, ",\"bt\":[", 7) != 0) { free(syms); return; }
 
   bool first = true;
@@ -606,7 +607,8 @@ static void __attribute__((noinline)) _emit_backtrace_json(clog_buf_t *b) {
     first = false;
   }
 
-  _buf_append(b, "]", 1);
+  if (_buf_append(b, "]", 1) != 0)
+    b->len = bt_start; /* roll back entire bt array so the JSON object closes cleanly */
   free(syms);
 #else
   (void)b;
@@ -764,6 +766,14 @@ static struct clogger *_logger_alloc(clog_shared_t *shared,
   return lg;
 }
 
+/* Free a fully-initialised logger without touching the shared backing store. */
+static void _logger_free(struct clogger *lg) {
+  __chmap_destroy(lg->fields);
+  lg->fields = NULL;
+  _buf_free(&lg->buf);
+  _mem_free(lg->shared->m_procs, lg);
+}
+
 static struct clogger *_alloc(int fd, bool owns_fd, const char *file_path,
                               clog_level_t min_level,
                               ccol_memmgmt_procs_t *m_procs) {
@@ -837,10 +847,6 @@ void clog_close(clog lg) {
 
   mutex_lock(sh->mutex);
 
-  __chmap_destroy(lg->fields);
-  lg->fields = NULL;
-  _buf_free(&lg->buf);
-
   int remaining = --sh->ref_count;
 
   if (remaining == 0 && sh->owns_fd && sh->fd >= 0) {
@@ -848,7 +854,7 @@ void clog_close(clog lg) {
     sh->fd = -1;
   }
 
-  _mem_free(sh->m_procs, lg);
+  _logger_free(lg);
 
   mutex_unlock(sh->mutex);
 
@@ -872,6 +878,11 @@ clog clog_derive(clog parent) {
   /* Copy parent's fields into the child's independent field map */
   if (chmap_elem_count(parent->fields) > 0) {
     cmap_iterator *it = chashmap_begin_iter(parent->fields, NULL);
+    if (!it) {
+      _logger_free(child);
+      mutex_unlock(parent->shared->mutex);
+      return NULL;
+    }
     while (it) {
       const char *k = (const char *)it->key_pair->ptr;
       const char *v = (const char *)it->val_pair->ptr;
@@ -879,9 +890,7 @@ clog clog_derive(clog parent) {
       cmap_pair vp = {.ptr = (void *)v, .size = strlen(v) + 1};
       if (chmap_insert_elem(child->fields, &kp, &vp) != ccol_success) {
         ccol_iter_destroy(it);
-        __chmap_destroy(child->fields);
-        _buf_free(&child->buf);
-        _mem_free(parent->shared->m_procs, child);
+        _logger_free(child);
         mutex_unlock(parent->shared->mutex);
         return NULL;
       }
@@ -965,8 +974,8 @@ void clog_set_field(clog lg, const char *key, const char *value) {
   if (*key == '\0') return;
   for (const char *p = key; *p; p++) {
     unsigned char c = (unsigned char)*p;
-    if (c < 0x20 || *p == ' ' || *p == '=' || *p == '"' || *p == '\\' ||
-        *p == ']')
+    if (c < 0x20 || c == 0x7f || *p == ' ' || *p == '=' || *p == '"' ||
+        *p == '\\' || *p == ']')
       return;
   }
 

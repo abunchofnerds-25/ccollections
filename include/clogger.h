@@ -70,9 +70,10 @@ typedef enum {
   CLOG_INFO,
   CLOG_WARN,
   CLOG_ERROR,
-  CLOG_ALERT, /**< Action must be taken immediately; maps to syslog severity 1 */
+  CLOG_ALERT, /**< Action must be taken immediately; maps to syslog severity 1
+               */
   CLOG_FATAL,
-  CLOG_OFF    /**< Disables all output when used as min_level */
+  CLOG_OFF /**< Disables all output when used as min_level */
 } clog_level_t;
 
 /* ========================================================================== */
@@ -244,7 +245,7 @@ void clog_set_level(clog logger, clog_level_t level);
 clog_level_t clog_get_level(clog logger);
 
 /* ========================================================================== */
-/*                         OUTPUT FORMAT                                       */
+/*                         OUTPUT FORMAT */
 /* ========================================================================== */
 
 /**
@@ -263,7 +264,7 @@ clog_level_t clog_get_level(clog logger);
 typedef enum {
   CLOG_FMT_LOGFMT = 0, /**< key=value logfmt (default) */
   CLOG_FMT_JSON,       /**< NDJSON — one JSON object per line */
-  CLOG_FMT_SYSLOG,     /**< RFC 5424 syslog; fd-based loggers only (see above) */
+  CLOG_FMT_SYSLOG, /**< RFC 5424 syslog; fd-based loggers only (see above) */
 } clog_format_t;
 
 /**
@@ -318,26 +319,26 @@ clog_format_t clog_get_format(clog logger);
  * The default facility is CLOG_SYSLOG_USER.
  */
 typedef enum {
-  CLOG_SYSLOG_KERN     = 0,  /**< Kernel messages */
-  CLOG_SYSLOG_USER     = 1,  /**< User-level messages (default) */
-  CLOG_SYSLOG_MAIL     = 2,  /**< Mail system */
-  CLOG_SYSLOG_DAEMON   = 3,  /**< System daemons */
-  CLOG_SYSLOG_AUTH     = 4,  /**< Security / authorization messages */
-  CLOG_SYSLOG_SYSLOG   = 5,  /**< Internal syslogd messages */
-  CLOG_SYSLOG_LPR      = 6,  /**< Line printer subsystem */
-  CLOG_SYSLOG_NEWS     = 7,  /**< Network news subsystem */
-  CLOG_SYSLOG_UUCP     = 8,  /**< UUCP subsystem */
-  CLOG_SYSLOG_CRON     = 9,  /**< Clock daemon */
+  CLOG_SYSLOG_KERN = 0,      /**< Kernel messages */
+  CLOG_SYSLOG_USER = 1,      /**< User-level messages (default) */
+  CLOG_SYSLOG_MAIL = 2,      /**< Mail system */
+  CLOG_SYSLOG_DAEMON = 3,    /**< System daemons */
+  CLOG_SYSLOG_AUTH = 4,      /**< Security / authorization messages */
+  CLOG_SYSLOG_SYSLOG = 5,    /**< Internal syslogd messages */
+  CLOG_SYSLOG_LPR = 6,       /**< Line printer subsystem */
+  CLOG_SYSLOG_NEWS = 7,      /**< Network news subsystem */
+  CLOG_SYSLOG_UUCP = 8,      /**< UUCP subsystem */
+  CLOG_SYSLOG_CRON = 9,      /**< Clock daemon */
   CLOG_SYSLOG_AUTHPRIV = 10, /**< Security / authorization (private) */
-  CLOG_SYSLOG_FTP      = 11, /**< FTP daemon */
-  CLOG_SYSLOG_LOCAL0   = 16, /**< Local use 0 */
-  CLOG_SYSLOG_LOCAL1   = 17, /**< Local use 1 */
-  CLOG_SYSLOG_LOCAL2   = 18, /**< Local use 2 */
-  CLOG_SYSLOG_LOCAL3   = 19, /**< Local use 3 */
-  CLOG_SYSLOG_LOCAL4   = 20, /**< Local use 4 */
-  CLOG_SYSLOG_LOCAL5   = 21, /**< Local use 5 */
-  CLOG_SYSLOG_LOCAL6   = 22, /**< Local use 6 */
-  CLOG_SYSLOG_LOCAL7   = 23, /**< Local use 7 */
+  CLOG_SYSLOG_FTP = 11,      /**< FTP daemon */
+  CLOG_SYSLOG_LOCAL0 = 16,   /**< Local use 0 */
+  CLOG_SYSLOG_LOCAL1 = 17,   /**< Local use 1 */
+  CLOG_SYSLOG_LOCAL2 = 18,   /**< Local use 2 */
+  CLOG_SYSLOG_LOCAL3 = 19,   /**< Local use 3 */
+  CLOG_SYSLOG_LOCAL4 = 20,   /**< Local use 4 */
+  CLOG_SYSLOG_LOCAL5 = 21,   /**< Local use 5 */
+  CLOG_SYSLOG_LOCAL6 = 22,   /**< Local use 6 */
+  CLOG_SYSLOG_LOCAL7 = 23,   /**< Local use 7 */
 } clog_syslog_facility_t;
 
 /**

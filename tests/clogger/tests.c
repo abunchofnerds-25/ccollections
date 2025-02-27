@@ -443,13 +443,17 @@ TEST(fields, invalid_key_is_rejected) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
   REQUIRE_NE((void *)lg, (void *)NULL);
 
-  /* These keys must be silently ignored (empty, space, '=', control char, DEL, ']'). */
-  clog_set_field(lg, "", "v");               /* empty — violates RFC 5424 1*32PRINTUSASCII */
+  /* These keys must be silently ignored (empty, space, '=', control char, DEL,
+   * ']'). */
+  clog_set_field(lg, "", "v"); /* empty — violates RFC 5424 1*32PRINTUSASCII */
   clog_set_field(lg, "bad key", "v");
   clog_set_field(lg, "bad=key", "v");
-  clog_set_field(lg, "bad\x01key", "v");    /* C0 control character */
-  clog_set_field(lg, "bad\x7f" "key", "v"); /* DEL (0x7f) — not PRINTUSASCII */
-  clog_set_field(lg, "bad]key", "v");        /* ']' breaks RFC 5424 SD elements */
+  clog_set_field(lg, "bad\x01key", "v"); /* C0 control character */
+  clog_set_field(lg,
+                 "bad\x7f"
+                 "key",
+                 "v");                /* DEL (0x7f) — not PRINTUSASCII */
+  clog_set_field(lg, "bad]key", "v"); /* ']' breaks RFC 5424 SD elements */
   /* This key is valid and must appear. */
   clog_set_field(lg, "good_key", "ok");
 
@@ -460,7 +464,7 @@ TEST(fields, invalid_key_is_rejected) {
   char buf[4096];
   read_file(path, buf, sizeof buf);
 
-  REQUIRE_EQ(strstr(buf, "=v"), NULL);       /* empty key would produce =v */
+  REQUIRE_EQ(strstr(buf, "=v"), NULL); /* empty key would produce =v */
   REQUIRE_EQ(strstr(buf, "bad key"), NULL);
   REQUIRE_EQ(strstr(buf, "bad=key="), NULL);
   REQUIRE_EQ(strstr(buf, "bad]key"), NULL);
@@ -504,8 +508,12 @@ TEST(fields, del_byte_in_value_is_escaped) {
 
   /* DEL (0x7f) must be escaped as \x7f in quoted logfmt values.
    * String literal concatenation terminates the hex escape before 'e'. */
-  clog_set_field(lg, "k", "val\x7f" "end");
-  log_info(lg, "msg\x7f" "end");
+  clog_set_field(lg, "k",
+                 "val\x7f"
+                 "end");
+  log_info(lg,
+           "msg\x7f"
+           "end");
 
   clog_close(lg);
 
@@ -532,7 +540,10 @@ TEST(fields, del_byte_in_key_is_rejected) {
   /* DEL (0x7f) is not in PRINTUSASCII (0x21–0x7e).  Keys are emitted verbatim
    * in logfmt, so a DEL key would silently corrupt the output.  It must be
    * rejected like C0 control characters. */
-  clog_set_field(lg, "bad\x7f" "key", "v");
+  clog_set_field(lg,
+                 "bad\x7f"
+                 "key",
+                 "v");
   clog_set_field(lg, "good_key", "ok");
 
   log_info(lg, "test");
@@ -634,10 +645,10 @@ TEST(rotation, logger_recovers_after_file_externally_deleted) {
   }
 
   clog_rotation_cfg_t cfg = {
-      .size_rotation_enabled  = true,
-      .max_file_size          = 10000,
-      .time_rotation_enabled  = false,
-      .max_rotated_files      = 0,
+      .size_rotation_enabled = true,
+      .max_file_size = 10000,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 0,
   };
 
   clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL);
@@ -1313,8 +1324,12 @@ TEST(json, del_byte_escaped_in_json) {
   /* DEL (0x7f) in a field value and in the message must be escaped as 
    * in JSON output.  String literal concatenation prevents GCC from treating
    * \x7fe as a multi-digit hex escape sequence. */
-  clog_set_field(lg, "k", "val\x7f" "end");
-  log_info(lg, "msg\x7f" "end");
+  clog_set_field(lg, "k",
+                 "val\x7f"
+                 "end");
+  log_info(lg,
+           "msg\x7f"
+           "end");
 
   clog_close(lg);
 
@@ -1373,7 +1388,8 @@ TEST(json, format_shared_with_derived_logger) {
   clog child = clog_derive(parent);
   REQUIRE_NE((void *)child, (void *)NULL);
 
-  /* Derived logger shares the format because it shares the same backing store */
+  /* Derived logger shares the format because it shares the same backing store
+   */
   REQUIRE_EQ(clog_get_format(child), CLOG_FMT_JSON);
 
   log_info(child, "child json");
@@ -1512,7 +1528,7 @@ TEST(syslog, severity_encoding) {
 
   REQUIRE_NE(strstr(buf, "<12>"), NULL); /* WARN   */
   REQUIRE_NE(strstr(buf, "<11>"), NULL); /* ERROR  */
-  REQUIRE_NE(strstr(buf, "<9>"),  NULL); /* ALERT  */
+  REQUIRE_NE(strstr(buf, "<9>"), NULL);  /* ALERT  */
 }
 
 TEST(syslog, facility_change) {
@@ -1553,9 +1569,9 @@ TEST(syslog, fields_in_sd) {
 
   /* Fields must appear as SD params inside the [ccol ...] element. */
   REQUIRE_NE(strstr(buf, "service=\"auth\""), NULL);
-  REQUIRE_NE(strstr(buf, "env=\"prod\""),     NULL);
+  REQUIRE_NE(strstr(buf, "env=\"prod\""), NULL);
   /* The closing bracket and message must follow. */
-  REQUIRE_NE(strstr(buf, "] structured"),     NULL);
+  REQUIRE_NE(strstr(buf, "] structured"), NULL);
 }
 
 TEST(syslog, sd_param_name_truncated_to_32_chars) {
@@ -1574,8 +1590,10 @@ TEST(syslog, sd_param_name_truncated_to_32_chars) {
   drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
 
   /* The emitted key must be capped at 32 characters. */
-  REQUIRE_NE(strstr(buf, "abcdefghijklmnopqrstuvwxyz_12345"), NULL);  /* 32 chars present */
-  REQUIRE_EQ(strstr(buf, "abcdefghijklmnopqrstuvwxyz_123456"), NULL); /* 33rd char absent */
+  REQUIRE_NE(strstr(buf, "abcdefghijklmnopqrstuvwxyz_12345"),
+             NULL); /* 32 chars present */
+  REQUIRE_EQ(strstr(buf, "abcdefghijklmnopqrstuvwxyz_123456"),
+             NULL); /* 33rd char absent */
 }
 
 TEST(syslog, file_logger_rejects_syslog_format) {
@@ -1619,7 +1637,10 @@ TEST(syslog, backtrace_as_separate_messages) {
   /* There must be at least two syslog messages (main + ≥1 backtrace frame). */
   int msg_count = 0;
   const char *p = buf;
-  while ((p = strstr(p, "<11>1 ")) != NULL) { msg_count++; p++; }
+  while ((p = strstr(p, "<11>1 ")) != NULL) {
+    msg_count++;
+    p++;
+  }
   REQUIRE_GT(msg_count, 1);
 
   /* Each backtrace message carries the tab-prefixed frame marker. */

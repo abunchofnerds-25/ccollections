@@ -67,14 +67,14 @@ static const char *const _LEVEL_STR[] = {"TRACE", "DEBUG", "INFO",  "WARN",
 
 /* RFC 5424 severity codes indexed by clog_level_t. */
 static const int _SYSLOG_SEVERITY[] = {
-  7, /* TRACE → debug         */
-  7, /* DEBUG → debug         */
-  6, /* INFO  → informational */
-  4, /* WARN  → warning       */
-  3, /* ERROR → error         */
-  1, /* ALERT → alert         */
-  0, /* FATAL → emergency     */
-  7, /* OFF   — sentinel; CLOG_OFF must never be used as a message level */
+    7, /* TRACE → debug         */
+    7, /* DEBUG → debug         */
+    6, /* INFO  → informational */
+    4, /* WARN  → warning       */
+    3, /* ERROR → error         */
+    1, /* ALERT → alert         */
+    0, /* FATAL → emergency     */
+    7, /* OFF   — sentinel; CLOG_OFF must never be used as a message level */
 };
 
 /* ========================================================================== */
@@ -100,8 +100,8 @@ typedef struct clog_shared {
   int ref_count;
   clog_format_t format;
   clog_syslog_facility_t syslog_facility; /* PRI facility for CLOG_FMT_SYSLOG */
-  char syslog_hostname[256];              /* hostname cached at creation       */
-  char syslog_appname[49];               /* APP-NAME cached at creation        */
+  char syslog_hostname[256]; /* hostname cached at creation       */
+  char syslog_appname[49];   /* APP-NAME cached at creation        */
   ccol_memmgmt_procs_t
       *m_procs; /* heap-allocated copy; NULL = default allocator */
 } clog_shared_t;
@@ -236,10 +236,22 @@ static int _buf_append_lv(clog_buf_t *b, const char *s) {
       if (p > run && _buf_append(b, run, (size_t)(p - run)) != 0) return -1;
       char esc[5];
       int esc_len;
-      if (c == '\n')      { esc[0] = '\\'; esc[1] = 'n';  esc_len = 2; }
-      else if (c == '\r') { esc[0] = '\\'; esc[1] = 'r';  esc_len = 2; }
-      else if (c == '\t') { esc[0] = '\\'; esc[1] = 't';  esc_len = 2; }
-      else { snprintf(esc, sizeof esc, "\\x%02x", c); esc_len = 4; }
+      if (c == '\n') {
+        esc[0] = '\\';
+        esc[1] = 'n';
+        esc_len = 2;
+      } else if (c == '\r') {
+        esc[0] = '\\';
+        esc[1] = 'r';
+        esc_len = 2;
+      } else if (c == '\t') {
+        esc[0] = '\\';
+        esc[1] = 't';
+        esc_len = 2;
+      } else {
+        snprintf(esc, sizeof esc, "\\x%02x", c);
+        esc_len = 4;
+      }
       if (_buf_append(b, esc, (size_t)esc_len) != 0) return -1;
       run = p + 1;
     }
@@ -274,10 +286,21 @@ static int _buf_append_json_content(clog_buf_t *b, const char *s) {
       if (p > run && _buf_append(b, run, (size_t)(p - run)) != 0) return -1;
       char esc[7];
       int esc_len;
-      if (c == '\n')      { esc[0] = '\\'; esc[1] = 'n';  esc_len = 2; }
-      else if (c == '\r') { esc[0] = '\\'; esc[1] = 'r';  esc_len = 2; }
-      else if (c == '\t') { esc[0] = '\\'; esc[1] = 't';  esc_len = 2; }
-      else { esc_len = snprintf(esc, sizeof esc, "\\u%04x", c); }
+      if (c == '\n') {
+        esc[0] = '\\';
+        esc[1] = 'n';
+        esc_len = 2;
+      } else if (c == '\r') {
+        esc[0] = '\\';
+        esc[1] = 'r';
+        esc_len = 2;
+      } else if (c == '\t') {
+        esc[0] = '\\';
+        esc[1] = 't';
+        esc_len = 2;
+      } else {
+        esc_len = snprintf(esc, sizeof esc, "\\u%04x", c);
+      }
       if (_buf_append(b, esc, (size_t)esc_len) != 0) return -1;
       run = p + 1;
     }
@@ -290,7 +313,7 @@ static int _buf_append_json_content(clog_buf_t *b, const char *s) {
  * key must not be NULL.  val NULL → ,"key":null
  */
 static int _buf_append_json_kv(clog_buf_t *b, const char *key,
-                                const char *val) {
+                               const char *val) {
   if (_buf_append(b, ",\"", 2) != 0) return -1;
   if (_buf_append_json_content(b, key) != 0) return -1;
   if (_buf_append(b, "\":", 2) != 0) return -1;
@@ -498,14 +521,18 @@ static int _rotate(clog_shared_t *sh) {
   if (slen == 0) return -1;
 
   /* Resolve collisions: append _0001, _0002, … until the name is free.
-   * Zero-padded so alphabetical sort in _prune_rotated matches creation order. */
+   * Zero-padded so alphabetical sort in _prune_rotated matches creation order.
+   */
   if (access(rotated, F_OK) == 0) {
     size_t base = plen + slen;
     bool found = false;
     for (int n = 1; n < 10000; n++) {
       int w = snprintf(rotated + base, sizeof(rotated) - base, "_%04d", n);
       if (w < 0) return -1;
-      if (access(rotated, F_OK) != 0) { found = true; break; }
+      if (access(rotated, F_OK) != 0) {
+        found = true;
+        break;
+      }
     }
     if (!found) return -1;
   }
@@ -524,7 +551,8 @@ static int _rotate(clog_shared_t *sh) {
   int new_fd =
       open(sh->file_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
   if (new_fd < 0) {
-    /* Recovery: restore the original path so the still-open fd remains useful. */
+    /* Recovery: restore the original path so the still-open fd remains useful.
+     */
     (void)rename(rotated, sh->file_path);
     return -1;
   }
@@ -589,7 +617,10 @@ static void __attribute__((noinline)) _emit_backtrace_json(clog_buf_t *b) {
 
   int initial_frame = 2;
   size_t bt_start = b->len;
-  if (_buf_append(b, ",\"bt\":[", 7) != 0) { free(syms); return; }
+  if (_buf_append(b, ",\"bt\":[", 7) != 0) {
+    free(syms);
+    return;
+  }
 
   bool first = true;
   for (int i = initial_frame; i < depth; i++) {
@@ -601,14 +632,16 @@ static void __attribute__((noinline)) _emit_backtrace_json(clog_buf_t *b) {
         (pl > 0 && _buf_append(b, prefix, (size_t)pl) != 0) ||
         _buf_append_json_content(b, syms[i]) != 0 ||
         _buf_append(b, "\"", 1) != 0) {
-      b->len = entry_start; /* roll back partial entry so array closes cleanly */
+      b->len =
+          entry_start; /* roll back partial entry so array closes cleanly */
       break;
     }
     first = false;
   }
 
   if (_buf_append(b, "]", 1) != 0)
-    b->len = bt_start; /* roll back entire bt array so the JSON object closes cleanly */
+    b->len = bt_start; /* roll back entire bt array so the JSON object closes
+                          cleanly */
   free(syms);
 #else
   (void)b;
@@ -623,8 +656,8 @@ static void __attribute__((noinline)) _emit_backtrace_json(clog_buf_t *b) {
  *   Frame 1 = _clog_write
  *   Frame 2 = caller (first frame shown to the user)
  */
-static void __attribute__((noinline))
-_emit_backtrace_syslog(struct clogger *lg, clog_level_t level) {
+static void __attribute__((noinline)) _emit_backtrace_syslog(
+    struct clogger *lg, clog_level_t level) {
 #if CLOG_HAS_BACKTRACE
   void *ptrs[CLOG_BACKTRACE_DEPTH];
   int depth = backtrace(ptrs, CLOG_BACKTRACE_DEPTH);
@@ -642,9 +675,8 @@ _emit_backtrace_syslog(struct clogger *lg, clog_level_t level) {
     _buf_reset(&lg->buf);
     _buf_appendf(&lg->buf, "<%d>1 ", pri);
     _buf_append_ts(&lg->buf);
-    _buf_appendf(&lg->buf, " %s %s %d %s - \t#%d %s\n",
-                 hostname, appname, (int)getpid(), msgid,
-                 i - initial_frame, syms[i]);
+    _buf_appendf(&lg->buf, " %s %s %d %s - \t#%d %s\n", hostname, appname,
+                 (int)getpid(), msgid, i - initial_frame, syms[i]);
     _write_all(lg->shared->fd, lg->buf.data, lg->buf.len);
     if (lg->shared->rotation_enabled)
       lg->shared->bytes_written += (off_t)lg->buf.len;
@@ -738,7 +770,10 @@ static clog_shared_t *_shared_alloc(int fd, bool owns_fd, const char *file_path,
       sh->syslog_appname[i] = raw[i];
     }
     sh->syslog_appname[i] = '\0';
-    if (i == 0) { sh->syslog_appname[0] = '-'; sh->syslog_appname[1] = '\0'; }
+    if (i == 0) {
+      sh->syslog_appname[0] = '-';
+      sh->syslog_appname[1] = '\0';
+    }
   }
 
   return sh;
@@ -924,7 +959,7 @@ clog_level_t clog_get_level(clog lg) {
 }
 
 /* ========================================================================== */
-/*                         OUTPUT FORMAT                                       */
+/*                         OUTPUT FORMAT */
 /* ========================================================================== */
 
 void clog_set_format(clog lg, clog_format_t fmt) {
@@ -1048,7 +1083,8 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
     if (msg_heap) {
       int mlen2 = vsnprintf(msg_heap, (size_t)mlen + 1, fmt, ap2);
       if (mlen2 >= 0) msg = msg_heap;
-      /* On vsnprintf failure msg_heap is freed below; fall back to stack version */
+      /* On vsnprintf failure msg_heap is freed below; fall back to stack
+       * version */
     }
     /* On allocation failure we fall back to the truncated stack version */
   }
@@ -1071,7 +1107,8 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
   _buf_reset(&lg->buf);
 
   if (log_fmt == CLOG_FMT_JSON) {
-    /* JSON: {"ts":"...","level":"...","src":"file:N","func":"...",...,"msg":"..."} */
+    /* JSON:
+     * {"ts":"...","level":"...","src":"file:N","func":"...",...,"msg":"..."} */
     _buf_append(&lg->buf, "{\"ts\":\"", 7);
     _buf_append_ts(&lg->buf);
     _buf_append(&lg->buf, "\"", 1);
@@ -1090,7 +1127,8 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
         const char *v = (const char *)it->val_pair->ptr;
         size_t field_start = lg->buf.len;
         if (_buf_append_json_kv(&lg->buf, k, v) != 0) {
-          lg->buf.len = field_start; /* roll back partial field so JSON stays valid */
+          lg->buf.len =
+              field_start; /* roll back partial field so JSON stays valid */
           ccol_iter_destroy(it);
           break;
         }

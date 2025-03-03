@@ -2880,8 +2880,8 @@ EXAMPLES
        log_trace(lg, "entered function, x=%d", x);
 
 SEE ALSO
-       log_debug, log_info, log_warn, log_error, log_fatal, _clog_write,
-       clog_open_fd_mp, clog_set_level
+       log_debug, log_info, log_warn, log_error, log_alert, log_fatal,
+       _clog_write, clog_open_fd_mp, clog_set_level
 
 ------------------------------------------------------------------------------
 NAME
@@ -2905,7 +2905,8 @@ EXAMPLES
        log_debug(lg, "cache miss for key=%d", key);
 
 SEE ALSO
-       log_trace, log_info, log_warn, log_error, log_fatal, _clog_write
+       log_trace, log_info, log_warn, log_error, log_alert, log_fatal,
+       _clog_write
 
 ------------------------------------------------------------------------------
 NAME
@@ -2932,7 +2933,8 @@ EXAMPLES
        log_info(lg, "request handled in %ldms", elapsed_ms);
 
 SEE ALSO
-       log_trace, log_debug, log_warn, log_error, log_fatal, _clog_write
+       log_trace, log_debug, log_warn, log_error, log_alert, log_fatal,
+       _clog_write
 
 ------------------------------------------------------------------------------
 NAME
@@ -2960,7 +2962,7 @@ EXAMPLES
        log_warn(lg, "config key %s missing, using default", key);
 
 SEE ALSO
-       log_info, log_error, log_fatal, _clog_write
+       log_info, log_error, log_alert, log_fatal, _clog_write
 
 ------------------------------------------------------------------------------
 NAME
@@ -3009,7 +3011,53 @@ EXAMPLES
        log_error(lg, "unexpected state %d in FSM", state);
 
 SEE ALSO
-       log_fatal, log_warn, _clog_write, clog_open_fd_mp
+       log_alert, log_fatal, log_warn, _clog_write, clog_open_fd_mp
+
+------------------------------------------------------------------------------
+NAME
+       log_alert - emit a log line at ALERT level with a backtrace
+
+SYNOPSIS
+       #include <clogger.h>
+
+       log_alert(clog lg, const char *fmt, ...);
+
+DESCRIPTION
+       Expands to a call to _clog_write() at CLOG_ALERT level with automatic
+       source location capture. After writing the structured log line, a stack
+       backtrace is appended in the same way as log_error():
+
+         ts=... level=ALERT src=file.c:42 func=handle msg="disk full"
+         \t#0 ./myapp(handle+0x1a) [0x7f...]
+         \t#1 ./myapp(main+0x42) [0x7f...]
+
+       ALERT maps to RFC 5424 syslog severity 1 ("alert — action must be taken
+       immediately").  In CLOG_FMT_SYSLOG mode each backtrace frame is emitted
+       as a separate syslog message using the same PRI and MSGID as the original
+       record.
+
+       ALERT sits between ERROR (severity 3) and FATAL (severity 0) in the
+       clog_level_t ordering.  Use it for conditions that require immediate
+       operator attention but do not necessarily terminate the process.
+
+PARAMETERS
+       lg     Logger handle (clog). Passing NULL is a no-op.
+       fmt    printf-style format string.
+       ...    Format arguments (optional).
+
+NOTES
+       Like log_error, log_alert does NOT terminate the process.
+       Backtrace requires the binary to be linked with -rdynamic.  On platforms
+       without execinfo.h the backtrace lines are silently omitted.
+       The backtrace write is protected by the per-logger mutex, so the
+       backtrace and the preceding log line always appear contiguously.
+
+EXAMPLES
+       log_alert(lg, "primary database unreachable, failing over");
+       log_alert(lg, "disk usage at %d%%, writes may fail soon", pct);
+
+SEE ALSO
+       log_error, log_fatal, _clog_write, clog_open_fd_mp
 
 ------------------------------------------------------------------------------
 NAME
@@ -3047,7 +3095,7 @@ EXAMPLES
        abort();
 
 SEE ALSO
-       log_error, _clog_write, clog_open_fd_mp
+       log_alert, log_error, _clog_write, clog_open_fd_mp
 
 ================================================================================
                               END OF MAN PAGES

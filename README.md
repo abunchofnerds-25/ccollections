@@ -1412,13 +1412,13 @@ void process(void) {
 
 ## 14. Structured Logger — `clogger`
 
-`clogger` is a thread-safe, structured logger that writes every line in logfmt format. Each line is machine-parseable and human-readable. A single per-logger `pthread_mutex_t` serialises all writes and state changes.
+`clogger` is a thread-safe, structured logger with three output formats: logfmt (default), NDJSON, and RFC 5424 syslog. Each record is machine-parseable and human-readable. A single per-logger `pthread_mutex_t` serialises all writes and state changes.
 
 **Header:** `#include <clogger.h>`
 
 ### Output Formats
 
-Two formats are supported, selectable at any time via `clog_set_format`. The default is logfmt.
+Three formats are supported, selectable at any time via `clog_set_format`. The default is logfmt.
 
 #### Logfmt (default)
 
@@ -1428,7 +1428,7 @@ Every log line follows the pattern:
 ts=<ISO-8601-UTC> level=<L> src=<file>:<line> func=<fn> [fields] msg=<text>
 ```
 
-`log_error` and `log_fatal` append a backtrace as tab-indented continuation lines that do not start with `ts=`, allowing log aggregators to group them with their parent record:
+`log_error`, `log_alert`, and `log_fatal` append a backtrace as tab-indented continuation lines that do not start with `ts=`, allowing log aggregators to group them with their parent record:
 
 ```
 ts=2026-05-29T21:52:39.096473Z level=ERROR src=main.c:42 func=handle env=prod msg="db timeout"
@@ -1445,7 +1445,38 @@ When `CLOG_FMT_JSON` is selected, each log record is a single self-contained JSO
 {"ts":"2026-05-29T21:52:39.096642Z","level":"ERROR","src":"main.c:10","func":"main","env":"prod","msg":"db failed","bt":["#0 main+0x16d","#1 libc.so.6+0x29ca8"]}
 ```
 
-Structured fields appear as top-level JSON keys (insertion order). For `log_error` and `log_fatal` the backtrace is embedded as a `"bt"` string array inside the same JSON object instead of being written as separate continuation lines.
+Structured fields appear as top-level JSON keys (insertion order). For `log_error`, `log_alert`, and `log_fatal` the backtrace is embedded as a `"bt"` string array inside the same JSON object instead of being written as separate continuation lines.
+
+#### Syslog (RFC 5424)
+
+When `CLOG_FMT_SYSLOG` is selected, each record is emitted as a single RFC 5424 message:
+
+```
+<PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol src="file:N" func="fn" [fields]] MSG
+```
+
+The `PRI` field encodes both the facility (default `CLOG_SYSLOG_USER`; see `clog_set_facility`) and the severity level mapped from `clog_level_t` according to RFC 5424 (TRACE/DEBUG→7, INFO→6, WARN→4, ERROR→3, ALERT→1, FATAL→0). For `log_error`, `log_alert`, and `log_fatal` each backtrace frame is emitted as a separate syslog message carrying the same PRI and MSGID.
+
+`CLOG_FMT_SYSLOG` is restricted to **fd-based loggers** (`clog_open_fd` / `clog_open_fd_mp`). Calling `clog_set_format` with `CLOG_FMT_SYSLOG` on a file-backed logger is a silent no-op. The fd must be connected to a syslog daemon beforehand; on Linux this is typically a `SOCK_DGRAM` Unix socket at `/dev/log`:
+
+```c
+int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+struct sockaddr_un sa = { .sun_family = AF_UNIX };
+strncpy(sa.sun_path, "/dev/log", sizeof sa.sun_path - 1);
+connect(fd, (struct sockaddr *)&sa, sizeof sa);
+
+clog lg = clog_open_fd(fd, CLOG_INFO);
+clog_set_format(lg, CLOG_FMT_SYSLOG);
+clog_set_facility(lg, CLOG_SYSLOG_DAEMON);
+
+log_info(lg, "service started");
+clog_close(lg);
+close(fd);
+```
+
+Keep individual messages under 2 KiB to stay within typical syslogd datagram limits. Log rotation is unavailable for fd-based loggers.
+
+---
 
 The format is stored on the **shared backing store**, so it applies to all logger handles that write to the same file descriptor (root and every derived logger). Setting it via any handle takes effect immediately for all of them:
 
@@ -1459,7 +1490,7 @@ clog derived = clog_derive(lg);
 clog_format_t fmt = clog_get_format(lg); /* CLOG_FMT_JSON */
 ```
 
-Backtrace (for either format) requires linking the binary with `-rdynamic`. On platforms without `execinfo.h` (glibc, macOS, FreeBSD) the backtrace is omitted silently.
+Backtrace (for any format) requires linking the binary with `-rdynamic`. On platforms without `execinfo.h` (glibc, macOS, FreeBSD) the backtrace is omitted silently.
 
 ### Basic Usage
 
@@ -1475,7 +1506,7 @@ clog_set_field(lg, "service", "auth");
 
 log_info(lg,  "starting up");
 log_warn(lg,  "config missing: %s", "timeout");
-log_error(lg, "db failed: %s", "timeout");   /* also appends a backtrace */
+log_error(lg, "db failed: %s", "timeout");   /* also appends a backtrace; log_alert and log_fatal do too */
 
 clog_close(lg);
 ```
@@ -1535,8 +1566,9 @@ All four function pointers must be set; passing a partially-populated struct ret
 | `CLOG_INFO`  | 2 | Recommended production minimum |
 | `CLOG_WARN`  | 3 | |
 | `CLOG_ERROR` | 4 | Appends a backtrace |
-| `CLOG_FATAL` | 5 | Appends a backtrace |
-| `CLOG_OFF`   | 6 | Disables all output when used as `min_level` |
+| `CLOG_ALERT` | 5 | Action required immediately; maps to RFC 5424 severity 1; appends a backtrace |
+| `CLOG_FATAL` | 6 | Appends a backtrace; does not terminate the process |
+| `CLOG_OFF`   | 7 | Disables all output when used as `min_level` |
 
 The minimum level can be changed at any time with `clog_set_level`. Messages below the current minimum are dropped without acquiring the mutex.
 
@@ -1576,7 +1608,8 @@ clog_close(lg);   /* safe */
 |---|---|
 | `clog_open_fd_mp(fd, min_level, mprocs)` | Create a logger writing to an existing open fd; the fd is not closed on `clog_close` |
 | `clog_open_file_mp(path, min_level, cfg, mprocs)` | Create a file-backed logger; pass a `clog_rotation_cfg_t *` for rotation or `NULL` to disable it |
-| `clog_close(logger)` | Flush, close (if file-backed), and free all resources; safe with `NULL` |
+| `clog_derive(parent)` | Create a derived logger sharing the same fd, mutex, and rotation as `parent`; starts with a snapshot of `parent`'s fields and level, then evolves independently; release with `clog_close` |
+| `clog_close(logger)` | Flush, close (if file-backed), and free all resources; the underlying fd is kept open until all derived handles are also closed; safe with `NULL` |
 
 **Level Control**
 
@@ -1585,12 +1618,14 @@ clog_close(lg);   /* safe */
 | `clog_set_level(logger, level)` | Change the minimum log level; thread-safe |
 | `clog_get_level(logger)` | Return the current minimum level; returns `CLOG_OFF` for a `NULL` logger |
 
-**Output Format**
+**Output Format and Syslog Facility**
 
 | Function | Description |
 |---|---|
-| `clog_set_format(logger, fmt)` | Change the output format (`CLOG_FMT_LOGFMT` or `CLOG_FMT_JSON`); affects all handles sharing the same fd; thread-safe |
+| `clog_set_format(logger, fmt)` | Change the output format (`CLOG_FMT_LOGFMT`, `CLOG_FMT_JSON`, or `CLOG_FMT_SYSLOG`); affects all handles sharing the same fd; `CLOG_FMT_SYSLOG` is a no-op on file-backed loggers; thread-safe |
 | `clog_get_format(logger)` | Return the current format; returns `CLOG_FMT_LOGFMT` for a `NULL` logger |
+| `clog_set_facility(logger, facility)` | Change the RFC 5424 syslog facility (e.g. `CLOG_SYSLOG_DAEMON`); affects all handles sharing the same fd; only meaningful with `CLOG_FMT_SYSLOG`; default is `CLOG_SYSLOG_USER`; thread-safe |
+| `clog_get_facility(logger)` | Return the current syslog facility; returns `CLOG_SYSLOG_USER` for a `NULL` logger |
 
 **Structured Fields**
 
@@ -1609,7 +1644,8 @@ clog_close(lg);   /* safe */
 | `log_info(lg, fmt, ...)`  | `CLOG_INFO`  | No |
 | `log_warn(lg, fmt, ...)`  | `CLOG_WARN`  | No |
 | `log_error(lg, fmt, ...)` | `CLOG_ERROR` | Yes |
-| `log_fatal(lg, fmt, ...)` | `CLOG_FATAL` | Yes |
+| `log_alert(lg, fmt, ...)` | `CLOG_ALERT` | Yes — use for conditions requiring immediate operator action |
+| `log_fatal(lg, fmt, ...)` | `CLOG_FATAL` | Yes — does not terminate the process; caller must call `abort()` / `exit()` |
 
 ---
 

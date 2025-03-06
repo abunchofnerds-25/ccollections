@@ -2948,9 +2948,12 @@ SYNOPSIS
 
 DESCRIPTION
        Looks up key_pair in the cache and, on success, heap-allocates a copy
-       of the associated value (via standard malloc), assigns the pointer to
-       val_out->ptr, and sets val_out->size to the stored byte size. The
-       caller is responsible for freeing val_out->ptr with free().
+       of the associated value using the cache's custom allocator (if one was
+       provided at construction) or malloc() otherwise, assigns the pointer to
+       val_out->ptr, and sets val_out->size to the stored byte size. The caller
+       is responsible for freeing val_out->ptr with the matching allocator: the
+       custom free function if a custom allocator was configured, or free()
+       otherwise.
 
        Cache hit: the entry is moved to the most-recently-used position and
        a heap-allocated copy of its value is written into val_out.
@@ -2972,9 +2975,10 @@ PARAMETERS
        cache     Cache handle.
        key_pair  Key to look up (ptr and size fields must be set).
        val_out   Output pair populated on success. val_out->ptr is set to a
-                 heap-allocated copy of the value (caller must free() it);
-                 val_out->size is set to the stored value size. Must not be
-                 NULL.
+                 heap-allocated copy of the value (caller must free it with
+                 the cache's custom allocator, or free() if no custom
+                 allocator was provided); val_out->size is set to the stored
+                 value size. Must not be NULL.
 
 RETURN VALUE
        ccol_success           val_out populated; caller owns val_out->ptr.
@@ -2984,9 +2988,12 @@ RETURN VALUE
                               copy).
 
 NOTES
-       The returned val_out->ptr is allocated with the standard malloc
-       regardless of any custom allocator configured on the cache. Free it
-       with free().
+       The returned val_out->ptr is allocated with the cache's custom
+       allocator if one was provided at construction, or with the standard
+       malloc() otherwise. Free it with the matching allocator.
+       When the value type is char*, the returned copy is a heap-allocated
+       null-terminated string: this allocation is also made with the custom
+       allocator (or malloc() if none was configured).
        The cache never exposes a pointer into its internal storage (such a
        pointer would dangle after eviction).
        O(1) average-case complexity for the hash map lookup.
@@ -3092,6 +3099,581 @@ NOTES
 
 SEE ALSO
        clrucache_size, clrucache_create_full
+
+================================================================================
+                       CLOGGER.H - STRUCTURED LOGGER
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       clog_open_fd_mp - create a logger writing to an existing file descriptor
+
+SYNOPSIS
+       #include <clogger.h>
+
+       clog clog_open_fd_mp(int fd, clog_level_t min_level,
+                         ccol_memmgmt_procs_t *mprocs);
+
+DESCRIPTION
+       Creates a new logger that writes to an already-open file descriptor.
+       The file descriptor is not owned by the logger and will NOT be closed
+       when clog_close() is called. Log rotation is unavailable for fd-backed
+       loggers.
+
+       Use fd=1 for stdout, fd=2 for stderr, or any other open writable fd.
+
+PARAMETERS
+       fd         Open, writable file descriptor. Must be >= 0.
+       min_level  Messages below this level are silently dropped. Use
+                  CLOG_OFF to suppress all output.
+       mprocs     Custom allocator (malloc/free/calloc/realloc function
+                  pointers), or NULL to use the default system allocator.
+                  All four pointers must be set when mprocs is non-NULL;
+                  a partially-populated struct causes the call to return
+                  NULL without creating a logger. The struct is copied
+                  internally; the caller may free it after this call.
+
+RETURN VALUE
+       Returns a new logger handle on success.
+       Returns NULL if fd < 0, if mprocs is invalid, or if memory
+       allocation fails.
+
+NOTES
+       The fd is not duplicated; the caller is responsible for keeping it
+       open for the lifetime of the logger.
+       All public functions are fully thread-safe via a per-logger mutex.
+       Passing NULL as the logger to any subsequent call is always a no-op.
+
+SEE ALSO
+       clog_open_file_mp, clog_close, log_info, log_error
+
+------------------------------------------------------------------------------
+NAME
+       clog_open_file_mp - create a file-backed logger with optional log rotation
+
+SYNOPSIS
+       #include <clogger.h>
+
+       clog clog_open_file_mp(const char *path, clog_level_t min_level,
+                           const clog_rotation_cfg_t *cfg,
+                           ccol_memmgmt_procs_t *mprocs);
+
+DESCRIPTION
+       Creates a new logger that writes to the file at path. The file is
+       created if it does not exist (mode 0644) and opened for appending if
+       it does. When the file already exists its current size is read via
+       fstat(2) so that size-based rotation thresholds are applied correctly
+       even when appending to a pre-existing log.
+
+       Log rotation is enabled only when cfg is non-NULL. Both size-based
+       and time-based rotation may be enabled independently:
+
+       Size rotation: triggers after the write that causes the cumulative
+       bytes written to reach or exceed cfg->max_file_size. Checked after
+       each write.
+
+       Time rotation: triggers on the first write after
+       cfg->rotation_interval_secs seconds have elapsed since the last
+       rotation (or since the logger was created). Checked before each write.
+
+       When a rotation fires, the current file is atomically renamed to
+       <path>.<YYYYMMDDHHMMSS>. If a file with that name already exists a
+       collision suffix _1, _2, … (up to _9999) is appended. A new empty
+       log file is then opened. When cfg->max_rotated_files > 0, the oldest
+       rotated files beyond the limit are deleted automatically.
+
+PARAMETERS
+       path       Destination log file path. Copied internally.
+       min_level  Messages below this level are silently dropped.
+       cfg        Rotation configuration, or NULL to disable rotation.
+                  Fields with value 0 fall back to their respective
+                  CLOG_DEFAULT_* constant:
+                    size_rotation_enabled  - enable size-based rotation
+                    max_file_size          - bytes threshold (0 → 10 MiB)
+                    time_rotation_enabled  - enable time-based rotation
+                    rotation_interval_secs - seconds (0 → 86400 = 1 day)
+                    max_rotated_files      - files kept; 0 → no limit
+       mprocs     Custom allocator (malloc/free/calloc/realloc function
+                  pointers), or NULL to use the default system allocator.
+                  All four pointers must be set when mprocs is non-NULL;
+                  a partially-populated struct causes the call to return
+                  NULL without creating a logger. The struct is copied
+                  internally; the caller may free it after this call.
+                  The allocator is inherited by all loggers derived from
+                  this one via clog_derive().
+
+RETURN VALUE
+       Returns a new logger handle on success.
+       Returns NULL on failure (bad path, permission error, invalid mprocs,
+       allocation failure, etc.).
+
+NOTES
+       The logger owns the file descriptor and closes it on clog_close().
+       O_CLOEXEC is set on the file descriptor.
+       Rotation is performed within the locked section — no log lines are
+       lost or interleaved across the rename boundary.
+
+SEE ALSO
+       clog_open_fd_mp, clog_close, CLOG_DEFAULT_MAX_FILE_SIZE,
+       CLOG_DEFAULT_ROTATION_INTERVAL, CLOG_DEFAULT_MAX_ROTATED_FILES
+
+------------------------------------------------------------------------------
+NAME
+       clog_close - flush, close, and free a logger
+
+SYNOPSIS
+       #include <clogger.h>
+
+       void clog_close(clog logger);
+
+DESCRIPTION
+       Releases all resources owned by the logger:
+         - If the logger is file-backed, the file descriptor is closed.
+         - All attached key=value fields are freed.
+         - The internal write buffer is freed.
+         - The mutex is destroyed and the logger struct is freed.
+
+       After this call, the handle must not be used. Passing NULL is safe
+       and does nothing.
+
+PARAMETERS
+       logger  Logger handle to close. NULL is a no-op.
+
+NOTES
+       clog_close() must not be called while other threads are still calling
+       log_* macros on the same handle. Callers are responsible for ensuring
+       all logging threads have finished before calling clog_close().
+       For fd-based loggers (clog_open_fd_mp), the file descriptor is NOT
+       closed — it is the caller's responsibility.
+
+SEE ALSO
+       clog_open_fd_mp, clog_open_file_mp
+
+------------------------------------------------------------------------------
+NAME
+       clog_set_level - change the minimum log level at runtime
+
+SYNOPSIS
+       #include <clogger.h>
+
+       void clog_set_level(clog logger, clog_level_t level);
+
+DESCRIPTION
+       Updates the minimum severity level. Messages with a level strictly
+       below the new minimum are silently discarded on subsequent calls.
+       The change takes effect immediately and is visible to all threads
+       sharing the logger.
+
+PARAMETERS
+       logger  Logger handle. NULL is a no-op.
+       level   New minimum level (CLOG_TRACE through CLOG_OFF).
+               Use CLOG_OFF to suppress all output.
+
+NOTES
+       Thread-safe: protected by the per-logger mutex.
+
+SEE ALSO
+       clog_get_level, clog_open_fd_mp, clog_open_file_mp
+
+------------------------------------------------------------------------------
+NAME
+       clog_get_level - return the current minimum log level
+
+SYNOPSIS
+       #include <clogger.h>
+
+       clog_level_t clog_get_level(clog logger);
+
+DESCRIPTION
+       Returns the current minimum severity level of the logger.
+
+PARAMETERS
+       logger  Logger handle. NULL returns CLOG_OFF.
+
+RETURN VALUE
+       Current minimum level, or CLOG_OFF if logger is NULL.
+
+NOTES
+       Thread-safe: protected by the per-logger mutex.
+
+SEE ALSO
+       clog_set_level
+
+------------------------------------------------------------------------------
+NAME
+       clog_set_field - attach or update a persistent structured field
+
+SYNOPSIS
+       #include <clogger.h>
+
+       void clog_set_field(clog logger, const char *key, const char *value);
+
+DESCRIPTION
+       Associates key with value as a persistent field. The field appears in
+       every subsequent log line emitted by this logger, inserted between the
+       func= and msg= tokens:
+
+         ts=... level=INFO src=... func=... key=value msg=...
+
+       Both key and value are copied internally; the caller may free or
+       modify them after this call without affecting the logger.
+
+       If key already exists its value is replaced. Otherwise a new field is
+       prepended to the field list.
+
+       Values that contain spaces, '=', '"', '\\', or ASCII control
+       characters are automatically double-quoted and backslash-escaped in
+       the output:
+         - '"' → \"
+         - '\\' → \\
+         - control chars → \xNN
+
+PARAMETERS
+       logger  Logger handle. NULL is a no-op.
+       key     Field name. Copied internally. Should not contain '=' or
+               whitespace (no enforcement, but the resulting logfmt line
+               would be malformed).
+       value   Field value. Copied internally. May be arbitrary text.
+
+NOTES
+       Thread-safe: protected by the per-logger mutex.
+       The field list is a linked list. For large field sets, iteration is
+       O(n) per write; prefer a small number of long-lived fields.
+
+SEE ALSO
+       clog_remove_field, clog_clear_fields
+
+------------------------------------------------------------------------------
+NAME
+       clog_remove_field - remove a previously attached structured field
+
+SYNOPSIS
+       #include <clogger.h>
+
+       void clog_remove_field(clog logger, const char *key);
+
+DESCRIPTION
+       Removes the field with the given key from the logger's field list.
+       The field will no longer appear in subsequent log lines. If the key
+       is not present the call is a no-op.
+
+PARAMETERS
+       logger  Logger handle. NULL is a no-op.
+       key     Field name to remove. The match is case-sensitive and exact.
+
+NOTES
+       Thread-safe: protected by the per-logger mutex.
+
+SEE ALSO
+       clog_set_field, clog_clear_fields
+
+------------------------------------------------------------------------------
+NAME
+       clog_clear_fields - remove all attached structured fields
+
+SYNOPSIS
+       #include <clogger.h>
+
+       void clog_clear_fields(clog logger);
+
+DESCRIPTION
+       Removes and frees every field attached to the logger. Subsequent log
+       lines will contain no key=value pairs between func= and msg=.
+
+PARAMETERS
+       logger  Logger handle. NULL is a no-op.
+
+NOTES
+       Thread-safe: protected by the per-logger mutex.
+
+SEE ALSO
+       clog_set_field, clog_remove_field
+
+------------------------------------------------------------------------------
+NAME
+       clog_derive - create a derived logger sharing the same output target
+
+SYNOPSIS
+       #include <clogger.h>
+
+       clog clog_derive(clog parent);
+
+DESCRIPTION
+       Creates a new derived logger that writes to the same file descriptor as
+       parent and shares the same synchronisation mutex and log-rotation state.
+       All writes from parent and every derived logger are therefore serialised
+       by the same lock and land in the same destination.
+
+       At the moment of the call, the derived logger receives a snapshot of
+       parent's structured fields and minimum log level.  After creation the
+       two loggers maintain fully independent field maps and level settings:
+       adding, removing, or changing fields or the level on one logger has no
+       effect on the other.
+
+       Log rotation (if configured on the original file-backed logger) continues
+       to be managed by the root logger; derived loggers benefit transparently.
+
+       Release a derived logger with clog_close() when it is no longer needed.
+       The underlying file is kept open until all handles (root and every derived
+       logger) have been closed — the shared backing store uses reference counting.
+
+PARAMETERS
+       parent  Source logger to derive from. NULL returns NULL.
+
+RETURN VALUE
+       Returns a new derived logger handle on success.
+       Returns NULL if parent is NULL or if memory allocation fails.
+
+NOTES
+       Derived loggers inherit the output format and syslog facility from the
+       shared backing store; changes to those settings via any handle are
+       immediately visible to all handles writing to the same fd.
+       Thread-safe: the field snapshot is taken under the shared mutex.
+
+SEE ALSO
+       clog_open_fd_mp, clog_open_file_mp, clog_close
+
+------------------------------------------------------------------------------
+NAME
+       clog_set_format - change the output format at runtime
+
+SYNOPSIS
+       #include <clogger.h>
+
+       void clog_set_format(clog logger, clog_format_t fmt);
+
+DESCRIPTION
+       Updates the output format of the shared backing store.  Because the
+       format is stored on the shared store rather than the per-logger struct,
+       the change is immediately visible to every logger handle that writes to
+       the same file descriptor (the root logger and all derived loggers).
+
+       Three formats are available:
+
+         CLOG_FMT_LOGFMT (0)
+           Default.  Every record is emitted as a single logfmt line:
+             ts=<ISO-8601-UTC> level=<L> src=<file>:<line> func=<fn>
+             [fields] msg=<text>
+           log_error, log_alert, and log_fatal append tab-indented backtrace
+           continuation lines after the main record.
+
+         CLOG_FMT_JSON (1)
+           Every record is emitted as a single NDJSON object followed by a
+           newline:
+             {"ts":"...","level":"...","src":"file:N","func":"...",
+              [fields,] "msg":"..."}
+           Structured fields become top-level JSON keys.  For log_error,
+           log_alert, and log_fatal the backtrace is embedded as a "bt"
+           string array inside the same JSON object.
+
+         CLOG_FMT_SYSLOG (2)
+           RFC 5424 syslog format.  Available only for fd-based loggers
+           (clog_open_fd / clog_open_fd_mp).  Calling clog_set_format() with
+           CLOG_FMT_SYSLOG on a file-backed logger is a silent no-op; the
+           format remains unchanged.
+
+           Each record is emitted as a single line:
+             <PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol ...] MSG\n
+
+             PRI        = (facility * 8) + RFC 5424 severity (mapped from
+                          clog_level_t: TRACE=7, DEBUG=7, INFO=6, WARN=4,
+                          ERROR=3, ALERT=1, FATAL=0)
+             TIMESTAMP  = ISO 8601 UTC (same format as logfmt/JSON)
+             HOSTNAME   = result of gethostname(2), or "-" if unavailable
+             APP-NAME   = process name from /proc/self/comm or argv[0], or "-"
+             PID        = getpid(2)
+             MSGID      = level string ("INFO", "ERROR", etc.)
+             [ccol ...]  = RFC 5424 SD-ELEMENT with SD-ID "ccol" carrying
+                          src="<file>:<line>", func="<fn>", and any fields
+                          attached via clog_set_field()
+             MSG        = the formatted message text
+
+           The facility is controlled by clog_set_facility() and defaults to
+           CLOG_SYSLOG_USER.  Backtraces (log_error, log_alert, log_fatal) are
+           emitted as separate syslog messages, one per frame, using the same
+           PRI and MSGID as the original record.
+
+           The fd must be connected to a syslog daemon before calling
+           clog_set_format().  On Linux this is typically a SOCK_DGRAM Unix
+           socket at /dev/log.  Keep individual messages under 2 KiB to
+           stay within typical syslogd datagram limits.
+
+PARAMETERS
+       logger  Logger handle.  NULL is a no-op.
+       fmt     CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG.
+
+NOTES
+       Thread-safe: protected by the shared backing-store mutex.
+       Passing CLOG_FMT_SYSLOG on a file-backed logger is a silent no-op.
+
+SEE ALSO
+       clog_get_format, clog_set_facility, clog_open_fd_mp, clog_open_file_mp,
+       clog_derive
+
+------------------------------------------------------------------------------
+NAME
+       clog_get_format - return the current output format
+
+SYNOPSIS
+       #include <clogger.h>
+
+       clog_format_t clog_get_format(clog logger);
+
+DESCRIPTION
+       Returns the current output format of the shared backing store.
+
+PARAMETERS
+       logger  Logger handle.  NULL returns CLOG_FMT_LOGFMT.
+
+RETURN VALUE
+       CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG; CLOG_FMT_LOGFMT
+       if logger is NULL.
+
+NOTES
+       Thread-safe: protected by the shared backing-store mutex.
+
+SEE ALSO
+       clog_set_format, clog_set_facility
+
+------------------------------------------------------------------------------
+NAME
+       clog_set_facility - change the syslog facility
+
+SYNOPSIS
+       #include <clogger.h>
+
+       void clog_set_facility(clog logger, clog_syslog_facility_t facility);
+
+DESCRIPTION
+       Updates the syslog facility stored on the shared backing store.  The
+       facility is encoded into the PRI field of every RFC 5424 message as
+       (facility * 8) + severity.  Because the value lives on the shared store
+       the change is visible to every logger handle that writes to the same file
+       descriptor (the root logger and all derived loggers).
+
+       This function is only meaningful when the output format is
+       CLOG_FMT_SYSLOG; calling it with any other format is harmless (the
+       stored value is updated but has no effect on the output until
+       CLOG_FMT_SYSLOG is selected).
+
+       Available facility codes (RFC 5424 / RFC 3164):
+         CLOG_SYSLOG_KERN     (0)  — Kernel messages
+         CLOG_SYSLOG_USER     (1)  — User-level messages (default)
+         CLOG_SYSLOG_MAIL     (2)  — Mail system
+         CLOG_SYSLOG_DAEMON   (3)  — System daemons
+         CLOG_SYSLOG_AUTH     (4)  — Security / authorization messages
+         CLOG_SYSLOG_SYSLOG   (5)  — Internal syslogd messages
+         CLOG_SYSLOG_LPR      (6)  — Line printer subsystem
+         CLOG_SYSLOG_NEWS     (7)  — Network news subsystem
+         CLOG_SYSLOG_UUCP     (8)  — UUCP subsystem
+         CLOG_SYSLOG_CRON     (9)  — Clock daemon
+         CLOG_SYSLOG_AUTHPRIV (10) — Security / authorization (private)
+         CLOG_SYSLOG_FTP      (11) — FTP daemon
+         CLOG_SYSLOG_LOCAL0   (16) — Local use 0
+         …
+         CLOG_SYSLOG_LOCAL7   (23) — Local use 7
+
+PARAMETERS
+       logger    Logger handle.  NULL is a no-op.
+       facility  Desired facility code (clog_syslog_facility_t).
+
+NOTES
+       Thread-safe: protected by the shared backing-store mutex.
+       The default facility is CLOG_SYSLOG_USER.
+
+SEE ALSO
+       clog_get_facility, clog_set_format
+
+------------------------------------------------------------------------------
+NAME
+       clog_get_facility - return the current syslog facility
+
+SYNOPSIS
+       #include <clogger.h>
+
+       clog_syslog_facility_t clog_get_facility(clog logger);
+
+DESCRIPTION
+       Returns the syslog facility currently stored on the shared backing store.
+
+PARAMETERS
+       logger  Logger handle.  NULL returns CLOG_SYSLOG_USER.
+
+RETURN VALUE
+       Current facility code, or CLOG_SYSLOG_USER if logger is NULL.
+
+NOTES
+       Thread-safe: protected by the shared backing-store mutex.
+
+SEE ALSO
+       clog_set_facility, clog_set_format
+
+------------------------------------------------------------------------------
+NAME
+       _clog_write - internal log-line writer (use the log_* macros instead)
+
+SYNOPSIS
+       #include <clogger.h>
+
+       void _clog_write(clog logger, clog_level_t level,
+                        const char *file, int line, const char *func,
+                        bool with_backtrace, const char *fmt, ...)
+           __attribute__((format(printf, 7, 8)));
+
+DESCRIPTION
+       Formats and emits a single structured log line. This is the function
+       that all log_* macros expand to; application code should call the
+       macros rather than this function directly.
+
+       The write sequence (all steps under the per-logger mutex) is:
+
+         1. Check level >= min_level; return immediately if not.
+         2. Format the user message with vsnprintf into a 1024-byte stack
+            buffer; spill to heap if the formatted text exceeds 1024 bytes.
+         3. If time rotation is enabled, check and fire if due.
+         4. Build the log record according to the shared backing-store format:
+
+            CLOG_FMT_LOGFMT:
+              ts=<ISO-8601-UTC> level=<L> src=<file>:<line> func=<func>
+              [key=value ...] msg=<message>
+
+            CLOG_FMT_JSON:
+              {"ts":"...","level":"...","src":"file:N","func":"...",
+               [fields,] "msg":"..." [,"bt":[...]]}
+              The "bt" array is appended inline when with_backtrace is true.
+
+         5. Write the record atomically with write(2) via an EINTR-retry loop.
+         6. If with_backtrace is true, emit the backtrace:
+            CLOG_FMT_LOGFMT: call backtrace() + backtrace_symbols() and
+              write each frame as a tab-indented continuation line:
+                \t#N symbol\n
+            CLOG_FMT_SYSLOG: emit each frame as a separate RFC 5424 syslog
+              message (same PRI and MSGID as the original record).
+            CLOG_FMT_JSON: backtrace was already embedded as "bt" in step 4.
+         7. If size rotation is enabled, check and fire if due.
+
+       The write buffer is a per-logger dynamic buffer that starts at 4 KiB
+       and grows (doubling) up to 16 MiB. It is reused across calls.
+
+PARAMETERS
+       logger          Logger handle. NULL is a no-op.
+       level           Severity level of this message.
+       file            Source file name (__FILE__).
+       line            Source line number (__LINE__).
+       func            Function name (__func__).
+       with_backtrace  If true, append a stack backtrace after the log line.
+       fmt             printf-style format string.
+       ...             Format arguments.
+
+NOTES
+       Backtrace support requires a platform with execinfo.h (glibc, macOS,
+       FreeBSD) and the binary linked with -rdynamic for symbol resolution.
+       On other platforms the backtrace is silently omitted.
+       The format attribute causes the compiler to type-check fmt and the
+       variadic arguments at compile time.
+
+SEE ALSO
+       log_trace, log_debug, log_info, log_warn, log_error, log_fatal
 
 ================================================================================
                               END OF MAN PAGES

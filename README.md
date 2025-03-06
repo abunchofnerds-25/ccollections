@@ -23,9 +23,10 @@ A library of generic, type-safe data structures for C, built on C11 and GNU C ex
 11. [Memory Pools — `cmempool`](#11-memory-pools--cmempool)
 12. [Thread Communication — `cthreadcomm`](#12-thread-communication--cthreadcomm)
 13. [LRU Cache — `clrucache`](#13-lru-cache--clrucache)
-14. [Thread Safety](#14-thread-safety)
-15. [Custom Memory Management](#15-custom-memory-management)
-16. [License](#16-license)
+14. [Structured Logger — `clogger`](#14-structured-logger--clogger)
+15. [Thread Safety](#15-thread-safety)
+16. [Custom Memory Management](#16-custom-memory-management)
+17. [License](#17-license)
 
 ---
 
@@ -139,11 +140,10 @@ The convenience macros call `fatal_err()` on unrecoverable failures—caller bug
 
 ## 4. Building and Linking
 
-Clone the repository and run `make` to produce `libccollections.so` and a demonstration binary:
+Clone the repository and run `make` to produce `libccollections.so`:
 
 ```bash
-make              # Build the shared library and the demo binary
-make run          # Run the demo (sets LD_LIBRARY_PATH=. automatically)
+make              # Build the shared library
 make test         # Build and run all test suites
 make memtest      # Run all tests under Valgrind with full leak checking
 make clean        # Remove all build artefacts
@@ -158,6 +158,7 @@ cd tests/cbstmap  && make test
 cd tests/csort    && make test
 cd tests/cmempool && make test
 cd tests/cthreadcomm && make test
+cd tests/clogger   && make test
 ```
 
 To link an application against the library:
@@ -176,6 +177,8 @@ Include only the headers you need:
 #include <csort.h>
 #include <cmempool.h>
 #include <cthreadcomm.h>
+#include <clrucache.h>
+#include <clogger.h>
 ```
 
 `cvector.h`, `chashmap.h`, and `cbstmap.h` each automatically include `citerators.h`, so the unified iteration API (`ccol_begin`, `ccol_for_each`, `ccol_iter_declare`, and related macros) is available whenever any one of those container headers is included. Use `#include <ccollections.h>` to get all three containers and the full iteration API in a single include.
@@ -1006,7 +1009,7 @@ r_mempool_destroy(pool);  /* The buffer itself is not freed */
 
 ### Driving Other Containers from a Pool
 
-Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 15](#15-custom-memory-management) for the complete pattern.
+Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 16](#16-custom-memory-management) for the complete pattern.
 
 ---
 
@@ -1327,7 +1330,7 @@ if (clru_get(cache, k, &out) == ccol_success) {
 clru_destroy(cache);
 ```
 
-**`char *` value types** — the macro transfers ownership of the heap-allocated string to the caller via `*(char **)val_ptr`. The caller **must** call `free()` on it when done:
+**`char *` value types** — the macro transfers ownership of the heap-allocated string to the caller via `*(char **)val_ptr`. The caller **must** free it when done. The allocation uses the cache's custom allocator if one was provided at construction, or `malloc()` otherwise:
 
 ```c
 clru_construct(str_cache, int, char *, 64, NULL, NULL, NULL);
@@ -1340,12 +1343,15 @@ char *s = NULL;
 if (clru_get(str_cache, k, &s) == ccol_success) {
     printf("%s\n", s);
     free(s);   /* Required — clru_get transferred heap ownership to the caller */
+               /* Use custom_free(s) instead if a custom allocator was provided */
 }
 
 clru_destroy(str_cache);
 ```
 
 Each call to `clru_get` produces an independent heap allocation for the string. Two successive calls to `clru_get` for the same key return two independent pointers that must each be freed separately.
+
+The same allocator rule applies to `clrucache_get_full` for all value types: `val_out->ptr` is allocated with the cache's custom allocator (or `malloc()` if none was configured) and must be freed with the matching function.
 
 ### Cross-Scope Usage
 
@@ -1399,12 +1405,251 @@ void process(void) {
 
 | Macro / Function | Description |
 |---|---|
-| `clru_get(name, key, val_ptr)` | Retrieve the value for `key`. `val_ptr` is a pointer to the value type (`ValT *`), **not** `cmap_pair *`. For non-`char *` val types, the value is copied directly into `*val_ptr` — no heap allocation occurs. For `char *` val types, `*(char **)val_ptr` is set to a heap-allocated string that the caller must `free()`. Returns `ccol_success`, `ccol_key_not_found`, or another error code. |
+| `clru_get(name, key, val_ptr)` | Retrieve the value for `key`. `val_ptr` is a pointer to the value type (`ValT *`), **not** `cmap_pair *`. For non-`char *` val types, the value is copied directly into `*val_ptr` — no heap allocation occurs. For `char *` val types, `*(char **)val_ptr` is set to a heap-allocated string allocated by the cache's custom allocator (or `malloc()` if none was configured); the caller must free it with the matching function. Returns `ccol_success`, `ccol_key_not_found`, or another error code. |
 | `clru_set(name, key, val)` | Store `val` for `key`; if a remote setter was provided it is called first; returns `ccol_success` or `ccol_unexpected_failure` on remote failure |
 
 ---
 
-## 14. Thread Safety
+## 14. Structured Logger — `clogger`
+
+`clogger` is a thread-safe, structured logger with three output formats: logfmt (default), NDJSON, and RFC 5424 syslog. Each record is machine-parseable and human-readable. A single per-logger `pthread_mutex_t` serialises all writes and state changes.
+
+**Header:** `#include <clogger.h>`
+
+### Output Formats
+
+Three formats are supported, selectable at any time via `clog_set_format`. The default is logfmt.
+
+#### Logfmt (default)
+
+Every log line follows the pattern:
+
+```
+ts=<ISO-8601-UTC> level=<L> src=<file>:<line> func=<fn> [fields] msg=<text>
+```
+
+`log_error`, `log_alert`, and `log_fatal` append a backtrace as tab-indented continuation lines that do not start with `ts=`, allowing log aggregators to group them with their parent record:
+
+```
+ts=2026-05-29T21:52:39.096473Z level=ERROR src=main.c:42 func=handle env=prod msg="db timeout"
+	#0 ./myapp(handle+0x1a) [0x7f...]
+	#1 ./myapp(main+0x42) [0x7f...]
+```
+
+#### JSON (NDJSON)
+
+When `CLOG_FMT_JSON` is selected, each log record is a single self-contained JSON object followed by a newline:
+
+```json
+{"ts":"2026-05-29T21:52:39.096473Z","level":"INFO","src":"main.c:9","func":"main","env":"prod","msg":"starting up"}
+{"ts":"2026-05-29T21:52:39.096642Z","level":"ERROR","src":"main.c:10","func":"main","env":"prod","msg":"db failed","bt":["#0 main+0x16d","#1 libc.so.6+0x29ca8"]}
+```
+
+Structured fields appear as top-level JSON keys (insertion order). For `log_error`, `log_alert`, and `log_fatal` the backtrace is embedded as a `"bt"` string array inside the same JSON object instead of being written as separate continuation lines.
+
+#### Syslog (RFC 5424)
+
+When `CLOG_FMT_SYSLOG` is selected, each record is emitted as a single RFC 5424 message:
+
+```
+<PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol src="file:N" func="fn" [fields]] MSG
+```
+
+The `PRI` field encodes both the facility (default `CLOG_SYSLOG_USER`; see `clog_set_facility`) and the severity level mapped from `clog_level_t` according to RFC 5424 (TRACE/DEBUG→7, INFO→6, WARN→4, ERROR→3, ALERT→1, FATAL→0). For `log_error`, `log_alert`, and `log_fatal` each backtrace frame is emitted as a separate syslog message carrying the same PRI and MSGID.
+
+`CLOG_FMT_SYSLOG` is restricted to **fd-based loggers** (`clog_open_fd` / `clog_open_fd_mp`). Calling `clog_set_format` with `CLOG_FMT_SYSLOG` on a file-backed logger is a silent no-op. The fd must be connected to a syslog daemon beforehand; on Linux this is typically a `SOCK_DGRAM` Unix socket at `/dev/log`:
+
+```c
+int fd = socket(AF_UNIX, SOCK_DGRAM, 0);
+struct sockaddr_un sa = { .sun_family = AF_UNIX };
+strncpy(sa.sun_path, "/dev/log", sizeof sa.sun_path - 1);
+connect(fd, (struct sockaddr *)&sa, sizeof sa);
+
+clog lg = clog_open_fd(fd, CLOG_INFO);
+clog_set_format(lg, CLOG_FMT_SYSLOG);
+clog_set_facility(lg, CLOG_SYSLOG_DAEMON);
+
+log_info(lg, "service started");
+clog_close(lg);
+close(fd);
+```
+
+Keep individual messages under 2 KiB to stay within typical syslogd datagram limits. Log rotation is unavailable for fd-based loggers.
+
+---
+
+The format is stored on the **shared backing store**, so it applies to all logger handles that write to the same file descriptor (root and every derived logger). Setting it via any handle takes effect immediately for all of them:
+
+```c
+clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, NULL, NULL);
+clog_set_format(lg, CLOG_FMT_JSON);
+
+clog derived = clog_derive(lg);
+/* derived also writes JSON — it shares the same backing store */
+
+clog_format_t fmt = clog_get_format(lg); /* CLOG_FMT_JSON */
+```
+
+Backtrace (for any format) requires linking the binary with `-rdynamic`. On platforms without `execinfo.h` (glibc, macOS, FreeBSD) the backtrace is omitted silently.
+
+### Basic Usage
+
+```c
+#include <clogger.h>
+
+/* Logger targeting stderr */
+clog lg = clog_open_fd_mp(2, CLOG_INFO, NULL);
+
+/* Attach persistent fields */
+clog_set_field(lg, "env",     "prod");
+clog_set_field(lg, "service", "auth");
+
+log_info(lg,  "starting up");
+log_warn(lg,  "config missing: %s", "timeout");
+log_error(lg, "db failed: %s", "timeout");   /* also appends a backtrace; log_alert and log_fatal do too */
+
+clog_close(lg);
+```
+
+Sample output:
+
+```
+ts=2026-05-29T21:52:39.096473Z level=INFO  src=main.c:9  func=main env=prod service=auth msg="starting up"
+ts=2026-05-29T21:52:39.096512Z level=WARN  src=main.c:10 func=main env=prod service=auth msg="config missing: timeout"
+ts=2026-05-29T21:52:39.096642Z level=ERROR src=main.c:11 func=main env=prod service=auth msg="db failed: timeout"
+	#0 ./myapp(main+0x16d) [0x563b...]
+	#1 /lib/x86_64-linux-gnu/libc.so.6(+0x29ca8) [0x7f78...]
+```
+
+### File-Backed Logger with Rotation
+
+Log rotation is available only for file-backed loggers. Both size-based and time-based rotation can be enabled independently:
+
+```c
+clog_rotation_cfg_t cfg = {
+    .size_rotation_enabled  = true,
+    .max_file_size          = 50L * 1024L * 1024L,  /* 50 MiB */
+    .time_rotation_enabled  = true,
+    .rotation_interval_secs = 86400,                 /* 24 hours */
+    .max_rotated_files      = 7,                     /* keep one week of logs */
+};
+
+clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, &cfg, NULL);
+```
+
+When a rotation fires the current file is renamed to `<path>.<YYYYMMDDHHMMSS>` (e.g. `app.log.20260529215239`) and a new file is opened. Collisions within the same second are resolved with a `_1`, `_2`, … suffix. When `max_rotated_files` is positive, the oldest rotated files beyond the limit are deleted automatically.
+
+Pass `NULL` as the configuration to open a file-backed logger without rotation.
+
+### Custom Allocator
+
+Both creation functions accept a `ccol_memmgmt_procs_t *mprocs` as the last parameter. Pass `NULL` to use the default `malloc`/`calloc`/`realloc`/`free`. Passing a non-NULL pointer causes all internal allocations — for the shared backing store, the per-logger write buffer, and the heap message buffer — to use the supplied functions. The allocator is also inherited by all loggers derived from the root via `clog_derive`. The `mprocs` struct is copied internally; the caller may free it after the logger is created.
+
+```c
+ccol_memmgmt_procs_t my_alloc = {
+    .malloc  = my_malloc,
+    .free    = my_free,
+    .calloc  = my_calloc,
+    .realloc = my_realloc,
+};
+clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, NULL, &my_alloc);
+```
+
+All four function pointers must be set; passing a partially-populated struct returns `NULL`.
+
+### Log Levels
+
+| Level | Value | Notes |
+|---|---|---|
+| `CLOG_TRACE` | 0 | Finest-grained detail |
+| `CLOG_DEBUG` | 1 | |
+| `CLOG_INFO`  | 2 | Recommended production minimum |
+| `CLOG_WARN`  | 3 | |
+| `CLOG_ERROR` | 4 | Appends a backtrace |
+| `CLOG_ALERT` | 5 | Action required immediately; maps to RFC 5424 severity 1; appends a backtrace |
+| `CLOG_FATAL` | 6 | Appends a backtrace; does not terminate the process |
+| `CLOG_OFF`   | 7 | Disables all output when used as `min_level` |
+
+The minimum level can be changed at any time with `clog_set_level`. Messages below the current minimum are dropped without acquiring the mutex.
+
+### Structured Fields
+
+Fields are persistent key=value pairs that appear in every subsequent log line. `clog_set_field` updates an existing key in place or prepends a new one; both key and value are copied internally.
+
+```c
+clog_set_field(lg, "request_id", "abc-123");
+log_info(lg, "processing");
+/* → ts=... request_id=abc-123 msg=processing */
+
+clog_remove_field(lg, "request_id");
+log_info(lg, "done");
+/* → ts=... msg=done */
+
+clog_clear_fields(lg);   /* remove all fields */
+```
+
+Field values that contain spaces, `=`, `"`, `\`, or control characters are automatically double-quoted and backslash-escaped in the output.
+
+### NULL Safety
+
+Passing `NULL` as the logger to any macro or function is always a no-op. This allows loggers to be silenced at runtime without touching every call site:
+
+```c
+clog lg = production_mode ? clog_open_fd_mp(2, CLOG_INFO, NULL) : NULL;
+log_info(lg, "this line is discarded when lg is NULL");
+clog_close(lg);   /* safe */
+```
+
+### Reference: Core Operations
+
+**Lifecycle**
+
+| Function | Description |
+|---|---|
+| `clog_open_fd_mp(fd, min_level, mprocs)` | Create a logger writing to an existing open fd; the fd is not closed on `clog_close` |
+| `clog_open_file_mp(path, min_level, cfg, mprocs)` | Create a file-backed logger; pass a `clog_rotation_cfg_t *` for rotation or `NULL` to disable it |
+| `clog_derive(parent)` | Create a derived logger sharing the same fd, mutex, and rotation as `parent`; starts with a snapshot of `parent`'s fields and level, then evolves independently; release with `clog_close` |
+| `clog_close(logger)` | Flush, close (if file-backed), and free all resources; the underlying fd is kept open until all derived handles are also closed; safe with `NULL` |
+
+**Level Control**
+
+| Function | Description |
+|---|---|
+| `clog_set_level(logger, level)` | Change the minimum log level; thread-safe |
+| `clog_get_level(logger)` | Return the current minimum level; returns `CLOG_OFF` for a `NULL` logger |
+
+**Output Format and Syslog Facility**
+
+| Function | Description |
+|---|---|
+| `clog_set_format(logger, fmt)` | Change the output format (`CLOG_FMT_LOGFMT`, `CLOG_FMT_JSON`, or `CLOG_FMT_SYSLOG`); affects all handles sharing the same fd; `CLOG_FMT_SYSLOG` is a no-op on file-backed loggers; thread-safe |
+| `clog_get_format(logger)` | Return the current format; returns `CLOG_FMT_LOGFMT` for a `NULL` logger |
+| `clog_set_facility(logger, facility)` | Change the RFC 5424 syslog facility (e.g. `CLOG_SYSLOG_DAEMON`); affects all handles sharing the same fd; only meaningful with `CLOG_FMT_SYSLOG`; default is `CLOG_SYSLOG_USER`; thread-safe |
+| `clog_get_facility(logger)` | Return the current syslog facility; returns `CLOG_SYSLOG_USER` for a `NULL` logger |
+
+**Structured Fields**
+
+| Function | Description |
+|---|---|
+| `clog_set_field(logger, key, value)` | Attach a persistent `key=value` field; updates the value if the key already exists |
+| `clog_remove_field(logger, key)` | Remove a field; no-op if the key is absent |
+| `clog_clear_fields(logger)` | Remove all attached fields |
+
+**Logging Macros**
+
+| Macro | Level | Backtrace |
+|---|---|---|
+| `log_trace(lg, fmt, ...)` | `CLOG_TRACE` | No |
+| `log_debug(lg, fmt, ...)` | `CLOG_DEBUG` | No |
+| `log_info(lg, fmt, ...)`  | `CLOG_INFO`  | No |
+| `log_warn(lg, fmt, ...)`  | `CLOG_WARN`  | No |
+| `log_error(lg, fmt, ...)` | `CLOG_ERROR` | Yes |
+| `log_alert(lg, fmt, ...)` | `CLOG_ALERT` | Yes — use for conditions requiring immediate operator action |
+| `log_fatal(lg, fmt, ...)` | `CLOG_FATAL` | Yes — does not terminate the process; caller must call `abort()` / `exit()` |
+
+---
+
+## 15. Thread Safety
 
 ### Intentionally Unguarded Containers
 
@@ -1460,7 +1705,7 @@ The following components include their own synchronisation and are safe to use f
 
 ---
 
-## 15. Custom Memory Management
+## 16. Custom Memory Management
 
 Every container accepts a `ccol_memmgmt_procs_t *` at creation time. Passing `NULL` selects the standard `malloc`/`calloc`/`realloc`/`free` family.
 
@@ -1521,7 +1766,7 @@ r_mempool_destroy(node_pool);
 
 ---
 
-## 16. License
+## 17. License
 
 MIT License
 

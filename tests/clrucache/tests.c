@@ -744,7 +744,8 @@ TEST(get_val_types, struct_value_via_macro) {
   clru_destroy(cache);
 }
 
-/* --- clrucache_get_full: each call produces a fresh independent allocation - */
+/* --- clrucache_get_full: each call produces a fresh independent allocation -
+ */
 
 TEST(get_val_types, full_api_returns_independent_copies) {
   clru_construct(cache, int, int, 8, NULL, NULL, NULL);
@@ -770,7 +771,8 @@ TEST(get_val_types, full_api_returns_independent_copies) {
   clru_destroy(cache);
 }
 
-/* --- on a miss, val_out fields are not modified ---------------------------- */
+/* --- on a miss, val_out fields are not modified ----------------------------
+ */
 
 TEST(get_val_types, missing_key_val_out_untouched) {
   clru_construct(cache, int, int, 8, NULL, NULL, NULL);
@@ -790,7 +792,8 @@ TEST(get_val_types, missing_key_val_out_untouched) {
   clru_destroy(cache);
 }
 
-/* --- overwrite: subsequent get returns the new value ----------------------- */
+/* --- overwrite: subsequent get returns the new value -----------------------
+ */
 
 TEST(get_val_types, overwrite_reflected_in_subsequent_get) {
   clru_construct(cache, int, double, 8, NULL, NULL, NULL);
@@ -805,7 +808,8 @@ TEST(get_val_types, overwrite_reflected_in_subsequent_get) {
   clru_destroy(cache);
 }
 
-/* --- char* value: macro transfers heap ownership to caller ----------------- */
+/* --- char* value: macro transfers heap ownership to caller -----------------
+ */
 
 TEST(get_val_types, char_ptr_value_macro_transfers_ownership) {
   clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
@@ -821,7 +825,8 @@ TEST(get_val_types, char_ptr_value_macro_transfers_ownership) {
   clru_destroy(cache);
 }
 
-/* --- char* value: two consecutive gets return distinct heap pointers ------- */
+/* --- char* value: two consecutive gets return distinct heap pointers -------
+ */
 
 TEST(get_val_types, char_ptr_value_two_gets_are_independent_copies) {
   clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
@@ -843,7 +848,8 @@ TEST(get_val_types, char_ptr_value_two_gets_are_independent_copies) {
   clru_destroy(cache);
 }
 
-/* --- char* value via clrucache_get_full: size == strlen + 1 ---------------- */
+/* --- char* value via clrucache_get_full: size == strlen + 1 ----------------
+ */
 
 TEST(get_val_types, char_ptr_value_full_api_size_includes_null_terminator) {
   clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
@@ -887,7 +893,8 @@ TEST(get_val_types, char_ptr_key_and_char_ptr_value) {
   clru_destroy(cache);
 }
 
-/* --- char* value from remote getter: macro path delivers owned string ------ */
+/* --- char* value from remote getter: macro path delivers owned string ------
+ */
 
 TEST(get_val_types, char_ptr_value_from_remote_getter_macro) {
   clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
@@ -907,7 +914,8 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_macro) {
   clru_destroy(cache);
 }
 
-/* --- char* value from remote getter: clrucache_get_full direct path -------- */
+/* --- char* value from remote getter: clrucache_get_full direct path --------
+ */
 
 TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
   clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
@@ -924,4 +932,96 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
   free(val_out.ptr);
 
   clru_destroy(cache);
+}
+
+/* ========================================================================== */
+/*                         CUSTOM ALLOCATOR                                   */
+/* ========================================================================== */
+
+static size_t _lru_custom_alloc_count = 0;
+static size_t _lru_custom_free_count = 0;
+
+static void *_lru_custom_malloc(size_t sz) {
+  _lru_custom_alloc_count++;
+  return malloc(sz);
+}
+static void _lru_custom_free(void *p) {
+  if (p) _lru_custom_free_count++;
+  free(p);
+}
+static void *_lru_custom_calloc(size_t n, size_t sz) {
+  _lru_custom_alloc_count++;
+  return calloc(n, sz);
+}
+static void *_lru_custom_realloc(void *p, size_t sz) {
+  _lru_custom_alloc_count++;
+  return realloc(p, sz);
+}
+
+TEST(custom_alloc, get_full_copy_uses_custom_allocator) {
+  _lru_custom_alloc_count = 0;
+  _lru_custom_free_count = 0;
+  ccol_memmgmt_procs_t mprocs = {_lru_custom_malloc, _lru_custom_free,
+                                 _lru_custom_calloc, _lru_custom_realloc};
+
+  char *err = NULL;
+  clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
+                                           NULL, &mprocs, &err);
+  REQUIRE_NOT_NULL(cache);
+
+  int k = 1, v = 42;
+  cmap_pair kp = {}, vp = {};
+  _populate_cmap_pair(&kp, k);
+  _populate_cmap_pair(&vp, v);
+  REQUIRE_EQ(clrucache_set_full(cache, &kp, &vp), ccol_success);
+
+  cmap_pair val_out = {};
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, &val_out), ccol_success);
+  REQUIRE_NOT_NULL(val_out.ptr);
+  REQUIRE_EQ(*(int *)val_out.ptr, 42);
+
+  /* The copy returned by clrucache_get_full was allocated with the custom
+   * allocator; free it via that same allocator */
+  _lru_custom_free(val_out.ptr);
+
+  __clrucache_destroy(cache);
+  REQUIRE_EQ(_lru_custom_alloc_count, _lru_custom_free_count);
+}
+
+TEST(custom_alloc, char_ptr_get_full_uses_custom_allocator) {
+  _lru_custom_alloc_count = 0;
+  _lru_custom_free_count = 0;
+  ccol_memmgmt_procs_t mprocs = {_lru_custom_malloc, _lru_custom_free,
+                                 _lru_custom_calloc, _lru_custom_realloc};
+
+  char *err = NULL;
+  clru_cache cache = clrucache_create_full(8, ccol_string, ccol_string, NULL,
+                                           NULL, NULL, &mprocs, &err);
+  REQUIRE_NOT_NULL(cache);
+
+  char *k = "hello", *v = "world";
+  cmap_pair kp = {}, vp = {};
+  _populate_cmap_pair(&kp, k);
+  _populate_cmap_pair(&vp, v);
+  REQUIRE_EQ(clrucache_set_full(cache, &kp, &vp), ccol_success);
+
+  cmap_pair val_out = {};
+  REQUIRE_EQ(clrucache_get_full(cache, &kp, &val_out), ccol_success);
+  REQUIRE_NOT_NULL(val_out.ptr);
+  REQUIRE_STREQ((char *)val_out.ptr, "world");
+
+  /* char* copy was allocated with the custom allocator; free via it */
+  _lru_custom_free(val_out.ptr);
+
+  __clrucache_destroy(cache);
+  REQUIRE_EQ(_lru_custom_alloc_count, _lru_custom_free_count);
+}
+
+TEST(custom_alloc, invalid_mprocs_returns_null) {
+  ccol_memmgmt_procs_t bad = {_lru_custom_malloc, NULL, _lru_custom_calloc,
+                              _lru_custom_realloc};
+  char *err = NULL;
+  clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
+                                           NULL, &bad, &err);
+  REQUIRE_NULL(cache);
 }

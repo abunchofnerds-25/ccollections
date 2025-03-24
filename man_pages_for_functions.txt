@@ -3313,7 +3313,7 @@ DESCRIPTION
        every subsequent log line emitted by this logger, inserted between the
        func= and msg= tokens:
 
-         ts=... level=INFO src=... func=... key=value msg=...
+         ts=... level=INFO proc=[prog(pid):tname(tid)] src=... func=... key=value msg=...
 
        Both key and value are copied internally; the caller may free or
        modify them after this call without affecting the logger.
@@ -3452,16 +3452,16 @@ DESCRIPTION
 
          CLOG_FMT_LOGFMT (0)
            Default.  Every record is emitted as a single logfmt line:
-             ts=<ISO-8601-UTC> level=<L> src=<file>:<line> func=<fn>
-             [fields] msg=<text>
+             ts=<ISO-8601-UTC> level=<L> proc=[<name>(<pid>):<tname>(<tid>)]
+             src=<file>:<line> func=<fn> [fields] msg=<text>
            log_error, log_alert, and log_fatal append tab-indented backtrace
            continuation lines after the main record.
 
          CLOG_FMT_JSON (1)
            Every record is emitted as a single NDJSON object followed by a
            newline:
-             {"ts":"...","level":"...","src":"file:N","func":"...",
-              [fields,] "msg":"..."}
+             {"ts":"...","level":"...","proc":"[name(pid):tname(tid)]",
+              "src":"file:N","func":"...", [fields,] "msg":"..."}
            Structured fields become top-level JSON keys.  For log_error,
            log_alert, and log_fatal the backtrace is embedded as a "bt"
            string array inside the same JSON object.
@@ -3484,6 +3484,7 @@ DESCRIPTION
              PID        = getpid(2)
              MSGID      = level string ("INFO", "ERROR", etc.)
              [ccol ...]  = RFC 5424 SD-ELEMENT with SD-ID "ccol" carrying
+                          proc="[<name>(<pid>):<tname>(<tid>)\]",
                           src="<file>:<line>", func="<fn>", and any fields
                           attached via clog_set_field()
              MSG        = the formatted message text
@@ -3634,12 +3635,12 @@ DESCRIPTION
          4. Build the log record according to the shared backing-store format:
 
             CLOG_FMT_LOGFMT:
-              ts=<ISO-8601-UTC> level=<L> src=<file>:<line> func=<func>
-              [key=value ...] msg=<message>
+              ts=<ISO-8601-UTC> level=<L> proc=[<name>(<pid>):<tname>(<tid>)]
+              src=<file>:<line> func=<func> [key=value ...] msg=<message>
 
             CLOG_FMT_JSON:
-              {"ts":"...","level":"...","src":"file:N","func":"...",
-               [fields,] "msg":"..." [,"bt":[...]]}
+              {"ts":"...","level":"...","proc":"[name(pid):tname(tid)]",
+               "src":"file:N","func":"...", [fields,] "msg":"..." [,"bt":[...]]}
               The "bt" array is appended inline when with_backtrace is true.
 
          5. Write the record atomically with write(2) via an EINTR-retry loop.
@@ -3674,6 +3675,463 @@ NOTES
 
 SEE ALSO
        log_trace, log_debug, log_info, log_warn, log_error, log_fatal
+
+================================================================================
+                             CJSON.H - JSON DOM
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cjson_parse_mp, cjson_parse - parse a null-terminated JSON string into
+       a DOM tree
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson cjson_parse_mp(const char *json_str, char **err_str,
+                            ccol_memmgmt_procs_t *mp);
+       /* convenience wrapper — default allocator */
+       static inline cjson cjson_parse(const char *json_str,
+                                       char **err_str);
+
+DESCRIPTION
+       Parses json_str using a recursive-descent parser and returns the root
+       node of the resulting DOM tree.  All seven JSON value kinds are
+       supported: null, boolean, integer (stored as long long), number (double),
+       string (UTF-8, owned heap copy), array (cvec of child cjson), and object
+       (chmap of char*→cjson).
+
+       Integer literals with no decimal point or exponent are stored as
+       CJSON_INTEGER; all others (including integers that overflow long long)
+       as CJSON_FLOAT.  Number literals are limited to 359 decimal characters;
+       longer inputs produce a parse error.  Numbers that overflow IEEE 754
+       double (i.e. strtod returns infinity) also produce a parse error.
+
+       String escape sequences \", \\, \/, \b, \f, \n, \r, \t, and
+       \uXXXX (including surrogate pairs) are decoded to UTF-8.  The
+       \u0000 is explicitly rejected with a parse error: cjson
+       stores strings as null-terminated char * values and cannot
+       represent embedded null bytes.
+
+       cjson_parse() is a static inline wrapper that calls
+       cjson_parse_mp(json_str, err_str, NULL).
+
+PARAMETERS
+       json_str  Null-terminated JSON text.
+       err_str   Out-parameter for the parse error message.  On success
+                 *err_str is set to NULL.  On failure a heap-allocated
+                 null-terminated string is stored in *err_str; the caller
+                 must free() it when done.  Pass NULL to discard the error
+                 message.
+       mp        Custom memory management procedures for all nodes in the
+                 resulting tree, or NULL for the default allocator.
+
+RETURN VALUE
+       Root cjson node on success.
+       NULL on parse failure; if err_str was non-NULL, *err_str holds the
+       reason (caller must free it).
+
+NOTES
+       The caller owns the returned tree and must free it with cjson_destroy().
+       The error string (when requested) is always allocated with plain
+       malloc so the caller can always free it with plain free(), regardless
+       of which mp was used for node allocation.
+
+EXAMPLE
+       char *err = NULL;
+       cjson doc = cjson_parse_mp(input, &err, NULL);
+       if (!doc) {
+           fprintf(stderr, "parse failed: %s\n", err);
+           free(err);
+           return -1;
+       }
+       /* use doc ... */
+       cjson_destroy(doc);
+
+SEE ALSO
+       cjson_parse_n_mp, cjson_destroy, cjson_serialize
+
+------------------------------------------------------------------------------
+NAME
+       cjson_parse_n_mp, cjson_parse_n - parse a bounded JSON buffer into a
+       DOM tree
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson cjson_parse_n_mp(const char *json_str, size_t len,
+                              char **err_str, ccol_memmgmt_procs_t *mp);
+       /* convenience wrapper — default allocator */
+       static inline cjson cjson_parse_n(const char *json_str, size_t len,
+                                         char **err_str);
+
+DESCRIPTION
+       Like cjson_parse_mp() but operates on len bytes instead of a
+       null-terminated string.  cjson_parse_n() is a static inline wrapper
+       that calls cjson_parse_n_mp(json_str, len, err_str, NULL).
+
+PARAMETERS
+       json_str  Input buffer (need not be null-terminated).
+       len       Number of bytes to parse.
+       err_str   Out-parameter for the parse error message (same semantics
+                 as cjson_parse_mp).  Pass NULL to discard.
+       mp        Custom allocator for all nodes, or NULL for default.
+
+RETURN VALUE
+       Root cjson node on success, NULL on failure.
+
+SEE ALSO
+       cjson_parse_mp
+
+------------------------------------------------------------------------------
+NAME
+       cjson_serialize - serialize a DOM tree to a compact JSON string
+
+SYNOPSIS
+       #include <cjson.h>
+
+       char *cjson_serialize(cjson node);
+
+DESCRIPTION
+       Walks the DOM tree rooted at node and produces a compact (no whitespace)
+       JSON string.  A NULL node produces the string "null".
+
+       Doubles are serialized with the shortest round-trip decimal
+       representation (up to 17 significant digits).  Integers use %lld.
+       Non-finite doubles (Inf, NaN) are serialized as "null".
+
+RETURN VALUE
+       Heap-allocated null-terminated string on success.
+       NULL on allocation failure.
+       The caller must free the string with cjson_serialize_free().
+
+SEE ALSO
+       cjson_serialize_pretty, cjson_serialize_free, cjson_parse
+
+------------------------------------------------------------------------------
+NAME
+       cjson_serialize_pretty - serialize a DOM tree to an indented JSON string
+
+SYNOPSIS
+       #include <cjson.h>
+
+       char *cjson_serialize_pretty(cjson node, unsigned int indent);
+
+DESCRIPTION
+       Like cjson_serialize() but inserts newlines and indent spaces per
+       nesting level.  indent = 0 uses a default indent of 4 spaces; to
+       produce compact (non-indented) output, use cjson_serialize() instead.
+
+RETURN VALUE
+       Heap-allocated null-terminated string; free with cjson_serialize_free().
+
+SEE ALSO
+       cjson_serialize
+
+------------------------------------------------------------------------------
+NAME
+       cjson_serialize_free_mp, cjson_serialize_free - free a string returned
+       by the serializer
+
+SYNOPSIS
+       #include <cjson.h>
+
+       void cjson_serialize_free_mp(char *s, ccol_memmgmt_procs_t *mp);
+       /* convenience wrapper — default allocator */
+       static inline void cjson_serialize_free(char *s);
+
+DESCRIPTION
+       Frees a string returned by cjson_serialize() or cjson_serialize_pretty().
+       mp must be the same allocator that was passed to cjson_parse_mp() /
+       cjson_create_*_mp() when the serialized tree was built.  Pass NULL when
+       the default allocator was used.  cjson_serialize_free() is a static
+       inline wrapper that calls cjson_serialize_free_mp(s, NULL).
+
+PARAMETERS
+       s   String to free (may be NULL).
+       mp  Allocator to use for the free, or NULL for the default allocator.
+
+SEE ALSO
+       cjson_serialize, cjson_serialize_pretty
+
+------------------------------------------------------------------------------
+NAME
+       cjson_type - return the type tag of a DOM node
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson_node_type_t cjson_type(cjson node);
+
+DESCRIPTION
+       Returns the cjson_node_type_t tag of node.
+       Returns CJSON_NULL safely when node is NULL.
+
+SEE ALSO
+       cjson_bool_val, cjson_int_val, cjson_double_val, cjson_str_val
+
+------------------------------------------------------------------------------
+NAME
+       cjson_bool_val, cjson_int_val, cjson_double_val, cjson_str_val -
+       read a scalar value from a DOM node
+
+SYNOPSIS
+       #include <cjson.h>
+
+       bool        cjson_bool_val(cjson node);
+       long long   cjson_int_val(cjson node);
+       double      cjson_double_val(cjson node);
+       const char *cjson_str_val(cjson node);
+
+DESCRIPTION
+       Each function returns the value stored in node, asserting via fatal_err()
+       if the node's type does not match.
+
+       cjson_str_val() returns a pointer to the node's own internal copy of
+       the string; the caller must not free it.
+
+SEE ALSO
+       cjson_type
+
+------------------------------------------------------------------------------
+NAME
+       cjson_array_len, cjson_object_size - query composite node sizes
+
+SYNOPSIS
+       #include <cjson.h>
+
+       size_t cjson_array_len(cjson node);
+       size_t cjson_object_size(cjson node);
+
+DESCRIPTION
+       Return the element count of an array or object node respectively.
+       Both call fatal_err() if the node's type does not match.
+
+SEE ALSO
+       cjson_array_get, cjson_object_get
+
+------------------------------------------------------------------------------
+NAME
+       cjson_array_push - append a child to an array node
+
+SYNOPSIS
+       #include <cjson.h>
+
+       ccol_retval_t cjson_array_push(cjson arr, cjson child);
+
+DESCRIPTION
+       Appends child to the end of arr.  Ownership of child transfers to arr
+       unconditionally: on success the array owns child; on failure child is
+       deep-freed by cjson_array_push.  Do not free child after calling this
+       function regardless of the return value.
+
+RETURN VALUE
+       ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+
+SEE ALSO
+       cjson_array_get, cjson_create_array
+
+------------------------------------------------------------------------------
+NAME
+       cjson_array_get - access an array element by index
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson cjson_array_get(cjson arr, size_t index);
+
+DESCRIPTION
+       Returns a non-owning reference to the element at index.
+
+RETURN VALUE
+       Child node, or NULL if index is out of bounds or arr is not CJSON_ARRAY.
+
+SEE ALSO
+       cjson_array_push, cjson_array_len
+
+------------------------------------------------------------------------------
+NAME
+       cjson_object_set - set or replace a key in an object node
+
+SYNOPSIS
+       #include <cjson.h>
+
+       ccol_retval_t cjson_object_set(cjson obj, const char *key, cjson child);
+
+DESCRIPTION
+       Inserts or replaces the value for key in obj.  Ownership of child
+       transfers to obj unconditionally: on success the object owns child;
+       on failure child is deep-freed by cjson_object_set.  Do not free
+       child after calling this function regardless of the return value.
+       If a previous child existed under key it is deep-freed before the
+       new one is stored.
+
+RETURN VALUE
+       ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+
+SEE ALSO
+       cjson_object_get, cjson_create_object
+
+------------------------------------------------------------------------------
+NAME
+       cjson_object_get - look up a key in an object node
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson cjson_object_get(cjson obj, const char *key);
+
+DESCRIPTION
+       Returns a non-owning reference to the value associated with key.
+
+RETURN VALUE
+       Child node, or NULL if the key is absent or obj is not CJSON_OBJECT.
+
+SEE ALSO
+       cjson_object_set, cjson_object_size
+
+------------------------------------------------------------------------------
+NAME
+       cjson_clone - deep-copy a DOM subtree
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson cjson_clone(cjson node);
+
+DESCRIPTION
+       Returns a fully independent copy of the subtree rooted at node.
+       All strings are duplicated, all arrays and objects are recursively
+       cloned.  The clone uses the same allocator as the source (taken from
+       the root node's stored m_procs).
+
+RETURN VALUE
+       New root node on success (caller owns it), or NULL on allocation failure.
+
+SEE ALSO
+       cjson_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cjson_create_null_mp, cjson_create_bool_mp, cjson_create_int_mp,
+       cjson_create_double_mp, cjson_create_string_mp, cjson_create_array_mp,
+       cjson_create_object_mp - allocate DOM nodes with custom allocator
+
+       cjson_create_null, cjson_create_bool, cjson_create_int,
+       cjson_create_double, cjson_create_string, cjson_create_array,
+       cjson_create_object - allocate DOM nodes (default allocator wrappers)
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson cjson_create_null_mp(ccol_memmgmt_procs_t *mp);
+       cjson cjson_create_bool_mp(bool val, ccol_memmgmt_procs_t *mp);
+       cjson cjson_create_int_mp(long long val, ccol_memmgmt_procs_t *mp);
+       cjson cjson_create_double_mp(double val, ccol_memmgmt_procs_t *mp);
+       cjson cjson_create_string_mp(const char *val, ccol_memmgmt_procs_t *mp);
+       cjson cjson_create_array_mp(ccol_memmgmt_procs_t *mp);
+       cjson cjson_create_object_mp(ccol_memmgmt_procs_t *mp);
+
+       /* convenience wrappers — default allocator (NULL mp) */
+       static inline cjson cjson_create_null(void);
+       static inline cjson cjson_create_bool(bool val);
+       static inline cjson cjson_create_int(long long val);
+       static inline cjson cjson_create_double(double val);
+       static inline cjson cjson_create_string(const char *val);
+       static inline cjson cjson_create_array(void);
+       static inline cjson cjson_create_object(void);
+
+DESCRIPTION
+       Each _mp function allocates a new DOM node of the corresponding JSON
+       type using mp as the allocator (NULL = default malloc/free/calloc/realloc).
+       The allocator is stored per-node and used for all subsequent operations
+       on that node, including destruction.
+
+       The non-_mp variants are static inline wrappers that call the _mp
+       function with NULL as the allocator.
+
+       cjson_create_string_mp() makes a private heap copy of val.  Passing NULL
+       for val produces a CJSON_NULL node (not a CJSON_STRING node with a null
+       pointer), because a null C string pointer naturally maps to JSON null.
+       cjson_create_array_mp() returns an empty array; children are added with
+       cjson_array_push().
+       cjson_create_object_mp() returns an empty object; children are added with
+       cjson_object_set().
+
+       cjson_create_double_mp() rejects non-finite values (Inf, -Inf, NaN) and
+       returns NULL for them.  JSON has no representation for non-finite
+       doubles; the parser likewise rejects numbers that overflow to infinity.
+       Use cjson_set() to write a double field; it propagates the same
+       validation and returns ccol_invalid_args on failure.
+
+PARAMETERS
+       mp   Custom memory management procedures for this node and its owned
+            resources, or NULL for the default allocator.
+
+RETURN VALUE
+       New cjson node on success, NULL on allocation failure or (for
+       cjson_create_double_mp) if val is non-finite.
+       cjson_create_string_mp(NULL, mp) returns a CJSON_NULL node (never NULL
+       itself, unless OOM).
+
+NOTES
+       The caller owns the returned node and must free it with cjson_destroy().
+       cjson_destroy() uses each node's stored allocator — no mp parameter needed.
+
+SEE ALSO
+       cjson_destroy, cjson_array_push, cjson_object_set
+
+------------------------------------------------------------------------------
+NAME
+       _cjson_get - path-navigation back-end (prefer cjson_get macro)
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson _cjson_get(cjson root, const char *path);
+
+DESCRIPTION
+       Navigates from root through a dot-separated path and returns the node at
+       the destination.  Path components starting with '#' followed by decimal
+       digits address array elements when the current node is CJSON_ARRAY;
+       otherwise they are treated as literal object keys.
+
+RETURN VALUE
+       Non-owning node reference, or NULL if any component is missing or the
+       type at that step is incompatible.
+
+SEE ALSO
+       cjson_get (macro), _cjson_set_typed
+
+------------------------------------------------------------------------------
+NAME
+       _cjson_set_typed - path-write back-end (prefer cjson_set macro)
+
+SYNOPSIS
+       #include <cjson.h>
+
+       ccol_retval_t _cjson_set_typed(cjson root, const char *path,
+                                       cjson_node_type_t type,
+                                       void *raw, size_t raw_size,
+                                       bool is_signed, bool raw_is_char_array);
+
+DESCRIPTION
+       Writes a scalar value to the leaf addressed by path.  The leaf is
+       created if absent (its immediate parent must already exist).  If the
+       leaf exists its type is changed unconditionally and any composite
+       (array, object) resources it previously owned are deep-freed.
+
+       raw is a void pointer to the C value; raw_size is sizeof the original
+       C expression.  For string values, raw points to a const char * variable
+       unless raw_is_char_array is true, in which case raw points directly at
+       the char[] bytes of a string literal.
+
+RETURN VALUE
+       ccol_success, ccol_invalid_args, ccol_key_not_found, or
+       ccol_not_enough_memory.
+
+SEE ALSO
+       cjson_set (macro), _cjson_get
 
 ================================================================================
                               END OF MAN PAGES

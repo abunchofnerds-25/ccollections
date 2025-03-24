@@ -1140,3 +1140,70 @@ void mem_cpy(void *dst, const void *src, size_t n);
  * @endcode
  */
 void mem_zero(void *dst, size_t n);
+
+/**
+ * @brief A strdup variant that uses the custom memory management procs
+ *
+ * Duplicates the input string using the custom memory allocation function and
+ * returns it
+ *
+ * @param mp Pointer to customer memory management procs
+ * @param input The input string
+ * @return The pointer to the new buffer containing the copy of input or NULL if
+ * memory allocation fails
+ *
+ * Example:
+ * @code
+ * char* new_copy = ccol_strdup(mp, "hello");
+ * @endcode
+ */
+static inline __attribute__((always_inline)) char *ccol_strdup(
+    ccol_memmgmt_procs_t *mp, const char *input) {
+  size_t len = strlen(input) + 1;  // The '\0' at the end
+  char *result = (char *)_mem_alloc(mp, len * sizeof(char));
+  if (result) {
+    mem_cpy(result, input, len);
+  }
+  return result;
+}
+
+/**
+ * @brief Internal cleanup function for ordinary pointers with default memory
+ * management procedures.
+ *
+ * This function only calls free on the target pointer, it does not execute any
+ * other more capable cleanup functions. So it should just be used on simple
+ * pointers that point to head allocated buffer, not some opaque pointers to
+ * complex objects requiring sophisticated cleanup mechanisms.
+ *
+ * @param cbm Pointer to the ordinary pointer to be freed
+ *
+ * @note Used by _ccol_destructor attribute
+ * @warning Do not call directly
+ */
+static inline void __ccol_free_ordinary_ptr(void **ptr) {
+  if (*ptr) {
+    free(*ptr);
+    *ptr = NULL;
+  }
+}
+
+/**
+ * @brief Declare a scoped pointer of type 'ptr_type*' to be freed when the
+ * scope gets exited
+ *
+ * This declaration macro is meant to be used for simple memory areas that can
+ * be freed when they are not needed. It does not run any sophisticated cleanup
+ * procedures, so it should not be used for pointers pointing to complex objects
+ * requiring special cleanup.
+ *
+ * @param ptr_type  The data type the pointer is going to point to.
+ * @param ptr_name  The name of the pointer to be declared.
+ *
+ * Example:
+ * @code
+ * ccol_scoped_ptr(char, surname) = NULL;
+ * @endcode
+ */
+#define ccol_scoped_ptr(ptr_type, ptr_name) \
+  type *ptr_name _ccol_destructor(__ccol_free_ordinary_ptr)

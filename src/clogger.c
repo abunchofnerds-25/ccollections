@@ -38,7 +38,11 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <sys/time.h>
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 
@@ -358,6 +362,45 @@ static const char *_syslog_appname(void) {
   if (p && p[0]) return p;
 #endif
   return "-";
+}
+
+/* Return the basename of the executable, or "unknown" if unavailable. */
+static const char *_get_progname(void) {
+#if defined(__GLIBC__)
+  if (program_invocation_short_name && program_invocation_short_name[0])
+    return program_invocation_short_name;
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+  const char *p = getprogname();
+  if (p && p[0]) return p;
+#endif
+  return "unknown";
+}
+
+/* Return the OS-level thread ID for the calling thread. */
+static pid_t _get_tid(void) {
+#if defined(__linux__)
+  return (pid_t)syscall(SYS_gettid);
+#elif defined(__APPLE__)
+  uint64_t tid64 = 0;
+  pthread_threadid_np(NULL, &tid64);
+  return (pid_t)tid64;
+#else
+  return (pid_t)(uintptr_t)pthread_self();
+#endif
+}
+
+/* Fill buf with the name of the calling thread (at most bufsz-1 chars). */
+static void _get_thread_name(char *buf, size_t bufsz) {
+#if defined(__linux__)
+  char name[16]; /* prctl writes at most 16 bytes including null */
+  if (prctl(PR_GET_NAME, name) == 0 && name[0]) {
+    snprintf(buf, bufsz, "%s", name);
+    return;
+  }
+#elif defined(__APPLE__) || defined(__FreeBSD__)
+  if (pthread_getname_np(pthread_self(), buf, bufsz) == 0 && buf[0]) return;
+#endif
+  snprintf(buf, bufsz, "unknown");
 }
 
 /* ========================================================================== */
@@ -1102,6 +1145,17 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
   }
 
   /* ----------------------------------------------------------------------- */
+  /* Build proc identifier: [progname(pid):tname(tid)]                       */
+  /* ----------------------------------------------------------------------- */
+  char proc_val[256];
+  {
+    char tname[16];
+    _get_thread_name(tname, sizeof tname);
+    snprintf(proc_val, sizeof proc_val, "%.200s(%d):%.15s(%d)",
+             _get_progname(), (int)getpid(), tname, (int)_get_tid());
+  }
+
+  /* ----------------------------------------------------------------------- */
   /* Build the log line.                                                      */
   /* ----------------------------------------------------------------------- */
   _buf_reset(&lg->buf);
@@ -1113,6 +1167,9 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
     _buf_append_ts(&lg->buf);
     _buf_append(&lg->buf, "\"", 1);
     _buf_appendf(&lg->buf, ",\"level\":\"%s\"", _LEVEL_STR[level]);
+    _buf_append(&lg->buf, ",\"proc\":\"", 9);
+    _buf_append_json_content(&lg->buf, proc_val);
+    _buf_append(&lg->buf, "\"", 1);
     _buf_append(&lg->buf, ",\"src\":\"", 8);
     _buf_append_json_content(&lg->buf, file);
     _buf_appendf(&lg->buf, ":%d\"", line);
@@ -1155,8 +1212,10 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
     _buf_appendf(&lg->buf, " %s %s %d %s", hostname, appname, (int)getpid(),
                  _LEVEL_STR[level]);
 
-    /* Structured data: [ccol src="file:N" func="fn" <user-fields>] */
-    _buf_append(&lg->buf, " [ccol src=\"", 12);
+    /* Structured data: [ccol proc="name:pid:tid" src="file:N" func="fn" <user-fields>] */
+    _buf_append(&lg->buf, " [ccol proc=\"", 13);
+    _buf_append_sd_value(&lg->buf, proc_val);
+    _buf_append(&lg->buf, "\" src=\"", 7);
     _buf_append_sd_value(&lg->buf, file);
     _buf_appendf(&lg->buf, ":%d\" func=\"", line);
     _buf_append_sd_value(&lg->buf, func);
@@ -1184,10 +1243,13 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
     _buf_append(&lg->buf, msg, strlen(msg));
     _buf_append(&lg->buf, "\n", 1);
   } else {
-    /* Logfmt: ts=... level=... src=...:N func=... [fields] msg=... */
+    /* Logfmt: ts=... level=... proc=... src=...:N func=... [fields] msg=... */
     _buf_append(&lg->buf, "ts=", 3);
     _buf_append_ts(&lg->buf);
-    _buf_appendf(&lg->buf, " level=%s src=", _LEVEL_STR[level]);
+    _buf_appendf(&lg->buf, " level=%s", _LEVEL_STR[level]);
+    _buf_append(&lg->buf, " proc=", 6);
+    _buf_append_lv(&lg->buf, proc_val);
+    _buf_append(&lg->buf, " src=", 5);
     {
       /* Build "file:line" as a single value so _buf_append_lv quotes it if
        * the path contains logfmt-special characters (spaces, =, etc.). */

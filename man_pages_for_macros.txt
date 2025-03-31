@@ -3098,5 +3098,177 @@ SEE ALSO
        log_alert, log_error, _clog_write, clog_open_fd_mp
 
 ================================================================================
+                          CJSON.H - LIFECYCLE MACROS
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cjson_declare - declare an uninitialized cjson variable
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson_declare(var_name);
+
+DESCRIPTION
+       Expands to `cjson var_name`.  Provided for naming-convention symmetry
+       with the other container modules.  The variable must be assigned (e.g.
+       via cjson_parse() or cjson_create_*()) before it is used.
+
+PARAMETERS
+       var_name  Name of the variable to declare.
+
+EXAMPLES
+       cjson_declare(root);
+       root = cjson_parse("{\"k\":1}");
+       cjson_destroy(root);
+
+SEE ALSO
+       cjson_declare_scoped, cjson_destroy, cjson_parse
+
+------------------------------------------------------------------------------
+NAME
+       cjson_declare_scoped - declare a cjson variable with automatic destruction
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson_declare_scoped(var_name);
+
+DESCRIPTION
+       Expands to `cjson var_name` decorated with the GCC cleanup attribute so
+       that cjson_destroy() is called automatically when the variable goes out
+       of scope.  The variable must be initialized before use (set to NULL or
+       to a valid node).
+
+PARAMETERS
+       var_name  Name of the variable to declare.
+
+EXAMPLES
+       {
+           cjson_declare_scoped(root) = cjson_parse("{\"k\":1}");
+           /* root is freed automatically at the closing brace */
+       }
+
+SEE ALSO
+       cjson_declare, cjson_destroy, _ccol_destructor
+
+================================================================================
+                          CJSON.H - PATH MACROS
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cjson_get - navigate to a DOM node via a dot-separated path
+
+SYNOPSIS
+       #include <cjson.h>
+
+       cjson cjson_get(cjson root, const char *path);
+
+DESCRIPTION
+       Expands to a call to _cjson_get(root, path).
+
+       path is a dot-separated sequence of component strings.  A component
+       that begins with '#' followed by one or more decimal digits addresses
+       an array element by zero-based index when the current node is
+       CJSON_ARRAY; otherwise the component is used as a literal object key
+       (including the '#' prefix).  A bare '#' with no trailing digits is
+       always treated as an error and causes NULL to be returned.
+
+       An empty path string returns root unchanged.
+
+PARAMETERS
+       root   Root cjson node (typically CJSON_OBJECT or CJSON_ARRAY).
+       path   Dot-separated path string, e.g. "users.#0.address.city".
+
+RETURN VALUE
+       Non-owning cjson handle to the target node, or NULL if any component
+       along the path is missing or the current node type does not support
+       the requested traversal.
+
+NOTES
+       The returned handle becomes invalid if the tree is mutated or destroyed.
+       Do not free the returned handle.
+
+EXAMPLES
+       cjson city = cjson_get(doc, "users.#0.address.city");
+       if (cjson_type(city) == CJSON_STRING)
+           printf("%s\n", cjson_str_val(city));
+
+       /* '#0' in an object context is a literal key, not an index */
+       cjson v = cjson_get(doc, "#0");
+
+SEE ALSO
+       cjson_set, _cjson_get, cjson_type
+
+------------------------------------------------------------------------------
+NAME
+       cjson_set - write a C scalar to the DOM leaf at a dot-separated path
+
+SYNOPSIS
+       #include <cjson.h>
+
+       ccol_retval_t cjson_set(cjson root, const char *path, val);
+
+DESCRIPTION
+       Expands to a call to _cjson_set_typed() with the type and raw value
+       of val derived at compile time via _Generic.
+
+       Accepted C types for val:
+         bool                       → CJSON_BOOL
+         any integer type           → CJSON_INTEGER (stored as long long)
+         float / double             → CJSON_FLOAT  (stored as double)
+         char * / const char *      → CJSON_STRING  (strdup'd copy)
+         string literal ("...")     → CJSON_STRING
+         NULL or other pointer      → CJSON_NULL
+
+       Signed integer types are sign-extended to long long correctly.
+       Unsigned integers in the range [0, LLONG_MAX] round-trip faithfully.
+       Unsigned values > LLONG_MAX are stored with their bit pattern
+       reinterpreted as a signed long long.
+
+       The leaf is created if it does not yet exist (its immediate parent
+       must already exist).  If the leaf exists its type is changed
+       unconditionally: existing array or object subtrees are deep-freed
+       before the new value is written.
+
+PARAMETERS
+       root   Root cjson node.
+       path   Dot-separated path string to the target leaf.
+       val    C value; the type must be one of the accepted types listed above.
+
+RETURN VALUE
+       ccol_retval_t: ccol_success on success.
+       ccol_invalid_args  — empty path, parent type incompatible, array
+                            index out of bounds, or bare '#' with no digits.
+       ccol_key_not_found — a non-leaf component on the path does not exist.
+       ccol_not_enough_memory — allocation failure.
+
+NOTES
+       Passing a bool literal requires an explicit cast: (bool)true.
+       Without the cast, the integer value 1 is seen instead of _Bool,
+       resulting in CJSON_INTEGER rather than CJSON_BOOL.
+
+       Plain char inherits the platform's default signedness (signed on
+       x86/x86-64 Linux, unsigned where -funsigned-char applies, e.g. ARM).
+       Use signed char or unsigned char explicitly when portability matters.
+
+EXAMPLES
+       cjson_set(doc, "users.#0.active", (bool)true);
+       cjson_set(doc, "users.#0.score",  99);
+       cjson_set(doc, "users.#0.label",  "champion");
+       cjson_set(doc, "users.#0.ratio",  0.75);
+
+       /* Type change: replace an existing object subtree with a scalar */
+       cjson_set(doc, "users.#0.metadata", 0);  /* deep-frees old subtree */
+
+       /* Set to null */
+       cjson_set(doc, "users.#0.deprecated", NULL);
+
+SEE ALSO
+       cjson_get, _cjson_set_typed, cjson_object_set, cjson_array_push
+
+================================================================================
                               END OF MAN PAGES
 ================================================================================

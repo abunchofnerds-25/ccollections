@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #pragma GCC diagnostic push
@@ -171,6 +172,7 @@ TEST(output, logfmt_fields_present) {
   /* All mandatory logfmt keys must be present */
   REQUIRE_NE(strstr(buf, "ts="), NULL);
   REQUIRE_NE(strstr(buf, "level="), NULL);
+  REQUIRE_NE(strstr(buf, "proc="), NULL);
   REQUIRE_NE(strstr(buf, "src="), NULL);
   REQUIRE_NE(strstr(buf, "func="), NULL);
   REQUIRE_NE(strstr(buf, "msg="), NULL);
@@ -247,6 +249,184 @@ TEST(output, error_and_fatal_produce_backtrace) {
 
   /* The backtrace continuation line starts with a tab followed by '#' */
   REQUIRE_NE(strstr(buf, "\t#"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* ========================================================================== */
+/*                         PROC FIELD                                         */
+/* ========================================================================== */
+
+static void *_proc_test_thread(void *arg) {
+  clog lg = *(clog *)arg;
+  log_info(lg, "from spawned thread");
+  return NULL;
+}
+
+TEST(proc_field, logfmt_proc_has_name_pid_tid_structure) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  pid_t pid = getpid();
+  pid_t tid = (pid_t)syscall(SYS_gettid);
+
+  log_info(lg, "proc test");
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* proc= field must be present */
+  char *proc_start = strstr(buf, "proc=");
+  REQUIRE_NE(proc_start, NULL);
+
+  char *val = proc_start + 5; /* skip "proc=" */
+
+  /* proc format: progname(pid):tname(tid) */
+  /* (pid): must appear in the progname section */
+  char pid_part[48];
+  snprintf(pid_part, sizeof pid_part, "(%d):", (int)pid);
+  REQUIRE_NE(strstr(val, pid_part), NULL);
+
+  /* (tid) must appear in the thread section */
+  char tid_part[48];
+  snprintf(tid_part, sizeof tid_part, "(%d)", (int)tid);
+  REQUIRE_NE(strstr(val, tid_part), NULL);
+
+  /* Extract the value (ends at next space) and verify exactly one colon */
+  char *val_end = strchr(val, ' ');
+  REQUIRE_NE(val_end, NULL);
+  size_t val_len = (size_t)(val_end - val);
+  char proc_val[256];
+  REQUIRE_EQ((val_len < sizeof proc_val), 1);
+  memcpy(proc_val, val, val_len);
+  proc_val[val_len] = '\0';
+
+  char *colon = strchr(proc_val, ':');
+  REQUIRE_NE(colon, NULL);
+  REQUIRE_EQ(strchr(colon + 1, ':'), NULL); /* exactly one colon */
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(proc_field, json_proc_has_name_pid_tid_structure) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_JSON);
+
+  pid_t pid = getpid();
+  pid_t tid = (pid_t)syscall(SYS_gettid);
+
+  log_info(lg, "proc json test");
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* "proc": key must exist */
+  REQUIRE_NE(strstr(buf, "\"proc\":"), NULL);
+
+  /* (pid): must appear in the progname section of the proc value */
+  char pid_part[48];
+  snprintf(pid_part, sizeof pid_part, "(%d):", (int)pid);
+  REQUIRE_NE(strstr(buf, pid_part), NULL);
+
+  /* (tid) must appear in the thread section of the proc value */
+  char tid_part[48];
+  snprintf(tid_part, sizeof tid_part, "(%d)", (int)tid);
+  REQUIRE_NE(strstr(buf, tid_part), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(proc_field, syslog_proc_in_sd_element) {
+  int pipefd[2];
+  REQUIRE_EQ(pipe(pipefd), 0);
+  clog lg = clog_open_fd(pipefd[1], CLOG_INFO);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_SYSLOG);
+
+  pid_t pid = getpid();
+  pid_t tid = (pid_t)syscall(SYS_gettid);
+
+  log_info(lg, "proc syslog test");
+
+  char buf[4096];
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+
+  /* proc SD param must be present inside the [ccol ...] element */
+  REQUIRE_NE(strstr(buf, "proc=\""), NULL);
+
+  /* (pid): must appear in the progname section of the proc SD value */
+  char pid_part[48];
+  snprintf(pid_part, sizeof pid_part, "(%d):", (int)pid);
+  REQUIRE_NE(strstr(buf, pid_part), NULL);
+
+  /* (tid) must appear in the thread section of the proc SD value */
+  char tid_part[48];
+  snprintf(tid_part, sizeof tid_part, "(%d)", (int)tid);
+  REQUIRE_NE(strstr(buf, tid_part), NULL);
+}
+
+TEST(proc_field, different_threads_have_different_tids) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* Log from the main thread */
+  log_info(lg, "main thread");
+
+  /* Log from a spawned thread */
+  pthread_t thr;
+  pthread_create(&thr, NULL, _proc_test_thread, &lg);
+  pthread_join(thr, NULL);
+
+  clog_close(lg);
+
+  char buf[131072];
+  read_file(path, buf, sizeof buf);
+
+  /* Collect both proc= values */
+  char *main_proc = strstr(buf, "proc=");
+  REQUIRE_NE(main_proc, NULL);
+  char *second_proc = strstr(main_proc + 1, "proc=");
+  REQUIRE_NE(second_proc, NULL);
+
+  /* Extract the TID component from (tid)] in each proc value.
+   * Format: [progname(pid):tname(tid)]
+   * After the single ':' separator, find (tid) to extract the TID. */
+  char get_tid_str[2][32];
+  char *procs[2] = {main_proc, second_proc};
+  for (int i = 0; i < 2; i++) {
+    char *v = procs[i] + 5; /* skip "proc=" */
+    char *colon = strchr(v, ':');
+    REQUIRE_NE(colon, NULL);
+    char *open = strchr(colon, '(');
+    REQUIRE_NE(open, NULL);
+    char *close = strchr(open, ')');
+    REQUIRE_NE(close, NULL);
+    size_t len = (size_t)(close - (open + 1));
+    REQUIRE_EQ((len < sizeof get_tid_str[i]), 1);
+    memcpy(get_tid_str[i], open + 1, len);
+    get_tid_str[i][len] = '\0';
+  }
+
+  /* The TIDs must differ between the main thread and the spawned thread */
+  REQUIRE_NE(strcmp(get_tid_str[0], get_tid_str[1]), 0);
 
   cleanup_dir(dir, "app.log");
 }
@@ -1195,6 +1375,7 @@ TEST(json, basic_json_structure) {
   /* All mandatory JSON keys */
   REQUIRE_NE(strstr(buf, "\"ts\":"), NULL);
   REQUIRE_NE(strstr(buf, "\"level\":"), NULL);
+  REQUIRE_NE(strstr(buf, "\"proc\":"), NULL);
   REQUIRE_NE(strstr(buf, "\"src\":"), NULL);
   REQUIRE_NE(strstr(buf, "\"func\":"), NULL);
   REQUIRE_NE(strstr(buf, "\"msg\":"), NULL);
@@ -1497,7 +1678,8 @@ TEST(syslog, basic_structure) {
   REQUIRE_NE(strstr(buf, "<14>1 "), NULL);
   /* RFC 5424 SD-ID for structured data */
   REQUIRE_NE(strstr(buf, "[ccol "), NULL);
-  /* src and func present as SD params */
+  /* proc, src, and func present as SD params */
+  REQUIRE_NE(strstr(buf, "proc=\""), NULL);
   REQUIRE_NE(strstr(buf, "src=\""), NULL);
   REQUIRE_NE(strstr(buf, "func=\""), NULL);
   /* MSGID is the level string */

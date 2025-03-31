@@ -29,7 +29,7 @@ SOFTWARE.
  * @brief Structured, thread-safe logger with log rotation
  *
  * Output format (logfmt):
- *   ts=<ISO-8601-UTC> level=<L> src=<file>:<line> func=<fn> [fields] msg=<text>
+ *   ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>) src=<file>:<line> func=<fn> [fields] msg=<text>
  *
  * Backtrace (ERROR / ALERT / FATAL only) is appended as tab-indented
  * continuation lines that do not start with "ts=", allowing log aggregators

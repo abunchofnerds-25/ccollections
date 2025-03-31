@@ -1140,3 +1140,29 @@ void mem_cpy(void *dst, const void *src, size_t n);
  * @endcode
  */
 void mem_zero(void *dst, size_t n);
+
+/**
+ * @brief A strdup variant that uses the custom memory management procs
+ *
+ * Duplicates the input string using the custom memory allocation function and
+ * returns it
+ *
+ * @param mp Pointer to customer memory management procs
+ * @param input The input string
+ * @return The pointer to the new buffer containing the copy of input or NULL if
+ * memory allocation fails
+ *
+ * Example:
+ * @code
+ * char* new_copy = ccol_strdup(mp, "hello");
+ * @endcode
+ */
+static inline __attribute__((always_inline)) char *ccol_strdup(
+    ccol_memmgmt_procs_t *mp, const char *input) {
+  size_t len = strlen(input) + 1;  // The '\0' at the end
+  char *result = (char *)_mem_alloc(mp, len * sizeof(char));
+  if (result) {
+    mem_cpy(result, input, len);
+  }
+  return result;
+}

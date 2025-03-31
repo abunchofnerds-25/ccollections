@@ -66,7 +66,7 @@ SOFTWARE.
  */
 
 /** @brief Default initial bucket array size */
-#define DEFAULT_INITIAL_BUCKET_ARRAY_SIZE 64
+#define DEFAULT_INITIAL_BUCKET_ARRAY_SIZE 16
 
 /** @brief Opaque hash map structure */
 typedef struct chashmap chashmap;

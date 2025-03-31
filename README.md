@@ -24,9 +24,10 @@ A library of generic, type-safe data structures for C, built on C11 and GNU C ex
 12. [Thread Communication — `cthreadcomm`](#12-thread-communication--cthreadcomm)
 13. [LRU Cache — `clrucache`](#13-lru-cache--clrucache)
 14. [Structured Logger — `clogger`](#14-structured-logger--clogger)
-15. [Thread Safety](#15-thread-safety)
-16. [Custom Memory Management](#16-custom-memory-management)
-17. [License](#17-license)
+15. [JSON Parser / Serializer / DOM — `cjson`](#15-json-parser--serializer--dom--cjson)
+16. [Thread Safety](#16-thread-safety)
+17. [Custom Memory Management](#17-custom-memory-management)
+18. [License](#18-license)
 
 ---
 
@@ -1425,13 +1426,13 @@ Three formats are supported, selectable at any time via `clog_set_format`. The d
 Every log line follows the pattern:
 
 ```
-ts=<ISO-8601-UTC> level=<L> src=<file>:<line> func=<fn> [fields] msg=<text>
+ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>) src=<file>:<line> func=<fn> [fields] msg=<text>
 ```
 
-`log_error`, `log_alert`, and `log_fatal` append a backtrace as tab-indented continuation lines that do not start with `ts=`, allowing log aggregators to group them with their parent record:
+`proc` identifies the executable basename and main PID in the first group, and the OS thread name and thread ID in the second. `log_error`, `log_alert`, and `log_fatal` append a backtrace as tab-indented continuation lines that do not start with `ts=`, allowing log aggregators to group them with their parent record:
 
 ```
-ts=2026-05-29T21:52:39.096473Z level=ERROR src=main.c:42 func=handle env=prod msg="db timeout"
+ts=2026-05-29T21:52:39.096473Z level=ERROR proc=myapp(1234):main(1234) src=main.c:42 func=handle env=prod msg="db timeout"
 	#0 ./myapp(handle+0x1a) [0x7f...]
 	#1 ./myapp(main+0x42) [0x7f...]
 ```
@@ -1441,8 +1442,8 @@ ts=2026-05-29T21:52:39.096473Z level=ERROR src=main.c:42 func=handle env=prod ms
 When `CLOG_FMT_JSON` is selected, each log record is a single self-contained JSON object followed by a newline:
 
 ```json
-{"ts":"2026-05-29T21:52:39.096473Z","level":"INFO","src":"main.c:9","func":"main","env":"prod","msg":"starting up"}
-{"ts":"2026-05-29T21:52:39.096642Z","level":"ERROR","src":"main.c:10","func":"main","env":"prod","msg":"db failed","bt":["#0 main+0x16d","#1 libc.so.6+0x29ca8"]}
+{"ts":"2026-05-29T21:52:39.096473Z","level":"INFO","proc":"myapp(1234):main(1234)","src":"main.c:9","func":"main","env":"prod","msg":"starting up"}
+{"ts":"2026-05-29T21:52:39.096642Z","level":"ERROR","proc":"myapp(1234):main(1234)","src":"main.c:10","func":"main","env":"prod","msg":"db failed","bt":["#0 main+0x16d","#1 libc.so.6+0x29ca8"]}
 ```
 
 Structured fields appear as top-level JSON keys (insertion order). For `log_error`, `log_alert`, and `log_fatal` the backtrace is embedded as a `"bt"` string array inside the same JSON object instead of being written as separate continuation lines.
@@ -1452,7 +1453,7 @@ Structured fields appear as top-level JSON keys (insertion order). For `log_erro
 When `CLOG_FMT_SYSLOG` is selected, each record is emitted as a single RFC 5424 message:
 
 ```
-<PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol src="file:N" func="fn" [fields]] MSG
+<PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol proc="name(pid):tname(tid)" src="file:N" func="fn" [fields]] MSG
 ```
 
 The `PRI` field encodes both the facility (default `CLOG_SYSLOG_USER`; see `clog_set_facility`) and the severity level mapped from `clog_level_t` according to RFC 5424 (TRACE/DEBUG→7, INFO→6, WARN→4, ERROR→3, ALERT→1, FATAL→0). For `log_error`, `log_alert`, and `log_fatal` each backtrace frame is emitted as a separate syslog message carrying the same PRI and MSGID.
@@ -1514,9 +1515,9 @@ clog_close(lg);
 Sample output:
 
 ```
-ts=2026-05-29T21:52:39.096473Z level=INFO  src=main.c:9  func=main env=prod service=auth msg="starting up"
-ts=2026-05-29T21:52:39.096512Z level=WARN  src=main.c:10 func=main env=prod service=auth msg="config missing: timeout"
-ts=2026-05-29T21:52:39.096642Z level=ERROR src=main.c:11 func=main env=prod service=auth msg="db failed: timeout"
+ts=2026-05-29T21:52:39.096473Z level=INFO  proc=myapp(1234):main(1234) src=main.c:9  func=main env=prod service=auth msg="starting up"
+ts=2026-05-29T21:52:39.096512Z level=WARN  proc=myapp(1234):main(1234) src=main.c:10 func=main env=prod service=auth msg="config missing: timeout"
+ts=2026-05-29T21:52:39.096642Z level=ERROR proc=myapp(1234):main(1234) src=main.c:11 func=main env=prod service=auth msg="db failed: timeout"
 	#0 ./myapp(main+0x16d) [0x563b...]
 	#1 /lib/x86_64-linux-gnu/libc.so.6(+0x29ca8) [0x7f78...]
 ```
@@ -1649,11 +1650,149 @@ clog_close(lg);   /* safe */
 
 ---
 
-## 15. Thread Safety
+## 15. JSON Parser / Serializer / DOM — `cjson`
+
+`cjson` provides a fully mutable JSON Document Object Model (DOM), a recursive-descent parser, a serializer (compact and pretty-print), and two type-safe path macros — `cjson_get` and `cjson_set` — for reading and writing anywhere in the tree without chaining individual lookup calls.
+
+### Node types
+
+Every JSON value is represented by an opaque `cjson` handle.  The type tag is a `cjson_node_type_t` enum:
+
+| Tag | C storage | Meaning |
+|---|---|---|
+| `CJSON_NULL` | — | JSON `null` |
+| `CJSON_BOOL` | `bool` | JSON `true` / `false` |
+| `CJSON_INTEGER` | `long long` | JSON number without decimal point or exponent (falls back to `CJSON_FLOAT` on overflow) |
+| `CJSON_FLOAT` | `double` | JSON number with decimal point, exponent, or integer value that overflows `long long` |
+| `CJSON_STRING` | `char *` (owned copy) | JSON string (UTF-8) |
+| `CJSON_ARRAY` | `cvec` of child `cjson` | JSON array |
+| `CJSON_OBJECT` | `chmap` of `char *→cjson` | JSON object |
+
+### Construction and parsing
+
+```c
+/* cjson_parse_mp accepts memory management functions
+   to be used while parsing a given JSON string */
+char *err_str = NULL;
+cjson doc = cjson_parse_mp("{\"users\":[{\"name\":\"Alice\",\"age\":30}]}", &err_str, NULL);
+if (!doc) { fprintf(stderr, "%s\n", err_str); free(err_str); exit(1); }
+
+/* cjson_parse is a convenience wrapper that internally passes
+   NULL for memory management procs to cjson_parse_mp. */
+cjson doc2 = cjson_parse("{\"users\":[{\"name\":\"Alice\",\"age\":30}]}", &err_str);
+if (!doc2) { fprintf(stderr, "%s\n", err_str); free(err_str); exit(1); }
+
+/* One can also pass NULL for err_str when they don't need
+   the parsing error details to both of these JSON parsing
+   functions. */
+cjson doc3 = cjson_parse("{\"foo\": \"bar\"}", NULL);
+
+/* Building programmatically */
+cjson arr = cjson_create_array();
+cjson_array_push(arr, cjson_create_int(1));
+cjson_array_push(arr, cjson_create_string("two"));
+```
+
+> **`\u0000` in string values:** The parser rejects the JSON escape sequence `\u0000` and returns `NULL` with a parse error. Because `cjson` stores all string values as null-terminated `char *` buffers, an embedded null byte would silently truncate the string at that position. Rejecting `\u0000` up-front prevents silent data corruption.
+
+### Serialization
+
+```c
+/* All of the pointers returned by cjson_serialize* variants
+   need to be freed by the callers */
+char *compact = cjson_serialize(doc);           /* compact serialization */
+char *pretty  = cjson_serialize_pretty(doc, 2); /* 2-space indent */
+cjson_serialize_free(compact);
+cjson_serialize_free(pretty);
+
+compact = cjson_serialize_mp(doc, mp);          /* compact using custom memory procs */
+pretty = cjson_serialize_pretty_mp(doc, 2, mp); /* 2-space indent using custom memory procs */
+cjson_serialize_free_mp(compact, mp);
+cjson_serialize_free_mp(pretty, mp);
+```
+
+### Path navigation — `cjson_get` and `cjson_set`
+
+Paths are dot-separated component strings.  A component that begins with `#` followed by **one or more decimal digits** addresses **an array element by index when the current node is an array**; otherwise it is treated as a **literal object key**.  A bare `#` with no trailing digits is always an error (`cjson_get` returns `NULL`; `cjson_set` returns `ccol_invalid_args`).
+
+```c
+/* Read values anywhere in the tree */
+cjson name = cjson_get(doc, "users.#0.name");
+if (cjson_type(name) == CJSON_STRING)
+    printf("%s\n", cjson_str_val(name));   /* "Alice" */
+
+/* Write scalars — creates the leaf if absent, changes its type if it exists */
+cjson_set(doc, "users.#0.active", (bool)true);
+cjson_set(doc, "users.#0.score",  99);
+cjson_set(doc, "users.#0.label",  "champion");
+
+/* Replacing an existing subtree (array, object) with a scalar is safe;
+   the old subtree is deep-freed automatically. */
+cjson_set(doc, "users.#0.name", 42);  /* name is now an integer */
+```
+
+`cjson_set` accepts: `bool`, any integer type, `float`, `double`, `char *`, `const char *`, and string literals.  It detects the C type at compile time via `_Generic` and routes to the correct storage path.  Passing an untyped `NULL` literal sets the leaf to `CJSON_NULL`; a typed null pointer such as `(const char *)NULL` also produces `CJSON_NULL` because a null C string pointer maps to JSON null.  Non-finite `double` values (`INFINITY`, `-INFINITY`, `NAN`) are rejected and `ccol_invalid_args` is returned; the existing node is left untouched.  Signed integer types (including plain `char` on platforms where `char` is signed, e.g. x86-64 Linux) are sign-extended correctly to `long long`.
+
+Duplicate object keys set within the JSON object use **last-value-wins** semantics — the final occurrence of a key is retained and prior occurrences are deep-freed.
+
+### Value access
+
+```c
+cjson_node_type_t cjson_type(cjson node);
+bool        cjson_bool_val(cjson node);
+long long   cjson_int_val(cjson node);
+double      cjson_double_val(cjson node);
+const char *cjson_str_val(cjson node);   /* string owned by the node */
+size_t      cjson_array_len(cjson node);
+size_t      cjson_object_size(cjson node);
+```
+
+### Destruction and ownership
+
+```c
+cjson_destroy(doc);   /* deep-frees the entire tree, NULLs the handle */
+```
+
+- `cjson_array_push` **transfers ownership unconditionally**: on success the array owns the child; on failure `cjson_array_push` deep-frees it.  Do not free the child after calling this function regardless of the return value.
+- `cjson_object_set` **transfers ownership unconditionally**: on success the object owns the child; on failure `cjson_object_set` deep-frees it.  Do not free the child after calling this function regardless of the return value.
+- `cjson_get` returns a **non-owning** reference valid until the tree is mutated or destroyed.
+- `cjson_clone` returns a fully independent deep copy.
+
+### Custom memory management
+
+Every factory and parse function has an `_mp` variant that accepts a `ccol_memmgmt_procs_t *mp` parameter.  The names without `_mp` suffix are `static inline` wrappers that pass `NULL` (default `malloc`/`free`/`calloc`/`realloc`).
+
+```c
+/* All nodes in the tree use my_procs. */
+char *err = NULL;
+cjson doc = cjson_parse_mp(json_str, &err, &my_procs);
+if (!doc) { fprintf(stderr, "%s\n", err); free(err); /* handle error */ }
+/* ... use doc ... */
+cjson_destroy(doc);   /* uses each node's stored allocator automatically */
+
+/* Serialization buffer is allocated with the root node's allocator. */
+char *out = cjson_serialize(doc2);
+cjson_serialize_free_mp(out, &my_procs);   /* pass same mp used at creation */
+
+/* Build a tree programmatically with a custom allocator. */
+cjson root = cjson_create_object_mp(&my_procs);
+cjson_object_set(root, "x", cjson_create_int_mp(42, &my_procs));
+cjson_destroy(root);
+```
+
+**Per-node ownership:** the allocator is stamped on every node at creation time.  `cjson_destroy()` uses each node's own stored allocator — no external `mp` parameter is needed for destruction.  `cjson_clone()` inherits the allocator from the source tree.
+
+**Node pool:** `cjson` maintains a per-thread free-list (capped at 512 nodes) to amortize allocation cost for the common case.  Custom-allocator nodes (`mp != NULL`) bypass the pool entirely and are allocated/freed directly through their own allocator.  Default-allocator nodes (`mp == NULL`) use the pool as usual; it is drained at thread exit with plain `free()`.
+
+---
+
+## 16. Thread Safety
+
+The library applies a consistent policy: **components that pass data between threads or provide shared services carry their own synchronisation; components used for single-threaded data manipulation are deliberately unguarded.**
 
 ### Intentionally Unguarded Containers
 
-The vector, hash map, BST map, and dynamic string contain no internal locks. This is a deliberate design decision, not an omission.
+`cvector`, `chashmap`, `cbstmap`, `cstring`, and `cjson` contain no internal locks. This is a deliberate design decision, not an omission.
 
 Per-operation locking provides a false sense of safety. Consider the check-then-act pattern that appears in virtually every real use of a map:
 
@@ -1668,6 +1807,8 @@ chmap_insert(map, key, other_value);
 ```
 
 Even if each individual call were internally serialised, the window between `chmap_get_ptr` returning and `chmap_insert` executing is a race. Meaningful thread safety must be expressed at the level of the logical operation, not the individual call. Callers are expected to guard shared containers with the synchronisation primitives best suited to their access pattern.
+
+`cjson` follows the same rule.  Concurrent calls to `cjson_parse_mp()` and `cjson_parse_n_mp()` on **independent** DOM trees are fully safe: the `err_str` out-parameter is caller-supplied and per-call — there is no shared state between concurrent parsers.  Access to any single DOM tree from multiple threads still requires external synchronisation.
 
 The library provides thin, portable wrappers over pthreads in `include/common.h`:
 
@@ -1692,20 +1833,27 @@ rw_lock_unlock(rw);
 
 ### Thread-Safe Components
 
-The following components include their own synchronisation and are safe to use from multiple threads without external locking:
+The following components include their own internal synchronisation and are safe to call from multiple threads without external locking:
 
-| Component | Thread Safety |
+| Component | Synchronisation model |
 |---|---|
-| `mempool` | Thread-safe unless created with `single_threaded = true` |
-| `r_mempool` | Thread-safe unless created with `single_threaded = true` |
-| `circular_queue` | Always thread-safe |
-| `dynamic_queue` | Always thread-safe |
-| `channel` | Always thread-safe |
-| `clrucache` | Always thread-safe |
+| `mempool` | Internal mutex; disabled when created with `single_threaded = true` |
+| `r_mempool` | Internal mutex; disabled when created with `single_threaded = true` |
+| `circular_queue` | Internal mutex + condition variables |
+| `dynamic_queue` | Internal mutex + condition variable |
+| `channel` | Two internal circular queues (one per direction) |
+| `clrucache` | Single mutex + per-entry condition variables; see constraints below |
+| `clogger` | Mutex on the shared backing store; all handles writing to the same fd are fully serialised; see constraints below |
+
+### Per-Component Constraints
+
+**`clrucache` eviction callback.** The callback passed to `clru_construct` is invoked **while the cache mutex is held**. It must not call back into the same cache handle — doing so will deadlock. It may allocate memory or write to a logger, but must not call `clru_get` or `clru_set` on the cache that triggered the eviction.
+
+**`clogger` derived loggers.** `clog_derive` creates a sibling logger that shares the same fd, rotation state, and mutex as the root logger via the shared backing store. Writes from the root and all of its siblings are fully serialised with no additional locking required at the call site. The minimum-level check (`log_info`, `log_warn`, and similar macros) reads the per-logger level field without holding the mutex as a deliberate performance optimisation — a concurrent `clog_set_level` may therefore cause a single message near the boundary level to be inconsistently logged or dropped. This is intentional: the optimisation avoids mutex acquisition for every suppressed message, and the inconsistency window is not a data-corruption hazard.
 
 ---
 
-## 16. Custom Memory Management
+## 17. Custom Memory Management
 
 Every container accepts a `ccol_memmgmt_procs_t *` at creation time. Passing `NULL` selects the standard `malloc`/`calloc`/`realloc`/`free` family.
 
@@ -1766,7 +1914,7 @@ r_mempool_destroy(node_pool);
 
 ---
 
-## 17. License
+## 18. License
 
 MIT License
 

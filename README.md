@@ -1,6 +1,10 @@
 # C Collections
 
-A library of generic, type-safe data structures for C, built on C11 and GNU C extensions. It is designed for use in systems where correctness, performance, and predictable memory behaviour matter.
+`c_collections` is a production-quality library of generic, type-safe data structures for C. It covers the full breadth of what most systems software needs: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, a structured logger, a JSON parser, and inter-thread communication primitives - all under a single, consistent API.
+
+Type safety is enforced at compile time using C11 `_Generic` selection, with no code-generation tools or external build-system steps required. Every module follows the same lifecycle conventions (`*_construct`, `*_destroy`, and `*_scoped` variants for automatic cleanup), so learning one container transfers immediately to the next.
+
+The library targets contexts where correctness, performance, and predictable memory behaviour matter. It compiles clean under both GCC and Clang at `-Wall -Wextra -Werror`, and every module ships with a comprehensive test suite validated under Valgrind.
 
 ---
 
@@ -14,17 +18,17 @@ A library of generic, type-safe data structures for C, built on C11 and GNU C ex
    - [Cross-Scope Type Recovery](#33-cross-scope-type-recovery)
    - [Error Handling](#34-error-handling)
 4. [Building and Linking](#4-building-and-linking)
-5. [Dynamic Array — `cvector`](#5-dynamic-array--cvector)
-6. [Dynamic String — `cstring`](#6-dynamic-string--cstring)
-7. [Sorting — `csort`](#7-sorting--csort)
-8. [Hash Map — `chashmap`](#8-hash-map--chashmap)
-9. [Ordered Map — `cbstmap`](#9-ordered-map--cbstmap)
-10. [Unified Iteration — `citerators`](#10-unified-iteration--citerators)
-11. [Memory Pools — `cmempool`](#11-memory-pools--cmempool)
-12. [Thread Communication — `cthreadcomm`](#12-thread-communication--cthreadcomm)
-13. [LRU Cache — `clrucache`](#13-lru-cache--clrucache)
-14. [Structured Logger — `clogger`](#14-structured-logger--clogger)
-15. [JSON Parser / Serializer / DOM — `cjson`](#15-json-parser--serializer--dom--cjson)
+5. [Dynamic Array - `cvector`](#5-dynamic-array--cvector)
+6. [Dynamic String - `cstring`](#6-dynamic-string--cstring)
+7. [Sorting - `csort`](#7-sorting--csort)
+8. [Hash Map - `chashmap`](#8-hash-map--chashmap)
+9. [Ordered Map - `cbstmap`](#9-ordered-map--cbstmap)
+10. [Unified Iteration - `citerators`](#10-unified-iteration--citerators)
+11. [Memory Pools - `cmempool`](#11-memory-pools--cmempool)
+12. [Thread Communication - `cthreadcomm`](#12-thread-communication--cthreadcomm)
+13. [LRU Cache - `clrucache`](#13-lru-cache--clrucache)
+14. [Structured Logger - `clogger`](#14-structured-logger--clogger)
+15. [JSON Parser / Serializer / DOM - `cjson`](#15-json-parser--serializer--dom--cjson)
 16. [Thread Safety](#16-thread-safety)
 17. [Custom Memory Management](#17-custom-memory-management)
 18. [License](#18-license)
@@ -33,11 +37,11 @@ A library of generic, type-safe data structures for C, built on C11 and GNU C ex
 
 ## 1. Rationale
 
-Writing generic data structures in C is inherently difficult. The language provides no templates, no operator overloading, and no built-in reflection. The common responses to this problem—`void *` interfaces, preprocessor token-pasting, and external code-generation tools—each carry a significant cost: `void *` APIs discard type information at the call site and push the burden of correctness entirely onto the caller; token-pasting macros produce opaque, hard-to-debug expansions; code generators add build-system complexity and break the edit-compile-run cycle.
+Writing generic data structures in C is inherently difficult. The language provides no templates, no operator overloading, and no built-in reflection. Each of the common responses to this problem (`void *` interfaces, preprocessor token-pasting, and external code-generation tools) carry a significant cost: `void *` APIs discard type information at the call site and push the burden of correctness entirely onto the caller; token-pasting macros produce opaque, hard-to-debug expansions; code generators add build-system complexity and break the edit-compile-run cycle.
 
 This library takes a different approach. It uses the C11 `_Generic` selection expression to perform type introspection directly at the call site, at compile time, without generating new code or introducing new tools into the build. The result is a set of containers whose public interfaces are type-aware, whose error handling is explicit, and whose memory behaviour is predictable and auditable.
 
-The library is not a minimalist experiment. It covers the data structures needed in the majority of real systems work—dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, and thread communication primitives—each implemented with the same set of conventions so that learning one container transfers immediately to the next.
+The library is not a minimalist experiment. It covers the data structures needed in the majority of real systems work (dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, and thread communication primitives) each implemented with the same set of conventions so that learning one container transfers immediately to the next.
 
 ---
 
@@ -45,15 +49,15 @@ The library is not a minimalist experiment. It covers the data structures needed
 
 Several well-established libraries provide generic data structures for C programs. Understanding the motivation for this library requires understanding what each alternative offers and where its design constraints create friction in certain contexts.
 
-**GLib.** The GNOME utility library provides a comprehensive set of containers — `GHashTable`, `GArray`, `GPtrArray`, `GList`, `GTree` — and is mature, extensively tested, and widely deployed. Its primary trade-off is that all interfaces accept `gpointer` (a typedef for `void *`), so type information is absent at the call site. Correct usage requires explicit casts, and type errors manifest at runtime rather than at compile time. GLib is also a substantial dependency: importing it for its data structures alone introduces a large runtime with its own threading model, type system, and object hierarchy. For projects already built on GTK or GNOME infrastructure this cost is already paid, but for a self-contained systems library it represents significant overhead.
+**GLib.** The GNOME utility library provides a comprehensive set of containers (`GHashTable`, `GArray`, `GPtrArray`, `GList`, `GTree`) and is mature, extensively tested, and widely deployed. Its primary trade-off is that all interfaces accept `gpointer` (a typedef for `void *`), so type information is absent at the call site. Correct usage requires explicit casts, and type errors manifest at runtime rather than at compile time. GLib is also a substantial dependency: importing it for its data structures alone introduces a large runtime with its own threading model, type system, and object hierarchy. For projects already built on GTK or GNOME infrastructure this cost is already paid, but for a self-contained systems library it represents significant overhead.
 
-**uthash.** Troy Hanson's single-header hash table is zero-dependency and widely used in embedded and systems code. Its design is intrusive: a hash handle is embedded directly in the user's struct, and the map is accessed via a pointer to that struct. This eliminates separate allocation for key/value pairs and gives very low overhead, but it constrains the data model — a struct can participate in only one uthash table unless multiple handles are embedded manually. While string keys are supported natively, other key types require additional macro boilerplate. uthash also covers only the hash table use case; it does not address ordered maps, dynamic strings, memory pools, or inter-thread communication.
+**uthash.** Troy Hanson's single-header hash table is zero-dependency and widely used in embedded and systems code. Its design is intrusive: a hash handle is embedded directly in the user's struct, and the map is accessed via a pointer to that struct. This eliminates separate allocation for key/value pairs and gives very low overhead, but it constrains the data model; a struct can participate in only one uthash table unless multiple handles are embedded manually. While string keys are supported natively, other key types require additional macro boilerplate. uthash also covers only the hash table use case; it does not address ordered maps, dynamic strings, memory pools, or inter-thread communication.
 
 **klib.** Heng Li's klib takes a philosophy similar in spirit to this library: generic containers implemented entirely in C headers using macros. `kvec` and `khash` are efficient and appear in performance-sensitive open-source code. The key distinction is that klib uses preprocessor token-pasting to generate a new family of typed functions for each instantiation (`KHASH_MAP_INIT_INT`, `KHASH_MAP_INIT_STR`, and similar). Adding a new key/value type combination requires an explicit instantiation declaration; there is no mechanism to infer or dispatch on type automatically at the call site. The library covers hash maps and dynamic arrays but does not provide ordered maps, dynamic strings, memory pools, or threading primitives.
 
 **stb_ds.** Sean Barrett's `stb_ds.h` provides hash maps and dynamic arrays in a single-header, zero-dependency style valued for its simplicity and portability. Internally, values are accessed through typed pointer casts over `void *` storage, and type consistency is the caller's responsibility. The library does not cover ordered maps, dynamic strings, memory pools, or inter-thread messaging, and it provides no mechanism for automatic cleanup or custom allocator injection.
 
-**Where this library differs.** The design goal was a library that satisfies four requirements simultaneously: compile-time type awareness at the call site without code generation or external tools; a uniform macro API across all container kinds so that learning one container transfers immediately to the next; structural integration between components — any container can be backed by a memory pool using a common allocator interface; and thread communication primitives that follow the same ownership and lifecycle model as the rest of the library. No single library in common use addresses all four of these requirements together. The trade-off is a dependency on a C11-capable compiler with GNU extensions, and `_Generic` expressions that produce verbose error messages when an unsupported type is supplied — constraints that are acceptable in the contexts for which this library was designed.
+**Where this library differs.** The design goal was a library that satisfies four requirements simultaneously: compile-time type awareness at the call site without code generation or external tools; a uniform macro API across all container kinds so that learning one container transfers immediately to the next; structural integration between components; any container can be backed by a memory pool using a common allocator interface; and thread communication primitives that follow the same ownership and lifecycle model as the rest of the library. No single library in common use addresses all four of these requirements together. The trade-off is a dependency on a C11-capable compiler with GNU extensions, and `_Generic` expressions that produce verbose error messages when an unsupported type is supplied which are acceptable constraints in the contexts for which this library was designed.
 
 ---
 
@@ -135,7 +139,7 @@ typedef enum {
 } ccol_retval_t;
 ```
 
-The convenience macros call `fatal_err()` on unrecoverable failures—caller bugs and resource exhaustion—causing immediate termination with a diagnostic message. When finer control is required, the underlying functions can be called directly and their return values inspected.
+The convenience macros call `fatal_err()` on unrecoverable failures (caller bugs and resource exhaustion) causing immediate termination with a diagnostic message. When finer control is required, the underlying functions can be called directly and their return values inspected.
 
 ---
 
@@ -182,13 +186,57 @@ Include only the headers you need:
 #include <clogger.h>
 ```
 
-`cvector.h`, `chashmap.h`, and `cbstmap.h` each automatically include `citerators.h`, so the unified iteration API (`ccol_begin`, `ccol_for_each`, `ccol_iter_declare`, and related macros) is available whenever any one of those container headers is included. Use `#include <ccollections.h>` to get all three containers and the full iteration API in a single include.
+`cvector.h`, `chashmap.h`, and `cbstmap.h` each automatically include `citerators.h`, so the unified iteration API (`ccol_begin`, `ccol_for_each`, `ccol_iter_declare`, and related macros) is available whenever any one of those container headers is included.
+
+### Quick Start
+
+The following example demonstrates three modules working together: an incoming JSON payload is parsed, a nested field is updated, and the result is logged with structured context attached to every line.
+
+```c
+#include <cjson.h>
+#include <clogger.h>
+
+int handle_webhook(clog lg, const char *payload) {
+    char *err = NULL;
+    cjson doc = cjson_parse(payload, &err);
+    if (!doc) {
+        log_error(lg, "JSON parse failed: %s", err);
+        free(err);
+        return -1;
+    }
+
+    /* Navigate to a nested field and update it in place */
+    cjson status = cjson_get(doc, "event.status");
+    if (status && cjson_type(status) == CJSON_STRING)
+        cjson_set(doc, "event.status", "processed");
+
+    char *out = cjson_serialize(doc);
+    log_info(lg, "forwarding: %s", out);
+    cjson_serialize_free(out);
+
+    cjson_destroy(doc);
+    return 0;
+}
+
+int main(void) {
+    clog lg = clog_open_fd_mp(2, CLOG_INFO, NULL);
+    clog_set_field(lg, "service", "webhooks");
+    clog_set_field(lg, "env",     "prod");
+
+    handle_webhook(lg, "{\"event\":{\"type\":\"push\",\"status\":\"pending\"}}");
+
+    clog_close(lg);
+    return 0;
+}
+```
+
+Each module is fully independent: include only the headers your translation unit needs.
 
 The compiler must support C11 and GNU extensions (`-std=gnu11`). The library compiles cleanly under both GCC and Clang; diagnostic pragma guards for each compiler are present in the headers.
 
 ---
 
-## 5. Dynamic Array — `cvector`
+## 5. Dynamic Array - `cvector`
 
 `cvector` is a heap-allocated, automatically resizing array. It provides amortised O(1) insertion at the end, O(1) indexed access, and stable O(n log n) sorting. A vector maintains a minimum capacity of four elements, doubles its allocation when full, and halves it when occupancy drops below one quarter.
 
@@ -210,7 +258,7 @@ cvec_push(scores, val);
 val = 98;
 cvec_push(scores, val);
 
-/* Index-based access — cvec_at returns a modifiable lvalue */
+/* Index-based access - cvec_at returns a modifiable lvalue */
 printf("First score: %d\n", cvec_at(scores, 0));
 cvec_at(scores, 0) = 100;  /* Modify in place */
 
@@ -263,6 +311,40 @@ void compute(void) {
 }
 ```
 
+### Real-World Use Case: Paginated Query Results
+
+A common pattern in API servers is to accumulate rows from a database cursor into a vector, sort them by a field, and return a page window. The vector handles growth automatically, and the scoped variant ensures cleanup even on early return:
+
+```c
+int cmp_score_desc(const void *a, const void *b) {
+    const Row *ra = (const Row *)a;
+    const Row *rb = (const Row *)b;
+    return (rb->score > ra->score) - (rb->score < ra->score);
+}
+
+void render_page(DbCursor *cursor, JsonResponse *resp,
+                 size_t page, size_t page_size) {
+    cvec_construct_scoped(rows, Row);
+
+    Row row;
+    while (db_cursor_next(cursor, &row) == DB_OK)
+        cvec_push(rows, row);
+
+    cvector_sort_with_comparison_proc(rows, cmp_score_desc);
+
+    size_t start = page * page_size;
+    size_t end   = start + page_size;
+    if (end > cvec_size(rows)) end = cvec_size(rows);
+
+    for (size_t i = start; i < end; i++)
+        json_append_row(resp, &cvec_at(rows, i));
+
+    /* rows is destroyed automatically here regardless of which path was taken */
+}
+```
+
+`cvec_construct_scoped` registers cleanup via `__attribute__((cleanup))`. Any function with multiple return paths benefits from scoped containers: no `goto cleanup` scaffolding, no risk of leaking on an early return.
+
 ### Reference: Core Operations
 
 **Lifecycle**
@@ -304,7 +386,7 @@ void compute(void) {
 
 ---
 
-## 6. Dynamic String — `cstring`
+## 6. Dynamic String - `cstring`
 
 `cstring` is a heap-allocated string with automatic capacity management. Its internal buffer always holds a null-terminated C string, making it directly compatible with standard library functions. Capacity grows to the next power of two on demand, with a minimum of 16 bytes.
 
@@ -338,7 +420,7 @@ bool ends      = cstr_ends_with(s, "lo");
 size_t pos     = cstr_find(s, "ll");  /* Returns ccol_invalid_size if not found */
 size_t rpos    = cstr_rfind(s, "l");
 
-/* Derived strings — caller is responsible for destroying these */
+/* Derived strings - caller is responsible for destroying these */
 cstr sub  = cstr_substring(s, 1, 4);
 cstr copy = cstr_copy(s, NULL);
 cstr_destroy(sub);
@@ -347,7 +429,7 @@ cstr_destroy(copy);
 cstr_destroy(s);
 ```
 
-> **Pointer stability:** `cstr_c_str()` returns a pointer into the string's internal buffer. Any mutating operation—`cstr_append`, `cstr_insert`, `cstr_replace`, and others—may reallocate the buffer, invalidating all previously obtained raw pointers.
+> **Pointer stability:** `cstr_c_str()` returns a pointer into the string's internal buffer. Any mutating operation (`cstr_append`, `cstr_insert`, `cstr_replace`, and others) may reallocate the buffer, invalidating all previously obtained raw pointers.
 
 ### Splitting a Delimited String
 
@@ -391,6 +473,49 @@ chmap_insert(map, k, count);
 cstr_destroy(key);
 chmap_destroy(map);
 ```
+
+### Real-World Use Case: Parsing Configuration Files
+
+A configuration reader that accepts `key = value` lines from a file illustrates the string manipulation API. Trimming handles inconsistent whitespace, splitting tokenises the line by delimiter, and `cstr_starts_with` skips comment lines cheaply:
+
+```c
+void load_config(const char *path, chmap config) {
+    chmap_redeclare(config, char*, char*);
+
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char buf[256];
+    while (fgets(buf, sizeof(buf), f)) {
+        cstr_construct_scoped(line, buf);
+        cstr_trim(line);
+
+        if (cstr_is_empty(line) || cstr_starts_with(line, "#"))
+            continue;
+
+        cvec parts = cstr_split(line, "=", NULL);
+        cvec_redeclare(parts, cstr);
+        if (cvec_size(parts) < 2) { cvec_destroy(parts); continue; }
+
+        cstr key = cvec_at(parts, 0);
+        cstr val = cvec_at(parts, 1);
+        cstr_trim(key);
+        cstr_trim(val);
+
+        /* The map copies both strings internally */
+        char *k = (char *)cstr_c_str(key);
+        char *v = (char *)cstr_c_str(val);
+        chmap_insert(config, k, v);
+
+        for (size_t i = 0; i < cvec_size(parts); i++)
+            cstr_destroy(cvec_at(parts, i));
+        cvec_destroy(parts);
+    }
+    fclose(f);
+}
+```
+
+`cstr_construct_scoped` frees the temporary line buffer automatically on each loop iteration. `cstr_split` returns a `cvec` of independently owned `cstr` values; each token must be destroyed before the vector is destroyed.
 
 ### Reference: Core Operations
 
@@ -454,7 +579,7 @@ chmap_destroy(map);
 
 ---
 
-## 7. Sorting — `csort`
+## 7. Sorting - `csort`
 
 `csort` provides a stable, iterative bottom-up mergesort. It operates on any collection type through a getter abstraction, and provides default comparators for all standard C arithmetic types selected via `_Generic`. The integration with `cvector` is the most common usage path.
 
@@ -497,9 +622,42 @@ csort_sort(people, 3, sizeof(Person), person_getter, compare_by_age, NULL);
 
 **Complexity guarantees:** O(n log n) in all cases; O(n) auxiliary space; stable (equal elements preserve their original order); iterative (no recursion, no stack overflow risk for large inputs).
 
+### Real-World Use Case: Priority Job Queue
+
+A background worker processes jobs in priority order while preserving submission order for jobs at the same priority level. The stable sort guarantee means equal-priority jobs are always dispatched in the order they arrived, without any secondary sort key:
+
+```c
+typedef struct {
+    int      priority;    /* higher value = higher priority */
+    uint64_t submit_ts;
+    char     payload[128];
+} Job;
+
+int cmp_job_desc(const void *a, const void *b) {
+    const Job *ja = (const Job *)a;
+    const Job *jb = (const Job *)b;
+    /* Descending: higher priority first */
+    return (jb->priority > ja->priority) - (jb->priority < ja->priority);
+}
+
+void *job_getter(void *collection, size_t index) {
+    return &((Job *)collection)[index];
+}
+
+void dispatch_next_batch(Job *queue, size_t count, size_t batch_size) {
+    csort_sort(queue, count, sizeof(Job), job_getter, cmp_job_desc, NULL);
+
+    size_t n = count < batch_size ? count : batch_size;
+    for (size_t i = 0; i < n; i++)
+        submit_to_thread_pool(&queue[i]);
+}
+```
+
+Because `csort` is a stable sort, two jobs submitted at times `t1 < t2` with identical priority are always ordered `t1, t2` after sorting, regardless of how many sort passes have occurred.
+
 ---
 
-## 8. Hash Map — `chashmap`
+## 8. Hash Map - `chashmap`
 
 `chashmap` is an associative container with O(1) average-case insertion, lookup, and deletion. A distinctive feature is that it selects one of two internal implementations at compile time, based on the types of the key and value.
 
@@ -507,19 +665,19 @@ csort_sort(people, 3, sizeof(Person), person_getter, compare_by_age, NULL);
 
 ### Implementation Selection
 
-**Open-addressing** is selected when both the key and the value are integral types no wider than eight bytes. It uses compact 17-byte slots (8-byte key, 8-byte value, 1-byte metadata), Fibonacci hashing for integers, and linear probing. Load factor thresholds are 0.70 (grow) and 0.25 (shrink), with a 2× scale factor. There are zero per-entry heap allocations, and cache locality is quite good.
+**Open-addressing** is selected when both the key and the value are integral types no wider than eight bytes. It uses compact 17-byte slots (8-byte key, 8-byte value, 1-byte metadata), Fibonacci hashing for integers, and linear probing. Load factor thresholds are 0.70 (grow) and 0.25 (shrink), with a 2x scale factor. There are zero per-entry heap allocations, and cache locality is quite good.
 
-**Separate chaining** is selected for all other type combinations. It uses a linked-list per bucket, XXHash64 for content-based hashing, Small String Optimisation (23-byte inline buffer for short strings), and a doubly-linked list that preserves insertion order. The minimum bucket count is 64 (always a power of two), and the scale factor is 4×.
+**Separate chaining** is selected for all other type combinations. It uses a linked-list per bucket, XXHash64 for content-based hashing, Small String Optimisation (23-byte inline buffer for short strings), and a doubly-linked list that preserves insertion order. The minimum bucket count is 64 (always a power of two), and the scale factor is 4x.
 
 The selection happens transparently; the same macro interface is used in both cases.
 
 ### Basic Usage
 
 ```c
-/* Both key and value are integral — open-addressing is selected */
+/* Both key and value are integral - open-addressing is selected */
 chmap_construct(counters, int, long);
 
-/* String key — separate chaining is selected */
+/* String key - separate chaining is selected */
 chmap_construct(index, char*, int);
 
 /* Insertion: keys and values must be lvalues (see note below) */
@@ -599,7 +757,7 @@ chmap_destroy(freq);
 
 When the key or value type is `char *`, the map copies the string content into its own storage (inline if it fits in 23 bytes, heap-allocated otherwise). The original pointer may be freed immediately after insertion without affecting the map. Retrieved string pointers point into the map's internal storage and must not be freed by the caller.
 
-For non-string pointer values—such as `Point *`—the map stores the pointer itself, not a copy of the pointed-to object. Lifetime management of the pointed-to data is the caller's responsibility:
+For non-string pointer values (such as `Point *`) the map stores the pointer itself, not a copy of the pointed-to object. Lifetime management of the pointed-to data is the caller's responsibility:
 
 ```c
 typedef struct { int x, y; } Point;
@@ -616,6 +774,40 @@ ccol_for_each(coords, it, {
 });
 chmap_destroy(coords);
 ```
+
+### Real-World Use Case: HTTP Request Router
+
+An HTTP router maps `"METHOD /path"` strings to handler function pointers. `chmap_get_ptr` provides O(1) dispatch and returns `NULL` for unregistered routes without triggering a fatal error:
+
+```c
+typedef void (*handler_fn)(HttpRequest *, HttpResponse *);
+
+void router_init(chmap router) {
+    chmap_redeclare(router, char*, handler_fn);
+
+    handler_fn h;
+    h = list_users_handler;   chmap_insert(router, "GET /users",       h);
+    h = create_user_handler;  chmap_insert(router, "POST /users",      h);
+    h = get_user_handler;     chmap_insert(router, "GET /users/:id",   h);
+    h = delete_user_handler;  chmap_insert(router, "DELETE /users/:id", h);
+}
+
+void router_dispatch(chmap router, HttpRequest *req, HttpResponse *resp) {
+    chmap_redeclare(router, char*, handler_fn);
+
+    char key[128];
+    snprintf(key, sizeof(key), "%s %s", req->method, req->path);
+
+    handler_fn *fn = chmap_get_ptr(router, key);
+    if (!fn) {
+        resp->status = 404;
+        return;
+    }
+    (*fn)(req, resp);
+}
+```
+
+The map copies each key string into its own storage (inline for strings up to 23 bytes, heap-allocated otherwise), so the temporary `key` buffer on the stack is safe after insertion.
 
 ### Reference: Core Operations
 
@@ -667,7 +859,7 @@ These macros come from `citerators.h`, which `chashmap.h` includes automatically
 
 ---
 
-## 9. Ordered Map — `cbstmap`
+## 9. Ordered Map - `cbstmap`
 
 `cbstmap` is an associative container implemented as a fully iterative (non-recursive) AVL tree. It maintains keys in sorted order and provides O(log n) insertion, deletion, and lookup. In-order iteration visits entries from smallest to largest key.
 
@@ -762,6 +954,33 @@ cbmap_insert(env, k, "/usr/local/bin:/usr/bin");
 cbmap_destroy(env);
 ```
 
+### Real-World Use Case: Live Leaderboard
+
+A game server maintains a leaderboard where players are ranked by score. Storing negated scores as keys causes the AVL tree's ascending in-order traversal to visit entries from highest to lowest score. Insertion and lookup are both O(log n); the tree rebalances automatically:
+
+```c
+void leaderboard_upsert(cbmap board, const char *player, int score) {
+    cbmap_redeclare(board, int, char*);
+    int neg_score = -score;
+    cbmap_insert(board, neg_score, player);
+}
+
+void leaderboard_print_top(cbmap board, size_t n) {
+    cbmap_redeclare(board, int, char*);
+    size_t rank = 1;
+    ccol_for_each(board, it, {
+        if (rank > n) { ccol_iter_destroy(it); break; }
+        printf("#%zu  %-20s  %d pts\n",
+               rank,
+               *ccol_iter_val_ptr(it),
+               -(*ccol_iter_key_ptr(it)));   /* un-negate for display */
+        rank++;
+    });
+}
+```
+
+The AVL self-balancing property keeps the tree height bounded at O(log n) even under adversarial insertion patterns such as scores arriving in strictly ascending order, where a naive BST would degrade to a linked list.
+
 ### Reference: Core Operations
 
 **Lifecycle**
@@ -812,13 +1031,13 @@ These macros come from `citerators.h`, which `cbstmap.h` includes automatically.
 
 ---
 
-## 10. Unified Iteration — `citerators`
+## 10. Unified Iteration - `citerators`
 
 `citerators.h` provides a single, type-dispatched iteration API that works uniformly across `cvector`, `chashmap`, and `cbstmap`. There is no need to include it explicitly: each container header includes `citerators.h` at its own end, so any translation unit that includes a single container header automatically gets the full unified API.
 
-**Header:** included automatically by `cvector.h`, `chashmap.h`, and `cbstmap.h`. All three containers are available via `ccollections.h`.
+**Header:** included automatically by `cvector.h`, `chashmap.h`, and `cbstmap.h`.
 
-### `ccol_for_each` — The Recommended Pattern
+### `ccol_for_each` - The Recommended Pattern
 
 ```c
 chmap_construct(word_count, char*, int);
@@ -879,6 +1098,30 @@ Output:
 [2] = 78
 ```
 
+### Real-World Use Case: Unified Audit Log Serializer
+
+A function that serializes any `chmap` of string fields to a structured log line works without knowing the concrete field names at compile time. `chmap_redeclare` restores the companion type variables in the new scope, and `ccol_for_each` handles the rest:
+
+```c
+void audit_log_event(clog lg, const char *event, chmap fields) {
+    chmap_redeclare(fields, char*, char*);
+
+    cstr_construct_scoped(line, event);
+    cstr_append(line, " ");
+
+    ccol_for_each(fields, it, {
+        cstr_append(line, *ccol_iter_key_ptr(it));
+        cstr_append(line, "=");
+        cstr_append(line, *ccol_iter_val_ptr(it));
+        cstr_append(line, " ");
+    });
+
+    log_info(lg, "%s", cstr_c_str(line));
+}
+```
+
+The same `ccol_for_each` / `ccol_iter_next` / `ccol_iter_key_ptr` / `ccol_iter_val_ptr` surface works identically on `cvector`, `chmap`, and `cbmap`. The dispatch to the correct begin/next functions is resolved at compile time by `ccol_begin` via `_Generic`, with zero runtime overhead.
+
 ### Reference: Core Operations
 
 | Macro | Header | Description |
@@ -904,13 +1147,13 @@ Output:
 
 ---
 
-## 11. Memory Pools — `cmempool`
+## 11. Memory Pools - `cmempool`
 
 The library provides two pool allocators: a fixed-size pool (`mempool`) and a ranged pool (`r_mempool`). Both offer O(1) allocation and deallocation, optional thread safety, and an optional fallback to the system allocator when the pool is exhausted.
 
 **Header:** `#include <cmempool.h>`
 
-### Fixed-Size Pool — `mempool`
+### Fixed-Size Pool - `mempool`
 
 A `mempool` holds a fixed number of elements of a fixed size. Allocation returns a slot from an internal free list; deallocation returns it. There is no fragmentation within the pool.
 
@@ -946,7 +1189,7 @@ mempool_free_entry(slot);
 mempool_destroy(pool);  /* The buffer itself is not freed */
 ```
 
-### Ranged Pool — `r_mempool`
+### Ranged Pool - `r_mempool`
 
 A `r_mempool` covers allocation requests across a configurable range of power-of-two sizes. It maintains an internal sub-pool for each size class and selects the smallest fitting class for each request. Requests that exceed the largest class can fall back to the system allocator.
 
@@ -954,15 +1197,15 @@ The following table illustrates the structure produced by `r_mempool_create(4, 1
 
 | Element Size | Element Count |
 |---|---|
-| 2⁴  = 16 bytes   | 2⁹ = 512 |
-| 2⁵  = 32 bytes   | 2⁸ = 256 |
-| 2⁶  = 64 bytes   | 2⁷ = 128 |
-| 2⁷  = 128 bytes  | 2⁶ = 64  |
-| 2⁸  = 256 bytes  | 2⁵ = 32  |
-| 2⁹  = 512 bytes  | 2⁴ = 16  |
-| 2¹⁰ = 1024 bytes | 2³ = 8   |
-| 2¹¹ = 2048 bytes | 2² = 4   |
-| 2¹² = 4096 bytes | 2¹ = 2   |
+| 2^**`4`** : 16 bytes    | 2^**`9`** : 512 entries |
+| 2^5 : 32 bytes    | 2^8 : 256 entries |
+| 2^6 : 64 bytes    | 2^7 : 128 entries |
+| 2^7 : 128 bytes   | 2^6 : 64 entries  |
+| 2^8 : 256 bytes   | 2^5 : 32 entries  |
+| 2^9 : 512 bytes   | 2^4 : 16 entries  |
+| 2^10 : 1024 bytes | 2^3 : 8 entries   |
+| 2^11 : 2048 bytes | 2^2 : 4 entries   |
+| 2^**`12`** : 4096 bytes | 2^1 : 2 entries   |
 
 ```c
 r_mempool *rpool = r_mempool_create(
@@ -1008,13 +1251,52 @@ r_mempool_free_entry(slot);
 r_mempool_destroy(pool);  /* The buffer itself is not freed */
 ```
 
+### Real-World Use Case: Per-Connection Context Pool
+
+A TCP server that handles thousands of short-lived connections benefits from a fixed-size pool for connection context structs. Allocation and deallocation are O(1) free-list operations with no heap fragmentation, and the fixed capacity bounds peak memory usage at startup:
+
+```c
+typedef struct {
+    int      fd;
+    char     peer_addr[46];
+    uint64_t connect_ts;
+} ConnCtx;
+
+static mempool *conn_pool;
+
+void server_init(int max_connections) {
+    conn_pool = mempool_create(
+        (size_t)max_connections,
+        sizeof(ConnCtx),
+        /*fallback=*/false,      /* return NULL instead of calling malloc */
+        /*single_threaded=*/false,
+        NULL, NULL);
+}
+
+ConnCtx *conn_accept(int fd, const char *peer) {
+    ConnCtx *ctx = mempool_calloc_entry(conn_pool);   /* zero-initialised */
+    if (!ctx) return NULL;                             /* pool exhausted */
+    ctx->fd = fd;
+    strncpy(ctx->peer_addr, peer, sizeof(ctx->peer_addr) - 1);
+    ctx->connect_ts = now_us();
+    return ctx;
+}
+
+void conn_close(ConnCtx *ctx) {
+    close(ctx->fd);
+    mempool_free_entry(ctx);   /* O(1) - returned to the free list */
+}
+```
+
+Because every slot is the same size as `ConnCtx`, there is no fragmentation within the pool. Peak memory is fully determined by `max_connections * sizeof(ConnCtx)` - no surprises under load.
+
 ### Driving Other Containers from a Pool
 
 Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 16](#16-custom-memory-management) for the complete pattern.
 
 ---
 
-## 12. Thread Communication — `cthreadcomm`
+## 12. Thread Communication - `cthreadcomm`
 
 The thread communication module provides three primitives for safe message passing between threads: a bounded circular queue, an unbounded dynamic queue, and a bidirectional channel. All three use a zero-copy ownership transfer model: the sender's pointer is set to `NULL` on a successful send, and the receiver becomes the sole owner of the data.
 
@@ -1029,7 +1311,7 @@ typedef struct {
 } c_message_t;
 ```
 
-### Circular Queue — Bounded, Blocking
+### Circular Queue - Bounded, Blocking
 
 `circular_queue` holds a fixed number of messages. A sender blocks when the queue is full; a receiver blocks when it is empty. This backpressure mechanism is the primary tool for rate-limiting producers.
 
@@ -1039,7 +1321,7 @@ circular_queue *cq = circular_queue_create(16, NULL);
 /* Producer */
 c_message_t msg = { .data = strdup("task payload"), .size = 13 };
 circq_send_zc(cq, &msg);
-/* msg.data is now NULL — ownership has been transferred */
+/* msg.data is now NULL - ownership has been transferred */
 
 /* Consumer */
 c_message_t received;
@@ -1057,7 +1339,7 @@ if (rc == ccol_container_full) {
 circular_queue_destroy(cq);
 ```
 
-### Dynamic Queue — Unbounded
+### Dynamic Queue - Unbounded
 
 `dynamic_queue` uses a linked list and never blocks a sender. It grows without bound as long as memory is available, making it appropriate when the producer must not stall under any circumstances and the consumer is expected to keep up over time.
 
@@ -1076,9 +1358,9 @@ free(received.data);
 dynamic_queue_destroy(dq);
 ```
 
-### Channel — Bidirectional, Owner–Worker Pattern
+### Channel - Bidirectional, Owner-Worker Pattern
 
-A `channel` wraps two circular queues—one in each direction—and routes messages automatically based on the identity of the calling thread. The thread that calls `channel_create` is the owner; all other threads are workers. This removes the need for separate queue handles at the cost of a thread-identity check on each operation.
+A `channel` wraps two circular queues (one in each direction) and routes messages automatically based on the identity of the calling thread. The thread that calls `channel_create` is the owner; all other threads are workers. This removes the need for separate queue handles at the cost of a thread-identity check on each operation.
 
 ```c
 channel *ch = channel_create(16, NULL);
@@ -1116,7 +1398,7 @@ pthread_join(t, NULL);
 channel_destroy(ch);
 ```
 
-### Example: Producer–Consumer with Sentinel Termination
+### Example: Producer-Consumer with Sentinel Termination
 
 ```c
 circular_queue *queue;
@@ -1157,7 +1439,60 @@ int main(void) {
 }
 ```
 
-### Multiplexed Waiting — `ccol_select`
+### Real-World Use Case: Async Image Processing Pipeline
+
+A web server offloads image resizing to a pool of worker threads. The zero-copy ownership model means the heap-allocated job struct is never duplicated: `chan_send_zc` nulls the sender's pointer on success, and the worker becomes the sole owner:
+
+```c
+typedef struct {
+    char path[256];
+    int  target_width;
+    int  target_height;
+    char output_path[256];
+} ImageJob;
+
+void *image_worker(void *arg) {
+    channel *ch = (channel *)arg;
+    for (;;) {
+        c_message_t msg;
+        chan_recv_zc(ch, &msg);
+        if (!msg.data) break;   /* NULL sentinel signals shutdown */
+
+        ImageJob *job = (ImageJob *)msg.data;
+        resize_image(job->path, job->target_width, job->target_height,
+                     job->output_path);
+
+        c_message_t ack = {
+            .data = strdup(job->output_path),
+            .size = strlen(job->output_path) + 1
+        };
+        free(job);
+        chan_send_zc(ch, &ack);   /* transfer result back to dispatcher */
+    }
+    return NULL;
+}
+
+void dispatch_resize(channel *ch, const char *src, int w, int h,
+                     const char *dst) {
+    ImageJob *job = malloc(sizeof(ImageJob));
+    snprintf(job->path,        sizeof(job->path),        "%s", src);
+    snprintf(job->output_path, sizeof(job->output_path), "%s", dst);
+    job->target_width  = w;
+    job->target_height = h;
+
+    c_message_t msg = { .data = job, .size = sizeof(*job) };
+    chan_send_zc(ch, &msg);   /* job is now NULL - worker owns it */
+
+    c_message_t ack;
+    chan_recv_zc(ch, &ack);
+    printf("done: %s\n", (char *)ack.data);
+    free(ack.data);
+}
+```
+
+The `channel` automatically routes sends and receives based on thread identity: the thread that called `channel_create` is the owner; all other threads are workers. No separate queue handles are required.
+
+### Multiplexed Waiting - `ccol_select`
 
 `ccol_select` blocks until any one of a set of queue or file descriptor sources becomes ready, analogous to POSIX `select(2)` or `poll(2)` but integrated with the queue primitives. `ccol_select_timed` adds a millisecond deadline measured on `CLOCK_MONOTONIC`.
 
@@ -1214,9 +1549,9 @@ ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
 
 ---
 
-## 13. LRU Cache — `clrucache`
+## 13. LRU Cache - `clrucache`
 
-`clrucache` is a fully thread-safe generic LRU (Least-Recently-Used) cache backed by a hash map for O(1) lookup and a doubly-linked list for O(1) eviction. When the cache is full, inserting a new entry evicts the least-recently-used live entry first, optionally notifying the caller via an eviction callback. An optional remote getter and setter integrate the cache transparently with an external backing store — a database, a network service, or any other source.
+`clrucache` is a fully thread-safe generic LRU (Least-Recently-Used) cache backed by a hash map for O(1) lookup and a doubly-linked list for O(1) eviction. When the cache is full, inserting a new entry evicts the least-recently-used live entry first, optionally notifying the caller via an eviction callback. An optional remote getter and setter integrate the cache transparently with an external backing store; a database, a network service, or any other source.
 
 **Header:** `#include <clrucache.h>`
 
@@ -1241,7 +1576,7 @@ int k = 42;
 double v = 3.14;
 clru_set(cache, k, v);
 
-/* Retrieve a value — val_ptr is a pointer to the value type, not cmap_pair */
+/* Retrieve a value - val_ptr is a pointer to the value type, not cmap_pair */
 double out = 0.0;
 if (clru_get(cache, k, &out) == ccol_success) {
     printf("%.2f\n", out);
@@ -1250,7 +1585,7 @@ if (clru_get(cache, k, &out) == ccol_success) {
 clru_destroy(cache);
 ```
 
-### Remote Getter — Read-Through
+### Remote Getter - Read-Through
 
 A remote getter is called on a cache miss. The cache takes ownership of the heap-allocated value returned by the getter. Concurrent requests for the same missing key coalesce: only one fetch executes, and all waiters receive the result.
 
@@ -1276,7 +1611,7 @@ if (clru_get(cache, k, &val) == ccol_success) {
 clru_destroy(cache);
 ```
 
-### Remote Setter — Write-Through
+### Remote Setter - Write-Through
 
 A remote setter is called synchronously before the cache is updated. If the remote call fails, the cache is not updated and `clru_set` returns `ccol_unexpected_failure`.
 
@@ -1301,7 +1636,7 @@ clru_destroy(cache);
 ```c
 void on_evict(const cmap_pair *key, const cmap_pair *val) {
     printf("evicted key=%d\n", *(const int *)key->ptr);
-    /* Must NOT call back into the cache — mutex is held */
+    /* Must NOT call back into the cache - mutex is held */
 }
 
 clru_construct(cache, int, double, 4, NULL, NULL, on_evict);
@@ -1309,11 +1644,51 @@ clru_construct(cache, int, double, 4, NULL, NULL, on_evict);
 clru_destroy(cache);
 ```
 
+### Real-World Use Case: Session Token Validation Cache
+
+An authentication middleware validates bearer tokens on every request. Token validation involves a database round-trip on the first occurrence; subsequent requests for the same token are served from the cache in O(1). The remote getter coalesces concurrent misses for the same token, so only one database query executes even under a burst of parallel requests for an uncached token:
+
+```c
+/* Called automatically by the cache on a miss.
+   Returns the user ID for the token, or 0 if the token is invalid. */
+bool load_user_id(const cmap_pair *key_pair, cmap_pair *val_pair) {
+    const char *token = (const char *)key_pair->ptr;
+
+    long *uid = malloc(sizeof(long));
+    if (!uid) return false;
+
+    *uid = db_validate_token(token);
+    if (*uid == 0) { free(uid); return false; }
+
+    val_pair->ptr  = uid;
+    val_pair->size = sizeof(long);
+    return true;
+}
+
+/* Module-level cache: hold the 8192 most recently validated tokens */
+clru_construct(token_cache, char*, long, 8192, load_user_id, NULL, NULL);
+
+/* Called from multiple threads on every inbound request */
+int auth_middleware(const char *bearer_token) {
+    clru_redeclare(token_cache, char*, long);
+
+    char *tok = (char *)bearer_token;
+    long uid  = 0;
+    if (clru_get(token_cache, tok, &uid) != ccol_success)
+        return 401;
+
+    attach_user_context(uid);
+    return 200;
+}
+```
+
+The LRU eviction policy bounds memory usage: the 8192 most recently validated tokens stay hot in memory; older ones are evicted silently. The coalescing property means that a sudden spike of requests for an uncached token causes exactly one database query rather than a thundering herd.
+
 ### Memory Ownership for Retrieved Values
 
 `clru_get` memory behavior depends on the value type. Only `char *` values cause a heap allocation; for all other types no heap allocation occurs.
 
-**Non-`char *` value types** — the macro copies the value directly into `*val_ptr` with no heap allocation. The caller receives the value in a plain typed variable; `free()` is neither needed nor valid:
+**Non-`char *` value types** - the macro copies the value directly into `*val_ptr` with no heap allocation. The caller receives the value in a plain typed variable; `free()` is neither needed nor valid:
 
 ```c
 clru_construct(cache, int, double, 128, NULL, NULL, NULL);
@@ -1325,13 +1700,13 @@ clru_set(cache, k, v);
 double out = 0.0;
 if (clru_get(cache, k, &out) == ccol_success) {
     printf("%.2f\n", out);
-    /* No free() — no heap allocation occurred */
+    /* No free() - no heap allocation occurred */
 }
 
 clru_destroy(cache);
 ```
 
-**`char *` value types** — the macro transfers ownership of the heap-allocated string to the caller via `*(char **)val_ptr`. The caller **must** free it when done. The allocation uses the cache's custom allocator if one was provided at construction, or `malloc()` otherwise:
+**`char *` value types** - the macro transfers ownership of the heap-allocated string to the caller via `*(char **)val_ptr`. The caller **must** free it when done. The allocation uses the cache's custom allocator if one was provided at construction, or `malloc()` otherwise:
 
 ```c
 clru_construct(str_cache, int, char *, 64, NULL, NULL, NULL);
@@ -1343,7 +1718,7 @@ clru_set(str_cache, k, greeting);
 char *s = NULL;
 if (clru_get(str_cache, k, &s) == ccol_success) {
     printf("%s\n", s);
-    free(s);   /* Required — clru_get transferred heap ownership to the caller */
+    free(s);   /* Required - clru_get transferred heap ownership to the caller */
                /* Use custom_free(s) instead if a custom allocator was provided */
 }
 
@@ -1356,7 +1731,7 @@ The same allocator rule applies to `clrucache_get_full` for all value types: `va
 
 ### Cross-Scope Usage
 
-Pass the cache handle across function boundaries and use `clru_redeclare` to restore type information. This is required before calling `clru_get` or `clru_set` — both macros rely on the companion type variables to determine the value type. Note that `clru_redeclare` requires a simple local identifier, not a struct-member expression like `ga->cache`; declare a local alias first if necessary.
+Pass the cache handle across function boundaries and use `clru_redeclare` to restore type information. This is required before calling `clru_get` or `clru_set`; both macros rely on the companion type variables to determine the value type. Note that `clru_redeclare` requires a simple local identifier, not a struct-member expression like `ga->cache`; declare a local alias first if necessary.
 
 ```c
 void read_and_write(clru_cache c) {
@@ -1406,12 +1781,12 @@ void process(void) {
 
 | Macro / Function | Description |
 |---|---|
-| `clru_get(name, key, val_ptr)` | Retrieve the value for `key`. `val_ptr` is a pointer to the value type (`ValT *`), **not** `cmap_pair *`. For non-`char *` val types, the value is copied directly into `*val_ptr` — no heap allocation occurs. For `char *` val types, `*(char **)val_ptr` is set to a heap-allocated string allocated by the cache's custom allocator (or `malloc()` if none was configured); the caller must free it with the matching function. Returns `ccol_success`, `ccol_key_not_found`, or another error code. |
+| `clru_get(name, key, val_ptr)` | Retrieve the value for `key`. `val_ptr` is a pointer to the value type (`ValT *`), **not** `cmap_pair *`. For non-`char *` val types, the value is copied directly into `*val_ptr`; no heap allocation occurs. For `char *` val types, `*(char **)val_ptr` is set to a heap-allocated string allocated by the cache's custom allocator (or `malloc()` if none was configured); the caller must free it with the matching function. Returns `ccol_success`, `ccol_key_not_found`, or another error code. |
 | `clru_set(name, key, val)` | Store `val` for `key`; if a remote setter was provided it is called first; returns `ccol_success` or `ccol_unexpected_failure` on remote failure |
 
 ---
 
-## 14. Structured Logger — `clogger`
+## 14. Structured Logger - `clogger`
 
 `clogger` is a thread-safe, structured logger with three output formats: logfmt (default), NDJSON, and RFC 5424 syslog. Each record is machine-parseable and human-readable. A single per-logger `pthread_mutex_t` serialises all writes and state changes.
 
@@ -1456,7 +1831,7 @@ When `CLOG_FMT_SYSLOG` is selected, each record is emitted as a single RFC 5424 
 <PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol proc="name(pid):tname(tid)" src="file:N" func="fn" [fields]] MSG
 ```
 
-The `PRI` field encodes both the facility (default `CLOG_SYSLOG_USER`; see `clog_set_facility`) and the severity level mapped from `clog_level_t` according to RFC 5424 (TRACE/DEBUG→7, INFO→6, WARN→4, ERROR→3, ALERT→1, FATAL→0). For `log_error`, `log_alert`, and `log_fatal` each backtrace frame is emitted as a separate syslog message carrying the same PRI and MSGID.
+The `PRI` field encodes both the facility (default `CLOG_SYSLOG_USER`; see `clog_set_facility`) and the severity level mapped from `clog_level_t` according to RFC 5424 (TRACE/DEBUG -> 7, INFO -> 6, WARN -> 4, ERROR -> 3, ALERT -> 1, FATAL -> 0). For `log_error`, `log_alert`, and `log_fatal` each backtrace frame is emitted as a separate syslog message carrying the same PRI and MSGID.
 
 `CLOG_FMT_SYSLOG` is restricted to **fd-based loggers** (`clog_open_fd` / `clog_open_fd_mp`). Calling `clog_set_format` with `CLOG_FMT_SYSLOG` on a file-backed logger is a silent no-op. The fd must be connected to a syslog daemon beforehand; on Linux this is typically a `SOCK_DGRAM` Unix socket at `/dev/log`:
 
@@ -1486,7 +1861,7 @@ clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, NULL, NULL);
 clog_set_format(lg, CLOG_FMT_JSON);
 
 clog derived = clog_derive(lg);
-/* derived also writes JSON — it shares the same backing store */
+/* derived also writes JSON - it shares the same backing store */
 
 clog_format_t fmt = clog_get_format(lg); /* CLOG_FMT_JSON */
 ```
@@ -1538,13 +1913,13 @@ clog_rotation_cfg_t cfg = {
 clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, &cfg, NULL);
 ```
 
-When a rotation fires the current file is renamed to `<path>.<YYYYMMDDHHMMSS>` (e.g. `app.log.20260529215239`) and a new file is opened. Collisions within the same second are resolved with a `_1`, `_2`, … suffix. When `max_rotated_files` is positive, the oldest rotated files beyond the limit are deleted automatically.
+When a rotation fires the current file is renamed to `<path>.<YYYYMMDDHHMMSS>` (e.g. `app.log.20260529215239`) and a new file is opened. Collisions within the same second are resolved with a `_1`, `_2`, ... suffix. When `max_rotated_files` is positive, the oldest rotated files beyond the limit are deleted automatically.
 
 Pass `NULL` as the configuration to open a file-backed logger without rotation.
 
 ### Custom Allocator
 
-Both creation functions accept a `ccol_memmgmt_procs_t *mprocs` as the last parameter. Pass `NULL` to use the default `malloc`/`calloc`/`realloc`/`free`. Passing a non-NULL pointer causes all internal allocations — for the shared backing store, the per-logger write buffer, and the heap message buffer — to use the supplied functions. The allocator is also inherited by all loggers derived from the root via `clog_derive`. The `mprocs` struct is copied internally; the caller may free it after the logger is created.
+Both creation functions accept a `ccol_memmgmt_procs_t *mprocs` as the last parameter. Pass `NULL` to use the default `malloc`/`calloc`/`realloc`/`free`. Passing a non-NULL pointer causes all internal allocations (for the shared backing store, the per-logger write buffer, and the heap message buffer) to use the supplied functions. The allocator is also inherited by all loggers derived from the root via `clog_derive`. The `mprocs` struct is copied internally; the caller may free it after the logger is created.
 
 ```c
 ccol_memmgmt_procs_t my_alloc = {
@@ -1580,11 +1955,11 @@ Fields are persistent key=value pairs that appear in every subsequent log line. 
 ```c
 clog_set_field(lg, "request_id", "abc-123");
 log_info(lg, "processing");
-/* → ts=... request_id=abc-123 msg=processing */
+/* -> ts=... request_id=abc-123 msg=processing */
 
 clog_remove_field(lg, "request_id");
 log_info(lg, "done");
-/* → ts=... msg=done */
+/* -> ts=... msg=done */
 
 clog_clear_fields(lg);   /* remove all fields */
 ```
@@ -1600,6 +1975,55 @@ clog lg = production_mode ? clog_open_fd_mp(2, CLOG_INFO, NULL) : NULL;
 log_info(lg, "this line is discarded when lg is NULL");
 clog_close(lg);   /* safe */
 ```
+
+### Real-World Use Case: Per-Request Structured Logging
+
+A service logs every inbound request with a unique request ID and the authenticated user. Using `clog_derive`, each request handler gets a private logger that shares the underlying file and mutex with the root logger but carries its own request-scoped fields. The derived handle is released when the request completes without affecting the root or any other derived loggers:
+
+```c
+clog g_logger;   /* root logger, initialised at startup */
+
+void handle_request(const char *req_id, long uid, const char *path) {
+    clog req_log = clog_derive(g_logger);
+
+    char uid_buf[32];
+    snprintf(uid_buf, sizeof(uid_buf), "%ld", uid);
+
+    clog_set_field(req_log, "request_id", req_id);
+    clog_set_field(req_log, "user_id",    uid_buf);
+    clog_set_field(req_log, "path",       path);
+
+    log_info(req_log, "request received");
+
+    int rc = process_request(path);
+    if (rc != 0)
+        log_error(req_log, "request failed with code %d", rc);
+    else
+        log_info(req_log, "request completed");
+
+    clog_close(req_log);   /* this handle is released; root logger is unaffected */
+}
+
+int main(void) {
+    clog_rotation_cfg_t rot = {
+        .size_rotation_enabled  = true,
+        .max_file_size          = 100L * 1024L * 1024L,   /* 100 MiB */
+        .time_rotation_enabled  = true,
+        .rotation_interval_secs = 86400,                   /* daily */
+        .max_rotated_files      = 30,
+    };
+    g_logger = clog_open_file_mp("/var/log/myservice.log", CLOG_INFO, &rot, NULL);
+    clog_set_field(g_logger, "service", "myservice");
+    clog_set_field(g_logger, "env",     "prod");
+
+    /* ... accept and dispatch requests ... */
+
+    clog_close(g_logger);
+    return 0;
+}
+```
+
+Request-scoped fields (`request_id`, `user_id`, `path`) appear in every line emitted by `req_log` but are absent from lines emitted by the root logger or any other derived logger. All writes share a single mutex, so output from concurrent requests is never interleaved.
 
 ### Reference: Core Operations
 
@@ -1645,14 +2069,14 @@ clog_close(lg);   /* safe */
 | `log_info(lg, fmt, ...)`  | `CLOG_INFO`  | No |
 | `log_warn(lg, fmt, ...)`  | `CLOG_WARN`  | No |
 | `log_error(lg, fmt, ...)` | `CLOG_ERROR` | Yes |
-| `log_alert(lg, fmt, ...)` | `CLOG_ALERT` | Yes — use for conditions requiring immediate operator action |
-| `log_fatal(lg, fmt, ...)` | `CLOG_FATAL` | Yes — does not terminate the process; caller must call `abort()` / `exit()` |
+| `log_alert(lg, fmt, ...)` | `CLOG_ALERT` | Yes - use for conditions requiring immediate operator action |
+| `log_fatal(lg, fmt, ...)` | `CLOG_FATAL` | Yes - does not terminate the process; caller must call `abort()` / `exit()` |
 
 ---
 
-## 15. JSON Parser / Serializer / DOM — `cjson`
+## 15. JSON Parser / Serializer / DOM - `cjson`
 
-`cjson` provides a fully mutable JSON Document Object Model (DOM), a recursive-descent parser, a serializer (compact and pretty-print), and two type-safe path macros — `cjson_get` and `cjson_set` — for reading and writing anywhere in the tree without chaining individual lookup calls.
+`cjson` provides a fully mutable JSON Document Object Model (DOM), a recursive-descent parser, a serializer (compact and pretty-print), and two type-safe path macros (`cjson_get` and `cjson_set`) for reading and writing anywhere in the tree without chaining individual lookup calls.
 
 ### Node types
 
@@ -1660,13 +2084,13 @@ Every JSON value is represented by an opaque `cjson` handle.  The type tag is a 
 
 | Tag | C storage | Meaning |
 |---|---|---|
-| `CJSON_NULL` | — | JSON `null` |
+| `CJSON_NULL` | - | JSON `null` |
 | `CJSON_BOOL` | `bool` | JSON `true` / `false` |
 | `CJSON_INTEGER` | `long long` | JSON number without decimal point or exponent (falls back to `CJSON_FLOAT` on overflow) |
 | `CJSON_FLOAT` | `double` | JSON number with decimal point, exponent, or integer value that overflows `long long` |
 | `CJSON_STRING` | `char *` (owned copy) | JSON string (UTF-8) |
 | `CJSON_ARRAY` | `cvec` of child `cjson` | JSON array |
-| `CJSON_OBJECT` | `chmap` of `char *→cjson` | JSON object |
+| `CJSON_OBJECT` | `chmap` of `char * -> cjson` | JSON object |
 
 ### Construction and parsing
 
@@ -1711,7 +2135,7 @@ cjson_serialize_free_mp(compact, mp);
 cjson_serialize_free_mp(pretty, mp);
 ```
 
-### Path navigation — `cjson_get` and `cjson_set`
+### Path navigation - `cjson_get` and `cjson_set`
 
 Paths are dot-separated component strings.  A component that begins with `#` followed by **one or more decimal digits** addresses **an array element by index when the current node is an array**; otherwise it is treated as a **literal object key**.  A bare `#` with no trailing digits is always an error (`cjson_get` returns `NULL`; `cjson_set` returns `ccol_invalid_args`).
 
@@ -1721,7 +2145,7 @@ cjson name = cjson_get(doc, "users.#0.name");
 if (cjson_type(name) == CJSON_STRING)
     printf("%s\n", cjson_str_val(name));   /* "Alice" */
 
-/* Write scalars — creates the leaf if absent, changes its type if it exists */
+/* Write scalars - creates the leaf if absent, changes its type if it exists */
 cjson_set(doc, "users.#0.active", (bool)true);
 cjson_set(doc, "users.#0.score",  99);
 cjson_set(doc, "users.#0.label",  "champion");
@@ -1733,7 +2157,43 @@ cjson_set(doc, "users.#0.name", 42);  /* name is now an integer */
 
 `cjson_set` accepts: `bool`, any integer type, `float`, `double`, `char *`, `const char *`, and string literals.  It detects the C type at compile time via `_Generic` and routes to the correct storage path.  Passing an untyped `NULL` literal sets the leaf to `CJSON_NULL`; a typed null pointer such as `(const char *)NULL` also produces `CJSON_NULL` because a null C string pointer maps to JSON null.  Non-finite `double` values (`INFINITY`, `-INFINITY`, `NAN`) are rejected and `ccol_invalid_args` is returned; the existing node is left untouched.  Signed integer types (including plain `char` on platforms where `char` is signed, e.g. x86-64 Linux) are sign-extended correctly to `long long`.
 
-Duplicate object keys set within the JSON object use **last-value-wins** semantics — the final occurrence of a key is retained and prior occurrences are deep-freed.
+Duplicate object keys set within the JSON object use **last-value-wins** semantics; the final occurrence of a key is retained and prior occurrences are deep-freed.
+
+### Real-World Use Case: Webhook Payload Normalization
+
+A webhook receiver must validate an incoming JSON payload, normalize a status field, inject a server-assigned timestamp, and forward the updated document downstream. The `cjson_get` and `cjson_set` path macros allow targeted updates deep in the tree without rebuilding the whole document:
+
+```c
+char *normalize_webhook(const char *raw_payload) {
+    char *err = NULL;
+    cjson doc = cjson_parse(raw_payload, &err);
+    if (!doc) {
+        fprintf(stderr, "parse error: %s\n", err);
+        free(err);
+        return NULL;
+    }
+
+    /* Validate a required field */
+    cjson event_type = cjson_get(doc, "event.type");
+    if (!event_type || cjson_type(event_type) != CJSON_STRING) {
+        cjson_destroy(doc);
+        return NULL;
+    }
+
+    /* Overwrite the status field in place - old node is deep-freed automatically */
+    cjson_set(doc, "event.status", "received");
+
+    /* Inject server-side metadata */
+    cjson_set(doc, "meta.processed_at", (long long)time(NULL));
+    cjson_set(doc, "meta.processor",    "gateway-v2");
+
+    char *out = cjson_serialize(doc);
+    cjson_destroy(doc);
+    return out;   /* caller must call cjson_serialize_free(out) */
+}
+```
+
+`cjson_get` returns a non-owning reference into the live tree, valid until the tree is mutated or destroyed. `cjson_set` deep-frees the old node at the target path before installing the new value, so replacing a nested object or array with a scalar is always safe and leak-free.
 
 ### Value access
 
@@ -1780,7 +2240,7 @@ cjson_object_set(root, "x", cjson_create_int_mp(42, &my_procs));
 cjson_destroy(root);
 ```
 
-**Per-node ownership:** the allocator is stamped on every node at creation time.  `cjson_destroy()` uses each node's own stored allocator — no external `mp` parameter is needed for destruction.  `cjson_clone()` inherits the allocator from the source tree.
+**Per-node ownership:** the allocator is stamped on every node at creation time.  `cjson_destroy()` uses each node's own stored allocator; no external `mp` parameter is needed for destruction.  `cjson_clone()` inherits the allocator from the source tree.
 
 **Node pool:** `cjson` maintains a per-thread free-list (capped at 512 nodes) to amortize allocation cost for the common case.  Custom-allocator nodes (`mp != NULL`) bypass the pool entirely and are allocated/freed directly through their own allocator.  Default-allocator nodes (`mp == NULL`) use the pool as usual; it is drained at thread exit with plain `free()`.
 
@@ -1802,13 +2262,13 @@ if (chmap_get_ptr(map, key) == NULL) {
     chmap_insert(map, key, value);
 }
 
-/* Thread 2 — concurrent */
+/* Thread 2 - concurrent */
 chmap_insert(map, key, other_value);
 ```
 
 Even if each individual call were internally serialised, the window between `chmap_get_ptr` returning and `chmap_insert` executing is a race. Meaningful thread safety must be expressed at the level of the logical operation, not the individual call. Callers are expected to guard shared containers with the synchronisation primitives best suited to their access pattern.
 
-`cjson` follows the same rule.  Concurrent calls to `cjson_parse_mp()` and `cjson_parse_n_mp()` on **independent** DOM trees are fully safe: the `err_str` out-parameter is caller-supplied and per-call — there is no shared state between concurrent parsers.  Access to any single DOM tree from multiple threads still requires external synchronisation.
+`cjson` follows the same rule.  Concurrent calls to `cjson_parse_mp()` and `cjson_parse_n_mp()` on **independent** DOM trees are fully safe: the `err_str` out-parameter is caller-supplied and per-call; there is no shared state between concurrent parsers.  Access to any single DOM tree from multiple threads still requires external synchronisation.
 
 The library provides thin, portable wrappers over pthreads in `include/common.h`:
 
@@ -1819,7 +2279,7 @@ mutex_lock(lock);
 chmap_insert(map, key, value);
 mutex_unlock(lock);
 
-/* Reader–writer lock for read-heavy workloads */
+/* Reader-writer lock for read-heavy workloads */
 rw_lock_t rw = PTHREAD_RWLOCK_INITIALIZER;
 
 rw_lock_rdlock(rw);
@@ -1847,9 +2307,9 @@ The following components include their own internal synchronisation and are safe
 
 ### Per-Component Constraints
 
-**`clrucache` eviction callback.** The callback passed to `clru_construct` is invoked **while the cache mutex is held**. It must not call back into the same cache handle — doing so will deadlock. It may allocate memory or write to a logger, but must not call `clru_get` or `clru_set` on the cache that triggered the eviction.
+**`clrucache` eviction callback.** The callback passed to `clru_construct` is invoked **while the cache mutex is held**. It must not call back into the same cache handle, doing so will deadlock. It may allocate memory or write to a logger, but must not call `clru_get` or `clru_set` on the cache that triggered the eviction.
 
-**`clogger` derived loggers.** `clog_derive` creates a sibling logger that shares the same fd, rotation state, and mutex as the root logger via the shared backing store. Writes from the root and all of its siblings are fully serialised with no additional locking required at the call site. The minimum-level check (`log_info`, `log_warn`, and similar macros) reads the per-logger level field without holding the mutex as a deliberate performance optimisation — a concurrent `clog_set_level` may therefore cause a single message near the boundary level to be inconsistently logged or dropped. This is intentional: the optimisation avoids mutex acquisition for every suppressed message, and the inconsistency window is not a data-corruption hazard.
+**`clogger` derived loggers.** `clog_derive` creates a sibling logger that shares the same fd, rotation state, and mutex as the root logger via the shared backing store. Writes from the root and all of its siblings are fully serialised with no additional locking required at the call site. The minimum-level check (`log_info`, `log_warn`, and similar macros) reads the per-logger level field without holding the mutex as a deliberate performance optimisation; a concurrent `clog_set_level` may therefore cause a single message near the boundary level to be inconsistently logged or dropped. This is intentional: the optimisation avoids mutex acquisition for every suppressed message, and the inconsistency window is not a data-corruption hazard.
 
 ---
 
@@ -1918,7 +2378,7 @@ r_mempool_destroy(node_pool);
 
 MIT License
 
-Copyright (c) 2026 — C Collections Contributors
+Copyright (c) 2026 - C Collections Contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

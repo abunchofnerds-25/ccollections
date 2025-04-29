@@ -358,7 +358,8 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
  *
  * @return Pointer to iterator, or NULL if map is empty or allocation fails
  *
- * @note Separate chaining: Iterates in insertion order via doubly-linked list
+ * @note Separate chaining: Iterates in reverse insertion order (most-recently
+ *       inserted element first) via doubly-linked list
  * @note Open-addressing: Iterates in slot order (not insertion order)
  * @note Iterator must be destroyed with chmap_iter_destroy() or will
  * auto-destroy at end

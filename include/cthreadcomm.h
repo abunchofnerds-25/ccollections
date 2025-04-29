@@ -894,26 +894,34 @@ typedef struct {
 
 /** @brief Build a selectable from a raw file descriptor (no read size limit)
  *
- *  When a file descriptor selectable wins the race, buf is left untouched and
- *  *ready_index is set.  The caller must then perform the actual I/O on the fd.
- *  A TOCTOU race is possible (same contract as POSIX select(2)), so the I/O
- *  call must be non-blocking.
- *
  *  ccol_select uses epoll(7) internally whenever any fd selectable is present.
  *  Queue selectables in the same array are bridged via per-waiter eventfd(2)s
  *  so both fd and queue readiness are multiplexed on a single epoll_wait call.
  *
  *  @param fd_      File descriptor to watch (must be >= 0)
- *  @param sel_dir  ccol_select_read  → EPOLLIN (readable)
- *                  ccol_select_write → EPOLLOUT (writable)
+ *  @param sel_dir  ccol_select_read  -> EPOLLIN (readable)
+ *                  ccol_select_write -> EPOLLOUT (writable)
  *
- *  @note For read-direction fd wins: ccol_select() reads all currently-
- *        available data from the fd into a heap buffer and sets buf->data
- *        (caller must free()) and buf->size (bytes read).  EOF yields
- *        buf->data = NULL, buf->size = 0.  No read size limit is enforced;
- *        use selectable_from_fd_limited() to cap the allocation.
+ *  @note For read-direction fd wins: ccol_select() reads data from the fd into
+ *        a heap buffer and sets buf->data (caller must free()) and buf->size.
+ *        EOF yields buf->data = NULL, buf->size = 0.  No read size limit is
+ *        enforced; use selectable_from_fd_limited() to cap the allocation.
+ *        Read behaviour depends on fd type:
+ *          - Datagram fds (SOCK_DGRAM, SOCK_SEQPACKET): one read(2) into a
+ *            66 KiB buffer, capturing the full datagram without truncation.
+ *          - O_NONBLOCK stream / non-socket fds (pipes, timerfd, etc.): the
+ *            read loop grows the buffer until EAGAIN, draining all data that
+ *            arrived before the wakeup.
+ *          - Blocking stream / non-socket fds: exactly one read(2) of up to
+ *            4096 bytes.  Any remaining data stays in the fd buffer and will
+ *            be returned on the next ccol_select() call because epoll is
+ *            level-triggered.  Use selectable_from_fd_limited() with
+ *            max_bytes_ > 4096 to read more per call, or use O_NONBLOCK for
+ *            full-drain behaviour.
  *  @note For write-direction fd wins: buf is left untouched (symmetric with
- *        write-direction queue wins); caller calls write(2).
+ *        write-direction queue wins); caller calls write(2).  A TOCTOU race is
+ *        possible (same contract as POSIX select(2)); the write(2) call should
+ *        be non-blocking or must handle EWOULDBLOCK/EAGAIN.
  *  @note EPOLLRDHUP, EPOLLERR, and EPOLLHUP are always included for read
  *        selectables; EPOLLERR and EPOLLHUP for write selectables.
  */
@@ -934,7 +942,11 @@ typedef struct {
  *  max_bytes_ + 1 bytes, which allows a message of exactly max_bytes_ to
  *  succeed while anything larger is caught and rejected before buf is returned
  *  to the caller.  For datagram sockets, any datagram whose size exceeds
- *  max_bytes_ triggers the same ccol_msg_too_large error.
+ *  max_bytes_ triggers the same ccol_msg_too_large error.  For blocking stream
+ *  fds, exactly one read(2) is performed per call using a buffer of
+ *  max(4096, max_bytes_) bytes, allowing up to max_bytes_ bytes to be returned
+ *  in a single call when max_bytes_ > 4096.  Data beyond the buffer size stays
+ *  in the fd kernel buffer for the next ccol_select() call.
  *
  *  @param fd_        File descriptor to watch (must be >= 0)
  *  @param sel_dir    ccol_select_read or ccol_select_write

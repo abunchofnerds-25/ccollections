@@ -625,14 +625,14 @@ TEST(fields, invalid_key_is_rejected) {
 
   /* These keys must be silently ignored (empty, space, '=', control char, DEL,
    * ']'). */
-  clog_set_field(lg, "", "v"); /* empty — violates RFC 5424 1*32PRINTUSASCII */
+  clog_set_field(lg, "", "v"); /* empty -- violates RFC 5424 1*32PRINTUSASCII */
   clog_set_field(lg, "bad key", "v");
   clog_set_field(lg, "bad=key", "v");
   clog_set_field(lg, "bad\x01key", "v"); /* C0 control character */
   clog_set_field(lg,
                  "bad\x7f"
                  "key",
-                 "v");                /* DEL (0x7f) — not PRINTUSASCII */
+                 "v");                /* DEL (0x7f) -- not PRINTUSASCII */
   clog_set_field(lg, "bad]key", "v"); /* ']' breaks RFC 5424 SD elements */
   /* This key is valid and must appear. */
   clog_set_field(lg, "good_key", "ok");
@@ -671,7 +671,7 @@ TEST(fields, value_with_spaces_is_quoted) {
   char buf[4096];
   read_file(path, buf, sizeof buf);
 
-  /* Value contains spaces → must be quoted */
+  /* Value contains spaces -> must be quoted */
   REQUIRE_NE(strstr(buf, "host=\"web server 01\""), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -717,7 +717,7 @@ TEST(fields, del_byte_in_key_is_rejected) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
   REQUIRE_NE((void *)lg, (void *)NULL);
 
-  /* DEL (0x7f) is not in PRINTUSASCII (0x21–0x7e).  Keys are emitted verbatim
+  /* DEL (0x7f) is not in PRINTUSASCII (0x21-0x7e).  Keys are emitted verbatim
    * in logfmt, so a DEL key would silently corrupt the output.  It must be
    * rejected like C0 control characters. */
   clog_set_field(lg,
@@ -738,6 +738,73 @@ TEST(fields, del_byte_in_key_is_rejected) {
   REQUIRE_EQ(strstr(buf, "=v"), NULL);
   /* The valid key must be present. */
   REQUIRE_NE(strstr(buf, "good_key=ok"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(fields, newline_and_cr_in_value_are_escaped) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* Value contains raw LF, CR, and HT -- all must be escaped in logfmt
+   * output so the record remains a single line. */
+  clog_set_field(lg, "payload", "line1\nline2\rend\ttab");
+  log_info(lg, "escape test");
+
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* The entire record must fit on a single logfmt line: exactly one ts= */
+  int ts_count = 0;
+  const char *p = buf;
+  while ((p = strstr(p, "ts=")) != NULL) {
+    ts_count++;
+    p++;
+  }
+  REQUIRE_EQ(ts_count, 1);
+
+  /* The first (and only) line must not contain raw CR or HT bytes. */
+  char *nl = strchr(buf, '\n');
+  REQUIRE_NE(nl, NULL);
+  size_t first_line_len = (size_t)(nl - buf);
+  REQUIRE_EQ(memchr(buf, '\r', first_line_len), NULL);
+  REQUIRE_EQ(memchr(buf, '\t', first_line_len), NULL);
+
+  /* The escaped two-character sequences must be present. */
+  REQUIRE_NE(strstr(buf, "\\n"), NULL);
+  REQUIRE_NE(strstr(buf, "\\r"), NULL);
+  REQUIRE_NE(strstr(buf, "\\t"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(fields, empty_value_is_quoted) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* An empty string value must be emitted as "" in logfmt. */
+  clog_set_field(lg, "empty_field", "");
+  log_info(lg, "empty value test");
+
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* The field must appear with an explicitly quoted empty string value. */
+  REQUIRE_NE(strstr(buf, "empty_field=\"\""), NULL);
 
   cleanup_dir(dir, "app.log");
 }
@@ -845,7 +912,7 @@ TEST(rotation, logger_recovers_after_file_externally_deleted) {
   log_info(lg, "triggers rotation");
 
   /* Second write: bytes_written reset to 0 after rotation; line_len < 10000.
-   * No further rotation — this line lands in the recreated file at `path`. */
+   * No further rotation -- this line lands in the recreated file at `path`. */
   log_info(lg, "after recovery");
 
   clog_close(lg);
@@ -1064,7 +1131,7 @@ TEST(derive, independent_level) {
   clog child = clog_derive(parent);
   REQUIRE_NE((void *)child, (void *)NULL);
 
-  /* Lower child's level below parent's — child sees DEBUG, parent does not */
+  /* Lower child's level below parent's -- child sees DEBUG, parent does not */
   clog_set_level(child, CLOG_DEBUG);
 
   log_debug(parent, "parent debug - dropped");
@@ -1132,6 +1199,105 @@ TEST(derive, field_override_in_child_is_independent) {
   cleanup_dir(dir, "app.log");
 }
 
+TEST(derive, grandchild_derive) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)parent, (void *)NULL);
+  clog_set_field(parent, "origin", "parent");
+
+  clog child = clog_derive(parent);
+  REQUIRE_NE((void *)child, (void *)NULL);
+  /* child inherits origin=parent from the snapshot; add its own field */
+  clog_set_field(child, "gen", "child");
+
+  /* Derive a grandchild from the child */
+  clog grandchild = clog_derive(child);
+  REQUIRE_NE((void *)grandchild, (void *)NULL);
+  /* grandchild inherits both origin=parent and gen=child */
+
+  /* Close parent and child first; grandchild must remain fully usable */
+  clog_close(parent);
+  clog_close(child);
+
+  log_info(grandchild, "from grandchild");
+  clog_close(grandchild);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_NE(strstr(buf, "from grandchild"), NULL);
+  /* Both inherited fields must appear in the grandchild's line */
+  REQUIRE_NE(strstr(buf, "origin=parent"), NULL);
+  REQUIRE_NE(strstr(buf, "gen=child"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(derive, multiple_children_from_one_parent) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)parent, (void *)NULL);
+  clog_set_field(parent, "shared", "yes");
+
+  clog child1 = clog_derive(parent);
+  REQUIRE_NE((void *)child1, (void *)NULL);
+  clog_set_field(child1, "name", "c1");
+
+  clog child2 = clog_derive(parent);
+  REQUIRE_NE((void *)child2, (void *)NULL);
+  clog_set_field(child2, "name", "c2");
+
+  log_info(child1, "from child1");
+  log_info(child2, "from child2");
+
+  clog_close(child1);
+  clog_close(child2);
+  clog_close(parent);
+
+  char buf[8192];
+  read_file(path, buf, sizeof buf);
+
+  /* Both messages land in the same file */
+  REQUIRE_NE(strstr(buf, "from child1"), NULL);
+  REQUIRE_NE(strstr(buf, "from child2"), NULL);
+
+  /* Isolate each log line for independent field checks */
+  char *msg1 = strstr(buf, "from child1");
+  char *msg2 = strstr(buf, "from child2");
+  REQUIRE_NE(msg1, NULL);
+  REQUIRE_NE(msg2, NULL);
+
+  char *ls1 = msg1;
+  while (ls1 > buf && *(ls1 - 1) != '\n') ls1--;
+  char *ls2 = msg2;
+  while (ls2 > buf && *(ls2 - 1) != '\n') ls2--;
+
+  char *le1 = strchr(msg1, '\n');
+  char *le2 = strchr(msg2, '\n');
+  if (le1) *le1 = '\0';
+  if (le2) *le2 = '\0';
+
+  /* Both children inherit the shared field from the parent snapshot */
+  REQUIRE_NE(strstr(ls1, "shared=yes"), NULL);
+  REQUIRE_NE(strstr(ls2, "shared=yes"), NULL);
+
+  /* Each child's own field is independent and must not appear on the other's line */
+  REQUIRE_NE(strstr(ls1, "name=c1"), NULL);
+  REQUIRE_EQ(strstr(ls1, "name=c2"), NULL);
+  REQUIRE_NE(strstr(ls2, "name=c2"), NULL);
+  REQUIRE_EQ(strstr(ls2, "name=c1"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
 /* ========================================================================== */
 /*                         THREAD SAFETY                                      */
 /* ========================================================================== */
@@ -1172,7 +1338,7 @@ TEST(threading, concurrent_writes_produce_no_garbled_lines) {
 
   clog_close(lg);
 
-  /* Every line must start with "ts=" — no interleaved partial writes */
+  /* Every line must start with "ts=" -- no interleaved partial writes */
   char buf[131072];
   size_t len = read_file(path, buf, sizeof buf);
   REQUIRE_NE(len, (size_t)0);
@@ -1310,7 +1476,7 @@ TEST(custom_alloc, derived_logger_uses_parent_allocator) {
 TEST(custom_alloc, invalid_mprocs_returns_null) {
   ccol_memmgmt_procs_t bad_procs = {
       .malloc = _custom_malloc,
-      .free = NULL, /* missing free — must be rejected */
+      .free = NULL, /* missing free -- must be rejected */
       .calloc = _custom_calloc,
       .realloc = _custom_realloc,
   };
@@ -1502,7 +1668,7 @@ TEST(json, del_byte_escaped_in_json) {
   REQUIRE_NE((void *)lg, (void *)NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* DEL (0x7f) in a field value and in the message must be escaped as 
+  /* DEL (0x7f) in a field value and in the message must be escaped as \u007f
    * in JSON output.  String literal concatenation prevents GCC from treating
    * \x7fe as a multi-digit hex escape sequence. */
   clog_set_field(lg, "k",
@@ -1519,7 +1685,7 @@ TEST(json, del_byte_escaped_in_json) {
 
   /* Raw DEL must not appear in the output. */
   REQUIRE_EQ(memchr(buf, 0x7f, strlen(buf)), NULL);
-  /* DEL must be encoded as the JSON Unicode escape . */
+  /* DEL must be encoded as the JSON Unicode escape \u007f. */
   REQUIRE_NE(strstr(buf, "\\u007f"), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -1620,6 +1786,55 @@ TEST(output, alert_level_appears_in_logfmt) {
   cleanup_dir(dir, "app.log");
 }
 
+TEST(output, error_and_fatal_level_strings_in_logfmt) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  log_error(lg, "error event");
+  log_fatal(lg, "fatal event");
+
+  clog_close(lg);
+
+  char buf[16384];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_NE(strstr(buf, "ERROR"), NULL);
+  REQUIRE_NE(strstr(buf, "FATAL"), NULL);
+  REQUIRE_NE(strstr(buf, "error event"), NULL);
+  REQUIRE_NE(strstr(buf, "fatal event"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(output, fatal_produces_backtrace) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_FATAL, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  log_fatal(lg, "critical failure");
+
+  clog_close(lg);
+
+  char buf[8192];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_NE(strstr(buf, "FATAL"), NULL);
+  REQUIRE_NE(strstr(buf, "critical failure"), NULL);
+  /* log_fatal must produce at least one backtrace continuation line */
+  REQUIRE_NE(strstr(buf, "\t#"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
 TEST(json, set_format_on_derived_affects_parent) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
@@ -1646,6 +1861,102 @@ TEST(json, set_format_on_derived_affects_parent) {
 
   /* Parent's line must be JSON */
   REQUIRE_EQ(buf[0], '{');
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(json, error_alert_fatal_level_strings_in_json) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_JSON);
+
+  log_error(lg, "e");
+  log_alert(lg, "a");
+  log_fatal(lg, "f");
+
+  clog_close(lg);
+
+  char buf[16384];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_NE(strstr(buf, "\"ERROR\""), NULL);
+  REQUIRE_NE(strstr(buf, "\"ALERT\""), NULL);
+  REQUIRE_NE(strstr(buf, "\"FATAL\""), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(json, alert_and_fatal_have_inline_bt_array) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_ALERT, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_JSON);
+
+  log_alert(lg, "alert event");
+  log_fatal(lg, "fatal event");
+
+  clog_close(lg);
+
+  char buf[16384];
+  read_file(path, buf, sizeof buf);
+
+  /* Each of the two messages must carry an inline bt array */
+  int bt_count = 0;
+  const char *p = buf;
+  while ((p = strstr(p, "\"bt\":[")) != NULL) {
+    bt_count++;
+    p++;
+  }
+  REQUIRE_EQ(bt_count, 2);
+
+  /* JSON format must not produce tab-indented backtrace continuation lines */
+  REQUIRE_EQ(strstr(buf, "\t#"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(json, tab_and_cr_in_field_value_are_escaped) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_JSON);
+
+  /* Field value with embedded HT and CR -- both must be JSON-escaped */
+  clog_set_field(lg, "data", "col1\tcol2\r\n");
+
+  log_info(lg, "tab and cr test");
+
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* Raw HT and CR must not appear in the JSON output */
+  REQUIRE_EQ(memchr(buf, '\t', strlen(buf)), NULL);
+  REQUIRE_EQ(memchr(buf, '\r', strlen(buf)), NULL);
+
+  /* The escaped sequences must be present */
+  REQUIRE_NE(strstr(buf, "\\t"), NULL);
+  REQUIRE_NE(strstr(buf, "\\r"), NULL);
+
+  /* The entire record must be a single JSON-object line */
+  REQUIRE_EQ(buf[0], '{');
+  char *nl = strchr(buf, '\n');
+  REQUIRE_NE(nl, NULL);
+  REQUIRE_EQ(*(nl - 1), '}');
 
   cleanup_dir(dir, "app.log");
 }
@@ -1699,8 +2010,8 @@ TEST(syslog, severity_encoding) {
   REQUIRE_NE((void *)lg, (void *)NULL);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* LOG_USER(1): WARN→4 → PRI=12; ERROR→3 → PRI=11; ALERT→1 → PRI=9;
-     FATAL→0 → PRI=8 */
+  /* LOG_USER(1): WARN->4 -> PRI=12; ERROR->3 -> PRI=11; ALERT->1 -> PRI=9;
+     FATAL->0 -> PRI=8 */
   log_warn(lg, "w");
   log_error(lg, "e");
   log_alert(lg, "a");
@@ -1722,7 +2033,7 @@ TEST(syslog, facility_change) {
 
   REQUIRE_EQ(clog_get_facility(lg), CLOG_SYSLOG_USER);
 
-  /* Switch to DAEMON(3); INFO(6) → PRI = 3*8+6 = 30 */
+  /* Switch to DAEMON(3); INFO(6) -> PRI = 3*8+6 = 30 */
   clog_set_facility(lg, CLOG_SYSLOG_DAEMON);
   REQUIRE_EQ(clog_get_facility(lg), CLOG_SYSLOG_DAEMON);
 
@@ -1763,7 +2074,7 @@ TEST(syslog, sd_param_name_truncated_to_32_chars) {
   REQUIRE_NE((void *)lg, (void *)NULL);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* 40-char key — exceeds RFC 5424 SD-PARAM-NAME limit of 32. */
+  /* 40-char key -- exceeds RFC 5424 SD-PARAM-NAME limit of 32. */
   clog_set_field(lg, "abcdefghijklmnopqrstuvwxyz_123456789", "val");
 
   log_info(lg, "truncation");
@@ -1816,7 +2127,7 @@ TEST(syslog, backtrace_as_separate_messages) {
   char buf[16384];
   drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
 
-  /* There must be at least two syslog messages (main + ≥1 backtrace frame). */
+  /* There must be at least two syslog messages (main + >=1 backtrace frame). */
   int msg_count = 0;
   const char *p = buf;
   while ((p = strstr(p, "<11>1 ")) != NULL) {
@@ -1827,4 +2138,300 @@ TEST(syslog, backtrace_as_separate_messages) {
 
   /* Each backtrace message carries the tab-prefixed frame marker. */
   REQUIRE_NE(strstr(buf, "\t#0 "), NULL);
+}
+
+TEST(syslog, fatal_severity_encoding) {
+  int pipefd[2];
+  REQUIRE_EQ(pipe(pipefd), 0);
+  clog lg = clog_open_fd(pipefd[1], CLOG_TRACE);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_SYSLOG);
+
+  /* LOG_USER(1) * 8 + FATAL_syslog_severity(0) = 8 */
+  log_fatal(lg, "fatal syslog event");
+
+  char buf[16384];
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+
+  REQUIRE_NE(strstr(buf, "<8>"), NULL);
+  REQUIRE_NE(strstr(buf, "fatal syslog event"), NULL);
+}
+
+TEST(syslog, sd_param_value_special_chars_escaped) {
+  int pipefd[2];
+  REQUIRE_EQ(pipe(pipefd), 0);
+  clog lg = clog_open_fd(pipefd[1], CLOG_INFO);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_SYSLOG);
+
+  /* RFC 5424 SD-PARAM-VALUE requires ], \, and " to be escaped. */
+  clog_set_field(lg, "bracket", "val]end");
+  clog_set_field(lg, "backslash", "C:\\foo");
+  clog_set_field(lg, "quote", "say \"hi\"");
+
+  log_info(lg, "sd escape test");
+
+  char buf[4096];
+  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+
+  /* ']' -> '\]' */
+  REQUIRE_NE(strstr(buf, "\\]"), NULL);
+  /* '\' -> '\\' */
+  REQUIRE_NE(strstr(buf, "C:\\\\foo"), NULL);
+  /* '"' -> '\"' */
+  REQUIRE_NE(strstr(buf, "\\\"hi\\\""), NULL);
+}
+
+/* ========================================================================== */
+/*                         ADDITIONAL LIFECYCLE                               */
+/* ========================================================================== */
+
+TEST(lifecycle, open_file_appends_to_existing) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  /* Write a sentinel line with the first logger. */
+  clog lg1 = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg1, (void *)NULL);
+  log_info(lg1, "first open");
+  clog_close(lg1);
+
+  /* Open the same path again -- must append, not truncate. */
+  clog lg2 = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg2, (void *)NULL);
+  log_info(lg2, "second open");
+  clog_close(lg2);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* Both messages must be present in the file. */
+  REQUIRE_NE(strstr(buf, "first open"), NULL);
+  REQUIRE_NE(strstr(buf, "second open"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* ========================================================================== */
+/*                         ADDITIONAL FILTERING                               */
+/* ========================================================================== */
+
+TEST(filtering, set_level_to_off_suppresses_everything) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  log_info(lg, "before off - visible");
+
+  clog_set_level(lg, CLOG_OFF);
+  REQUIRE_EQ(clog_get_level(lg), CLOG_OFF);
+
+  log_fatal(lg, "after off - suppressed");
+
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_NE(strstr(buf, "before off - visible"), NULL);
+  REQUIRE_EQ(strstr(buf, "after off - suppressed"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* ========================================================================== */
+/*                         ADDITIONAL FIELD EDGE CASES                        */
+/* ========================================================================== */
+
+TEST(fields, remove_nonexistent_field_is_noop) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* Removing a key that was never set must not crash. */
+  clog_remove_field(lg, "nonexistent");
+  clog_remove_field(lg, "also_never_set");
+
+  log_info(lg, "still works");
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+  REQUIRE_NE(strstr(buf, "still works"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(fields, clear_empty_fields_is_noop) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* Clearing fields on a logger that never had any must not crash. */
+  clog_clear_fields(lg);
+  clog_clear_fields(lg);
+
+  log_info(lg, "still works");
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+  REQUIRE_NE(strstr(buf, "still works"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(fields, null_key_or_value_is_noop) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* NULL key and NULL value must both be rejected silently. */
+  clog_set_field(lg, NULL, "v");
+  clog_set_field(lg, "k", NULL);
+  clog_set_field(lg, NULL, NULL);
+  clog_remove_field(lg, NULL);
+
+  clog_set_field(lg, "good", "yes");
+  log_info(lg, "null field test");
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* Only the valid field must appear; no crash. */
+  REQUIRE_NE(strstr(buf, "good=yes"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* ========================================================================== */
+/*                         ADDITIONAL DERIVE                                  */
+/* ========================================================================== */
+
+TEST(derive, inherits_min_level_from_parent) {
+  clog parent = clog_open_fd_mp(STDERR_FILENO, CLOG_WARN, NULL);
+  REQUIRE_NE((void *)parent, (void *)NULL);
+
+  clog child = clog_derive(parent);
+  REQUIRE_NE((void *)child, (void *)NULL);
+
+  /* The child must start with the parent's level at derive time. */
+  REQUIRE_EQ(clog_get_level(child), CLOG_WARN);
+
+  clog_close(child);
+  clog_close(parent);
+}
+
+/* ========================================================================== */
+/*                         ADDITIONAL SYSLOG                                  */
+/* ========================================================================== */
+
+TEST(syslog, syslog_format_inherited_by_derived_logger) {
+  int pipefd[2];
+  REQUIRE_EQ(pipe(pipefd), 0);
+  clog parent = clog_open_fd(pipefd[1], CLOG_INFO);
+  REQUIRE_NE((void *)parent, (void *)NULL);
+  clog_set_format(parent, CLOG_FMT_SYSLOG);
+
+  clog child = clog_derive(parent);
+  REQUIRE_NE((void *)child, (void *)NULL);
+
+  /* Child shares the parent's backing store, so it must see syslog format. */
+  REQUIRE_EQ(clog_get_format(child), CLOG_FMT_SYSLOG);
+
+  log_info(child, "child syslog");
+
+  char buf[4096];
+  drain_pipe(parent, pipefd[0], pipefd[1], buf, sizeof buf);
+  clog_close(child);
+
+  /* Output must be RFC 5424 syslog, not logfmt. */
+  REQUIRE_NE(strstr(buf, "<14>1 "), NULL);
+  REQUIRE_NE(strstr(buf, "child syslog"), NULL);
+}
+
+/* ========================================================================== */
+/*                         ADDITIONAL THREADING                               */
+/* ========================================================================== */
+
+#define DERIVED_THREAD_COUNT 4
+#define DERIVED_MSGS_PER_THREAD 30
+
+typedef struct {
+  clog lg;
+  int id;
+} derived_arg_t;
+
+static void *_derived_writer_thread(void *arg) {
+  derived_arg_t *a = (derived_arg_t *)arg;
+  clog child = clog_derive(a->lg);
+  if (!child) return NULL;
+  clog_set_field(child, "writer", "yes");
+  for (int i = 0; i < DERIVED_MSGS_PER_THREAD; i++)
+    log_info(child, "derived id=%d msg=%d", a->id, i);
+  clog_close(child);
+  return NULL;
+}
+
+TEST(threading, concurrent_parent_and_derived_writers_no_garbled_lines) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog parent = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)parent, (void *)NULL);
+  clog_set_field(parent, "role", "parent");
+
+  pthread_t threads[DERIVED_THREAD_COUNT];
+  derived_arg_t args[DERIVED_THREAD_COUNT];
+
+  for (int i = 0; i < DERIVED_THREAD_COUNT; i++) {
+    args[i].lg = parent;
+    args[i].id = i;
+    pthread_create(&threads[i], NULL, _derived_writer_thread, &args[i]);
+  }
+
+  /* Parent also writes concurrently. */
+  for (int i = 0; i < DERIVED_MSGS_PER_THREAD; i++)
+    log_info(parent, "parent msg=%d", i);
+
+  for (int i = 0; i < DERIVED_THREAD_COUNT; i++) pthread_join(threads[i], NULL);
+  clog_close(parent);
+
+  /* Every non-backtrace line must start with "ts=". */
+  char buf[524288];
+  size_t len = read_file(path, buf, sizeof buf);
+  REQUIRE_NE(len, (size_t)0);
+
+  int bad_lines = 0;
+  char *line = buf;
+  while (line < buf + len) {
+    char *nl = strchr(line, '\n');
+    if (line[0] != '\t' && strncmp(line, "ts=", 3) != 0) bad_lines++;
+    if (!nl) break;
+    line = nl + 1;
+  }
+  REQUIRE_EQ(bad_lines, 0);
+
+  cleanup_dir(dir, "app.log");
 }

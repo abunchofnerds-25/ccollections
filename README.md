@@ -29,9 +29,10 @@ The library targets contexts where correctness, performance, and predictable mem
 13. [LRU Cache - `clrucache`](#13-lru-cache--clrucache)
 14. [Structured Logger - `clogger`](#14-structured-logger--clogger)
 15. [JSON Parser / Serializer / DOM - `cjson`](#15-json-parser--serializer--dom--cjson)
-16. [Thread Safety](#16-thread-safety)
-17. [Custom Memory Management](#17-custom-memory-management)
-18. [License](#18-license)
+16. [YAML Parser / Serializer / DOM - `cyaml`](#16-yaml-parser--serializer--dom--cyaml)
+17. [Thread Safety](#17-thread-safety)
+18. [Custom Memory Management](#18-custom-memory-management)
+19. [License](#19-license)
 
 ---
 
@@ -184,6 +185,8 @@ Include only the headers you need:
 #include <cthreadcomm.h>
 #include <clrucache.h>
 #include <clogger.h>
+#include <cjson.h>
+#include <cyaml.h>
 ```
 
 `cvector.h`, `chashmap.h`, and `cbstmap.h` each automatically include `citerators.h`, so the unified iteration API (`ccol_begin`, `ccol_for_each`, `ccol_iter_declare`, and related macros) is available whenever any one of those container headers is included.
@@ -1292,7 +1295,7 @@ Because every slot is the same size as `ConnCtx`, there is no fragmentation with
 
 ### Driving Other Containers from a Pool
 
-Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 16](#16-custom-memory-management) for the complete pattern.
+Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 18](#18-custom-memory-management) for the complete pattern.
 
 ---
 
@@ -1543,7 +1546,7 @@ ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
 **Key properties:**
 
 - A queue win is zero-copy: the message is dequeued atomically and ownership transferred.
-- A file descriptor read win: `msg.data` is heap-allocated by `ccol_select` (caller must `free`). `msg.size` is the byte count. EOF yields `msg.data = NULL`.
+- A file descriptor read win: `msg.data` is heap-allocated by `ccol_select` (caller must `free`). `msg.size` is the byte count. EOF yields `msg.data = NULL`. The amount of data read per call depends on the fd type: datagram fds (SOCK_DGRAM / SOCK_SEQPACKET) receive one full datagram captured in a 66 KiB buffer; O_NONBLOCK stream / non-socket fds are fully drained until EAGAIN; blocking stream / non-socket fds receive exactly one read per call using a buffer of max(4096, max_bytes) bytes -- pass `max_bytes > 4096` via `selectable_from_fd_limited` to read more per call; remaining data is returned on the next `ccol_select` call (epoll is level-triggered -- use O_NONBLOCK if full-drain behaviour is required).
 - A file descriptor write win: readiness is reported only; the caller then calls `write(2)`.
 - Queue-only selectable sets use a condition variable path with no `epoll` overhead. Any file descriptor in the set switches the implementation to `epoll(7)` automatically.
 
@@ -2089,8 +2092,8 @@ Every JSON value is represented by an opaque `cjson` handle.  The type tag is a 
 | `CJSON_INTEGER` | `long long` | JSON number without decimal point or exponent (falls back to `CJSON_FLOAT` on overflow) |
 | `CJSON_FLOAT` | `double` | JSON number with decimal point, exponent, or integer value that overflows `long long` |
 | `CJSON_STRING` | `char *` (owned copy) | JSON string (UTF-8) |
-| `CJSON_ARRAY` | `cvec` of child `cjson` | JSON array |
-| `CJSON_OBJECT` | `chmap` of `char * -> cjson` | JSON object |
+| `CJSON_LIST` | `cvec` of child `cjson` | JSON array |
+| `CJSON_DICTIONARY` | `chmap` of `char * -> cjson` | JSON object |
 
 ### Construction and parsing
 
@@ -2112,9 +2115,9 @@ if (!doc2) { fprintf(stderr, "%s\n", err_str); free(err_str); exit(1); }
 cjson doc3 = cjson_parse("{\"foo\": \"bar\"}", NULL);
 
 /* Building programmatically */
-cjson arr = cjson_create_array();
-cjson_array_push(arr, cjson_create_int(1));
-cjson_array_push(arr, cjson_create_string("two"));
+cjson arr = cjson_create_list();
+cjson_list_push(arr, cjson_create_int(1));
+cjson_list_push(arr, cjson_create_string("two"));
 ```
 
 > **`\u0000` in string values:** The parser rejects the JSON escape sequence `\u0000` and returns `NULL` with a parse error. Because `cjson` stores all string values as null-terminated `char *` buffers, an embedded null byte would silently truncate the string at that position. Rejecting `\u0000` up-front prevents silent data corruption.
@@ -2138,6 +2141,23 @@ cjson_serialize_free_mp(pretty, mp);
 ### Path navigation - `cjson_get` and `cjson_set`
 
 Paths are dot-separated component strings.  A component that begins with `#` followed by **one or more decimal digits** addresses **an array element by index when the current node is an array**; otherwise it is treated as a **literal object key**.  A bare `#` with no trailing digits is always an error (`cjson_get` returns `NULL`; `cjson_set` returns `ccol_invalid_args`).
+
+Two escape sequences are recognised inside path strings:
+
+| Sequence | Meaning in key |
+|----------|----------------|
+| `\\.`    | A literal `.` character (not a path separator) |
+| `\\\\`   | A literal `\` character |
+
+A `\` before any other character is passed through unchanged.
+
+```c
+/* Key named "a.b" (literal dot): */
+cjson node = cjson_get(doc, "a\\.b");
+
+/* Two-level path where the first key is "a.b" and the second is "c.d": */
+cjson node2 = cjson_get(doc, "a\\.b.c\\.d");
+```
 
 ```c
 /* Read values anywhere in the tree */
@@ -2195,6 +2215,30 @@ char *normalize_webhook(const char *raw_payload) {
 
 `cjson_get` returns a non-owning reference into the live tree, valid until the tree is mutated or destroyed. `cjson_set` deep-frees the old node at the target path before installing the new value, so replacing a nested object or array with a scalar is always safe and leak-free.
 
+### Deleting nodes - `cjson_delete`
+
+`cjson_delete(root, path)` removes the node addressed by the path and recursively frees its entire subtree.  For dictionary parents the leaf is addressed by key; for array parents the leaf must be a `#N` component.
+
+```c
+cjson_delete(doc, "users.#0.address");   /* remove a nested object */
+cjson_delete(doc, "config.debug");       /* remove a scalar key */
+cjson_delete(doc, "items.#2");           /* remove an array element */
+```
+
+The two lower-level functions are also available when you already hold a reference to the immediate parent:
+
+```c
+/* Remove by index from an array you already have a handle to */
+cjson arr = cjson_get(doc, "items");
+ccol_retval_t r = cjson_list_remove(arr, 0);
+
+/* Remove by key from an object you already have a handle to */
+cjson obj = cjson_get(doc, "config");
+ccol_retval_t r2 = cjson_dictionary_remove(obj, "debug");
+```
+
+`cjson_list_remove` shifts all subsequent elements left and shrinks the backing array.  `cjson_dictionary_remove` returns `ccol_key_not_found` when the key does not exist.
+
 ### Value access
 
 ```c
@@ -2203,8 +2247,8 @@ bool        cjson_bool_val(cjson node);
 long long   cjson_int_val(cjson node);
 double      cjson_double_val(cjson node);
 const char *cjson_str_val(cjson node);   /* string owned by the node */
-size_t      cjson_array_len(cjson node);
-size_t      cjson_object_size(cjson node);
+size_t      cjson_list_len(cjson node);
+size_t      cjson_dictionary_size(cjson node);
 ```
 
 ### Destruction and ownership
@@ -2213,8 +2257,8 @@ size_t      cjson_object_size(cjson node);
 cjson_destroy(doc);   /* deep-frees the entire tree, NULLs the handle */
 ```
 
-- `cjson_array_push` **transfers ownership unconditionally**: on success the array owns the child; on failure `cjson_array_push` deep-frees it.  Do not free the child after calling this function regardless of the return value.
-- `cjson_object_set` **transfers ownership unconditionally**: on success the object owns the child; on failure `cjson_object_set` deep-frees it.  Do not free the child after calling this function regardless of the return value.
+- `cjson_list_push` **transfers ownership unconditionally**: on success the array owns the child; on failure `cjson_list_push` deep-frees it.  Do not free the child after calling this function regardless of the return value.
+- `cjson_dictionary_set` **transfers ownership unconditionally**: on success the object owns the child; on failure `cjson_dictionary_set` deep-frees it.  Do not free the child after calling this function regardless of the return value.
 - `cjson_get` returns a **non-owning** reference valid until the tree is mutated or destroyed.
 - `cjson_clone` returns a fully independent deep copy.
 
@@ -2235,8 +2279,8 @@ char *out = cjson_serialize(doc2);
 cjson_serialize_free_mp(out, &my_procs);   /* pass same mp used at creation */
 
 /* Build a tree programmatically with a custom allocator. */
-cjson root = cjson_create_object_mp(&my_procs);
-cjson_object_set(root, "x", cjson_create_int_mp(42, &my_procs));
+cjson root = cjson_create_dictionary_mp(&my_procs);
+cjson_dictionary_set(root, "x", cjson_create_int_mp(42, &my_procs));
 cjson_destroy(root);
 ```
 
@@ -2246,13 +2290,261 @@ cjson_destroy(root);
 
 ---
 
-## 16. Thread Safety
+## 16. YAML Parser / Serializer / DOM - `cyaml`
+
+`cyaml` provides a fully mutable YAML Document Object Model (DOM), a hand-written recursive-descent parser, a block serializer, a compact flow serializer, and two type-safe path macros (`cyaml_get` and `cyaml_set`) for reading and writing anywhere in the tree without chaining individual lookup calls.
+
+### Supported YAML features
+
+| Feature | Notes |
+|---|---|
+| Block mappings | Indentation-sensitive key: value pairs |
+| Block sequences | Indentation-sensitive `- item` lists |
+| Flow mappings | `{key: value, ...}` inline style |
+| Flow sequences | `[a, b, c]` inline style |
+| Plain scalars | Unquoted values |
+| Single-quoted scalars | No escape processing; `''` encodes a literal `'` |
+| Double-quoted scalars | Full YAML escape sequences including `\uXXXX` |
+| Literal block scalars | `|` -- newlines preserved |
+| Folded block scalars | `>` -- newlines folded to spaces except blank lines |
+| Block scalar chomping | `|+` keep, `|-` strip, `|` clip (default) |
+| Anchors and aliases | `&name` / `*name`; aliases resolve to deep clones; scoped per document |
+| YAML 1.2 core schema | Implicit type resolution for null/bool/int/float |
+| Leading `---` / trailing `...` | Document-start and document-end markers |
+| Multi-document streams | Supported; see below |
+| Comments | `#` to end-of-line; silently ignored |
+| Tags | `!tag` / `!!tag`; silently ignored |
+
+**Not supported:** multi-line plain scalars (use `|` or `>` instead).
+
+### Multi-document streams
+
+When the input contains multiple `---`-delimited documents, `cyaml_parse` (and its variants) returns a single `CYAML_LIST` node whose elements are the individual document roots in order.  A single-document input is always returned as its root node directly -- no wrapping list.
+
+```c
+/* Kubernetes-style multi-document YAML */
+const char *stream =
+    "---\n"
+    "kind: Service\n"
+    "name: frontend\n"
+    "---\n"
+    "kind: Deployment\n"
+    "name: backend\n";
+
+char *err = NULL;
+cyaml root = cyaml_parse(stream, &err);
+/* root is CYAML_LIST with 2 elements */
+cyaml doc0 = cyaml_list_get(root, 0);   /* {kind: Service,     name: frontend} */
+cyaml doc1 = cyaml_list_get(root, 1);   /* {kind: Deployment,  name: backend}  */
+cyaml_destroy(root);
+```
+
+Rules for multi-document streams:
+- The first document may appear with or without a leading `---` marker.
+- Every subsequent document **must** begin with `---`.
+- An optional `...` end marker may follow each document.
+- Anchors are scoped per document; a `*alias` cannot reference an `&anchor`
+  from a different document.
+- An empty document (e.g. two consecutive `---` markers) yields a `CYAML_NULL`
+  element in the list.
+
+### Node types
+
+Every YAML value is represented by an opaque `cyaml` handle.  The type tag is a `cyaml_node_type_t` enum:
+
+| Constant | Internal storage | YAML kind |
+|---|---|---|
+| `CYAML_NULL` | -- | `null`, `~`, or empty value |
+| `CYAML_BOOL` | `bool` | `true` / `false` and case variants |
+| `CYAML_INTEGER` | `long long` | Decimal, `0x` hex, `0o` octal |
+| `CYAML_FLOAT` | `double` | Decimal, exponent, `.inf`, `-.inf`, `.nan` |
+| `CYAML_STRING` | `char *` (heap) | All non-null scalars that do not match other rules |
+| `CYAML_LIST` | `cvec` of child `cyaml` | Ordered list |
+| `CYAML_DICTIONARY` | `chmap` of `char * -> cyaml` | Key/value map |
+
+### Parsing
+
+```c
+char *err = NULL;
+
+/* cyaml_parse_mp accepts memory management functions for all allocations. */
+cyaml doc = cyaml_parse_mp("name: Alice\nage: 30\n", &err, NULL);
+
+/* cyaml_parse is a convenience wrapper that passes NULL for memory procs. */
+cyaml doc2 = cyaml_parse("name: Alice\nage: 30\n", &err);
+
+if (!doc2) {
+    fprintf(stderr, "parse error: %s\n", err ? err : "unknown");
+    free(err);
+}
+
+/* cyaml_parse_n / cyaml_parse_n_mp accept a byte length for non-null-terminated input. */
+cyaml doc3 = cyaml_parse_n(buf, len, NULL);
+
+/* Multi-document input: the returned node is a CYAML_LIST of document roots. */
+cyaml stream = cyaml_parse("---\nfoo: 1\n---\nbar: 2\n", &err);
+/* cyaml_type(stream) == CYAML_LIST, cyaml_list_len(stream) == 2 */
+```
+
+### Programmatic construction
+
+```c
+cyaml root = cyaml_create_dictionary();
+cyaml_dictionary_set(root, "name",   cyaml_create_string("Alice"));
+cyaml_dictionary_set(root, "age",    cyaml_create_int(30));
+cyaml_dictionary_set(root, "active", cyaml_create_bool(true));
+
+cyaml seq = cyaml_create_list();
+cyaml_list_push(seq, cyaml_create_int(1));
+cyaml_list_push(seq, cyaml_create_string("two"));
+cyaml_dictionary_set(root, "items", seq);
+```
+
+### Implicit type resolution (YAML 1.2 core schema)
+
+The parser resolves unquoted scalars according to the YAML 1.2 core schema:
+
+| Input | Resolved type |
+|---|---|
+| `~`, `null`, `Null`, `NULL`, or empty | `CYAML_NULL` |
+| `true`, `True`, `TRUE` | `CYAML_BOOL` (true) |
+| `false`, `False`, `FALSE` | `CYAML_BOOL` (false) |
+| Decimal integer, `0xHEX`, `0oOCTAL` | `CYAML_INTEGER` |
+| Decimal float, scientific notation | `CYAML_FLOAT` |
+| `.inf`, `-.inf`, `.nan` (any case) | `CYAML_FLOAT` |
+| Anything else | `CYAML_STRING` |
+
+To force a value to be treated as a string regardless of its content, use single or double quotes in the YAML source.
+
+### Serialization
+
+```c
+/* Block style -- human-readable YAML */
+char *block = cyaml_serialize(doc);
+
+/* Flow style -- compact single-line YAML */
+char *flow = cyaml_serialize_flow(doc);
+
+/* Both return heap-allocated strings that must be freed. */
+cyaml_serialize_free(block);
+cyaml_serialize_free(flow);
+
+/* cyaml_serialize() uses the node's own stored allocator automatically.
+ * When the tree was created with a custom allocator, free with _mp: */
+char *block2 = cyaml_serialize(doc);
+cyaml_serialize_free_mp(block2, mp);
+```
+
+### Path navigation -- `cyaml_get` and `cyaml_set`
+
+Paths are dot-separated component strings.  A component that begins with `#` followed by one or more decimal digits addresses a sequence element by index when the current node is a sequence; otherwise it is treated as a literal mapping key.
+
+Two escape sequences are recognised inside path strings:
+
+| Sequence | Meaning in key |
+|----------|----------------|
+| `\\.`    | A literal `.` character (not a path separator) |
+| `\\\\`   | A literal `\` character |
+
+A `\` before any other character is passed through unchanged.
+
+```c
+/* Key named "a.b" (literal dot): */
+cyaml node = cyaml_get(doc, "a\\.b");
+
+/* Two-level path where the first key is "a.b" and the second is "c.d": */
+cyaml node2 = cyaml_get(doc, "a\\.b.c\\.d");
+```
+
+```c
+cyaml name = cyaml_get(doc, "users.#0.name");
+if (cyaml_type(name) == CYAML_STRING)
+    printf("%s\n", cyaml_str_val(name));   /* "Alice" */
+
+/* cyaml_set creates the key if it does not exist. */
+cyaml_set(doc, "users.#0.active", (bool)true);
+cyaml_set(doc, "users.#0.score",  99);
+```
+
+### Deleting nodes -- `cyaml_delete`
+
+`cyaml_delete(root, path)` removes the node addressed by the path and recursively frees its entire subtree.  For dictionary parents the leaf is addressed by key; for list parents the leaf must be a `#N` component.
+
+```c
+cyaml_delete(doc, "server.debug");       /* remove a scalar key */
+cyaml_delete(doc, "hosts.#0");           /* remove a list element */
+cyaml_delete(doc, "users.alice.address"); /* remove a nested mapping */
+```
+
+The two lower-level functions are also available when you already hold a reference to the immediate parent:
+
+```c
+/* Remove by index from a list you already have a handle to */
+cyaml seq = cyaml_get(doc, "hosts");
+ccol_retval_t r = cyaml_list_remove(seq, 0);
+
+/* Remove by key from a dictionary you already have a handle to */
+cyaml server = cyaml_get(doc, "server");
+ccol_retval_t r2 = cyaml_dictionary_remove(server, "debug");
+```
+
+`cyaml_list_remove` shifts all subsequent elements left and shrinks the backing array.  `cyaml_dictionary_remove` returns `ccol_key_not_found` when the key does not exist.
+
+### Duplicate mapping keys
+
+The parser accepts duplicate keys without error.  When the same key appears more than once in a mapping, the last value wins and the earlier value is silently freed.  This matches common YAML parser behavior but is not mandated by the YAML 1.2 specification.  Callers should not rely on duplicate-key detection; treat it as implementation-defined behavior.
+
+### Anchors and aliases
+
+```c
+const char *yaml =
+    "defaults: &base\n"
+    "  timeout: 30\n"
+    "  retries: 3\n"
+    "staging: *base\n";
+
+cyaml doc = cyaml_parse(yaml, NULL);
+cyaml timeout = cyaml_get(doc, "defaults.timeout");
+/* CYAML_INTEGER, value 30 */
+cyaml st_timeout = cyaml_get(doc, "staging.timeout");
+/* Independent deep clone: also CYAML_INTEGER, value 30 */
+```
+
+Aliases resolve to independent deep clones of the anchored node.  Modifying the alias does not affect the original.  Merge keys (`<<:`) are not supported; see the "Not supported" note above.
+
+### Lifecycle
+
+```c
+/* Manual destroy: */
+cyaml_destroy(doc);    /* frees all nodes; NULLs the pointer */
+
+/* RAII (GCC/Clang only): */
+cyaml_declare_scoped(doc2) = cyaml_parse("x: 1\n", NULL);
+/* doc2 is automatically freed when it goes out of scope */
+```
+
+### Custom allocators
+
+```c
+cyaml_declare(doc);
+doc = cyaml_parse_mp(yaml, &err, &my_mprocs);
+cyaml_dictionary_set(doc, "key", cyaml_create_string_mp("val", &my_mprocs));
+cyaml_destroy(doc);
+```
+
+The allocator is stamped on every node at creation time.  `cyaml_destroy()` uses each node's own stored allocator.  `cyaml_clone()` inherits the allocator from the source tree.
+
+**Node pool:** `cyaml` maintains a per-thread free-list (capped at 512 nodes) to amortize allocation cost.  Custom-allocator nodes bypass the pool entirely.  Default-allocator nodes use the pool; it is drained at thread exit with plain `free()`.
+
+---
+
+## 17. Thread Safety
 
 The library applies a consistent policy: **components that pass data between threads or provide shared services carry their own synchronisation; components used for single-threaded data manipulation are deliberately unguarded.**
 
 ### Intentionally Unguarded Containers
 
-`cvector`, `chashmap`, `cbstmap`, `cstring`, and `cjson` contain no internal locks. This is a deliberate design decision, not an omission.
+`cvector`, `chashmap`, `cbstmap`, `cstring`, `cjson`, and `cyaml` contain no internal locks. This is a deliberate design decision, not an omission.
 
 Per-operation locking provides a false sense of safety. Consider the check-then-act pattern that appears in virtually every real use of a map:
 
@@ -2313,7 +2605,7 @@ The following components include their own internal synchronisation and are safe
 
 ---
 
-## 17. Custom Memory Management
+## 18. Custom Memory Management
 
 Every container accepts a `ccol_memmgmt_procs_t *` at creation time. Passing `NULL` selects the standard `malloc`/`calloc`/`realloc`/`free` family.
 
@@ -2374,7 +2666,7 @@ r_mempool_destroy(node_pool);
 
 ---
 
-## 18. License
+## 19. License
 
 MIT License
 

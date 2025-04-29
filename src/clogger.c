@@ -63,7 +63,7 @@ SOFTWARE.
 /* Rotation suffix format: ".YYYYMMDDHHMMSS" = 15 chars */
 #define CLOG_ROTATION_FMT ".%Y%m%d%H%M%S"
 #define CLOG_ROTATION_FMT_LEN 15
-/* Extra headroom for collision suffix "_0001"–"_9999" */
+/* Extra headroom for collision suffix "_0001"-"_9999" */
 #define CLOG_ROTATION_EXTRA 8
 
 static const char *const _LEVEL_STR[] = {"TRACE", "DEBUG", "INFO",  "WARN",
@@ -71,14 +71,14 @@ static const char *const _LEVEL_STR[] = {"TRACE", "DEBUG", "INFO",  "WARN",
 
 /* RFC 5424 severity codes indexed by clog_level_t. */
 static const int _SYSLOG_SEVERITY[] = {
-    7, /* TRACE → debug         */
-    7, /* DEBUG → debug         */
-    6, /* INFO  → informational */
-    4, /* WARN  → warning       */
-    3, /* ERROR → error         */
-    1, /* ALERT → alert         */
-    0, /* FATAL → emergency     */
-    7, /* OFF   — sentinel; CLOG_OFF must never be used as a message level */
+    7, /* TRACE -> debug         */
+    7, /* DEBUG -> debug         */
+    6, /* INFO  -> informational */
+    4, /* WARN  -> warning       */
+    3, /* ERROR -> error         */
+    1, /* ALERT -> alert         */
+    0, /* FATAL -> emergency     */
+    7, /* OFF   -- sentinel; CLOG_OFF must never be used as a message level */
 };
 
 /* ========================================================================== */
@@ -120,7 +120,7 @@ typedef struct {
 struct clogger {
   clog_shared_t *shared;  /* shared output backing store              */
   clog_level_t min_level; /* per-logger level filter                  */
-  chmap fields;           /* chmap(char* → char*) — per-logger fields */
+  chmap fields;           /* chmap(char* -> char*) -- per-logger fields */
   clog_buf_t buf;         /* per-logger reusable write buffer          */
 };
 
@@ -153,6 +153,7 @@ static int _buf_ensure(clog_buf_t *b, size_t need) {
   while (new_cap - b->len < need) {
     if (new_cap >= CLOG_BUF_MAX) return -1;
     new_cap *= 2;
+    if (new_cap > CLOG_BUF_MAX) new_cap = CLOG_BUF_MAX;
   }
   char *p = _mem_realloc(b->m_procs, b->data, new_cap);
   if (!p) return -1;
@@ -270,8 +271,8 @@ static int _buf_append_lv(clog_buf_t *b, const char *s) {
 
 /*
  * Append the JSON-escaped content of s without surrounding quotes.
- * Escaping: '"' → '\"', '\' → '\\', '\n'→'\n', '\r'→'\r', '\t'→'\t',
- * other control chars → '\uXXXX'.  s must not be NULL.
+ * Escaping: '"' -> '\"', '\' -> '\\', '\n'->'\n', '\r'->'\r', '\t'->'\t',
+ * other control chars -> '\uXXXX'.  s must not be NULL.
  */
 static int _buf_append_json_content(clog_buf_t *b, const char *s) {
   const char *run = s;
@@ -314,7 +315,7 @@ static int _buf_append_json_content(clog_buf_t *b, const char *s) {
 
 /*
  * Append a comma-prefixed JSON key-value pair: ,"key":"value"
- * key must not be NULL.  val NULL → ,"key":null
+ * key must not be NULL.  val NULL -> ,"key":null
  */
 static int _buf_append_json_kv(clog_buf_t *b, const char *key,
                                const char *val) {
@@ -563,7 +564,7 @@ static int _rotate(clog_shared_t *sh) {
       strftime(rotated + plen, sizeof(rotated) - plen, CLOG_ROTATION_FMT, &tm);
   if (slen == 0) return -1;
 
-  /* Resolve collisions: append _0001, _0002, … until the name is free.
+  /* Resolve collisions: append _0001, _0002, ... until the name is free.
    * Zero-padded so alphabetical sort in _prune_rotated matches creation order.
    */
   if (access(rotated, F_OK) == 0) {
@@ -582,10 +583,10 @@ static int _rotate(clog_shared_t *sh) {
 
   /* Rename while the old fd is still open (POSIX allows renaming open files).
    * We only close the old fd once we have a replacement; this way a failed
-   * open() leaves the logger alive — writes continue to the rotated file.
+   * open() leaves the logger alive -- writes continue to the rotated file.
    * ENOENT means the file was deleted externally; treat it as a clean slate
    * (O_CREAT below will create a fresh file).  Any other rename error is a
-   * hard failure — leave the logger writing to the still-open original fd. */
+   * hard failure -- leave the logger writing to the still-open original fd. */
   if (rename(sh->file_path, rotated) != 0 && errno != ENOENT) return -1;
 
   if (sh->rotation.max_rotated_files > 0)
@@ -803,7 +804,7 @@ static clog_shared_t *_shared_alloc(int fd, bool owns_fd, const char *file_path,
   char *sp = strchr(sh->syslog_hostname, ' ');
   if (sp) *sp = '\0';
 
-  /* Cache APP-NAME for RFC 5424; keep only PRINTUSASCII (0x21–0x7e). */
+  /* Cache APP-NAME for RFC 5424; keep only PRINTUSASCII (0x21-0x7e). */
   {
     const char *raw = _syslog_appname();
     size_t i = 0;
@@ -1151,8 +1152,8 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
   {
     char tname[16];
     _get_thread_name(tname, sizeof tname);
-    snprintf(proc_val, sizeof proc_val, "%.200s(%d):%.15s(%d)",
-             _get_progname(), (int)getpid(), tname, (int)_get_tid());
+    snprintf(proc_val, sizeof proc_val, "%.200s(%d):%.15s(%d)", _get_progname(),
+             (int)getpid(), tname, (int)_get_tid());
   }
 
   /* ----------------------------------------------------------------------- */
@@ -1212,7 +1213,8 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
     _buf_appendf(&lg->buf, " %s %s %d %s", hostname, appname, (int)getpid(),
                  _LEVEL_STR[level]);
 
-    /* Structured data: [ccol proc="name:pid:tid" src="file:N" func="fn" <user-fields>] */
+    /* Structured data: [ccol proc="name:pid:tid" src="file:N" func="fn"
+     * <user-fields>] */
     _buf_append(&lg->buf, " [ccol proc=\"", 13);
     _buf_append_sd_value(&lg->buf, proc_val);
     _buf_append(&lg->buf, "\" src=\"", 7);
@@ -1296,7 +1298,7 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
   }
 
   /* ----------------------------------------------------------------------- */
-  /* Backtrace — JSON embeds inline; logfmt and syslog write per-frame.      */
+  /* Backtrace -- JSON embeds inline; logfmt and syslog write per-frame.      */
   /* ----------------------------------------------------------------------- */
   if (with_backtrace && lg->shared->fd >= 0) {
     if (log_fmt == CLOG_FMT_SYSLOG)

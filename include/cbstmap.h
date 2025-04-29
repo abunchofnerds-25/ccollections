@@ -426,12 +426,13 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 #define cbmap_declare(hm_name, key_t, val_t)                                  \
   typeof(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */
+  cbmap hm_name /* deliberately not initialized to NULL */
 
 #define cbmap_declare_scoped(hm_name, key_t, val_t)                           \
   typeof(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy)
+  cbmap hm_name _ccol_destructor(                                             \
+      ___cbmap_destroy) /* deliberately not initialized to NULL */
 
 /**
  * @brief Initialize a BST map with defaults
@@ -823,7 +824,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
       val = (typeof(*hm_name##__ccol_val_type_var) *)&(val_pair->ptr);      \
     } else if (val_pair->size != sizeof(*val)) {                            \
       fatal_err(                                                            \
-          "cbmap_get('%s'): value size mismatch — stored: %lu bytes, "      \
+          "cbmap_get('%s'): value size mismatch - stored: %lu bytes, "      \
           "requested: %lu bytes; wrong type or missing cbmap_redeclare()?", \
           #hm_name, (unsigned long)val_pair->size,                          \
           (unsigned long)sizeof(*val));                                     \
@@ -867,7 +868,7 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
         val = (typeof(*hm_name##__ccol_val_type_var) *)&(val_pair->ptr);      \
       } else if (val_pair->size != sizeof(*val)) {                            \
         fatal_err(                                                            \
-            "cbmap_get_ptr('%s'): value size mismatch — stored: %lu bytes, "  \
+            "cbmap_get_ptr('%s'): value size mismatch - stored: %lu bytes, "  \
             "requested: %lu bytes; wrong type or missing cbmap_redeclare()?", \
             #hm_name, (unsigned long)val_pair->size,                          \
             (unsigned long)sizeof(*val));                                     \

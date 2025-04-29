@@ -48,12 +48,16 @@ const size_t minimum_scale_down_threshold =
 /*                    OPEN ADDRESSING STRUCTURES                              */
 /* ========================================================================== */
 
-// Compact slot - 17 bytes instead of 32
+// 24-byte slot (8-byte key + 8-byte value + 1-byte metadata + 7 bytes natural
+// padding). Natural alignment keeps key_data and val_data at 8-byte boundaries
+// across all array indices, which is required for correctness on strict-
+// alignment architectures and allows chmap_get_ptr to return an aligned pointer
+// directly into the slot array for in-place modification.
 typedef struct {
   uint64_t key_data;
   uint64_t val_data;
   uint8_t metadata;  // bit 0: occupied, bit 1: deleted
-} __attribute__((packed)) oa_slot;
+} oa_slot;
 
 #define SLOT_OCCUPIED 0x01
 #define SLOT_DELETED 0x02
@@ -158,7 +162,6 @@ static inline bool is_type_integral(ccol_data_type type) {
     case ccol_unsigned_long_long:
     case ccol_float:
     case ccol_double:
-    case ccol_long_double:
     case ccol_pointer:
       return true;
     default:
@@ -478,6 +481,11 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
       return hash_int_fast((size_t)(low ^ high));
 #endif
     }
+    case ccol_pointer: {
+      uintptr_t bits;
+      mem_cpy(&bits, key_ptr, sizeof(uintptr_t));
+      return hash_int_fast((size_t)bits);
+    }
     default:
       return xxhash64_buffer(key_ptr, key_size, 0);
   }
@@ -762,9 +770,9 @@ static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
 #define dllistRefNodePtr2LlistNodePtr(tracker) \
   (llist_node*)((uint8_t*)tracker - offsetof(llist_node, dllist_refs))
 
-/* Prepends node to the doubly-linked list rooted at *head. Insertion-order
- * traversal is maintained by the dllist so the iterator visits nodes in the
- * order they were first inserted. */
+/* Prepends node to the doubly-linked list rooted at *head. The list therefore
+ * keeps the most-recently inserted element at the head; iteration via next
+ * pointers visits nodes in reverse insertion order (newest first). */
 static void attach_node_to_dllist(dllist_ref_node** head,
                                   dllist_ref_node* node) {
   node->prev = NULL;
@@ -942,8 +950,9 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
     return true;
   } else {
     if (elem->data.val_is_inline) {
-      elem->data.val_storage.ptr = _mem_alloc(elem->m_procs, val_size);
-      if (!elem->data.val_storage.ptr) return false;
+      void* new_ptr = _mem_alloc(elem->m_procs, val_size);
+      if (!new_ptr) return false;
+      elem->data.val_storage.ptr = new_ptr;
       elem->data.val_is_inline = false;
     } else {
       void* orig = elem->data.val_storage.ptr;

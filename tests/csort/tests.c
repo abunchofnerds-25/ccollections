@@ -238,12 +238,12 @@ TEST(csort, cvector_string_sort_with_known_values) {
 }
 
 void create_random_str(char *dest, size_t length) {
-  char charset[] =
+  static const char charset[] =
       "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-
+  /* Use modulo so the index stays in [0, sizeof charset - 2], never reaching
+   * the null terminator at charset[sizeof charset - 1]. */
   while (length-- > 0) {
-    size_t index = (double)rand() / RAND_MAX * (sizeof charset - 1);
-    *dest++ = charset[index];
+    *dest++ = charset[rand() % (sizeof charset - 1)];
   }
   *dest = '\0';
 }
@@ -263,8 +263,11 @@ TEST(csort, cvector_string_sort_with_random_values) {
   REQUIRE_EQ((void *)err_str, NULL);
 
   for (i = 0; i < num_sample; i++) {
-    create_random_str(rand_strings[i],
-                      (int)((double)rand() / RAND_MAX * max_str_lenght));
+    /* rand() % max_str_lenght gives lengths in [0, max_str_lenght - 1], so the
+     * generated string (plus its null terminator) always fits in the 100-byte
+     * buffer. The previous floating-point formula could yield length == 100
+     * when rand() == RAND_MAX, causing a one-byte stack overflow. */
+    create_random_str(rand_strings[i], (size_t)(rand() % max_str_lenght));
     cvector_push_back(cvec, &(char *){rand_strings[i]});
   }
 
@@ -277,7 +280,9 @@ TEST(csort, cvector_string_sort_with_random_values) {
     for (i = 1; i < num_sample; i++) {
       first = *(const char **)cvector_at(cvec, i - 1);
       second = *(const char **)cvector_at(cvec, i);
-      REQUIRE_TRUE(strcmp(first, second) < 0);
+      /* Use <= 0: two random strings of equal content are a valid sort result
+       * and would incorrectly fail a strict < 0 check. */
+      REQUIRE_TRUE(strcmp(first, second) <= 0);
     }
   }
 
@@ -290,10 +295,9 @@ typedef struct custom_test_struct {
 } custom_test_struct;
 
 int custom_test_struct_comparison_proc(const void *first, const void *second) {
-  custom_test_struct *p_struct_first = (custom_test_struct *)first;
-  custom_test_struct *p_struct_second = (custom_test_struct *)second;
-
-  return p_struct_first->data - p_struct_second->data;
+  const custom_test_struct *a = (const custom_test_struct *)first;
+  const custom_test_struct *b = (const custom_test_struct *)second;
+  return (a->data > b->data) - (a->data < b->data);
 }
 
 TEST(csort, cvector_custom_test_struct_sort) {
@@ -474,4 +478,112 @@ TEST(csort, sort_is_stable) {
   }
 
   cvec_destroy(v);
+}
+
+TEST(csort, sort_negative_integers) {
+  int values[] = {0, -5, 3, -100, 42, -1, 7, -3};
+  const int n = 8;
+
+  cvec_construct(v, int);
+  for (int i = 0; i < n; i++) {
+    cvector_push_back(v, &values[i]);
+  }
+
+  cvec_sort(v);
+
+  for (int i = 1; i < n; i++) {
+    REQUIRE_LE(cvec_at(v, i - 1), cvec_at(v, i));
+  }
+  REQUIRE_EQ(cvec_at(v, 0), -100);
+  REQUIRE_EQ(cvec_at(v, n - 1), 42);
+
+  cvec_destroy(v);
+}
+
+TEST(csort, sort_all_duplicates) {
+  const int n = 8;
+
+  cvec_construct(v, int);
+  for (int i = 0; i < n; i++) {
+    cvec_push_rvalue(v, 7);
+  }
+
+  cvec_sort(v);
+
+  REQUIRE_EQ(cvector_elem_count(v), (size_t)n);
+  for (int i = 0; i < n; i++) {
+    REQUIRE_EQ(cvec_at(v, i), 7);
+  }
+
+  cvec_destroy(v);
+}
+
+TEST(csort, sort_two_elements_ascending) {
+  cvec_construct(v, int);
+  cvec_push_rvalue(v, 1);
+  cvec_push_rvalue(v, 2);
+  cvec_sort(v);
+  REQUIRE_EQ(cvec_at(v, 0), 1);
+  REQUIRE_EQ(cvec_at(v, 1), 2);
+  cvec_destroy(v);
+}
+
+TEST(csort, sort_two_elements_descending) {
+  cvec_construct(v, int);
+  cvec_push_rvalue(v, 2);
+  cvec_push_rvalue(v, 1);
+  cvec_sort(v);
+  REQUIRE_EQ(cvec_at(v, 0), 1);
+  REQUIRE_EQ(cvec_at(v, 1), 2);
+  cvec_destroy(v);
+}
+
+TEST(csort, cvector_unsigned_long_long_sort) {
+  /* REQUIRE_LE does not support unsigned long long in tau, so the ordering
+   * check is written as REQUIRE_TRUE with an explicit <= comparison. */
+  const int num_sample = 10;
+
+  srand((unsigned int)time(NULL));
+  cvec_declare(cvec, unsigned long long);
+  cvec_init(cvec);
+
+  REQUIRE_NE((void *)cvec, NULL);
+
+  for (int i = 0; i < num_sample; i++) {
+    unsigned long long val =
+        ((unsigned long long)rand() << 32) | (unsigned long long)rand();
+    cvector_push_back(cvec, &val);
+  }
+
+  REQUIRE_EQ(cvector_elem_count(cvec), (size_t)num_sample);
+
+  cvec_sort(cvec);
+
+  for (int i = 1; i < num_sample; i++) {
+    unsigned long long prev = *(unsigned long long *)cvector_at(cvec, i - 1);
+    unsigned long long curr = *(unsigned long long *)cvector_at(cvec, i);
+    REQUIRE_TRUE(prev <= curr);
+  }
+
+  cvec_destroy(cvec);
+  REQUIRE_EQ((void *)cvec, NULL);
+}
+
+void *c_str_array_getter(void *collection, size_t index) {
+  return ((char **)collection) + index;
+}
+
+TEST(csort, c_str_array_sort) {
+  /* Verifies csort_sort on a plain C array of char* pointers. */
+  char *arr[] = {"banana", "apple", "cherry", "date", "apricot"};
+  const int n = 5;
+
+  csort_sort(arr, (size_t)n, sizeof(char *), c_str_array_getter,
+             csort_get_default_comparison_proc(arr[0]), NULL);
+
+  for (int i = 1; i < n; i++) {
+    REQUIRE_TRUE(strcmp(arr[i - 1], arr[i]) <= 0);
+  }
+  REQUIRE_STREQ(arr[0], "apple");
+  REQUIRE_STREQ(arr[4], "date");
 }

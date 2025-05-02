@@ -1202,8 +1202,10 @@ ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir) {
  *   suppressed for datagram fds regardless of O_NONBLOCK, because a buffer-
  *   exactly-full result means truncation, not that more stream data follows.
  *   Non-socket fds (pipes, timerfd, etc.) and stream sockets use a 4 KiB
- *   initial buffer; if the fd has O_NONBLOCK the loop grows the buffer until
- *   EAGAIN to drain all data that arrived before the wakeup.
+ *   initial buffer (or max_bytes when max_bytes > 4096 and the fd is blocking),
+ *   allowing callers to tune the single-read size via
+ * selectable_from_fd_limited; if the fd has O_NONBLOCK the loop grows the
+ * buffer until EAGAIN to drain all data that arrived before the wakeup.
  *
  * Other safety properties:
  *   - fcntl(F_GETFL) is a read-only, thread-safe operation; fd flags are
@@ -1221,20 +1223,27 @@ static ccol_retval_t _read_from_fd(int fd, size_t max_bytes, c_message_t *msg) {
       (getsockopt(fd, SOL_SOCKET, SO_TYPE, &sock_type, &sock_type_len) == 0) &&
       (sock_type == SOCK_DGRAM || sock_type == SOCK_SEQPACKET);
 
-  size_t capacity =
-      is_dgram ? _FD_READ_DGRAM_INITIAL_SIZE : _FD_READ_STREAM_INITIAL_SIZE;
-  void *data = malloc(capacity);
-  if (!data) return ccol_unexpected_failure;
-
-  size_t total = 0;
-  /* Grow-retry loop is only safe for stream fds with O_NONBLOCK.  For
-   * datagram fds, suppress it unconditionally: total == capacity would mean
-   * the kernel truncated the datagram, not that more bytes follow. */
+  /* Inspect O_NONBLOCK before sizing the buffer: for blocking stream fds the
+   * initial capacity is raised to max_bytes (when max_bytes > default) so the
+   * caller controls how much is read in the single blocking call. */
   bool nonblocking = false;
   if (!is_dgram) {
     int flags = fcntl(fd, F_GETFL, 0);
     nonblocking = (flags >= 0) && ((flags & O_NONBLOCK) != 0);
   }
+
+  size_t capacity;
+  if (is_dgram) {
+    capacity = _FD_READ_DGRAM_INITIAL_SIZE;
+  } else if (!nonblocking && max_bytes > _FD_READ_STREAM_INITIAL_SIZE) {
+    capacity = max_bytes;
+  } else {
+    capacity = _FD_READ_STREAM_INITIAL_SIZE;
+  }
+  void *data = malloc(capacity);
+  if (!data) return ccol_unexpected_failure;
+
+  size_t total = 0;
 
   for (;;) {
     ssize_t n = read(fd, (char *)data + total, capacity - total);
@@ -1423,7 +1432,7 @@ static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
       } else {
         /* ccol_select_write: writable if there is room and sending is on */
         if (cq->msg_count < cq->max_size && !cq->writing_disabled) {
-          if (cq->msg_count + 1 < cq->max_size && cq->sel_write_waiters_head)
+          if (cq->sel_write_waiters_head)
             notify_one_sel_waiter(cq->sel_write_waiters_head);
           mutex_unlock(cq->mutex);
           found = (int)i;
@@ -1462,7 +1471,7 @@ static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
       } else {
         /* ccol_select_write: writable unless writing_disabled or at capacity */
         if (!dq->writing_disabled && dq->msg_count < max_elem_count) {
-          if (dq->msg_count + 1 < max_elem_count && dq->sel_write_waiters_head)
+          if (dq->sel_write_waiters_head)
             notify_one_sel_waiter(dq->sel_write_waiters_head);
           mutex_unlock(dq->mutex);
           found = (int)i;

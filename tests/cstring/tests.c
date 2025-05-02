@@ -381,12 +381,11 @@ TEST(cstrings, set_self_alias_no_realloc) {
   cstring_destroy(s);
 }
 
-TEST(cstrings, set_self_alias_triggers_realloc) {
-  // Build a string whose length fills the current capacity so that
-  // cstring_set(s, cstring_c_str(s)) forces a realloc.  With minimum
-  // capacity = 16 a 15-char string fills the buffer exactly; setting it
-  // to itself requires capacity >= 16, which is already held — use a
-  // 16-char string so cstring_grow_to needs capacity >= 17 and must realloc.
+TEST(cstrings, set_self_alias_full_length_no_realloc) {
+  // A 16-char string gets init_cap = next_pow2(17) = 32, so setting it to
+  // itself requests capacity 17 which is already satisfied -- no realloc.
+  // Exercises the no-realloc self-alias path with a longer string than
+  // set_self_alias_no_realloc.
   cstr s = cstring_create("1234567890123456", NULL);
   REQUIRE_EQ(cstring_length(s), (size_t)16);
   ccol_retval_t rv = cstring_set(s, cstring_c_str(s));
@@ -396,9 +395,10 @@ TEST(cstrings, set_self_alias_triggers_realloc) {
   cstring_destroy(s);
 }
 
-TEST(cstrings, set_suffix_alias_triggers_realloc) {
-  // Pass a pointer into the middle of s->data as the source — the realloc
-  // must not make that pointer dangle before it is used in memcpy.
+TEST(cstrings, set_suffix_alias_no_realloc) {
+  // A suffix of s->data always has str_len < s->length < s->capacity, so
+  // no realloc can occur.  Exercises the alias-offset tracking path where
+  // the internal pointer must be re-derived after (a no-op) grow_to.
   cstr s = cstring_create("1234567890123456", NULL);
   // cstring_c_str(s) + 6 points to "7890123456"
   ccol_retval_t rv = cstring_set(s, cstring_c_str(s) + 6);
@@ -783,6 +783,21 @@ TEST(cstrings, find_rfind_first_vs_last) {
   cstring_destroy(s);
 }
 
+TEST(cstrings, find_empty_needle) {
+  // strstr(data, "") returns data, so find("") always yields offset 0.
+  cstr s = cstring_create("hello", NULL);
+  REQUIRE_EQ(cstring_find(s, ""), (size_t)0);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, rfind_empty_needle) {
+  // An empty needle has no meaningful last occurrence; the implementation
+  // returns s->length (the past-the-end position), matching C++ semantics.
+  cstr s = cstring_create("hello", NULL);
+  REQUIRE_EQ(cstring_rfind(s, ""), cstring_length(s));
+  cstring_destroy(s);
+}
+
 // ========================================================================
 // REPLACE
 // ========================================================================
@@ -912,6 +927,18 @@ TEST(cstrings, substring_of_empty_string) {
   cstr sub = cstring_substring(s, 0, 3, NULL);
   REQUIRE_NE((void *)sub, NULL);
   REQUIRE_STREQ(cstring_c_str(sub), "");
+  cstring_destroy(sub);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, substring_zero_length) {
+  // Requesting zero characters from a non-empty string must return an empty
+  // cstring, not NULL.
+  cstr s = cstring_create("hello", NULL);
+  cstr sub = cstring_substring(s, 2, 0, NULL);
+  REQUIRE_NE((void *)sub, NULL);
+  REQUIRE_STREQ(cstring_c_str(sub), "");
+  REQUIRE_EQ(cstring_length(sub), (size_t)0);
   cstring_destroy(sub);
   cstring_destroy(s);
 }
@@ -1335,13 +1362,29 @@ TEST(cstrings, append_self_alias_triggers_realloc) {
   cstr_destroy(s);
 }
 
-TEST(cstrings, append_suffix_alias_triggers_realloc) {
-  // Append a pointer into the middle of the same buffer after realloc.
+TEST(cstrings, append_suffix_alias_no_realloc) {
+  // The 9-char source has capacity 16; appending the 5-char suffix "56789"
+  // gives 14 chars which fits without realloc (grow_to(15) <= 16, no-op).
+  // Exercises the alias-offset tracking path without reallocation.
   cstr_construct(s, "123456789");
   // cstring_c_str(s) + 4 points to "56789"
   ccol_retval_t rv = cstring_append(s, cstring_c_str(s) + 4);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_STREQ(cstring_c_str(s), "12345678956789");
+  cstr_destroy(s);
+}
+
+TEST(cstrings, append_self_alias_no_realloc) {
+  // "hello" (5 chars, capacity 16): appending itself gives "hellohello"
+  // (10 chars), grow_to(11) <= 16 is a no-op.  Exercises the alias_off==0
+  // no-realloc path; memcpy is safe because dst starts at s->length while
+  // src ends at s->length-1 -- no overlap.
+  cstr_construct(s, "hello");
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+  ccol_retval_t rv = cstring_append(s, cstring_c_str(s));
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "hellohello");
+  REQUIRE_EQ(cstring_length(s), (size_t)10);
   cstr_destroy(s);
 }
 
@@ -1355,13 +1398,29 @@ TEST(cstrings, prepend_self_alias_triggers_realloc) {
   cstr_destroy(s);
 }
 
-TEST(cstrings, prepend_suffix_alias_triggers_realloc) {
-  // Prepend a pointer into the buffer (alias_off > 0).
-  // "123456789" prepend "56789" (offset 4) → "5678912345678 9"
+TEST(cstrings, prepend_suffix_alias_no_realloc) {
+  // The 9-char source has capacity 16; prepending the 5-char suffix "56789"
+  // gives 14 chars which fits without realloc.  Exercises the alias_off > 0
+  // path (second pointer correction after memmove) without reallocation.
   cstr_construct(s, "123456789");
   ccol_retval_t rv = cstring_prepend(s, cstring_c_str(s) + 4);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_STREQ(cstring_c_str(s), "56789123456789");
+  cstr_destroy(s);
+}
+
+TEST(cstrings, prepend_self_alias_no_realloc) {
+  // "hello" (5 chars, capacity 16): prepending itself gives "hellohello"
+  // (10 chars), grow_to(11) <= 16 is a no-op.  Exercises the alias_off==0
+  // no-realloc path; the final memmove(s->data, s->data, 5) is a same-pointer
+  // copy that memmove handles safely (the content was already shifted right
+  // by the preceding memmove, so positions 0..4 still hold the correct prefix).
+  cstr_construct(s, "hello");
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+  ccol_retval_t rv = cstring_prepend(s, cstring_c_str(s));
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "hellohello");
+  REQUIRE_EQ(cstring_length(s), (size_t)10);
   cstr_destroy(s);
 }
 
@@ -1374,10 +1433,12 @@ TEST(cstrings, insert_self_alias_triggers_realloc) {
   cstr_destroy(s);
 }
 
-TEST(cstrings, insert_alias_after_pos_triggers_realloc) {
-  // "123456789" insert "56789" (offset 4) at pos 2 → "12567893456789"
-  // alias_off (4) > pos (2): after the memmove the source shifts right by
-  // str_len (5), so the pointer must be re-derived again.
+TEST(cstrings, insert_alias_after_pos_no_realloc) {
+  // "123456789" insert "56789" (offset 4) at pos 2 -> "12567893456789"
+  // The 9-char source has capacity 16; inserting 5 chars gives 14 chars
+  // (grow_to(15) <= 16, no-op).  alias_off (4) > pos (2): after the first
+  // memmove the source shifts right by str_len (5) and the pointer must be
+  // re-derived; exercises that second correction without reallocation.
   cstr_construct(s, "123456789");
   ccol_retval_t rv = cstring_insert(s, 2, cstring_c_str(s) + 4);
   REQUIRE_EQ(rv, ccol_success);
@@ -1394,5 +1455,113 @@ TEST(cstrings, insert_alias_overlapping_dst_gt_src) {
   ccol_retval_t rv = cstring_insert(s, 3, cstring_c_str(s) + 1);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_STREQ(cstring_c_str(s), "abcbcdede");
+  cstr_destroy(s);
+}
+
+TEST(cstrings, insert_self_alias_at_nonzero_pos_no_realloc) {
+  // "hello" (5 chars, capacity 16): inserting itself at pos 2 gives
+  // "he" + "hello" + "llo" = "hehellollo" (10 chars), grow_to(11) <= 16.
+  // Exercises alias_off==0 with pos>0 without reallocation; the final
+  // memmove(s->data+2, s->data, 5) has dst > src with overlap -- memmove
+  // handles it correctly.
+  cstr_construct(s, "hello");
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+  ccol_retval_t rv = cstring_insert(s, 2, cstring_c_str(s));
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "hehellollo");
+  REQUIRE_EQ(cstring_length(s), (size_t)10);
+  cstr_destroy(s);
+}
+
+// ========================================================================
+// ADDITIONAL EDGE CASES AND UNTESTED PATHS
+// ========================================================================
+
+TEST(cstrings, cstring_new_function) {
+  cstr s = cstring_new("hello");
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_EQ(cstring_length(s), 5);
+  REQUIRE_STREQ(cstring_c_str(s), "hello");
+  cstring_destroy(s);
+
+  cstr empty = cstring_new(NULL);
+  REQUIRE_NE((void *)empty, NULL);
+  REQUIRE_EQ(cstring_length(empty), 0);
+  REQUIRE_STREQ(cstring_c_str(empty), "");
+  cstring_destroy(empty);
+}
+
+TEST(cstrings, get_mprocs_null_for_default) {
+  cstr s = cstring_new("hello");
+  REQUIRE_EQ((void *)cstring_get_mprocs(s), NULL);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, get_mprocs_returns_custom) {
+  ccol_memmgmt_procs_t mp = {
+      .malloc = malloc, .free = free, .calloc = calloc, .realloc = realloc};
+  char *err = NULL;
+  cstr s = cstring_create_full("hello", &mp, &err);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_NE((void *)cstring_get_mprocs(s), NULL);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, construct_mp_scoped_macro) {
+  {
+    cstr_construct_mp_scoped(
+        s, "scoped",
+        (&(ccol_memmgmt_procs_t){.malloc = malloc,
+                                  .free = free,
+                                  .calloc = calloc,
+                                  .realloc = realloc}));
+    REQUIRE_STREQ(cstring_c_str(s), "scoped");
+  }
+  // s is destroyed automatically when the scope above exits
+}
+
+TEST(cstrings, trim_single_whitespace_char) {
+  cstr s = cstring_create(" ", NULL);
+  cstring_trim(s);
+  REQUIRE_STREQ(cstring_c_str(s), "");
+  REQUIRE_EQ(cstring_length(s), 0);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, rfind_overlapping_needles) {
+  // "ababa" contains "aba" at offsets 0 and 2 (overlapping).
+  // rfind must return 2, not 0.  The +1 advance (not +nlen) in the
+  // implementation is specifically there to handle this case.
+  cstr s = cstring_create("ababa", NULL);
+  REQUIRE_EQ(cstring_rfind(s, "aba"), (size_t)2);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, replace_needle_equals_replacement) {
+  cstr s = cstring_create("hello world", NULL);
+  REQUIRE_EQ(cstring_replace(s, "hello", "hello"), ccol_success);
+  REQUIRE_STREQ(cstring_c_str(s), "hello world");
+  REQUIRE_EQ(cstring_length(s), 11);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, replace_with_self_as_replacement) {
+  // Passing cstring_c_str(s) as the replacement is safe: the build loop
+  // reads the replacement bytes before freeing the old buffer.
+  cstr s = cstring_create("axb", NULL);
+  REQUIRE_EQ(cstring_replace(s, "x", cstring_c_str(s)), ccol_success);
+  // "axb" -> "a" + "axb" + "b" = "aaxbb"
+  REQUIRE_STREQ(cstring_c_str(s), "aaxbb");
+  REQUIRE_EQ(cstring_length(s), 5);
+  cstring_destroy(s);
+}
+
+TEST(cstrings, substring_macro) {
+  cstr_construct(s, "hello world");
+  cstr sub = cstr_substring(s, 6, 5);
+  REQUIRE_NE((void *)sub, NULL);
+  REQUIRE_STREQ(cstring_c_str(sub), "world");
+  REQUIRE_EQ(cstring_length(sub), 5);
+  cstr_destroy(sub);
   cstr_destroy(s);
 }

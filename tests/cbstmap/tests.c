@@ -1133,3 +1133,185 @@ TEST(cbst_maps, construct_scoped_lifecycle) {
     // bm is automatically destroyed at end of block
   }
 }
+
+TEST(cbst_maps, declare_scoped_lifecycle) {
+  {
+    cbmap_declare_scoped(bm, int, int);
+    cbmap_init(bm);
+    REQUIRE_NE((void *)bm, NULL);
+
+    int k1 = 7, v1 = 70;
+    int k2 = 3, v2 = 30;
+    int k3 = 9, v3 = 90;
+    cbmap_insert(bm, k1, v1);
+    cbmap_insert(bm, k2, v2);
+    cbmap_insert(bm, k3, v3);
+
+    REQUIRE_EQ(cbmap_get(bm, k1), 70);
+    REQUIRE_EQ(cbmap_get(bm, k2), 30);
+    REQUIRE_EQ(cbmap_get(bm, k3), 90);
+    // bm is automatically destroyed at end of block
+  }
+}
+
+TEST(cbst_maps, get_elem_copy_size_mismatch) {
+  cbmap cbm = cbmap_create(true, NULL);
+  REQUIRE_NE((void *)cbm, NULL);
+
+  int key = 42;
+  int val = 100;
+  REQUIRE_EQ(
+      cbmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                        &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
+      ccol_success);
+
+  // Wrong buffer size: stored sizeof(int) but asking for sizeof(long)
+  long wrong_buf = 0;
+  REQUIRE_EQ(
+      cbmap_get_elem_copy(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                          &wrong_buf, sizeof(wrong_buf)),
+      ccol_invalid_args);
+
+  // Correct buffer size works
+  int right_buf = 0;
+  REQUIRE_EQ(
+      cbmap_get_elem_copy(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                          &right_buf, sizeof(right_buf)),
+      ccol_success);
+  REQUIRE_EQ(right_buf, 100);
+
+  cbmap_destroy(cbm);
+}
+
+TEST(cbst_maps, get_elem_ref_missing_key) {
+  cbmap cbm = cbmap_create(true, NULL);
+  REQUIRE_NE((void *)cbm, NULL);
+
+  int key = 1;
+  int val = 10;
+  REQUIRE_EQ(
+      cbmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                        &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
+      ccol_success);
+
+  int missing = 999;
+  cmap_pair *out = NULL;
+  REQUIRE_EQ(
+      cbmap_get_elem_ref(cbm,
+                         &(cmap_pair){.ptr = &missing, .size = sizeof(missing)},
+                         &out),
+      ccol_key_not_found);
+  REQUIRE_EQ((void *)out, NULL);
+
+  cbmap_destroy(cbm);
+}
+
+TEST(cbst_maps, get_ptr_missing_int_key) {
+  cbmap_construct(bm, int, int);
+
+  int k1 = 1, v1 = 10;
+  int k2 = 2, v2 = 20;
+  int k_missing = 99;
+  cbmap_insert(bm, k1, v1);
+  cbmap_insert(bm, k2, v2);
+
+  // Present keys
+  REQUIRE_NE((void *)cbmap_get_ptr(bm, k1), NULL);
+  REQUIRE_EQ(*cbmap_get_ptr(bm, k1), 10);
+
+  // Missing key returns NULL
+  REQUIRE_EQ((void *)cbmap_get_ptr(bm, k_missing), NULL);
+
+  cbmap_destroy(bm);
+}
+
+TEST(cbst_maps, early_iterator_destroy) {
+  cbmap_construct(bm, int, int);
+
+  for (int i = 0; i < 20; ++i) {
+    int val = i * 10;
+    cbmap_insert(bm, i, val);
+  }
+
+  // Abort iteration after the first 5 elements and verify no leak
+  int count = 0;
+  ccol_iter_declare(bm, it);
+  for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
+    ++count;
+    if (count == 5) {
+      ccol_iter_destroy(it);
+      break;
+    }
+  }
+  REQUIRE_EQ(count, 5);
+
+  // Map must still be fully usable after the aborted iteration
+  REQUIRE_EQ(cbmap_elem_count(bm), 20);
+  for (int i = 0; i < 20; ++i) {
+    int val = cbmap_get(bm, i);
+    REQUIRE_EQ(val, i * 10);
+  }
+
+  // A fresh full iteration must still visit all nodes
+  count = 0;
+  ccol_iter_declare(bm, it2);
+  for (it2 = ccol_begin(bm); it2 != NULL; it2 = ccol_iter_next(it2)) {
+    ++count;
+  }
+  REQUIRE_EQ(count, 20);
+
+  cbmap_destroy(bm);
+}
+
+TEST(cbst_maps, update_value_with_different_size) {
+  cbmap cbm = cbmap_create(true, NULL);
+  REQUIRE_NE((void *)cbm, NULL);
+
+  // Insert with int value (4 bytes)
+  int key = 7;
+  int small_val = 42;
+  REQUIRE_EQ(
+      cbmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                        &(cmap_pair){.ptr = &small_val, .size = sizeof(small_val)}),
+      ccol_success);
+  REQUIRE_EQ(cbmap_elem_count(cbm), 1);
+
+  int readback = 0;
+  REQUIRE_EQ(
+      cbmap_get_elem_copy(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                          &readback, sizeof(readback)),
+      ccol_success);
+  REQUIRE_EQ(readback, 42);
+
+  // Re-insert same key with long value (8 bytes) -- triggers realloc path
+  long big_val = 1234567890123L;
+  REQUIRE_EQ(
+      cbmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                        &(cmap_pair){.ptr = &big_val, .size = sizeof(big_val)}),
+      ccol_key_already_present);
+  REQUIRE_EQ(cbmap_elem_count(cbm), 1);
+
+  long big_readback = 0;
+  REQUIRE_EQ(
+      cbmap_get_elem_copy(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                          &big_readback, sizeof(big_readback)),
+      ccol_success);
+  REQUIRE_EQ(big_readback, 1234567890123L);
+
+  // Re-insert again back to int size -- triggers realloc in the other direction
+  small_val = 99;
+  REQUIRE_EQ(
+      cbmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                        &(cmap_pair){.ptr = &small_val, .size = sizeof(small_val)}),
+      ccol_key_already_present);
+  REQUIRE_EQ(cbmap_elem_count(cbm), 1);
+
+  readback = 0;
+  REQUIRE_EQ(
+      cbmap_get_elem_copy(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                          &readback, sizeof(readback)),
+      ccol_success);
+  REQUIRE_EQ(readback, 99);
+
+  cbmap_destroy(cbm);
+}

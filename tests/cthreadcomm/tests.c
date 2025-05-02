@@ -2,6 +2,7 @@
 #include <cthreadcomm.h>
 #include <pthread.h>
 #include <stdlib.h>
+#include <string.h>
 #include <tau/tau.h>
 #include <time.h>
 #include <unistd.h>
@@ -2040,7 +2041,7 @@ TEST(ccol_select, timed_out_deregisters_waiter_node) {
              ccol_timed_out);
 
   /* Send to the queue AFTER the timed-out select has returned.  If the waiter
-   * node was not deregistered, circq_send_zc → notify_one_sel_waiter will
+   * node was not deregistered, circq_send_zc -> notify_one_sel_waiter will
    * dereference the freed node here. */
   c_message_t msg = {.data = malloc(4), .size = 4};
   *(int *)msg.data = 42;
@@ -2051,4 +2052,183 @@ TEST(ccol_select, timed_out_deregisters_waiter_node) {
   free(buf.data);
 
   circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, write_circq_timed_out_when_sending_disabled) {
+  /* A disabled queue must cause a write-direction ccol_select_timed to wait
+   * out the full timeout rather than return ccol_not_permitted immediately.
+   * Disabling only blocks new sends; it must not short-circuit the select. */
+  circular_queue *cq = circular_queue_create(4, NULL);
+  circq_disable_sending(cq);
+
+  int sentinel = 0x1234;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 99;
+  struct timespec before, after;
+  getWallTime(before);
+  REQUIRE_EQ(ccol_select_timed_va(&buf, &idx, 50 /* ms */,
+                                  selectable_from_circq(cq, ccol_select_write)),
+             ccol_timed_out);
+  getWallTime(after);
+  REQUIRE_GE(diffTimeUSec(before, after), 50000);
+  REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
+  REQUIRE_EQ(idx, (size_t)99);
+
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, write_dynq_timed_out_when_sending_disabled) {
+  /* Same contract as above for dynamic_queue. */
+  dynamic_queue *dq = dynamic_queue_create(NULL);
+  dynmq_disable_sending(dq);
+
+  int sentinel = 0x5678;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 99;
+  struct timespec before, after;
+  getWallTime(before);
+  REQUIRE_EQ(ccol_select_timed_va(&buf, &idx, 50 /* ms */,
+                                  selectable_from_dynq(dq, ccol_select_write)),
+             ccol_timed_out);
+  getWallTime(after);
+  REQUIRE_GE(diffTimeUSec(before, after), 50000);
+  REQUIRE_EQ((void *)buf.data, (void *)&sentinel);
+  REQUIRE_EQ(idx, (size_t)99);
+
+  dynamic_queue_destroy(dq);
+}
+
+// --- concurrent write-waiters helpers ---
+
+typedef struct {
+  circular_queue *cq;
+  ccol_retval_t result;
+} sel_write_wait_result;
+
+static void *thr_circq_write_wait(void *arg) {
+  sel_write_wait_result *a = (sel_write_wait_result *)arg;
+  int sentinel = 0xDEAD;
+  c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
+  size_t idx = 0;
+  a->result = ccol_select_timed_va(&buf, &idx, 500 /* ms */,
+                                   selectable_from_circq(a->cq, ccol_select_write));
+  return NULL;
+}
+
+TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
+  /* Regression test for the cascade bug: when two threads are simultaneously
+   * waiting for write-readiness on a full capacity-1 queue, a single dequeue
+   * must cascade through the waiter list and wake BOTH threads, not just the
+   * head waiter. Without the fix the second waiter would time out. */
+  circular_queue *cq = circular_queue_create(1, NULL);
+
+  int *fill = malloc(sizeof(int));
+  assert(fill);
+  *fill = 0;
+  c_message_t fill_msg = {.data = fill, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(cq, &fill_msg), ccol_success);
+
+  sel_write_wait_result a1 = {.cq = cq, .result = ccol_unexpected_failure};
+  sel_write_wait_result a2 = {.cq = cq, .result = ccol_unexpected_failure};
+  pthread_t t1, t2;
+  pthread_create(&t1, NULL, thr_circq_write_wait, &a1);
+  pthread_create(&t2, NULL, thr_circq_write_wait, &a2);
+
+  usleep(30000);  /* let both threads register as write-waiters */
+
+  c_message_t drain = {.data = NULL, .size = 0};
+  REQUIRE_EQ(circq_recv_zc(cq, &drain), ccol_success);
+  free(drain.data);
+
+  pthread_join(t1, NULL);
+  pthread_join(t2, NULL);
+
+  REQUIRE_EQ(a1.result, ccol_success);
+  REQUIRE_EQ(a2.result, ccol_success);
+
+  circular_queue_destroy(cq);
+}
+
+// --- fd_limited tests ---
+
+TEST(ccol_select, fd_limited_accepts_data_within_limit) {
+  /* selectable_from_fd_limited must accept data whose size is at or below the
+   * byte limit and populate buf normally. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  int val = 99;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  /* limit is 2*sizeof(int); data is sizeof(int) -- within limit */
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx,
+                     selectable_from_fd_limited(pfd[0], ccol_select_read,
+                                               sizeof(int) * 2)),
+      ccol_success);
+  REQUIRE_EQ(idx, (size_t)0);
+  REQUIRE_NE((void *)buf.data, NULL);
+  REQUIRE_EQ(buf.size, sizeof(val));
+  REQUIRE_EQ(*(int *)buf.data, val);
+  free(buf.data);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(ccol_select, fd_limited_rejects_data_exceeding_limit) {
+  /* selectable_from_fd_limited must return ccol_msg_too_large when the fd
+   * carries more bytes than the limit.  ready_index must still be set to the
+   * fd's index; buf must be untouched. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  /* Write 4 ints (16 bytes); limit is 3 bytes. */
+  int vals[4] = {1, 2, 3, 4};
+  REQUIRE_EQ((ssize_t)sizeof(vals), write(pfd[1], vals, sizeof(vals)));
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx,
+                     selectable_from_fd_limited(pfd[0], ccol_select_read, 3)),
+      ccol_msg_too_large);
+  REQUIRE_EQ(idx, (size_t)0);
+  REQUIRE_EQ((void *)buf.data, NULL);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(ccol_select, fd_limited_blocking_reads_up_to_max_bytes) {
+  /* A blocking pipe fd with max_bytes > 4096 must return all written bytes in
+   * a single ccol_select call, not just the default 4096-byte chunk. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  /* Write 8192 bytes with a recognisable incrementing pattern. */
+  const size_t nbytes = 8192;
+  unsigned char *src = malloc(nbytes);
+  REQUIRE_NE((void *)src, NULL);
+  for (size_t i = 0; i < nbytes; ++i)
+    src[i] = (unsigned char)(i & 0xFF);
+  REQUIRE_EQ((ssize_t)nbytes, write(pfd[1], src, nbytes));
+
+  c_message_t buf = {.data = NULL, .size = 0};
+  size_t idx = 99;
+  REQUIRE_EQ(
+      ccol_select_va(&buf, &idx,
+                     selectable_from_fd_limited(pfd[0], ccol_select_read, nbytes)),
+      ccol_success);
+  REQUIRE_EQ(idx, (size_t)0);
+  REQUIRE_NE((void *)buf.data, NULL);
+  REQUIRE_EQ(buf.size, nbytes);
+  REQUIRE_EQ(memcmp(buf.data, src, nbytes), 0);
+  free(buf.data);
+  free(src);
+
+  close(pfd[0]);
+  close(pfd[1]);
 }

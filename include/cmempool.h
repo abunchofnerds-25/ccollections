@@ -153,7 +153,7 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
  * @note Element count is calculated as buf_size / (elem_size + header_overhead)
  * @note Buffer is not freed by mempool_destroy() (user manages buffer lifetime)
  * @note Pool struct itself is still allocated via mmgmt_procs
- * @note If elem_size < sizeof(uintptr_t), it is adjusted
+ * @note Returns NULL with error if elem_size < sizeof(uintptr_t)
  *
  * @see DECLARE_PREALLOCATED_MEMPOOL_BUFFER
  * @see mempool_create
@@ -415,11 +415,11 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
  *
  * @note For internal use - use DECLARE_PREALLOCATED_RMEMPOOL_BUFFER instead
  */
-#define CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(SS, LS, SC) \
-  (((LS) - (SS) + 1) * (1 << (SC)) * (1 << (SS)) +              \
-   (2 * (1 << (SC)) * offsetof(__internal_entry_header, next) * \
-    ((1 << ((LS) - (SS) + 1)) - 1)) /                           \
-       (1 << ((LS) - (SS) + 1)))
+#define CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(SS, LS, SC)         \
+  (((LS) - (SS) + 1) * ((size_t)1 << (SC)) * ((size_t)1 << (SS)) +      \
+   (2 * ((size_t)1 << (SC)) * offsetof(__internal_entry_header, next) * \
+    (((size_t)1 << ((LS) - (SS) + 1)) - 1)) /                           \
+       ((size_t)1 << ((LS) - (SS) + 1)))
 
 /**
  * @brief Declare a preallocated buffer for a ranged memory pool

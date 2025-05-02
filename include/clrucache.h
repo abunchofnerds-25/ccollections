@@ -237,10 +237,12 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
 /**
  * @brief Declare with automatic cleanup on scope exit
  */
-#define clru_declare_scoped(name, KeyT, ValT)                             \
-  typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL; \
-  typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL; \
-  clru_cache name _ccol_destructor(___clrucache_destroy)
+#define clru_declare_scoped(name, KeyT, ValT)                              \
+  typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL;  \
+  typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL;  \
+  clru_cache name _ccol_destructor(                                        \
+      ___clrucache_destroy) /* Deliberately does not have an initial value \
+                               (NULL) to support other initial assignments */
 
 /**
  * @brief Initialize a previously declared cache variable
@@ -381,7 +383,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
         /* Write the heap pointer via memcpy to avoid strict-aliasing         \
          * violations when val_ptr is not char**. */                          \
         void *_clru_str_out = _clru_vout.ptr;                                 \
-        memcpy((val_ptr), &_clru_str_out, sizeof(void *));                    \
+        mem_cpy((val_ptr), &_clru_str_out, sizeof(void *));                   \
       }                                                                       \
     } else {                                                                  \
       /* Non-char* path: copy directly into *val_ptr — no heap allocation */  \

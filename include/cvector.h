@@ -707,7 +707,7 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
     ccol_retval_t r = cvector_pop_back((v), &_tmp);                           \
     if (r != ccol_success) {                                                  \
       fatal_err("cvec_pop('%s'): r: %d (%s)%s", #v, r, ccol_retval_to_str(r), \
-                r == ccol_container_empty ? " — vector is empty" : "");       \
+                r == ccol_container_empty ? " -- vector is empty" : "");      \
     }                                                                         \
     _tmp;                                                                     \
   })
@@ -737,7 +737,7 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * @endcode
  */
 #define cvec_at(v, index) \
-  *(typeof(*v##__ccol_val_type_var) *)(cvector_at((v), (index)))
+  (*(typeof(*v##__ccol_val_type_var) *)(cvector_at((v), (index))))
 
 /**
  * @brief Get the number of elements (type-safe wrapper)
@@ -775,14 +775,14 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  *
  * @see cvector_reserve
  */
-#define cvec_reserve(v, new_capacity_count)                              \
-  do {                                                                   \
-    if (!cvector_reserve((v), (new_capacity_count))) {                   \
-      fatal_err(                                                         \
-          "cvec_reserve('%s'): failed to reserve %lu elements — out of " \
-          "memory?",                                                     \
-          #v, (size_t)(new_capacity_count));                             \
-    }                                                                    \
+#define cvec_reserve(v, new_capacity_count)                               \
+  do {                                                                    \
+    if (!cvector_reserve((v), (new_capacity_count))) {                    \
+      fatal_err(                                                          \
+          "cvec_reserve('%s'): failed to reserve %lu elements -- out of " \
+          "memory?",                                                      \
+          #v, (size_t)(new_capacity_count));                              \
+    }                                                                     \
   } while (0)
 
 /**
@@ -799,14 +799,14 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  *
  * @see cvector_append_array
  */
-#define cvec_append_array(v, arr_ptr, elem_count)                            \
-  do {                                                                       \
-    if (!cvector_append_array((v), (arr_ptr), (elem_count))) {               \
-      fatal_err(                                                             \
-          "cvec_append_array('%s'): failed to append %lu elements — out of " \
-          "memory?",                                                         \
-          #v, (size_t)(elem_count));                                         \
-    }                                                                        \
+#define cvec_append_array(v, arr_ptr, elem_count)                             \
+  do {                                                                        \
+    if (!cvector_append_array((v), (arr_ptr), (elem_count))) {                \
+      fatal_err(                                                              \
+          "cvec_append_array('%s'): failed to append %lu elements -- out of " \
+          "memory?",                                                          \
+          #v, (size_t)(elem_count));                                          \
+    }                                                                         \
   } while (0)
 
 /**

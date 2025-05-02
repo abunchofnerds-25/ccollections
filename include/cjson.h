@@ -30,9 +30,9 @@ SOFTWARE.
  * @file cjson.h
  * @brief Generic JSON parser, serializer, and mutable in-memory DOM.
  *
- * The DOM is backed by the library's own cvector (arrays) and chashmap
- * (objects).  Every node is a heap-allocated tagged_node_t; the full struct
- * definition lives in cjson.c and is opaque to callers.
+ * The DOM is backed by the library's own cvector (lists) and chashmap
+ * (dictionaries).  Every node is a heap-allocated cjson_node_t; the full
+ * struct definition lives in cjson.c and is opaque to callers.
  *
  * ### Custom memory management
  *
@@ -44,8 +44,8 @@ SOFTWARE.
  * all nodes are created through the same factory/parse call chain.  The
  * allocator is used for:
  *   - The node struct itself
- *   - Owned string copies (CJSON_STRING values, object keys)
- *   - Backing cvec (arrays) and chmap (objects)
+ *   - Owned string copies (CJSON_STRING values, dictionary keys)
+ *   - Backing cvec (lists) and chmap (dictionaries)
  *   - Temporary path copies in cjson_get / cjson_set
  *   - The serialization buffer returned by cjson_serialize()
  *
@@ -62,11 +62,11 @@ SOFTWARE.
  *
  * Paths are dot-separated component strings, e.g. "users.#0.address.city".
  *
- *   - Plain components address object keys.
+ *   - Plain components address dictionary keys.
  *   - A component that begins with '#' followed by decimal digits addresses
- *     an array element by zero-based index **when the current node is an
- *     array**; otherwise the whole component (including the '#') is used as a
- *     literal object key.
+ *     an list element by zero-based index **when the current node is an
+ *     list**; otherwise the whole component (including the '#') is used as a
+ *     literal dictionary key.
  *   - An empty path string is a no-op for cjson_get (returns root) and an
  *     error for cjson_set.
  *
@@ -74,8 +74,8 @@ SOFTWARE.
  *
  * - cjson_create_*(), cjson_parse(), cjson_parse_mp(), and cjson_clone()
  *   return fully owned trees.
- * - cjson_array_push() and cjson_object_set() transfer ownership of the child
- *   to the parent; do not free it afterwards.
+ * - cjson_list_push() and cjson_dictionary_set() transfer ownership of the
+ * child to the parent; do not free it afterwards.
  * - cjson_get() returns a NON-OWNING reference valid until the tree is mutated
  *   or destroyed.
  * - cjson_destroy() recursively frees the entire subtree and NULLs the handle.
@@ -89,17 +89,17 @@ SOFTWARE.
  * @brief JSON value kind tag.
  *
  * Replaces the general-purpose ccol_data_type with a JSON-specific set that
- * covers all seven JSON value kinds, including the composite types (array,
- * object) that ccol_data_type lacks, plus null and boolean.
+ * covers all seven JSON value kinds, including the composite types (list,
+ * dictionary) that ccol_data_type lacks, plus null and boolean.
  */
 typedef enum cjson_node_type {
-  CJSON_NULL = 0, /**< JSON null literal                           */
-  CJSON_BOOL,     /**< JSON boolean  (true / false)                */
-  CJSON_INTEGER,  /**< JSON number with no decimal point/exponent  */
-  CJSON_FLOAT,    /**< JSON number with decimal point or exponent  */
-  CJSON_STRING,   /**< JSON string (UTF-8, owned heap copy)        */
-  CJSON_ARRAY,    /**< JSON array  (ordered list of child nodes)   */
-  CJSON_OBJECT,   /**< JSON object (string-keyed child nodes)      */
+  CJSON_NULL = 0,   /**< JSON null literal                           */
+  CJSON_BOOL,       /**< JSON boolean  (true / false)                */
+  CJSON_INTEGER,    /**< JSON number with no decimal point/exponent  */
+  CJSON_FLOAT,      /**< JSON number with decimal point or exponent  */
+  CJSON_STRING,     /**< JSON string (UTF-8, owned heap copy)        */
+  CJSON_LIST,       /**< JSON list (list of child nodes)            */
+  CJSON_DICTIONARY, /**< JSON dictionary (string-keyed child nodes)  */
 } cjson_node_type_t;
 
 /* ========================================================================== */
@@ -107,7 +107,7 @@ typedef enum cjson_node_type {
 /* ========================================================================== */
 
 /** @brief Opaque DOM node type.  Full definition lives in cjson.c. */
-typedef struct tagged_node_t cjson_node_t;
+typedef struct cjson_node_t cjson_node_t;
 
 /** @brief Public handle: pointer to an opaque DOM node. */
 typedef cjson_node_t *cjson;
@@ -178,25 +178,26 @@ static inline cjson cjson_create_string(const char *val) {
 }
 
 /**
- * @brief Allocate and return an empty JSON array node.
+ * @brief Allocate and return an empty JSON list node.
  * @param mp  Custom allocator, or NULL for default.
  */
-cjson cjson_create_array_mp(ccol_memmgmt_procs_t *mp);
+cjson cjson_create_list_mp(ccol_memmgmt_procs_t *mp);
 
-/** @brief Allocate and return an empty JSON array node (default allocator). */
-static inline cjson cjson_create_array(void) {
-  return cjson_create_array_mp(NULL);
+/** @brief Allocate and return an empty JSON list node (default allocator). */
+static inline cjson cjson_create_list(void) {
+  return cjson_create_list_mp(NULL);
 }
 
 /**
- * @brief Allocate and return an empty JSON object node.
+ * @brief Allocate and return an empty JSON dictionary node.
  * @param mp  Custom allocator, or NULL for default.
  */
-cjson cjson_create_object_mp(ccol_memmgmt_procs_t *mp);
+cjson cjson_create_dictionary_mp(ccol_memmgmt_procs_t *mp);
 
-/** @brief Allocate and return an empty JSON object node (default allocator). */
-static inline cjson cjson_create_object(void) {
-  return cjson_create_object_mp(NULL);
+/** @brief Allocate and return an empty JSON dictionary node (default
+ * allocator). */
+static inline cjson cjson_create_dictionary(void) {
+  return cjson_create_dictionary_mp(NULL);
 }
 
 /* ========================================================================== */
@@ -310,10 +311,10 @@ static inline const char *cjson_type_str(cjson node) {
       return "CJSON_FLOAT";
     case CJSON_STRING:
       return "CJSON_STRING";
-    case CJSON_ARRAY:
-      return "CJSON_ARRAY";
-    case CJSON_OBJECT:
-      return "CJSON_OBJECT";
+    case CJSON_LIST:
+      return "CJSON_LIST";
+    case CJSON_DICTIONARY:
+      return "CJSON_DICTIONARY";
     default:
       return "CJSON_UNKNOWN";
   }
@@ -348,56 +349,83 @@ double cjson_double_val(cjson node);
 const char *cjson_str_val(cjson node);
 
 /**
- * @brief Return the element count of an array node.
- * Calls fatal_err() if the node's type is not CJSON_ARRAY.
+ * @brief Return the element count of an list node.
+ * Calls fatal_err() if the node's type is not CJSON_LIST.
  */
-size_t cjson_array_len(cjson node);
+size_t cjson_list_len(cjson node);
 
 /**
- * @brief Return the key count of an object node.
- * Calls fatal_err() if the node's type is not CJSON_OBJECT.
+ * @brief Return the key count of an dictionary node.
+ * Calls fatal_err() if the node's type is not CJSON_DICTIONARY.
  */
-size_t cjson_object_size(cjson node);
+size_t cjson_dictionary_size(cjson node);
 
 /* ========================================================================== */
-/*                         ARRAY / OBJECT MANIPULATION                        */
+/*                          LIST / DICTIONARY MANIPULATION                    */
 /* ========================================================================== */
 
 /**
- * @brief Append a child node to an array.
+ * @brief Append a child node to an list.
  *
  * Ownership of @p child transfers to @p arr; do not free it afterwards.
  *
- * @param arr    Target array node (must be CJSON_ARRAY).
+ * @param arr    Target list node (must be CJSON_LIST).
  * @param child  Child to append.
  * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
  */
-ccol_retval_t cjson_array_push(cjson arr, cjson child);
+ccol_retval_t cjson_list_push(cjson arr, cjson child);
 
 /**
- * @brief Access an element of an array by index (non-owning).
+ * @brief Access an element of an list by index (non-owning).
  * @return Child node, or NULL if index is out of bounds or type is wrong.
  */
-cjson cjson_array_get(cjson arr, size_t index);
+cjson cjson_list_get(cjson arr, size_t index);
 
 /**
- * @brief Set (insert or replace) a key in an object.
+ * @brief Set (insert or replace) a key in an dictionary.
  *
  * Ownership of @p child transfers to @p obj.  If the key already exists the
  * previous child is deep-freed before the new one is stored.
  *
- * @param obj    Target object node (must be CJSON_OBJECT).
+ * @param obj    Target dictionary node (must be CJSON_DICTIONARY).
  * @param key    Null-terminated key string; a copy is stored internally.
  * @param child  Value node.
  * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
  */
-ccol_retval_t cjson_object_set(cjson obj, const char *key, cjson child);
+ccol_retval_t cjson_dictionary_set(cjson obj, const char *key, cjson child);
 
 /**
- * @brief Look up a key in an object (non-owning).
+ * @brief Look up a key in an dictionary (non-owning).
  * @return Child node, or NULL if the key is absent or type is wrong.
  */
-cjson cjson_object_get(cjson obj, const char *key);
+cjson cjson_dictionary_get(cjson obj, const char *key);
+
+/**
+ * @brief Remove and deep-free the element at position index from a list.
+ *
+ * All elements after index are shifted left by one position.  The removed
+ * subtree is recursively freed.
+ *
+ * @param arr    Target list node (must be CJSON_LIST).
+ * @param index  Zero-based index of the element to remove.
+ * @return ccol_success on success.
+ *         ccol_invalid_args if arr is NULL, not a list, or index is out of
+ *         bounds.
+ */
+ccol_retval_t cjson_list_remove(cjson arr, size_t index);
+
+/**
+ * @brief Remove and deep-free the entry with the given key from a dictionary.
+ *
+ * The removed subtree is recursively freed.
+ *
+ * @param obj  Target dictionary node (must be CJSON_DICTIONARY).
+ * @param key  Null-terminated key string.
+ * @return ccol_success on success.
+ *         ccol_invalid_args if obj is NULL or not a dictionary.
+ *         ccol_key_not_found if key does not exist.
+ */
+ccol_retval_t cjson_dictionary_remove(cjson obj, const char *key);
 
 /* ========================================================================== */
 /*                         DEEP COPY                                          */
@@ -496,6 +524,23 @@ static inline void ___cjson_destroy(cjson *node) {
 cjson _cjson_get(cjson root, const char *path);
 
 /**
+ * @brief Remove and deep-free the node addressed by a path (back-end).
+ *
+ * Prefer the cjson_delete() macro.
+ *
+ * Navigates to the parent of the addressed node and calls
+ * cjson_dictionary_remove() or cjson_list_remove() as appropriate.
+ * The path uses the same dot-separated syntax as _cjson_get and
+ * _cjson_set_typed, including escape sequences.
+ *
+ * @return ccol_success on success.
+ *         ccol_invalid_args for a NULL/empty path or wrong parent type.
+ *         ccol_key_not_found if any path component is absent.
+ *         ccol_not_enough_memory on allocation failure.
+ */
+ccol_retval_t _cjson_delete(cjson root, const char *path);
+
+/**
  * @brief Write a typed scalar value to the leaf addressed by a path (back-end).
  *
  * Prefer the cjson_set() macro.
@@ -510,7 +555,7 @@ cjson _cjson_get(cjson root, const char *path);
  * *).
  * @param raw_size         sizeof() the original C expression.
  * @param is_signed        Whether the integer source type is signed.
- * @param raw_is_char_array true when raw points directly at a char[] array
+ * @param raw_is_char_array true when raw points directly at a char[] list
  *                         (e.g. a string literal captured via typeof); false
  *                         when raw points at a const char * variable.  Used
  *                         only when type == CJSON_STRING.
@@ -623,7 +668,7 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
 /**
  * @brief Navigate to the DOM node at a dot-separated path.
  *
- * @param root  Root cjson handle (CJSON_OBJECT or CJSON_ARRAY at top level).
+ * @param root  Root cjson handle (CJSON_DICTIONARY or CJSON_LIST at top level).
  * @param path  Dot-separated path string literal or char *.
  * @return Non-owning cjson handle, or NULL if the path does not exist.
  *
@@ -643,8 +688,8 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
  * const char *.  Passing NULL sets the leaf to CJSON_NULL.
  *
  * The leaf is created when absent (its immediate parent must already exist).
- * If the leaf exists its type is changed unconditionally — existing array or
- * object subtrees are deep-freed automatically.
+ * If the leaf exists its type is changed unconditionally — existing list or
+ * dictionary subtrees are deep-freed automatically.
  *
  * @param root  Root cjson handle.
  * @param path  Dot-separated path string.
@@ -665,3 +710,23 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
                      (void *)&_cjson_sv, sizeof(_cjson_sv),                  \
                      _cjson_is_signed(_cjson_sv), is_char_array(_cjson_sv)); \
   })
+
+/**
+ * @brief Remove and deep-free the DOM node addressed by a dot-separated path.
+ *
+ * Navigates to the parent of the addressed node, then removes and recursively
+ * frees the child.  For dictionary parents the leaf is addressed by key; for
+ * list parents the leaf must be a '#N' component.
+ *
+ * @param root  Root cjson handle.
+ * @param path  Dot-separated path string (same syntax as cjson_get/cjson_set).
+ * @return ccol_retval_t: ccol_success on success, error code otherwise.
+ *
+ * Example:
+ * @code
+ * cjson_delete(doc, "users.#0.address");
+ * cjson_delete(doc, "config.debug");
+ * cjson_delete(doc, "items.#2");
+ * @endcode
+ */
+#define cjson_delete(root, path) _cjson_delete((root), (path))

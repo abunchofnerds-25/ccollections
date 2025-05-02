@@ -2,6 +2,7 @@
 .project
 obj/
 libccollections.so
+libccollections.a
 tests/*/tests
 tests/*/coverage/
 *.gcno

@@ -296,7 +296,7 @@ ccol_retval_t cstring_prepend(cstr s, const char *str) {
     str = s->data + alias_off + str_len;
   }
 
-  memcpy(s->data, str, str_len);
+  memmove(s->data, str, str_len);
   s->length = new_len;
 
   return ccol_success;
@@ -377,7 +377,7 @@ ccol_retval_t cstring_set(cstr s, const char *str) {
     str = s->data + alias_off;
   }
 
-  memcpy(s->data, str, str_len + 1);
+  memmove(s->data, str, str_len + 1);
   s->length = str_len;
 
   return ccol_success;

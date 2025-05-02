@@ -6,10 +6,9 @@ SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \
             ../../src/cvector.c ../../src/csort.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
-	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror \
-	-lm
+	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
-LFLAGS = -lm
+LFLAGS =
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)

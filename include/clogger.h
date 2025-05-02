@@ -29,7 +29,8 @@ SOFTWARE.
  * @brief Structured, thread-safe logger with log rotation
  *
  * Output format (logfmt):
- *   ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>) src=<file>:<line> func=<fn> [fields] msg=<text>
+ *   ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>)
+ * src=<file>:<line> func=<fn> [fields] msg=<text>
  *
  * Backtrace (ERROR / ALERT / FATAL only) is appended as tab-indented
  * continuation lines that do not start with "ts=", allowing log aggregators
@@ -95,7 +96,7 @@ typedef enum {
  * Pass a pointer to this struct to clog_open_file_mp(). Fields with value 0
  * use their respective CLOG_DEFAULT_* constant.
  *
- * Example — rotate at 50 MiB, keep 14 files:
+ * Example -- rotate at 50 MiB, keep 14 files:
  * @code
  * clog_rotation_cfg_t cfg = {
  *     .size_rotation_enabled  = true,
@@ -108,11 +109,11 @@ typedef enum {
  */
 typedef struct clog_rotation_cfg {
   bool size_rotation_enabled;
-  off_t max_file_size; /**< Bytes; 0 → CLOG_DEFAULT_MAX_FILE_SIZE */
+  off_t max_file_size; /**< Bytes; 0 -> CLOG_DEFAULT_MAX_FILE_SIZE */
   bool time_rotation_enabled;
-  time_t rotation_interval_secs; /**< Seconds; 0 →
+  time_t rotation_interval_secs; /**< Seconds; 0 ->
                                     CLOG_DEFAULT_ROTATION_INTERVAL */
-  int max_rotated_files;         /**< Files kept on disk; 0 → no limit */
+  int max_rotated_files;         /**< Files kept on disk; 0 -> no limit */
 } clog_rotation_cfg_t;
 
 /* ========================================================================== */
@@ -125,7 +126,7 @@ struct clogger;
  * @brief Opaque logger handle.
  *
  * Obtain via clog_open_fd_mp() or clog_open_file_mp(). Release via
- * clog_close(). NULL is safe to pass to all functions — they are no-ops.
+ * clog_close(). NULL is safe to pass to all functions -- they are no-ops.
  */
 typedef struct clogger *clog;
 
@@ -141,7 +142,7 @@ typedef struct clogger *clog;
  * clog_close(). Log rotation is unavailable for fd-based loggers. All dynamic
  * memory operations will be performed via the provided memory management procs.
  *
- * @param fd        Open, writable file descriptor (1=stdout, 2=stderr, …).
+ * @param fd        Open, writable file descriptor (1=stdout, 2=stderr, ...).
  * @param min_level Messages below this level are silently dropped.
  * @param mprocs    Custom allocator, or NULL to use malloc/free.
  * @return New logger handle, or NULL on allocation failure, invalid mprocs,
@@ -156,7 +157,7 @@ clog clog_open_fd_mp(int fd, clog_level_t min_level,
  * The file descriptor is not owned by the logger and will NOT be closed on
  * clog_close(). Log rotation is unavailable for fd-based loggers.
  *
- * @param fd        Open, writable file descriptor (1=stdout, 2=stderr, …).
+ * @param fd        Open, writable file descriptor (1=stdout, 2=stderr, ...).
  * @param min_level Messages below this level are silently dropped.
  * @return New logger handle, or NULL on allocation failure, or if fd is
  *         closed, read-only, or otherwise invalid.
@@ -213,8 +214,8 @@ void clog_close(clog logger);
  * @brief Derive a new logger from an existing one.
  *
  * The derived logger shares the parent's logging target (file descriptor) and
- * synchronisation mutex, so all writes — from the parent and every derived
- * logger — are serialised by the same lock and go to the same destination.
+ * synchronisation mutex, so all writes -- from the parent and every derived
+ * logger -- are serialised by the same lock and go to the same destination.
  *
  * The derived logger starts with a snapshot of the parent's fields and
  * minimum log level at the time of the call.  After that, the two loggers
@@ -229,7 +230,7 @@ void clog_close(clog logger);
  * The underlying file is kept open until all handles (root + every derived
  * logger) have been closed.
  *
- * @param parent Source logger to derive from. NULL → returns NULL.
+ * @param parent Source logger to derive from. NULL -> returns NULL.
  * @return New derived logger handle, or NULL on allocation failure.
  */
 clog clog_derive(clog parent);
@@ -263,7 +264,7 @@ clog_level_t clog_get_level(clog logger);
  */
 typedef enum {
   CLOG_FMT_LOGFMT = 0, /**< key=value logfmt (default) */
-  CLOG_FMT_JSON,       /**< NDJSON — one JSON object per line */
+  CLOG_FMT_JSON,       /**< NDJSON -- one JSON object per line */
   CLOG_FMT_SYSLOG, /**< RFC 5424 syslog; fd-based loggers only (see above) */
 } clog_format_t;
 
@@ -391,13 +392,13 @@ void clog_remove_field(clog logger, const char *key);
 void clog_clear_fields(clog logger);
 
 /* ========================================================================== */
-/*                         INTERNAL — DO NOT CALL DIRECTLY                    */
+/*                         INTERNAL -- DO NOT CALL DIRECTLY */
 /* ========================================================================== */
 
 /**
  * @brief Internal write function. Use the log_* macros instead.
  *
- * @param logger         Logger handle (may be NULL — produces no output).
+ * @param logger         Logger handle (may be NULL -- produces no output).
  * @param level          Severity level.
  * @param file           Source file (__FILE__).
  * @param line           Source line (__LINE__).

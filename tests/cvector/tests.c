@@ -381,7 +381,7 @@ TEST(cvectors, scaling_shrink_threshold) {
   // Capacity should remain unchanged
   REQUIRE_EQ(cvector_get_capacity(cvec), 32);
 
-  // Pop down to 3 elements (< 16/4 = 4)
+  // Pop 13 more times to reach 3 elements (shrinks 32->16 at count<8, 16->8 at count<4)
   for (int i = 0; i < 13; ++i) {
     cvector_pop_back(cvec, &tmp);
   }
@@ -1050,6 +1050,7 @@ TEST(cvectors, declarative_macros) {
   int tmp = 2;
   cvec_push(vec, tmp);
   int val = cvec_pop(vec);
+  REQUIRE_EQ(val, 2);
 
   cvec_reset(vec);
 
@@ -1100,6 +1101,7 @@ TEST(cvectors, constructive_macros_mp) {
   int tmp = 2;
   cvec_push(vec, tmp);
   int val = cvec_pop(vec);
+  REQUIRE_EQ(val, 2);
 
   cvec_reset(vec);
 
@@ -1150,6 +1152,7 @@ TEST(cvectors, declarative_macros_mp) {
   int tmp = 2;
   cvec_push(vec, tmp);
   int val = cvec_pop(vec);
+  REQUIRE_EQ(val, 2);
 
   cvec_reset(vec);
 
@@ -1204,4 +1207,247 @@ TEST(cvectors, construct_scoped_lifecycle) {
     }
     // v is automatically destroyed at end of block (no cvec_destroy needed)
   }
+}
+
+// ========================================================================
+// ITERATOR TESTS
+// ========================================================================
+
+TEST(cvectors, iterator_empty_vector) {
+  cvec_construct(vec, int);
+
+  ccol_iter_declare(vec, it);
+  it = ccol_begin(vec);
+  REQUIRE_EQ((void *)it, NULL);
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, iterator_single_element) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 99);
+
+  ccol_iter_declare(vec, it);
+  it = ccol_begin(vec);
+  REQUIRE_NE((void *)it, NULL);
+
+  const size_t *key = ccol_iter_key_ptr(it);
+  int *val = ccol_iter_val_ptr(it);
+  REQUIRE_EQ(*key, (size_t)0);
+  REQUIRE_EQ(*val, 99);
+
+  it = ccol_iter_next(it);
+  REQUIRE_EQ((void *)it, NULL);
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, iterator_full_traversal) {
+  cvec_construct(vec, int);
+  for (int i = 0; i < 8; ++i) {
+    cvec_push_rvalue(vec, i * 5);
+  }
+
+  ccol_iter_declare(vec, it);
+  int count = 0;
+  for (it = ccol_begin(vec); it != NULL; it = ccol_iter_next(it)) {
+    const size_t *key = ccol_iter_key_ptr(it);
+    int *val = ccol_iter_val_ptr(it);
+    REQUIRE_EQ(*key, (size_t)count);
+    REQUIRE_EQ(*val, count * 5);
+    ++count;
+  }
+  REQUIRE_EQ(count, 8);
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, iterator_val_mutation) {
+  cvec_construct(vec, int);
+  for (int i = 0; i < 5; ++i) {
+    cvec_push_rvalue(vec, i);
+  }
+
+  ccol_iter_declare(vec, it);
+  for (it = ccol_begin(vec); it != NULL; it = ccol_iter_next(it)) {
+    int *val = ccol_iter_val_ptr(it);
+    *val *= 3;
+  }
+
+  for (int i = 0; i < 5; ++i) {
+    REQUIRE_EQ(cvec_at(vec, i), i * 3);
+  }
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, iterator_early_exit) {
+  cvec_construct(vec, int);
+  for (int i = 0; i < 10; ++i) {
+    cvec_push_rvalue(vec, i);
+  }
+
+  int count = 0;
+  ccol_iter_declare(vec, it);
+  for (it = ccol_begin(vec); it != NULL; it = ccol_iter_next(it)) {
+    ++count;
+    if (count == 4) {
+      ccol_iter_destroy(it);
+      break;
+    }
+  }
+  REQUIRE_EQ(count, 4);
+  REQUIRE_EQ((void *)it, NULL);
+  REQUIRE_EQ(cvector_elem_count(vec), 10);  // vector unchanged
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, iterator_for_each_macro) {
+  cvec_construct(vec, int);
+  for (int i = 1; i <= 6; ++i) {
+    cvec_push_rvalue(vec, i);
+  }
+
+  int sum = 0;
+  ccol_for_each(vec, it, {
+    int *val = ccol_iter_val_ptr(it);
+    sum += *val;
+  });
+  REQUIRE_EQ(sum, 21);  // 1+2+3+4+5+6
+
+  cvec_destroy(vec);
+}
+
+// ========================================================================
+// SORT TESTS
+// ========================================================================
+
+static int cmp_int_descending(const void *a, const void *b) {
+  int va = *(const int *)a;
+  int vb = *(const int *)b;
+  return (va < vb) - (va > vb);
+}
+
+typedef struct {
+  int key;
+  int seq;
+} cvec_stable_item;
+
+static int cmp_stable_item(const void *a, const void *b) {
+  int ka = ((const cvec_stable_item *)a)->key;
+  int kb = ((const cvec_stable_item *)b)->key;
+  return (ka > kb) - (ka < kb);
+}
+
+TEST(cvectors, sort_empty_vector) {
+  cvec_construct(vec, int);
+  cvec_sort(vec);  // must not crash on empty input
+  REQUIRE_EQ(cvec_size(vec), (size_t)0);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, sort_single_element) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 42);
+  cvec_sort(vec);
+  REQUIRE_EQ(cvec_size(vec), (size_t)1);
+  REQUIRE_EQ(cvec_at(vec, 0), 42);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, sort_ascending) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 5);
+  cvec_push_rvalue(vec, 3);
+  cvec_push_rvalue(vec, 1);
+  cvec_push_rvalue(vec, 4);
+  cvec_push_rvalue(vec, 2);
+
+  cvec_sort(vec);
+
+  for (int i = 0; i < 5; ++i) {
+    REQUIRE_EQ(cvec_at(vec, i), i + 1);
+  }
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, sort_already_sorted) {
+  cvec_construct(vec, int);
+  for (int i = 0; i < 8; ++i) {
+    cvec_push_rvalue(vec, i);
+  }
+
+  cvec_sort(vec);
+
+  for (int i = 0; i < 8; ++i) {
+    REQUIRE_EQ(cvec_at(vec, i), i);
+  }
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, sort_custom_comparator_descending) {
+  cvec_construct(vec, int);
+  for (int i = 1; i <= 6; ++i) {
+    cvec_push_rvalue(vec, i);
+  }
+
+  cvector_sort_with_comparison_proc(vec, cmp_int_descending);
+
+  for (int i = 0; i < 6; ++i) {
+    REQUIRE_EQ(cvec_at(vec, i), 6 - i);
+  }
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, sort_doubles) {
+  cvec_construct(vec, double);
+  cvec_push_rvalue(vec, 3.0);
+  cvec_push_rvalue(vec, 1.0);
+  cvec_push_rvalue(vec, 4.0);
+  cvec_push_rvalue(vec, 2.0);
+
+  cvec_sort(vec);
+
+  REQUIRE_EQ(cvec_at(vec, 0), 1.0);
+  REQUIRE_EQ(cvec_at(vec, 1), 2.0);
+  REQUIRE_EQ(cvec_at(vec, 2), 3.0);
+  REQUIRE_EQ(cvec_at(vec, 3), 4.0);
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, sort_stable) {
+  cvec_declare(vec, cvec_stable_item);
+  cvec_init(vec);
+
+  // Interleaved insertion: key=2/seq=0, key=1/seq=0, key=2/seq=1, ...
+  cvec_push(vec, ((cvec_stable_item){2, 0}));
+  cvec_push(vec, ((cvec_stable_item){1, 0}));
+  cvec_push(vec, ((cvec_stable_item){2, 1}));
+  cvec_push(vec, ((cvec_stable_item){1, 1}));
+  cvec_push(vec, ((cvec_stable_item){2, 2}));
+  cvec_push(vec, ((cvec_stable_item){1, 2}));
+
+  cvector_sort_with_comparison_proc(vec, cmp_stable_item);
+
+  // key=1 group must appear first, in original insertion order (seq 0,1,2)
+  REQUIRE_EQ(cvec_at(vec, 0).key, 1);
+  REQUIRE_EQ(cvec_at(vec, 0).seq, 0);
+  REQUIRE_EQ(cvec_at(vec, 1).key, 1);
+  REQUIRE_EQ(cvec_at(vec, 1).seq, 1);
+  REQUIRE_EQ(cvec_at(vec, 2).key, 1);
+  REQUIRE_EQ(cvec_at(vec, 2).seq, 2);
+  // key=2 group follows, in original insertion order
+  REQUIRE_EQ(cvec_at(vec, 3).key, 2);
+  REQUIRE_EQ(cvec_at(vec, 3).seq, 0);
+  REQUIRE_EQ(cvec_at(vec, 4).key, 2);
+  REQUIRE_EQ(cvec_at(vec, 4).seq, 1);
+  REQUIRE_EQ(cvec_at(vec, 5).key, 2);
+  REQUIRE_EQ(cvec_at(vec, 5).seq, 2);
+
+  cvec_destroy(vec);
 }

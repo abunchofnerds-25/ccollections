@@ -383,20 +383,8 @@ void __mempool_free_entry(mempool *mp, __internal_entry_header *header) {
 
   if (valid_mempool_addr(mp, c_header)) {
     if (header->elem_status != elem_is_taken) {
-      // This block seems to be tampered with
-      addr_t addr = header->next;
-      if (addr && valid_mempool_addr(mp, (uintptr_t)addr)) {
-        // Was this address returned to the pool before?
-        if (header->elem_status == elem_is_free) {
-          // Double free!
-          if (mp->should_use_locks) {
-            rw_lock_unlock(mp->lock);
-          }
-          ccol_assert(false);
-        }
-      }
-
-      // Somehow the entry got overwritten.
+      // Either a double-free (elem_is_free) or corruption (any other status).
+      // Both are fatal, so assert unconditionally without further branching.
       if (mp->should_use_locks) {
         rw_lock_unlock(mp->lock);
       }
@@ -801,6 +789,24 @@ bool init_preallocated_r_mempool_internal_pools(r_mempool *rmp,
     return false;
   }
 
+  size_t first_size = rmp->smallest_size;
+  size_t first_count = rmp->smallest_elem_count;
+
+  /* Validate the total buffer size before touching any sub-buffer so that
+   * an incorrectly sized buffer never causes out-of-bounds writes during
+   * sub-pool initialisation. */
+  size_t expected_size = 0;
+  for (size_t esize = first_size, ecount = first_count, index = 0;
+       index < rmp->number_of_mempools; esize *= 2, ecount /= 2, ++index) {
+    expected_size += ecount * (esize + offsetof(__internal_entry_header, next));
+  }
+  if (expected_size != preallocated_buffer_size) {
+    if (err) {
+      *err = CCOL_ERR_STR("buffer sizes differ");
+    }
+    return false;
+  }
+
   rmp->mem_pools = (mempool **)_mem_calloc(
       rmp->m_procs, rmp->number_of_mempools, sizeof(mempool *));
   if (!rmp->mem_pools) {
@@ -810,9 +816,6 @@ bool init_preallocated_r_mempool_internal_pools(r_mempool *rmp,
     }
     return false;
   }
-
-  size_t first_size = rmp->smallest_size;
-  size_t first_count = rmp->smallest_elem_count;
 
   size_t cumulative_size = 0;
 
@@ -834,13 +837,6 @@ bool init_preallocated_r_mempool_internal_pools(r_mempool *rmp,
     cumulative_size += sub_buffer_size;
   }
 
-  if (cumulative_size != preallocated_buffer_size) {
-    if (err) {
-      *err = CCOL_ERR_STR("buffer sizes differ");
-    }
-    return false;
-  }
-
   return true;
 }
 
@@ -854,6 +850,13 @@ r_mempool *r_mempool_create_from_preallocated_buffer(
     ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
   if (err) {
     *err = NULL;
+  }
+
+  if (!buffer) {
+    if (err) {
+      *err = CCOL_ERR_STR("buffer is NULL");
+    }
+    return NULL;
   }
 
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err)) {

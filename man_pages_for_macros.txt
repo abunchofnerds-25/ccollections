@@ -1253,11 +1253,11 @@ DESCRIPTION
        is ccol_msg_too_large returned.
 
        For ccol_select_read direction: when ccol_select() returns ccol_success,
-       buf->data points to a heap buffer containing all data that was available on
-       the fd at the moment of the read, and buf->size holds the byte count.  The
-       caller gains ownership of buf->data and must call free() on it.  EOF yields
-       buf->data = NULL, buf->size = 0.  This is the same ownership model as queue
-       read wins.
+       buf->data points to a heap buffer containing the data read from the fd
+       (how much is read per call depends on fd type; see Read behaviour detail
+       below), and buf->size holds the byte count.  The caller gains ownership
+       of buf->data and must call free() on it.  EOF yields buf->data = NULL,
+       buf->size = 0.  This is the same ownership model as queue read wins.
 
        For ccol_select_write direction: buf is left untouched — ccol_select() only
        signals that the fd has room in its kernel send buffer.  The caller must
@@ -1277,7 +1277,13 @@ DESCRIPTION
        initial buffer is used.  If the fd has O_NONBLOCK, the read loop grows the
        buffer (up to max_bytes + 1 when a limit is set) until EAGAIN to drain all
        data that arrived before the wakeup.  If the fd is in blocking mode, exactly
-       one read(2) call is made (safe because epoll already confirmed readiness).
+       one read(2) call is made using a buffer of max(4096, max_bytes) bytes;
+       passing max_bytes > 4096 via selectable_from_fd_limited() therefore allows
+       reading up to max_bytes bytes in a single blocking call.  Any data remaining
+       in the fd buffer after that single read is NOT drained in that call -- it
+       will be returned on the next ccol_select() call because epoll(7) is
+       level-triggered.  Use O_NONBLOCK on the fd if full-drain behaviour per call
+       is required.
 
        Mixing fd selectables with queue selectables in the same ccol_select() call
        is supported.  The implementation switches to an epoll(7)-based wait path
@@ -3172,14 +3178,19 @@ DESCRIPTION
        path is a dot-separated sequence of component strings.  A component
        that begins with '#' followed by one or more decimal digits addresses
        an array element by zero-based index when the current node is
-       CJSON_ARRAY; otherwise the component is used as a literal object key
+       CJSON_LIST; otherwise the component is used as a literal object key
        (including the '#' prefix).  A bare '#' with no trailing digits is
        always treated as an error and causes NULL to be returned.
 
        An empty path string returns root unchanged.
 
+       Escape sequences in path components:
+         \.   -> a literal '.' in the key (not treated as a path separator)
+         \\   -> a literal '\' in the key
+       A '\' before any other character is left unchanged.
+
 PARAMETERS
-       root   Root cjson node (typically CJSON_OBJECT or CJSON_ARRAY).
+       root   Root cjson node (typically CJSON_DICTIONARY or CJSON_LIST).
        path   Dot-separated path string, e.g. "users.#0.address.city".
 
 RETURN VALUE
@@ -3236,6 +3247,8 @@ DESCRIPTION
 PARAMETERS
        root   Root cjson node.
        path   Dot-separated path string to the target leaf.
+              Escape sequences: '\.' -> literal '.', '\\' -> literal '\'.
+              A '\' before any other character is left unchanged.
        val    C value; the type must be one of the accepted types listed above.
 
 RETURN VALUE
@@ -3267,7 +3280,300 @@ EXAMPLES
        cjson_set(doc, "users.#0.deprecated", NULL);
 
 SEE ALSO
-       cjson_get, _cjson_set_typed, cjson_object_set, cjson_array_push
+       cjson_get, _cjson_set_typed, cjson_dictionary_set, cjson_list_push
+
+------------------------------------------------------------------------------
+NAME
+       cjson_delete - remove and free the DOM node at a dot-separated path
+
+SYNOPSIS
+       #include <cjson.h>
+
+       ccol_retval_t cjson_delete(cjson root, const char *path);
+
+DESCRIPTION
+       Expands to a call to _cjson_delete(root, path).
+
+       Navigates to the parent of the addressed node, removes the child, and
+       recursively frees its entire subtree.  The path uses the same
+       dot-separated syntax as cjson_get and cjson_set.
+
+       For dictionary parents, the leaf component is used as the key to
+       remove.  For list parents, the leaf component must be a '#N' token
+       (e.g. "#2" to remove index 2).
+
+       The split is performed on the LAST unescaped dot, so "a.b.c" targets
+       key "c" inside the node at "a.b".  When path contains no dot, root is
+       the parent.
+
+       Escape sequences '\.' and '\\' produce a literal dot or backslash in
+       a key name, consistent with cjson_get and cjson_set.
+
+RETURN VALUE
+       ccol_retval_t.  Returns ccol_success on success.
+       ccol_invalid_args if root or path is NULL, path is empty, or the leaf
+       component is not valid for the parent type.
+       ccol_key_not_found if any path component (parent or leaf) is absent.
+       ccol_not_enough_memory on internal allocation failure.
+
+EXAMPLE
+       cjson_delete(doc, "users.#0.address");
+       cjson_delete(doc, "config.debug");
+       cjson_delete(doc, "items.#2");
+
+SEE ALSO
+       cjson_get, cjson_set, _cjson_delete, cjson_dictionary_remove,
+       cjson_list_remove
+
+================================================================================
+                            CYAML.H - YAML DOM
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_declare - declare an uninitialized cyaml variable
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml_declare(var_name);
+
+DESCRIPTION
+       Declares a cyaml handle variable named var_name without initializing
+       it.  Provided for naming-convention symmetry with other c_collections
+       modules (which all expose a _declare variant).
+
+       This macro simply expands to "cyaml var_name".
+
+PARAMETERS
+       var_name  Name of the variable to declare.
+
+EXAMPLES
+       cyaml_declare(root);
+       root = cyaml_parse("key: value\n", NULL);
+       /* ... use root ... */
+       cyaml_destroy(root);
+
+SEE ALSO
+       cyaml_declare_scoped, cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_declare_scoped - declare a cyaml variable with automatic RAII
+       destruction
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml_declare_scoped(var_name);
+
+DESCRIPTION
+       Declares a cyaml handle variable named var_name and attaches a GCC
+       cleanup attribute so that ___cyaml_destroy() is called automatically
+       when var_name goes out of scope.
+
+       The cleanup runs in reverse declaration order at the end of the
+       enclosing block, whether it exits normally, via break/continue/return,
+       or via goto.
+
+       This is a GCC/Clang extension; it is not available on MSVC.
+
+PARAMETERS
+       var_name  Name of the variable to declare.
+
+EXAMPLES
+       {
+           cyaml_declare_scoped(doc) = cyaml_parse("x: 1\n", NULL);
+           if (!doc) return;
+           /* ... use doc ... */
+       }  /* doc is freed automatically here */
+
+SEE ALSO
+       cyaml_declare, cyaml_destroy, ___cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_destroy - recursively free a DOM tree and null the handle
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml_destroy(node);
+
+DESCRIPTION
+       If node is non-NULL, recursively frees the entire DOM subtree rooted at
+       node using each node's stored allocator, then sets node to NULL.
+
+       List children, dictionary values, and string copies are all freed
+       recursively.  Double-freeing a destroyed handle is safe because the
+       macro nulls the variable first.
+
+       To destroy a tree without nulling the pointer, call __cyaml_destroy()
+       directly.
+
+PARAMETERS
+       node  cyaml variable to destroy.  The variable itself is set to NULL.
+
+EXAMPLES
+       cyaml root = cyaml_parse("a: 1\n", NULL);
+       /* ... use root ... */
+       cyaml_destroy(root);   /* root is now NULL */
+
+SEE ALSO
+       cyaml_declare_scoped, __cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_get - navigate to a DOM node via a dot-separated path
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_get(cyaml root, const char *path);
+
+DESCRIPTION
+       Thin wrapper around _cyaml_get().  Navigate from root through a
+       dot-separated path and return the node at the destination.
+
+       Path syntax:
+         - Components are separated by dots ('.').
+         - A component beginning with '#' followed by one or more decimal
+           digits indexes into a CYAML_LIST by position (e.g. "#0" is
+           the first element).
+         - All other components are treated as literal CYAML_DICTIONARY keys.
+         - A bare '#' with no trailing digits is always treated as a literal
+           key (unlike cjson which returns an error).
+         - Escape sequences: '\.' -> literal '.' in the key (not a
+           separator); '\\' -> literal '\' in the key.  A '\' before any
+           other character is left unchanged.
+
+       The returned reference is NON-OWNING.  It becomes invalid if the
+       containing node is mutated or destroyed.
+
+PARAMETERS
+       root  Root cyaml handle (typically CYAML_DICTIONARY or CYAML_LIST).
+       path  Dot-separated path string literal or char *.
+
+RETURN VALUE
+       Non-owning cyaml handle at the target, or NULL if any component along
+       the path is missing or the node type is incompatible.
+
+EXAMPLES
+       cyaml port = cyaml_get(doc, "server.ports.#0");
+       if (cyaml_type(port) == CYAML_INTEGER)
+           printf("%lld\n", cyaml_int_val(port));
+
+       /* Top-level access with empty path returns root itself */
+       cyaml same = cyaml_get(doc, "");
+
+SEE ALSO
+       cyaml_set, _cyaml_get
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_set - write a C scalar to the DOM leaf addressed by a path
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       ccol_retval_t cyaml_set(cyaml root, const char *path, val);
+
+DESCRIPTION
+       Detect the compile-time type of val via _Generic and call
+       _cyaml_set_typed() to write a scalar value to the leaf node addressed
+       by path.
+
+       Accepted C types for val and the resulting CYAML node type:
+         bool                      → CYAML_BOOL
+         any integer type          → CYAML_INTEGER (stored as long long)
+         float / double            → CYAML_FLOAT (stored as double)
+         char * / const char *     → CYAML_STRING (heap copy made)
+         string literal ("...")    → CYAML_STRING
+         NULL or unrecognized ptr  → CYAML_NULL
+
+       The leaf is created when absent; its immediate parent must already
+       exist.  If the leaf exists its type is replaced unconditionally:
+       existing list or dictionary subtrees are deep-freed before the new
+       value is written.
+
+       Non-finite doubles (Inf, -Inf, NaN) are accepted and stored (unlike
+       cyaml_set on a cjson DOM).  They serialize as .inf, -.inf, .nan.
+
+       Passing (bool)true / (bool)false is required to produce a CYAML_BOOL
+       node -- without the explicit cast, integer literal 1 or 0 produces a
+       CYAML_INTEGER node instead.
+
+PARAMETERS
+       root   Root cyaml handle.
+       path   Dot-separated path string.
+              Escape sequences: '\.' -> literal '.', '\\' -> literal '\'.
+              A '\' before any other character is left unchanged.
+       val    C value; type is resolved at compile time.
+
+RETURN VALUE
+       ccol_retval_t: ccol_success on success.
+       ccol_invalid_args  -- empty path, type incompatible at a path step, or
+                             list index out of bounds.
+       ccol_key_not_found -- a non-leaf component of the path does not exist.
+       ccol_not_enough_memory -- allocation failure.
+
+EXAMPLES
+       cyaml_set(doc, "server.port",  8080);
+       cyaml_set(doc, "server.name",  "prod");
+       cyaml_set(doc, "server.tls",   (bool)true);
+       cyaml_set(doc, "server.ratio", 0.95);
+
+       /* Replace a dictionary subtree with a scalar */
+       cyaml_set(doc, "server.options", 0);   /* deep-frees old subtree */
+
+       /* Set to null */
+       cyaml_set(doc, "server.deprecated", NULL);
+
+SEE ALSO
+       cyaml_get, _cyaml_set_typed
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_delete - remove and free the DOM node at a dot-separated path
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       ccol_retval_t cyaml_delete(cyaml root, const char *path);
+
+DESCRIPTION
+       Expands to a call to _cyaml_delete(root, path).
+
+       Navigates to the parent of the addressed node, removes the child, and
+       recursively frees its entire subtree.  The path uses the same
+       dot-separated syntax as cyaml_get and cyaml_set.
+
+       For dictionary parents, the leaf component is used as the key to
+       remove.  For list parents, the leaf component must be a '#N' token
+       (e.g. "#0" to remove the first element).
+
+       The split is performed on the LAST unescaped dot, so "a.b.c" targets
+       key "c" inside the node at "a.b".  When path contains no dot, root is
+       the parent.
+
+       Escape sequences '\.' and '\\' produce a literal dot or backslash in
+       a key name, consistent with cyaml_get and cyaml_set.
+
+RETURN VALUE
+       ccol_retval_t.  Returns ccol_success on success.
+       ccol_invalid_args if root or path is NULL, path is empty, or the leaf
+       component is not valid for the parent type.
+       ccol_key_not_found if any path component (parent or leaf) is absent.
+       ccol_not_enough_memory on internal allocation failure.
+
+EXAMPLE
+       cyaml_delete(doc, "server.debug");
+       cyaml_delete(doc, "hosts.#0");
+       cyaml_delete(doc, "users.alice.address");
+
+SEE ALSO
+       cyaml_get, cyaml_set, _cyaml_delete, cyaml_dictionary_remove,
+       cyaml_list_remove
 
 ================================================================================
                               END OF MAN PAGES

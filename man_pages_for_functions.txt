@@ -1866,11 +1866,12 @@ RETURN VALUE
                                dequeued message (zero-copy ownership transfer);
                                caller must free buf->data.
 
-                               fd read win: ccol_select() has already read all
-                               available data from the fd into buf->data (heap-
-                               allocated; caller must free) and set buf->size to
-                               the byte count.  EOF yields buf->data = NULL,
-                               buf->size = 0.
+                               fd read win: ccol_select() has already read data
+                               from the fd into buf->data (heap-allocated;
+                               caller must free) and set buf->size to the byte
+                               count.  How much data is read per call depends on
+                               fd type; see the NOTES section below.  EOF yields
+                               buf->data = NULL, buf->size = 0.
 
                                Write-direction win (queue or fd): buf is left
                                untouched; no queue slot is reserved and no I/O
@@ -1942,9 +1943,15 @@ NOTES
        Stream and non-socket fds (pipes, timerfd, signalfd, etc.): a 4 KiB initial
        buffer is used.  If the fd has O_NONBLOCK, the loop grows the buffer (up to
        max_fd_read_bytes + 1 when a limit is set) until EAGAIN.  If blocking,
-       exactly one read(2) call is made.  The fd's flags are inspected read-only
-       via fcntl(F_GETFL) and are never modified, so concurrent users of the same
-       fd are unaffected.
+       exactly one read(2) call is made using a buffer of
+       max(4096, max_fd_read_bytes) bytes; passing max_fd_read_bytes > 4096 via
+       selectable_from_fd_limited() therefore allows reading up to
+       max_fd_read_bytes bytes in a single blocking call.  Any data remaining in
+       the fd buffer after that single read will be returned on the next
+       ccol_select() call because epoll(7) is level-triggered.  Use O_NONBLOCK on
+       the fd if full-drain behaviour per call is required.  The fd's flags are
+       inspected read-only via fcntl(F_GETFL) and are never modified, so concurrent
+       users of the same fd are unaffected.
 
        Uses POSIX mutexes and condition variables internally; epoll(7) and
        eventfd(2) when fd selectables are present (Linux only).
@@ -3895,73 +3902,73 @@ SEE ALSO
 
 ------------------------------------------------------------------------------
 NAME
-       cjson_array_len, cjson_object_size - query composite node sizes
+       cjson_list_len, cjson_dictionary_size - query composite node sizes
 
 SYNOPSIS
        #include <cjson.h>
 
-       size_t cjson_array_len(cjson node);
-       size_t cjson_object_size(cjson node);
+       size_t cjson_list_len(cjson node);
+       size_t cjson_dictionary_size(cjson node);
 
 DESCRIPTION
        Return the element count of an array or object node respectively.
        Both call fatal_err() if the node's type does not match.
 
 SEE ALSO
-       cjson_array_get, cjson_object_get
+       cjson_list_get, cjson_dictionary_get
 
 ------------------------------------------------------------------------------
 NAME
-       cjson_array_push - append a child to an array node
+       cjson_list_push - append a child to an array node
 
 SYNOPSIS
        #include <cjson.h>
 
-       ccol_retval_t cjson_array_push(cjson arr, cjson child);
+       ccol_retval_t cjson_list_push(cjson arr, cjson child);
 
 DESCRIPTION
        Appends child to the end of arr.  Ownership of child transfers to arr
        unconditionally: on success the array owns child; on failure child is
-       deep-freed by cjson_array_push.  Do not free child after calling this
+       deep-freed by cjson_list_push.  Do not free child after calling this
        function regardless of the return value.
 
 RETURN VALUE
        ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
 
 SEE ALSO
-       cjson_array_get, cjson_create_array
+       cjson_list_get, cjson_create_list
 
 ------------------------------------------------------------------------------
 NAME
-       cjson_array_get - access an array element by index
+       cjson_list_get - access an array element by index
 
 SYNOPSIS
        #include <cjson.h>
 
-       cjson cjson_array_get(cjson arr, size_t index);
+       cjson cjson_list_get(cjson arr, size_t index);
 
 DESCRIPTION
        Returns a non-owning reference to the element at index.
 
 RETURN VALUE
-       Child node, or NULL if index is out of bounds or arr is not CJSON_ARRAY.
+       Child node, or NULL if index is out of bounds or arr is not CJSON_LIST.
 
 SEE ALSO
-       cjson_array_push, cjson_array_len
+       cjson_list_push, cjson_list_len
 
 ------------------------------------------------------------------------------
 NAME
-       cjson_object_set - set or replace a key in an object node
+       cjson_dictionary_set - set or replace a key in an object node
 
 SYNOPSIS
        #include <cjson.h>
 
-       ccol_retval_t cjson_object_set(cjson obj, const char *key, cjson child);
+       ccol_retval_t cjson_dictionary_set(cjson obj, const char *key, cjson child);
 
 DESCRIPTION
        Inserts or replaces the value for key in obj.  Ownership of child
        transfers to obj unconditionally: on success the object owns child;
-       on failure child is deep-freed by cjson_object_set.  Do not free
+       on failure child is deep-freed by cjson_dictionary_set.  Do not free
        child after calling this function regardless of the return value.
        If a previous child existed under key it is deep-freed before the
        new one is stored.
@@ -3970,25 +3977,69 @@ RETURN VALUE
        ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
 
 SEE ALSO
-       cjson_object_get, cjson_create_object
+       cjson_dictionary_get, cjson_create_dictionary
 
 ------------------------------------------------------------------------------
 NAME
-       cjson_object_get - look up a key in an object node
+       cjson_dictionary_get - look up a key in an object node
 
 SYNOPSIS
        #include <cjson.h>
 
-       cjson cjson_object_get(cjson obj, const char *key);
+       cjson cjson_dictionary_get(cjson obj, const char *key);
 
 DESCRIPTION
        Returns a non-owning reference to the value associated with key.
 
 RETURN VALUE
-       Child node, or NULL if the key is absent or obj is not CJSON_OBJECT.
+       Child node, or NULL if the key is absent or obj is not CJSON_DICTIONARY.
 
 SEE ALSO
-       cjson_object_set, cjson_object_size
+       cjson_dictionary_set, cjson_dictionary_size
+
+------------------------------------------------------------------------------
+NAME
+       cjson_list_remove - remove and free an element from an array node by index
+
+SYNOPSIS
+       #include <cjson.h>
+
+       ccol_retval_t cjson_list_remove(cjson arr, size_t index);
+
+DESCRIPTION
+       Removes the element at position index from the array node arr and
+       recursively frees it together with all of its descendants.  All
+       elements after index are shifted left by one position (O(n) in the
+       number of elements after index).
+
+RETURN VALUE
+       ccol_success        - element removed and freed.
+       ccol_invalid_args   - arr is NULL, arr is not CJSON_LIST, or index is
+                             out of bounds.
+
+SEE ALSO
+       cjson_list_push, cjson_list_get, cjson_dictionary_remove
+
+------------------------------------------------------------------------------
+NAME
+       cjson_dictionary_remove - remove and free a key from an object node
+
+SYNOPSIS
+       #include <cjson.h>
+
+       ccol_retval_t cjson_dictionary_remove(cjson obj, const char *key);
+
+DESCRIPTION
+       Removes the entry identified by key from the object node obj and
+       recursively frees the associated value subtree.
+
+RETURN VALUE
+       ccol_success        - entry removed and freed.
+       ccol_invalid_args   - obj is NULL or not CJSON_DICTIONARY.
+       ccol_key_not_found  - key does not exist in the object.
+
+SEE ALSO
+       cjson_dictionary_set, cjson_dictionary_get, cjson_list_remove
 
 ------------------------------------------------------------------------------
 NAME
@@ -4014,12 +4065,12 @@ SEE ALSO
 ------------------------------------------------------------------------------
 NAME
        cjson_create_null_mp, cjson_create_bool_mp, cjson_create_int_mp,
-       cjson_create_double_mp, cjson_create_string_mp, cjson_create_array_mp,
-       cjson_create_object_mp - allocate DOM nodes with custom allocator
+       cjson_create_double_mp, cjson_create_string_mp, cjson_create_list_mp,
+       cjson_create_dictionary_mp - allocate DOM nodes with custom allocator
 
        cjson_create_null, cjson_create_bool, cjson_create_int,
-       cjson_create_double, cjson_create_string, cjson_create_array,
-       cjson_create_object - allocate DOM nodes (default allocator wrappers)
+       cjson_create_double, cjson_create_string, cjson_create_list,
+       cjson_create_dictionary - allocate DOM nodes (default allocator wrappers)
 
 SYNOPSIS
        #include <cjson.h>
@@ -4029,8 +4080,8 @@ SYNOPSIS
        cjson cjson_create_int_mp(long long val, ccol_memmgmt_procs_t *mp);
        cjson cjson_create_double_mp(double val, ccol_memmgmt_procs_t *mp);
        cjson cjson_create_string_mp(const char *val, ccol_memmgmt_procs_t *mp);
-       cjson cjson_create_array_mp(ccol_memmgmt_procs_t *mp);
-       cjson cjson_create_object_mp(ccol_memmgmt_procs_t *mp);
+       cjson cjson_create_list_mp(ccol_memmgmt_procs_t *mp);
+       cjson cjson_create_dictionary_mp(ccol_memmgmt_procs_t *mp);
 
        /* convenience wrappers — default allocator (NULL mp) */
        static inline cjson cjson_create_null(void);
@@ -4038,8 +4089,8 @@ SYNOPSIS
        static inline cjson cjson_create_int(long long val);
        static inline cjson cjson_create_double(double val);
        static inline cjson cjson_create_string(const char *val);
-       static inline cjson cjson_create_array(void);
-       static inline cjson cjson_create_object(void);
+       static inline cjson cjson_create_list(void);
+       static inline cjson cjson_create_dictionary(void);
 
 DESCRIPTION
        Each _mp function allocates a new DOM node of the corresponding JSON
@@ -4053,10 +4104,10 @@ DESCRIPTION
        cjson_create_string_mp() makes a private heap copy of val.  Passing NULL
        for val produces a CJSON_NULL node (not a CJSON_STRING node with a null
        pointer), because a null C string pointer naturally maps to JSON null.
-       cjson_create_array_mp() returns an empty array; children are added with
-       cjson_array_push().
-       cjson_create_object_mp() returns an empty object; children are added with
-       cjson_object_set().
+       cjson_create_list_mp() returns an empty array; children are added with
+       cjson_list_push().
+       cjson_create_dictionary_mp() returns an empty object; children are added with
+       cjson_dictionary_set().
 
        cjson_create_double_mp() rejects non-finite values (Inf, -Inf, NaN) and
        returns NULL for them.  JSON has no representation for non-finite
@@ -4079,7 +4130,7 @@ NOTES
        cjson_destroy() uses each node's stored allocator — no mp parameter needed.
 
 SEE ALSO
-       cjson_destroy, cjson_array_push, cjson_object_set
+       cjson_destroy, cjson_list_push, cjson_dictionary_set
 
 ------------------------------------------------------------------------------
 NAME
@@ -4093,8 +4144,13 @@ SYNOPSIS
 DESCRIPTION
        Navigates from root through a dot-separated path and returns the node at
        the destination.  Path components starting with '#' followed by decimal
-       digits address array elements when the current node is CJSON_ARRAY;
+       digits address array elements when the current node is CJSON_LIST;
        otherwise they are treated as literal object keys.
+
+       Escape sequences in path components:
+         \.   -> literal '.' in the key (not a path separator)
+         \\   -> literal '\' in the key
+       A '\' before any other character is left unchanged.
 
 RETURN VALUE
        Non-owning node reference, or NULL if any component is missing or the
@@ -4126,12 +4182,884 @@ DESCRIPTION
        unless raw_is_char_array is true, in which case raw points directly at
        the char[] bytes of a string literal.
 
+       Escape sequences in path components:
+         \.   -> literal '.' in the key (not a path separator)
+         \\   -> literal '\' in the key
+       A '\' before any other character is left unchanged.
+
 RETURN VALUE
        ccol_success, ccol_invalid_args, ccol_key_not_found, or
        ccol_not_enough_memory.
 
 SEE ALSO
        cjson_set (macro), _cjson_get
+
+------------------------------------------------------------------------------
+NAME
+       _cjson_delete - path-based delete back-end (prefer cjson_delete macro)
+
+SYNOPSIS
+       #include <cjson.h>
+
+       ccol_retval_t _cjson_delete(cjson root, const char *path);
+
+DESCRIPTION
+       Navigates to the parent of the node addressed by the dot-separated path
+       and removes and deep-frees that node.  The path uses the same syntax as
+       _cjson_get: plain components address dictionary keys, '#N' components
+       address list elements by zero-based index, and '\.' / '\\' are escape
+       sequences for a literal dot or backslash in a key name.
+
+       The split is performed on the LAST unescaped dot, so "a.b.c" navigates
+       to parent "a.b" and removes key "c".  When path has no dot, root itself
+       is the parent.
+
+       Prefer the cjson_delete() macro for all call sites.
+
+RETURN VALUE
+       ccol_success           - node removed and freed.
+       ccol_invalid_args      - root or path is NULL, path is empty, or the
+                                leaf component is not valid for the parent type
+                                (e.g. a non-'#N' component on a list parent).
+       ccol_key_not_found     - any path component, including the parent path,
+                                is absent.
+       ccol_not_enough_memory - internal strdup failed.
+
+SEE ALSO
+       cjson_delete (macro), _cjson_get, _cjson_set_typed
+
+================================================================================
+                            CYAML.H - YAML DOM
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_create_null_mp, cyaml_create_null - allocate a YAML null node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_create_null_mp(ccol_memmgmt_procs_t *mp);
+       cyaml cyaml_create_null(void);
+
+DESCRIPTION
+       Allocate a DOM node of type CYAML_NULL.  cyaml_create_null() is an
+       inline wrapper that passes NULL (default allocator) to
+       cyaml_create_null_mp().
+
+PARAMETERS
+       mp   Custom memory management procedures, or NULL for the default
+            allocator.
+
+RETURN VALUE
+       New cyaml node on success, NULL on allocation failure.
+
+SEE ALSO
+       cyaml_destroy, cyaml_type
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_create_bool_mp, cyaml_create_bool - allocate a YAML boolean node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_create_bool_mp(bool val, ccol_memmgmt_procs_t *mp);
+       cyaml cyaml_create_bool(bool val);
+
+DESCRIPTION
+       Allocate a DOM node of type CYAML_BOOL with the given value.
+       cyaml_create_bool() passes NULL for mp.
+
+PARAMETERS
+       val  C boolean value.
+       mp   Custom allocator, or NULL for default.
+
+RETURN VALUE
+       New cyaml node on success, NULL on allocation failure.
+
+SEE ALSO
+       cyaml_bool_val, cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_create_int_mp, cyaml_create_int - allocate a YAML integer node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_create_int_mp(long long val, ccol_memmgmt_procs_t *mp);
+       cyaml cyaml_create_int(long long val);
+
+DESCRIPTION
+       Allocate a DOM node of type CYAML_INTEGER.  The value is stored
+       internally as a long long.  cyaml_create_int() passes NULL for mp.
+
+PARAMETERS
+       val  Integer value (any integer type is implicitly converted to
+            long long by the caller).
+       mp   Custom allocator, or NULL for default.
+
+RETURN VALUE
+       New cyaml node on success, NULL on allocation failure.
+
+SEE ALSO
+       cyaml_int_val, cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_create_double_mp, cyaml_create_double - allocate a YAML
+       floating-point node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_create_double_mp(double val, ccol_memmgmt_procs_t *mp);
+       cyaml cyaml_create_double(double val);
+
+DESCRIPTION
+       Allocate a DOM node of type CYAML_FLOAT.  Unlike cjson, YAML
+       explicitly supports non-finite values: +Inf serializes as .inf,
+       -Inf as -.inf, and NaN as .nan.  All three are accepted and stored.
+       cyaml_create_double() passes NULL for mp.
+
+PARAMETERS
+       val  Double value; finite, infinite, and NaN are all accepted.
+       mp   Custom allocator, or NULL for default.
+
+RETURN VALUE
+       New cyaml node on success, NULL on allocation failure.
+
+SEE ALSO
+       cyaml_double_val, cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_create_string_mp, cyaml_create_string - allocate a YAML string
+       node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_create_string_mp(const char *val, ccol_memmgmt_procs_t *mp);
+       cyaml cyaml_create_string(const char *val);
+
+DESCRIPTION
+       Allocate a DOM node of type CYAML_STRING containing a heap-owned copy
+       of val.  Passing NULL for val produces a CYAML_NULL node (the function
+       itself never returns NULL due to a null val argument).
+       cyaml_create_string() passes NULL for mp.
+
+PARAMETERS
+       val  Null-terminated source string, or NULL to produce a null node.
+       mp   Custom allocator, or NULL for default.
+
+RETURN VALUE
+       New cyaml node on success, NULL only on allocation failure.
+
+SEE ALSO
+       cyaml_str_val, cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_create_list_mp, cyaml_create_list - allocate an empty
+       YAML list node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_create_list_mp(ccol_memmgmt_procs_t *mp);
+       cyaml cyaml_create_list(void);
+
+DESCRIPTION
+       Allocate a DOM node of type CYAML_LIST backed by a cvector.
+       The list is initially empty.  Children are added with
+       cyaml_list_push().  cyaml_create_list() passes NULL for mp.
+
+PARAMETERS
+       mp   Custom allocator, or NULL for default.
+
+RETURN VALUE
+       New cyaml node on success, NULL on allocation failure.
+
+SEE ALSO
+       cyaml_list_push, cyaml_list_get, cyaml_list_len,
+       cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_create_dictionary_mp, cyaml_create_dictionary - allocate an empty YAML
+       dictionary node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_create_dictionary_mp(ccol_memmgmt_procs_t *mp);
+       cyaml cyaml_create_dictionary(void);
+
+DESCRIPTION
+       Allocate a DOM node of type CYAML_DICTIONARY backed by a chashmap
+       (separate chaining, string->pointer).  The dictionary is initially empty.
+       Children are added with cyaml_dictionary_set().  cyaml_create_dictionary()
+       passes NULL for mp.
+
+PARAMETERS
+       mp   Custom allocator, or NULL for default.
+
+RETURN VALUE
+       New cyaml node on success, NULL on allocation failure.
+
+SEE ALSO
+       cyaml_dictionary_set, cyaml_dictionary_get, cyaml_dictionary_size, cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_parse_mp, cyaml_parse - parse a null-terminated YAML string into
+       a DOM tree
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_parse_mp(const char *yaml_str, char **err_str,
+                            ccol_memmgmt_procs_t *mp);
+       cyaml cyaml_parse(const char *yaml_str, char **err_str);
+
+DESCRIPTION
+       Parse a null-terminated YAML string and return the root DOM node.
+       Comments (#) are silently discarded.  Tags (!tag, !!tag) are silently
+       ignored.  Anchors (&name) and aliases (*name) are resolved to
+       independent deep clones.  Implicit YAML 1.2 core schema typing is
+       applied to unquoted scalars.
+
+       SINGLE-DOCUMENT STREAMS
+       When the input contains exactly one document (with or without a leading
+       "---" marker and an optional trailing "..." marker), the root node of
+       that document is returned directly.
+
+       MULTI-DOCUMENT STREAMS
+       When the input contains multiple documents separated by "---" markers,
+       all document roots are collected and returned as a single CYAML_LIST
+       node whose elements are the individual document roots in order.  The
+       anchor table is reset between documents so an anchor defined in one
+       document cannot be referenced by a later document.  After the first
+       document, each subsequent document must begin with a "---" marker;
+       bare content following a document end ("...") is rejected as a parse
+       error.
+
+       cyaml_parse() is an inline wrapper that passes NULL for mp.
+
+       On parse failure *err_str (if non-NULL) receives a heap-allocated,
+       null-terminated error message that the caller must free().  On success
+       *err_str is set to NULL.  Pass NULL for err_str to discard error
+       details.
+
+PARAMETERS
+       yaml_str   Null-terminated YAML input.
+       err_str    Out-parameter for the error string, or NULL to ignore.
+       mp         Custom allocator for all nodes in the resulting tree, or
+                  NULL for the default allocator.
+
+RETURN VALUE
+       For a single-document input: the root cyaml node.
+       For a multi-document input: a CYAML_LIST node wrapping all document
+       roots.
+       NULL on parse failure or OOM.
+
+NOTES
+       The caller owns the returned tree and must free it with cyaml_destroy().
+
+       To distinguish single- from multi-document results, check the type of
+       the returned node with cyaml_type().
+
+SEE ALSO
+       cyaml_parse_n_mp, cyaml_destroy, cyaml_serialize
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_parse_n_mp, cyaml_parse_n - parse a bounded YAML buffer
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_parse_n_mp(const char *yaml_str, size_t len,
+                              char **err_str, ccol_memmgmt_procs_t *mp);
+       cyaml cyaml_parse_n(const char *yaml_str, size_t len, char **err_str);
+
+DESCRIPTION
+       Identical to cyaml_parse_mp() but reads at most len bytes from
+       yaml_str, which need not be null-terminated.  Useful when parsing a
+       sub-range of a larger buffer.  Multi-document stream semantics are
+       identical to those described for cyaml_parse_mp().
+
+PARAMETERS
+       yaml_str   Input buffer (need not be null-terminated).
+       len        Number of bytes to parse.
+       err_str    Out-parameter for the error string, or NULL to ignore.
+       mp         Custom allocator, or NULL for default.
+
+RETURN VALUE
+       Root cyaml node on success (see cyaml_parse_mp() for multi-document
+       behaviour), NULL on failure.
+
+SEE ALSO
+       cyaml_parse_mp, cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_serialize - serialize a DOM tree to block-style YAML
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       char *cyaml_serialize(cyaml node);
+
+DESCRIPTION
+       Produce a human-readable, block-style YAML document from the given DOM
+       subtree.  Scalars are emitted as plain text when safe (i.e., when they
+       would round-trip without implicit type ambiguity); otherwise they are
+       double-quoted.  Lists use "- value" block notation.  Dictionaries use
+       "key: value" block notation.  Nested structures are indented by two
+       spaces per level.
+
+       The returned buffer is allocated using the root node's stored allocator.
+       It must be freed with cyaml_serialize_free() (or cyaml_serialize_free_mp()
+       if a custom allocator was used).
+
+RETURN VALUE
+       Heap-allocated null-terminated YAML string on success, NULL on OOM.
+
+SEE ALSO
+       cyaml_serialize_flow, cyaml_serialize_free, cyaml_serialize_free_mp
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_serialize_flow - serialize a DOM tree to flow-style YAML
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       char *cyaml_serialize_flow(cyaml node);
+
+DESCRIPTION
+       Produce a compact, flow-style YAML representation of the DOM subtree.
+       Lists are rendered as [a, b, c].  dictionaries are rendered as
+       {key: value, ...}.  Scalars follow the same quoting rules as
+       cyaml_serialize().  The output is typically a single line.
+
+       Free the returned string with cyaml_serialize_free().
+
+RETURN VALUE
+       Heap-allocated null-terminated string on success, NULL on OOM.
+
+SEE ALSO
+       cyaml_serialize, cyaml_serialize_free
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_serialize_free_mp, cyaml_serialize_free - free a serializer buffer
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       void cyaml_serialize_free_mp(char *s, ccol_memmgmt_procs_t *mp);
+       void cyaml_serialize_free(char *s);
+
+DESCRIPTION
+       Free a buffer returned by cyaml_serialize() or cyaml_serialize_flow().
+       cyaml_serialize_free() is an inline wrapper that passes NULL for mp.
+
+       The mp argument must match the allocator that was active when the DOM
+       tree was created (i.e., the mp passed to cyaml_parse_mp() or the
+       create functions).  Passing the wrong allocator is undefined behaviour.
+
+PARAMETERS
+       s    String to free.  May be NULL (no-op).
+       mp   Allocator to use for deallocation, or NULL for the default.
+
+SEE ALSO
+       cyaml_serialize, cyaml_serialize_flow
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_type - return the type tag of a node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml_node_type_t cyaml_type(cyaml node);
+
+DESCRIPTION
+       Return the cyaml_node_type_t tag of node.  If node is NULL, returns
+       CYAML_NULL.
+
+       The enum values are: CYAML_NULL, CYAML_BOOL, CYAML_INTEGER,
+       CYAML_FLOAT, CYAML_STRING, CYAML_LIST, CYAML_DICTIONARY.
+
+PARAMETERS
+       node  DOM node handle; may be NULL.
+
+RETURN VALUE
+       cyaml_node_type_t constant.
+
+SEE ALSO
+       cyaml_type_str
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_type_str - return a string name for a node's type
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       const char *cyaml_type_str(cyaml node);
+
+DESCRIPTION
+       Return a static string literal naming the type of node, e.g.
+       "CYAML_INTEGER".  Returns "CYAML_UNKNOWN" for unexpected type values.
+       Useful for diagnostics and test output.
+
+RETURN VALUE
+       Static null-terminated string; caller must not free it.
+
+SEE ALSO
+       cyaml_type
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_bool_val - extract a boolean value from a CYAML_BOOL node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       bool cyaml_bool_val(cyaml node);
+
+DESCRIPTION
+       Return the C bool stored in node.  Calls fatal_err() if node is NULL
+       or if its type is not CYAML_BOOL.
+
+PARAMETERS
+       node  CYAML_BOOL node.
+
+RETURN VALUE
+       C bool value.
+
+SEE ALSO
+       cyaml_type, cyaml_create_bool
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_int_val - extract an integer value from a CYAML_INTEGER node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       long long cyaml_int_val(cyaml node);
+
+DESCRIPTION
+       Return the long long stored in node.  Calls fatal_err() if node is NULL
+       or if its type is not CYAML_INTEGER.
+
+PARAMETERS
+       node  CYAML_INTEGER node.
+
+RETURN VALUE
+       long long value.
+
+SEE ALSO
+       cyaml_type, cyaml_create_int
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_double_val - extract a floating-point value from a CYAML_FLOAT node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       double cyaml_double_val(cyaml node);
+
+DESCRIPTION
+       Return the double stored in node.  Calls fatal_err() if node is NULL or
+       if its type is not CYAML_FLOAT.  The returned value may be infinite or
+       NaN (see cyaml_create_double_mp).
+
+PARAMETERS
+       node  CYAML_FLOAT node.
+
+RETURN VALUE
+       double value.
+
+SEE ALSO
+       cyaml_type, cyaml_create_double
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_str_val - extract a string value from a CYAML_STRING node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       const char *cyaml_str_val(cyaml node);
+
+DESCRIPTION
+       Return a read-only pointer to the null-terminated string stored in
+       node.  Calls fatal_err() if node is NULL or its type is not
+       CYAML_STRING.
+
+       The returned pointer is owned by the node; it is invalidated when the
+       node is destroyed or its value is changed via cyaml_set().
+
+PARAMETERS
+       node  CYAML_STRING node.
+
+RETURN VALUE
+       Pointer to the internal string buffer.
+
+SEE ALSO
+       cyaml_type, cyaml_create_string
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_list_len - return the number of elements in a list
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       size_t cyaml_list_len(cyaml node);
+
+DESCRIPTION
+       Return the number of child nodes in the CYAML_LIST node.  Calls
+       fatal_err() if node is NULL or its type is not CYAML_LIST.
+
+RETURN VALUE
+       Element count (0 for empty lists).
+
+SEE ALSO
+       cyaml_list_get, cyaml_list_push
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_dictionary_size - return the number of keys in a dictionary
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       size_t cyaml_dictionary_size(cyaml node);
+
+DESCRIPTION
+       Return the number of key-value pairs in the CYAML_DICTIONARY node.  Calls
+       fatal_err() if node is NULL or its type is not CYAML_DICTIONARY.
+
+RETURN VALUE
+       Key count (0 for empty dictionaries).
+
+SEE ALSO
+       cyaml_dictionary_get, cyaml_dictionary_set
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_list_push - append a child to a list
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       ccol_retval_t cyaml_list_push(cyaml seq, cyaml child);
+
+DESCRIPTION
+       Append child to the CYAML_LIST node seq.  Ownership of child
+       transfers to seq; do not free the child afterwards.
+
+PARAMETERS
+       seq    CYAML_LIST target node.
+       child  Node to append.
+
+RETURN VALUE
+       ccol_success, ccol_invalid_args (if seq is not a list), or
+       ccol_not_enough_memory.
+
+SEE ALSO
+       cyaml_list_get, cyaml_list_len, cyaml_create_list
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_list_get - access a list element by index
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_list_get(cyaml seq, size_t index);
+
+DESCRIPTION
+       Return a non-owning reference to the child at position index within
+       seq.
+
+RETURN VALUE
+       Child node, or NULL if index is out of bounds or seq is not a
+       CYAML_LIST.
+
+SEE ALSO
+       cyaml_list_push, cyaml_list_len
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_dictionary_set - insert or replace a key in a dictionary
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       ccol_retval_t cyaml_dictionary_set(cyaml map, const char *key,
+                                       cyaml child);
+
+DESCRIPTION
+       Store child under key in the CYAML_DICTIONARY node map.  An internal copy
+       of key is made.  Ownership of child transfers to map.  If the key
+       already exists, the previous child is deep-freed before the new one is
+       stored.
+
+PARAMETERS
+       map    CYAML_DICTIONARY target node.
+       key    Null-terminated key string.
+       child  Value node (ownership transfers).
+
+RETURN VALUE
+       ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+
+SEE ALSO
+       cyaml_dictionary_get, cyaml_dictionary_size, cyaml_create_dictionary
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_dictionary_get - look up a key in a dictionary
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_dictionary_get(cyaml map, const char *key);
+
+DESCRIPTION
+       Return a non-owning reference to the value stored under key in map.
+
+RETURN VALUE
+       Child node, or NULL if key is absent or map is not a CYAML_DICTIONARY.
+
+SEE ALSO
+       cyaml_dictionary_set, cyaml_dictionary_size
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_list_remove - remove and free a list element by index
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       ccol_retval_t cyaml_list_remove(cyaml seq, size_t index);
+
+DESCRIPTION
+       Removes the element at position index from the list node seq and
+       recursively frees it together with all of its descendants.  All
+       elements after index are shifted left by one position (O(n) in the
+       number of elements after index).
+
+RETURN VALUE
+       ccol_success        - element removed and freed.
+       ccol_invalid_args   - seq is NULL, seq is not CYAML_LIST, or index is
+                             out of bounds.
+
+SEE ALSO
+       cyaml_list_push, cyaml_list_get, cyaml_dictionary_remove
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_dictionary_remove - remove and free a key from a dictionary node
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       ccol_retval_t cyaml_dictionary_remove(cyaml map, const char *key);
+
+DESCRIPTION
+       Removes the entry identified by key from the dictionary node map and
+       recursively frees the associated value subtree.
+
+RETURN VALUE
+       ccol_success        - entry removed and freed.
+       ccol_invalid_args   - map is NULL or not CYAML_DICTIONARY.
+       ccol_key_not_found  - key does not exist in the dictionary.
+
+SEE ALSO
+       cyaml_dictionary_set, cyaml_dictionary_get, cyaml_list_remove
+
+------------------------------------------------------------------------------
+NAME
+       cyaml_clone - produce a deep independent copy of a DOM subtree
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml cyaml_clone(cyaml node);
+
+DESCRIPTION
+       Recursively copy node and all of its descendants.  The clone uses the
+       same allocator as the source tree.  Mutating the clone does not affect
+       the original and vice versa.
+
+PARAMETERS
+       node  Root of the subtree to copy.  NULL is accepted and returns NULL.
+
+RETURN VALUE
+       Root of the new tree (caller owns it), or NULL on allocation failure.
+
+SEE ALSO
+       cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       __cyaml_destroy - recursively free a DOM tree (internal)
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       void __cyaml_destroy(cyaml node);
+
+DESCRIPTION
+       Recursively frees node and all of its descendants using each node's
+       stored allocator.  Does NOT null the caller's handle.  Prefer the
+       cyaml_destroy() macro, which nulls the handle after freeing.
+
+       This function is also used as the RAII cleanup target registered by
+       cyaml_declare_scoped() via the GCC cleanup attribute.
+
+SEE ALSO
+       cyaml_destroy (macro), ___cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       ___cyaml_destroy - RAII cleanup wrapper for cyaml handles
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       void ___cyaml_destroy(cyaml *node);
+
+DESCRIPTION
+       Called automatically by the GCC cleanup attribute when a scoped cyaml
+       variable goes out of scope (registered by cyaml_declare_scoped()).
+       Frees *node with __cyaml_destroy() and sets *node to NULL.  Safe to
+       call when *node is already NULL.
+
+SEE ALSO
+       cyaml_declare_scoped (macro), __cyaml_destroy
+
+------------------------------------------------------------------------------
+NAME
+       _cyaml_get - path-navigation back-end (prefer cyaml_get macro)
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       cyaml _cyaml_get(cyaml root, const char *path);
+
+DESCRIPTION
+       Navigate from root through a dot-separated path and return the node at
+       the destination.  Path components beginning with '#' followed by
+       decimal digits index into a CYAML_LIST by position; all other
+       components are treated as literal dictionary keys.
+
+       Escape sequences in path components:
+         \.   -> literal '.' in the key (not a path separator)
+         \\   -> literal '\' in the key
+       A '\' before any other character is left unchanged.
+
+       The cyaml_get() macro is the preferred public interface.  Call
+       _cyaml_get() directly only when the macro wrapper is inconvenient.
+
+RETURN VALUE
+       Non-owning node reference, or NULL if any component is missing or the
+       node type at that step is incompatible with the operation.
+
+SEE ALSO
+       cyaml_get (macro), _cyaml_set_typed
+
+------------------------------------------------------------------------------
+NAME
+       _cyaml_set_typed - path-write back-end (prefer cyaml_set macro)
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
+                                      cyaml_node_type_t type, void *raw,
+                                      size_t raw_size, bool is_signed,
+                                      bool raw_is_char_array);
+
+DESCRIPTION
+       Write a scalar value to the leaf addressed by path.  The leaf is
+       created if absent (its immediate parent must already exist).  If the
+       leaf exists its type is replaced unconditionally; any composite
+       (list, dictionary) resources it previously held are deep-freed.
+
+       raw is a void pointer to the C value; raw_size is sizeof the original
+       C expression.  For string values, raw points to a const char * variable
+       unless raw_is_char_array is true, in which case raw points directly at
+       the char[] bytes of a string literal.
+
+       Escape sequences in path components:
+         \.   -> literal '.' in the key (not a path separator)
+         \\   -> literal '\' in the key
+       A '\' before any other character is left unchanged.
+
+       The cyaml_set() macro is the preferred public interface and fills in
+       type, raw_size, is_signed, and raw_is_char_array automatically from the
+       compile-time type of the value expression.
+
+PARAMETERS
+       root             Root of the DOM tree.
+       path             Dot-separated path string.
+       type             YAML type of the new value.
+       raw              Pointer to the raw C value.
+       raw_size         sizeof() of the original C expression.
+       is_signed        Whether the integer source type is signed.
+       raw_is_char_array  true when raw points directly at a char[] array.
+
+RETURN VALUE
+       ccol_success, ccol_invalid_args, ccol_key_not_found, or
+       ccol_not_enough_memory.
+
+SEE ALSO
+       cyaml_set (macro), _cyaml_get
+
+------------------------------------------------------------------------------
+NAME
+       _cyaml_delete - path-based delete back-end (prefer cyaml_delete macro)
+
+SYNOPSIS
+       #include <cyaml.h>
+
+       ccol_retval_t _cyaml_delete(cyaml root, const char *path);
+
+DESCRIPTION
+       Navigates to the parent of the node addressed by the dot-separated path
+       and removes and deep-frees that node.  The path uses the same syntax as
+       _cyaml_get: plain components address dictionary keys, '#N' components
+       address list elements by zero-based index, and '\.' / '\\' are escape
+       sequences for a literal dot or backslash in a key name.
+
+       The split is performed on the LAST unescaped dot, so "a.b.c" navigates
+       to parent "a.b" and removes key "c".  When path has no dot, root itself
+       is the parent.
+
+       Prefer the cyaml_delete() macro for all call sites.
+
+RETURN VALUE
+       ccol_success           - node removed and freed.
+       ccol_invalid_args      - root or path is NULL, path is empty, or the
+                                leaf component is not valid for the parent type
+                                (e.g. a non-'#N' component on a list parent).
+       ccol_key_not_found     - any path component, including the parent path,
+                                is absent.
+       ccol_not_enough_memory - internal strdup failed.
+
+SEE ALSO
+       cyaml_delete (macro), _cyaml_get, _cyaml_set_typed
 
 ================================================================================
                               END OF MAN PAGES

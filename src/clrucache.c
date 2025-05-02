@@ -162,9 +162,10 @@ static clru_entry *entry_alloc(clrucache *cache) {
 }
 
 /* Free key, value, condvar, and the entry itself.
- * Precondition: entry must be evicted (not in map, not in LRU) and
- * entry->waiters == 0, so no other thread can reach it. Mutex need NOT
- * be held — callers intentionally release it before this call. */
+ * Precondition: entry->evicted == true && entry->waiters == 0, so no other
+ * thread holds a reference.  The cache mutex may or may not be held by the
+ * caller; correctness depends solely on exclusive access guaranteed by the
+ * two preconditions above. */
 static void entry_free(clrucache *cache, clru_entry *e) {
   _mem_free(cache->m_procs, e->key);
   _mem_free(cache->m_procs, e->value);
@@ -215,12 +216,18 @@ static void make_room(clrucache *cache) {
 /* ========================================================================== */
 
 /* Look up the entry pointer stored in the internal chmap.
- * Returns NULL if key not found. Caller must hold cache->mutex. */
+ * Returns NULL if key not found. Caller must hold cache->mutex.
+ *
+ * chmap_entry is __attribute__((packed)), so val_storage.inline_data is not
+ * 8-byte aligned. A direct *(clru_entry **)found->ptr cast is UB at -O3.
+ * Use memcpy to perform an alignment-safe load (same fix as in cjson/cyaml). */
 static clru_entry *map_lookup(clrucache *cache, const cmap_pair *key_pair) {
   cmap_pair *found = NULL;
   ccol_retval_t r = chmap_get_elem_ref(cache->map, key_pair, &found);
   if (r != ccol_success) return NULL;
-  return *(clru_entry **)found->ptr;
+  clru_entry *e;
+  memcpy(&e, found->ptr, sizeof(e));
+  return e;
 }
 
 /* Insert or update the entry pointer in the internal chmap. */
@@ -320,7 +327,8 @@ void __clrucache_destroy(clru_cache cache) {
 
 ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
                                  cmap_pair *val_out) {
-  if (!cache || !key_pair || !val_out) return ccol_invalid_args;
+  if (!cache || !key_pair || !key_pair->ptr || !key_pair->size || !val_out)
+    return ccol_invalid_args;
 
   mutex_lock(cache->mutex);
 
@@ -495,43 +503,73 @@ static ccol_retval_t entry_store_value(clrucache *cache, clru_entry *entry,
 
 ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
                                  const cmap_pair *val_pair) {
-  if (!cache || !key_pair || !val_pair || val_pair->size == 0)
+  if (!cache || !key_pair || !key_pair->ptr || !key_pair->size || !val_pair ||
+      !val_pair->ptr || val_pair->size == 0)
     return ccol_invalid_args;
 
   mutex_lock(cache->mutex);
 
-  clru_entry *entry = map_lookup(cache, key_pair);
   bool created_new = false;
+  clru_entry *entry;
 
-  if (entry) {
-    /* Wait for any concurrent fetch or set to finish first */
-    if (entry->fetch_in_progress || entry->set_in_progress) {
-      entry->waiters++;
-      while (entry->fetch_in_progress || entry->set_in_progress) {
-        cond_var_wait(entry->cond, cache->mutex);
-      }
-      entry->waiters--;
-
-      if (entry->evicted) {
-        /* Entry died while we waited; treat as a new key */
-        bool should_free = (entry->waiters == 0);
-        if (should_free) entry_free(cache, entry);
-        entry = NULL;
-      }
-    }
-  }
-
-  if (!entry) {
-    entry = create_and_insert_placeholder(cache, key_pair);
+  /*
+   * Loop until we own the set slot for this key.  A single map_lookup +
+   * create-or-wait is not enough because multiple setter threads that were
+   * all blocked on the same in-progress operation can wake up simultaneously
+   * after that operation completes (or fails).  Without the loop, the second
+   * thread to run would call create_and_insert_placeholder for a key that the
+   * first thread already re-inserted, getting ccol_key_already_present from
+   * chmap_insert_elem and incorrectly returning ccol_not_enough_memory to the
+   * caller.  By looping back to map_lookup we find the first thread's
+   * placeholder and wait for it, serialising the setters correctly.
+   */
+  for (;;) {
+    entry = map_lookup(cache, key_pair);
     if (!entry) {
-      mutex_unlock(cache->mutex);
-      return ccol_not_enough_memory;
+      entry = create_and_insert_placeholder(cache, key_pair);
+      if (!entry) {
+        mutex_unlock(cache->mutex);
+        return ccol_not_enough_memory;
+      }
+      created_new = true;
+      break;
     }
-    created_new = true;
+    if (!entry->fetch_in_progress && !entry->set_in_progress) {
+      break; /* Entry is live; we own it */
+    }
+    /* A concurrent fetch or set is in progress: wait for it to complete */
+    entry->waiters++;
+    while (entry->fetch_in_progress || entry->set_in_progress) {
+      cond_var_wait(entry->cond, cache->mutex);
+    }
+    entry->waiters--;
+    if (!entry->evicted) {
+      break; /* Entry survived; we own it */
+    }
+    /* Entry was cleaned up while we waited: loop back to re-check the map
+     * before creating a new placeholder, since another waiter may have
+     * already done so. */
+    bool should_free = (entry->waiters == 0);
+    if (should_free) entry_free(cache, entry);
   }
 
   /* We now own the set slot */
   entry->set_in_progress = true;
+
+  /* If the entry is currently LIVE (in the LRU list), remove it before
+   * releasing the mutex.  evict_lru() only selects from the LRU list, so an
+   * entry that is not in the list cannot be chosen as a victim.  Without this
+   * removal a concurrent make_room() could evict the entry while the remote
+   * setter is executing; any getter blocked on set_in_progress would then wake
+   * to find entry->evicted==true and return ccol_key_not_found even though the
+   * setter succeeds and re-inserts the value.  entry_store_value() handles the
+   * !in_lru path (make_room + lru_add_to_front) correctly on success; on
+   * failure or OOM we restore the entry to the LRU manually below. */
+  bool removed_from_lru = (!created_new && entry->in_lru);
+  if (removed_from_lru) {
+    lru_remove(entry);
+    cache->size--;
+  }
 
   /* Hold a waiter reference so the entry is not freed if evicted while we
    * are blocked in the remote call. */
@@ -545,49 +583,52 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 
   mutex_lock(cache->mutex);
   entry->waiters--;
-  bool was_evicted = entry->evicted;
+  ccol_retval_t retval = remote_ok ? ccol_success : ccol_unexpected_failure;
 
+  /* entry->evicted is always false here: brand-new placeholders are never in
+   * the LRU list and cannot be selected by evict_lru; existing LIVE entries
+   * were explicitly removed from the LRU before the mutex was released, so
+   * they also cannot be evicted while the remote call executes. */
   if (remote_ok) {
-    if (!was_evicted) {
-      /* Entry is still LIVE: update its value */
-      ccol_retval_t store_r = entry_store_value(cache, entry, val_pair);
-      if (store_r != ccol_success) {
-        /* OOM: if we created the entry, remove it */
-        if (created_new) {
-          cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
-          chmap_delete_elem(cache->map, &kp);
-          entry->evicted = true;
-        }
-        entry->set_in_progress = false;
-        cond_var_broadcast(entry->cond);
-        bool should_free = (entry->evicted && entry->waiters == 0);
-        mutex_unlock(cache->mutex);
-        if (should_free) entry_free(cache, entry);
-        return store_r;
+    ccol_retval_t store_r = entry_store_value(cache, entry, val_pair);
+    if (store_r != ccol_success) {
+      /* OOM: if we created the entry, remove it from the map */
+      if (created_new) {
+        cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
+        chmap_delete_elem(cache->map, &kp);
+        entry->evicted = true;
+      } else if (removed_from_lru && entry->value) {
+        /* Restore old-valued entry to LRU so it remains accessible.
+         * make_room first: concurrent inserts may have filled the cache
+         * while the mutex was released for the remote call. */
+        make_room(cache);
+        lru_add_to_front(cache, entry);
+        cache->size++;
       }
-    } else {
-      /* Entry was evicted while we were in the remote call.
-       * Remote set succeeded, so re-insert a new entry with the new value.
-       * The old (evicted) entry dies after we clear set_in_progress below. */
-      clru_entry *new_e = create_and_insert_placeholder(cache, key_pair);
-      if (new_e) {
-        ccol_retval_t store_r = entry_store_value(cache, new_e, val_pair);
-        if (store_r != ccol_success) {
-          cmap_pair kp = {.ptr = new_e->key, .size = new_e->key_size};
-          chmap_delete_elem(cache->map, &kp);
-          entry_free(cache, new_e);
-        }
-      }
+      entry->set_in_progress = false;
+      cond_var_broadcast(entry->cond);
+      bool should_free = (entry->evicted && entry->waiters == 0);
+      mutex_unlock(cache->mutex);
+      if (should_free) entry_free(cache, entry);
+      return store_r;
     }
   } else {
     /* Remote setter failed */
-    if (created_new && !was_evicted) {
+    if (created_new) {
       /* Placeholder we created has no value: clean it up */
       cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
       chmap_delete_elem(cache->map, &kp);
       entry->evicted = true;
+    } else if (removed_from_lru) {
+      /* Existing LIVE entry was removed from LRU: restore it with the old value
+       * so the cache remains consistent and the entry stays accessible.
+       * make_room first: concurrent inserts may have filled the cache
+       * while the mutex was released for the remote call. */
+      make_room(cache);
+      lru_add_to_front(cache, entry);
+      cache->size++;
     }
-    /* For an existing entry that was NOT evicted, leave the old value intact */
+    /* For an existing entry already in LRU (not removed), leave it intact */
   }
 
   entry->set_in_progress = false;
@@ -597,7 +638,7 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
   mutex_unlock(cache->mutex);
   if (should_free) entry_free(cache, entry);
 
-  return remote_ok ? ccol_success : ccol_unexpected_failure;
+  return retval;
 }
 
 /* ========================================================================== */
@@ -606,7 +647,9 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 
 ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
                                    void *buf, size_t buf_size) {
-  if (!cache || !key_pair || !buf || buf_size == 0) return ccol_invalid_args;
+  if (!cache || !key_pair || !key_pair->ptr || !key_pair->size || !buf ||
+      buf_size == 0)
+    return ccol_invalid_args;
 
   mutex_lock(cache->mutex);
 
@@ -650,13 +693,27 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
     entry->fetch_in_progress = false;
 
     if (fetch_ok && fetched.ptr && fetched.size > 0) {
+      /* Reject a value that is larger than the destination buffer; caching it
+       * would make every future __clrucache_get_into call for this key return
+       * an error as well, so treat this as a fetch failure entirely. */
+      if (fetched.size > buf_size) {
+        _mem_free(cache->m_procs, fetched.ptr);
+        cmap_pair kp = {.ptr = entry->key, .size = entry->key_size};
+        chmap_delete_elem(cache->map, &kp);
+        entry->evicted = true;
+        cond_var_broadcast(entry->cond);
+        bool should_free = (entry->waiters == 0);
+        mutex_unlock(cache->mutex);
+        if (should_free) entry_free(cache, entry);
+        return ccol_unexpected_failure;
+      }
+
       make_room(cache);
       entry->value = fetched.ptr;
       entry->value_size = fetched.size;
       lru_add_to_front(cache, entry);
       cache->size++;
 
-      assert(fetched.size <= buf_size);
       mem_cpy(buf, fetched.ptr, fetched.size);
 
       cond_var_broadcast(entry->cond);
@@ -693,7 +750,10 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
   assert(!entry->evicted && entry->value != NULL && entry->in_lru);
   lru_move_to_front(cache, entry);
 
-  assert(entry->value_size <= buf_size);
+  if (entry->value_size > buf_size) {
+    mutex_unlock(cache->mutex);
+    return ccol_unexpected_failure;
+  }
   mem_cpy(buf, entry->value, entry->value_size);
 
   mutex_unlock(cache->mutex);

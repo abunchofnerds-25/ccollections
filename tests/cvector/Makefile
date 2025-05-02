@@ -2,12 +2,12 @@ CC = gcc
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS
 SRC_FILE_PREFIX = cvector
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/common.c
+SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/common.c ../../src/csort.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
-LFLAGS = -lm -lpthread
+LFLAGS = -lpthread
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)

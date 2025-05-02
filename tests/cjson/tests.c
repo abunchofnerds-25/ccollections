@@ -90,57 +90,58 @@ TEST(construction, empty_string) {
 }
 
 TEST(construction, array_empty) {
-  cjson a = cjson_create_array();
+  cjson a = cjson_create_list();
   REQUIRE_NE((void *)a, NULL);
-  REQUIRE_EQ(cjson_type(a), CJSON_ARRAY);
-  REQUIRE_EQ(cjson_array_len(a), (size_t)0);
+  REQUIRE_EQ(cjson_type(a), CJSON_LIST);
+  REQUIRE_EQ(cjson_list_len(a), (size_t)0);
   cjson_destroy(a);
 }
 
 TEST(construction, array_push) {
-  cjson a = cjson_create_array();
-  REQUIRE_EQ(cjson_array_push(a, cjson_create_int(1)), ccol_success);
-  REQUIRE_EQ(cjson_array_push(a, cjson_create_int(2)), ccol_success);
-  REQUIRE_EQ(cjson_array_push(a, cjson_create_int(3)), ccol_success);
-  REQUIRE_EQ(cjson_array_len(a), (size_t)3);
-  REQUIRE_EQ(cjson_int_val(cjson_array_get(a, 0)), 1LL);
-  REQUIRE_EQ(cjson_int_val(cjson_array_get(a, 2)), 3LL);
-  REQUIRE_EQ((void *)cjson_array_get(a, 99), NULL);
+  cjson a = cjson_create_list();
+  REQUIRE_EQ(cjson_list_push(a, cjson_create_int(1)), ccol_success);
+  REQUIRE_EQ(cjson_list_push(a, cjson_create_int(2)), ccol_success);
+  REQUIRE_EQ(cjson_list_push(a, cjson_create_int(3)), ccol_success);
+  REQUIRE_EQ(cjson_list_len(a), (size_t)3);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(a, 0)), 1LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(a, 2)), 3LL);
+  REQUIRE_EQ((void *)cjson_list_get(a, 99), NULL);
   cjson_destroy(a);
 }
 
 TEST(construction, object_empty) {
-  cjson o = cjson_create_object();
+  cjson o = cjson_create_dictionary();
   REQUIRE_NE((void *)o, NULL);
-  REQUIRE_EQ(cjson_type(o), CJSON_OBJECT);
-  REQUIRE_EQ(cjson_object_size(o), (size_t)0);
+  REQUIRE_EQ(cjson_type(o), CJSON_DICTIONARY);
+  REQUIRE_EQ(cjson_dictionary_size(o), (size_t)0);
   cjson_destroy(o);
 }
 
 TEST(construction, object_set_get) {
-  cjson o = cjson_create_object();
-  REQUIRE_EQ(cjson_object_set(o, "x", cjson_create_int(10)), ccol_success);
-  REQUIRE_EQ(cjson_object_set(o, "y", cjson_create_string("hi")), ccol_success);
-  REQUIRE_EQ(cjson_object_size(o), (size_t)2);
+  cjson o = cjson_create_dictionary();
+  REQUIRE_EQ(cjson_dictionary_set(o, "x", cjson_create_int(10)), ccol_success);
+  REQUIRE_EQ(cjson_dictionary_set(o, "y", cjson_create_string("hi")),
+             ccol_success);
+  REQUIRE_EQ(cjson_dictionary_size(o), (size_t)2);
 
-  cjson x = cjson_object_get(o, "x");
+  cjson x = cjson_dictionary_get(o, "x");
   REQUIRE_NE((void *)x, NULL);
   REQUIRE_EQ(cjson_int_val(x), 10LL);
 
-  cjson y = cjson_object_get(o, "y");
+  cjson y = cjson_dictionary_get(o, "y");
   REQUIRE_NE((void *)y, NULL);
   REQUIRE_STREQ(cjson_str_val(y), "hi");
 
-  REQUIRE_EQ((void *)cjson_object_get(o, "missing"), NULL);
+  REQUIRE_EQ((void *)cjson_dictionary_get(o, "missing"), NULL);
   cjson_destroy(o);
 }
 
 TEST(construction, object_replace_frees_old) {
-  cjson o = cjson_create_object();
-  cjson_object_set(o, "k", cjson_create_string("original"));
-  cjson_object_set(o, "k", cjson_create_int(99));
-  REQUIRE_EQ(cjson_int_val(cjson_object_get(o, "k")), 99LL);
-  REQUIRE_EQ(cjson_object_size(o), (size_t)1);
+  cjson o = cjson_create_dictionary();
+  cjson_dictionary_set(o, "k", cjson_create_string("original"));
+  cjson_dictionary_set(o, "k", cjson_create_int(99));
+  REQUIRE_EQ(cjson_int_val(cjson_dictionary_get(o, "k")), 99LL);
+  REQUIRE_EQ(cjson_dictionary_size(o), (size_t)1);
   cjson_destroy(o);
 }
 
@@ -313,60 +314,61 @@ TEST(parse, incomplete_escape_at_string_end) {
 TEST(parse, empty_array) {
   cjson a = cjson_parse("[]", NULL);
   REQUIRE_NE((void *)a, NULL);
-  REQUIRE_EQ(cjson_type(a), CJSON_ARRAY);
-  REQUIRE_EQ(cjson_array_len(a), (size_t)0);
+  REQUIRE_EQ(cjson_type(a), CJSON_LIST);
+  REQUIRE_EQ(cjson_list_len(a), (size_t)0);
   cjson_destroy(a);
 }
 
 TEST(parse, array_of_mixed) {
   cjson a = cjson_parse("[null, true, 1, 2.5, \"x\"]", NULL);
   REQUIRE_NE((void *)a, NULL);
-  REQUIRE_EQ(cjson_array_len(a), (size_t)5);
-  REQUIRE_EQ(cjson_type(cjson_array_get(a, 0)), CJSON_NULL);
-  REQUIRE_TRUE(cjson_bool_val(cjson_array_get(a, 1)));
-  REQUIRE_EQ(cjson_int_val(cjson_array_get(a, 2)), 1LL);
-  REQUIRE_EQ(cjson_double_val(cjson_array_get(a, 3)), 2.5);
-  REQUIRE_STREQ(cjson_str_val(cjson_array_get(a, 4)), "x");
+  REQUIRE_EQ(cjson_list_len(a), (size_t)5);
+  REQUIRE_EQ(cjson_type(cjson_list_get(a, 0)), CJSON_NULL);
+  REQUIRE_TRUE(cjson_bool_val(cjson_list_get(a, 1)));
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(a, 2)), 1LL);
+  REQUIRE_EQ(cjson_double_val(cjson_list_get(a, 3)), 2.5);
+  REQUIRE_STREQ(cjson_str_val(cjson_list_get(a, 4)), "x");
   cjson_destroy(a);
 }
 
 TEST(parse, empty_object) {
   cjson o = cjson_parse("{}", NULL);
   REQUIRE_NE((void *)o, NULL);
-  REQUIRE_EQ(cjson_type(o), CJSON_OBJECT);
-  REQUIRE_EQ(cjson_object_size(o), (size_t)0);
+  REQUIRE_EQ(cjson_type(o), CJSON_DICTIONARY);
+  REQUIRE_EQ(cjson_dictionary_size(o), (size_t)0);
   cjson_destroy(o);
 }
 
 TEST(parse, simple_object) {
   cjson o = cjson_parse("{\"a\":1, \"b\":\"two\", \"c\":true}", NULL);
   REQUIRE_NE((void *)o, NULL);
-  REQUIRE_EQ(cjson_object_size(o), (size_t)3);
-  REQUIRE_EQ(cjson_int_val(cjson_object_get(o, "a")), 1LL);
-  REQUIRE_STREQ(cjson_str_val(cjson_object_get(o, "b")), "two");
-  REQUIRE_TRUE(cjson_bool_val(cjson_object_get(o, "c")));
+  REQUIRE_EQ(cjson_dictionary_size(o), (size_t)3);
+  REQUIRE_EQ(cjson_int_val(cjson_dictionary_get(o, "a")), 1LL);
+  REQUIRE_STREQ(cjson_str_val(cjson_dictionary_get(o, "b")), "two");
+  REQUIRE_TRUE(cjson_bool_val(cjson_dictionary_get(o, "c")));
   cjson_destroy(o);
 }
 
 TEST(parse, nested) {
   cjson root = cjson_parse(
       "{\"users\":[{\"name\":\"Alice\",\"age\":30},{\"name\":\"Bob\",\"age\":"
-      "25}]}", NULL);
+      "25}]}",
+      NULL);
   REQUIRE_NE((void *)root, NULL);
-  cjson users = cjson_object_get(root, "users");
-  REQUIRE_EQ(cjson_array_len(users), (size_t)2);
-  cjson alice = cjson_array_get(users, 0);
-  REQUIRE_STREQ(cjson_str_val(cjson_object_get(alice, "name")), "Alice");
-  REQUIRE_EQ(cjson_int_val(cjson_object_get(alice, "age")), 30LL);
-  cjson bob = cjson_array_get(users, 1);
-  REQUIRE_STREQ(cjson_str_val(cjson_object_get(bob, "name")), "Bob");
+  cjson users = cjson_dictionary_get(root, "users");
+  REQUIRE_EQ(cjson_list_len(users), (size_t)2);
+  cjson alice = cjson_list_get(users, 0);
+  REQUIRE_STREQ(cjson_str_val(cjson_dictionary_get(alice, "name")), "Alice");
+  REQUIRE_EQ(cjson_int_val(cjson_dictionary_get(alice, "age")), 30LL);
+  cjson bob = cjson_list_get(users, 1);
+  REQUIRE_STREQ(cjson_str_val(cjson_dictionary_get(bob, "name")), "Bob");
   cjson_destroy(root);
 }
 
 TEST(parse, whitespace_everywhere) {
   cjson o = cjson_parse("  {  \"k\"  :  [  1  ,  2  ]  }  ", NULL);
   REQUIRE_NE((void *)o, NULL);
-  REQUIRE_EQ(cjson_array_len(cjson_object_get(o, "k")), (size_t)2);
+  REQUIRE_EQ(cjson_list_len(cjson_dictionary_get(o, "k")), (size_t)2);
   cjson_destroy(o);
 }
 
@@ -495,7 +497,7 @@ TEST(serialize, string_escaping) {
 }
 
 TEST(serialize, empty_array) {
-  cjson a = cjson_create_array();
+  cjson a = cjson_create_list();
   char *s = cjson_serialize(a);
   REQUIRE_STREQ(s, "[]");
   cjson_serialize_free(s);
@@ -503,10 +505,10 @@ TEST(serialize, empty_array) {
 }
 
 TEST(serialize, simple_array) {
-  cjson a = cjson_create_array();
-  cjson_array_push(a, cjson_create_int(1));
-  cjson_array_push(a, cjson_create_int(2));
-  cjson_array_push(a, cjson_create_int(3));
+  cjson a = cjson_create_list();
+  cjson_list_push(a, cjson_create_int(1));
+  cjson_list_push(a, cjson_create_int(2));
+  cjson_list_push(a, cjson_create_int(3));
   char *s = cjson_serialize(a);
   REQUIRE_STREQ(s, "[1,2,3]");
   cjson_serialize_free(s);
@@ -514,7 +516,7 @@ TEST(serialize, simple_array) {
 }
 
 TEST(serialize, empty_object) {
-  cjson o = cjson_create_object();
+  cjson o = cjson_create_dictionary();
   char *s = cjson_serialize(o);
   REQUIRE_STREQ(s, "{}");
   cjson_serialize_free(s);
@@ -531,11 +533,11 @@ TEST(serialize, roundtrip_nested) {
   REQUIRE_NE((void *)out, NULL);
   cjson root2 = cjson_parse(out, NULL);
   REQUIRE_NE((void *)root2, NULL);
-  REQUIRE_STREQ(cjson_str_val(cjson_object_get(root2, "name")), "Alice");
-  REQUIRE_TRUE(cjson_bool_val(cjson_object_get(root2, "active")));
-  cjson arr = cjson_object_get(root2, "scores");
-  REQUIRE_EQ(cjson_array_len(arr), (size_t)3);
-  REQUIRE_EQ(cjson_int_val(cjson_array_get(arr, 1)), 20LL);
+  REQUIRE_STREQ(cjson_str_val(cjson_dictionary_get(root2, "name")), "Alice");
+  REQUIRE_TRUE(cjson_bool_val(cjson_dictionary_get(root2, "active")));
+  cjson arr = cjson_dictionary_get(root2, "scores");
+  REQUIRE_EQ(cjson_list_len(arr), (size_t)3);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(arr, 1)), 20LL);
 
   cjson_serialize_free(out);
   cjson_destroy(root);
@@ -565,7 +567,7 @@ TEST(serialize, float_type_roundtrip) {
 
 TEST(serialize, utf8_roundtrip) {
   /* Non-ASCII UTF-8 bytes must survive serialize → parse unchanged. */
-  const char *original = "caf\xC3\xA9";  /* "café" in UTF-8 */
+  const char *original = "caf\xC3\xA9"; /* "café" in UTF-8 */
   cjson n = cjson_create_string(original);
   char *s = cjson_serialize(n);
   REQUIRE_NE((void *)s, NULL);
@@ -586,8 +588,8 @@ TEST(serialize, pretty_null_handle) {
 }
 
 TEST(serialize, pretty_print_indented) {
-  cjson o = cjson_create_object();
-  cjson_object_set(o, "a", cjson_create_int(1));
+  cjson o = cjson_create_dictionary();
+  cjson_dictionary_set(o, "a", cjson_create_int(1));
   char *pretty = cjson_serialize_pretty(o, 2);
   REQUIRE_NE((void *)pretty, NULL);
   REQUIRE_TRUE(strchr(pretty, '\n') != NULL);
@@ -597,8 +599,8 @@ TEST(serialize, pretty_print_indented) {
 }
 
 TEST(serialize, pretty_indent_zero_defaults_to_four) {
-  cjson o = cjson_create_object();
-  cjson_object_set(o, "a", cjson_create_int(1));
+  cjson o = cjson_create_dictionary();
+  cjson_dictionary_set(o, "a", cjson_create_int(1));
   char *pretty = cjson_serialize_pretty(o, 0);
   REQUIRE_NE((void *)pretty, NULL);
   REQUIRE_TRUE(strchr(pretty, '\n') != NULL);
@@ -638,7 +640,8 @@ TEST(navigate, get_array_element) {
 TEST(navigate, get_mixed_path) {
   cjson root = cjson_parse(
       "{\"users\":[{\"profile\":{\"name\":\"Alice\"}},{\"profile\":{\"name\":"
-      "\"Bob\"}}]}", NULL);
+      "\"Bob\"}}]}",
+      NULL);
   cjson name = cjson_get(root, "users.#0.profile.name");
   REQUIRE_NE((void *)name, NULL);
   REQUIRE_STREQ(cjson_str_val(name), "Alice");
@@ -749,7 +752,11 @@ TEST(navigate, set_double) {
 TEST(navigate, set_null) {
   cjson root = cjson_parse("{\"k\":\"hello\"}", NULL);
   cjson_set(root, "k", NULL);
-  REQUIRE_EQ(cjson_type(cjson_get(root, "k")), CJSON_NULL);
+  /* Key must still be present — cjson_type(NULL) == CJSON_NULL would make a
+   * bare type check pass even if the key were accidentally removed. */
+  cjson null_node = cjson_get(root, "k");
+  REQUIRE_NE((void *)null_node, NULL);
+  REQUIRE_EQ(cjson_type(null_node), CJSON_NULL);
   cjson_destroy(root);
 }
 
@@ -808,8 +815,54 @@ TEST(navigate, set_on_array_root) {
   cjson root = cjson_parse("[10, 20, 30]", NULL);
   ccol_retval_t r = cjson_set(root, "#1", 99);
   REQUIRE_EQ(r, ccol_success);
-  REQUIRE_EQ(cjson_int_val(cjson_array_get(root, 1)), 99LL);
-  REQUIRE_EQ(cjson_int_val(cjson_array_get(root, 0)), 10LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 1)), 99LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 0)), 10LL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, set_float_literal) {
+  /* cjson_set with a 4-byte float exercises the sizeof(float) branch in
+   * node_reinit_scalar — distinct from the double path. */
+  cjson root = cjson_parse("{\"v\":0}", NULL);
+  float f = 2.5f;
+  cjson_set(root, "v", f);
+  REQUIRE_EQ(cjson_type(cjson_get(root, "v")), CJSON_FLOAT);
+  REQUIRE_EQ(cjson_double_val(cjson_get(root, "v")), 2.5);
+  cjson_destroy(root);
+}
+
+TEST(navigate, set_list_slot_composite_to_scalar) {
+  /* Replacing a list element that is itself a composite node (dictionary)
+   * with a scalar must deep-free the composite via node_clear and leave
+   * adjacent elements intact. */
+  cjson root = cjson_parse("{\"items\":[{\"a\":1},\"two\",{\"b\":2}]}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  ccol_retval_t r = cjson_set(root, "items.#0", 99);
+  REQUIRE_EQ(r, ccol_success);
+  REQUIRE_EQ(cjson_type(cjson_get(root, "items.#0")), CJSON_INTEGER);
+  REQUIRE_EQ(cjson_int_val(cjson_get(root, "items.#0")), 99LL);
+  REQUIRE_STREQ(cjson_str_val(cjson_get(root, "items.#1")), "two");
+  REQUIRE_EQ(cjson_int_val(cjson_get(root, "items.#2.b")), 2LL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, leading_dot_get_returns_null) {
+  /* A path starting with '.' has an empty leading component; cjson_get
+   * must return NULL cleanly. */
+  cjson root = cjson_parse("{\"a\":1}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ((void *)cjson_get(root, ".a"), NULL);
+  REQUIRE_NE((void *)cjson_get(root, "a"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, leading_dot_set_returns_invalid_args) {
+  /* A leading dot is a path syntax error; cjson_set must return
+   * ccol_invalid_args and leave the tree unmodified. */
+  cjson root = cjson_parse("{\"a\":1}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_set(root, ".a", 99), ccol_invalid_args);
+  REQUIRE_EQ(cjson_int_val(cjson_get(root, "a")), 1LL);
   cjson_destroy(root);
 }
 
@@ -845,9 +898,7 @@ TEST(clone, scalar) {
   cjson_destroy(copy);
 }
 
-TEST(clone, null_handle) {
-  REQUIRE_EQ((void *)cjson_clone(NULL), NULL);
-}
+TEST(clone, null_handle) { REQUIRE_EQ((void *)cjson_clone(NULL), NULL); }
 
 TEST(clone, nested_object) {
   cjson orig = cjson_parse("{\"a\":{\"b\":[1,2,3]}}", NULL);
@@ -951,7 +1002,7 @@ TEST(edge, deeply_nested_parse_and_get) {
 TEST(edge, array_containing_objects) {
   cjson root = cjson_parse("[{\"k\":1},{\"k\":2},{\"k\":3}]", NULL);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(cjson_type(root), CJSON_ARRAY);
+  REQUIRE_EQ(cjson_type(root), CJSON_LIST);
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "#2.k")), 3LL);
   cjson_destroy(root);
 }
@@ -961,7 +1012,7 @@ TEST(edge, set_creates_multiple_new_keys) {
   cjson_set(root, "a", 1);
   cjson_set(root, "b", 2);
   cjson_set(root, "c", 3);
-  REQUIRE_EQ(cjson_object_size(root), (size_t)3);
+  REQUIRE_EQ(cjson_dictionary_size(root), (size_t)3);
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "b")), 2LL);
   cjson_destroy(root);
 }
@@ -1020,8 +1071,8 @@ TEST(edge, llong_min_serialize_roundtrip) {
 TEST(fuzzy, duplicate_key_no_leak) {
   cjson root = cjson_parse("{\"x\":1,\"x\":2,\"x\":3}", NULL);
   REQUIRE_NE((void *)root, NULL);
-  REQUIRE_EQ(cjson_type(root), CJSON_OBJECT);
-  REQUIRE_EQ(cjson_object_size(root), (size_t)1);
+  REQUIRE_EQ(cjson_type(root), CJSON_DICTIONARY);
+  REQUIRE_EQ(cjson_dictionary_size(root), (size_t)1);
   REQUIRE_EQ(cjson_int_val(cjson_get(root, "x")), 3LL);
   cjson_destroy(root);
 }
@@ -1050,7 +1101,8 @@ TEST(fuzzy, long_decimal_number_parses) {
   cjson n = cjson_parse(
       "1000000000000000000000000000000000000000"
       "0000000000000000000000000000000000000000"
-      "000000000000000000000000", NULL);
+      "000000000000000000000000",
+      NULL);
   REQUIRE_NE((void *)n, NULL);
   REQUIRE_EQ(cjson_type(n), CJSON_FLOAT);
   cjson_destroy(n);
@@ -1060,7 +1112,8 @@ TEST(fuzzy, negative_long_decimal_number_parses) {
   cjson n = cjson_parse(
       "-1000000000000000000000000000000000000000"
       "0000000000000000000000000000000000000000"
-      "000000000000000000000000", NULL);
+      "000000000000000000000000",
+      NULL);
   REQUIRE_NE((void *)n, NULL);
   REQUIRE_EQ(cjson_type(n), CJSON_FLOAT);
   cjson_destroy(n);
@@ -1106,7 +1159,10 @@ TEST(navigate, set_null_string_ptr_becomes_json_null) {
   const char *ptr = NULL;
   ccol_retval_t r = cjson_set(root, "k", ptr);
   REQUIRE_EQ(r, ccol_success);
-  REQUIRE_EQ(cjson_type(cjson_get(root, "k")), CJSON_NULL);
+  /* Key must still be present — same masking risk as set_null above. */
+  cjson null_node = cjson_get(root, "k");
+  REQUIRE_NE((void *)null_node, NULL);
+  REQUIRE_EQ(cjson_type(null_node), CJSON_NULL);
   char *s = cjson_serialize(root);
   REQUIRE_NE((void *)s, NULL);
   REQUIRE_TRUE(strstr(s, "null") != NULL);
@@ -1151,62 +1207,149 @@ TEST(navigate, set_nonfinite_double_rejected) {
 }
 
 /* ========================================================================== */
+/*                       PATH ESCAPE SEQUENCE TESTS                           */
+/* ========================================================================== */
+
+TEST(navigate, get_escaped_dot_flat_key) {
+  /* Key is "a.b" (contains a literal dot).  Access it with "a\\.b". */
+  cjson root = cjson_parse("{\"a.b\":42}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  cjson node = cjson_get(root, "a\\.b");
+  REQUIRE_NE((void *)node, NULL);
+  REQUIRE_EQ(cjson_int_val(node), 42LL);
+  /* Unescaped dot must NOT find the key. */
+  REQUIRE_EQ((void *)cjson_get(root, "a.b"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, get_escaped_backslash_flat_key) {
+  /* Key is "a\\b" (contains a literal backslash).  Access it with "a\\\\b". */
+  cjson root = cjson_parse("{\"a\\\\b\":7}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  cjson node = cjson_get(root, "a\\\\b");
+  REQUIRE_NE((void *)node, NULL);
+  REQUIRE_EQ(cjson_int_val(node), 7LL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, get_escaped_dot_nested_path) {
+  /* Outer key is plain "outer"; inner key is "k.ey" (literal dot). */
+  cjson root = cjson_parse("{\"outer\":{\"k.ey\":99}}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  cjson node = cjson_get(root, "outer.k\\.ey");
+  REQUIRE_NE((void *)node, NULL);
+  REQUIRE_EQ(cjson_int_val(node), 99LL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, get_escaped_dot_both_components) {
+  /* Both levels have dot-containing keys: "a.b" -> "c.d". */
+  cjson root = cjson_parse("{\"a.b\":{\"c.d\":1}}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  cjson node = cjson_get(root, "a\\.b.c\\.d");
+  REQUIRE_NE((void *)node, NULL);
+  REQUIRE_EQ(cjson_int_val(node), 1LL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, set_escaped_dot_creates_new_key) {
+  /* Create a new key "x.y" (literal dot) at the root. */
+  cjson root = cjson_parse("{}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_set(root, "x\\.y", 55), ccol_success);
+  cjson node = cjson_get(root, "x\\.y");
+  REQUIRE_NE((void *)node, NULL);
+  REQUIRE_EQ(cjson_int_val(node), 55LL);
+  /* Must not have created a spurious nested "x" key. */
+  REQUIRE_EQ((void *)cjson_get(root, "x"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, set_escaped_dot_updates_existing_key) {
+  /* Update an existing key "p.q" (literal dot). */
+  cjson root = cjson_parse("{\"p.q\":0}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_set(root, "p\\.q", 123), ccol_success);
+  REQUIRE_EQ(cjson_int_val(cjson_get(root, "p\\.q")), 123LL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, set_escaped_dot_nested_path) {
+  /* Set "outer"."k.ey" via escaped path "outer.k\\.ey". */
+  cjson root = cjson_parse("{\"outer\":{\"k.ey\":0}}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_set(root, "outer.k\\.ey", 77), ccol_success);
+  REQUIRE_EQ(cjson_int_val(cjson_get(root, "outer.k\\.ey")), 77LL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, set_escaped_backslash_creates_key) {
+  /* Create a key "a\\b" (literal backslash) via "a\\\\b". */
+  cjson root = cjson_parse("{}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_set(root, "a\\\\b", 9), ccol_success);
+  REQUIRE_NE((void *)cjson_get(root, "a\\\\b"), NULL);
+  REQUIRE_EQ(cjson_int_val(cjson_get(root, "a\\\\b")), 9LL);
+  cjson_destroy(root);
+}
+
+/* ========================================================================== */
 /*                         CLONE REGRESSION TESTS                             */
 /* ========================================================================== */
 
 TEST(clone, flat_array) {
-  cjson orig = cjson_create_array();
-  cjson_array_push(orig, cjson_create_int(10));
-  cjson_array_push(orig, cjson_create_int(20));
-  cjson_array_push(orig, cjson_create_string("hi"));
+  cjson orig = cjson_create_list();
+  cjson_list_push(orig, cjson_create_int(10));
+  cjson_list_push(orig, cjson_create_int(20));
+  cjson_list_push(orig, cjson_create_string("hi"));
 
   cjson copy = cjson_clone(orig);
   REQUIRE_NE((void *)copy, (void *)orig);
-  REQUIRE_EQ(cjson_type(copy), CJSON_ARRAY);
-  REQUIRE_EQ(cjson_array_len(copy), (size_t)3);
-  REQUIRE_EQ(cjson_int_val(cjson_array_get(copy, 0)), 10LL);
-  REQUIRE_EQ(cjson_int_val(cjson_array_get(copy, 1)), 20LL);
-  REQUIRE_STREQ(cjson_str_val(cjson_array_get(copy, 2)), "hi");
+  REQUIRE_EQ(cjson_type(copy), CJSON_LIST);
+  REQUIRE_EQ(cjson_list_len(copy), (size_t)3);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(copy, 0)), 10LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(copy, 1)), 20LL);
+  REQUIRE_STREQ(cjson_str_val(cjson_list_get(copy, 2)), "hi");
 
   cjson_set(copy, "#0", 99);
-  REQUIRE_EQ(cjson_int_val(cjson_array_get(orig, 0)), 10LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(orig, 0)), 10LL);
 
   cjson_destroy(orig);
   cjson_destroy(copy);
 }
 
 TEST(clone, flat_object) {
-  cjson orig = cjson_create_object();
-  cjson_object_set(orig, "a", cjson_create_int(1));
-  cjson_object_set(orig, "b", cjson_create_string("world"));
-  cjson_object_set(orig, "c", cjson_create_bool(true));
+  cjson orig = cjson_create_dictionary();
+  cjson_dictionary_set(orig, "a", cjson_create_int(1));
+  cjson_dictionary_set(orig, "b", cjson_create_string("world"));
+  cjson_dictionary_set(orig, "c", cjson_create_bool(true));
 
   cjson copy = cjson_clone(orig);
   REQUIRE_NE((void *)copy, (void *)orig);
-  REQUIRE_EQ(cjson_type(copy), CJSON_OBJECT);
-  REQUIRE_EQ(cjson_object_size(copy), (size_t)3);
-  REQUIRE_EQ(cjson_int_val(cjson_object_get(copy, "a")), 1LL);
-  REQUIRE_STREQ(cjson_str_val(cjson_object_get(copy, "b")), "world");
-  REQUIRE_TRUE(cjson_bool_val(cjson_object_get(copy, "c")));
+  REQUIRE_EQ(cjson_type(copy), CJSON_DICTIONARY);
+  REQUIRE_EQ(cjson_dictionary_size(copy), (size_t)3);
+  REQUIRE_EQ(cjson_int_val(cjson_dictionary_get(copy, "a")), 1LL);
+  REQUIRE_STREQ(cjson_str_val(cjson_dictionary_get(copy, "b")), "world");
+  REQUIRE_TRUE(cjson_bool_val(cjson_dictionary_get(copy, "c")));
 
-  cjson_object_set(copy, "a", cjson_create_int(999));
-  REQUIRE_EQ(cjson_int_val(cjson_object_get(orig, "a")), 1LL);
+  cjson_dictionary_set(copy, "a", cjson_create_int(999));
+  REQUIRE_EQ(cjson_int_val(cjson_dictionary_get(orig, "a")), 1LL);
 
   cjson_destroy(orig);
   cjson_destroy(copy);
 }
 
 TEST(construction, object_set_replaces_old_child) {
-  cjson o = cjson_create_object();
-  cjson_object_set(o, "k", cjson_create_string("first"));
-  REQUIRE_STREQ(cjson_str_val(cjson_object_get(o, "k")), "first");
+  cjson o = cjson_create_dictionary();
+  cjson_dictionary_set(o, "k", cjson_create_string("first"));
+  REQUIRE_STREQ(cjson_str_val(cjson_dictionary_get(o, "k")), "first");
 
-  cjson_object_set(o, "k", cjson_create_string("second"));
-  REQUIRE_STREQ(cjson_str_val(cjson_object_get(o, "k")), "second");
-  REQUIRE_EQ(cjson_object_size(o), (size_t)1);
+  cjson_dictionary_set(o, "k", cjson_create_string("second"));
+  REQUIRE_STREQ(cjson_str_val(cjson_dictionary_get(o, "k")), "second");
+  REQUIRE_EQ(cjson_dictionary_size(o), (size_t)1);
 
-  cjson_object_set(o, "k", cjson_create_int(42));
-  REQUIRE_EQ(cjson_int_val(cjson_object_get(o, "k")), 42LL);
+  cjson_dictionary_set(o, "k", cjson_create_int(42));
+  REQUIRE_EQ(cjson_int_val(cjson_dictionary_get(o, "k")), 42LL);
 
   cjson_destroy(o);
 }
@@ -1216,53 +1359,53 @@ TEST(construction, object_set_replaces_old_child) {
 /* ========================================================================== */
 
 TEST(construction, array_push_null_arr_frees_child) {
-  ccol_retval_t r = cjson_array_push(NULL, cjson_create_int(42));
+  ccol_retval_t r = cjson_list_push(NULL, cjson_create_int(42));
   REQUIRE_EQ(r, ccol_invalid_args);
 }
 
 TEST(construction, array_push_null_child_rejected) {
-  cjson arr = cjson_create_array();
-  ccol_retval_t r = cjson_array_push(arr, NULL);
+  cjson arr = cjson_create_list();
+  ccol_retval_t r = cjson_list_push(arr, NULL);
   REQUIRE_EQ(r, ccol_invalid_args);
-  REQUIRE_EQ(cjson_array_len(arr), (size_t)0);
+  REQUIRE_EQ(cjson_list_len(arr), (size_t)0);
   cjson_destroy(arr);
 }
 
 TEST(construction, array_push_wrong_type_frees_child) {
   cjson not_array = cjson_create_int(7);
-  ccol_retval_t r = cjson_array_push(not_array, cjson_create_string("hi"));
+  ccol_retval_t r = cjson_list_push(not_array, cjson_create_string("hi"));
   REQUIRE_EQ(r, ccol_invalid_args);
   cjson_destroy(not_array);
 }
 
 TEST(construction, object_set_null_obj_frees_child) {
-  ccol_retval_t r = cjson_object_set(NULL, "k", cjson_create_int(1));
+  ccol_retval_t r = cjson_dictionary_set(NULL, "k", cjson_create_int(1));
   REQUIRE_EQ(r, ccol_invalid_args);
 }
 
 TEST(construction, object_set_wrong_type_frees_child) {
   cjson not_obj = cjson_create_string("oops");
-  ccol_retval_t r = cjson_object_set(not_obj, "k", cjson_create_int(99));
+  ccol_retval_t r = cjson_dictionary_set(not_obj, "k", cjson_create_int(99));
   REQUIRE_EQ(r, ccol_invalid_args);
   cjson_destroy(not_obj);
 }
 
 TEST(construction, object_set_null_key_frees_child) {
-  cjson o = cjson_create_object();
-  ccol_retval_t r = cjson_object_set(o, NULL, cjson_create_int(1));
+  cjson o = cjson_create_dictionary();
+  ccol_retval_t r = cjson_dictionary_set(o, NULL, cjson_create_int(1));
   REQUIRE_EQ(r, ccol_invalid_args);
-  REQUIRE_EQ(cjson_object_size(o), (size_t)0);
+  REQUIRE_EQ(cjson_dictionary_size(o), (size_t)0);
   cjson_destroy(o);
 }
 
 TEST(construction, array_get_null_arr_returns_null) {
-  REQUIRE_EQ((void *)cjson_array_get(NULL, 0), NULL);
+  REQUIRE_EQ((void *)cjson_list_get(NULL, 0), NULL);
 }
 
 TEST(construction, object_get_null_returns_null) {
-  REQUIRE_EQ((void *)cjson_object_get(NULL, "k"), NULL);
-  cjson o = cjson_create_object();
-  REQUIRE_EQ((void *)cjson_object_get(o, NULL), NULL);
+  REQUIRE_EQ((void *)cjson_dictionary_get(NULL, "k"), NULL);
+  cjson o = cjson_create_dictionary();
+  REQUIRE_EQ((void *)cjson_dictionary_get(o, NULL), NULL);
   cjson_destroy(o);
 }
 
@@ -1349,21 +1492,21 @@ TEST(custom_alloc, array_and_object_use_custom_alloc) {
   _ta_allocs = 0;
   _ta_frees = 0;
 
-  cjson arr = cjson_create_array_mp(&_tracking_alloc);
+  cjson arr = cjson_create_list_mp(&_tracking_alloc);
   REQUIRE_NE((void *)arr, NULL);
-  REQUIRE_EQ(cjson_array_push(arr, cjson_create_int_mp(1, &_tracking_alloc)),
+  REQUIRE_EQ(cjson_list_push(arr, cjson_create_int_mp(1, &_tracking_alloc)),
              ccol_success);
   REQUIRE_EQ(
-      cjson_array_push(arr, cjson_create_string_mp("item", &_tracking_alloc)),
+      cjson_list_push(arr, cjson_create_string_mp("item", &_tracking_alloc)),
       ccol_success);
-  REQUIRE_EQ(cjson_array_len(arr), (size_t)2);
+  REQUIRE_EQ(cjson_list_len(arr), (size_t)2);
 
-  cjson obj = cjson_create_object_mp(&_tracking_alloc);
+  cjson obj = cjson_create_dictionary_mp(&_tracking_alloc);
   REQUIRE_NE((void *)obj, NULL);
-  REQUIRE_EQ(cjson_object_set(obj, "key",
-                              cjson_create_bool_mp(false, &_tracking_alloc)),
+  REQUIRE_EQ(cjson_dictionary_set(
+                 obj, "key", cjson_create_bool_mp(false, &_tracking_alloc)),
              ccol_success);
-  REQUIRE_EQ(cjson_object_size(obj), (size_t)1);
+  REQUIRE_EQ(cjson_dictionary_size(obj), (size_t)1);
 
   /* Backing cvec and chmap each require at least one allocation. */
   REQUIRE_GT(_ta_allocs, (size_t)3);
@@ -1405,9 +1548,10 @@ TEST(custom_alloc, serialize_uses_custom_alloc) {
   _ta_allocs = 0;
   _ta_frees = 0;
 
-  cjson doc = cjson_create_object_mp(&_tracking_alloc);
-  cjson_object_set(doc, "x", cjson_create_int_mp(7, &_tracking_alloc));
-  cjson_object_set(doc, "s", cjson_create_string_mp("hi", &_tracking_alloc));
+  cjson doc = cjson_create_dictionary_mp(&_tracking_alloc);
+  cjson_dictionary_set(doc, "x", cjson_create_int_mp(7, &_tracking_alloc));
+  cjson_dictionary_set(doc, "s",
+                       cjson_create_string_mp("hi", &_tracking_alloc));
 
   size_t allocs_before_ser = _ta_allocs;
 
@@ -1487,8 +1631,8 @@ TEST(custom_alloc, custom_alloc_frees_on_destroy) {
   _ta_allocs = 0;
   _ta_frees = 0;
 
-  cjson root = cjson_parse_mp("{\"a\":1,\"b\":\"hello\",\"c\":[1,2,3]}",
-                              NULL, &_tracking_alloc);
+  cjson root = cjson_parse_mp("{\"a\":1,\"b\":\"hello\",\"c\":[1,2,3]}", NULL,
+                              &_tracking_alloc);
   REQUIRE_NE((void *)root, NULL);
   REQUIRE_GT(_ta_allocs, (size_t)0);
 
@@ -1499,4 +1643,445 @@ TEST(custom_alloc, custom_alloc_frees_on_destroy) {
 
   /* Every allocation must be matched by a free. */
   REQUIRE_EQ(_ta_allocs, _ta_frees);
+}
+
+/* ========================================================================== */
+/*                         DELETE                                             */
+/* ========================================================================== */
+
+TEST(delete, list_remove_middle) {
+  char *err = NULL;
+  cjson root = cjson_parse("[10, 20, 30, 40]", &err);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_list_len(root), (size_t)4);
+
+  REQUIRE_EQ(cjson_list_remove(root, 1), ccol_success);
+
+  REQUIRE_EQ(cjson_list_len(root), (size_t)3);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 0)), 10LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 1)), 30LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 2)), 40LL);
+  cjson_destroy(root);
+}
+
+TEST(delete, list_remove_first) {
+  char *err = NULL;
+  cjson root = cjson_parse("[1, 2, 3]", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_list_remove(root, 0), ccol_success);
+
+  REQUIRE_EQ(cjson_list_len(root), (size_t)2);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 0)), 2LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 1)), 3LL);
+  cjson_destroy(root);
+}
+
+TEST(delete, list_remove_last) {
+  char *err = NULL;
+  cjson root = cjson_parse("[1, 2, 3]", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_list_remove(root, 2), ccol_success);
+
+  REQUIRE_EQ(cjson_list_len(root), (size_t)2);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 0)), 1LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 1)), 2LL);
+  cjson_destroy(root);
+}
+
+TEST(delete, list_remove_only_element) {
+  char *err = NULL;
+  cjson root = cjson_parse("[42]", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_list_remove(root, 0), ccol_success);
+  REQUIRE_EQ(cjson_list_len(root), (size_t)0);
+  cjson_destroy(root);
+}
+
+TEST(delete, list_remove_out_of_bounds) {
+  char *err = NULL;
+  cjson root = cjson_parse("[1, 2]", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_list_remove(root, 2), ccol_invalid_args);
+  REQUIRE_EQ(cjson_list_len(root), (size_t)2);
+  cjson_destroy(root);
+}
+
+TEST(delete, list_remove_subtree_freed) {
+  /* Removing a list element that is itself a nested object must not leak. */
+  char *err = NULL;
+  cjson root = cjson_parse("[{\"a\":1,\"b\":[10,20]}, 99]", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_list_remove(root, 0), ccol_success);
+  REQUIRE_EQ(cjson_list_len(root), (size_t)1);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 0)), 99LL);
+  cjson_destroy(root);
+}
+
+TEST(delete, dictionary_remove_existing_key) {
+  char *err = NULL;
+  cjson root = cjson_parse("{\"a\":1,\"b\":2,\"c\":3}", &err);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_dictionary_size(root), (size_t)3);
+
+  REQUIRE_EQ(cjson_dictionary_remove(root, "b"), ccol_success);
+
+  REQUIRE_EQ(cjson_dictionary_size(root), (size_t)2);
+  REQUIRE_EQ((void *)cjson_dictionary_get(root, "b"), NULL);
+  REQUIRE_NE((void *)cjson_dictionary_get(root, "a"), NULL);
+  REQUIRE_NE((void *)cjson_dictionary_get(root, "c"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(delete, dictionary_remove_missing_key) {
+  char *err = NULL;
+  cjson root = cjson_parse("{\"a\":1}", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_dictionary_remove(root, "z"), ccol_key_not_found);
+  REQUIRE_EQ(cjson_dictionary_size(root), (size_t)1);
+  cjson_destroy(root);
+}
+
+TEST(delete, dictionary_remove_subtree_freed) {
+  /* Removing a key whose value is a nested container must not leak. */
+  char *err = NULL;
+  cjson root = cjson_parse("{\"keep\":1,\"drop\":{\"x\":[1,2,3]}}", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_dictionary_remove(root, "drop"), ccol_success);
+  REQUIRE_EQ(cjson_dictionary_size(root), (size_t)1);
+  REQUIRE_NE((void *)cjson_dictionary_get(root, "keep"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(delete, path_delete_dict_key) {
+  char *err = NULL;
+  cjson root = cjson_parse("{\"x\":1,\"y\":2}", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_delete(root, "x"), ccol_success);
+  REQUIRE_EQ(cjson_dictionary_size(root), (size_t)1);
+  REQUIRE_EQ((void *)cjson_get(root, "x"), NULL);
+  REQUIRE_NE((void *)cjson_get(root, "y"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(delete, path_delete_nested_key) {
+  char *err = NULL;
+  cjson root = cjson_parse("{\"a\":{\"b\":1,\"c\":2}}", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_delete(root, "a.b"), ccol_success);
+  REQUIRE_EQ((void *)cjson_get(root, "a.b"), NULL);
+  REQUIRE_NE((void *)cjson_get(root, "a.c"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(delete, path_delete_list_element) {
+  char *err = NULL;
+  cjson root = cjson_parse("{\"items\":[10,20,30]}", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_delete(root, "items.#1"), ccol_success);
+
+  cjson items = cjson_get(root, "items");
+  REQUIRE_EQ(cjson_list_len(items), (size_t)2);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(items, 0)), 10LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(items, 1)), 30LL);
+  cjson_destroy(root);
+}
+
+TEST(delete, path_missing_parent_returns_key_not_found) {
+  char *err = NULL;
+  cjson root = cjson_parse("{\"a\":1}", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_delete(root, "x.y"), ccol_key_not_found);
+  cjson_destroy(root);
+}
+
+TEST(delete, path_missing_leaf_returns_key_not_found) {
+  char *err = NULL;
+  cjson root = cjson_parse("{\"a\":{\"b\":1}}", &err);
+  REQUIRE_NE((void *)root, NULL);
+
+  REQUIRE_EQ(cjson_delete(root, "a.z"), ccol_key_not_found);
+  cjson_destroy(root);
+}
+
+TEST(delete, path_delete_with_escaped_dot_in_key) {
+  /* Key literally named "a.b" must be addressable via "a\\.b". */
+  cjson root = cjson_create_dictionary();
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_dictionary_set(root, "a.b", cjson_create_int(7)),
+             ccol_success);
+  REQUIRE_EQ(cjson_dictionary_set(root, "keep", cjson_create_int(1)),
+             ccol_success);
+
+  REQUIRE_EQ(cjson_delete(root, "a\\.b"), ccol_success);
+  REQUIRE_EQ(cjson_dictionary_size(root), (size_t)1);
+  REQUIRE_NE((void *)cjson_dictionary_get(root, "keep"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(delete, null_root_returns_invalid_args) {
+  REQUIRE_EQ(_cjson_delete(NULL, "x"), ccol_invalid_args);
+}
+
+TEST(delete, null_path_returns_invalid_args) {
+  cjson root = cjson_parse("{\"x\":1}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(_cjson_delete(root, NULL), ccol_invalid_args);
+  cjson_destroy(root);
+}
+
+TEST(delete, empty_path_returns_invalid_args) {
+  cjson root = cjson_parse("{\"x\":1}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(_cjson_delete(root, ""), ccol_invalid_args);
+  REQUIRE_NE((void *)cjson_get(root, "x"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(delete, trailing_dot_returns_invalid_args) {
+  cjson root = cjson_parse("{\"a\":{\"b\":1}}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(_cjson_delete(root, "a."), ccol_invalid_args);
+  REQUIRE_NE((void *)cjson_get(root, "a.b"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(delete, consecutive_dots_rejected) {
+  cjson root = cjson_parse("{\"a\":{\"b\":1}}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_NE(_cjson_delete(root, "a..b"), ccol_success);
+  REQUIRE_NE((void *)cjson_get(root, "a.b"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(delete, leading_dot_rejected) {
+  cjson root = cjson_parse("{\"a\":1}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(_cjson_delete(root, ".a"), ccol_invalid_args);
+  REQUIRE_NE((void *)cjson_get(root, "a"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(delete, list_root_delete_element) {
+  /* cjson_delete must work when root itself is a CJSON_LIST and the path
+   * addresses an element directly (no intermediate dictionary lookup). */
+  cjson root = cjson_parse("[10, 20, 30]", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_delete(root, "#1"), ccol_success);
+  REQUIRE_EQ(cjson_list_len(root), (size_t)2);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 0)), 10LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(root, 1)), 30LL);
+  cjson_destroy(root);
+}
+
+/* ========================================================================== */
+/*          REMOVE FUNCTION NULL / WRONG-TYPE ARGUMENT EDGE CASES             */
+/* ========================================================================== */
+
+TEST(delete, list_remove_null_arr) {
+  REQUIRE_EQ(cjson_list_remove(NULL, 0), ccol_invalid_args);
+}
+
+TEST(delete, list_remove_wrong_type) {
+  cjson not_list = cjson_create_int(5);
+  REQUIRE_EQ(cjson_list_remove(not_list, 0), ccol_invalid_args);
+  cjson_destroy(not_list);
+}
+
+TEST(delete, dictionary_remove_null_obj) {
+  REQUIRE_EQ(cjson_dictionary_remove(NULL, "k"), ccol_invalid_args);
+}
+
+TEST(delete, dictionary_remove_null_key) {
+  cjson dict = cjson_create_dictionary();
+  REQUIRE_EQ(cjson_dictionary_remove(dict, NULL), ccol_invalid_args);
+  cjson_destroy(dict);
+}
+
+TEST(delete, dictionary_remove_wrong_type) {
+  cjson not_dict = cjson_create_int(5);
+  REQUIRE_EQ(cjson_dictionary_remove(not_dict, "k"), ccol_invalid_args);
+  cjson_destroy(not_dict);
+}
+
+/* ========================================================================== */
+/*         node_make_scalar ERROR PROPAGATION (new-key path)                  */
+/* ========================================================================== */
+
+TEST(navigate, set_nonfinite_new_key_returns_invalid_args) {
+  /* Inf/NaN on a key that does NOT yet exist must return ccol_invalid_args,
+   * not ccol_not_enough_memory. The new-key path in _cjson_set_typed must
+   * propagate the exact error from node_reinit_scalar via node_make_scalar. */
+  cjson root = cjson_parse("{}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_set(root, "v", INFINITY), ccol_invalid_args);
+  REQUIRE_EQ((void *)cjson_get(root, "v"), NULL);
+  REQUIRE_EQ(cjson_set(root, "v", NAN), ccol_invalid_args);
+  REQUIRE_EQ((void *)cjson_get(root, "v"), NULL);
+  cjson_destroy(root);
+}
+
+TEST(navigate, set_typed_invalid_integer_size_new_key) {
+  /* A direct _cjson_set_typed call with an invalid raw_size for CJSON_INTEGER
+   * and a key that does not yet exist must return ccol_invalid_args, not
+   * ccol_not_enough_memory.  This is only reachable via the back-end function
+   * (cjson_set always passes a valid sizeof). */
+  cjson root = cjson_parse("{}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  long long v = 42;
+  ccol_retval_t r =
+      _cjson_set_typed(root, "k", CJSON_INTEGER, &v, 3, true, false);
+  REQUIRE_EQ(r, ccol_invalid_args);
+  REQUIRE_EQ((void *)cjson_get(root, "k"), NULL);
+  cjson_destroy(root);
+}
+
+/* ========================================================================== */
+/*                         ADDITIONAL COVERAGE                                */
+/* ========================================================================== */
+
+TEST(parse, null_input_returns_null) {
+  /* cjson_parse(NULL) must return NULL without crashing. */
+  REQUIRE_EQ((void *)cjson_parse(NULL, NULL), NULL);
+}
+
+TEST(parse, null_input_with_error_str) {
+  /* The error string must be populated when input is NULL. */
+  char *err = NULL;
+  cjson n = cjson_parse_mp(NULL, &err, NULL);
+  REQUIRE_EQ((void *)n, NULL);
+  REQUIRE_NE((void *)err, NULL);
+  REQUIRE_TRUE(strlen(err) > 0);
+  free(err);
+}
+
+TEST(navigate, set_new_null_key) {
+  /* cjson_set with NULL must CREATE a findable CJSON_NULL node when the key
+   * does not yet exist (not merely return success without inserting). */
+  cjson root = cjson_parse("{}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  REQUIRE_EQ(cjson_set(root, "newkey", NULL), ccol_success);
+  cjson node = cjson_get(root, "newkey");
+  REQUIRE_NE((void *)node, NULL);
+  REQUIRE_EQ(cjson_type(node), CJSON_NULL);
+  REQUIRE_EQ(cjson_dictionary_size(root), (size_t)1);
+  cjson_destroy(root);
+}
+
+TEST(navigate, set_trailing_dot_returns_error) {
+  /* A path with a trailing dot has an empty leaf component; cjson_set must
+   * return a non-success error code and leave the tree unmodified. */
+  cjson root = cjson_parse("{\"a\":{\"b\":0}}", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  ccol_retval_t r = cjson_set(root, "a.", 99);
+  REQUIRE_NE(r, ccol_success);
+  REQUIRE_EQ(cjson_int_val(cjson_get(root, "a.b")), 0LL);
+  cjson_destroy(root);
+}
+
+TEST(serialize, pretty_print_list) {
+  /* cjson_serialize_pretty must emit a newline-indented form for list roots. */
+  cjson a = cjson_create_list();
+  cjson_list_push(a, cjson_create_int(1));
+  cjson_list_push(a, cjson_create_int(2));
+  char *s = cjson_serialize_pretty(a, 2);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_TRUE(strchr(s, '\n') != NULL);
+  REQUIRE_TRUE(strstr(s, "1") != NULL);
+  REQUIRE_TRUE(strstr(s, "2") != NULL);
+  cjson back = cjson_parse(s, NULL);
+  REQUIRE_NE((void *)back, NULL);
+  REQUIRE_EQ(cjson_type(back), CJSON_LIST);
+  REQUIRE_EQ(cjson_list_len(back), (size_t)2);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(back, 0)), 1LL);
+  REQUIRE_EQ(cjson_int_val(cjson_list_get(back, 1)), 2LL);
+  cjson_serialize_free(s);
+  cjson_destroy(a);
+  cjson_destroy(back);
+}
+
+TEST(clone, null_type_node) {
+  /* cjson_clone on a CJSON_NULL-TYPE node (distinct from a NULL handle) must
+   * return an independent non-NULL handle of type CJSON_NULL. */
+  cjson orig = cjson_create_null();
+  REQUIRE_NE((void *)orig, NULL);
+  cjson copy = cjson_clone(orig);
+  REQUIRE_NE((void *)copy, NULL);
+  REQUIRE_NE((void *)copy, (void *)orig);
+  REQUIRE_EQ(cjson_type(copy), CJSON_NULL);
+  cjson_destroy(orig);
+  cjson_destroy(copy);
+}
+
+TEST(construction, list_get_wrong_type_returns_null) {
+  /* cjson_list_get on a non-CJSON_LIST node must return NULL, not crash. */
+  cjson not_list = cjson_create_int(42);
+  REQUIRE_EQ((void *)cjson_list_get(not_list, 0), NULL);
+  cjson_destroy(not_list);
+}
+
+TEST(construction, dict_get_wrong_type_returns_null) {
+  /* cjson_dictionary_get on a non-CJSON_DICTIONARY node must return NULL. */
+  cjson not_dict = cjson_create_string("oops");
+  REQUIRE_EQ((void *)cjson_dictionary_get(not_dict, "k"), NULL);
+  cjson_destroy(not_dict);
+}
+
+TEST(navigate, set_on_scalar_root_returns_invalid_args) {
+  /* cjson_set where the eventual parent is a scalar (not dict or list) must
+   * return ccol_invalid_args and leave the node untouched. */
+  cjson root = cjson_create_int(42);
+  ccol_retval_t r = cjson_set(root, "key", 5);
+  REQUIRE_EQ(r, ccol_invalid_args);
+  REQUIRE_EQ(cjson_type(root), CJSON_INTEGER);
+  REQUIRE_EQ(cjson_int_val(root), 42LL);
+  cjson_destroy(root);
+}
+
+TEST(edge, llong_max_serialize_roundtrip) {
+  /* LLONG_MAX must serialize to the correct decimal string and parse back. */
+  cjson n = cjson_create_int(LLONG_MAX);
+  REQUIRE_NE((void *)n, NULL);
+  char *s = cjson_serialize(n);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_STREQ(s, "9223372036854775807");
+  cjson back = cjson_parse(s, NULL);
+  REQUIRE_NE((void *)back, NULL);
+  REQUIRE_EQ(cjson_type(back), CJSON_INTEGER);
+  REQUIRE_EQ(cjson_int_val(back), LLONG_MAX);
+  cjson_serialize_free(s);
+  cjson_destroy(n);
+  cjson_destroy(back);
+}
+
+TEST(delete, path_delete_non_hash_leaf_on_list_returns_invalid_args) {
+  /* A path whose leaf component does not start with '#' while the parent is a
+   * CJSON_LIST is invalid; cjson_delete must return ccol_invalid_args and
+   * leave the list unmodified. */
+  cjson root = cjson_parse("[1, 2, 3]", NULL);
+  REQUIRE_NE((void *)root, NULL);
+  ccol_retval_t r = cjson_delete(root, "key");
+  REQUIRE_EQ(r, ccol_invalid_args);
+  REQUIRE_EQ(cjson_list_len(root), (size_t)3);
+  cjson_destroy(root);
+}
+
+TEST(delete, path_delete_on_scalar_root_returns_invalid_args) {
+  /* cjson_delete where root is a scalar (not dict or list) must return
+   * ccol_invalid_args and leave the node untouched. */
+  cjson root = cjson_create_int(42);
+  ccol_retval_t r = _cjson_delete(root, "key");
+  REQUIRE_EQ(r, ccol_invalid_args);
+  REQUIRE_EQ(cjson_type(root), CJSON_INTEGER);
+  cjson_destroy(root);
 }

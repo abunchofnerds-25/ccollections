@@ -46,9 +46,10 @@ SOFTWARE.
  *   Available only for file-backed loggers (clog_open_file_mp). Size rotation
  *   triggers after the write that crosses max_file_size. Time rotation
  *   triggers on the first write after the interval elapses. Rotated files
- *   are renamed <path>.<YYYYMMDDHHMMSS>; if more than max_rotated_files
- *   exist the oldest are deleted. Build with -rdynamic for resolved symbols
- *   in backtraces.
+ *   are renamed <path>.<YYYYMMDDHHMMSS>[_N]; if more than max_rotated_files
+ *   exist the oldest are deleted. When compress_rotated is true the rotated
+ *   file is further compressed with gzip (producing .gz) outside the logger
+ *   mutex. Build with -rdynamic for resolved symbols in backtraces.
  */
 
 #include <common.h>
@@ -73,7 +74,9 @@ typedef enum {
   CLOG_ERROR,
   CLOG_ALERT, /**< Action must be taken immediately; maps to syslog severity 1
                */
-  CLOG_FATAL,
+  CLOG_FATAL, /**< Appends a backtrace and terminates the process via
+                 exit(EXIT_FAILURE). Bypasses min_level: the fatal message
+                 is always written regardless of the logger's level setting. */
   CLOG_OFF /**< Disables all output when used as min_level */
 } clog_level_t;
 
@@ -93,19 +96,32 @@ typedef enum {
 /**
  * @brief Log rotation configuration.
  *
- * Pass a pointer to this struct to clog_open_file_mp(). Fields with value 0
- * use their respective CLOG_DEFAULT_* constant.
+ * Pass a pointer to this struct to clog_open_file_mp().
  *
- * Example -- rotate at 50 MiB, keep 14 files:
+ * Zero values for max_file_size and rotation_interval_secs each fall back to
+ * their respective CLOG_DEFAULT_* constant.  A zero max_rotated_files means
+ * "no limit" -- old rotated files are never pruned.
+ *
+ * Example -- rotate at 50 MiB, keep 14 files, gzip each rotated file:
  * @code
  * clog_rotation_cfg_t cfg = {
  *     .size_rotation_enabled  = true,
  *     .max_file_size          = 50L * 1024L * 1024L,
  *     .time_rotation_enabled  = false,
  *     .max_rotated_files      = 14,
+ *     .compress_rotated       = true,
  * };
  * clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, &cfg, NULL);
  * @endcode
+ *
+ * When compress_rotated is true, each rotated file is gzip-compressed via
+ * zlib immediately after rotation, producing a
+ * "<path>.<YYYYMMDDHHMMSS>[_N].gz" file.  The original uncompressed file is
+ * removed on success.  Compression failures are silent: the uncompressed file
+ * is left on disk so no data is lost.  Compressed files are decompressible
+ * with standard tools (gunzip, zcat, gzip -d).  Compression runs outside the
+ * logger mutex so log writers are not stalled during the operation.
+ * Requires linking with -lz.
  */
 typedef struct clog_rotation_cfg {
   bool size_rotation_enabled;
@@ -114,6 +130,7 @@ typedef struct clog_rotation_cfg {
   time_t rotation_interval_secs; /**< Seconds; 0 ->
                                     CLOG_DEFAULT_ROTATION_INTERVAL */
   int max_rotated_files;         /**< Files kept on disk; 0 -> no limit */
+  bool compress_rotated; /**< Gzip-compress each rotated file via zlib (-lz) */
 } clog_rotation_cfg_t;
 
 /* ========================================================================== */
@@ -126,7 +143,7 @@ struct clogger;
  * @brief Opaque logger handle.
  *
  * Obtain via clog_open_fd_mp() or clog_open_file_mp(). Release via
- * clog_close(). NULL is safe to pass to all functions -- they are no-ops.
+ * clog_close().
  */
 typedef struct clogger *clog;
 
@@ -204,7 +221,7 @@ static inline __attribute__((always_inline)) clog clog_open_file(
 /**
  * @brief Flush, close, and free all resources owned by the logger.
  *
- * After this call the handle must not be used. Safe to call with NULL.
+ * After this call the handle must not be used.
  * If this is the last handle sharing an underlying file (root or all derived
  * loggers closed), the file descriptor is closed automatically.
  */
@@ -230,7 +247,7 @@ void clog_close(clog logger);
  * The underlying file is kept open until all handles (root + every derived
  * logger) have been closed.
  *
- * @param parent Source logger to derive from. NULL -> returns NULL.
+ * @param parent Source logger to derive from.
  * @return New derived logger handle, or NULL on allocation failure.
  */
 clog clog_derive(clog parent);
@@ -276,7 +293,7 @@ typedef enum {
  * Passing CLOG_FMT_SYSLOG on a file-backed logger is a silent no-op.
  * Thread-safe.
  *
- * @param logger Logger handle. NULL is a no-op.
+ * @param logger Logger handle.
  * @param fmt    Desired output format.
  */
 void clog_set_format(clog logger, clog_format_t fmt);
@@ -284,7 +301,7 @@ void clog_set_format(clog logger, clog_format_t fmt);
 /**
  * @brief Return the current output format.
  *
- * @param logger Logger handle. NULL returns CLOG_FMT_LOGFMT.
+ * @param logger Logger handle.
  * @return Current output format.
  */
 clog_format_t clog_get_format(clog logger);
@@ -349,7 +366,7 @@ typedef enum {
  * facility is stored on the shared backing store, the change is visible to
  * every logger handle that shares the same file descriptor. Thread-safe.
  *
- * @param logger   Logger handle. NULL is a no-op.
+ * @param logger   Logger handle.
  * @param facility Desired facility code.
  */
 void clog_set_facility(clog logger, clog_syslog_facility_t facility);
@@ -357,7 +374,7 @@ void clog_set_facility(clog logger, clog_syslog_facility_t facility);
 /**
  * @brief Return the current syslog facility.
  *
- * @param logger Logger handle. NULL returns CLOG_SYSLOG_USER.
+ * @param logger Logger handle.
  * @return Current facility code.
  */
 clog_syslog_facility_t clog_get_facility(clog logger);
@@ -398,7 +415,7 @@ void clog_clear_fields(clog logger);
 /**
  * @brief Internal write function. Use the log_* macros instead.
  *
- * @param logger         Logger handle (may be NULL -- produces no output).
+ * @param logger         Logger handle.
  * @param level          Severity level.
  * @param file           Source file (__FILE__).
  * @param line           Source line (__LINE__).
@@ -449,7 +466,13 @@ void _clog_write(clog logger, clog_level_t level, const char *file, int line,
   _clog_write((l), CLOG_ALERT, __FILE__, __LINE__, __func__, true, fmt, \
               ##__VA_ARGS__)
 
-/** Logs at FATAL level and appends a backtrace. */
+/**
+ * Logs at FATAL level, appends a backtrace, then terminates the process by
+ * calling exit(EXIT_FAILURE). This macro never returns to the caller.
+ * Unlike all other log_* macros, log_fatal bypasses the logger's min_level
+ * filter: the message is always written so the cause of termination is never
+ * silently suppressed.
+ */
 #define log_fatal(l, fmt, ...)                                          \
   _clog_write((l), CLOG_FATAL, __FILE__, __LINE__, __func__, true, fmt, \
               ##__VA_ARGS__)

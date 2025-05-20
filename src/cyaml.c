@@ -164,17 +164,24 @@ static pthread_key_t _pool_key;
 
 static void _pool_drain(void *);
 
-/* DSO constructor: create the pthread key (registering _pool_drain as the
- * per-thread destructor) and mark it live. */
-__attribute__((constructor)) static void _pool_key_init(void) {
+/* Lazy key init: runs exactly once on the first node_alloc call.
+ * _pool_key_live gates both pthread_setspecific (in node_free) and the
+ * destructor below, so processes that never call any cyaml function pay
+ * zero cost. */
+static pthread_once_t _pool_key_once = PTHREAD_ONCE_INIT;
+
+static void _do_pool_key_init(void) {
   pthread_key_create(&_pool_key, _pool_drain);
   atomic_store(&_pool_key_live, true);
 }
 
 /* DSO destructor: drain the calling thread's own pool, mark the key dead so
  * concurrent threads skip the pthread_setspecific call, then delete the key
- * to avoid PTHREAD_KEYS_MAX exhaustion on repeated dlopen/dlclose cycles. */
+ * to avoid PTHREAD_KEYS_MAX exhaustion on repeated dlopen/dlclose cycles.
+ * The _pool_key_live guard makes this a no-op if no cyaml function was ever
+ * called (i.e. _do_pool_key_init never ran). */
 __attribute__((destructor)) static void _pool_key_fini(void) {
+  if (!atomic_load(&_pool_key_live)) return;
   _pool_drain(NULL);
   atomic_store(&_pool_key_live, false);
   pthread_key_delete(_pool_key);
@@ -185,6 +192,7 @@ __attribute__((destructor)) static void _pool_key_fini(void) {
  * value union.  Returns NULL on allocation failure. */
 static cyaml_node_t *node_alloc(cyaml_node_type_t type,
                                 ccol_memmgmt_procs_t *mp) {
+  pthread_once(&_pool_key_once, _do_pool_key_init);
   cyaml_node_t *n;
   if (mp == NULL && _pool_head) {
     n = _pool_head;

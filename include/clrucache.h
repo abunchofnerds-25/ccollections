@@ -230,19 +230,19 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
  * Must be followed by clru_init() before use.
  */
 #define clru_declare(name, KeyT, ValT)                                    \
-  typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL; \
-  typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL; \
-  clru_cache name
+  typeof(KeyT) *name##__clru_key_type_var                                 \
+      __attribute__((unused)); /* deliberately not initialized to NULL */ \
+  typeof(ValT) *name##__clru_val_type_var                                 \
+      __attribute__((unused)); /* deliberately not initialized to NULL */ \
+  clru_cache name              /* deliberately not initialized to NULL */
 
 /**
  * @brief Declare with automatic cleanup on scope exit
  */
-#define clru_declare_scoped(name, KeyT, ValT)                              \
-  typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL;  \
-  typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL;  \
-  clru_cache name _ccol_destructor(                                        \
-      ___clrucache_destroy) /* Deliberately does not have an initial value \
-                               (NULL) to support other initial assignments */
+#define clru_declare_scoped(name, KeyT, ValT)                             \
+  typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL; \
+  typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL; \
+  clru_cache name _ccol_destructor(___clrucache_destroy) = NULL
 
 /**
  * @brief Initialize a previously declared cache variable

@@ -45,6 +45,7 @@ SOFTWARE.
 #endif
 #include <time.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #if defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__)
 #include <execinfo.h>
@@ -462,6 +463,50 @@ static const char *_path_base(const char *path) {
 }
 
 /* ========================================================================== */
+/*                         GZIP COMPRESSION (via zlib)                        */
+/* ========================================================================== */
+
+#define _GZ_BUF_SIZE 65536U
+
+/*
+ * Gzip-compress the file at src into dst (src + ".gz") using zlib.
+ * On success: dst is a valid gzip file, src is unlinked; returns 0.
+ * On failure: dst is removed if partially written, src is untouched; returns
+ * -1.
+ */
+static int _gzip_compress_file(const char *src, const char *dst) {
+  FILE *in = NULL;
+  gzFile out = NULL;
+  int rc = -1;
+
+  in = fopen(src, "rb");
+  if (!in) goto done;
+
+  out = gzopen(dst, "wb");
+  if (!out) goto done;
+
+  unsigned char buf[_GZ_BUF_SIZE];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof buf, in)) > 0) {
+    if (gzwrite(out, buf, (unsigned)n) != (int)n) goto done;
+  }
+  if (ferror(in)) goto done;
+
+  if (gzclose(out) != Z_OK) {
+    out = NULL;
+    goto done;
+  }
+  out = NULL;
+  rc = 0;
+
+done:
+  if (in) fclose(in);
+  if (out) gzclose(out);
+  if (rc != 0) unlink(dst); /* remove truncated output */
+  if (rc == 0) unlink(src); /* remove uncompressed original */
+  return rc;
+}
+/* ========================================================================== */
 /*                         LOG ROTATION                                       */
 /* ========================================================================== */
 
@@ -605,6 +650,25 @@ static int _rotate(clog_shared_t *sh) {
   sh->fd = new_fd;
   sh->bytes_written = 0;
   sh->last_rotation = now;
+
+  /*
+   * Compress the rotated file outside the mutex so log writers are not stalled
+   * during what can be a slow I/O operation.  The critical shared state (fd,
+   * bytes_written, last_rotation) is already committed above; releasing the
+   * mutex here is safe.
+   */
+  if (sh->rotation.compress_rotated) {
+    char gz_path[PATH_MAX];
+    size_t rlen = strlen(rotated);
+    if (rlen + 3 < sizeof gz_path) {
+      memcpy(gz_path, rotated, rlen);
+      memcpy(gz_path + rlen, ".gz", 4); /* includes NUL */
+      mutex_unlock(sh->mutex);
+      _gzip_compress_file(rotated, gz_path);
+      mutex_lock(sh->mutex);
+    }
+  }
+
   return 0;
 }
 
@@ -920,8 +984,6 @@ clog clog_open_file_mp(const char *path, clog_level_t min_level,
 }
 
 void clog_close(clog lg) {
-  if (!lg) return;
-
   clog_shared_t *sh = lg->shared;
 
   mutex_lock(sh->mutex);
@@ -944,8 +1006,6 @@ void clog_close(clog lg) {
 }
 
 clog clog_derive(clog parent) {
-  if (!parent) return NULL;
-
   mutex_lock(parent->shared->mutex);
 
   struct clogger *child = _logger_alloc(parent->shared, parent->min_level);
@@ -988,14 +1048,12 @@ clog clog_derive(clog parent) {
 /* ========================================================================== */
 
 void clog_set_level(clog lg, clog_level_t level) {
-  if (!lg) return;
   mutex_lock(lg->shared->mutex);
   lg->min_level = level;
   mutex_unlock(lg->shared->mutex);
 }
 
 clog_level_t clog_get_level(clog lg) {
-  if (!lg) return CLOG_OFF;
   mutex_lock(lg->shared->mutex);
   clog_level_t l = lg->min_level;
   mutex_unlock(lg->shared->mutex);
@@ -1007,7 +1065,6 @@ clog_level_t clog_get_level(clog lg) {
 /* ========================================================================== */
 
 void clog_set_format(clog lg, clog_format_t fmt) {
-  if (!lg) return;
   mutex_lock(lg->shared->mutex);
   /* CLOG_FMT_SYSLOG requires a caller-supplied fd (owns_fd == false). */
   if (fmt == CLOG_FMT_SYSLOG && lg->shared->owns_fd) {
@@ -1019,7 +1076,6 @@ void clog_set_format(clog lg, clog_format_t fmt) {
 }
 
 clog_format_t clog_get_format(clog lg) {
-  if (!lg) return CLOG_FMT_LOGFMT;
   mutex_lock(lg->shared->mutex);
   clog_format_t f = lg->shared->format;
   mutex_unlock(lg->shared->mutex);
@@ -1027,14 +1083,12 @@ clog_format_t clog_get_format(clog lg) {
 }
 
 void clog_set_facility(clog lg, clog_syslog_facility_t facility) {
-  if (!lg) return;
   mutex_lock(lg->shared->mutex);
   lg->shared->syslog_facility = facility;
   mutex_unlock(lg->shared->mutex);
 }
 
 clog_syslog_facility_t clog_get_facility(clog lg) {
-  if (!lg) return CLOG_SYSLOG_USER;
   mutex_lock(lg->shared->mutex);
   clog_syslog_facility_t f = lg->shared->syslog_facility;
   mutex_unlock(lg->shared->mutex);
@@ -1046,7 +1100,7 @@ clog_syslog_facility_t clog_get_facility(clog lg) {
 /* ========================================================================== */
 
 void clog_set_field(clog lg, const char *key, const char *value) {
-  if (!lg || !key || !value) return;
+  if (!key || !value) return;
 
   /* Reject keys that would corrupt logfmt or RFC 5424 SD output.
    * RFC 5424 SD-PARAM-NAME requires at least one character. */
@@ -1068,7 +1122,7 @@ void clog_set_field(clog lg, const char *key, const char *value) {
 }
 
 void clog_remove_field(clog lg, const char *key) {
-  if (!lg || !key) return;
+  if (!key) return;
 
   mutex_lock(lg->shared->mutex);
 
@@ -1079,8 +1133,6 @@ void clog_remove_field(clog lg, const char *key) {
 }
 
 void clog_clear_fields(clog lg) {
-  if (!lg) return;
-
   mutex_lock(lg->shared->mutex);
   chmap_reset(lg->fields, 0);
   mutex_unlock(lg->shared->mutex);
@@ -1092,12 +1144,20 @@ void clog_clear_fields(clog lg) {
 
 void _clog_write(clog lg, clog_level_t level, const char *file, int line,
                  const char *func, bool with_backtrace, const char *fmt, ...) {
-  if (!lg) return;
-
   mutex_lock(lg->shared->mutex);
 
-  if (level < lg->min_level || lg->shared->fd < 0) {
+  /* CLOG_FATAL bypasses the level filter: the cause of termination must
+   * always be recorded, regardless of min_level. */
+  if (level < lg->min_level && level != CLOG_FATAL) {
     mutex_unlock(lg->shared->mutex);
+    return;
+  }
+
+  if (lg->shared->fd < 0) {
+    mutex_unlock(lg->shared->mutex);
+    if (level == CLOG_FATAL) {
+      exit(EXIT_FAILURE);
+    }
     return;
   }
 
@@ -1120,6 +1180,9 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
   if (mlen < 0) {
     va_end(ap2);
     mutex_unlock(lg->shared->mutex);
+    if (level == CLOG_FATAL) {
+      exit(EXIT_FAILURE);
+    }
     return;
   }
   if ((size_t)mlen >= sizeof msg_stack) {
@@ -1316,4 +1379,7 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
     _rotate(lg->shared);
 
   mutex_unlock(lg->shared->mutex);
+  if (level == CLOG_FATAL) {
+    exit(EXIT_FAILURE);
+  }
 }

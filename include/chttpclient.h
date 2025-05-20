@@ -1,0 +1,557 @@
+/*
+MIT License
+
+Copyright (c) 2026 - A bunch of nerds
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
+#pragma once
+
+#include <chttp.h>
+#include <citerators.h>
+#include <common.h>
+
+/**
+ * @file chttpclient.h
+ * @brief HTTP/1.1 client backed by libcurl with a lazy-initialized
+ *        connection pool.
+ *
+ * ### Connection pool
+ *
+ * Each chttpcli handle owns a pool of CURL * easy handles (one per concurrent
+ * in-flight request). Pool slots are created on first use (lazy). When all
+ * slots are in use, chttpclient_do blocks until one becomes free. The pool
+ * size defaults to the CPU count; call chttpclient_set_pool_size to override.
+ *
+ * ### Default client
+ *
+ * chttp_default_client() returns a process-level default client that is
+ * lazily initialised on first call. It can be configured via the same
+ * chttpclient_set_* functions as any other client. Convenience wrappers
+ * (chttp_get, chttp_post, etc.) use it transparently.
+ *
+ * ### Thread safety
+ *
+ * All public functions in this module are thread-safe.
+ *
+ * ### libcurl initialisation
+ *
+ * curl_global_init(CURL_GLOBAL_ALL) is called once at library load via
+ * __attribute__((constructor)). curl_global_cleanup() is called at unload.
+ *
+ * ### Example
+ *
+ * @code
+ * // Simple GET with the default client
+ * chttpcli_response *resp;
+ * if (chttp_get("https://api.example.com/users", &resp) == ccol_success) {
+ *     printf("status=%d body=%s\n", resp->status_code, resp->body);
+ *     chttpclient_resp_free(resp);
+ * }
+ *
+ * // Custom client
+ * chttpcli_construct(cli);
+ * chttpclient_set_pool_size(cli, 8);
+ * chttpclient_set_request_timeout(cli, 5000);
+ *
+ * chttp_request_t *req = chttp_request_new(CHTTP_POST,
+ *     "https://api.example.com/items",
+ *     &CHTTP_JSON_BODY(json_str, json_len), NULL);
+ * chttp_request_set_header(req, "Authorization", "Bearer token");
+ *
+ * chttpcli_response *r;
+ * chttpclient_do(cli, req, &r);
+ * chttp_request_free(req);
+ * chttpclient_resp_free(r);
+ * chttpclient_destroy(cli);
+ * @endcode
+ */
+
+/* ========================================================================== */
+/*                         OPAQUE HANDLE                                      */
+/* ========================================================================== */
+
+/** @brief Opaque HTTP client handle. */
+typedef struct chttpclient *chttpcli;
+
+/* ========================================================================== */
+/*                         STREAMING CALLBACK                                 */
+/* ========================================================================== */
+
+/**
+ * @brief Streaming response body callback for chttpclient_do_streaming.
+ *
+ * Called zero or more times as response body bytes arrive. Return the number
+ * of bytes consumed; returning a value less than len aborts the transfer.
+ *
+ * @param data  Pointer to the received chunk (not NUL-terminated).
+ * @param len   Number of bytes in this chunk.
+ * @param ctx   User-supplied context pointer set at call site.
+ * @return      Number of bytes handled; must equal len to continue.
+ */
+typedef size_t (*chttpcli_write_fn)(const void *data, size_t len, void *ctx);
+
+/* ========================================================================== */
+/*                         REQUEST OBJECT                                     */
+/* ========================================================================== */
+
+/**
+ * @brief HTTP request (partially transparent).
+ *
+ * The fields method, url, and body are public and may be read directly.
+ * Headers are internal; use chttp_request_set_header / get_header /
+ * headers_begin. url and body.data (and body.content_type, if set) are
+ * owned copies allocated by chttp_request_new_mp and freed by
+ * chttp_request_free.
+ */
+typedef struct chttp_request {
+  chttp_method_t method;
+  char *url;                 /* owned copy */
+  chttp_request_body_t body; /* body.data is an owned copy */
+  chmap_declare(headers, char *, char *);
+  ccol_memmgmt_procs_t *_m_procs;
+} chttp_request_t;
+
+/* ========================================================================== */
+/*                         RESPONSE OBJECT                                    */
+/* ========================================================================== */
+
+/**
+ * @brief HTTP response (partially transparent).
+ *
+ * status_code, body, body_len, and headers are public.
+ *
+ * body is a heap-allocated, NUL-terminated buffer. body_len is the number of
+ * bytes before the sentinel NUL. body is NULL when chttpclient_do_streaming
+ * was used (the body was delivered via the write callback instead).
+ *
+ * Call chttpclient_resp_free to release all owned memory.  When a custom
+ * allocator was supplied to create_chttpclient_mp, free the response BEFORE
+ * destroying the client; see chttpclient_resp_free for details.
+ */
+typedef struct chttpcli_response {
+  int status_code;
+  char *body; /* heap-allocated, NUL-terminated; NULL for streaming path */
+  size_t body_len;
+  chmap_declare(headers, char *, char *); /* internal: chmap(char* -> char*) */
+  ccol_memmgmt_procs_t *_m_procs;
+} chttpcli_response;
+
+/* ========================================================================== */
+/*                    REQUEST LIFECYCLE */
+/* ========================================================================== */
+
+/**
+ * @brief Allocate and initialise an HTTP request (custom allocator).
+ *
+ * Copies url and (if non-NULL) body->data and body->content_type into
+ * internally owned buffers so the caller may free its originals immediately.
+ *
+ * @param method   HTTP method.
+ * @param url      Target URL (copied; must not be NULL).
+ * @param body     Request body, or NULL / &CHTTP_NO_BODY for bodyless methods.
+ * @param mprocs   Custom allocator, or NULL for malloc/free.
+ * @param err_str  Optional: receives a static error string on failure.
+ * @return Newly allocated request, or NULL on failure.
+ */
+chttp_request_t *chttp_request_new_mp(chttp_method_t method, const char *url,
+                                      const chttp_request_body_t *body,
+                                      ccol_memmgmt_procs_t *mprocs,
+                                      char **err_str);
+
+/**
+ * @brief Allocate and initialise an HTTP request (default allocator).
+ */
+static inline __attribute__((always_inline)) chttp_request_t *chttp_request_new(
+    chttp_method_t method, const char *url, const chttp_request_body_t *body,
+    char **err_str) {
+  return chttp_request_new_mp(method, url, body, NULL, err_str);
+}
+
+/**
+ * @brief Set or replace a request header.
+ *
+ * Header names are normalised to lowercase on storage; lookup via
+ * chttp_request_get_header is therefore case-insensitive. If a header with
+ * the same name already exists its value is replaced.
+ *
+ * @param req    Request to modify.
+ * @param name   Header name (e.g. "Content-Type").
+ * @param value  Header value.
+ * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ */
+ccol_retval_t chttp_request_set_header(chttp_request_t *req, const char *name,
+                                       const char *value);
+
+/**
+ * @brief Look up a request header by name (case-insensitive).
+ *
+ * @param req   Request to query.
+ * @param name  Header name.
+ * @return Pointer to the stored value string, or NULL if not present.
+ *         Valid until the next chttp_request_set_header call on this request.
+ */
+const char *chttp_request_get_header(const chttp_request_t *req,
+                                     const char *name);
+
+/**
+ * @brief Free a request and all its owned resources.
+ *
+ * Safe to call with NULL.
+ */
+void chttp_request_free(chttp_request_t *req);
+
+/* ========================================================================== */
+/*                    CLIENT CONSTRUCTORS */
+/* ========================================================================== */
+
+/**
+ * @brief Create an HTTP client with a custom allocator.
+ *
+ * The client is created with default settings. Call chttpclient_set_* before
+ * the first request to customise behaviour. Pool slots are created lazily.
+ *
+ * Default configuration (before any chttpclient_set_* calls):
+ *   pool_size          = CPU count (resolved on first request)
+ *   connect_timeout_ms = 0 (libcurl default - no timeout)
+ *   request_timeout_ms = 0 (libcurl default - no timeout)
+ *   TLS                = peer + host verification on, system CA bundle
+ *
+ * @param mprocs   Custom allocator, or NULL for malloc/free.
+ * @param err_str  Optional: receives a static error string on failure.
+ * @return New client handle, or NULL on failure.
+ */
+chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str);
+
+/**
+ * @brief Create an HTTP client with the default allocator.
+ */
+static inline __attribute__((always_inline)) chttpcli
+create_chttpclient(char **err_str) {
+  return create_chttpclient_mp(NULL, err_str);
+}
+
+/* ========================================================================== */
+/*                    CLIENT CONFIGURATION */
+/* ========================================================================== */
+
+/**
+ * @brief Set the maximum number of concurrent in-flight requests.
+ *
+ * Excess callers of chttpclient_do block until a slot is free. May be called
+ * before or after the first request. Passing 0 selects the CPU count.
+ *
+ * When called after pool initialisation, expanding is allowed (realloc).
+ * Shrinking marks excess capacity unreachable; in-flight requests on those
+ * slots complete normally and their handles are cleaned up on release.
+ *
+ * @param cli  Client handle.
+ * @param n    Pool size; 0 = CPU count.
+ * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ */
+ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
+
+/**
+ * @brief Set the TCP connect timeout in milliseconds (0 = no timeout).
+ *
+ * @param cli  Client handle.
+ * @param ms   Timeout in milliseconds.
+ * @return ccol_success or ccol_invalid_args.
+ */
+ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, long ms);
+
+/**
+ * @brief Set the total request timeout in milliseconds (0 = no timeout).
+ *
+ * This is the maximum time from when chttpclient_do is called to when the
+ * last byte of the response body is received.
+ *
+ * @param cli  Client handle.
+ * @param ms   Timeout in milliseconds.
+ * @return ccol_success or ccol_invalid_args.
+ */
+ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, long ms);
+
+/**
+ * @brief Set TLS configuration for this client.
+ *
+ * Passing NULL restores the default (verify_peer=true, verify_host=true,
+ * system CA bundle, no client certificate).
+ *
+ * @param cli  Client handle.
+ * @param tls  TLS configuration to copy, or NULL to restore defaults.
+ * @return ccol_success or ccol_invalid_args.
+ */
+ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
+
+/* ========================================================================== */
+/*                    CLIENT DESTRUCTION */
+/* ========================================================================== */
+
+/**
+ * @brief Internal destroy -- use chttpclient_destroy macro instead.
+ *
+ * Waits for all in-flight requests to complete before freeing resources.
+ */
+void __chttpclient_destroy(chttpcli cli);
+
+/**
+ * @brief RAII cleanup helper (used with _ccol_destructor).
+ */
+static inline __attribute__((always_inline)) void ___chttpclient_destroy(
+    chttpcli *pp) {
+  if (pp && *pp) {
+    __chttpclient_destroy(*pp);
+    *pp = NULL;
+  }
+}
+
+/**
+ * @brief Destroy an HTTP client and set the handle to NULL.
+ *
+ * Blocks until all in-flight requests complete. Must not be called
+ * concurrently with other calls on the same handle.
+ */
+#define chttpclient_destroy(cli)  \
+  do {                            \
+    __chttpclient_destroy((cli)); \
+    (cli) = NULL;                 \
+  } while (0)
+
+/* ========================================================================== */
+/*                    LIFECYCLE MACROS */
+/* ========================================================================== */
+
+/** @brief Declare an uninitialised client variable. */
+#define chttpcli_declare(name) chttpcli name
+
+/** @brief Declare a client variable with automatic destruction on scope exit.
+ */
+#define chttpcli_declare_scoped(name) \
+  chttpcli name _ccol_destructor(___chttpclient_destroy) = NULL;
+
+/**
+ * @brief Declare and initialise an HTTP client; fatal_err on failure.
+ *
+ * Example:
+ * @code
+ * chttpcli_construct(cli);
+ * chttpclient_set_pool_size(cli, 4);
+ * chttpclient_set_request_timeout(cli, 10000);
+ * chttpcli_response *resp;
+ * chttpclient_do(cli, req, &resp);
+ * chttpclient_destroy(cli);
+ * @endcode
+ */
+#define chttpcli_construct(name)                          \
+  chttpcli name = NULL;                                   \
+  do {                                                    \
+    char *_clic_err = NULL;                               \
+    (name) = create_chttpclient(&_clic_err);              \
+    if (!(name)) {                                        \
+      fatal_err("chttpcli_construct('%s'): %s", #name,    \
+                _clic_err ? _clic_err : "unknown error"); \
+    }                                                     \
+  } while (0)
+
+/**
+ * @brief Declare, initialise, and auto-destroy on scope exit; fatal_err on
+ *        failure.
+ */
+#define chttpcli_construct_scoped(name)                          \
+  chttpcli name _ccol_destructor(___chttpclient_destroy) = NULL; \
+  do {                                                           \
+    char *_clic_err = NULL;                                      \
+    (name) = create_chttpclient(&_clic_err);                     \
+    if (!(name)) {                                               \
+      fatal_err("chttpcli_construct_scoped('%s'): %s", #name,    \
+                _clic_err ? _clic_err : "unknown error");        \
+    }                                                            \
+  } while (0)
+
+/* ========================================================================== */
+/*                    REQUEST EXECUTION */
+/* ========================================================================== */
+
+/**
+ * @brief Perform an HTTP request and buffer the entire response body.
+ *
+ * Blocks until a pool slot is free, executes the request synchronously, and
+ * returns a heap-allocated response. The caller owns *resp_out and must call
+ * chttpclient_resp_free when done.
+ *
+ * @param cli       Client handle.
+ * @param req       Request to execute.
+ * @param resp_out  On success, receives a pointer to the response.
+ * @return ccol_success                        Request completed; *resp_out is
+ * valid. ccol_invalid_args                   Any argument is NULL.
+ *         ccol_not_enough_memory              Allocation failed.
+ *         ccol_timed_out                      Request or connect timeout
+ * triggered. ccol_not_permitted                  Client is being destroyed.
+ *         ccol_http_invalid_url               URL is malformed or uses an
+ * unsupported scheme. ccol_http_host_resolution_failed    DNS or hostname
+ * resolution failed. ccol_http_connection_failed         TCP connection to the
+ * server could not be established. ccol_http_too_many_redirects        HTTP
+ * redirect limit was exceeded. ccol_http_tls_handshake_failed      TLS/SSL
+ * handshake with the server failed. ccol_http_tls_cert_verification_failed Peer
+ * TLS certificate could not be verified. ccol_http_transfer_aborted
+ * Transfer-level failure: server error response (CURLOPT_FAILONERROR),
+ * empty/unparseable reply, upload failure, read callback abort, range error,
+ *                                             content-encoding error, size
+ * limit exceeded, chunk callback error, network send/recv error, HTTP/2 or
+ * HTTP/3 stream error, auth error, etc. ccol_unexpected_failure             Any
+ * other internal libcurl error.
+ */
+ccol_retval_t chttpclient_do(chttpcli cli, const chttp_request_t *req,
+                             chttpcli_response **resp_out);
+
+/**
+ * @brief Perform an HTTP request with a streaming response body.
+ *
+ * write_fn is called one or more times with chunks of the response body as
+ * they arrive. Response headers are not accessible via this path. If
+ * status_code_out is non-NULL it receives the HTTP status code on success.
+ *
+ * @param cli             Client handle.
+ * @param req             Request to execute.
+ * @param write_fn        Chunk delivery callback (must not be NULL).
+ * @param write_ctx       Passed verbatim to write_fn.
+ * @param status_code_out Receives HTTP status code on success, or NULL.
+ * @return Same codes as chttpclient_do.  Additionally,
+ *         ccol_http_transfer_aborted is returned when write_fn returns fewer
+ *         bytes than len, aborting the transfer.
+ */
+ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
+                                       chttpcli_write_fn write_fn,
+                                       void *write_ctx, int *status_code_out);
+
+/* ========================================================================== */
+/*                    DEFAULT CLIENT AND CONVENIENCE API */
+/* ========================================================================== */
+
+/**
+ * @brief Return the process-level default client (lazily initialised).
+ *
+ * Thread-safe. The default client uses default settings (pool_size = CPU
+ * count, no timeouts, TLS verification on). It may be configured by passing
+ * the returned handle to chttpclient_set_*.
+ *
+ * @return Default client handle, or NULL if initialisation failed.
+ */
+chttpcli chttp_default_client(void);
+
+/**
+ * @brief Perform a request using the default client.
+ *
+ * Equivalent to chttpclient_do(chttp_default_client(), req, resp_out).
+ */
+ccol_retval_t chttp_do(const chttp_request_t *req,
+                       chttpcli_response **resp_out);
+
+/**
+ * @brief Execute a one-shot request via the default client.
+ *
+ * Convenience wrapper: constructs a chttp_request_t internally, attaches
+ * @p headers without taking ownership, calls chttp_do, then frees the
+ * internal request object.  The caller retains full ownership of @p headers
+ * and must destroy it when no longer needed.
+ *
+ * @param method    HTTP method.
+ * @param url       Target URL; must not be NULL.
+ * @param body      Request body, or NULL for bodyless requests.
+ * @param headers   chmap(char* -> char*) of request headers, or NULL.
+ *                  Borrowed for the duration of the call; not consumed.
+ * @param resp_out  On success, receives the response pointer.
+ * @return Same codes as chttpclient_do, or ccol_not_enough_memory if the
+ *         internal request allocation fails.
+ */
+ccol_retval_t chttp_run_query(chttp_method_t method, const char *url,
+                              const chttp_request_body_t *body, chmap headers,
+                              chttpcli_response **resp_out);
+
+/**
+ * @brief GET request via the default client.
+ *
+ * @param url      Target URL.
+ * @param resp_out Receives the response pointer on success.
+ * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory,
+ *         ccol_timed_out, or ccol_unexpected_failure.
+ */
+ccol_retval_t chttp_get(const char *url, chttpcli_response **resp_out);
+
+/**
+ * @brief POST request via the default client.
+ *
+ * @param url      Target URL.
+ * @param body     Request body, or NULL for an empty POST.
+ * @param resp_out Receives the response pointer on success.
+ */
+ccol_retval_t chttp_post(const char *url, const chttp_request_body_t *body,
+                         chttpcli_response **resp_out);
+
+/**
+ * @brief PUT request via the default client.
+ */
+ccol_retval_t chttp_put(const char *url, const chttp_request_body_t *body,
+                        chttpcli_response **resp_out);
+
+/**
+ * @brief DELETE request via the default client.
+ */
+ccol_retval_t chttp_delete(const char *url, chttpcli_response **resp_out);
+
+/**
+ * @brief PATCH request via the default client.
+ */
+ccol_retval_t chttp_patch(const char *url, const chttp_request_body_t *body,
+                          chttpcli_response **resp_out);
+
+/* ========================================================================== */
+/*                    RESPONSE API */
+/* ========================================================================== */
+
+/**
+ * @brief Look up a response header by name.
+ *
+ * Lookup is case-insensitive. If the server sent duplicate headers with the
+ * same name, the last occurrence wins (the map stores one value per name and
+ * updates it in-place on duplicate insert).
+ *
+ * @param resp  Response to query.
+ * @param name  Header name (e.g. "Content-Type").
+ * @return Pointer to the value string, or NULL if not found.
+ *         Valid until chttpclient_resp_free is called.
+ */
+const char *chttpclient_resp_header(const chttpcli_response *resp,
+                                    const char *name);
+
+/**
+ * @brief Free a response and all its owned resources.
+ *
+ * Safe to call with NULL.
+ *
+ * Lifetime constraint with custom allocators: the response holds a
+ * non-owning reference to the allocator supplied when the client was created
+ * (via create_chttpclient_mp).  When a custom allocator is in use,
+ * chttpclient_resp_free MUST be called before chttpclient_destroy; calling
+ * it after the client has been destroyed is undefined behaviour.  With the
+ * default allocator (NULL mprocs / malloc) the order does not matter.
+ */
+void chttpclient_resp_free(chttpcli_response *resp);

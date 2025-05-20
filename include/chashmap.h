@@ -24,6 +24,7 @@ SOFTWARE.
 
 #pragma once
 
+#include <citerators.h>
 #include <common.h>
 #include <string.h>
 
@@ -48,7 +49,7 @@ SOFTWARE.
  * - Linked lists for collision resolution
  * - Small String Optimization (SSO): 23-byte inline storage for keys/values
  * - Doubly-linked list for maintaining insertion order and iteration
- * - Minimum bucket array size: 64 (always power-of-2)
+ * - Minimum bucket array size: 16 (always power-of-2)
  * - Scale factor: 4x (grows to 4x size, shrinks to 0.25x size)
  * - Scale up threshold: (bucket_count + 1) * 1.5 elements
  * - Scale down threshold: (bucket_count + 1) / 8 elements
@@ -86,7 +87,7 @@ typedef chashmap *chmap;
  * implementation strategy (open-addressing vs separate chaining) is
  * automatically selected based on the key and value types.
  *
- * @param initial_bucket_array_size Initial number of buckets (minimum 64)
+ * @param initial_bucket_array_size Initial number of buckets (minimum 16)
  * @param key_type Type of keys (determines implementation strategy)
  * @param val_type Type of values (determines implementation strategy)
  * @param mmgmt_procs Custom memory management procedures, or NULL for default
@@ -218,7 +219,7 @@ size_t chmap_elem_count(chmap chm);
  *
  * @note All elements are destroyed regardless of return value
  * @note If new_bucket_array_size is 0, array size remains unchanged
- * @note If new_bucket_array_size < 64, it's set to 64
+ * @note If new_bucket_array_size < 16, it's set to 16
  * @note Otherwise rounded to nearest_power_of_2(new_bucket_array_size)
  * @note Will assert if chm is NULL
  *
@@ -462,15 +463,17 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @see chmap_init
  * @see chmap_construct
  */
-#define chmap_declare(hm_name, key_t, val_t)                                  \
-  typeof(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL; \
-  chmap hm_name /* _ccol_destructor(___chmap_destroy) */
+#define chmap_declare(hm_name, key_t, val_t)                              \
+  typeof(key_t) *hm_name##__ccol_key_type_var                             \
+      __attribute__((unused)); /* deliberately not initialized to NULL */ \
+  typeof(val_t) *hm_name##__ccol_val_type_var                             \
+      __attribute__((unused)); /* deliberately not initialized to NULL */ \
+  chmap hm_name                /* deliberately not initialized to NULL */
 
 #define chmap_declare_scoped(hm_name, key_t, val_t)                           \
   typeof(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL; \
-  chmap hm_name _ccol_destructor(___chmap_destroy)
+  chmap hm_name _ccol_destructor(___chmap_destroy) = NULL
 
 /**
  * @brief Initialize a hash map with full customization
@@ -484,7 +487,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @param custom_hashing_proc Custom hash function
  *
  * @note Terminates program on failure
- * @note Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (64)
+ * @note Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
  * @note Automatically detects key and value types to select implementation
  *
  * @see chmap_declare
@@ -518,7 +521,7 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @param custom_hashing_proc Custom hash function
  *
  * @note Terminates program on failure
- * @note Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (64)
+ * @note Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16)
  * @note Implementation automatically selected based on key_t and val_t
  *
  * @see chmap_init_full
@@ -968,5 +971,3 @@ static inline void ___chmap_destroy(chmap *chm) {
     }                                                                         \
     val;                                                                      \
   })
-
-#include <citerators.h>

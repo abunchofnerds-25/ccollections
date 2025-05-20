@@ -16,7 +16,7 @@ test: build
 	./tests
 
 memtest: build
-	valgrind --leak-check=full -s --show-leak-kinds=all ./tests
+	valgrind --leak-check=full -s --show-leak-kinds=all --error-exitcode=1 ./tests
 
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \

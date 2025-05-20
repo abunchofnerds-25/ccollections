@@ -26,7 +26,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 
-const size_t minimum_allowed_bucket_array_size = 64;
+const size_t minimum_allowed_bucket_array_size = 16;
 const size_t scale_factor = 4;
 const size_t minimum_scale_down_threshold =
     scale_factor * (minimum_allowed_bucket_array_size);
@@ -1445,7 +1445,7 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
   }
 
   if (!chm) {
-    ccol_assert(false);
+    return NULL;
   }
 
   if (chm->impl_type == IMPL_SEPARATE_CHAINING) {

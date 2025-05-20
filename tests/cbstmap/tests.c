@@ -1197,9 +1197,8 @@ TEST(cbst_maps, get_elem_ref_missing_key) {
   int missing = 999;
   cmap_pair *out = NULL;
   REQUIRE_EQ(
-      cbmap_get_elem_ref(cbm,
-                         &(cmap_pair){.ptr = &missing, .size = sizeof(missing)},
-                         &out),
+      cbmap_get_elem_ref(
+          cbm, &(cmap_pair){.ptr = &missing, .size = sizeof(missing)}, &out),
       ccol_key_not_found);
   REQUIRE_EQ((void *)out, NULL);
 
@@ -1270,10 +1269,10 @@ TEST(cbst_maps, update_value_with_different_size) {
   // Insert with int value (4 bytes)
   int key = 7;
   int small_val = 42;
-  REQUIRE_EQ(
-      cbmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
-                        &(cmap_pair){.ptr = &small_val, .size = sizeof(small_val)}),
-      ccol_success);
+  REQUIRE_EQ(cbmap_insert_elem(
+                 cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                 &(cmap_pair){.ptr = &small_val, .size = sizeof(small_val)}),
+             ccol_success);
   REQUIRE_EQ(cbmap_elem_count(cbm), 1);
 
   int readback = 0;
@@ -1300,10 +1299,10 @@ TEST(cbst_maps, update_value_with_different_size) {
 
   // Re-insert again back to int size -- triggers realloc in the other direction
   small_val = 99;
-  REQUIRE_EQ(
-      cbmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
-                        &(cmap_pair){.ptr = &small_val, .size = sizeof(small_val)}),
-      ccol_key_already_present);
+  REQUIRE_EQ(cbmap_insert_elem(
+                 cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
+                 &(cmap_pair){.ptr = &small_val, .size = sizeof(small_val)}),
+             ccol_key_already_present);
   REQUIRE_EQ(cbmap_elem_count(cbm), 1);
 
   readback = 0;

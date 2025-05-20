@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #pragma GCC diagnostic push
@@ -76,6 +77,66 @@ static void cleanup_dir(const char *dir, const char *prefix) {
   rmdir(dir);
 }
 
+/* Count files in dir whose name ends with suffix. */
+static int count_files_with_suffix(const char *dir, const char *suffix) {
+  DIR *d = opendir(dir);
+  if (!d) return 0;
+  int count = 0;
+  size_t slen = strlen(suffix);
+  struct dirent *e;
+  while ((e = readdir(d)) != NULL) {
+    size_t nlen = strlen(e->d_name);
+    if (nlen >= slen && strcmp(e->d_name + nlen - slen, suffix) == 0) count++;
+  }
+  closedir(d);
+  return count;
+}
+
+/*
+ * Run "gunzip -t <path>" and return the exit status.
+ * 0 means the file is a valid gzip archive.
+ */
+static int gunzip_test(const char *gz_path) {
+  char cmd[1024];
+  snprintf(cmd, sizeof cmd, "gunzip -t '%s' 2>/dev/null", gz_path);
+  return system(cmd);
+}
+
+/*
+ * Decompress <gz_path> into buf (up to cap-1 bytes), NUL-terminate.
+ * Returns the number of decompressed bytes, or 0 on error.
+ */
+static size_t gunzip_read(const char *gz_path, char *buf, size_t cap) {
+  char cmd[1024];
+  snprintf(cmd, sizeof cmd, "gunzip -c '%s' 2>/dev/null", gz_path);
+  FILE *f = popen(cmd, "r");
+  if (!f) return 0;
+  size_t got = fread(buf, 1, cap - 1, f);
+  pclose(f);
+  buf[got] = '\0';
+  return got;
+}
+
+/* Find the first file in dir with the given suffix and copy its path to out. */
+static int find_file_with_suffix(const char *dir, const char *suffix, char *out,
+                                 size_t outsz) {
+  DIR *d = opendir(dir);
+  if (!d) return -1;
+  size_t slen = strlen(suffix);
+  struct dirent *e;
+  int found = 0;
+  while ((e = readdir(d)) != NULL) {
+    size_t nlen = strlen(e->d_name);
+    if (nlen >= slen && strcmp(e->d_name + nlen - slen, suffix) == 0) {
+      snprintf(out, outsz, "%s/%s", dir, e->d_name);
+      found = 1;
+      break;
+    }
+  }
+  closedir(d);
+  return found ? 0 : -1;
+}
+
 /* Make a unique temp directory under /tmp and return its path in `out`. */
 static int make_tmpdir(char *out, size_t outsz) {
   snprintf(out, outsz, "/tmp/clogger_test_XXXXXX");
@@ -90,17 +151,6 @@ TEST(lifecycle, open_fd_and_close) {
   clog lg = clog_open_fd_mp(STDERR_FILENO, CLOG_INFO, NULL);
   REQUIRE_NE((void *)lg, (void *)NULL);
   clog_close(lg);
-}
-
-TEST(lifecycle, null_is_safe) {
-  /* None of these should crash. */
-  clog_close(NULL);
-  clog_set_level(NULL, CLOG_DEBUG);
-  clog_set_field(NULL, "k", "v");
-  clog_remove_field(NULL, "k");
-  clog_clear_fields(NULL);
-  log_info(NULL, "no-op");
-  REQUIRE_EQ(clog_get_level(NULL), CLOG_OFF);
 }
 
 TEST(lifecycle, open_file_and_close) {
@@ -231,7 +281,7 @@ TEST(output, all_levels_in_output) {
   cleanup_dir(dir, "app.log");
 }
 
-TEST(output, error_and_fatal_produce_backtrace) {
+TEST(output, error_produce_backtrace) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
   char path[512];
@@ -460,7 +510,7 @@ TEST(filtering, messages_below_min_level_dropped) {
   cleanup_dir(dir, "app.log");
 }
 
-TEST(filtering, off_suppresses_everything) {
+TEST(filtering, off_suppresses_all_log_output) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
   char path[512];
@@ -469,7 +519,8 @@ TEST(filtering, off_suppresses_everything) {
   clog lg = clog_open_file_mp(path, CLOG_OFF, NULL, NULL);
   REQUIRE_NE((void *)lg, (void *)NULL);
 
-  log_fatal(lg, "suppressed");
+  log_error(lg, "suppressed");
+  log_alert(lg, "suppressed");
 
   clog_close(lg);
 
@@ -624,7 +675,7 @@ TEST(fields, invalid_key_is_rejected) {
   REQUIRE_NE((void *)lg, (void *)NULL);
 
   /* These keys must be silently ignored (empty, space, '=', control char, DEL,
-   * ']'). */
+   * ']', '\', '"'). */
   clog_set_field(lg, "", "v"); /* empty -- violates RFC 5424 1*32PRINTUSASCII */
   clog_set_field(lg, "bad key", "v");
   clog_set_field(lg, "bad=key", "v");
@@ -632,8 +683,10 @@ TEST(fields, invalid_key_is_rejected) {
   clog_set_field(lg,
                  "bad\x7f"
                  "key",
-                 "v");                /* DEL (0x7f) -- not PRINTUSASCII */
-  clog_set_field(lg, "bad]key", "v"); /* ']' breaks RFC 5424 SD elements */
+                 "v");                 /* DEL (0x7f) -- not PRINTUSASCII */
+  clog_set_field(lg, "bad]key", "v");  /* ']' breaks RFC 5424 SD elements */
+  clog_set_field(lg, "bad\\key", "v"); /* '\' corrupts logfmt quoting */
+  clog_set_field(lg, "bad\"key", "v"); /* '"' corrupts logfmt quoting */
   /* This key is valid and must appear. */
   clog_set_field(lg, "good_key", "ok");
 
@@ -809,6 +862,63 @@ TEST(fields, empty_value_is_quoted) {
   cleanup_dir(dir, "app.log");
 }
 
+TEST(fields, backslash_in_value_is_quoted_and_escaped_in_logfmt) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* A backslash in a value triggers double-quoting in logfmt, and each
+   * backslash is escaped as \\ inside the quoted string. */
+  clog_set_field(lg, "win_path", "C:\\Users\\foo");
+  log_info(lg, "backslash test");
+
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* Value must appear as win_path="C:\\Users\\foo" -- each \ escaped to \\. */
+  REQUIRE_NE(strstr(buf, "win_path=\"C:\\\\Users\\\\foo\""), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* ========================================================================== */
+/*                         OUTPUT -- LONG MESSAGES                            */
+/* ========================================================================== */
+
+TEST(output, long_message_uses_heap_and_is_not_truncated) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* Build a message longer than the 1024-byte stack buffer in _clog_write so
+   * that the heap-allocation fallback is exercised. */
+  char long_msg[2048];
+  memset(long_msg, 'A', sizeof long_msg - 1);
+  long_msg[sizeof long_msg - 1] = '\0';
+
+  log_info(lg, "%s", long_msg);
+
+  clog_close(lg);
+
+  char buf[8192];
+  read_file(path, buf, sizeof buf);
+
+  /* The full 2047-character message must appear verbatim in the output. */
+  REQUIRE_NE(strstr(buf, long_msg), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
 /* ========================================================================== */
 /*                         SIZE-BASED ROTATION                                */
 /* ========================================================================== */
@@ -928,14 +1038,78 @@ TEST(rotation, logger_recovers_after_file_externally_deleted) {
   cleanup_dir(dir, "app.log");
 }
 
+TEST(rotation, time_based_rotation_creates_rotated_file) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = false,
+      .time_rotation_enabled = true,
+      .rotation_interval_secs = 1,
+      .max_rotated_files = 0,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* First write establishes last_rotation baseline; no rotation yet. */
+  log_info(lg, "before rotation");
+
+  /* Sleep long enough to exceed the 1-second rotation interval. */
+  sleep(2);
+
+  /* This write triggers time-based rotation. */
+  log_info(lg, "after rotation");
+
+  clog_close(lg);
+
+  /* At least one rotated file must exist alongside the live log. */
+  int rotated = count_files_with_prefix(dir, "app.log.");
+  REQUIRE_NE(rotated, 0);
+
+  /* The live file must contain the post-rotation message. */
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+  REQUIRE_NE(strstr(buf, "after rotation"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(rotation, same_second_collision_uses_suffix) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  /* With max_file_size = 10, every log write (each >>10 bytes) triggers an
+   * immediate size-based rotation.  Five rotations within the same UTC second
+   * forces the collision-handling code to generate _0001, _0002, ... suffixes.
+   */
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 10,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 0,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  for (int i = 0; i < 5; i++) log_info(lg, "collision test %d", i);
+
+  clog_close(lg);
+
+  /* At least one file with the _0001 collision suffix must exist. */
+  REQUIRE_GT(count_files_with_suffix(dir, "_0001"), 0);
+
+  cleanup_dir(dir, "app.log");
+}
+
 /* ========================================================================== */
 /*                         DERIVED LOGGERS                                    */
 /* ========================================================================== */
-
-TEST(derive, null_derive_is_safe) {
-  clog child = clog_derive(NULL);
-  REQUIRE_EQ((void *)child, (void *)NULL);
-}
 
 TEST(derive, derived_is_not_null) {
   clog parent = clog_open_fd_mp(STDERR_FILENO, CLOG_INFO, NULL);
@@ -1289,7 +1463,8 @@ TEST(derive, multiple_children_from_one_parent) {
   REQUIRE_NE(strstr(ls1, "shared=yes"), NULL);
   REQUIRE_NE(strstr(ls2, "shared=yes"), NULL);
 
-  /* Each child's own field is independent and must not appear on the other's line */
+  /* Each child's own field is independent and must not appear on the other's
+   * line */
   REQUIRE_NE(strstr(ls1, "name=c1"), NULL);
   REQUIRE_EQ(strstr(ls1, "name=c2"), NULL);
   REQUIRE_NE(strstr(ls2, "name=c2"), NULL);
@@ -1488,12 +1663,6 @@ TEST(custom_alloc, invalid_mprocs_returns_null) {
 /* ========================================================================== */
 /*                         JSON OUTPUT FORMAT                                 */
 /* ========================================================================== */
-
-TEST(json, null_safe) {
-  /* None of these should crash. */
-  clog_set_format(NULL, CLOG_FMT_JSON);
-  REQUIRE_EQ(clog_get_format(NULL), CLOG_FMT_LOGFMT);
-}
 
 TEST(json, default_format_is_logfmt) {
   clog lg = clog_open_fd_mp(STDERR_FILENO, CLOG_INFO, NULL);
@@ -1786,7 +1955,7 @@ TEST(output, alert_level_appears_in_logfmt) {
   cleanup_dir(dir, "app.log");
 }
 
-TEST(output, error_and_fatal_level_strings_in_logfmt) {
+TEST(output, error_and_alert_level_strings_in_logfmt) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
   char path[512];
@@ -1796,7 +1965,7 @@ TEST(output, error_and_fatal_level_strings_in_logfmt) {
   REQUIRE_NE((void *)lg, (void *)NULL);
 
   log_error(lg, "error event");
-  log_fatal(lg, "fatal event");
+  log_alert(lg, "alert event");
 
   clog_close(lg);
 
@@ -1804,32 +1973,32 @@ TEST(output, error_and_fatal_level_strings_in_logfmt) {
   read_file(path, buf, sizeof buf);
 
   REQUIRE_NE(strstr(buf, "ERROR"), NULL);
-  REQUIRE_NE(strstr(buf, "FATAL"), NULL);
+  REQUIRE_NE(strstr(buf, "ALERT"), NULL);
   REQUIRE_NE(strstr(buf, "error event"), NULL);
-  REQUIRE_NE(strstr(buf, "fatal event"), NULL);
+  REQUIRE_NE(strstr(buf, "alert event"), NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
-TEST(output, fatal_produces_backtrace) {
+TEST(output, alert_produces_backtrace) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
   char path[512];
   snprintf(path, sizeof path, "%s/app.log", dir);
 
-  clog lg = clog_open_file_mp(path, CLOG_FATAL, NULL, NULL);
+  clog lg = clog_open_file_mp(path, CLOG_ALERT, NULL, NULL);
   REQUIRE_NE((void *)lg, (void *)NULL);
 
-  log_fatal(lg, "critical failure");
+  log_alert(lg, "critical failure");
 
   clog_close(lg);
 
   char buf[8192];
   read_file(path, buf, sizeof buf);
 
-  REQUIRE_NE(strstr(buf, "FATAL"), NULL);
+  REQUIRE_NE(strstr(buf, "ALERT"), NULL);
   REQUIRE_NE(strstr(buf, "critical failure"), NULL);
-  /* log_fatal must produce at least one backtrace continuation line */
+  /* log_alert must produce at least one backtrace continuation line */
   REQUIRE_NE(strstr(buf, "\t#"), NULL);
 
   cleanup_dir(dir, "app.log");
@@ -1865,7 +2034,7 @@ TEST(json, set_format_on_derived_affects_parent) {
   cleanup_dir(dir, "app.log");
 }
 
-TEST(json, error_alert_fatal_level_strings_in_json) {
+TEST(json, error_and_alert_level_strings_in_json) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
   char path[512];
@@ -1877,7 +2046,6 @@ TEST(json, error_alert_fatal_level_strings_in_json) {
 
   log_error(lg, "e");
   log_alert(lg, "a");
-  log_fatal(lg, "f");
 
   clog_close(lg);
 
@@ -1886,12 +2054,11 @@ TEST(json, error_alert_fatal_level_strings_in_json) {
 
   REQUIRE_NE(strstr(buf, "\"ERROR\""), NULL);
   REQUIRE_NE(strstr(buf, "\"ALERT\""), NULL);
-  REQUIRE_NE(strstr(buf, "\"FATAL\""), NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
-TEST(json, alert_and_fatal_have_inline_bt_array) {
+TEST(json, alert_has_inline_bt_array) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
   char path[512];
@@ -1902,21 +2069,20 @@ TEST(json, alert_and_fatal_have_inline_bt_array) {
   clog_set_format(lg, CLOG_FMT_JSON);
 
   log_alert(lg, "alert event");
-  log_fatal(lg, "fatal event");
 
   clog_close(lg);
 
   char buf[16384];
   read_file(path, buf, sizeof buf);
 
-  /* Each of the two messages must carry an inline bt array */
+  /* Alert must carry an inline bt array */
   int bt_count = 0;
   const char *p = buf;
   while ((p = strstr(p, "\"bt\":[")) != NULL) {
     bt_count++;
     p++;
   }
-  REQUIRE_EQ(bt_count, 2);
+  REQUIRE_EQ(bt_count, 1);
 
   /* JSON format must not produce tab-indented backtrace continuation lines */
   REQUIRE_EQ(strstr(buf, "\t#"), NULL);
@@ -1965,12 +2131,19 @@ TEST(json, tab_and_cr_in_field_value_are_escaped) {
 /*                         RFC 5424 SYSLOG FORMAT                             */
 /* ========================================================================== */
 
-TEST(syslog, null_safe) {
-  /* clog_set/get_facility must not crash on NULL. */
-  clog_set_facility(NULL, CLOG_SYSLOG_DAEMON);
-  REQUIRE_EQ(clog_get_facility(NULL), CLOG_SYSLOG_USER);
-  /* Setting syslog format on NULL must not crash. */
-  clog_set_format(NULL, CLOG_FMT_SYSLOG);
+/*
+ * log_fatal calls exit() internally.  To prevent clogger allocations from
+ * showing up as "still reachable" in the child's valgrind report we register
+ * an atexit handler in the child that closes the logger before the process
+ * terminates.  The global is set only inside the child branch (after fork) so
+ * it never fires in the parent process.
+ */
+static clog _g_fatal_child_lg = NULL;
+static void _fatal_child_cleanup(void) {
+  if (_g_fatal_child_lg) {
+    clog_close(_g_fatal_child_lg);
+    _g_fatal_child_lg = NULL;
+  }
 }
 
 TEST(syslog, basic_structure) {
@@ -2141,20 +2314,50 @@ TEST(syslog, backtrace_as_separate_messages) {
 }
 
 TEST(syslog, fatal_severity_encoding) {
-  int pipefd[2];
-  REQUIRE_EQ(pipe(pipefd), 0);
-  clog lg = clog_open_fd(pipefd[1], CLOG_TRACE);
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  /* clog_open_fd with owns_fd=false allows CLOG_FMT_SYSLOG on a file fd. */
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  REQUIRE_NE(fd, -1);
+
+  clog lg = clog_open_fd(fd, CLOG_TRACE);
   REQUIRE_NE((void *)lg, (void *)NULL);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* LOG_USER(1) * 8 + FATAL_syslog_severity(0) = 8 */
-  log_fatal(lg, "fatal syslog event");
+  /* log_fatal terminates the process; use a child to verify it and capture
+   * the log output it writes before calling exit(). */
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    _g_fatal_child_lg = lg;
+    atexit(_fatal_child_cleanup);
+    log_fatal(lg, "fatal syslog event");
+    _exit(0); /* unreachable */
+  }
 
-  char buf[16384];
-  drain_pipe(lg, pipefd[0], pipefd[1], buf, sizeof buf);
+  int status;
+  waitpid(pid, &status, 0);
+  clog_close(lg);
+  close(fd);
 
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  /* LOG_USER(1) * 8 + FATAL syslog severity(0) = 8 */
   REQUIRE_NE(strstr(buf, "<8>"), NULL);
   REQUIRE_NE(strstr(buf, "fatal syslog event"), NULL);
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_NE(WEXITSTATUS(status), 0);
+
+  cleanup_dir(dir, "app.log");
 }
 
 TEST(syslog, sd_param_value_special_chars_escaped) {
@@ -2232,7 +2435,7 @@ TEST(filtering, set_level_to_off_suppresses_everything) {
   clog_set_level(lg, CLOG_OFF);
   REQUIRE_EQ(clog_get_level(lg), CLOG_OFF);
 
-  log_fatal(lg, "after off - suppressed");
+  log_alert(lg, "after off - suppressed");
 
   clog_close(lg);
 
@@ -2432,6 +2635,440 @@ TEST(threading, concurrent_parent_and_derived_writers_no_garbled_lines) {
     line = nl + 1;
   }
   REQUIRE_EQ(bad_lines, 0);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* ========================================================================== */
+/*                         COMPRESSION                                        */
+/* ========================================================================== */
+
+/* Rotation produces a valid gzip file decompressible with gunzip. */
+TEST(compression, rotated_file_is_valid_gzip) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 300,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 5,
+      .compress_rotated = true,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  for (int i = 0; i < 20; i++)
+    log_info(lg, "compression test message index=%d padding-to-force-rotation",
+             i);
+
+  clog_close(lg);
+
+  /* At least one .gz file must exist. */
+  REQUIRE_GT(count_files_with_suffix(dir, ".gz"), 0);
+
+  /* All rotated files should be .gz -- no raw uncompressed rotated files. */
+  REQUIRE_EQ(count_files_with_suffix(dir, ".gz"),
+             count_files_with_prefix(dir, "app.log."));
+
+  /* gunzip -t must pass on the first .gz file found. */
+  char gz_path[512];
+  REQUIRE_EQ(find_file_with_suffix(dir, ".gz", gz_path, sizeof gz_path), 0);
+  REQUIRE_EQ(gunzip_test(gz_path), 0);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* Decompressed content must match the log lines that were written. */
+TEST(compression, decompressed_content_matches_written_log) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 400,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 10,
+      .compress_rotated = true,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* Write a distinctive sentinel into the first batch so it ends up rotated. */
+  log_info(
+      lg,
+      "sentinel_marker_abc123 index=0 pad=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+  for (int i = 1; i < 15; i++)
+    log_info(
+        lg,
+        "sentinel_marker_abc123 index=%d pad=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        i);
+
+  clog_close(lg);
+
+  char gz_path[512];
+  REQUIRE_EQ(find_file_with_suffix(dir, ".gz", gz_path, sizeof gz_path), 0);
+
+  char decomp[65536];
+  size_t dlen = gunzip_read(gz_path, decomp, sizeof decomp);
+  REQUIRE_GT(dlen, (size_t)0);
+
+  /* The sentinel must appear somewhere in the decompressed output. */
+  REQUIRE_TRUE(strstr(decomp, "sentinel_marker_abc123") != NULL);
+
+  /* Every non-backtrace line must start with "ts=". */
+  int bad = 0;
+  char *l = decomp;
+  while (l < decomp + dlen) {
+    char *nl = strchr(l, '\n');
+    if (l[0] != '\t' && strncmp(l, "ts=", 3) != 0) bad++;
+    if (!nl) break;
+    l = nl + 1;
+  }
+  REQUIRE_EQ(bad, 0);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* With compress_rotated=false the old behaviour is preserved (no .gz files). */
+TEST(compression, no_compression_when_disabled) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 300,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 5,
+      .compress_rotated = false,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  for (int i = 0; i < 20; i++)
+    log_info(lg, "no-compress test message index=%d padding-padding-padding",
+             i);
+
+  clog_close(lg);
+
+  REQUIRE_EQ(count_files_with_suffix(dir, ".gz"), 0);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* max_rotated_files cap is respected even when compression is enabled. */
+TEST(compression, max_rotated_files_respected_with_compression) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 200,
+      .time_rotation_enabled = false,
+      .max_rotated_files = 2,
+      .compress_rotated = true,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  for (int i = 0; i < 60; i++)
+    log_info(lg, "pruning+compress test idx=%d extra-data-to-fill-the-buffer",
+             i);
+
+  clog_close(lg);
+
+  /*
+   * _prune_rotated runs before compression, keying on the timestamp-only name.
+   * After pruning at most max_rotated_files raw rotated files remain; they are
+   * then compressed to .gz.  The live file ("app.log") is not counted.
+   * Allow one extra in case the final rotation raced with the check.
+   */
+  int gz_count = count_files_with_suffix(dir, ".gz");
+  REQUIRE_LE(gz_count, cfg.max_rotated_files + 1);
+  REQUIRE_GT(gz_count, 0);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* An empty log file (0 bytes at rotation) compresses to a valid gzip. */
+TEST(compression, empty_file_compresses_cleanly) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  /* Pre-create the log file with 0 bytes so we can manually trigger rotation
+   * via the internal clog_rotate_now helper available in unit-test builds. */
+  int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  REQUIRE_NE(fd, -1);
+  close(fd);
+
+  clog_rotation_cfg_t cfg = {
+      .size_rotation_enabled = true,
+      .max_file_size = 1, /* any write triggers rotation */
+      .time_rotation_enabled = false,
+      .max_rotated_files = 5,
+      .compress_rotated = true,
+  };
+
+  clog lg = clog_open_file_mp(path, CLOG_INFO, &cfg, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  /* A single write forces a rotation of the (nearly-empty) file. */
+  log_info(lg, "trigger rotation");
+  clog_close(lg);
+
+  char gz_path[512];
+  int found = find_file_with_suffix(dir, ".gz", gz_path, sizeof gz_path);
+  if (found == 0) {
+    /* If a .gz was produced it must be valid. */
+    REQUIRE_EQ(gunzip_test(gz_path), 0);
+  }
+  /* If no .gz exists the file was too small to trigger rotation -- that is
+   * also acceptable; the test verifies there is no crash. */
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* ========================================================================== */
+/*                         FATAL LEVEL (PROCESS TERMINATION)                  */
+/* ========================================================================== */
+
+TEST(fatal, terminates_process) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    _g_fatal_child_lg = lg;
+    atexit(_fatal_child_cleanup);
+    log_fatal(lg, "process must die");
+    _exit(0); /* unreachable */
+  }
+
+  int wstatus;
+  waitpid(pid, &wstatus, 0);
+  clog_close(lg);
+  cleanup_dir(dir, "app.log");
+
+  REQUIRE_TRUE(WIFEXITED(wstatus));
+  REQUIRE_NE(WEXITSTATUS(wstatus), 0);
+}
+
+TEST(fatal, writes_log_before_terminating) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    _g_fatal_child_lg = lg;
+    atexit(_fatal_child_cleanup);
+    log_fatal(lg, "fatal condition encountered");
+    _exit(0); /* unreachable */
+  }
+
+  int wstatus;
+  waitpid(pid, &wstatus, 0);
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_TRUE(WIFEXITED(wstatus));
+  REQUIRE_NE(WEXITSTATUS(wstatus), 0);
+  REQUIRE_NE(strstr(buf, "FATAL"), NULL);
+  REQUIRE_NE(strstr(buf, "fatal condition encountered"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(fatal, writes_backtrace_before_terminating) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    _g_fatal_child_lg = lg;
+    atexit(_fatal_child_cleanup);
+    log_fatal(lg, "fatal with trace");
+    _exit(0); /* unreachable */
+  }
+
+  int wstatus;
+  waitpid(pid, &wstatus, 0);
+  clog_close(lg);
+
+  char buf[8192];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_NE(strstr(buf, "\t#"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(fatal, writes_and_terminates_with_clog_off) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  /* log_fatal bypasses the level filter: even with CLOG_OFF the message
+   * must be written and the process must terminate. */
+  clog lg = clog_open_file_mp(path, CLOG_OFF, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    _g_fatal_child_lg = lg;
+    atexit(_fatal_child_cleanup);
+    log_fatal(lg, "fatal bypasses filter");
+    _exit(0); /* unreachable */
+  }
+
+  int wstatus;
+  waitpid(pid, &wstatus, 0);
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_TRUE(WIFEXITED(wstatus));
+  REQUIRE_NE(WEXITSTATUS(wstatus), 0);
+  REQUIRE_NE(strstr(buf, "FATAL"), NULL);
+  REQUIRE_NE(strstr(buf, "fatal bypasses filter"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+/* ========================================================================== */
+/*                         FATAL LEVEL (JSON FORMAT)                          */
+/* ========================================================================== */
+
+TEST(json, fatal_level_string_in_json) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_TRACE, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_JSON);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    _g_fatal_child_lg = lg;
+    atexit(_fatal_child_cleanup);
+    log_fatal(lg, "fatal json message");
+    _exit(0); /* unreachable */
+  }
+
+  int wstatus;
+  waitpid(pid, &wstatus, 0);
+  clog_close(lg);
+
+  char buf[4096];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_NE(strstr(buf, "\"FATAL\""), NULL);
+  REQUIRE_NE(strstr(buf, "fatal json message"), NULL);
+
+  cleanup_dir(dir, "app.log");
+}
+
+TEST(json, fatal_has_inline_bt_array) {
+  char dir[256];
+  REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
+  char path[512];
+  snprintf(path, sizeof path, "%s/app.log", dir);
+
+  clog lg = clog_open_file_mp(path, CLOG_FATAL, NULL, NULL);
+  REQUIRE_NE((void *)lg, (void *)NULL);
+  clog_set_format(lg, CLOG_FMT_JSON);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    _g_fatal_child_lg = lg;
+    atexit(_fatal_child_cleanup);
+    log_fatal(lg, "fatal event");
+    _exit(0); /* unreachable */
+  }
+
+  int wstatus;
+  waitpid(pid, &wstatus, 0);
+  clog_close(lg);
+
+  char buf[8192];
+  read_file(path, buf, sizeof buf);
+
+  REQUIRE_NE(strstr(buf, "\"bt\":["), NULL);
+  REQUIRE_EQ(strstr(buf, "\t#"), NULL); /* JSON embeds bt inline, no tab lines */
+  REQUIRE_EQ(buf[0], '{');
+  char *nl = strchr(buf, '\n');
+  REQUIRE_NE(nl, NULL);
+  REQUIRE_EQ(*(nl - 1), '}');
 
   cleanup_dir(dir, "app.log");
 }

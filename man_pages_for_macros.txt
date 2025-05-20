@@ -281,6 +281,45 @@ EXAMPLES
 SEE ALSO
        cvector_sort_with_comparison_proc
 
+------------------------------------------------------------------------------
+NAME
+       cvec_find - find the first occurrence of an element by value (type-safe)
+
+SYNOPSIS
+       #include <cvector.h>
+
+       size_t idx = cvec_find(v, elem);
+
+DESCRIPTION
+       Type-safe wrapper for cvector_find() that accepts a value (including
+       rvalues and literals) and compares using memcmp (byte-wise equality).
+       Use cvector_find() directly when a custom comparator is needed.
+
+PARAMETERS
+       v     Vector to search
+       elem  Element value to search for (rvalue or lvalue)
+
+RETURN VALUE
+       Zero-based index of the first matching element.
+       ccol_invalid_size if no match is found.
+
+NOTES
+       O(n) complexity
+       Uses memcmp for comparison (byte-wise equality)
+       Structs with padding bytes may not compare correctly
+
+EXAMPLES
+       cvec_construct(vec, int);
+       cvec_push_rvalue(vec, 10);
+       cvec_push_rvalue(vec, 20);
+       cvec_push_rvalue(vec, 30);
+       size_t idx = cvec_find(vec, 20);   // idx == 1
+       size_t nf  = cvec_find(vec, 99);   // nf  == ccol_invalid_size
+       cvec_destroy(vec);
+
+SEE ALSO
+       cvector_find
+
 ================================================================================
                         CSORT.H - SORTING LIBRARY
 ================================================================================
@@ -422,7 +461,7 @@ PARAMETERS
 NOTES
        Terminates program on allocation failure
        Creates hidden type marker variables for type safety
-       Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (64) buckets
+       Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
        Uses default memory management and hashing
 
 EXAMPLES
@@ -1089,13 +1128,13 @@ DESCRIPTION
        Constructs a ccol_selectable tagged-union value of type ccol_selectable_circq
        wrapping the given circular_queue pointer with the specified direction.
 
-         ccol_select_read  — wait for at least one message to arrive (read-wait)
-         ccol_select_write — wait until the queue has room for a send (write-wait)
+         ccol_select_read  -- wait for at least one message to arrive (read-wait)
+         ccol_select_write -- wait until the queue has room for a send (write-wait)
 
        This is a macro that expands to a compound literal; it has no run-time
        overhead beyond loading the pointer.
 
-       For write-direction wins, ccol_select() leaves buf untouched — no message
+       For write-direction wins, ccol_select() leaves buf untouched -- no message
        is consumed.  The caller must subsequently call circq_try_send_zc() since
        the available slot is not reserved (TOCTOU, same as POSIX select(2)).
 
@@ -1140,8 +1179,8 @@ DESCRIPTION
        Constructs a ccol_selectable tagged-union value of type ccol_selectable_dynq
        wrapping the given dynamic_queue pointer with the specified direction.
 
-         ccol_select_read  — wait for at least one message to arrive (read-wait)
-         ccol_select_write — wait until sending is enabled (!writing_disabled)
+         ccol_select_read  -- wait for at least one message to arrive (read-wait)
+         ccol_select_write -- wait until sending is enabled (!writing_disabled)
 
        Because a dynamic_queue is unbounded, it is always considered writable as
        long as writing is not disabled.  ccol_select_write on a dynamic_queue is
@@ -1185,10 +1224,10 @@ DESCRIPTION
        thread's ID and the requested direction to pick the correct internal
        circular queue:
 
-         ccol_select_read:  owner ← workers_to_owner_cq  (same as chan_recv_zc)
-                          worker ← owner_to_workers_cq
-         ccol_select_write: owner → owner_to_workers_cq  (same as chan_send_zc)
-                          worker → workers_to_owner_cq
+         ccol_select_read:  owner <- workers_to_owner_cq  (same as chan_recv_zc)
+                          worker <- owner_to_workers_cq
+         ccol_select_write: owner -> owner_to_workers_cq  (same as chan_send_zc)
+                          worker -> workers_to_owner_cq
 
        Direction is resolved once, at the point this macro is evaluated.  If
        the calling thread's role can change, reconstruct the selectable before
@@ -1235,9 +1274,9 @@ DESCRIPTION
        Constructs a ccol_selectable tagged-union value of type ccol_selectable_fd
        wrapping the given file descriptor with the specified I/O direction.
 
-         ccol_select_read  — wake when the fd becomes readable (data available or
+         ccol_select_read  -- wake when the fd becomes readable (data available or
                             EOF / error condition)
-         ccol_select_write — wake when the fd becomes writable (send buffer has room)
+         ccol_select_write -- wake when the fd becomes writable (send buffer has room)
 
        Both macros expand to compound literals; they have no run-time overhead.
 
@@ -1259,7 +1298,7 @@ DESCRIPTION
        of buf->data and must call free() on it.  EOF yields buf->data = NULL,
        buf->size = 0.  This is the same ownership model as queue read wins.
 
-       For ccol_select_write direction: buf is left untouched — ccol_select() only
+       For ccol_select_write direction: buf is left untouched -- ccol_select() only
        signals that the fd has room in its kernel send buffer.  The caller must
        subsequently call write(2) (symmetric with write-direction queue wins, where
        no queue slot is reserved).  max_bytes is ignored for write-direction fds.
@@ -1315,7 +1354,7 @@ EXAMPLES
            selectable_from_circq(q, ccol_select_read),
            selectable_from_fd(pfd[0], ccol_select_read));
        if (r == ccol_success && idx == 1) {
-           /* fd won — data already read into msg.data */
+           /* fd won -- data already read into msg.data */
            int val = *(int *)msg.data;
            free(msg.data);
        }
@@ -1528,7 +1567,7 @@ PARAMETERS
        initial  Initial content (C string or NULL for empty string)
 
 NOTES
-       Calls fatal_err() on allocation failure — use cstring_create() directly
+       Calls fatal_err() on allocation failure -- use cstring_create() directly
        if you need to handle errors gracefully
 
 EXAMPLES
@@ -1747,7 +1786,7 @@ DESCRIPTION
 
 PARAMETERS
        s     cstr to modify
-       pos   Insertion position (0 … length, inclusive)
+       pos   Insertion position (0 ... length, inclusive)
        str   C string to insert (must not be NULL)
 
 NOTES
@@ -2471,7 +2510,7 @@ PARAMETERS
        name     Cache variable (must have companion type variables in scope,
                 either from clru_construct / clru_declare or clru_redeclare).
                 When passing a cache across function boundaries, call
-                clru_redeclare() with a simple local alias first — the
+                clru_redeclare() with a simple local alias first -- the
                 val-type detection relies on the name##__clru_val_type_var
                 companion variable.
        key      Key expression. Must be an lvalue or a string literal; assign
@@ -2492,7 +2531,7 @@ RETURN VALUE
 
 EXAMPLES
        /* Non-string value type: val_ptr is double *, not cmap_pair *;
-          the value is copied directly into *val_ptr — no heap allocation */
+          the value is copied directly into *val_ptr -- no heap allocation */
        clru_construct(cache, int, double, 128, NULL, NULL, NULL);
 
        int k = 5;
@@ -2532,7 +2571,7 @@ WARNINGS
        copied directly into *val_ptr; the caller must NOT call free() on it.
 
 NOTES
-       Uses a GNU C statement expression ({...}) — requires GCC or Clang.
+       Uses a GNU C statement expression ({...}) -- requires GCC or Clang.
        The cache never exposes a pointer into its internal storage; the value
        is always copied out before the mutex is released.
 
@@ -2577,7 +2616,7 @@ EXAMPLES
        clru_destroy(cache);
 
 NOTES
-       Uses a GNU C statement expression ({...}) — requires GCC or Clang.
+       Uses a GNU C statement expression ({...}) -- requires GCC or Clang.
        Both key and val must be lvalues; the macro takes their addresses
        internally. Assign literals or expressions to named variables first.
 
@@ -2603,7 +2642,7 @@ SYNOPSIS
 DESCRIPTION
        Declares a cmap_iterator pointer named it bound to the type information
        of container.  The declaration attaches __attribute__((cleanup)) so the
-       iterator is destroyed automatically when it leaves scope — no explicit
+       iterator is destroyed automatically when it leaves scope -- no explicit
        ccol_iter_destroy() call is required.
 
        Also declares two hidden companion type variables that allow
@@ -2708,7 +2747,7 @@ PARAMETERS
                   argument; commas inside nested function calls are safe).
 
 NOTES
-       Do NOT modify the container inside the body — insertions and deletions
+       Do NOT modify the container inside the body -- insertions and deletions
        invalidate the iterator and produce undefined behaviour.
        Requires GCC or Clang (uses statement expressions and cleanup).
 
@@ -2832,7 +2871,7 @@ DESCRIPTION
        the iterator reaches NULL naturally.
 
        When using ccol_iter_declare(), RAII cleanup handles destruction
-       automatically on scope exit — ccol_iter_destroy() is only necessary
+       automatically on scope exit -- ccol_iter_destroy() is only necessary
        when you need to release resources before the end of the scope.
        Inside ccol_for_each(), the iterator is always destroyed on exit.
 
@@ -2865,13 +2904,13 @@ DESCRIPTION
        No backtrace is appended.
 
        The output format is:
-         ts=<ISO-8601-UTC> level=TRACE src=<file>:<line> func=<fn> [fields] msg=<text>
+         ts=<ISO-8601-UTC> level=TRACE proc=<name>(<pid>):<tname>(<tid>) src=<file>:<line> func=<fn> [fields] msg=<text>
 
-       The call is a no-op when lg is NULL or when the logger's current
-       minimum level is above CLOG_TRACE.
+       The call is a no-op when the logger's current minimum level is above
+       CLOG_TRACE.
 
 PARAMETERS
-       lg     Logger handle (clog). Passing NULL is a no-op.
+       lg     Logger handle (clog).
        fmt    printf-style format string.
        ...    Format arguments (optional).
 
@@ -2903,7 +2942,7 @@ DESCRIPTION
        source location capture. No backtrace is appended.
 
 PARAMETERS
-       lg     Logger handle (clog). Passing NULL is a no-op.
+       lg     Logger handle (clog).
        fmt    printf-style format string.
        ...    Format arguments (optional).
 
@@ -2930,7 +2969,7 @@ DESCRIPTION
        INFO is the recommended default minimum level for production services.
 
 PARAMETERS
-       lg     Logger handle (clog). Passing NULL is a no-op.
+       lg     Logger handle (clog).
        fmt    printf-style format string.
        ...    Format arguments (optional).
 
@@ -2959,7 +2998,7 @@ DESCRIPTION
        operation but merit attention.
 
 PARAMETERS
-       lg     Logger handle (clog). Passing NULL is a no-op.
+       lg     Logger handle (clog).
        fmt    printf-style format string.
        ...    Format arguments (optional).
 
@@ -3000,14 +3039,13 @@ DESCRIPTION
        omitted silently and the log line is emitted normally.
 
 PARAMETERS
-       lg     Logger handle (clog). Passing NULL is a no-op.
+       lg     Logger handle (clog).
        fmt    printf-style format string.
        ...    Format arguments (optional).
 
 NOTES
        log_error does NOT terminate the process. Use log_fatal if process
-       termination is desired (note: log_fatal also does not call abort() or
-       exit(); that is the caller's responsibility).
+       termination is desired.
        The backtrace write is also protected by the per-logger mutex, so
        the backtrace and the preceding log line always appear contiguously
        even under concurrent logging from multiple threads.
@@ -3037,7 +3075,7 @@ DESCRIPTION
          \t#0 ./myapp(handle+0x1a) [0x7f...]
          \t#1 ./myapp(main+0x42) [0x7f...]
 
-       ALERT maps to RFC 5424 syslog severity 1 ("alert — action must be taken
+       ALERT maps to RFC 5424 syslog severity 1 ("alert -- action must be taken
        immediately").  In CLOG_FMT_SYSLOG mode each backtrace frame is emitted
        as a separate syslog message using the same PRI and MSGID as the original
        record.
@@ -3047,12 +3085,13 @@ DESCRIPTION
        operator attention but do not necessarily terminate the process.
 
 PARAMETERS
-       lg     Logger handle (clog). Passing NULL is a no-op.
+       lg     Logger handle (clog).
        fmt    printf-style format string.
        ...    Format arguments (optional).
 
 NOTES
-       Like log_error, log_alert does NOT terminate the process.
+       Like log_error, log_alert does NOT terminate the process. Use
+       log_fatal if process termination is required.
        Backtrace requires the binary to be linked with -rdynamic.  On platforms
        without execinfo.h the backtrace lines are silently omitted.
        The backtrace write is protected by the per-logger mutex, so the
@@ -3067,7 +3106,8 @@ SEE ALSO
 
 ------------------------------------------------------------------------------
 NAME
-       log_fatal - emit a log line at FATAL level with a backtrace
+       log_fatal - emit a log line at FATAL level with a backtrace, then
+                   terminate the process
 
 SYNOPSIS
        #include <clogger.h>
@@ -3075,30 +3115,42 @@ SYNOPSIS
        log_fatal(clog lg, const char *fmt, ...);
 
 DESCRIPTION
-       Identical to log_error() except the severity level is CLOG_FATAL.
-       A stack backtrace is appended after the log line.
+       Writes a structured log line at CLOG_FATAL severity, appends a full
+       stack backtrace, then terminates the calling process by invoking
+       exit(EXIT_FAILURE).  This macro never returns to the caller.
 
-       This macro does NOT terminate the process. It is the caller's
-       responsibility to call abort(), exit(), or take other action after
-       logging the fatal condition.
+       Unlike all other log_* macros, log_fatal bypasses the logger's
+       min_level filter.  The log line and backtrace are always written,
+       regardless of the logger's current minimum level (including CLOG_OFF),
+       so the cause of process termination is never silently suppressed.
+
+       The log line and backtrace are written inside the per-logger mutex so
+       they always appear contiguously in the output, even when other threads
+       are logging concurrently.
+
+       In CLOG_FMT_JSON mode the backtrace is embedded as an inline "bt"
+       array inside the JSON object (same as log_error / log_alert).  In
+       logfmt and syslog modes it is emitted as tab-indented continuation
+       lines following the main record.
 
 PARAMETERS
-       lg     Logger handle (clog). Passing NULL is a no-op.
+       lg     Logger handle (clog).
        fmt    printf-style format string.
        ...    Format arguments (optional).
 
 NOTES
-       Typical usage pattern:
-         log_fatal(lg, "unrecoverable state: %s", reason);
-         abort();
+       Backtrace requires the binary to be linked with -rdynamic.  On
+       platforms without execinfo.h the backtrace lines are silently omitted
+       but the process still terminates.
 
-       The fact that log_fatal does not call abort() itself allows the caller
-       to perform any final cleanup (flush queues, release locks, write a
-       crash report) before terminating.
+       Because log_fatal terminates the process immediately, any logger
+       handles that have not been closed are not explicitly freed.  This is
+       intentional: on program exit the OS reclaims all resources.
 
 EXAMPLES
+       log_fatal(lg, "unrecoverable state: %s", reason);
+
        log_fatal(lg, "assertion failed: invariant violated at step %d", step);
-       abort();
 
 SEE ALSO
        log_alert, log_error, _clog_write, clog_open_fd_mp
@@ -3227,12 +3279,12 @@ DESCRIPTION
        of val derived at compile time via _Generic.
 
        Accepted C types for val:
-         bool                       → CJSON_BOOL
-         any integer type           → CJSON_INTEGER (stored as long long)
-         float / double             → CJSON_FLOAT  (stored as double)
-         char * / const char *      → CJSON_STRING  (strdup'd copy)
-         string literal ("...")     → CJSON_STRING
-         NULL or other pointer      → CJSON_NULL
+         bool                       -> CJSON_BOOL
+         any integer type           -> CJSON_INTEGER (stored as long long)
+         float / double             -> CJSON_FLOAT  (stored as double)
+         char * / const char *      -> CJSON_STRING  (strdup'd copy)
+         string literal ("...")     -> CJSON_STRING
+         NULL or other pointer      -> CJSON_NULL
 
        Signed integer types are sign-extended to long long correctly.
        Unsigned integers in the range [0, LLONG_MAX] round-trip faithfully.
@@ -3253,10 +3305,10 @@ PARAMETERS
 
 RETURN VALUE
        ccol_retval_t: ccol_success on success.
-       ccol_invalid_args  — empty path, parent type incompatible, array
+       ccol_invalid_args  -- empty path, parent type incompatible, array
                             index out of bounds, or bare '#' with no digits.
-       ccol_key_not_found — a non-leaf component on the path does not exist.
-       ccol_not_enough_memory — allocation failure.
+       ccol_key_not_found -- a non-leaf component on the path does not exist.
+       ccol_not_enough_memory -- allocation failure.
 
 NOTES
        Passing a bool literal requires an explicit cast: (bool)true.
@@ -3484,12 +3536,12 @@ DESCRIPTION
        by path.
 
        Accepted C types for val and the resulting CYAML node type:
-         bool                      → CYAML_BOOL
-         any integer type          → CYAML_INTEGER (stored as long long)
-         float / double            → CYAML_FLOAT (stored as double)
-         char * / const char *     → CYAML_STRING (heap copy made)
-         string literal ("...")    → CYAML_STRING
-         NULL or unrecognized ptr  → CYAML_NULL
+         bool                      -> CYAML_BOOL
+         any integer type          -> CYAML_INTEGER (stored as long long)
+         float / double            -> CYAML_FLOAT (stored as double)
+         char * / const char *     -> CYAML_STRING (heap copy made)
+         string literal ("...")    -> CYAML_STRING
+         NULL or unrecognized ptr  -> CYAML_NULL
 
        The leaf is created when absent; its immediate parent must already
        exist.  If the leaf exists its type is replaced unconditionally:
@@ -3574,6 +3626,638 @@ EXAMPLE
 SEE ALSO
        cyaml_get, cyaml_set, _cyaml_delete, cyaml_dictionary_remove,
        cyaml_list_remove
+
+================================================================================
+                     CTHREADPOOL.H - GENERIC THREAD POOL
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_destroy - destroy a thread pool and set pointer to NULL
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ctpool_destroy(pool);
+
+DESCRIPTION
+       Calls __ctpool_destroy() to drain or cancel all pending tasks, join all
+       worker threads, and free all associated resources. The pool pointer is
+       then set to NULL.
+
+       If neither ctpool_shutdown_drain() nor ctpool_shutdown_immediate() was
+       called beforehand, a drain shutdown is performed implicitly so that all
+       queued tasks complete before the pool is freed.
+
+PARAMETERS
+       pool  Thread pool variable to destroy (set to NULL after destruction).
+
+NOTES
+       Safe to call when pool is NULL (no-op).
+       Must be called only after all other threads have stopped submitting to
+       or querying the pool.
+
+SEE ALSO
+       ctpool_construct, __ctpool_destroy, ctpool_shutdown_drain,
+       ctpool_shutdown_immediate
+
+------------------------------------------------------------------------------
+NAME
+       ___ctpool_destroy - RAII cleanup function for ctpool
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ___ctpool_destroy(ctpool *pp);
+
+DESCRIPTION
+       Static inline function used as the cleanup callback in
+       ctpool_declare_scoped() and ctpool_construct_scoped(). If *pp is
+       non-NULL, calls __ctpool_destroy(*pp) and sets *pp to NULL.
+
+       This function is not intended to be called directly; use
+       ctpool_declare_scoped() or ctpool_construct_scoped() instead.
+
+PARAMETERS
+       pp  Pointer to a ctpool variable (must not be NULL).
+
+NOTES
+       Compatible with __attribute__((cleanup)) on GCC and Clang.
+
+SEE ALSO
+       ctpool_declare_scoped, ctpool_construct_scoped, ctpool_destroy
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_declare - declare an uninitialised thread pool variable
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ctpool_declare(name);
+
+DESCRIPTION
+       Expands to `ctpool name`. The variable is left uninitialized and must
+       be assigned via create_cthread_pool() or create_cthread_pool_mp()
+       before use.
+
+       Provided for naming-convention symmetry with other c_collections
+       modules.
+
+PARAMETERS
+       name  Variable name to declare.
+
+EXAMPLES
+       ctpool_declare(pool);
+       char *err = NULL;
+       pool = create_cthread_pool(4, 128, &err);
+       if (!pool) { fprintf(stderr, "%s\n", err); exit(1); }
+       /* ... submit tasks ... */
+       ctpool_shutdown_drain(pool);
+       ctpool_destroy(pool);
+
+SEE ALSO
+       ctpool_declare_scoped, ctpool_construct, create_cthread_pool
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_declare_scoped - declare a thread pool variable with automatic
+       RAII destruction
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ctpool_declare_scoped(name);
+
+DESCRIPTION
+       Like ctpool_declare() but attaches __attribute__((cleanup(___ctpool_destroy)))
+       so that __ctpool_destroy() is called automatically when the variable
+       leaves scope.
+
+       The variable must still be assigned before use. If it is still NULL
+       when it goes out of scope the cleanup is a no-op.
+
+PARAMETERS
+       name  Variable name to declare.
+
+NOTES
+       Requires GCC or Clang (uses __attribute__((cleanup))).
+       Perform an explicit shutdown before scope exit if drain behaviour is
+       important; the implicit shutdown inside __ctpool_destroy() drains the
+       queue, which may block for an unbounded time if tasks are long-running.
+
+EXAMPLES
+       {
+           ctpool_declare_scoped(pool);
+           pool = create_cthread_pool(4, 0, NULL);
+           ctpool_submit(pool, my_fn, my_arg, NULL);
+           ctpool_shutdown_drain(pool);
+       }  /* pool is destroyed automatically here */
+
+SEE ALSO
+       ctpool_declare, ctpool_construct_scoped, ___ctpool_destroy
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_construct - declare and initialise a thread pool in one step
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ctpool_construct(name, num_threads, queue_capacity);
+
+DESCRIPTION
+       Declares a ctpool variable named name, calls create_cthread_pool() to
+       initialise it, and calls fatal_err() if creation fails.
+
+       queue_capacity controls the queue mode:
+         0 or ccol_invalid_size  ->  unbounded queue (submit never blocks on
+                                      capacity; only failure is OOM)
+         N > 0                   ->  bounded queue of capacity N (submit blocks
+                                      when full; try_submit returns
+                                      ccol_container_full instead)
+
+PARAMETERS
+       name            Variable name for the pool handle.
+       num_threads     Number of worker threads to spawn (must be >= 1).
+       queue_capacity  Maximum pending tasks (0 or ccol_invalid_size for
+                       unbounded).
+
+NOTES
+       Calls fatal_err() on failure; use create_cthread_pool() directly when
+       graceful error handling is required.
+
+EXAMPLES
+       ctpool_construct(pool, 4, 256);
+       ctpool_submit(pool, my_fn, my_arg, NULL);
+       ctpool_wait(pool);
+       ctpool_shutdown_drain(pool);
+       ctpool_destroy(pool);
+
+       /* Unbounded queue */
+       ctpool_construct(pool2, 8, 0);
+       ctpool_submit(pool2, heavy_fn, NULL, NULL);
+       ctpool_shutdown_drain(pool2);
+       ctpool_destroy(pool2);
+
+SEE ALSO
+       ctpool_construct_scoped, ctpool_declare, create_cthread_pool,
+       ctpool_submit, ctpool_shutdown_drain, ctpool_destroy
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_construct_scoped - declare, initialise, and auto-destroy a
+       thread pool
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ctpool_construct_scoped(name, num_threads, queue_capacity);
+
+DESCRIPTION
+       Combines ctpool_declare_scoped() and the initialisation performed by
+       ctpool_construct() into a single statement. The pool is automatically
+       destroyed (with an implicit drain shutdown if one was not already
+       called) when the variable leaves scope.
+
+PARAMETERS
+       name            Variable name for the pool handle.
+       num_threads     Number of worker threads to spawn (must be >= 1).
+       queue_capacity  Maximum pending tasks (0 or ccol_invalid_size for
+                       unbounded).
+
+NOTES
+       Calls fatal_err() on failure; use create_cthread_pool() directly when
+       graceful error handling is required.
+       Requires GCC or Clang (uses __attribute__((cleanup))).
+       The implicit drain inside the destructor may block for a long time if
+       tasks are slow; call ctpool_shutdown_drain() or
+       ctpool_shutdown_immediate() explicitly before the end of scope when
+       bounded latency on exit matters.
+
+EXAMPLES
+       void process_batch(void) {
+           ctpool_construct_scoped(pool, 4, 0);
+           for (int i = 0; i < 1000; i++)
+               ctpool_submit(pool, work_fn, items[i], NULL);
+           ctpool_shutdown_drain(pool);
+       }  /* pool destroyed automatically */
+
+SEE ALSO
+       ctpool_construct, ctpool_declare_scoped, ___ctpool_destroy,
+       ctpool_shutdown_drain, ctpool_shutdown_immediate
+
+------------------------------------------------------------------------------
+NAME
+       CHTTP_NO_BODY - construct a chttp_request_body_t for a bodyless request
+
+SYNOPSIS
+       #include <chttp.h>
+
+       CHTTP_NO_BODY
+
+DESCRIPTION
+       Expands to a chttp_request_body_t initialiser with all fields zeroed.
+       Use for GET, HEAD, DELETE, and other methods that carry no body.
+
+EXAMPLES
+       chttp_request_t *req = chttp_request_new(CHTTP_GET, url, CHTTP_NO_BODY, NULL);
+
+SEE ALSO
+       CHTTP_BODY, CHTTP_JSON_BODY, CHTTP_TEXT_BODY, CHTTP_FORM_BODY
+
+------------------------------------------------------------------------------
+NAME
+       CHTTP_BODY - construct a chttp_request_body_t with an explicit
+       content type
+
+SYNOPSIS
+       #include <chttp.h>
+
+       CHTTP_BODY(data_ptr, data_len, content_type_str)
+
+DESCRIPTION
+       Expands to a chttp_request_body_t initialiser with the given raw data
+       pointer, length, and Content-Type string.
+
+       data_ptr       Pointer to the body bytes (not copied by the macro).
+       data_len       Length of the body in bytes.
+       content_type_str  Content-Type header value string.
+
+EXAMPLES
+       chttp_request_body_t body = CHTTP_BODY(buf, len, "application/octet-stream");
+
+SEE ALSO
+       CHTTP_JSON_BODY, CHTTP_TEXT_BODY, CHTTP_NO_BODY
+
+------------------------------------------------------------------------------
+NAME
+       CHTTP_JSON_BODY - construct a chttp_request_body_t for JSON content
+
+SYNOPSIS
+       #include <chttp.h>
+
+       CHTTP_JSON_BODY(d, n)
+
+DESCRIPTION
+       Expands to a chttp_request_body_t initialiser with Content-Type set to
+       "application/json", data pointer d, and byte length n.
+
+SEE ALSO
+       CHTTP_TEXT_BODY, CHTTP_BODY
+
+------------------------------------------------------------------------------
+NAME
+       CHTTP_TEXT_BODY - construct a chttp_request_body_t for plain-text
+       content
+
+SYNOPSIS
+       #include <chttp.h>
+
+       CHTTP_TEXT_BODY(d, n)
+
+DESCRIPTION
+       Expands to a chttp_request_body_t initialiser with Content-Type set to
+       "text/plain", data pointer d, and byte length n.
+
+SEE ALSO
+       CHTTP_JSON_BODY, CHTTP_BODY
+
+------------------------------------------------------------------------------
+NAME
+       CHTTP_FORM_BODY - construct a chttp_request_body_t for URL-encoded
+       form content
+
+SYNOPSIS
+       #include <chttp.h>
+
+       CHTTP_FORM_BODY(d, n)
+
+DESCRIPTION
+       Expands to a chttp_request_body_t initialiser with Content-Type set to
+       "application/x-www-form-urlencoded", data pointer d, and byte length n.
+       The caller is responsible for percent-encoding the key/value pairs
+       before passing them to this macro.
+
+SEE ALSO
+       CHTTP_JSON_BODY, CHTTP_BODY
+
+------------------------------------------------------------------------------
+NAME
+       CHTTP_TLS_DEFAULT - default TLS configuration initialiser
+
+SYNOPSIS
+       #include <chttp.h>
+
+       CHTTP_TLS_DEFAULT
+
+DESCRIPTION
+       Expands to a chttp_tls_config_t initialiser with:
+         verify_peer    = true
+         verify_host    = true
+         ca_bundle_path = NULL  (use system CA bundle)
+         cert_path      = NULL  (no client certificate)
+         key_path       = NULL  (no client key)
+
+EXAMPLES
+       chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+       tls.verify_peer = false;
+       chttpclient_set_tls(cli, &tls);
+
+SEE ALSO
+       chttpclient_set_tls
+
+------------------------------------------------------------------------------
+NAME
+       CHTTP_STATUS_* - HTTP status code constants
+
+SYNOPSIS
+       #include <chttp.h>
+
+       CHTTP_STATUS_CONTINUE               100
+       CHTTP_STATUS_SWITCHING_PROTOCOLS    101
+       CHTTP_STATUS_OK                     200
+       CHTTP_STATUS_CREATED                201
+       CHTTP_STATUS_ACCEPTED               202
+       CHTTP_STATUS_NO_CONTENT             204
+       CHTTP_STATUS_MOVED_PERMANENTLY      301
+       CHTTP_STATUS_FOUND                  302
+       CHTTP_STATUS_NOT_MODIFIED           304
+       CHTTP_STATUS_TEMPORARY_REDIRECT     307
+       CHTTP_STATUS_PERMANENT_REDIRECT     308
+       CHTTP_STATUS_BAD_REQUEST            400
+       CHTTP_STATUS_UNAUTHORIZED           401
+       CHTTP_STATUS_FORBIDDEN              403
+       CHTTP_STATUS_NOT_FOUND              404
+       CHTTP_STATUS_METHOD_NOT_ALLOWED     405
+       CHTTP_STATUS_CONFLICT               409
+       CHTTP_STATUS_GONE                   410
+       CHTTP_STATUS_UNPROCESSABLE_ENTITY   422
+       CHTTP_STATUS_TOO_MANY_REQUESTS      429
+       CHTTP_STATUS_INTERNAL_SERVER_ERROR  500
+       CHTTP_STATUS_NOT_IMPLEMENTED        501
+       CHTTP_STATUS_BAD_GATEWAY            502
+       CHTTP_STATUS_SERVICE_UNAVAILABLE    503
+       CHTTP_STATUS_GATEWAY_TIMEOUT        504
+
+DESCRIPTION
+       Integer constants for common HTTP status codes.  Prefer these names
+       over bare integer literals to improve readability.
+
+EXAMPLES
+       if (resp->status_code == CHTTP_STATUS_NOT_FOUND) { ... }
+
+SEE ALSO
+       chttpclient_do, chttpcli_response
+
+------------------------------------------------------------------------------
+NAME
+       chttpclient_destroy - destroy an HTTP client and NULL the handle
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttpclient_destroy(cli)
+
+DESCRIPTION
+       Macro wrapper around __chttpclient_destroy.  Waits for all in-flight
+       requests to complete, frees all resources, then sets cli to NULL.
+
+PARAMETERS
+       cli   An lvalue of type chttpcli.
+
+SEE ALSO
+       __chttpclient_destroy, ___chttpclient_destroy, create_chttpclient
+
+------------------------------------------------------------------------------
+NAME
+       chttpcli_declare - declare a chttpcli handle variable
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttpcli_declare(name)
+
+DESCRIPTION
+       Declares a chttpcli variable named name, initialised to NULL.  Equivalent
+       to writing "chttpcli name = NULL;".
+
+SEE ALSO
+       chttpcli_construct, chttpcli_declare_scoped
+
+------------------------------------------------------------------------------
+NAME
+       chttpcli_declare_scoped - declare a scoped chttpcli handle variable
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttpcli_declare_scoped(name)
+
+DESCRIPTION
+       Declares a chttpcli variable named name with automatic destruction via
+       GCC cleanup attribute.  ___chttpclient_destroy is called when name goes
+       out of scope regardless of how the scope is exited.
+
+       The variable is initialised to NULL.  Assigning NULL before scope exit
+       suppresses the cleanup call.
+
+SEE ALSO
+       chttpcli_construct_scoped, chttpcli_declare, ___chttpclient_destroy
+
+------------------------------------------------------------------------------
+NAME
+       chttpcli_construct - declare and initialise a chttpcli handle
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttpcli_construct(name)
+
+DESCRIPTION
+       Declares a chttpcli variable named name and immediately calls
+       create_chttpclient to initialise it.  On failure, calls fatal_err()
+       and does not return.
+
+PARAMETERS
+       name     Identifier for the new handle variable.
+
+SEE ALSO
+       chttpcli_construct_scoped, chttpcli_declare, create_chttpclient
+
+------------------------------------------------------------------------------
+NAME
+       chttpcli_construct_scoped - declare, initialise, and auto-destroy a
+       chttpcli handle
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttpcli_construct_scoped(name)
+
+DESCRIPTION
+       Combines chttpcli_declare_scoped and the create_chttpclient call:
+       declares name with GCC cleanup attribute, calls create_chttpclient,
+       and sets name.  The client is destroyed automatically when name leaves
+       scope.  On failure, calls fatal_err() and does not return.
+
+PARAMETERS
+       name     Identifier for the new handle variable.
+
+SEE ALSO
+       chttpcli_construct, chttpcli_declare_scoped, ___chttpclient_destroy
+
+------------------------------------------------------------------------------
+NAME
+       CHTTPSVR_QUEUE_UNBOUNDED - sentinel for an unbounded server worker queue
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+       cfg.worker_queue_capacity = CHTTPSVR_QUEUE_UNBOUNDED;
+
+DESCRIPTION
+       Expands to ((size_t)-1).  Assign to chttpsvr_config_t.worker_queue_capacity
+       to create the server's ctpool with no queue capacity limit (equivalent
+       to passing 0 to the ctpool API).
+
+       The default value of 0 for worker_queue_capacity instead maps to a
+       library-defined default of 256 * worker_thread_count queue slots.
+
+SEE ALSO
+       CHTTPSVR_CONFIG_DEFAULT, chttpsvr_start
+
+------------------------------------------------------------------------------
+NAME
+       CHTTPSVR_CONFIG_DEFAULT - zero-initialiser for chttpsvr_config_t with
+       sensible defaults
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+
+DESCRIPTION
+       Expands to a compound literal that initialises a chttpsvr_config_t
+       with the following defaults:
+
+         host                  = "0.0.0.0"
+         port                  = 8080
+         max_body_size         = 4 MiB
+         read_timeout_ms       = 0   (no timeout; use facil.io default ~40 s)
+         idle_timeout_ms       = 0   (0 = fall back to read_timeout_ms)
+         tls                   = NULL
+         worker_thread_count   = 0   (0 = CPU core count)
+         worker_queue_capacity = 0   (0 = 256 * worker_thread_count)
+
+       Use CHTTPSVR_QUEUE_UNBOUNDED for worker_queue_capacity to create a pool
+       with no capacity limit.
+
+       Override individual fields after applying the macro:
+
+         chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+         cfg.port = 9090;
+         cfg.worker_thread_count = 8;
+
+SEE ALSO
+       chttpsvr_start, CHTTPSVR_QUEUE_UNBOUNDED
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_declare - declare an uninitialised chttpsvr variable
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr_declare(name);
+
+DESCRIPTION
+       Declares a chttpsvr variable named name without initialising it.
+       Use create_chttpsvr to initialise it later.
+
+SEE ALSO
+       chttpsvr_construct, create_chttpsvr
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_declare_scoped - declare an uninitialised chttpsvr variable
+       with automatic destruction
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr_declare_scoped(name);
+
+DESCRIPTION
+       Like chttpsvr_declare but attaches a GCC cleanup attribute so that
+       __chttpsvr_destroy is called automatically when name leaves scope.
+
+SEE ALSO
+       chttpsvr_construct_scoped, chttpsvr_declare
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_construct - declare and initialise a chttpsvr handle
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr_construct(name, cl);
+
+DESCRIPTION
+       Declares a chttpsvr variable named name, calls create_chttpsvr(cl),
+       and assigns the result.  Calls fatal_err() and does not return on
+       failure.
+
+PARAMETERS
+       name     Identifier for the new handle variable.
+       cl       clog handle for this server's diagnostic output.
+
+SEE ALSO
+       chttpsvr_construct_scoped, chttpsvr_declare, create_chttpsvr
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_construct_scoped - declare, initialise, and auto-destroy a
+       chttpsvr handle
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr_construct_scoped(name, cl);
+
+DESCRIPTION
+       Combines chttpsvr_declare_scoped and a create_chttpsvr(cl) call.
+       Declares name with a GCC cleanup attribute so that __chttpsvr_destroy
+       is called automatically when name leaves scope.  Calls fatal_err() and
+       does not return on failure.
+
+PARAMETERS
+       name     Identifier for the new handle variable.
+       cl       clog handle for this server's diagnostic output.
+
+SEE ALSO
+       chttpsvr_construct, chttpsvr_declare_scoped, __chttpsvr_destroy
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_destroy - destroy a chttpsvr handle and NULL the pointer
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr_destroy(name);
+
+DESCRIPTION
+       Calls __chttpsvr_destroy on name and then sets name to NULL.
+
+       __chttpsvr_destroy drains all in-flight requests, and if this is the
+       last active server also stops the shared engine.  Call chttpsvr_stop
+       first to close the listener before calling this macro.
+
+SEE ALSO
+       __chttpsvr_destroy, chttpsvr_stop, chttpsvr_engine_wait
 
 ================================================================================
                               END OF MAN PAGES

@@ -9,7 +9,7 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 # -rdynamic exports the main binary's symbols to the dynamic linker so that
 # backtrace_symbols() can resolve function names inside the test binary.
-LFLAGS = -lpthread -rdynamic
+LFLAGS = -lpthread -lz -rdynamic
 
 build:
 	$(CC) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS)
@@ -18,7 +18,7 @@ test: build
 	./tests
 
 memtest: build
-	valgrind --leak-check=full -s --show-leak-kinds=all ./tests
+	valgrind --leak-check=full -s --show-leak-kinds=all --child-silent-after-fork=yes --error-exitcode=1 ./tests
 
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \

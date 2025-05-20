@@ -295,7 +295,18 @@ SOFTWARE.
  * zero indicates success.
  */
 typedef enum ccollections_retval_t {
-  ccol_unexpected_failure = -10, /**< Unexpected/unknown error */
+  ccol_unexpected_failure = -17, /**< Unexpected/unknown error */
+  ccol_http_connection_failed,   /**< TCP connection to the server could not be
+                                    established */
+  ccol_http_host_resolution_failed, /**< DNS or hostname resolution failed */
+  ccol_http_tls_handshake_failed, /**< TLS/SSL handshake with the server failed
+                                   */
+  ccol_http_tls_cert_verification_failed, /**< Peer TLS certificate could not be
+                                             verified */
+  ccol_http_too_many_redirects, /**< HTTP redirect limit was exceeded */
+  ccol_http_invalid_url, /**< URL is malformed or uses an unsupported scheme */
+  ccol_http_transfer_aborted, /**< Network send/receive error or streaming
+                                 callback aborted */
   ccol_msg_too_large,   /**< Message data exceeded the configured size limit */
   ccol_container_empty, /**< Container has no elements */
   ccol_container_full,  /**< Container at maximum capacity */
@@ -332,6 +343,20 @@ static inline const char *ccol_retval_to_str(ccol_retval_t r) {
       return "ccol_container_empty";
     case ccol_msg_too_large:
       return "ccol_msg_too_large";
+    case ccol_http_connection_failed:
+      return "ccol_http_connection_failed";
+    case ccol_http_host_resolution_failed:
+      return "ccol_http_host_resolution_failed";
+    case ccol_http_tls_handshake_failed:
+      return "ccol_http_tls_handshake_failed";
+    case ccol_http_tls_cert_verification_failed:
+      return "ccol_http_tls_cert_verification_failed";
+    case ccol_http_too_many_redirects:
+      return "ccol_http_too_many_redirects";
+    case ccol_http_invalid_url:
+      return "ccol_http_invalid_url";
+    case ccol_http_transfer_aborted:
+      return "ccol_http_transfer_aborted";
     case ccol_unexpected_failure:
       return "ccol_unexpected_failure";
     default:

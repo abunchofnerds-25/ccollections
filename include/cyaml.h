@@ -506,7 +506,7 @@ cyaml cyaml_clone(cyaml node);
  * @endcode
  */
 #define cyaml_declare_scoped(var_name) \
-  cyaml var_name _ccol_destructor(___cyaml_destroy)
+  cyaml var_name _ccol_destructor(___cyaml_destroy) = NULL
 
 /* ========================================================================== */
 /*                         DESTRUCTION                                        */

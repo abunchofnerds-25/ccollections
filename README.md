@@ -1,70 +1,83 @@
 # C Collections
 
-`c_collections` is a production-quality library of generic, type-safe data structures for C. It covers the full breadth of what most systems software needs: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, a structured logger, a JSON parser, and inter-thread communication primitives - all under a single, consistent API.
+`c_collections` is a library of generic data structures and utilities for C. It provides what the C standard library leaves out: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, inter-thread communication primitives, a thread pool, a structured logger, a JSON parser, a YAML parser, and an HTTP client -- all under one consistent API.
 
-Type safety is enforced at compile time using C11 `_Generic` selection, with no code-generation tools or external build-system steps required. Every module follows the same lifecycle conventions (`*_construct`, `*_destroy`, and `*_scoped` variants for automatic cleanup), so learning one container transfers immediately to the next.
+If you have used Python's `list` and `dict`, Java's `ArrayList` and `HashMap`, or C++'s `vector` and `map`, the containers here will feel familiar. The difference is that this library is plain C11 -- no code generators, no external build tools, no hidden runtime.
 
-The library targets contexts where correctness, performance, and predictable memory behaviour matter. It compiles clean under both GCC and Clang at `-Wall -Wextra -Werror`, and every module ships with a comprehensive test suite validated under Valgrind.
+Every module follows the same naming conventions (`*_construct`, `*_destroy`, and optional `*_scoped` variants for automatic cleanup), so once you have learned how one container works, the others follow naturally. The library compiles cleanly under GCC and Clang at `-Wall -Wextra -Werror`, and each module ships with a test suite that runs under Valgrind.
 
 ---
 
 ## Table of Contents
 
 1. [Rationale](#1-rationale)
-2. [Alternatives Considered](#2-alternatives-considered)
+2. [How Generic Containers Work in C](#2-how-generic-containers-work-in-c)
 3. [Design Principles](#3-design-principles)
-   - [Type Safety Without Code Generation](#31-type-safety-without-code-generation)
+   - [Compile-Time Type Dispatch](#31-compile-time-type-dispatch)
    - [Container Lifecycle Macros](#32-container-lifecycle-macros)
    - [Cross-Scope Type Recovery](#33-cross-scope-type-recovery)
    - [Error Handling](#34-error-handling)
 4. [Building and Linking](#4-building-and-linking)
 5. [Dynamic Array - `cvector`](#5-dynamic-array--cvector)
 6. [Dynamic String - `cstring`](#6-dynamic-string--cstring)
-7. [Sorting - `csort`](#7-sorting--csort)
-8. [Hash Map - `chashmap`](#8-hash-map--chashmap)
-9. [Ordered Map - `cbstmap`](#9-ordered-map--cbstmap)
-10. [Unified Iteration - `citerators`](#10-unified-iteration--citerators)
+7. [Hash Map - `chashmap`](#7-hash-map--chashmap)
+8. [Ordered Map - `cbstmap`](#8-ordered-map--cbstmap)
+9. [Unified Iteration - `citerators`](#9-unified-iteration--citerators)
+10. [Sorting - `csort`](#10-sorting--csort)
 11. [Memory Pools - `cmempool`](#11-memory-pools--cmempool)
 12. [Thread Communication - `cthreadcomm`](#12-thread-communication--cthreadcomm)
 13. [LRU Cache - `clrucache`](#13-lru-cache--clrucache)
 14. [Structured Logger - `clogger`](#14-structured-logger--clogger)
 15. [JSON Parser / Serializer / DOM - `cjson`](#15-json-parser--serializer--dom--cjson)
 16. [YAML Parser / Serializer / DOM - `cyaml`](#16-yaml-parser--serializer--dom--cyaml)
-17. [Thread Safety](#17-thread-safety)
-18. [Custom Memory Management](#18-custom-memory-management)
-19. [License](#19-license)
+17. [Thread Pool - `cthreadpool`](#17-thread-pool--cthreadpool)
+18. [HTTP Client - `chttpclient`](#18-http-client--chttpclient)
+19. [HTTP Server - `chttpserver`](#19-http-server--chttpserver)
+20. [Thread Safety](#20-thread-safety)
+21. [Custom Memory Management](#21-custom-memory-management)
+22. [License](#22-license)
 
 ---
 
 ## 1. Rationale
 
-Writing generic data structures in C is inherently difficult. The language provides no templates, no operator overloading, and no built-in reflection. Each of the common responses to this problem (`void *` interfaces, preprocessor token-pasting, and external code-generation tools) carry a significant cost: `void *` APIs discard type information at the call site and push the burden of correctness entirely onto the caller; token-pasting macros produce opaque, hard-to-debug expansions; code generators add build-system complexity and break the edit-compile-run cycle.
+C gives you direct control over memory, near-zero runtime overhead, and programs that run on everything from microcontrollers to supercomputers. What it does not give you is a standard library of generic containers.
 
-This library takes a different approach. It uses the C11 `_Generic` selection expression to perform type introspection directly at the call site, at compile time, without generating new code or introducing new tools into the build. The result is a set of containers whose public interfaces are type-aware, whose error handling is explicit, and whose memory behaviour is predictable and auditable.
+In Python, `scores = []` gives you a resizable list that grows on demand. In Java, `new ArrayList<Integer>()` gives you a typed dynamic array. In C, the closest built-in equivalent is a fixed-size array whose size you must know at compile time. Growing it means calling `realloc` yourself. A hash map means implementing one from scratch or tracking down a library. This is a valuable learning exercise, but in a real program you usually want to spend your energy on the problem you are actually solving, not on reimplementing containers you have already studied.
 
-The library is not a minimalist experiment. It covers the data structures needed in the majority of real systems work (dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, and thread communication primitives) each implemented with the same set of conventions so that learning one container transfers immediately to the next.
+The challenge with generic containers in C is catching type mistakes at compile time. The classic approach passes everything as `void *` -- a pointer to untyped memory -- which works with any element type but means the compiler cannot warn you about a mismatch. A `double *` silently passed where an `int *` is expected compiles without a warning and produces garbage at runtime. This library uses a C11 feature called `_Generic` that lets a macro inspect the static type of its argument at compile time and dispatch to different code accordingly. The result is that accidental type mismatches -- the kind you make by mistake rather than by deliberate cast -- are caught at the call site before the program runs.
 
 ---
 
-## 2. Alternatives Considered
+## 2. How Generic Containers Work in C
 
-Several well-established libraries provide generic data structures for C programs. Understanding the motivation for this library requires understanding what each alternative offers and where its design constraints create friction in certain contexts.
+C does not have built-in support for generic containers. Getting a container to work with any element type requires a trade-off between catching type mistakes at compile time and convenience, and most approaches give up one to gain the other.
 
-**GLib.** The GNOME utility library provides a comprehensive set of containers (`GHashTable`, `GArray`, `GPtrArray`, `GList`, `GTree`) and is mature, extensively tested, and widely deployed. Its primary trade-off is that all interfaces accept `gpointer` (a typedef for `void *`), so type information is absent at the call site. Correct usage requires explicit casts, and type errors manifest at runtime rather than at compile time. GLib is also a substantial dependency: importing it for its data structures alone introduces a large runtime with its own threading model, type system, and object hierarchy. For projects already built on GTK or GNOME infrastructure this cost is already paid, but for a self-contained systems library it represents significant overhead.
+The most common approach uses `void *` to erase type information. A container stores a typeless pointer to each element, and the caller casts it back to the right type on retrieval. This compiles for any element type without any changes to the container, but the compiler cannot warn you about type errors. A `double *` silently passed where an `int *` belongs will compile and produce wrong results at runtime.
 
-**uthash.** Troy Hanson's single-header hash table is zero-dependency and widely used in embedded and systems code. Its design is intrusive: a hash handle is embedded directly in the user's struct, and the map is accessed via a pointer to that struct. This eliminates separate allocation for key/value pairs and gives very low overhead, but it constrains the data model; a struct can participate in only one uthash table unless multiple handles are embedded manually. While string keys are supported natively, other key types require additional macro boilerplate. uthash also covers only the hash table use case; it does not address ordered maps, dynamic strings, memory pools, or inter-thread communication.
+A second approach uses preprocessor token-pasting to generate a new family of typed functions for each element type. This recovers compile-time type checking, but adding a new type combination requires an explicit instantiation declaration, and the expanded macro code is hard to read when debugging.
 
-**klib.** Heng Li's klib takes a philosophy similar in spirit to this library: generic containers implemented entirely in C headers using macros. `kvec` and `khash` are efficient and appear in performance-sensitive open-source code. The key distinction is that klib uses preprocessor token-pasting to generate a new family of typed functions for each instantiation (`KHASH_MAP_INIT_INT`, `KHASH_MAP_INIT_STR`, and similar). Adding a new key/value type combination requires an explicit instantiation declaration; there is no mechanism to infer or dispatch on type automatically at the call site. The library covers hash maps and dynamic arrays but does not provide ordered maps, dynamic strings, memory pools, or threading primitives.
+A third approach generates C source code from a higher-level description using an external tool. This is clean at the API level but adds a step to the build process and breaks the direct edit-compile-run cycle.
 
-**stb_ds.** Sean Barrett's `stb_ds.h` provides hash maps and dynamic arrays in a single-header, zero-dependency style valued for its simplicity and portability. Internally, values are accessed through typed pointer casts over `void *` storage, and type consistency is the caller's responsibility. The library does not cover ordered maps, dynamic strings, memory pools, or inter-thread messaging, and it provides no mechanism for automatic cleanup or custom allocator injection.
-
-**Where this library differs.** The design goal was a library that satisfies four requirements simultaneously: compile-time type awareness at the call site without code generation or external tools; a uniform macro API across all container kinds so that learning one container transfers immediately to the next; structural integration between components; any container can be backed by a memory pool using a common allocator interface; and thread communication primitives that follow the same ownership and lifecycle model as the rest of the library. No single library in common use addresses all four of these requirements together. The trade-off is a dependency on a C11-capable compiler with GNU extensions, and `_Generic` expressions that produce verbose error messages when an unsupported type is supplied which are acceptable constraints in the contexts for which this library was designed.
+This library uses C11's built-in `_Generic` expression instead. A `_Generic` expression dispatches to different code branches at compile time based on the type of its argument, with no extra tools and no generated files. The macros look like typed containers, behave like typed containers, and produce a compiler error if you use them with the wrong type. The cost is a requirement for a C11-capable compiler with GNU extensions -- a reasonable constraint on any modern development machine.
 
 ---
 
 ## 3. Design Principles
 
-### 3.1 Type Safety Without Code Generation
+### 3.1 Compile-Time Type Dispatch
+
+C11 introduced a built-in expression called `_Generic` that selects different code branches at compile time based on the static type of a sub-expression. Every container macro in this library uses `_Generic` to inspect the type of its argument at the call site and dispatch to the correct internal path. This catches *accidental* type mismatches -- the kind you make without thinking -- at compile time, before the program runs.
+
+It is worth being precise about what this provides and what it does not. If you write:
+
+```c
+cvec_construct(scores, int);
+double d = 3.14;
+cvec_push(scores, *(int *)&d);   /* explicit cast -- compiles, stores garbage */
+```
+
+the cast fools the `_Generic` check and nothing stops you. The library provides compile-time type *dispatch*, not type *safety* in the strict sense: it catches mistakes at the call site as long as you are not actively subverting the type system with a cast. That is enough to eliminate the most common class of bugs while adding zero runtime overhead.
 
 Every container macro inspects its argument with `_Generic` at the call site and records a `ccol_data_type` enum in the container's header struct. This enum drives all subsequent type-dependent decisions at runtime:
 
@@ -76,6 +89,8 @@ Every container macro inspects its argument with `_Generic` at the call site and
 The key macros are defined in `include/common.h`: `is_integral_type()`, `is_char_ptr()`, `is_char_array()`, and `determine_ccol_data_type()`.
 
 ### 3.2 Container Lifecycle Macros
+
+Every use of heap-allocated data in C requires pairing each `malloc` with a corresponding `free`. Forgetting to call `free` causes a memory leak; calling it too early (while the data is still in use) causes a crash. The lifecycle macros provide a consistent discipline across all containers and make it harder to get this wrong.
 
 All containers follow a three-level macro hierarchy that separates declaration, initialisation, and the combination of both:
 
@@ -101,7 +116,9 @@ void process(void) {
 
 ### 3.3 Cross-Scope Type Recovery
 
-The type-dispatching macros rely on a hidden companion variable created by `*_declare` or `*_construct`. When a container is passed across a function boundary, this variable is not present in the new scope. The `*_redeclare` macro re-establishes it, allowing all type-safe macros to function correctly:
+When you call `cvec_construct(scores, int)`, the macro creates a hidden local variable alongside `scores` that records the element type `int`. This companion variable is what allows `cvec_push` to know how to store a value and `cvec_at` to know how to retrieve one. Because it is a local variable, it only exists in the scope where `*_construct` was called. If you pass `scores` to another function, the companion variable does not travel with it, and the type-dispatching macros will not compile there without it. The `*_redeclare` macro re-creates the companion variable in the new scope.
+
+The type-dispatching macros rely on a hidden companion variable created by `*_declare` or `*_construct`. When a container is passed across a function boundary, this variable is not present in the new scope. The `*_redeclare` macro re-establishes it, allowing all type-dispatching macros to function correctly:
 
 ```c
 void fill(cvec vec) {
@@ -122,25 +139,34 @@ Omitting `*_redeclare` before using a type-dispatching macro in a new scope is t
 
 ### 3.4 Error Handling
 
+Errors in this library fall into two broad categories. Programming mistakes -- passing `NULL` where a valid pointer is required, or requesting an element at an out-of-bounds index -- are handled by calling `fatal_err()`, which prints a diagnostic message and terminates the program. This is intentional: a programming mistake should be loud and obvious rather than silently propagated and discovered much later. When you need to handle an expected failure gracefully (for example, a key that might or might not be in a map), use the underlying raw functions, which return a `ccol_retval_t` value you can inspect.
+
 Functions return `ccol_retval_t`, an enum whose value zero indicates success and whose negative values indicate specific failure conditions:
 
 ```c
 typedef enum {
-    ccol_unexpected_failure = -10,
-    ccol_msg_too_large      = -9,
-    ccol_container_empty    = -8,
-    ccol_container_full     = -7,
-    ccol_timed_out          = -6,
-    ccol_not_permitted      = -5,
-    ccol_invalid_args       = -4,
-    ccol_key_not_found      = -3,
-    ccol_key_already_present= -2,
-    ccol_not_enough_memory  = -1,
-    ccol_success            =  0
+    ccol_unexpected_failure                = -17,
+    ccol_http_connection_failed            = -16,
+    ccol_http_host_resolution_failed       = -15,
+    ccol_http_tls_handshake_failed         = -14,
+    ccol_http_tls_cert_verification_failed = -13,
+    ccol_http_too_many_redirects           = -12,
+    ccol_http_invalid_url                  = -11,
+    ccol_http_transfer_aborted             = -10,
+    ccol_msg_too_large                     = -9,
+    ccol_container_empty                   = -8,
+    ccol_container_full                    = -7,
+    ccol_timed_out                         = -6,
+    ccol_not_permitted                     = -5,
+    ccol_invalid_args                      = -4,
+    ccol_key_not_found                     = -3,
+    ccol_key_already_present               = -2,
+    ccol_not_enough_memory                 = -1,
+    ccol_success                           =  0
 } ccol_retval_t;
 ```
 
-The convenience macros call `fatal_err()` on unrecoverable failures (caller bugs and resource exhaustion) causing immediate termination with a diagnostic message. When finer control is required, the underlying functions can be called directly and their return values inspected.
+The convenience macros call `fatal_err()` on hard errors such as programming mistakes and resource exhaustion. When you need to recover from an expected failure condition, call the underlying functions directly and inspect the return value.
 
 ---
 
@@ -164,13 +190,16 @@ cd tests/cbstmap  && make test
 cd tests/csort    && make test
 cd tests/cmempool && make test
 cd tests/cthreadcomm && make test
-cd tests/clogger   && make test
+cd tests/clogger      && make test
+cd tests/cthreadpool  && make test
+cd tests/chttpclient  && make test
+cd tests/chttpserver  && make test
 ```
 
 To link an application against the library:
 
 ```bash
-gcc -o myapp myapp.c -lccollections -lpthread
+gcc -o myapp myapp.c -lccollections -lpthread -lcurl
 ```
 
 Include only the headers you need:
@@ -187,61 +216,76 @@ Include only the headers you need:
 #include <clogger.h>
 #include <cjson.h>
 #include <cyaml.h>
+#include <cthreadpool.h>
+#include <chttpclient.h>
+#include <chttpserver.h>
+```
+
+When linking against `chttpclient`, add `-lcurl` to the linker flags:
+
+```bash
+gcc -o myapp myapp.c -lccollections -lpthread -lcurl
+```
+
+When linking against `chttpserver`, add `-lssl -lcrypto -lm` in addition to `-lpthread`:
+
+```bash
+gcc -o myapp myapp.c -lccollections -lpthread -lssl -lcrypto -lm
 ```
 
 `cvector.h`, `chashmap.h`, and `cbstmap.h` each automatically include `citerators.h`, so the unified iteration API (`ccol_begin`, `ccol_for_each`, `ccol_iter_declare`, and related macros) is available whenever any one of those container headers is included.
 
 ### Quick Start
 
-The following example demonstrates three modules working together: an incoming JSON payload is parsed, a nested field is updated, and the result is logged with structured context attached to every line.
+The following example uses the two most commonly needed modules: a dynamic array and a hash map.
 
 ```c
-#include <cjson.h>
-#include <clogger.h>
-
-int handle_webhook(clog lg, const char *payload) {
-    char *err = NULL;
-    cjson doc = cjson_parse(payload, &err);
-    if (!doc) {
-        log_error(lg, "JSON parse failed: %s", err);
-        free(err);
-        return -1;
-    }
-
-    /* Navigate to a nested field and update it in place */
-    cjson status = cjson_get(doc, "event.status");
-    if (status && cjson_type(status) == CJSON_STRING)
-        cjson_set(doc, "event.status", "processed");
-
-    char *out = cjson_serialize(doc);
-    log_info(lg, "forwarding: %s", out);
-    cjson_serialize_free(out);
-
-    cjson_destroy(doc);
-    return 0;
-}
+#include <cvector.h>
+#include <chashmap.h>
+#include <stdio.h>
 
 int main(void) {
-    clog lg = clog_open_fd_mp(2, CLOG_INFO, NULL);
-    clog_set_field(lg, "service", "webhooks");
-    clog_set_field(lg, "env",     "prod");
+    /* --- Dynamic array of exam scores --- */
+    cvec_construct(scores, int);
 
-    handle_webhook(lg, "{\"event\":{\"type\":\"push\",\"status\":\"pending\"}}");
+    cvec_push_rvalue(scores, 91);
+    cvec_push_rvalue(scores, 74);
+    cvec_push_rvalue(scores, 88);
+    cvec_push_rvalue(scores, 63);
 
-    clog_close(lg);
+    cvec_sort(scores);   /* sort ascending in place */
+
+    printf("Sorted scores:");
+    for (size_t i = 0; i < cvec_size(scores); i++)
+        printf(" %d", cvec_at(scores, i));
+    printf("\n");   /* 63 74 88 91 */
+
+    cvec_destroy(scores);   /* free all memory */
+
+    /* --- Map from student name to grade --- */
+    chmap_construct(grades, char*, int);
+
+    int g;
+    g = 91; chmap_insert(grades, "Alice", g);
+    g = 74; chmap_insert(grades, "Bob",   g);
+    g = 88; chmap_insert(grades, "Carol", g);
+
+    printf("Alice: %d\n", chmap_get(grades, "Alice"));   /* 91 */
+
+    /* chmap_get_ptr returns NULL when the key is absent */
+    if (!chmap_get_ptr(grades, "Dave"))
+        printf("Dave has no grade yet.\n");
+
+    chmap_destroy(grades);
     return 0;
 }
 ```
 
-Each module is fully independent: include only the headers your translation unit needs.
-
-The compiler must support C11 and GNU extensions (`-std=gnu11`). The library compiles cleanly under both GCC and Clang; diagnostic pragma guards for each compiler are present in the headers.
-
----
+Each module is fully independent: include only the headers your code needs. The remaining sections cover every module in depth, starting with the simpler containers and building toward the more advanced ones.
 
 ## 5. Dynamic Array - `cvector`
 
-`cvector` is a heap-allocated, automatically resizing array. It provides amortised O(1) insertion at the end, O(1) indexed access, and stable O(n log n) sorting. A vector maintains a minimum capacity of four elements, doubles its allocation when full, and halves it when occupancy drops below one quarter.
+`cvector` is a resizable array. Unlike a plain C array (`int arr[100]`), a vector grows automatically when you push more elements than it can currently hold -- you do not need to know the final size in advance. Indexed access is O(1) (constant time regardless of the array's size). Insertion at the end is amortised O(1): the array occasionally doubles its capacity, but the average cost per insertion, spread over many insertions, stays constant. Sorting is O(n log n) and stable (equal elements keep their original relative order). The internal capacity is always at least four elements, doubles when the array is full, and halves when occupancy drops below one quarter.
 
 **Header:** `#include <cvector.h>`
 
@@ -391,7 +435,7 @@ void render_page(DbCursor *cursor, JsonResponse *resp,
 
 ## 6. Dynamic String - `cstring`
 
-`cstring` is a heap-allocated string with automatic capacity management. Its internal buffer always holds a null-terminated C string, making it directly compatible with standard library functions. Capacity grows to the next power of two on demand, with a minimum of 16 bytes.
+`cstring` is a heap-allocated string that grows automatically as you append to it. Unlike a fixed `char` array, you do not need to declare a maximum length in advance. Its internal buffer is always null-terminated, so you can pass it directly to any standard library function that expects a `const char *`. Capacity is always a power of two (minimum 16 bytes) and doubles when more space is needed.
 
 **Header:** `#include <cstring.h>`
 
@@ -582,87 +626,11 @@ void load_config(const char *path, chmap config) {
 
 ---
 
-## 7. Sorting - `csort`
+## 7. Hash Map - `chashmap`
 
-`csort` provides a stable, iterative bottom-up mergesort. It operates on any collection type through a getter abstraction, and provides default comparators for all standard C arithmetic types selected via `_Generic`. The integration with `cvector` is the most common usage path.
+A hash map stores key-value pairs and answers "what value is associated with this key?" in constant time on average (O(1)), regardless of how many pairs are stored. If you have used Python's `dict` or Java's `HashMap`, this is the same concept.
 
-**Header:** `#include <csort.h>`
-
-### Sorting a Vector
-
-```c
-cvec_construct(values, double);
-cvec_push_rvalue(values, 3.14);
-cvec_push_rvalue(values, 1.41);
-cvec_push_rvalue(values, 2.71);
-
-cvec_sort(values);  /* Ascending, using the default double comparator */
-
-cvec_destroy(values);
-```
-
-### Sorting a Plain C Array
-
-When sorting a plain array, a getter function is required to abstract element access:
-
-```c
-typedef struct { char name[64]; int age; } Person;
-
-int compare_by_age(const void *a, const void *b) {
-    const Person *p = (const Person *)a;
-    const Person *q = (const Person *)b;
-    return (p->age > q->age) - (p->age < q->age);
-}
-
-void *person_getter(void *collection, size_t index) {
-    return &((Person *)collection)[index];
-}
-
-Person people[] = {{"Alice", 30}, {"Bob", 25}, {"Charlie", 35}};
-
-csort_sort(people, 3, sizeof(Person), person_getter, compare_by_age, NULL);
-```
-
-**Complexity guarantees:** O(n log n) in all cases; O(n) auxiliary space; stable (equal elements preserve their original order); iterative (no recursion, no stack overflow risk for large inputs).
-
-### Real-World Use Case: Priority Job Queue
-
-A background worker processes jobs in priority order while preserving submission order for jobs at the same priority level. The stable sort guarantee means equal-priority jobs are always dispatched in the order they arrived, without any secondary sort key:
-
-```c
-typedef struct {
-    int      priority;    /* higher value = higher priority */
-    uint64_t submit_ts;
-    char     payload[128];
-} Job;
-
-int cmp_job_desc(const void *a, const void *b) {
-    const Job *ja = (const Job *)a;
-    const Job *jb = (const Job *)b;
-    /* Descending: higher priority first */
-    return (jb->priority > ja->priority) - (jb->priority < ja->priority);
-}
-
-void *job_getter(void *collection, size_t index) {
-    return &((Job *)collection)[index];
-}
-
-void dispatch_next_batch(Job *queue, size_t count, size_t batch_size) {
-    csort_sort(queue, count, sizeof(Job), job_getter, cmp_job_desc, NULL);
-
-    size_t n = count < batch_size ? count : batch_size;
-    for (size_t i = 0; i < n; i++)
-        submit_to_thread_pool(&queue[i]);
-}
-```
-
-Because `csort` is a stable sort, two jobs submitted at times `t1 < t2` with identical priority are always ordered `t1, t2` after sorting, regardless of how many sort passes have occurred.
-
----
-
-## 8. Hash Map - `chashmap`
-
-`chashmap` is an associative container with O(1) average-case insertion, lookup, and deletion. A distinctive feature is that it selects one of two internal implementations at compile time, based on the types of the key and value.
+`chashmap` selects one of two internal strategies at construction time based on the key and value types, but the macro API is identical for both.
 
 **Header:** `#include <chashmap.h>`
 
@@ -670,7 +638,7 @@ Because `csort` is a stable sort, two jobs submitted at times `t1 < t2` with ide
 
 **Open-addressing** is selected when both the key and the value are integral types no wider than eight bytes. It uses compact 17-byte slots (8-byte key, 8-byte value, 1-byte metadata), Fibonacci hashing for integers, and linear probing. Load factor thresholds are 0.70 (grow) and 0.25 (shrink), with a 2x scale factor. There are zero per-entry heap allocations, and cache locality is quite good.
 
-**Separate chaining** is selected for all other type combinations. It uses a linked-list per bucket, XXHash64 for content-based hashing, Small String Optimisation (23-byte inline buffer for short strings), and a doubly-linked list that preserves insertion order. The minimum bucket count is 64 (always a power of two), and the scale factor is 4x.
+**Separate chaining** is selected for all other type combinations. It uses a linked-list per bucket, XXHash64 for content-based hashing, Small String Optimisation (23-byte inline buffer for short strings), and a doubly-linked list that preserves reverse insertion order. The minimum bucket count is 16 (always a power of two), and the scale factor is 4x.
 
 The selection happens transparently; the same macro interface is used in both cases.
 
@@ -726,9 +694,9 @@ for (it = ccol_begin(index); it != NULL; it = ccol_iter_next(it)) {
 }
 ```
 
-The unified iteration macros are provided by `citerators.h`, which is automatically included when you include `chashmap.h`. See [Section 10](#10-unified-iteration--citerators) for the full API reference.
+The unified iteration macros are provided by `citerators.h`, which is automatically included when you include `chashmap.h`. See [Section 9](#9-unified-iteration--citerators) for the full API reference.
 
-Iteration order differs by implementation: separate chaining iterates in insertion order via its internal doubly-linked list; open-addressing iterates in slot order, which is neither insertion order nor sorted order.
+Iteration order differs by implementation: separate chaining iterates in reverse insertion order via its internal doubly-linked list; open-addressing iterates in slot order, which can be considered random.
 
 ### Example: Word Frequency Count
 
@@ -848,7 +816,7 @@ The map copies each key string into its own storage (inline for strings up to 23
 
 **Iteration**
 
-These macros come from `citerators.h`, which `chashmap.h` includes automatically. See [Section 10](#10-unified-iteration--citerators) for the full reference.
+These macros come from `citerators.h`, which `chashmap.h` includes automatically. See [Section 9](#9-unified-iteration--citerators) for the full reference.
 
 | Macro | Description |
 |---|---|
@@ -862,9 +830,11 @@ These macros come from `citerators.h`, which `chashmap.h` includes automatically
 
 ---
 
-## 9. Ordered Map - `cbstmap`
+## 8. Ordered Map - `cbstmap`
 
-`cbstmap` is an associative container implemented as a fully iterative (non-recursive) AVL tree. It maintains keys in sorted order and provides O(log n) insertion, deletion, and lookup. In-order iteration visits entries from smallest to largest key.
+An ordered map works like a hash map -- you look up values by key -- but it always keeps its keys in sorted order. Iterating over it visits entries from smallest key to largest. This makes it the right choice when you need both fast lookup and ordered traversal.
+
+`cbstmap` is implemented as a self-balancing AVL tree, which guarantees O(log n) worst-case performance for insertion, deletion, and lookup regardless of the order in which keys are inserted. (A naive binary search tree degrades to O(n) on sorted input; the AVL rebalancing prevents that.)
 
 **Header:** `#include <cbstmap.h>`
 
@@ -1020,7 +990,7 @@ The AVL self-balancing property keeps the tree height bounded at O(log n) even u
 
 **Iteration**
 
-These macros come from `citerators.h`, which `cbstmap.h` includes automatically. See [Section 10](#10-unified-iteration--citerators) for the full reference.
+These macros come from `citerators.h`, which `cbstmap.h` includes automatically. See [Section 9](#9-unified-iteration--citerators) for the full reference.
 
 | Macro | Description |
 |---|---|
@@ -1034,9 +1004,9 @@ These macros come from `citerators.h`, which `cbstmap.h` includes automatically.
 
 ---
 
-## 10. Unified Iteration - `citerators`
+## 9. Unified Iteration - `citerators`
 
-`citerators.h` provides a single, type-dispatched iteration API that works uniformly across `cvector`, `chashmap`, and `cbstmap`. There is no need to include it explicitly: each container header includes `citerators.h` at its own end, so any translation unit that includes a single container header automatically gets the full unified API.
+`citerators.h` provides a single iteration API that works identically across `cvector`, `chashmap`, and `cbstmap`. You do not need to learn a different loop pattern for each container type. There is no need to include this header explicitly: each of the three container headers pulls it in automatically.
 
 **Header:** included automatically by `cvector.h`, `chashmap.h`, and `cbstmap.h`.
 
@@ -1150,9 +1120,95 @@ The same `ccol_for_each` / `ccol_iter_next` / `ccol_iter_key_ptr` / `ccol_iter_v
 
 ---
 
+## 10. Sorting - `csort`
+
+`csort` is a sorting algorithm module. It provides a stable, iterative mergesort.
+
+*Stable* means that two elements that compare as equal always preserve their original relative order after sorting. If Alice and Bob both have score 85 and Alice appeared first in the input, she will still appear first in the sorted output. This matters whenever you sort by one field and want ties to remain in their original sequence.
+
+*Iterative* means the algorithm uses an explicit work buffer instead of function call recursion, so it never causes a stack overflow no matter how large the input is.
+
+In most cases you will reach `csort` indirectly through `cvec_sort` or `cvector_sort_with_comparison_proc`. The lower-level `csort_sort` function is available when you need to sort a plain C array directly.
+
+**Header:** `#include <csort.h>`
+
+### Sorting a Vector
+
+```c
+cvec_construct(values, double);
+cvec_push_rvalue(values, 3.14);
+cvec_push_rvalue(values, 1.41);
+cvec_push_rvalue(values, 2.71);
+
+cvec_sort(values);  /* Ascending, using the default double comparator */
+
+cvec_destroy(values);
+```
+
+### Sorting a Plain C Array
+
+When sorting a plain array, a getter function is required to abstract element access:
+
+```c
+typedef struct { char name[64]; int age; } Person;
+
+int compare_by_age(const void *a, const void *b) {
+    const Person *p = (const Person *)a;
+    const Person *q = (const Person *)b;
+    return (p->age > q->age) - (p->age < q->age);
+}
+
+void *person_getter(void *collection, size_t index) {
+    return &((Person *)collection)[index];
+}
+
+Person people[] = {{"Alice", 30}, {"Bob", 25}, {"Charlie", 35}};
+
+csort_sort(people, 3, sizeof(Person), person_getter, compare_by_age, NULL);
+```
+
+**Complexity guarantees:** O(n log n) in all cases; O(n) auxiliary space; stable (equal elements preserve their original order); iterative (no recursion, no stack overflow risk for large inputs).
+
+### Real-World Use Case: Priority Job Queue
+
+A background worker processes jobs in priority order while preserving submission order for jobs at the same priority level. The stable sort guarantee means equal-priority jobs are always dispatched in the order they arrived, without any secondary sort key:
+
+```c
+typedef struct {
+    int      priority;    /* higher value = higher priority */
+    uint64_t submit_ts;
+    char     payload[128];
+} Job;
+
+int cmp_job_desc(const void *a, const void *b) {
+    const Job *ja = (const Job *)a;
+    const Job *jb = (const Job *)b;
+    /* Descending: higher priority first */
+    return (jb->priority > ja->priority) - (jb->priority < ja->priority);
+}
+
+void *job_getter(void *collection, size_t index) {
+    return &((Job *)collection)[index];
+}
+
+void dispatch_next_batch(Job *queue, size_t count, size_t batch_size) {
+    csort_sort(queue, count, sizeof(Job), job_getter, cmp_job_desc, NULL);
+
+    size_t n = count < batch_size ? count : batch_size;
+    for (size_t i = 0; i < n; i++)
+        submit_to_thread_pool(&queue[i]);
+}
+```
+
+Because `csort` is a stable sort, two jobs submitted at times `t1 < t2` with identical priority are always ordered `t1, t2` after sorting, regardless of how many sort passes have occurred.
+
+---
+
 ## 11. Memory Pools - `cmempool`
 
-The library provides two pool allocators: a fixed-size pool (`mempool`) and a ranged pool (`r_mempool`). Both offer O(1) allocation and deallocation, optional thread safety, and an optional fallback to the system allocator when the pool is exhausted.
+A memory pool pre-allocates a large block of memory up front and hands out slices from it on demand. Compared to calling `malloc` for every object, pool allocation is faster (O(1) with no system calls for each request), produces no fragmentation, and makes peak memory usage predictable: the pool has a fixed capacity that cannot grow beyond what you set at creation.
+
+The library provides two pool allocators: a fixed-size pool (`mempool`) for objects of a single size, and a ranged pool (`r_mempool`) for objects across a range of sizes. Both offer optional thread safety and an optional fallback to the system allocator when the pool is exhausted.
 
 **Header:** `#include <cmempool.h>`
 
@@ -1295,13 +1351,15 @@ Because every slot is the same size as `ConnCtx`, there is no fragmentation with
 
 ### Driving Other Containers from a Pool
 
-Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 18](#18-custom-memory-management) for the complete pattern.
+Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 20](#20-custom-memory-management) for the complete pattern.
 
 ---
 
 ## 12. Thread Communication - `cthreadcomm`
 
-The thread communication module provides three primitives for safe message passing between threads: a bounded circular queue, an unbounded dynamic queue, and a bidirectional channel. All three use a zero-copy ownership transfer model: the sender's pointer is set to `NULL` on a successful send, and the receiver becomes the sole owner of the data.
+When two threads need to share data, you need a safe handoff mechanism. Simply reading and writing the same variable from two threads without coordination is a data race -- the result is undefined behaviour that can corrupt data or crash unpredictably.
+
+The thread communication module provides three primitives for passing data between threads safely. All three use a zero-copy ownership transfer model: on a successful send, the sender's pointer is set to `NULL` and the receiver becomes the sole owner of the data. This ensures that only one thread holds a reference to any given payload at a time, eliminating an entire class of concurrency bugs.
 
 **Header:** `#include <cthreadcomm.h>`
 
@@ -1554,7 +1612,9 @@ ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
 
 ## 13. LRU Cache - `clrucache`
 
-`clrucache` is a fully thread-safe generic LRU (Least-Recently-Used) cache backed by a hash map for O(1) lookup and a doubly-linked list for O(1) eviction. When the cache is full, inserting a new entry evicts the least-recently-used live entry first, optionally notifying the caller via an eviction callback. An optional remote getter and setter integrate the cache transparently with an external backing store; a database, a network service, or any other source.
+A cache stores the results of expensive operations so that repeated requests for the same input return immediately without redoing the work. An LRU (Least-Recently-Used) cache has a fixed capacity; when it is full and a new entry needs to be added, the entry that has gone the longest without being accessed is evicted first. This keeps frequently requested results in memory and lets old, rarely used ones fall out automatically.
+
+`clrucache` is a thread-safe LRU cache backed by a hash map for O(1) lookup and a doubly-linked list for O(1) eviction. It supports optional remote getter and setter callbacks to integrate transparently with an external backing store such as a database.
 
 **Header:** `#include <clrucache.h>`
 
@@ -1791,7 +1851,7 @@ void process(void) {
 
 ## 14. Structured Logger - `clogger`
 
-`clogger` is a thread-safe, structured logger with three output formats: logfmt (default), NDJSON, and RFC 5424 syslog. Each record is machine-parseable and human-readable. A single per-logger `pthread_mutex_t` serialises all writes and state changes.
+Logging is how a running program records what it is doing and what went wrong. `clogger` writes structured log lines: instead of free-form text, every message is a sequence of `key=value` pairs that can be filtered, searched, and aggregated programmatically. Three output formats are supported: logfmt (default, plain text, human-readable), NDJSON (one JSON object per line, easy to parse with tools like `jq`), and RFC 5424 syslog (for integration with system logging infrastructure). All writes are serialised through a mutex, making the logger safe to call from multiple threads without any extra coordination.
 
 **Header:** `#include <clogger.h>`
 
@@ -1885,7 +1945,8 @@ clog_set_field(lg, "service", "auth");
 
 log_info(lg,  "starting up");
 log_warn(lg,  "config missing: %s", "timeout");
-log_error(lg, "db failed: %s", "timeout");   /* also appends a backtrace; log_alert and log_fatal do too */
+log_error(lg, "db failed: %s", "timeout");   /* also appends a backtrace; log_alert does too */
+/* log_fatal appends a backtrace AND terminates the process via exit(EXIT_FAILURE) */
 
 clog_close(lg);
 ```
@@ -1946,10 +2007,10 @@ All four function pointers must be set; passing a partially-populated struct ret
 | `CLOG_WARN`  | 3 | |
 | `CLOG_ERROR` | 4 | Appends a backtrace |
 | `CLOG_ALERT` | 5 | Action required immediately; maps to RFC 5424 severity 1; appends a backtrace |
-| `CLOG_FATAL` | 6 | Appends a backtrace; does not terminate the process |
-| `CLOG_OFF`   | 7 | Disables all output when used as `min_level` |
+| `CLOG_FATAL` | 6 | Appends a backtrace and terminates the process via `exit(EXIT_FAILURE)`; bypasses `min_level` -- the message is always written |
+| `CLOG_OFF`   | 7 | Disables all output (except a fatal termination) when used as `min_level` |
 
-The minimum level can be changed at any time with `clog_set_level`. Messages below the current minimum are dropped without acquiring the mutex.
+The minimum level can be changed at any time with `clog_set_level`. Messages below the current minimum are dropped silently, with the sole exception of `CLOG_FATAL` which is always written regardless of `min_level`.
 
 ### Structured Fields
 
@@ -1968,16 +2029,6 @@ clog_clear_fields(lg);   /* remove all fields */
 ```
 
 Field values that contain spaces, `=`, `"`, `\`, or control characters are automatically double-quoted and backslash-escaped in the output.
-
-### NULL Safety
-
-Passing `NULL` as the logger to any macro or function is always a no-op. This allows loggers to be silenced at runtime without touching every call site:
-
-```c
-clog lg = production_mode ? clog_open_fd_mp(2, CLOG_INFO, NULL) : NULL;
-log_info(lg, "this line is discarded when lg is NULL");
-clog_close(lg);   /* safe */
-```
 
 ### Real-World Use Case: Per-Request Structured Logging
 
@@ -2073,13 +2124,15 @@ Request-scoped fields (`request_id`, `user_id`, `path`) appear in every line emi
 | `log_warn(lg, fmt, ...)`  | `CLOG_WARN`  | No |
 | `log_error(lg, fmt, ...)` | `CLOG_ERROR` | Yes |
 | `log_alert(lg, fmt, ...)` | `CLOG_ALERT` | Yes - use for conditions requiring immediate operator action |
-| `log_fatal(lg, fmt, ...)` | `CLOG_FATAL` | Yes - does not terminate the process; caller must call `abort()` / `exit()` |
+| `log_fatal(lg, fmt, ...)` | `CLOG_FATAL` | Yes - terminates the process via `exit(EXIT_FAILURE)` after writing the log and backtrace; never returns; bypasses `min_level` so the cause is always recorded |
 
 ---
 
 ## 15. JSON Parser / Serializer / DOM - `cjson`
 
-`cjson` provides a fully mutable JSON Document Object Model (DOM), a recursive-descent parser, a serializer (compact and pretty-print), and two type-safe path macros (`cjson_get` and `cjson_set`) for reading and writing anywhere in the tree without chaining individual lookup calls.
+JSON (JavaScript Object Notation) is a text format for structured data, widely used in web APIs and configuration files. `cjson` parses a JSON string into a tree of nodes held in memory (a DOM -- Document Object Model), lets you read and modify any node in the tree, and serialises the result back to a JSON string when you are done.
+
+Two path macros, `cjson_get` and `cjson_set`, let you navigate the tree using a dot-separated path string like `"users.#0.name"` instead of chaining individual lookup calls by hand.
 
 ### Node types
 
@@ -2292,7 +2345,7 @@ cjson_destroy(root);
 
 ## 16. YAML Parser / Serializer / DOM - `cyaml`
 
-`cyaml` provides a fully mutable YAML Document Object Model (DOM), a hand-written recursive-descent parser, a block serializer, a compact flow serializer, and two type-safe path macros (`cyaml_get` and `cyaml_set`) for reading and writing anywhere in the tree without chaining individual lookup calls.
+`cyaml` parses a YAML document into a mutable tree of nodes, lets you read and modify those nodes, and serialises the result back to YAML. The API mirrors `cjson` closely: the same dot-separated path macros (`cyaml_get` and `cyaml_set`) work on YAML trees using the same syntax.
 
 ### Supported YAML features
 
@@ -2538,9 +2591,931 @@ The allocator is stamped on every node at creation time.  `cyaml_destroy()` uses
 
 ---
 
-## 17. Thread Safety
+## 17. Thread Pool - `cthreadpool`
 
-The library applies a consistent policy: **components that pass data between threads or provide shared services carry their own synchronisation; components used for single-threaded data manipulation are deliberately unguarded.**
+Creating a new OS thread for every task is expensive: each `pthread_create` call allocates a stack and involves a system call. A thread pool solves this (for ephemeral threads to perform some work in parallel and terminate) by creating a fixed number of worker threads once and reusing them. You submit tasks to a queue; the next available worker picks one up. This bounds concurrent thread count and eliminates the per-task creation overhead.
+
+`cthreadpool` is a generic thread pool with a bounded or unbounded task queue, optional completion callbacks, and futures. A future is an object that lets the submitting thread collect a `void *` result from a task after it has finished running on a worker thread. Worker threads are created at construction and remain alive until the pool is shut down.
+
+The queue mode is selected once at construction time by the `queue_capacity` parameter:
+
+- `queue_capacity == 0` or `ccol_invalid_size` - unbounded queue: `ctpool_submit` never blocks on capacity; the only non-trivial failure path is out-of-memory.
+- `queue_capacity > 0` - bounded queue of that capacity: `ctpool_submit` blocks when the queue is full, applying natural backpressure to producers.
+
+**Header:** `#include <cthreadpool.h>`
+
+### Basic Usage
+
+```c
+/* Four worker threads, bounded queue of 256 tasks */
+ctpool_construct(pool, 4, 256);
+
+void compute(void *arg) { /* ... */ }
+void on_done(void *arg)  { /* called by the worker after compute returns */ }
+
+ctpool_submit(pool, compute, my_arg, on_done);
+
+/* Wait for all queued and active tasks to finish
+   without shutting down the pool */
+ctpool_wait(pool);
+
+/* Graceful shutdown: drain remaining tasks, then stop workers */
+ctpool_shutdown_drain(pool);
+ctpool_destroy(pool);
+```
+
+### Task Submission
+
+Three submission variants cover different producer patterns:
+
+```c
+/* Blocking: waits for space if the bounded queue is full */
+ccol_retval_t rc = ctpool_submit(pool, fn, arg, on_complete);
+
+/* Non-blocking: returns ccol_container_full immediately if full */
+rc = ctpool_try_submit(pool, fn, arg, on_complete);
+
+/* Timed: blocks up to the given relative duration */
+struct timespec timeout = { .tv_sec = 1, .tv_nsec = 0 };
+rc = ctpool_timed_submit(pool, fn, arg, on_complete, &timeout);
+```
+
+The `on_complete` callback is invoked by the worker immediately after `fn` returns and receives the same `arg`. It may be `NULL`.
+
+### Futures
+
+A future lets the submitting thread collect a `void *` result from a task:
+
+```c
+void *heavy_compute(void *arg) {
+    /* ... process ... */
+    return result;
+}
+
+ctpool_future *f = ctpool_submit_future(pool, heavy_compute, arg);
+if (!f) { /* OOM or pool is shutting down */ }
+
+void *result = ctpool_future_get(f);   /* blocks until the worker finishes */
+ctpool_future_free(f);                 /* release the caller's reference */
+```
+
+`ctpool_submit_future` blocks when a bounded queue is full. The same non-blocking and timed variants available for regular tasks also exist for futures:
+
+```c
+/* Non-blocking: returns ccol_container_full immediately if queue is full */
+ctpool_future *f = NULL;
+ccol_retval_t rc = ctpool_try_submit_future(pool, heavy_compute, arg, &f);
+
+/* Timed: blocks at most timeout waiting for a free slot */
+struct timespec timeout = { .tv_sec = 1, .tv_nsec = 0 };
+rc = ctpool_timed_submit_future(pool, heavy_compute, arg, &timeout, &f);
+
+/* NULL timeout is equivalent to ctpool_try_submit_future */
+rc = ctpool_timed_submit_future(pool, heavy_compute, arg, NULL, &f);
+```
+
+Both functions set `*out` to the future handle on success and to `NULL` on any failure, returning a `ccol_retval_t` that distinguishes between OOM, shutdown, container-full, and timeout.
+
+The future carries a reference count of 2 at submission: one for the caller and one held by the queued task. Calling `ctpool_future_free` before `ctpool_future_get` gives fire-and-forget semantics: the future is freed automatically once the worker finishes, and the result is discarded.
+
+Multiple threads may each hold a pointer to the same future and call `ctpool_future_get` independently. Each must call `ctpool_future_free` exactly once.
+
+### Phase Synchronization
+
+`ctpool_wait` blocks until the queue is empty and all active tasks have completed, without shutting the pool down. New tasks may be submitted after it returns.
+
+```c
+/* Submit phase 1 */
+for (size_t i = 0; i < n; i++)
+    ctpool_submit(pool, phase1_fn, &items[i], NULL);
+
+/* Barrier: all phase 1 work is done before phase 2 starts */
+ctpool_wait(pool);
+
+/* Submit phase 2 tasks that depend on phase 1 results */
+for (size_t i = 0; i < n; i++)
+    ctpool_submit(pool, phase2_fn, &items[i], NULL);
+
+ctpool_shutdown_drain(pool);
+ctpool_destroy(pool);
+```
+
+No other thread should be submitting tasks concurrently when `ctpool_wait` is called. With an unbounded queue, concurrent submissions can cause indefinite blocking.
+
+### Shutdown Modes
+
+```c
+/* Drain: finish all queued and active tasks, then stop workers */
+ctpool_shutdown_drain(pool);
+ctpool_destroy(pool);
+
+/* Immediate: cancel queued tasks, stop after active tasks finish */
+ctpool_shutdown_immediate(pool);
+ctpool_destroy(pool);
+```
+
+Futures for tasks that were in the queue at the time of an immediate shutdown become cancelled:
+
+```c
+ctpool_future *f = ctpool_submit_future(pool, fn, arg);
+ctpool_shutdown_immediate(pool);
+
+void *result = ctpool_future_get(f);           /* returns NULL */
+if (ctpool_future_cancelled(f)) { /* task never ran */ }
+ctpool_future_free(f);
+```
+
+If neither shutdown function is called before `ctpool_destroy`, a drain shutdown is performed implicitly.
+
+### Scoped Variant
+
+```c
+void process_batch(void) {
+    ctpool_construct_scoped(pool, 4, 0);   /* unbounded queue */
+
+    for (int i = 0; i < 1000; i++)
+        ctpool_submit(pool, work_fn, items[i], NULL);
+
+    ctpool_shutdown_drain(pool);
+    /* pool is destroyed automatically when the function returns */
+}
+```
+
+### Real-World Use Case: Parallel File Processing Pipeline
+
+A log analysis tool scans a large directory, parsing each file on a worker thread and accumulating results via atomic counters. `ctpool_wait` acts as a barrier between the parallel parsing phase and the single-threaded reporting phase:
+
+```c
+typedef struct { const char *path; atomic_int *error_count; } ParseJob;
+
+void parse_log_file(void *arg) {
+    ParseJob *job = (ParseJob *)arg;
+    FILE *f = fopen(job->path, "r");
+    if (!f) { atomic_fetch_add(job->error_count, 1); return; }
+    char line[4096];
+    while (fgets(line, sizeof(line), f))
+        process_line(line);
+    fclose(f);
+}
+
+void run_analysis(const char **paths, size_t count) {
+    ctpool_construct_scoped(pool, 4, ccol_invalid_size);
+
+    atomic_int errors = 0;
+    ParseJob jobs[count];
+    for (size_t i = 0; i < count; i++) {
+        jobs[i] = (ParseJob){ .path = paths[i], .error_count = &errors };
+        ctpool_submit(pool, parse_log_file, &jobs[i], NULL);
+    }
+
+    ctpool_wait(pool);   /* all files have been parsed */
+
+    if (atomic_load(&errors))
+        fprintf(stderr, "%d files failed to open\n", atomic_load(&errors));
+    report_results();
+
+    ctpool_shutdown_drain(pool);
+}
+```
+
+The pool is created with `ccol_invalid_size` (unbounded queue) so that submitting all `count` jobs in the loop never blocks. `ctpool_wait` then acts as a join point before the single-threaded reporting phase.
+
+### Reference: Core Operations
+
+**Lifecycle**
+
+| Function / Macro | Description |
+|---|---|
+| `ctpool_declare(name)` | Declare an uninitialized `ctpool` variable |
+| `ctpool_declare_scoped(name)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initializing |
+| `ctpool_construct(name, num_threads, queue_cap)` | Declare and initialize in one step; calls `fatal_err()` on failure |
+| `ctpool_construct_scoped(name, num_threads, queue_cap)` | Declare, initialize, and register auto-cleanup; calls `fatal_err()` on failure |
+| `create_cthread_pool(num_threads, queue_cap, err_str)` | Allocate and return a pool using the default allocator; returns `NULL` on failure |
+| `create_cthread_pool_mp(num_threads, queue_cap, mprocs, err_str)` | Allocate and return a pool with a custom allocator; returns `NULL` on failure |
+| `ctpool_destroy(pool)` | Drain-shutdown if needed, free all resources, and set pointer to `NULL` |
+
+**Task Submission**
+
+| Function | Description |
+|---|---|
+| `ctpool_submit(pool, fn, arg, on_complete)` | Submit a task; blocks if the bounded queue is full; `on_complete` may be `NULL` |
+| `ctpool_try_submit(pool, fn, arg, on_complete)` | Non-blocking submit; returns `ccol_container_full` instead of blocking |
+| `ctpool_timed_submit(pool, fn, arg, on_complete, timeout)` | Timed submit; `timeout` is a relative `struct timespec`; `NULL` behaves as try-only |
+
+**Futures**
+
+| Function | Description |
+|---|---|
+| `ctpool_submit_future(pool, fn, arg)` | Submit a task returning `void *`; returns a future or `NULL` on OOM or shutdown |
+| `ctpool_future_get(f)` | Block until the result is ready and return it; returns `NULL` if cancelled |
+| `ctpool_future_done(f)` | Non-blocking poll: `true` if the result is ready or the future was cancelled |
+| `ctpool_future_cancelled(f)` | `true` if the task was discarded by `ctpool_shutdown_immediate` |
+| `ctpool_future_free(f)` | Release the caller's reference; must be called exactly once per `ctpool_submit_future` |
+
+**Management**
+
+| Function | Description |
+|---|---|
+| `ctpool_wait(pool)` | Block until the queue is empty and all active tasks have completed |
+| `ctpool_shutdown_drain(pool)` | Graceful shutdown: finish all queued tasks, then stop workers |
+| `ctpool_shutdown_immediate(pool)` | Immediate shutdown: discard queued tasks, stop after active tasks finish |
+| `ctpool_pending_count(pool)` | Number of tasks currently in the queue (not yet picked up by a worker) |
+| `ctpool_active_count(pool)` | Number of tasks currently being executed by worker threads |
+
+---
+
+## 18. HTTP Client - `chttpclient`
+
+`chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is backed by libcurl, which handles TLS, redirects, and low-level networking, while this module adds a connection pool, case-insensitive header maps, and an API that integrates with the rest of the library.
+
+The module is split across two headers: `chttp.h` declares shared types (`chttp_method_t`, `chttp_tls_config_t`, `chttp_request_body_t`, and status-code constants), and `chttpclient.h` declares the client API. Including `chttpclient.h` pulls in `chttp.h` automatically.
+
+**Header:** `#include <chttpclient.h>`
+
+**Link with:** `-lcurl`
+
+### Convenience API - One-Liner Requests
+
+The simplest path uses the process-level default client via the `chttp_get`, `chttp_post`, `chttp_put`, `chttp_delete`, and `chttp_patch` convenience functions. The default client is lazily initialized on the first call, uses the CPU count as the pool size, and has TLS peer and host verification enabled.
+
+```c
+chttpcli_response *resp = NULL;
+
+if (chttp_get("https://api.example.com/users", &resp) == ccol_success) {
+    printf("status=%d\n", resp->status_code);
+    printf("body=%s\n",   resp->body);
+    chttpclient_resp_free(resp);
+}
+```
+
+For methods that carry a body, use the body macros from `chttp.h`:
+
+```c
+const char *payload = "{\"name\":\"alice\"}";
+chttpcli_response *resp = NULL;
+
+chttp_post("https://api.example.com/users",
+           &CHTTP_JSON_BODY(payload, strlen(payload)),
+           &resp);
+if (resp) {
+    printf("created: %d\n", resp->status_code);
+    chttpclient_resp_free(resp);
+}
+```
+
+### Custom Client
+
+When you need to control pool size, timeouts, or TLS behaviour, create a dedicated `chttpcli` handle:
+
+```c
+chttpcli_construct(cli);
+
+chttpclient_set_pool_size(cli, 8);
+chttpclient_set_connect_timeout(cli, 2000);   /* 2 s TCP connect timeout */
+chttpclient_set_request_timeout(cli, 10000);  /* 10 s total request timeout */
+
+chttp_request_t *req = chttp_request_new(CHTTP_POST,
+    "https://api.example.com/items",
+    &CHTTP_JSON_BODY(json_str, json_len),
+    NULL);
+chttp_request_set_header(req, "Authorization", "Bearer my-token");
+
+chttpcli_response *resp = NULL;
+ccol_retval_t rc = chttpclient_do(cli, req, &resp);
+chttp_request_free(req);
+
+if (rc == ccol_success) {
+    printf("%d: %s\n", resp->status_code, resp->body);
+    chttpclient_resp_free(resp);
+}
+
+chttpclient_destroy(cli);
+```
+
+`chttpclient_do` blocks until a pool slot is free, executes the request synchronously, and returns the fully buffered response. Multiple threads may call `chttpclient_do` concurrently on the same handle.
+
+### Request and Response Headers
+
+Header names are normalised to lowercase on storage; all lookups are therefore case-insensitive:
+
+```c
+chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+chttp_request_set_header(req, "Accept",     "application/json");
+chttp_request_set_header(req, "X-Trace-Id", trace_id);
+
+/* Read back - case-insensitive */
+const char *accept = chttp_request_get_header(req, "accept");
+```
+
+Response headers follow the same convention:
+
+```c
+const char *ct = chttpclient_resp_header(resp, "content-type");
+```
+
+To iterate all response headers:
+
+```c
+ccol_for_each(resp->headers, it) {
+    printf("key-name: %s -> key-value: %s\n",
+        *ccol_iter_key_ptr(it), *ccol_iter_val_ptr(it));
+}
+```
+
+### Streaming Response
+
+When the response body is large or must be processed incrementally, use `chttpclient_do_streaming`. The write callback receives chunks as they arrive:
+
+```c
+size_t write_to_file(const void *data, size_t len, void *ctx) {
+    return fwrite(data, 1, len, (FILE *)ctx);
+}
+
+FILE *out = fopen("response.bin", "wb");
+int status_code = 0;
+
+chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+chttpclient_do_streaming(cli, req, write_to_file, out, &status_code);
+chttp_request_free(req);
+fclose(out);
+```
+
+Response headers are not accessible via the streaming path. Returning a value less than `len` from the write callback aborts the transfer.
+
+### TLS Configuration
+
+By default, both peer and host verification are on and the system CA bundle is used. Override with `chttpclient_set_tls`:
+
+```c
+/* Disable verification (development / self-signed certs only) */
+chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+tls.verify_peer = false;
+tls.verify_host = false;
+chttpclient_set_tls(cli, &tls);
+
+/* Custom CA bundle */
+chttp_tls_config_t tls2 = CHTTP_TLS_DEFAULT;
+tls2.ca_bundle_path = "/etc/myapp/ca-chain.pem";
+chttpclient_set_tls(cli, &tls2);
+```
+
+Pass `NULL` to restore the defaults.
+
+### Connection Pool Behaviour
+
+Each `chttpcli` handle manages a pool of libcurl easy handles, one per concurrent in-flight request. Slots are created lazily on first use. The pool size defaults to the CPU count. When all slots are in use, `chttpclient_do` blocks until one becomes free, providing natural backpressure with no external semaphore required.
+
+### Scoped Variant
+
+```c
+void fetch_data(void) {
+    chttpcli_construct_scoped(cli);
+    chttpclient_set_request_timeout(cli, 5000);
+
+    chttpcli_response *resp = NULL;
+    chttp_get("https://api.example.com/data", &resp);
+    if (resp) {
+        process(resp->body);
+        chttpclient_resp_free(resp);
+    }
+    /* cli is destroyed automatically when the function returns */
+}
+```
+
+### Real-World Use Case: Parallel API Fan-Out
+
+A gateway handler fans out a single inbound request to three upstream services concurrently on a shared `chttpcli`. Each worker thread acquires a separate pool slot so the calls execute in parallel. The pool capacity acts as the concurrency cap:
+
+```c
+typedef struct {
+    chttpcli cli;
+    const char *url;
+    chttpcli_response *resp;
+    ccol_retval_t rc;
+} FetchArg;
+
+void *fetch_worker(void *arg) {
+    FetchArg *fa = (FetchArg *)arg;
+    chttp_request_t *req = chttp_request_new(CHTTP_GET, fa->url, NULL, NULL);
+    fa->rc = chttpclient_do(fa->cli, req, &fa->resp);
+    chttp_request_free(req);
+    return NULL;
+}
+
+void handle_gateway_request(chttpcli cli) {
+    FetchArg args[3] = {
+        { cli, "https://svc-a.internal/status", NULL, ccol_success },
+        { cli, "https://svc-b.internal/status", NULL, ccol_success },
+        { cli, "https://svc-c.internal/status", NULL, ccol_success },
+    };
+
+    pthread_t threads[3];
+    for (int i = 0; i < 3; i++)
+        pthread_create(&threads[i], NULL, fetch_worker, &args[i]);
+    for (int i = 0; i < 3; i++)
+        pthread_join(threads[i], NULL);
+
+    for (int i = 0; i < 3; i++) {
+        if (args[i].rc == ccol_success)
+            printf("svc %d: %d\n", i, args[i].resp->status_code);
+        chttpclient_resp_free(args[i].resp);
+    }
+}
+```
+
+If the pool size is smaller than the number of concurrent callers, excess threads block inside `chttpclient_do` until a slot is released, automatically bounding peak concurrency.
+
+### Error Return Values
+
+`chttpclient_do`, `chttpclient_do_streaming`, and the convenience wrappers return a `ccol_retval_t`. In addition to the generic codes shared by the rest of the library (`ccol_success`, `ccol_invalid_args`, `ccol_not_enough_memory`, `ccol_timed_out`, `ccol_not_permitted`), the HTTP client maps libcurl failure codes to the following specific values:
+
+| Return value | Meaning | Underlying libcurl code(s) |
+|---|---|---|
+| `ccol_http_invalid_url` | URL is malformed or uses an unsupported scheme | `CURLE_URL_MALFORMAT`, `CURLE_UNSUPPORTED_PROTOCOL` |
+| `ccol_http_host_resolution_failed` | DNS or hostname resolution failed | `CURLE_COULDNT_RESOLVE_HOST`, `CURLE_COULDNT_RESOLVE_PROXY` |
+| `ccol_http_connection_failed` | TCP connection or proxy tunnel could not be established; covers local interface binding errors and QUIC failures | `CURLE_COULDNT_CONNECT`, `CURLE_INTERFACE_FAILED`, `CURLE_NO_CONNECTION_AVAILABLE`, `CURLE_QUIC_CONNECT_ERROR`, `CURLE_PROXY` |
+| `ccol_http_too_many_redirects` | HTTP redirect limit was exceeded | `CURLE_TOO_MANY_REDIRECTS` |
+| `ccol_http_tls_handshake_failed` | TLS/SSL handshake failed; includes SSL engine initialisation errors, upgrade-to-TLS failures, and ECH negotiation failure | `CURLE_SSL_CONNECT_ERROR`, `CURLE_SSL_CIPHER`, `CURLE_SSL_ENGINE_NOTFOUND`, `CURLE_SSL_ENGINE_SETFAILED`, `CURLE_SSL_ENGINE_INITFAILED`, `CURLE_USE_SSL_FAILED`, `CURLE_SSL_SHUTDOWN_FAILED`, `CURLE_ECH_REQUIRED` |
+| `ccol_http_tls_cert_verification_failed` | Peer certificate or CA chain could not be verified; covers bad CA/CRL files, OCSP failures, pinning mismatches, and missing client certificates | `CURLE_PEER_FAILED_VERIFICATION`, `CURLE_SSL_CERTPROBLEM`, `CURLE_SSL_CACERT_BADFILE`, `CURLE_SSL_CRL_BADFILE`, `CURLE_SSL_ISSUER_ERROR`, `CURLE_SSL_INVALIDCERTSTATUS`, `CURLE_SSL_PINNEDPUBKEYNOTMATCH`, `CURLE_SSL_CLIENTCERT` |
+| `ccol_http_transfer_aborted` | Transfer failed after the connection was established; covers server error responses (when CURLOPT_FAILONERROR is set), empty/unparseable responses, mid-transfer network errors, upload failures, upload read callback abort, HTTP range request not satisfied, HTTP/2 and HTTP/3 stream errors, upload rewind failures, content-encoding problems, response body exceeding CURLOPT_MAXFILESIZE, chunk-data callback errors, transport-level auth failures, fatal poll errors, response-too-large errors, and a streaming write_fn returning short | `CURLE_HTTP_RETURNED_ERROR`, `CURLE_WEIRD_SERVER_REPLY`, `CURLE_GOT_NOTHING`, `CURLE_PARTIAL_FILE`, `CURLE_UPLOAD_FAILED`, `CURLE_READ_ERROR`, `CURLE_RANGE_ERROR`, `CURLE_SEND_ERROR`, `CURLE_RECV_ERROR`, `CURLE_WRITE_ERROR`, `CURLE_SEND_FAIL_REWIND`, `CURLE_BAD_CONTENT_ENCODING`, `CURLE_FILESIZE_EXCEEDED`, `CURLE_ABORTED_BY_CALLBACK`, `CURLE_CHUNK_FAILED`, `CURLE_HTTP2`, `CURLE_HTTP2_STREAM`, `CURLE_HTTP3`, `CURLE_AUTH_ERROR`, `CURLE_UNRECOVERABLE_POLL`, `CURLE_TOO_LARGE` |
+| `ccol_unexpected_failure` | Any other libcurl error not covered above | -- |
+
+`ccol_retval_to_str()` from `common.h` returns a string literal for any of these codes.
+
+### Status Code Constants
+
+`chttp.h` defines constants for all commonly used HTTP status codes:
+
+| Constant | Value |
+|---|---|
+| `CHTTP_STATUS_OK` | 200 |
+| `CHTTP_STATUS_CREATED` | 201 |
+| `CHTTP_STATUS_ACCEPTED` | 202 |
+| `CHTTP_STATUS_NO_CONTENT` | 204 |
+| `CHTTP_STATUS_BAD_REQUEST` | 400 |
+| `CHTTP_STATUS_UNAUTHORIZED` | 401 |
+| `CHTTP_STATUS_FORBIDDEN` | 403 |
+| `CHTTP_STATUS_NOT_FOUND` | 404 |
+| `CHTTP_STATUS_INTERNAL_ERROR` | 500 |
+| `CHTTP_STATUS_SERVICE_UNAVAILABLE` | 503 |
+
+See `chttp.h` for the complete list.
+
+### Reference: Core Operations
+
+**Request Lifecycle**
+
+| Function | Description |
+|---|---|
+| `chttp_request_new(method, url, body, err)` | Allocate a request using the default allocator; copies the URL and body data |
+| `chttp_request_new_mp(method, url, body, mprocs, err)` | Allocate a request with a custom allocator |
+| `chttp_request_set_header(req, name, value)` | Set or replace a request header; name is normalised to lowercase |
+| `chttp_request_get_header(req, name)` | Look up a request header (case-insensitive); returns NULL if absent |
+| `chttp_request_free(req)` | Free the request and all owned resources; safe to call with NULL |
+
+**Client Lifecycle**
+
+| Function / Macro | Description |
+|---|---|
+| `chttpcli_construct(name)` | Declare and initialize a client; calls `fatal_err()` on failure |
+| `chttpcli_construct_scoped(name)` | Declare, initialize, and auto-destroy on scope exit; calls `fatal_err()` on failure |
+| `chttpcli_declare(name)` | Declare an uninitialized client variable |
+| `chttpcli_declare_scoped(name)` | Declare with automatic destruction on scope exit, without initializing |
+| `create_chttpclient(err)` | Allocate and return a client using the default allocator; returns NULL on failure |
+| `create_chttpclient_mp(mprocs, err)` | Allocate and return a client with a custom allocator; returns NULL on failure |
+| `chttpclient_destroy(cli)` | Block until all in-flight requests finish, then free and NULL the handle |
+
+**Client Configuration**
+
+| Function | Description |
+|---|---|
+| `chttpclient_set_pool_size(cli, n)` | Set the maximum concurrent in-flight requests; 0 selects the CPU count |
+| `chttpclient_set_connect_timeout(cli, ms)` | TCP connect timeout in milliseconds; 0 = no limit |
+| `chttpclient_set_request_timeout(cli, ms)` | Total request timeout in milliseconds (connect + transfer); 0 = no limit |
+| `chttpclient_set_tls(cli, tls)` | Override TLS settings; NULL restores verification-on defaults |
+
+**Request Execution**
+
+| Function | Description |
+|---|---|
+| `chttpclient_do(cli, req, resp_out)` | Execute a request and buffer the full response body; blocks until a pool slot is free |
+| `chttpclient_do_streaming(cli, req, write_fn, ctx, status_out)` | Execute a request and deliver the body via a streaming callback; response headers are not accessible |
+
+**Default Client and Convenience API**
+
+| Function | Description |
+|---|---|
+| `chttp_default_client()` | Return the lazily initialized process-level default client; thread-safe |
+| `chttp_do(req, resp_out)` | Execute a request using the default client |
+| `chttp_get(url, resp_out)` | GET request via the default client |
+| `chttp_post(url, body, resp_out)` | POST request via the default client |
+| `chttp_put(url, body, resp_out)` | PUT request via the default client |
+| `chttp_delete(url, resp_out)` | DELETE request via the default client |
+| `chttp_patch(url, body, resp_out)` | PATCH request via the default client |
+
+**Response API**
+
+| Function | Description |
+|---|---|
+| `chttpclient_resp_header(resp, name)` | Look up a response header by name (case-insensitive); returns NULL if absent |
+| `chttpclient_resp_free(resp)` | Free the response and all owned resources; safe to call with NULL |
+
+**Body Macros (`chttp.h`)**
+
+| Macro | Description |
+|---|---|
+| `CHTTP_NO_BODY` | Zero-initializer for a bodyless request |
+| `CHTTP_BODY(data, len, ct)` | Inline body with explicit content type |
+| `CHTTP_JSON_BODY(data, len)` | Inline JSON body; sets Content-Type to `application/json` |
+| `CHTTP_TEXT_BODY(data, len)` | Inline plain-text body; sets Content-Type to `text/plain` |
+| `CHTTP_FORM_BODY(data, len)` | Inline URL-encoded form body; sets Content-Type to `application/x-www-form-urlencoded` |
+
+---
+
+## 19. HTTP Server - `chttpserver`
+
+`chttpserver` is an embedded HTTP/1.1 server backed by the facil.io event-driven networking library. It provides a Go-style routing API: register handlers for method+pattern pairs, attach middleware chains, and create sub-routers with their own prefix and middleware. Multiple server instances may run simultaneously on different ports within the same process, all sharing a single facil.io event-loop engine.
+
+The module is split across two headers: `chttp.h` declares shared types (`chttp_method_t`, `chttp_tls_config_t`, status-code constants, and body macros), and `chttpserver.h` declares the server API. Including `chttpserver.h` pulls in `chttp.h` automatically.
+
+**Header:** `#include <chttpserver.h>`
+
+**Dependencies:** links `-lssl -lcrypto -lm -lpthread`
+
+### Engine Lifecycle
+
+facil.io uses a single shared event loop ("engine") per process. The engine starts automatically on the first `chttpsvr_start` call and stops automatically when the last server is destroyed -- no explicit engine start or stop call is required.
+
+The library does not install any signal handlers. Applications are responsible for wiring shutdown into whatever signal or lifecycle mechanism they use. `chttpsvr_engine_stop()` is async-signal-safe and is the intended shutdown hook:
+
+```c
+#include <signal.h>
+#include <chttpserver.h>
+
+static void _on_signal(int sig) { (void)sig; chttpsvr_engine_stop(); }
+
+int main(void) {
+    signal(SIGINT,  _on_signal);
+    signal(SIGTERM, _on_signal);
+
+    /* ... create server, register routes, then start: */
+    chttpsvr_start(srv, &cfg);   /* blocks until engine is up and port is bound */
+
+    chttpsvr_engine_wait();      /* block until engine exits */
+    chttpsvr_destroy(srv);       /* engine stops when last server is destroyed */
+}
+```
+
+To redirect engine log output, call `chttpsvr_set_engine_logger` before the first `chttpsvr_start`:
+
+```c
+clog logger = clog_open_fd(2, CLOG_INFO);
+chttpsvr_set_engine_logger(logger);   /* derive engine sub-logger; optional */
+```
+
+### Quick Start
+
+```c
+#include <signal.h>
+#include <chttpserver.h>
+#include <clogger.h>
+
+static void hello(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+    (void)req; (void)ctx;
+    chttpsvr_resp_write_str(resp, "Hello, world!");
+}
+
+static void _on_signal(int sig) { (void)sig; chttpsvr_engine_stop(); }
+
+int main(void) {
+    signal(SIGINT,  _on_signal);
+    signal(SIGTERM, _on_signal);
+
+    clog logger = clog_open_fd(2, CLOG_INFO);
+    chttpsvr_set_engine_logger(logger);   /* optional: route engine logs to logger */
+
+    chttpsvr srv = create_chttpsvr(logger, NULL);
+
+    chttpsvr_register_handler(srv, CHTTP_GET, "/hello", hello, NULL);
+
+    chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+    cfg.port = 8080;
+    chttpsvr_start(srv, &cfg);   /* blocks until engine is up and port is bound */
+
+    chttpsvr_engine_wait();   /* block until SIGINT/SIGTERM triggers engine stop */
+    chttpsvr_destroy(srv);    /* engine stops when last server is destroyed */
+    clog_close(logger);
+    return 0;
+}
+```
+
+### Construction and Lifecycle
+
+```c
+clog logger = clog_open_fd(2, CLOG_INFO);
+chttpsvr srv  = create_chttpsvr(logger, NULL);         /* default allocator */
+chttpsvr srv  = create_chttpsvr_mp(mp, logger, &err);  /* custom allocator */
+
+chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+cfg.host                 = "0.0.0.0";          /* listen address */
+cfg.port                 = 8080;
+cfg.max_body_size        = 4*1024*1024;         /* 4 MiB body limit */
+cfg.read_timeout_ms      = 30000;               /* 30 s read timeout (baseline) */
+cfg.idle_timeout_ms      = 60000;               /* 60 s keep-alive idle timeout */
+cfg.worker_thread_count  = 4;                   /* 0 = CPU core count */
+cfg.worker_queue_capacity = 128;                /* 0 = default (256 * threads); CHTTPSVR_QUEUE_UNBOUNDED = no limit */
+cfg.tls                  = &tls_cfg;            /* optional TLS (chttp_tls_config_t) */
+
+ccol_retval_t rv = chttpsvr_start(srv, &cfg);   /* starts the engine on first call */
+/* Routes and middleware may be registered before or after chttpsvr_start. */
+
+chttpsvr_stop(srv);     /* close this server's listener (other servers are unaffected) */
+chttpsvr_destroy(srv);  /* drain in-flight requests; stop engine if last server */
+```
+
+Multiple servers can listen on different ports simultaneously:
+
+```c
+chttpsvr api  = create_chttpsvr(logger, NULL);
+chttpsvr mgmt = create_chttpsvr(logger, NULL);
+
+chttpsvr_config_t api_cfg  = CHTTPSVR_CONFIG_DEFAULT; api_cfg.port  = 8080;
+chttpsvr_config_t mgmt_cfg = CHTTPSVR_CONFIG_DEFAULT; mgmt_cfg.port = 9090;
+
+chttpsvr_start(api,  &api_cfg);   /* blocks until engine is up and port is bound */
+chttpsvr_start(mgmt, &mgmt_cfg);
+
+/* ... both servers serve concurrently ... */
+
+chttpsvr_stop(api);
+chttpsvr_stop(mgmt);
+
+chttpsvr_destroy(api);
+chttpsvr_destroy(mgmt);   /* engine stops after the last destroy */
+```
+
+The lifecycle macros follow the usual pattern:
+
+```c
+chttpsvr_construct(name, cl);         /* declare + init; fatal_err on failure */
+chttpsvr_construct_scoped(name, cl);  /* same + auto-destroy on scope exit */
+chttpsvr_declare(name);               /* declare without init */
+chttpsvr_destroy(name);               /* destroy and NULL the pointer */
+```
+
+### Routing
+
+Register a handler for a method and URL pattern:
+
+```c
+chttpsvr_register_handler(srv, CHTTP_GET,    "/",              index_handler, NULL);
+chttpsvr_register_handler(srv, CHTTP_POST,   "/users",         create_user,   NULL);
+chttpsvr_register_handler(srv, CHTTP_GET,    "/users/{id}",    get_user,      NULL);
+chttpsvr_register_handler(srv, CHTTP_DELETE, "/users/{id}",    delete_user,   NULL);
+chttpsvr_register_handler(srv, CHTTP_PUT,    "/items/{id}/{sub}", update_item, NULL);
+```
+
+`{name}` segments are named path parameters. Multiple parameters per pattern are supported. Literal segments are URL-decoded before comparison using path-segment decoding rules (RFC 3986): percent-encoded sequences such as `%20` are decoded, but `+` is left as a literal `+` (not converted to a space -- that is a query-string convention). Named-parameter values follow the same decoding, so a URL like `/users/hello+world` delivers `"hello+world"` to `chttpsvr_req_param`, not `"hello world"`.
+
+**Parameter name restrictions:** the name inside `{...}` must consist entirely of characters from `[A-Za-z0-9_]`. Patterns with names containing any other character (spaces, hyphens, dots, etc.) are rejected at registration time with `ccol_invalid_args`.
+
+Routes are matched in registration order across all registered routers. The server scans every route looking for a path-and-method match. If at least one route matches the path but none of those match the method, the server responds with 405 Method Not Allowed. If no route matches the path at all, it responds with 404. Path matching includes validation of percent-encoded sequences: a request with invalid encoding in any path segment -- whether a literal segment (e.g. `/bad%ZZusers/{id}` against `/users/{id}`) or a captured `{name}` parameter (e.g. `/users/bad%ZZvalue` against `/users/{id}`) -- does not match the route and returns 404 regardless of which methods are registered for that pattern. This means multiple methods can be registered for the same path and all will work correctly regardless of registration order:
+
+```c
+chttpsvr_register_handler(srv, CHTTP_GET,  "/users",      list_users,   NULL);
+chttpsvr_register_handler(srv, CHTTP_POST, "/users",      create_user,  NULL);
+chttpsvr_register_handler(srv, CHTTP_GET,  "/users/{id}", get_user,     NULL);
+chttpsvr_register_handler(srv, CHTTP_PUT,  "/users/{id}", update_user,  NULL);
+```
+
+**Trailing slashes:** A request path with a trailing slash does NOT match a pattern without one. For example, `GET /users/42/` returns 404 if only `/users/{id}` is registered. Register a separate pattern if you want to accept the trailing-slash form.
+
+**Invalid patterns:** Route patterns must begin with `/`. Patterns that do not start with `/` (including the empty string) are rejected with `ccol_invalid_args`. Patterns containing consecutive slashes (e.g. `/foo//bar`) or a trailing slash (e.g. `/foo/`) are also rejected. Patterns whose `{name}` parameter segment contains characters outside `[A-Za-z0-9_]` are likewise rejected. All of these cases would produce unreachable or misleading routes because incoming paths are never normalised -- only an exact segment-by-segment match succeeds.
+
+**Thread safety:** Route and middleware registration (`chttpsvr_register_handler`, `chttpsvr_use`, `chttpsvr_router_on`, `chttpsvr_router_use`, `chttpsvr_subrouter`) is thread-safe and may be called at any time -- before or after `chttpsvr_start`. A reader-writer lock protects the routing tables so concurrent requests are never blocked by rare registration writes.
+
+`chttpsvr_register_handler` and `chttpsvr_router_on` return `ccol_invalid_args` if `fn` is NULL, `pattern` is NULL, `pattern` does not start with `/`, `pattern` contains consecutive or trailing slashes, or a `{name}` segment contains characters outside `[A-Za-z0-9_]`. `chttpsvr_register_streaming_handler` and `chttpsvr_router_on_stream` apply the same guards. `chttpsvr_use` and `chttpsvr_router_use` likewise return `ccol_invalid_args` for a NULL `fn`. `chttpsvr_subrouter` returns NULL if `srv` is NULL, `prefix` is NULL, `prefix` does not start with `/`, or `prefix` contains consecutive slashes (e.g. `"//api"` or `"/a//b"`).
+
+**Wildcard method (`CHTTP_ANY`):** Pass `CHTTP_ANY` as the method to register a single handler that matches every HTTP method on the given pattern. Inside the handler, call `chttpsvr_req_method(req)` to determine which method was actually used. Because routing is first-wins, a method-specific route registered before a `CHTTP_ANY` route on the same pattern takes precedence for its method, while `CHTTP_ANY` catches every other method:
+
+```c
+/* GET uses get_user; all other methods (POST, PUT, DELETE, ...) use any_user. */
+chttpsvr_register_handler(srv, CHTTP_GET,  "/users/{id}", get_user,  NULL);
+chttpsvr_register_handler(srv, CHTTP_ANY,  "/users/{id}", any_user,  NULL);
+```
+
+`CHTTP_ANY` is a server-side routing sentinel only; do not pass it to the HTTP client API.
+
+**Duplicate routes:** Registering the same method and pattern more than once is permitted and succeeds each time, but only the first registered handler is ever invoked (first-wins policy). There is no error or warning for duplicate registrations.
+
+**Middleware limit:** The total number of middleware steps (global plus router-specific) active for a single request is capped at 32. The limit is enforced at dispatch time, not at registration time -- `chttpsvr_use` and `chttpsvr_router_use` always return `ccol_success` regardless of how many entries have already been registered. Exceeding the limit causes the server to respond with `500 Internal Server Error` on the affected request. In practice the limit is generous and is not expected to be reached.
+
+**Root-router shadowing:** Routes registered directly on the server (via `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler`) are part of the root router, which is always evaluated before any sub-router. A root-level route whose path conflicts with a sub-router pattern will always win, regardless of registration order. Avoid registering root-level routes whose paths overlap with a sub-router's prefix and pattern combination.
+
+### Streaming Handlers
+
+ALL handlers (buffered and streaming) run on the server's own `ctpool`; the reactor thread is never blocked by user code. Streaming handlers additionally expose `chttpsvr_req_read` for sequential body access, making them the preferred choice when the body is consumed incrementally:
+
+```c
+chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/upload", upload_handler, NULL);
+
+static void upload_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+    (void)ctx;
+    char buf[4096];
+    ssize_t n;
+    while ((n = chttpsvr_req_read(req, buf, sizeof(buf))) > 0) {
+        /* process chunk */
+    }
+    chttpsvr_resp_write_str(resp, "received");
+}
+```
+
+The `chttpsvr_req_read` function reads bytes sequentially from the pre-buffered body and returns 0 at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1.
+
+The server's `ctpool` is created at `chttpsvr_start` time. Its capacity is controlled by `chttpsvr_config_t.worker_thread_count` and `worker_queue_capacity`. If the queue is full when a request arrives, the server responds immediately with `503 Service Unavailable` -- it never stalls the reactor thread.
+
+### Middleware
+
+Middleware functions run before the route handler. They receive a `next` callback to continue the chain, or can short-circuit by not calling it:
+
+```c
+static void auth_mw(chttpsvr_req *req, chttpsvr_resp *resp,
+                    void *ctx, chttpsvr_next_fn next) {
+    const char *token = chttpsvr_req_header(req, "authorization");
+    if (!token) {
+        chttpsvr_resp_set_status(resp, CHTTP_STATUS_UNAUTHORIZED);
+        chttpsvr_resp_write_str(resp, "missing token");
+        return;  /* do not call next -- chain is terminated */
+    }
+    next(req, resp);  /* continue to the next middleware or handler */
+}
+
+/* Global middleware: runs for every request. */
+chttpsvr_use(srv, auth_mw, NULL);
+```
+
+### Sub-Routers
+
+Sub-routers group routes under a common path prefix and carry their own middleware chain:
+
+```c
+chttpsvr_router *api = chttpsvr_subrouter(srv, "/api/v1");
+chttpsvr_router_use(api, rate_limit_mw, NULL);  /* runs for /api/v1/* only */
+chttpsvr_router_on(api, CHTTP_GET, "/items",      list_items,  NULL);
+chttpsvr_router_on(api, CHTTP_GET, "/items/{id}", get_item,    NULL);
+chttpsvr_router_on(api, CHTTP_POST, "/items",     create_item, NULL);
+```
+
+The prefix must begin with `'/'`. A trailing slash is stripped automatically so `"/api/v1"` and `"/api/v1/"` are equivalent.
+
+**The `"/"` prefix edge case:** After trailing-slash normalisation the prefix `"/"` is stored with `prefix_len = 1`. The match rule requires the character immediately after the prefix to be `'/'` or `'\0'`. For the exact path `"/"` the next character is `'\0'` (matches). For any path like `"/foo"` the next character is a letter, so those paths do **not** match a `"/"` sub-router and receive 404. If you need to catch all requests regardless of path, register routes directly on the server with `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler` rather than using a sub-router with prefix `"/"`.
+
+Global middleware (added via `chttpsvr_use`) runs before router middleware for all routes.
+
+### Request API
+
+```c
+chttp_method_t  chttpsvr_req_method(req);
+const char     *chttpsvr_req_path(req);
+const char     *chttpsvr_req_raw_query(req);
+const char     *chttpsvr_req_header(req, "content-type");
+const void     *chttpsvr_req_body(req, &body_len);
+ssize_t         chttpsvr_req_read(req, buf, buflen);  /* streaming only */
+const char     *chttpsvr_req_param(req, "id");        /* named path param */
+
+/* Multi-value query parameters (e.g. ?q=a&q=b): */
+size_t n;
+const char **vals = chttpsvr_req_query(req, "q", &n);
+/* vals is NULL-terminated; the string values are valid for the handler
+   lifetime, but the array pointer is a scratch buffer recycled on each call
+   to chttpsvr_req_query -- copy any pointers before the next call.
+   NOTE: chttpsvr_req_query cannot distinguish OOM from key-absent; both
+   return (NULL, count=0).  Call chttpsvr_req_query_oom(req) after a NULL
+   return to tell them apart, or use chttpsvr_req_query_one for single-valued
+   keys. */
+
+/* Convenience for single-value query params (OOM-distinguishable): */
+const char *val = NULL;
+ccol_retval_t rv = chttpsvr_req_query_one(req, "sort", &val);
+/* returns ccol_not_permitted if key appears more than once,
+   ccol_not_enough_memory on OOM */
+```
+
+### Response API
+
+```c
+chttpsvr_resp_set_status(resp, CHTTP_STATUS_CREATED);
+chttpsvr_resp_set_header(resp, "x-request-id", "abc123");
+chttpsvr_resp_write(resp, data, len);        /* append raw bytes */
+chttpsvr_resp_write_str(resp, "text");       /* append NUL-terminated string */
+chttpsvr_resp_write_json(resp, json, len);   /* sets Content-Type + appends */
+```
+
+The response is buffered and sent automatically when the handler returns. `chttpsvr_resp_write` uses an overflow-safe doubling strategy for buffer growth: it returns `ccol_not_enough_memory` when `len` would cause the total body length to overflow `size_t`, in addition to the normal allocator-failure case.
+
+### Status Code Constants
+
+Common status code constants from `chttp.h`:
+
+| Constant | Value |
+|---|---|
+| `CHTTP_STATUS_OK` | 200 |
+| `CHTTP_STATUS_CREATED` | 201 |
+| `CHTTP_STATUS_NO_CONTENT` | 204 |
+| `CHTTP_STATUS_BAD_REQUEST` | 400 |
+| `CHTTP_STATUS_UNAUTHORIZED` | 401 |
+| `CHTTP_STATUS_FORBIDDEN` | 403 |
+| `CHTTP_STATUS_NOT_FOUND` | 404 |
+| `CHTTP_STATUS_METHOD_NOT_ALLOWED` | 405 |
+| `CHTTP_STATUS_INTERNAL_SERVER_ERROR` | 500 |
+| `CHTTP_STATUS_SERVICE_UNAVAILABLE` | 503 |
+
+### TLS
+
+Pass a `chttp_tls_config_t` (from `chttp.h`) in the server config to enable TLS. The server uses OpenSSL via facil.io's TLS abstraction layer:
+
+```c
+chttp_tls_config_t tls = {
+    .cert_path       = "/etc/certs/server.crt",
+    .key_path        = "/etc/certs/server.key",
+    .ca_bundle_path  = NULL,   /* optional; used for mutual TLS */
+};
+cfg.tls = &tls;
+```
+
+### API Reference
+
+**Construction**
+
+| Function | Description |
+|---|---|
+| `create_chttpsvr(cl, err)` | Create a server with the default allocator; `cl` is the clog handle for this server; returns NULL on failure |
+| `create_chttpsvr_mp(mp, cl, err)` | Create a server with a custom allocator |
+| `__chttpsvr_destroy(srv)` | Destroy and free the server; does not NULL the pointer; call only after engine is stopped |
+| `chttpsvr_destroy(srv)` | Macro: calls `__chttpsvr_destroy` then sets pointer to NULL |
+
+**Engine Lifecycle (shared, process-level)**
+
+| Function | Description |
+|---|---|
+| `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-engine`); must be called before the first `chttpsvr_start`; returns `ccol_invalid_args` if `cl` is NULL |
+| `chttpsvr_engine_stop()` | Signal the engine to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler |
+| `chttpsvr_engine_wait()` | Block until the engine thread exits; use as an escape hatch when you need to wait for all servers to shut down |
+
+**Per-Server Lifecycle**
+
+| Function | Description |
+|---|---|
+| `chttpsvr_start(srv, cfg)` | Start the server; on the first call starts the engine and blocks until the port is bound and the reactor is in its event loop; subsequent calls bind synchronously and return immediately; returns `ccol_invalid_args` if `srv` is NULL or `cfg->port` is 0; returns `ccol_not_permitted` if already started |
+| `chttpsvr_stop(srv)` | Close this server's listener; other servers continue running |
+
+**Route Registration (root router)**
+
+| Function | Description |
+|---|---|
+| `chttpsvr_register_handler(srv, method, pattern, fn, ctx)` | Register a buffered handler; runs on the server's ctpool |
+| `chttpsvr_register_streaming_handler(srv, method, pattern, fn, ctx)` | Register a streaming handler; exposes `chttpsvr_req_read`; runs on the server's ctpool |
+| `chttpsvr_use(srv, fn, ctx)` | Append global middleware |
+
+**Sub-Routers**
+
+| Function | Description |
+|---|---|
+| `chttpsvr_subrouter(srv, prefix)` | Create a sub-router under the given path prefix; prefix must start with '/' and must not contain consecutive slashes |
+| `chttpsvr_router_on(router, method, pattern, fn, ctx)` | Register a buffered handler on the sub-router |
+| `chttpsvr_router_on_stream(router, method, pattern, fn, ctx)` | Register a streaming handler on the sub-router |
+| `chttpsvr_router_use(router, fn, ctx)` | Append middleware to the sub-router |
+
+**Request**
+
+| Function | Description |
+|---|---|
+| `chttpsvr_req_method(req)` | HTTP method of the request |
+| `chttpsvr_req_path(req)` | URL path (decoded, without query string) |
+| `chttpsvr_req_raw_query(req)` | Raw query string (without leading `?`); NULL if absent |
+| `chttpsvr_req_header(req, name)` | Look up a request header (case-insensitive); NULL if absent |
+| `chttpsvr_req_body(req, &len)` | Pointer to buffered body bytes and length |
+| `chttpsvr_req_read(req, buf, n)` | Sequential body read for streaming handlers; returns bytes read, 0 at EOF or when n==0 (no-op), -1 on error (NULL req, NULL buf with n>0, or called from a buffered handler) |
+| `chttpsvr_req_param(req, name)` | Named path parameter (URL-decoded); NULL if not in pattern |
+| `chttpsvr_req_query(req, key, &count)` | All values for a query parameter (lazy-parsed, NULL-terminated array); returns NULL on key-absent or OOM |
+| `chttpsvr_req_query_one(req, key, &val)` | Single-value query parameter; `ccol_not_permitted` if key appears more than once; `ccol_not_enough_memory` on OOM |
+| `chttpsvr_req_query_oom(req)` | Returns true if a previous `chttpsvr_req_query` call on this request failed due to OOM (distinguishes OOM from key-absent) |
+
+**Response**
+
+| Function | Description |
+|---|---|
+| `chttpsvr_resp_set_status(resp, code)` | Set the HTTP status code (default 200); values outside 100-999 are sent as 500 |
+| `chttpsvr_resp_set_header(resp, name, value)` | Set or replace a response header |
+| `chttpsvr_resp_write(resp, data, len)` | Append raw bytes to the response body |
+| `chttpsvr_resp_write_str(resp, str)` | Append a NUL-terminated string |
+| `chttpsvr_resp_write_json(resp, json, len)` | Append JSON body and set `Content-Type: application/json`; returns `ccol_invalid_args` when len is 0 |
+
+---
+
+## 20. Thread Safety
+
+The library applies a consistent policy: **components that pass data between threads or provide shared services carry their own synchronisation; components used for single-threaded data manipulation are deliberately left unguarded.**
 
 ### Intentionally Unguarded Containers
 
@@ -2596,16 +3571,20 @@ The following components include their own internal synchronisation and are safe
 | `channel` | Two internal circular queues (one per direction) |
 | `clrucache` | Single mutex + per-entry condition variables; see constraints below |
 | `clogger` | Mutex on the shared backing store; all handles writing to the same fd are fully serialised; see constraints below |
+| `cthreadpool` | Internal mutex + condition variables; all public functions are safe to call concurrently except `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy`; see constraints below |
+| `chttpclient` | Internal pool mutex + condition variable; all public functions including `chttpclient_do` and `chttpclient_do_streaming` are safe to call concurrently on the same handle |
 
 ### Per-Component Constraints
 
 **`clrucache` eviction callback.** The callback passed to `clru_construct` is invoked **while the cache mutex is held**. It must not call back into the same cache handle, doing so will deadlock. It may allocate memory or write to a logger, but must not call `clru_get` or `clru_set` on the cache that triggered the eviction.
 
+**`cthreadpool` shutdown and destroy.** `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy` must each be called at most once and must not be called concurrently with each other. All other public functions (`ctpool_submit`, `ctpool_try_submit`, `ctpool_timed_submit`, `ctpool_submit_future`, `ctpool_wait`, `ctpool_pending_count`, `ctpool_active_count`) are safe to call from multiple threads concurrently. The future functions (`ctpool_future_get`, `ctpool_future_done`, `ctpool_future_cancelled`, `ctpool_future_free`) are likewise safe to call concurrently on the same future object.
+
 **`clogger` derived loggers.** `clog_derive` creates a sibling logger that shares the same fd, rotation state, and mutex as the root logger via the shared backing store. Writes from the root and all of its siblings are fully serialised with no additional locking required at the call site. The minimum-level check (`log_info`, `log_warn`, and similar macros) reads the per-logger level field without holding the mutex as a deliberate performance optimisation; a concurrent `clog_set_level` may therefore cause a single message near the boundary level to be inconsistently logged or dropped. This is intentional: the optimisation avoids mutex acquisition for every suppressed message, and the inconsistency window is not a data-corruption hazard.
 
 ---
 
-## 18. Custom Memory Management
+## 21. Custom Memory Management
 
 Every container accepts a `ccol_memmgmt_procs_t *` at creation time. Passing `NULL` selects the standard `malloc`/`calloc`/`realloc`/`free` family.
 
@@ -2666,7 +3645,7 @@ r_mempool_destroy(node_pool);
 
 ---
 
-## 19. License
+## 22. License
 
 MIT License
 

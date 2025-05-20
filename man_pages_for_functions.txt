@@ -343,6 +343,39 @@ NOTES
 SEE ALSO
        cvec_data_ptr, cvector_at
 
+------------------------------------------------------------------------------
+NAME
+       cvector_find - find the index of the first occurrence of an element
+
+SYNOPSIS
+       #include <cvector.h>
+
+       size_t cvector_find(cvec v, const void *elem,
+                           ccol_comparison_proc_t cmp);
+
+DESCRIPTION
+       Performs a linear scan and returns the zero-based index of the first
+       element that compares equal to *elem. When cmp is NULL the comparison
+       is done with memcmp over the element size (byte-wise equality).
+
+PARAMETERS
+       v     Vector to search (must not be NULL)
+       elem  Pointer to the value to search for
+       cmp   Comparison function (int(*)(const void*,const void*)), or NULL
+             to use memcmp
+
+RETURN VALUE
+       Zero-based index of the first matching element.
+       ccol_invalid_size if no match is found or elem is NULL.
+
+NOTES
+       O(n) complexity
+       Asserts if v is NULL
+       Structs with padding bytes may not compare correctly when cmp is NULL
+
+SEE ALSO
+       cvec_find
+
 ================================================================================
                          CHASHMAP.H - HASH MAP
 ================================================================================
@@ -364,12 +397,12 @@ DESCRIPTION
        The implementation strategy (open-addressing vs separate chaining) is
        automatically selected based on the key and value types.
 
-       Open-addressing is used when both key and value are integral types ≤8 
+       Open-addressing is used when both key and value are integral types <=8 
        bytes (excluding long double). Separate chaining is used for non-integral
        types or types >8 bytes.
 
 PARAMETERS
-       initial_bucket_array_size  Initial number of buckets (minimum 64)
+       initial_bucket_array_size  Initial number of buckets (minimum 16)
        key_type                   Type of keys (determines implementation)
        val_type                   Type of values (determines implementation)
        err                        Optional pointer to receive error string
@@ -379,7 +412,7 @@ RETURN VALUE
        Returns NULL on failure
 
 NOTES
-       Minimum bucket count is 64 (always power-of-2)
+       Minimum bucket count is 16 (always power-of-2)
        Open-addressing: Fibonacci hashing for integers, XXHash64 for buffers
        Separate chaining: XXHash64 for all types
        Map must be destroyed with chmap_destroy() when done
@@ -420,7 +453,7 @@ RETURN VALUE
 
 NOTES
        Implementation selection:
-         - Open-addressing: Both key and value are integral types ≤8 bytes
+         - Open-addressing: Both key and value are integral types <=8 bytes
          - Separate chaining: Either key or value is non-integral or >8 bytes
        Integral types: char, short, int, long, long long (signed/unsigned),
                       float, double
@@ -574,7 +607,7 @@ DESCRIPTION
 PARAMETERS
        chm                      Hash map to reset
        new_bucket_array_size    New bucket count (0 = keep current size;
-                                values < 64 are raised to 64; otherwise
+                                values < 16 are raised to 16; otherwise
                                 rounded to the nearest power of two)
 
 RETURN VALUE
@@ -617,7 +650,7 @@ RETURN VALUE
 NOTES
        Default comparison for unsigned: memcmp(key1, key2, size)
        Default comparison for signed: proper signed integer comparison
-       Map maintains AVL balance: |height(left) - height(right)| ≤ 1
+       Map maintains AVL balance: |height(left) - height(right)| <= 1
        All operations are O(log n) for balanced tree
        Map must be destroyed with cbmap_destroy() when done
 
@@ -1717,10 +1750,10 @@ DESCRIPTION
        Inspects the calling thread's ID and the requested direction to determine
        which of the channel's two underlying circular queues to wrap:
 
-         ccol_select_read  — owner ← workers_to_owner_cq  (same as chan_recv_zc)
-                           worker ← owner_to_workers_cq
-         ccol_select_write — owner → owner_to_workers_cq  (same as chan_send_zc)
-                           worker → workers_to_owner_cq
+         ccol_select_read  -- owner <- workers_to_owner_cq  (same as chan_recv_zc)
+                           worker <- owner_to_workers_cq
+         ccol_select_write -- owner -> owner_to_workers_cq  (same as chan_send_zc)
+                           worker -> workers_to_owner_cq
 
        The resolution is performed at the call site so that ccol_select() itself
        never needs access to the opaque channel struct.  The channel pointer is
@@ -1845,7 +1878,7 @@ DESCRIPTION
        Node lifetime: producer notification happens while the producer holds the
        queue mutex.  Deregistration also requires the queue mutex.  A node
        therefore cannot be removed from the list while a producer is traversing
-       it — the heap buffer backing the node array cannot be freed mid-traversal.
+       it -- the heap buffer backing the node array cannot be freed mid-traversal.
 
 PARAMETERS
        buf           Buffer to receive the message.  On ccol_success the caller
@@ -1990,11 +2023,11 @@ EXAMPLES
                selectable_from_fd(pfd[0], ccol_select_read));
        if (r == ccol_success) {
            if (idx == 0) {
-               /* queue won — buf has the dequeued message */
+               /* queue won -- buf has the dequeued message */
                printf("queue message size: %zu\n", msg.size);
                free(msg.data);
            } else {
-               /* fd won — ccol_select already read the data into buf */
+               /* fd won -- ccol_select already read the data into buf */
                printf("read %zu bytes from fd\n", msg.size);
                free(msg.data);   /* msg.data may be NULL on EOF */
            }
@@ -2188,7 +2221,7 @@ PARAMETERS
        s   String to destroy
 
 WARNINGS
-       Does not NULL the caller's pointer — use cstring_destroy() instead
+       Does not NULL the caller's pointer -- use cstring_destroy() instead
 
 SEE ALSO
        cstring_destroy, ___cstring_destroy
@@ -2382,7 +2415,7 @@ DESCRIPTION
 
 PARAMETERS
        s     String to modify
-       pos   Insertion position (0 … length, inclusive)
+       pos   Insertion position (0 ... length, inclusive)
        str   C string to insert (must not be NULL)
 
 RETURN VALUE
@@ -2905,7 +2938,7 @@ RETURN VALUE
 NOTES
        Thread-safe: all operations on the returned handle are protected by
        an internal mutex and per-entry condition variables.
-       The eviction callback is invoked while the cache mutex is held — it
+       The eviction callback is invoked while the cache mutex is held -- it
        must not re-enter the cache.
        The destroy function must be called only after all other threads have
        finished using the cache.
@@ -3149,7 +3182,6 @@ NOTES
        The fd is not duplicated; the caller is responsible for keeping it
        open for the lifetime of the logger.
        All public functions are fully thread-safe via a per-logger mutex.
-       Passing NULL as the logger to any subsequent call is always a no-op.
 
 SEE ALSO
        clog_open_file_mp, clog_close, log_info, log_error
@@ -3185,9 +3217,17 @@ DESCRIPTION
 
        When a rotation fires, the current file is atomically renamed to
        <path>.<YYYYMMDDHHMMSS>. If a file with that name already exists a
-       collision suffix _1, _2, … (up to _9999) is appended. A new empty
+       collision suffix _1, _2, ... (up to _9999) is appended. A new empty
        log file is then opened. When cfg->max_rotated_files > 0, the oldest
        rotated files beyond the limit are deleted automatically.
+
+       When cfg->compress_rotated is true, each rotated file is gzip-
+       compressed via zlib immediately after rotation. The compressed file
+       is written to <rotated-name>.gz and the original uncompressed file
+       is removed on success. Compression runs outside the logger mutex so
+       log writers are never stalled while the I/O completes. The resulting
+       .gz files are compatible with standard gunzip(1) and zcat(1) tools.
+       Requires linking the application with -lz.
 
 PARAMETERS
        path       Destination log file path. Copied internally.
@@ -3196,10 +3236,11 @@ PARAMETERS
                   Fields with value 0 fall back to their respective
                   CLOG_DEFAULT_* constant:
                     size_rotation_enabled  - enable size-based rotation
-                    max_file_size          - bytes threshold (0 → 10 MiB)
+                    max_file_size          - bytes threshold (0 = 10 MiB)
                     time_rotation_enabled  - enable time-based rotation
-                    rotation_interval_secs - seconds (0 → 86400 = 1 day)
-                    max_rotated_files      - files kept; 0 → no limit
+                    rotation_interval_secs - seconds (0 = 86400 = 1 day)
+                    max_rotated_files      - files kept; 0 = no limit
+                    compress_rotated       - gzip-compress each rotated file
        mprocs     Custom allocator (malloc/free/calloc/realloc function
                   pointers), or NULL to use the default system allocator.
                   All four pointers must be set when mprocs is non-NULL;
@@ -3217,8 +3258,11 @@ RETURN VALUE
 NOTES
        The logger owns the file descriptor and closes it on clog_close().
        O_CLOEXEC is set on the file descriptor.
-       Rotation is performed within the locked section — no log lines are
-       lost or interleaved across the rename boundary.
+       The rename and new-fd open are performed within the locked section
+       so no log lines are lost or interleaved across the rotation boundary.
+       When compress_rotated is true, the gzip compression step runs after
+       the new fd is already in use, outside the mutex, to avoid stalling
+       concurrent log writers during the compression I/O.
 
 SEE ALSO
        clog_open_fd_mp, clog_close, CLOG_DEFAULT_MAX_FILE_SIZE,
@@ -3235,23 +3279,26 @@ SYNOPSIS
 
 DESCRIPTION
        Releases all resources owned by the logger:
-         - If the logger is file-backed, the file descriptor is closed.
+         - If the logger is file-backed and this is the last handle sharing
+           the underlying file (i.e. all derived loggers have also been
+           closed), the file descriptor is closed.  If derived loggers still
+           exist the fd remains open and the file's ref-count is decremented.
          - All attached key=value fields are freed.
          - The internal write buffer is freed.
-         - The mutex is destroyed and the logger struct is freed.
+         - The per-handle state is freed; the shared backing store is freed
+           only when the last handle is released.
 
-       After this call, the handle must not be used. Passing NULL is safe
-       and does nothing.
+       After this call, the handle must not be used.
 
 PARAMETERS
-       logger  Logger handle to close. NULL is a no-op.
+       logger  Logger handle to close.
 
 NOTES
        clog_close() must not be called while other threads are still calling
        log_* macros on the same handle. Callers are responsible for ensuring
        all logging threads have finished before calling clog_close().
        For fd-based loggers (clog_open_fd_mp), the file descriptor is NOT
-       closed — it is the caller's responsibility.
+       closed -- it is the caller's responsibility.
 
 SEE ALSO
        clog_open_fd_mp, clog_open_file_mp
@@ -3272,7 +3319,7 @@ DESCRIPTION
        sharing the logger.
 
 PARAMETERS
-       logger  Logger handle. NULL is a no-op.
+       logger  Logger handle.
        level   New minimum level (CLOG_TRACE through CLOG_OFF).
                Use CLOG_OFF to suppress all output.
 
@@ -3295,10 +3342,10 @@ DESCRIPTION
        Returns the current minimum severity level of the logger.
 
 PARAMETERS
-       logger  Logger handle. NULL returns CLOG_OFF.
+       logger  Logger handle.
 
 RETURN VALUE
-       Current minimum level, or CLOG_OFF if logger is NULL.
+       Current minimum level.
 
 NOTES
        Thread-safe: protected by the per-logger mutex.
@@ -3320,7 +3367,7 @@ DESCRIPTION
        every subsequent log line emitted by this logger, inserted between the
        func= and msg= tokens:
 
-         ts=... level=INFO proc=[prog(pid):tname(tid)] src=... func=... key=value msg=...
+         ts=... level=INFO proc=prog(pid):tname(tid) src=... func=... key=value msg=...
 
        Both key and value are copied internally; the caller may free or
        modify them after this call without affecting the logger.
@@ -3331,12 +3378,12 @@ DESCRIPTION
        Values that contain spaces, '=', '"', '\\', or ASCII control
        characters are automatically double-quoted and backslash-escaped in
        the output:
-         - '"' → \"
-         - '\\' → \\
-         - control chars → \xNN
+         - '"' -> \"
+         - '\\' -> \\
+         - control chars -> \xNN
 
 PARAMETERS
-       logger  Logger handle. NULL is a no-op.
+       logger  Logger handle.
        key     Field name. Copied internally. Should not contain '=' or
                whitespace (no enforcement, but the resulting logfmt line
                would be malformed).
@@ -3365,7 +3412,7 @@ DESCRIPTION
        is not present the call is a no-op.
 
 PARAMETERS
-       logger  Logger handle. NULL is a no-op.
+       logger  Logger handle.
        key     Field name to remove. The match is case-sensitive and exact.
 
 NOTES
@@ -3388,7 +3435,7 @@ DESCRIPTION
        lines will contain no key=value pairs between func= and msg=.
 
 PARAMETERS
-       logger  Logger handle. NULL is a no-op.
+       logger  Logger handle.
 
 NOTES
        Thread-safe: protected by the per-logger mutex.
@@ -3422,14 +3469,14 @@ DESCRIPTION
 
        Release a derived logger with clog_close() when it is no longer needed.
        The underlying file is kept open until all handles (root and every derived
-       logger) have been closed — the shared backing store uses reference counting.
+       logger) have been closed -- the shared backing store uses reference counting.
 
 PARAMETERS
-       parent  Source logger to derive from. NULL returns NULL.
+       parent  Source logger to derive from.
 
 RETURN VALUE
        Returns a new derived logger handle on success.
-       Returns NULL if parent is NULL or if memory allocation fails.
+       Returns NULL if memory allocation fails.
 
 NOTES
        Derived loggers inherit the output format and syslog facility from the
@@ -3459,7 +3506,7 @@ DESCRIPTION
 
          CLOG_FMT_LOGFMT (0)
            Default.  Every record is emitted as a single logfmt line:
-             ts=<ISO-8601-UTC> level=<L> proc=[<name>(<pid>):<tname>(<tid>)]
+             ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>)
              src=<file>:<line> func=<fn> [fields] msg=<text>
            log_error, log_alert, and log_fatal append tab-indented backtrace
            continuation lines after the main record.
@@ -3467,7 +3514,7 @@ DESCRIPTION
          CLOG_FMT_JSON (1)
            Every record is emitted as a single NDJSON object followed by a
            newline:
-             {"ts":"...","level":"...","proc":"[name(pid):tname(tid)]",
+             {"ts":"...","level":"...","proc":"name(pid):tname(tid)",
               "src":"file:N","func":"...", [fields,] "msg":"..."}
            Structured fields become top-level JSON keys.  For log_error,
            log_alert, and log_fatal the backtrace is embedded as a "bt"
@@ -3507,7 +3554,7 @@ DESCRIPTION
            stay within typical syslogd datagram limits.
 
 PARAMETERS
-       logger  Logger handle.  NULL is a no-op.
+       logger  Logger handle.
        fmt     CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG.
 
 NOTES
@@ -3531,11 +3578,10 @@ DESCRIPTION
        Returns the current output format of the shared backing store.
 
 PARAMETERS
-       logger  Logger handle.  NULL returns CLOG_FMT_LOGFMT.
+       logger  Logger handle.
 
 RETURN VALUE
-       CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG; CLOG_FMT_LOGFMT
-       if logger is NULL.
+       CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG.
 
 NOTES
        Thread-safe: protected by the shared backing-store mutex.
@@ -3565,24 +3611,24 @@ DESCRIPTION
        CLOG_FMT_SYSLOG is selected).
 
        Available facility codes (RFC 5424 / RFC 3164):
-         CLOG_SYSLOG_KERN     (0)  — Kernel messages
-         CLOG_SYSLOG_USER     (1)  — User-level messages (default)
-         CLOG_SYSLOG_MAIL     (2)  — Mail system
-         CLOG_SYSLOG_DAEMON   (3)  — System daemons
-         CLOG_SYSLOG_AUTH     (4)  — Security / authorization messages
-         CLOG_SYSLOG_SYSLOG   (5)  — Internal syslogd messages
-         CLOG_SYSLOG_LPR      (6)  — Line printer subsystem
-         CLOG_SYSLOG_NEWS     (7)  — Network news subsystem
-         CLOG_SYSLOG_UUCP     (8)  — UUCP subsystem
-         CLOG_SYSLOG_CRON     (9)  — Clock daemon
-         CLOG_SYSLOG_AUTHPRIV (10) — Security / authorization (private)
-         CLOG_SYSLOG_FTP      (11) — FTP daemon
-         CLOG_SYSLOG_LOCAL0   (16) — Local use 0
-         …
-         CLOG_SYSLOG_LOCAL7   (23) — Local use 7
+         CLOG_SYSLOG_KERN     (0)  -- Kernel messages
+         CLOG_SYSLOG_USER     (1)  -- User-level messages (default)
+         CLOG_SYSLOG_MAIL     (2)  -- Mail system
+         CLOG_SYSLOG_DAEMON   (3)  -- System daemons
+         CLOG_SYSLOG_AUTH     (4)  -- Security / authorization messages
+         CLOG_SYSLOG_SYSLOG   (5)  -- Internal syslogd messages
+         CLOG_SYSLOG_LPR      (6)  -- Line printer subsystem
+         CLOG_SYSLOG_NEWS     (7)  -- Network news subsystem
+         CLOG_SYSLOG_UUCP     (8)  -- UUCP subsystem
+         CLOG_SYSLOG_CRON     (9)  -- Clock daemon
+         CLOG_SYSLOG_AUTHPRIV (10) -- Security / authorization (private)
+         CLOG_SYSLOG_FTP      (11) -- FTP daemon
+         CLOG_SYSLOG_LOCAL0   (16) -- Local use 0
+         ...
+         CLOG_SYSLOG_LOCAL7   (23) -- Local use 7
 
 PARAMETERS
-       logger    Logger handle.  NULL is a no-op.
+       logger    Logger handle.
        facility  Desired facility code (clog_syslog_facility_t).
 
 NOTES
@@ -3605,10 +3651,10 @@ DESCRIPTION
        Returns the syslog facility currently stored on the shared backing store.
 
 PARAMETERS
-       logger  Logger handle.  NULL returns CLOG_SYSLOG_USER.
+       logger  Logger handle.
 
 RETURN VALUE
-       Current facility code, or CLOG_SYSLOG_USER if logger is NULL.
+       Current facility code.
 
 NOTES
        Thread-safe: protected by the shared backing-store mutex.
@@ -3635,18 +3681,19 @@ DESCRIPTION
 
        The write sequence (all steps under the per-logger mutex) is:
 
-         1. Check level >= min_level; return immediately if not.
+         1. Check level >= min_level. If filtered AND level != CLOG_FATAL,
+            return immediately (no output). CLOG_FATAL bypasses this check.
          2. Format the user message with vsnprintf into a 1024-byte stack
             buffer; spill to heap if the formatted text exceeds 1024 bytes.
          3. If time rotation is enabled, check and fire if due.
          4. Build the log record according to the shared backing-store format:
 
             CLOG_FMT_LOGFMT:
-              ts=<ISO-8601-UTC> level=<L> proc=[<name>(<pid>):<tname>(<tid>)]
+              ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>)
               src=<file>:<line> func=<func> [key=value ...] msg=<message>
 
             CLOG_FMT_JSON:
-              {"ts":"...","level":"...","proc":"[name(pid):tname(tid)]",
+              {"ts":"...","level":"...","proc":"name(pid):tname(tid)",
                "src":"file:N","func":"...", [fields,] "msg":"..." [,"bt":[...]]}
               The "bt" array is appended inline when with_backtrace is true.
 
@@ -3659,12 +3706,13 @@ DESCRIPTION
               message (same PRI and MSGID as the original record).
             CLOG_FMT_JSON: backtrace was already embedded as "bt" in step 4.
          7. If size rotation is enabled, check and fire if due.
+         8. If level == CLOG_FATAL, call exit(EXIT_FAILURE).
 
        The write buffer is a per-logger dynamic buffer that starts at 4 KiB
        and grows (doubling) up to 16 MiB. It is reused across calls.
 
 PARAMETERS
-       logger          Logger handle. NULL is a no-op.
+       logger          Logger handle.
        level           Severity level of this message.
        file            Source file name (__FILE__).
        line            Source line number (__LINE__).
@@ -3697,7 +3745,7 @@ SYNOPSIS
 
        cjson cjson_parse_mp(const char *json_str, char **err_str,
                             ccol_memmgmt_procs_t *mp);
-       /* convenience wrapper — default allocator */
+       /* convenience wrapper -- default allocator */
        static inline cjson cjson_parse(const char *json_str,
                                        char **err_str);
 
@@ -3706,7 +3754,7 @@ DESCRIPTION
        node of the resulting DOM tree.  All seven JSON value kinds are
        supported: null, boolean, integer (stored as long long), number (double),
        string (UTF-8, owned heap copy), array (cvec of child cjson), and object
-       (chmap of char*→cjson).
+       (chmap of char*->cjson).
 
        Integer literals with no decimal point or exponent are stored as
        CJSON_INTEGER; all others (including integers that overflow long long)
@@ -3768,7 +3816,7 @@ SYNOPSIS
 
        cjson cjson_parse_n_mp(const char *json_str, size_t len,
                               char **err_str, ccol_memmgmt_procs_t *mp);
-       /* convenience wrapper — default allocator */
+       /* convenience wrapper -- default allocator */
        static inline cjson cjson_parse_n(const char *json_str, size_t len,
                                          char **err_str);
 
@@ -3844,7 +3892,7 @@ SYNOPSIS
        #include <cjson.h>
 
        void cjson_serialize_free_mp(char *s, ccol_memmgmt_procs_t *mp);
-       /* convenience wrapper — default allocator */
+       /* convenience wrapper -- default allocator */
        static inline void cjson_serialize_free(char *s);
 
 DESCRIPTION
@@ -4083,7 +4131,7 @@ SYNOPSIS
        cjson cjson_create_list_mp(ccol_memmgmt_procs_t *mp);
        cjson cjson_create_dictionary_mp(ccol_memmgmt_procs_t *mp);
 
-       /* convenience wrappers — default allocator (NULL mp) */
+       /* convenience wrappers -- default allocator (NULL mp) */
        static inline cjson cjson_create_null(void);
        static inline cjson cjson_create_bool(bool val);
        static inline cjson cjson_create_int(long long val);
@@ -4127,7 +4175,7 @@ RETURN VALUE
 
 NOTES
        The caller owns the returned node and must free it with cjson_destroy().
-       cjson_destroy() uses each node's stored allocator — no mp parameter needed.
+       cjson_destroy() uses each node's stored allocator -- no mp parameter needed.
 
 SEE ALSO
        cjson_destroy, cjson_list_push, cjson_dictionary_set
@@ -5060,6 +5108,2203 @@ RETURN VALUE
 
 SEE ALSO
        cyaml_delete (macro), _cyaml_get, _cyaml_set_typed
+
+================================================================================
+                        CTHREADPOOL.H - GENERIC THREAD POOL
+================================================================================
+
+------------------------------------------------------------------------------
+NAME
+       create_cthread_pool_mp - create a thread pool with custom memory
+                                management
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ctpool create_cthread_pool_mp(size_t num_threads,
+                                     size_t queue_capacity,
+                                     ccol_memmgmt_procs_t *mprocs,
+                                     char **err_str);
+
+DESCRIPTION
+       Creates a new thread pool with the specified number of worker threads.
+       The queue_capacity parameter controls the task queue mode:
+
+         0 or ccol_invalid_size -> unbounded task queue. ctpool_submit never
+           blocks on capacity; the only non-argument failure path is
+           ccol_not_enough_memory.
+
+         N > 0 -> bounded task queue of capacity N. ctpool_submit blocks when
+           the queue is full; ctpool_try_submit returns ccol_container_full
+           instead of blocking.
+
+       All num_threads worker threads are started before the function returns.
+       If any pthread_create call fails the already-started threads are joined
+       cleanly before the function returns NULL.
+
+PARAMETERS
+       num_threads    Number of worker threads (must be >= 1)
+       queue_capacity 0 or ccol_invalid_size for unbounded; N > 0 for bounded
+       mprocs         Custom allocator, or NULL for malloc/free
+       err_str        Optional: receives a static error string on failure
+
+RETURN VALUE
+       Returns a new ctpool handle on success.
+       Returns NULL on failure and sets *err_str if err_str is non-NULL.
+
+NOTES
+       Futures always use standard malloc/free regardless of mprocs.
+       The pool must be shut down with ctpool_shutdown_drain or
+       ctpool_shutdown_immediate before calling ctpool_destroy, unless
+       ctpool_destroy is used directly (which performs a drain shutdown).
+
+SEE ALSO
+       create_cthread_pool, ctpool_construct, __ctpool_destroy,
+       ctpool_shutdown_drain, ctpool_shutdown_immediate
+
+------------------------------------------------------------------------------
+NAME
+       create_cthread_pool - create a thread pool with default memory
+                             management
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ctpool create_cthread_pool(size_t num_threads,
+                                  size_t queue_capacity,
+                                  char **err_str);
+
+DESCRIPTION
+       Convenience wrapper around create_cthread_pool_mp with mprocs = NULL.
+       Uses standard malloc/free for all pool-internal allocations.
+
+PARAMETERS
+       num_threads    Number of worker threads (must be >= 1)
+       queue_capacity 0 or ccol_invalid_size for unbounded; N > 0 for bounded
+       err_str        Optional: receives a static error string on failure
+
+RETURN VALUE
+       Returns a new ctpool handle on success, or NULL on failure.
+
+SEE ALSO
+       create_cthread_pool_mp, ctpool_construct
+
+------------------------------------------------------------------------------
+NAME
+       __ctpool_destroy - destroy a thread pool (internal)
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       void __ctpool_destroy(ctpool pool);
+
+DESCRIPTION
+       Frees all resources associated with the pool. If neither
+       ctpool_shutdown_drain nor ctpool_shutdown_immediate was called
+       beforehand, performs a drain shutdown inline (waits for all queued and
+       active tasks to complete) before freeing.
+
+       After this function returns the pool handle is invalid. Use the
+       ctpool_destroy macro rather than calling this function directly, as the
+       macro also sets the handle to NULL.
+
+PARAMETERS
+       pool   Thread pool handle (NULL is a no-op)
+
+NOTES
+       Must not be called concurrently with any other pool operation.
+       Calling ctpool_destroy (the macro) is preferred over calling this
+       function directly.
+
+SEE ALSO
+       ctpool_destroy, ctpool_shutdown_drain, ctpool_shutdown_immediate
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_submit - submit a task (blocking when bounded queue is full)
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ccol_retval_t ctpool_submit(ctpool pool,
+                                   void (*fn)(void *),
+                                   void *arg,
+                                   void (*on_complete)(void *));
+
+DESCRIPTION
+       Allocates a task struct and appends it to the pool's task queue. For
+       unbounded queues the call returns as soon as the task is enqueued and
+       never blocks on capacity. For bounded queues the call blocks until a
+       slot is available in the queue.
+
+       The worker thread that picks up the task calls fn(arg). If on_complete
+       is non-NULL the worker calls on_complete(arg) immediately after fn
+       returns. The pool never frees arg; ownership remains with the caller.
+
+PARAMETERS
+       pool         Thread pool handle
+       fn           Task function (must not be NULL)
+       arg          Passed verbatim to fn and on_complete (may be NULL)
+       on_complete  Called by the worker after fn returns (may be NULL)
+
+RETURN VALUE
+       ccol_success           - task enqueued successfully.
+       ccol_invalid_args      - pool or fn is NULL.
+       ccol_not_enough_memory - task struct allocation failed.
+       ccol_not_permitted     - pool is shutting down.
+
+SEE ALSO
+       ctpool_try_submit, ctpool_timed_submit, ctpool_submit_future,
+       ctpool_wait
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_try_submit - submit a task without blocking
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ccol_retval_t ctpool_try_submit(ctpool pool,
+                                       void (*fn)(void *),
+                                       void *arg,
+                                       void (*on_complete)(void *));
+
+DESCRIPTION
+       Identical to ctpool_submit except that for bounded queues it never
+       blocks: if the queue is at capacity it returns ccol_container_full
+       immediately. For unbounded queues the behaviour is identical to
+       ctpool_submit.
+
+PARAMETERS
+       pool         Thread pool handle
+       fn           Task function (must not be NULL)
+       arg          Passed to fn and on_complete (may be NULL)
+       on_complete  Called after fn returns (may be NULL)
+
+RETURN VALUE
+       ccol_success           - task enqueued.
+       ccol_invalid_args      - pool or fn is NULL.
+       ccol_not_enough_memory - task struct allocation failed.
+       ccol_not_permitted     - pool is shutting down.
+       ccol_container_full    - bounded queue is at capacity (not returned for
+                                unbounded queues).
+
+SEE ALSO
+       ctpool_submit, ctpool_timed_submit
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_timed_submit - submit a task with a relative timeout
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ccol_retval_t ctpool_timed_submit(ctpool pool,
+                                         void (*fn)(void *),
+                                         void *arg,
+                                         void (*on_complete)(void *),
+                                         struct timespec *timeout);
+
+DESCRIPTION
+       Identical to ctpool_submit except that for bounded queues it waits at
+       most timeout for a free slot. The timeout is a relative duration;
+       internally it is converted to an absolute deadline using CLOCK_REALTIME.
+
+       Passing NULL as timeout is equivalent to ctpool_try_submit (no waiting).
+
+PARAMETERS
+       pool         Thread pool handle
+       fn           Task function (must not be NULL)
+       arg          Passed to fn and on_complete (may be NULL)
+       on_complete  Called after fn returns (may be NULL)
+       timeout      Relative duration to wait (NULL = do not wait)
+
+RETURN VALUE
+       ccol_success           - task enqueued.
+       ccol_invalid_args      - pool or fn is NULL.
+       ccol_not_enough_memory - task struct allocation failed.
+       ccol_not_permitted     - pool is shutting down.
+       ccol_container_full    - NULL timeout and queue is full.
+       ccol_timed_out         - timeout elapsed before a slot became free.
+       ccol_unexpected_failure - clock_gettime or pthread_cond_timedwait
+                                 returned an unexpected error.
+
+SEE ALSO
+       ctpool_submit, ctpool_try_submit
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_submit_future - submit a task that returns a void* result
+                              (blocking)
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ctpool_future *ctpool_submit_future(ctpool pool,
+                                           void *(*fn)(void *),
+                                           void *arg);
+
+DESCRIPTION
+       Allocates a future object and submits a task to the pool. The task
+       calls fn(arg) on a worker thread and stores the returned void* pointer
+       in the future for later retrieval by ctpool_future_get.
+
+       The returned future has a reference count of 2 on success: one
+       reference held by the caller, one held internally by the queued task.
+       The caller must call ctpool_future_free exactly once when done.
+
+       For bounded queues this function blocks until a slot is available.
+       Use ctpool_try_submit_future or ctpool_timed_submit_future to avoid
+       blocking.
+
+       Futures always use standard malloc/free regardless of any custom
+       allocator configured at pool creation.
+
+PARAMETERS
+       pool  Thread pool handle
+       fn    Task function returning void* (must not be NULL)
+       arg   Passed to fn (may be NULL)
+
+RETURN VALUE
+       Returns a new ctpool_future handle on success.
+       Returns NULL if pool or fn is NULL, if the pool is shutting down, or
+       if memory allocation fails.
+
+SEE ALSO
+       ctpool_try_submit_future, ctpool_timed_submit_future,
+       ctpool_future_get, ctpool_future_done, ctpool_future_cancelled,
+       ctpool_future_free
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_try_submit_future - submit a future task without blocking
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ccol_retval_t ctpool_try_submit_future(ctpool pool,
+                                              void *(*fn)(void *),
+                                              void *arg,
+                                              ctpool_future **out);
+
+DESCRIPTION
+       Allocates a future and submits it to the pool without blocking. If a
+       bounded queue is at capacity the function returns ccol_container_full
+       immediately and sets *out to NULL. For unbounded queues the behaviour
+       is identical to ctpool_submit_future.
+
+       On success *out is set to a new ctpool_future handle with a reference
+       count of 2 (caller + queued task). The caller must call
+       ctpool_future_free exactly once when done.
+
+PARAMETERS
+       pool  Thread pool handle
+       fn    Task function returning void* (must not be NULL)
+       arg   Passed to fn (may be NULL)
+       out   Receives the future handle on success; set to NULL on failure
+             (must not be NULL)
+
+RETURN VALUE
+       ccol_success           - task enqueued; *out set to the future handle.
+       ccol_invalid_args      - pool, fn, or out is NULL.
+       ccol_not_enough_memory - future or task allocation failed.
+       ccol_not_permitted     - pool is shutting down.
+       ccol_container_full    - bounded queue is at capacity.
+
+SEE ALSO
+       ctpool_submit_future, ctpool_timed_submit_future,
+       ctpool_future_get, ctpool_future_free
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_timed_submit_future - submit a future task with a relative
+                                    timeout
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       ccol_retval_t ctpool_timed_submit_future(ctpool pool,
+                                                void *(*fn)(void *),
+                                                void *arg,
+                                                struct timespec *timeout,
+                                                ctpool_future **out);
+
+DESCRIPTION
+       Allocates a future and submits it to the pool, waiting at most timeout
+       for a free slot on a bounded queue. The timeout is a relative duration;
+       internally it is converted to an absolute deadline using CLOCK_REALTIME.
+
+       Passing NULL as timeout is equivalent to ctpool_try_submit_future (no
+       waiting).
+
+       On success *out is set to a new ctpool_future handle with a reference
+       count of 2 (caller + queued task). The caller must call
+       ctpool_future_free exactly once when done.
+
+PARAMETERS
+       pool     Thread pool handle
+       fn       Task function returning void* (must not be NULL)
+       arg      Passed to fn (may be NULL)
+       timeout  Relative duration to wait (NULL = do not wait)
+       out      Receives the future handle on success; set to NULL on failure
+                (must not be NULL)
+
+RETURN VALUE
+       ccol_success            - task enqueued; *out set to the future handle.
+       ccol_invalid_args       - pool, fn, or out is NULL.
+       ccol_not_enough_memory  - future or task allocation failed.
+       ccol_not_permitted      - pool is shutting down.
+       ccol_container_full     - NULL timeout and queue is full.
+       ccol_timed_out          - timeout elapsed before a slot became free.
+       ccol_unexpected_failure - clock_gettime returned an unexpected error.
+
+SEE ALSO
+       ctpool_submit_future, ctpool_try_submit_future,
+       ctpool_future_get, ctpool_future_free
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_future_get - block until the future has a result
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       void *ctpool_future_get(ctpool_future *f);
+
+DESCRIPTION
+       Blocks until the associated task has finished executing, then returns
+       the void* value returned by the task function. If the task was
+       cancelled due to ctpool_shutdown_immediate the return value is NULL
+       and ctpool_future_cancelled(f) will return true.
+
+       Does not free the future. The caller must call ctpool_future_free
+       after retrieving the result.
+
+PARAMETERS
+       f   Future handle (NULL is a no-op that returns NULL)
+
+RETURN VALUE
+       The void* value returned by the task function, or NULL if the future
+       was cancelled or f is NULL.
+
+SEE ALSO
+       ctpool_submit_future, ctpool_future_done, ctpool_future_cancelled,
+       ctpool_future_free
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_future_done - non-blocking check for future completion
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       bool ctpool_future_done(ctpool_future *f);
+
+DESCRIPTION
+       Returns true if the associated task has finished (or was cancelled)
+       without blocking. Returns false if the task is still pending or
+       executing.
+
+PARAMETERS
+       f   Future handle (NULL returns false)
+
+RETURN VALUE
+       true if the future has a result or was cancelled, false otherwise.
+
+SEE ALSO
+       ctpool_future_get, ctpool_future_cancelled
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_future_cancelled - check whether a future was cancelled
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       bool ctpool_future_cancelled(ctpool_future *f);
+
+DESCRIPTION
+       Returns true if the task associated with this future was discarded
+       by ctpool_shutdown_immediate before it could execute. In that case
+       ctpool_future_get returns NULL and ctpool_future_done returns true.
+
+PARAMETERS
+       f   Future handle (NULL returns false)
+
+RETURN VALUE
+       true if the future was cancelled, false otherwise.
+
+SEE ALSO
+       ctpool_future_get, ctpool_future_done, ctpool_shutdown_immediate
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_future_free - release the caller's reference to a future
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       void ctpool_future_free(ctpool_future *f);
+
+DESCRIPTION
+       Decrements the future's reference count. When the count reaches zero
+       (both the caller and the worker have released their references) the
+       future object is freed with standard free().
+
+       Must be called exactly once per successful ctpool_submit_future,
+       ctpool_try_submit_future, or ctpool_timed_submit_future call. May be
+       called before or after ctpool_future_get. Calling before
+       ctpool_future_get is safe: the task still runs and the future is freed
+       automatically when the worker finishes.
+
+       Calling ctpool_future_free on a NULL pointer is a no-op.
+
+PARAMETERS
+       f   Future handle
+
+SEE ALSO
+       ctpool_submit_future, ctpool_try_submit_future,
+       ctpool_timed_submit_future, ctpool_future_get
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_wait - block until the pool is idle
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       void ctpool_wait(ctpool pool);
+
+DESCRIPTION
+       Blocks until the task queue is empty and all active tasks have
+       finished executing. Does not shut down the pool; worker threads
+       remain alive and new tasks may be submitted after this call returns.
+
+       Contract: no other thread should be submitting tasks concurrently
+       when ctpool_wait is called. With an unbounded queue, concurrent
+       submissions can cause indefinite blocking.
+
+PARAMETERS
+       pool   Thread pool handle (NULL is a no-op)
+
+SEE ALSO
+       ctpool_shutdown_drain, ctpool_shutdown_immediate
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_shutdown_drain - graceful shutdown
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       void ctpool_shutdown_drain(ctpool pool);
+
+DESCRIPTION
+       Signals the pool to stop accepting new tasks, waits for all queued
+       and active tasks to complete, then joins all worker threads. Blocks
+       until every worker has exited.
+
+       After this call returns, no new tasks may be submitted. The pool
+       struct can then be freed with ctpool_destroy. Calling
+       ctpool_shutdown_drain a second time is a no-op.
+
+PARAMETERS
+       pool   Thread pool handle (NULL is a no-op)
+
+NOTES
+       ctpool_submit and ctpool_submit_future return ccol_not_permitted after
+       this call.
+       Any thread blocked in ctpool_submit on a full bounded queue is woken
+       and will receive ccol_not_permitted.
+
+SEE ALSO
+       ctpool_shutdown_immediate, ctpool_wait, ctpool_destroy
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_shutdown_immediate - immediate shutdown
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       void ctpool_shutdown_immediate(ctpool pool);
+
+DESCRIPTION
+       Cancels all tasks currently in the queue, then signals worker threads
+       to exit after their current task (if any) completes. Blocks until all
+       worker threads have exited.
+
+       Futures for cancelled tasks are marked done and cancelled; any thread
+       blocked in ctpool_future_get for a cancelled future is unblocked and
+       receives NULL. Calling ctpool_shutdown_immediate a second time is a
+       no-op.
+
+PARAMETERS
+       pool   Thread pool handle (NULL is a no-op)
+
+NOTES
+       Tasks that are already executing when this is called are allowed to
+       finish normally.
+       ctpool_submit and ctpool_submit_future return ccol_not_permitted after
+       this call.
+
+SEE ALSO
+       ctpool_shutdown_drain, ctpool_future_cancelled, ctpool_destroy
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_pending_count - number of tasks in the queue
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       size_t ctpool_pending_count(ctpool pool);
+
+DESCRIPTION
+       Returns a snapshot of the number of tasks currently in the task queue
+       (submitted but not yet picked up by a worker thread). The value may
+       change immediately after the call returns.
+
+PARAMETERS
+       pool   Thread pool handle (NULL returns 0)
+
+RETURN VALUE
+       Number of queued tasks, or 0 if pool is NULL.
+
+SEE ALSO
+       ctpool_active_count
+
+------------------------------------------------------------------------------
+NAME
+       ctpool_active_count - number of tasks currently executing
+
+SYNOPSIS
+       #include <cthreadpool.h>
+
+       size_t ctpool_active_count(ctpool pool);
+
+DESCRIPTION
+       Returns a snapshot of the number of tasks currently being executed
+       by worker threads (dequeued but not yet finished). The value may
+       change immediately after the call returns.
+
+PARAMETERS
+       pool   Thread pool handle (NULL returns 0)
+
+RETURN VALUE
+       Number of actively executing tasks, or 0 if pool is NULL.
+
+SEE ALSO
+       ctpool_pending_count
+
+------------------------------------------------------------------------------
+NAME
+       chttp_request_new_mp - allocate and initialise an HTTP request with a
+       custom allocator
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttp_request_t *chttp_request_new_mp(chttp_method_t method,
+                                             const char *url,
+                                             const chttp_request_body_t *body,
+                                             ccol_memmgmt_procs_t *mprocs,
+                                             char **err_str);
+
+DESCRIPTION
+       Allocates a new chttp_request_t and copies the URL and, if non-NULL,
+       the body data and content_type string into privately owned buffers.
+       The caller may free its originals immediately after this call returns.
+
+       Pass NULL for body or use the CHTTP_NO_BODY macro when no request body
+       is needed (e.g. GET, DELETE).
+
+PARAMETERS
+       method    HTTP method (CHTTP_GET, CHTTP_POST, ...).
+       url       Target URL; must not be NULL (copied into the request).
+       body      Pointer to a chttp_request_body_t, or NULL for no body.
+       mprocs    Custom allocator, or NULL for malloc/free.
+       err_str   Optional; receives a static error string on failure.
+
+RETURN VALUE
+       Pointer to the new request, or NULL on failure.
+
+NOTES
+       All allocations use mprocs when non-NULL.
+       The request must remain alive until any chttpclient_do call using it
+       returns, because CURLOPT_POSTFIELDS is passed without copying.
+
+SEE ALSO
+       chttp_request_new, chttp_request_set_header, chttp_request_free,
+       chttpclient_do
+
+------------------------------------------------------------------------------
+NAME
+       chttp_request_new - allocate and initialise an HTTP request (default
+       allocator)
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttp_request_t *chttp_request_new(chttp_method_t method,
+                                          const char *url,
+                                          const chttp_request_body_t *body,
+                                          char **err_str);
+
+DESCRIPTION
+       Inline wrapper for chttp_request_new_mp with mprocs = NULL.
+
+RETURN VALUE
+       Pointer to the new request, or NULL on failure.
+
+SEE ALSO
+       chttp_request_new_mp
+
+------------------------------------------------------------------------------
+NAME
+       chttp_request_set_header - set or replace a request header
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttp_request_set_header(chttp_request_t *req,
+                                              const char *name,
+                                              const char *value);
+
+DESCRIPTION
+       Inserts or replaces the named header in the request.  The header name
+       is normalized to lowercase before storage so that all subsequent
+       lookups are case-insensitive.  If a header with the same name (ignoring
+       case) already exists it is overwritten with the new value.
+
+       The headers map is lazily created on the first call.
+
+PARAMETERS
+       req     Request to modify; must not be NULL.
+       name    Header name (e.g. "Authorization"); must not be NULL.
+       value   Header value; must not be NULL.
+
+RETURN VALUE
+       ccol_success            Header was set.
+       ccol_invalid_args       req, name, or value is NULL.
+       ccol_not_enough_memory  Map allocation failed.
+
+SEE ALSO
+       chttp_request_get_header
+
+------------------------------------------------------------------------------
+NAME
+       chttp_request_get_header - look up a request header by name
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       const char *chttp_request_get_header(const chttp_request_t *req,
+                                            const char *name);
+
+DESCRIPTION
+       Returns the stored value for the named header, or NULL if no such
+       header exists.  The lookup is case-insensitive: the supplied name is
+       lowercased internally before the lookup is performed.
+
+       The returned pointer is valid until the next chttp_request_set_header
+       call on this request or until the request is freed.
+
+PARAMETERS
+       req   Request to query; may be NULL (returns NULL).
+       name  Header name; may be NULL (returns NULL).
+
+RETURN VALUE
+       Pointer to the stored value string, or NULL if not found.
+
+SEE ALSO
+       chttp_request_set_header
+
+------------------------------------------------------------------------------
+NAME
+       chttp_request_free - free an HTTP request and all owned resources
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       void chttp_request_free(chttp_request_t *req);
+
+DESCRIPTION
+       Frees the URL copy, body data copy, content_type copy, headers map,
+       and the request struct itself.  Also frees the private mprocs copy if
+       one was allocated.
+
+       Safe to call with NULL.
+
+SEE ALSO
+       chttp_request_new_mp
+
+------------------------------------------------------------------------------
+NAME
+       create_chttpclient_mp - create an HTTP client with a custom allocator
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs,
+                                      char **err_str);
+
+DESCRIPTION
+       Allocates and initialises a new HTTP client.  The connection pool is
+       NOT created at this point; it is lazily initialised on the first
+       request.
+
+       Default configuration after creation:
+         pool_size          = CPU count (resolved on first request)
+         connect_timeout_ms = 0 (no timeout)
+         request_timeout_ms = 0 (no timeout)
+         TLS                = peer and host verification enabled, system CA
+
+PARAMETERS
+       mprocs    Custom allocator, or NULL for malloc/free.
+       err_str   Optional; receives a static error string on failure.
+
+RETURN VALUE
+       New client handle, or NULL on failure.
+
+SEE ALSO
+       create_chttpclient, chttpclient_destroy, chttpclient_set_pool_size
+
+------------------------------------------------------------------------------
+NAME
+       create_chttpclient - create an HTTP client with the default allocator
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttpcli create_chttpclient(char **err_str);
+
+DESCRIPTION
+       Inline wrapper for create_chttpclient_mp with mprocs = NULL.
+
+RETURN VALUE
+       New client handle, or NULL on failure.
+
+SEE ALSO
+       create_chttpclient_mp
+
+------------------------------------------------------------------------------
+NAME
+       chttpclient_set_pool_size - set the connection pool size
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
+
+DESCRIPTION
+       Sets the maximum number of concurrent in-flight requests.  Callers
+       that call chttpclient_do when all slots are busy will block until one
+       becomes free.
+
+       Passing 0 selects the CPU count (the default).
+
+       If called after the pool has been initialised: growing the pool
+       reallocates the internal slots array and broadcasts to wake any blocked
+       callers; shrinking reduces pool_cap so new requests use only the lower
+       slots (in-flight requests on exiled slots complete normally and their
+       handles are released on completion).
+
+PARAMETERS
+       cli   Client handle; must not be NULL.
+       n     Pool size; 0 = CPU count.
+
+RETURN VALUE
+       ccol_success            Pool size updated.
+       ccol_invalid_args       cli is NULL.
+       ccol_not_enough_memory  Realloc failed when growing.
+
+SEE ALSO
+       create_chttpclient, chttpclient_do
+
+------------------------------------------------------------------------------
+NAME
+       chttpclient_set_connect_timeout - set the TCP connect timeout
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, long ms);
+
+DESCRIPTION
+       Sets the maximum time allowed for the TCP connection phase.  Pass 0
+       to disable the timeout (libcurl default).
+
+PARAMETERS
+       cli   Client handle; must not be NULL.
+       ms    Timeout in milliseconds.
+
+RETURN VALUE
+       ccol_success      Timeout updated.
+       ccol_invalid_args cli is NULL.
+
+SEE ALSO
+       chttpclient_set_request_timeout
+
+------------------------------------------------------------------------------
+NAME
+       chttpclient_set_request_timeout - set the total request timeout
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, long ms);
+
+DESCRIPTION
+       Sets the maximum time from when chttpclient_do is called to when the
+       last byte of the response body is received.  Pass 0 to disable.
+
+       When a request times out chttpclient_do returns ccol_timed_out.
+
+PARAMETERS
+       cli   Client handle; must not be NULL.
+       ms    Timeout in milliseconds.
+
+RETURN VALUE
+       ccol_success      Timeout updated.
+       ccol_invalid_args cli is NULL.
+
+SEE ALSO
+       chttpclient_set_connect_timeout, chttpclient_do
+
+------------------------------------------------------------------------------
+NAME
+       chttpclient_set_tls - set TLS configuration for a client
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttpclient_set_tls(chttpcli cli,
+                                         const chttp_tls_config_t *tls);
+
+DESCRIPTION
+       Copies the supplied TLS configuration into the client.  Passing NULL
+       restores the default (verify_peer = true, verify_host = true, system
+       CA bundle, no client certificate).
+
+       The strings in chttp_tls_config_t (cert_path, key_path, ca_bundle_path)
+       are stored by pointer, not copied.  They must remain valid for the
+       lifetime of the client.
+
+PARAMETERS
+       cli   Client handle; must not be NULL.
+       tls   TLS configuration to copy, or NULL to restore defaults.
+
+RETURN VALUE
+       ccol_success      Configuration updated.
+       ccol_invalid_args cli is NULL.
+
+SEE ALSO
+       CHTTP_TLS_DEFAULT, create_chttpclient
+
+------------------------------------------------------------------------------
+NAME
+       __chttpclient_destroy - internal destroy function
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       void __chttpclient_destroy(chttpcli cli);
+
+DESCRIPTION
+       Waits for all in-flight requests to complete, then frees all CURL
+       handles, synchronisation primitives, the slots array, and the client
+       struct.
+
+       Do not call directly; use the chttpclient_destroy macro, which also
+       sets the handle to NULL.
+
+SEE ALSO
+       chttpclient_destroy, ___chttpclient_destroy
+
+------------------------------------------------------------------------------
+NAME
+       chttpclient_do - perform an HTTP request and buffer the full response
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttpclient_do(chttpcli cli,
+                                    const chttp_request_t *req,
+                                    chttpcli_response **resp_out);
+
+DESCRIPTION
+       Acquires a pool slot (blocking if all slots are in use), executes the
+       HTTP request synchronously, buffers the entire response body, and
+       stores a heap-allocated chttpcli_response in *resp_out.
+
+       The caller owns *resp_out on success and must call
+       chttpclient_resp_free when done.
+
+       libcurl follows redirects automatically (up to the default limit of
+       30).
+
+PARAMETERS
+       cli       Client handle; must not be NULL.
+       req       Request to execute; must not be NULL.
+       resp_out  Output parameter; must not be NULL.
+
+RETURN VALUE
+       ccol_success
+              Request completed; *resp_out is valid.
+
+       ccol_invalid_args
+              Any argument is NULL.
+
+       ccol_not_enough_memory
+              Memory allocation failed.
+
+       ccol_timed_out
+              Request or connect timeout triggered (CURLE_OPERATION_TIMEDOUT).
+
+       ccol_not_permitted
+              Client is being destroyed; no new requests are accepted.
+
+       ccol_http_invalid_url
+              URL is malformed or uses an unsupported scheme
+              (CURLE_URL_MALFORMAT, CURLE_UNSUPPORTED_PROTOCOL).
+
+       ccol_http_host_resolution_failed
+              DNS or hostname resolution failed
+              (CURLE_COULDNT_RESOLVE_HOST, CURLE_COULDNT_RESOLVE_PROXY).
+
+       ccol_http_connection_failed
+              TCP connection or proxy tunnel could not be established; also
+              covers local interface binding errors and QUIC failures
+              (CURLE_COULDNT_CONNECT, CURLE_INTERFACE_FAILED,
+              CURLE_NO_CONNECTION_AVAILABLE, CURLE_QUIC_CONNECT_ERROR,
+              CURLE_PROXY).
+
+       ccol_http_too_many_redirects
+              HTTP redirect limit was exceeded (CURLE_TOO_MANY_REDIRECTS).
+
+       ccol_http_tls_handshake_failed
+              TLS/SSL handshake failed; includes SSL engine initialisation
+              errors, upgrade-to-TLS failures, and ECH negotiation failure
+              (CURLE_SSL_CONNECT_ERROR, CURLE_SSL_CIPHER,
+              CURLE_SSL_ENGINE_NOTFOUND, CURLE_SSL_ENGINE_SETFAILED,
+              CURLE_SSL_ENGINE_INITFAILED, CURLE_USE_SSL_FAILED,
+              CURLE_SSL_SHUTDOWN_FAILED, CURLE_ECH_REQUIRED).
+
+       ccol_http_tls_cert_verification_failed
+              Peer certificate or CA chain could not be verified; also covers
+              bad CA/CRL files, OCSP failures, public-key pinning mismatches,
+              and missing client certificates
+              (CURLE_PEER_FAILED_VERIFICATION, CURLE_SSL_CERTPROBLEM,
+              CURLE_SSL_CACERT_BADFILE, CURLE_SSL_CRL_BADFILE,
+              CURLE_SSL_ISSUER_ERROR, CURLE_SSL_INVALIDCERTSTATUS,
+              CURLE_SSL_PINNEDPUBKEYNOTMATCH, CURLE_SSL_CLIENTCERT).
+
+       ccol_http_transfer_aborted
+              Transfer failed after the connection was established; covers
+              server error responses (when CURLOPT_FAILONERROR is set),
+              server sending an unparseable or empty response, mid-transfer
+              network errors, upload read callback abort, HTTP range request
+              not satisfied, content-encoding problems, response body
+              exceeding CURLOPT_MAXFILESIZE, HTTP/2 and HTTP/3 stream errors,
+              upload failures, upload rewind failures, transport-level auth
+              failures, chunk-data callback errors, fatal poll/select errors,
+              response-too-large errors, and a streaming write_fn that
+              returned short
+              (CURLE_HTTP_RETURNED_ERROR, CURLE_WEIRD_SERVER_REPLY,
+              CURLE_GOT_NOTHING, CURLE_PARTIAL_FILE, CURLE_UPLOAD_FAILED,
+              CURLE_READ_ERROR, CURLE_RANGE_ERROR, CURLE_SEND_ERROR,
+              CURLE_RECV_ERROR, CURLE_WRITE_ERROR, CURLE_SEND_FAIL_REWIND,
+              CURLE_BAD_CONTENT_ENCODING, CURLE_FILESIZE_EXCEEDED,
+              CURLE_ABORTED_BY_CALLBACK, CURLE_CHUNK_FAILED,
+              CURLE_HTTP2, CURLE_HTTP2_STREAM, CURLE_HTTP3, CURLE_AUTH_ERROR,
+              CURLE_UNRECOVERABLE_POLL, CURLE_TOO_LARGE).
+
+       ccol_unexpected_failure
+              Any other libcurl error not covered by the above codes.
+
+SEE ALSO
+       chttpclient_do_streaming, chttp_do, chttpclient_resp_free
+
+------------------------------------------------------------------------------
+NAME
+       chttpclient_do_streaming - perform an HTTP request with a streaming
+       response body
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttpclient_do_streaming(chttpcli cli,
+                                              const chttp_request_t *req,
+                                              chttpcli_write_fn write_fn,
+                                              void *write_ctx,
+                                              int *status_code_out);
+
+DESCRIPTION
+       Like chttpclient_do, but delivers the response body to write_fn in
+       chunks as data arrives instead of buffering it.  No chttpcli_response
+       struct is allocated; response headers are not accessible.
+
+       write_fn must return the number of bytes consumed.  Returning less
+       than len aborts the transfer with a failure.
+
+PARAMETERS
+       cli             Client handle; must not be NULL.
+       req             Request to execute; must not be NULL.
+       write_fn        Callback invoked with each body chunk; must not be NULL.
+       write_ctx       Opaque context pointer passed verbatim to write_fn.
+       status_code_out Receives the HTTP status code on success; may be NULL.
+
+RETURN VALUE
+       Same codes as chttpclient_do.  Additionally,
+       ccol_http_transfer_aborted is returned when write_fn returns fewer
+       bytes than len, aborting the transfer (CURLE_ABORTED_BY_CALLBACK).
+
+SEE ALSO
+       chttpclient_do, chttpcli_write_fn
+
+------------------------------------------------------------------------------
+NAME
+       chttp_default_client - return the process-level default HTTP client
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       chttpcli chttp_default_client(void);
+
+DESCRIPTION
+       Returns the lazily-initialised process-level default client.  Thread-
+       safe; only one client is ever created per process.
+
+       The default client uses default settings (pool_size = CPU count, no
+       timeouts, TLS verification enabled).  It can be configured via the
+       same chttpclient_set_* functions as any other client.
+
+RETURN VALUE
+       Default client handle, or NULL if initialisation failed.
+
+SEE ALSO
+       create_chttpclient, chttp_do, chttp_get
+
+------------------------------------------------------------------------------
+NAME
+       chttp_do - perform an HTTP request via the default client
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttp_do(const chttp_request_t *req,
+                              chttpcli_response **resp_out);
+
+DESCRIPTION
+       Equivalent to chttpclient_do(chttp_default_client(), req, resp_out).
+
+RETURN VALUE
+       Same codes as chttpclient_do.  Returns ccol_unexpected_failure if the
+       default client could not be initialised.
+
+SEE ALSO
+       chttpclient_do, chttp_default_client
+
+------------------------------------------------------------------------------
+NAME
+       chttp_get - perform a GET request via the default client
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttp_get(const char *url,
+                               chttpcli_response **resp_out);
+
+DESCRIPTION
+       Convenience wrapper: creates a CHTTP_GET request for url, performs it
+       via the default client, and frees the request.
+
+PARAMETERS
+       url       Target URL; must not be NULL.
+       resp_out  Output parameter; must not be NULL.
+
+RETURN VALUE
+       Same codes as chttpclient_do.
+
+SEE ALSO
+       chttp_post, chttp_put, chttp_delete, chttp_patch, chttp_do
+
+------------------------------------------------------------------------------
+NAME
+       chttp_post - perform a POST request via the default client
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttp_post(const char *url,
+                                const chttp_request_body_t *body,
+                                chttpcli_response **resp_out);
+
+DESCRIPTION
+       Convenience wrapper for HTTP POST.  body may be NULL for an empty POST.
+
+RETURN VALUE
+       Same codes as chttpclient_do.
+
+SEE ALSO
+       chttp_get, chttp_do
+
+------------------------------------------------------------------------------
+NAME
+       chttp_put - perform a PUT request via the default client
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttp_put(const char *url,
+                               const chttp_request_body_t *body,
+                               chttpcli_response **resp_out);
+
+DESCRIPTION
+       Convenience wrapper for HTTP PUT.
+
+RETURN VALUE
+       Same codes as chttpclient_do.
+
+SEE ALSO
+       chttp_get, chttp_do
+
+------------------------------------------------------------------------------
+NAME
+       chttp_delete - perform a DELETE request via the default client
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttp_delete(const char *url,
+                                  chttpcli_response **resp_out);
+
+DESCRIPTION
+       Convenience wrapper for HTTP DELETE.
+
+RETURN VALUE
+       Same codes as chttpclient_do.
+
+SEE ALSO
+       chttp_get, chttp_do
+
+------------------------------------------------------------------------------
+NAME
+       chttp_patch - perform a PATCH request via the default client
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       ccol_retval_t chttp_patch(const char *url,
+                                 const chttp_request_body_t *body,
+                                 chttpcli_response **resp_out);
+
+DESCRIPTION
+       Convenience wrapper for HTTP PATCH.
+
+RETURN VALUE
+       Same codes as chttpclient_do.
+
+SEE ALSO
+       chttp_get, chttp_do
+
+------------------------------------------------------------------------------
+NAME
+       chttpclient_resp_header - look up a response header by name
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       const char *chttpclient_resp_header(const chttpcli_response *resp,
+                                           const char *name);
+
+DESCRIPTION
+       Returns the value of the named response header, or NULL if not present.
+       The lookup is case-insensitive.  Response headers are stored in
+       lowercase; the supplied name is lowercased internally before lookup.
+
+       The returned pointer is valid until chttpclient_resp_free is called.
+
+PARAMETERS
+       resp  Response to query; may be NULL (returns NULL).
+       name  Header name; may be NULL (returns NULL).
+
+RETURN VALUE
+       Pointer to the header value string, or NULL if not found.
+
+SEE ALSO
+       chttpclient_resp_free
+
+------------------------------------------------------------------------------
+NAME
+       chttpclient_resp_free - free a response and all its owned resources
+
+SYNOPSIS
+       #include <chttpclient.h>
+
+       void chttpclient_resp_free(chttpcli_response *resp);
+
+DESCRIPTION
+       Frees the response body buffer, the response headers map, and the
+       response struct itself.  Safe to call with NULL.
+
+NOTES
+       The _m_procs pointer inside the response is a non-owning reference to
+       the creating client's allocator.  When using a custom allocator, all
+       responses must be freed before the client that produced them is
+       destroyed.
+
+SEE ALSO
+       chttpclient_do, chttpclient_resp_header
+
+------------------------------------------------------------------------------
+NAME
+       chttp_method_str - return the canonical string for an HTTP method
+
+SYNOPSIS
+       #include <chttp.h>
+
+       const char *chttp_method_str(chttp_method_t m);
+
+DESCRIPTION
+       Returns the uppercase ASCII method string for the given enum value
+       (e.g. "GET", "POST").  Returns "ANY" for CHTTP_ANY (a server-side
+       routing sentinel, not a real HTTP method).  Falls back to "UNKNOWN"
+       for invalid values.
+
+RETURN VALUE
+       Pointer to a static string literal; must not be freed.
+
+SEE ALSO
+       chttp_method_t
+
+------------------------------------------------------------------------------
+NAME
+       create_chttpsvr_mp - create an HTTP server with a custom allocator
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs,
+                                   clog cl,
+                                   char **err_str);
+
+DESCRIPTION
+       Allocates and initialises a new chttpsvr handle using the given memory
+       management procedures.  A root router with an empty prefix is created
+       automatically.
+
+       mprocs may be NULL, in which case the default system allocator is used.
+
+       cl is the clog handle that this server will use for per-connection
+       diagnostic output.  It must remain valid until __chttpsvr_destroy
+       returns.  cl must not be NULL.
+
+       On failure, err_str (if non-NULL) is set to a static diagnostic string
+       and NULL is returned.
+
+RETURN VALUE
+       A valid chttpsvr handle on success, or NULL on failure.
+
+SEE ALSO
+       create_chttpsvr, __chttpsvr_destroy, chttpsvr_start
+
+------------------------------------------------------------------------------
+NAME
+       create_chttpsvr - create an HTTP server with the default allocator
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr create_chttpsvr(clog cl, char **err_str);
+
+DESCRIPTION
+       Inline wrapper for create_chttpsvr_mp with mprocs = NULL.
+
+       cl must not be NULL.
+
+RETURN VALUE
+       A valid chttpsvr handle on success, or NULL on failure.
+
+SEE ALSO
+       create_chttpsvr_mp
+
+------------------------------------------------------------------------------
+NAME
+       __chttpsvr_destroy - free an HTTP server
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       void __chttpsvr_destroy(chttpsvr srv);
+
+DESCRIPTION
+       Drains all in-flight requests for this server (up to 30 seconds), then
+       frees all routers, routes, middleware nodes, the server's owned ctpool,
+       and the server struct itself.  If this is the last active server, also
+       stops the shared facil.io engine and joins the engine thread before
+       freeing.
+
+       For clean multi-server teardown, call chttpsvr_stop on all servers
+       first to close their listeners, then call __chttpsvr_destroy on each
+       handle in any order.
+
+       Does not set the caller's pointer to NULL; use the chttpsvr_destroy
+       macro for that.
+
+       Safe to call with NULL.
+
+SEE ALSO
+       chttpsvr_destroy, chttpsvr_stop, chttpsvr_engine_wait
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_set_engine_logger - set the logger for engine-level diagnostics
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_set_engine_logger(clog cl);
+
+DESCRIPTION
+       Derives a child logger from cl, adds the field component=http-engine,
+       and installs it as the facil.io engine logger.  Any previously installed
+       engine logger is closed.
+
+       Call this function before the first chttpsvr_start call so that engine
+       log output is routed to cl from the moment the engine starts.  Calling
+       it after the engine starts is also safe; the new logger takes effect
+       immediately under a writer lock.
+
+       cl must not be NULL; the derived child logger is owned by the engine
+       and must not be closed by the caller.
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if cl is NULL.
+       ccol_not_enough_memory if the child logger cannot be allocated.
+
+SEE ALSO
+       chttpsvr_start, chttpsvr_engine_stop, chttpsvr_engine_wait
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_engine_stop - signal the engine to stop
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       void chttpsvr_engine_stop(void);
+
+DESCRIPTION
+       Signals the shared facil.io engine to stop accepting new connections and
+       begin draining in-flight requests.  Returns immediately; use
+       chttpsvr_engine_wait() to block until the drain completes.
+
+       Non-blocking and async-signal-safe: it is safe to call this function
+       directly from a POSIX signal handler (e.g. SIGINT, SIGTERM).
+
+       The library does not install any signal handlers.  Applications are
+       responsible for wiring this function into whatever signal or shutdown
+       mechanism they use.
+
+       Safe to call before the engine has ever started (no-op).
+
+SEE ALSO
+       chttpsvr_engine_wait, chttpsvr_stop, chttpsvr_start
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_engine_wait - wait for the engine thread to exit
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       void chttpsvr_engine_wait(void);
+
+DESCRIPTION
+       Blocks the calling thread until the shared facil.io engine background
+       thread exits.  The engine stops automatically when the last server is
+       destroyed (__chttpsvr_destroy); this function is an escape hatch for
+       programs that need to synchronise with that shutdown explicitly.
+
+       Exactly one caller performs the pthread join; subsequent calls are
+       no-ops.
+
+       After this function returns, the engine logger is cleared so that any
+       remaining facil.io atexit callbacks do not access a freed clog handle.
+
+       Safe to call before the engine has ever started (no-op).
+
+SEE ALSO
+       chttpsvr_engine_stop, chttpsvr_start, __chttpsvr_destroy,
+       chttpsvr_set_engine_logger
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_start - register a listener with the running engine
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_start(chttpsvr srv,
+                                    const chttpsvr_config_t *cfg);
+
+DESCRIPTION
+       Starts the server on the port and host specified in cfg.  cfg may be
+       NULL, in which case the defaults from CHTTPSVR_CONFIG_DEFAULT are used.
+
+       If the shared facil.io engine is not yet running it is started
+       implicitly on this call.  In this case the listener socket is bound
+       and registered BEFORE the engine thread is spawned, so that the port
+       is accepting connections by the time the reactor enters its event loop.
+       chttpsvr_start blocks until the engine has signalled readiness (the
+       FIO_CALL_ON_START callbacks have fired and the reactor is running).
+       The function does NOT return until the server is fully ready to accept
+       connections.
+
+       For subsequent chttpsvr_start calls (engine already running), the
+       listener socket is bound synchronously on the calling thread via
+       http_listen and the function returns as soon as the socket is in
+       LISTEN state.  No additional wait is needed in either case.
+
+       The engine is kept running until the last server is destroyed.
+
+       Multiple chttpsvr handles may be started on different ports
+       simultaneously, all sharing the same engine.
+
+       Port 0 is rejected with ccol_invalid_args.  The OS-assigned ephemeral
+       port that would result from binding port 0 cannot be discovered through
+       this API, making the server unreachable by clients.
+
+       A ctpool for dispatching all handlers (buffered and streaming) is
+       created at start time using cfg->worker_thread_count threads and a
+       queue whose capacity is cfg->worker_queue_capacity (0 = 256 * threads;
+       CHTTPSVR_QUEUE_UNBOUNDED = no capacity limit).  The pool is owned by
+       the server and destroyed in __chttpsvr_destroy.
+
+       Connection timeout: both cfg->read_timeout_ms and cfg->idle_timeout_ms
+       map to the single connection-timeout parameter exposed by the underlying
+       facil.io http_listen call.  When idle_timeout_ms is non-zero it takes
+       precedence over read_timeout_ms; otherwise read_timeout_ms is used.
+       Both values are converted to whole seconds (rounded up from 1 ms,
+       clamped to 255 s).  A value of 0 for both fields uses the facil.io
+       default of approximately 40 seconds.
+
+       Restart: after chttpsvr_stop is called, chttpsvr_start may be called
+       again on the same handle to register a new listener.  The old ctpool is
+       drained and replaced with a fresh one.  Any TLS context from the
+       previous cycle is freed automatically before the new one is installed.
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if srv is NULL or cfg->port is 0.
+       ccol_not_permitted if this server is already started.
+       ccol_not_enough_memory if memory allocation fails.
+       ccol_unexpected_failure on http_listen errors.
+
+SEE ALSO
+       chttpsvr_stop, chttpsvr_engine_stop, chttpsvr_set_engine_logger,
+       chttpsvr_engine_wait, __chttpsvr_destroy
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_stop - close this server's listener
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       void chttpsvr_stop(chttpsvr srv);
+
+DESCRIPTION
+       Schedules the listener socket registered by chttpsvr_start for close
+       on the facil.io reactor.  Returns immediately.  The shared engine and
+       all other registered listeners continue running unaffected.
+
+       Idempotent: calling chttpsvr_stop on a server that was never started,
+       or that was already stopped, is a no-op.
+
+       Safe to call with NULL.
+
+SEE ALSO
+       chttpsvr_start, chttpsvr_engine_stop, chttpsvr_engine_wait
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_register_handler - register a buffered handler on the root router
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
+                                  const char *pattern,
+                                  chttpsvr_handler_fn fn, void *ctx);
+
+DESCRIPTION
+       Registers fn as the handler for requests matching method and pattern
+       on the root router.  pattern uses forward-slash-separated segments;
+       segments of the form {name} are named path parameters.
+
+       Passing CHTTP_ANY for method registers a wildcard route that matches
+       every HTTP method on the given pattern.  The handler can call
+       chttpsvr_req_method to retrieve the actual incoming method.
+       Registration order determines priority: a method-specific route
+       registered before a CHTTP_ANY route on the same pattern wins for its
+       method; the CHTTP_ANY route catches every other method.
+
+       pattern must begin with '/'.  Patterns that do not start with '/' are
+       rejected immediately with ccol_invalid_args.
+
+       The name inside a {name} segment must consist entirely of characters
+       from [A-Za-z0-9_].  Names containing other characters (spaces, hyphens,
+       dots, etc.) are rejected with ccol_invalid_args because they can never
+       be retrieved via chttpsvr_req_param.
+
+       Path-segment values (both literal segments and captured parameters) are
+       decoded using RFC 3986 path semantics: percent-encoded sequences such as
+       %20 are decoded, but '+' is left as a literal '+'.  This is consistent
+       with the decoded path returned by chttpsvr_req_path.  It differs from
+       query-string (application/x-www-form-urlencoded) decoding, where '+' is
+       treated as a space; that convention applies only to chttpsvr_req_query
+       and chttpsvr_req_query_one, not to path parameters.
+
+       The router scans all registered routes looking for a path-and-method
+       match.  Multiple methods may be registered for the same path; all are
+       reachable regardless of registration order.  If at least one route
+       matches the path but none matches the method, the server responds 405.
+       If no route matches the path, the server responds 404.  Path matching
+       includes validation of percent-encoded sequences: a request with invalid
+       encoding in any path segment -- whether a literal segment (e.g.
+       /bad%ZZusers/{id} against /users/{id}) or a captured {name} parameter
+       (e.g. /users/bad%ZZvalue against /users/{id}) -- does not match the
+       route and returns 404 regardless of which methods are registered for
+       that pattern.
+
+       If the same method and pattern combination is registered more than once,
+       each call succeeds (returns ccol_success) but only the FIRST registered
+       handler is ever invoked (first-wins policy).
+
+       Trailing slashes are NOT treated as equivalent: a request for
+       /users/42/ does not match the pattern /users/{id}.  Register a
+       separate pattern if the trailing-slash form must be accepted.
+
+       Patterns with consecutive slashes (e.g. /foo//bar) or a trailing slash
+       (e.g. /foo/) are rejected at registration time.  A trailing slash in an
+       incoming request path does NOT match a registered pattern that lacks one;
+       register a separate pattern if the trailing-slash form must be accepted.
+
+       This function is thread-safe and may be called before or after
+       chttpsvr_start is running.
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if srv, pattern, or fn is NULL; if pattern does not
+                         begin with '/'; if pattern contains consecutive
+                         slashes or a trailing slash; or if a {name} segment
+                         contains characters outside [A-Za-z0-9_].
+       ccol_not_enough_memory if allocation fails.
+
+SEE ALSO
+       chttpsvr_register_streaming_handler, chttpsvr_use, chttpsvr_subrouter
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_register_streaming_handler - register a streaming handler on the root router
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
+                                         chttp_method_t method,
+                                         const char *pattern,
+                                         chttpsvr_handler_fn fn, void *ctx);
+
+DESCRIPTION
+       Like chttpsvr_register_handler but marks the route as streaming, which
+       makes chttpsvr_req_read available to the handler for sequential body
+       consumption.  The handler runs on the server's owned ctpool worker
+       thread (not on the facil.io reactor thread) -- exactly as all handlers
+       do in this implementation -- but chttpsvr_req_read returns -1 on
+       non-streaming routes, so the streaming flag controls the API contract.
+
+       CHTTP_ANY may be used for method to match every HTTP method on the
+       pattern.  See chttpsvr_register_handler for the full CHTTP_ANY
+       semantics.
+
+       The body is fully buffered before the handler runs.  chttpsvr_req_read
+       reads it sequentially and returns 0 at EOF; subsequent calls also
+       return 0 (idempotent EOF).
+
+       When the server's ctpool queue is at capacity when a request arrives,
+       the server responds with 503 Service Unavailable immediately rather
+       than blocking the reactor thread.
+
+       The same pattern rules apply as for chttpsvr_register_handler: pattern
+       must begin with '/'; patterns with consecutive slashes or a trailing
+       slash are rejected; and {name} segments must contain only [A-Za-z0-9_].
+       See chttpsvr_register_handler for full details on pattern validation and
+       path-segment decoding semantics.
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if srv, pattern, or fn is NULL; if pattern does not
+                         begin with '/'; if pattern contains consecutive
+                         slashes or a trailing slash; or if a {name} segment
+                         contains characters outside [A-Za-z0-9_].
+       ccol_not_enough_memory if allocation fails.
+
+SEE ALSO
+       chttpsvr_register_handler, chttpsvr_req_read
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_use - append global middleware to the root router
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_use(chttpsvr srv,
+                                   chttpsvr_middleware_fn fn, void *ctx);
+
+DESCRIPTION
+       Appends a middleware function to the global middleware chain.  Global
+       middleware runs before router-specific middleware and before the route
+       handler for every request.
+
+       fn receives a next callback; calling it continues the chain.  Omitting
+       the call short-circuits the chain and sends the response as-is.
+
+       This function is thread-safe and may be called before or after
+       chttpsvr_start is running.
+
+NOTES
+       The combined number of global and router-specific middleware functions
+       active for a single request is capped at 32.  If this limit is exceeded
+       at dispatch time, the server responds with HTTP 500.  The limit is
+       enforced at dispatch time, not at registration time: chttpsvr_use and
+       chttpsvr_router_use always return ccol_success regardless of how many
+       middleware entries have already been registered.
+
+       Registering the same path and method more than once is permitted and
+       returns ccol_success each time, but only the FIRST registered handler
+       is ever invoked (first-wins policy).
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if srv or fn is NULL.
+       ccol_not_enough_memory if allocation fails.
+
+SEE ALSO
+       chttpsvr_register_handler, chttpsvr_router_use
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_subrouter - create a sub-router with a path prefix
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix);
+
+DESCRIPTION
+       Creates a new router under the given path prefix (which must begin with
+       '/') and attaches it to the server.  Routes registered on the sub-router
+       are matched against the portion of the path following the prefix.
+
+       The prefix must not contain consecutive slashes (e.g. "//api" or
+       "/a//b").  Such prefixes can never match a valid HTTP path and would
+       silently create an unreachable router; chttpsvr_subrouter rejects them
+       by returning NULL.
+
+       A trailing slash in prefix is stripped automatically: "/api/v1/" and
+       "/api/v1" are therefore equivalent and produce identical routing
+       behaviour.
+
+       The returned pointer is owned by the server and must not be freed by
+       the caller.
+
+       This function is thread-safe and may be called before or after
+       chttpsvr_start is running.
+
+NOTES
+       The "/" prefix is a special case.  The trailing-slash strip loop runs
+       only when the prefix length exceeds one character, so "/" is retained
+       as-is with prefix_len = 1.  The match rule checks path[prefix_len],
+       i.e. path[1], which must be '/' or '\0'.  For the exact path "/" the
+       character at index 1 is '\0' (matches).  For any other path beginning
+       with '/' (e.g. "/foo"), path[1] is a letter, which fails the check:
+       those paths do NOT match and receive 404.
+
+       Use prefix "/" only when you intend to match only the exact root path
+       "/".  To catch all requests regardless of path, register routes directly
+       on the server with chttpsvr_register_handler or chttpsvr_register_streaming_handler instead.
+
+       Root-router shadowing: routes registered directly on the server via
+       chttpsvr_register_handler or chttpsvr_register_streaming_handler (i.e. on the root router) are always
+       evaluated before any sub-router.  A root-level route whose path
+       conflicts with a sub-router pattern will always win, regardless of
+       registration order.  To avoid unintentional shadowing, do not register
+       root-level routes whose paths overlap with a sub-router's prefix and
+       pattern.
+
+RETURN VALUE
+       Pointer to the new chttpsvr_router on success, or NULL when srv is NULL,
+       prefix is NULL, prefix does not start with '/', prefix contains
+       consecutive slashes, or on OOM.
+
+SEE ALSO
+       chttpsvr_router_on, chttpsvr_router_use
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_router_on - register a buffered handler on a sub-router
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_router_on(chttpsvr_router *router,
+                                         chttp_method_t method,
+                                         const char *pattern,
+                                         chttpsvr_handler_fn fn, void *ctx);
+
+DESCRIPTION
+       Same as chttpsvr_register_handler but registers the route on a sub-router.  All
+       routing, leading-slash, trailing-slash, double-slash, param-name
+       character, and thread-safety rules described for chttpsvr_register_handler apply
+       here as well, including support for CHTTP_ANY as the method argument.
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if router, pattern, or fn is NULL; if pattern does
+                         not begin with '/'; if pattern contains consecutive
+                         slashes or a trailing slash; or if a {name} segment
+                         contains characters outside [A-Za-z0-9_].
+       ccol_not_enough_memory if allocation fails.
+
+SEE ALSO
+       chttpsvr_register_handler, chttpsvr_subrouter, chttpsvr_router_use
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_router_on_stream - register a streaming handler on a sub-router
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
+                                                chttp_method_t method,
+                                                const char *pattern,
+                                                chttpsvr_handler_fn fn,
+                                                void *ctx);
+
+DESCRIPTION
+       Same as chttpsvr_register_streaming_handler but registers the route on
+       a sub-router.  All pattern validation rules from
+       chttpsvr_register_streaming_handler apply here as well, including the
+       requirement that pattern begins with '/' and that {name} segments
+       contain only [A-Za-z0-9_], and support for CHTTP_ANY as the method
+       argument.
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if router, pattern, or fn is NULL; if pattern does
+                         not begin with '/'; if pattern contains consecutive
+                         slashes or a trailing slash; or if a {name} segment
+                         contains characters outside [A-Za-z0-9_].
+       ccol_not_enough_memory if allocation fails.
+
+SEE ALSO
+       chttpsvr_register_streaming_handler, chttpsvr_subrouter
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_router_use - append middleware to a sub-router
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
+                                          chttpsvr_middleware_fn fn, void *ctx);
+
+DESCRIPTION
+       Appends middleware to the given sub-router's chain.  This middleware
+       runs after global middleware and before the route handler, but only
+       for requests routed through this sub-router.
+
+       This function is thread-safe and may be called before or after
+       chttpsvr_start is running.
+
+NOTES
+       See the NOTES section of chttpsvr_use for the combined middleware limit
+       (32 steps per request) and the first-wins duplicate-route policy.
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if router or fn is NULL.
+       ccol_not_enough_memory if allocation fails.
+
+SEE ALSO
+       chttpsvr_use, chttpsvr_subrouter
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_method - return the HTTP method of a request
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       chttp_method_t chttpsvr_req_method(const chttpsvr_req *req);
+
+DESCRIPTION
+       Returns the HTTP method of req as a chttp_method_t enum value.  The
+       return value is always a concrete method (CHTTP_GET, CHTTP_POST, etc.);
+       CHTTP_ANY is never returned, even when the matched route was registered
+       with CHTTP_ANY.
+
+       When req is NULL the function returns CHTTP_GET.  Unlike most other
+       request accessors (which return NULL for a NULL req), chttp_method_t is
+       an integer enum with no sentinel value, so callers must guard against
+       NULL before calling this function if req may be NULL.
+
+SEE ALSO
+       chttpsvr_req_path, chttpsvr_req_header
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_path - return the URL path of a request
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       const char *chttpsvr_req_path(const chttpsvr_req *req);
+
+DESCRIPTION
+       Returns a NUL-terminated string containing the URL path of the request,
+       without the query string.  The string is valid for the lifetime of the
+       handler invocation.
+
+SEE ALSO
+       chttpsvr_req_raw_query, chttpsvr_req_param
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_raw_query - return the raw query string of a request
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       const char *chttpsvr_req_raw_query(const chttpsvr_req *req);
+
+DESCRIPTION
+       Returns a NUL-terminated string containing the raw (un-decoded) query
+       string, without the leading '?'.  Returns NULL if no query string is
+       present.
+
+SEE ALSO
+       chttpsvr_req_query, chttpsvr_req_query_one
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_header - look up a request header
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       const char *chttpsvr_req_header(const chttpsvr_req *req,
+                                        const char *name);
+
+DESCRIPTION
+       Returns the value of the request header named name, or NULL if the
+       header is absent.  The lookup is case-insensitive.  When a header
+       appears multiple times, the last value is returned.
+
+       The returned pointer is valid for the lifetime of the handler
+       invocation.
+
+SEE ALSO
+       chttpsvr_req_method, chttpsvr_req_path
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_body - access the buffered request body
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       const void *chttpsvr_req_body(const chttpsvr_req *req,
+                                      size_t *len_out);
+
+DESCRIPTION
+       Returns a pointer to the buffered request body bytes.  If len_out is
+       non-NULL, the body length in bytes is stored there.  Returns NULL and
+       stores 0 if there is no body.
+
+       The buffer is valid for the lifetime of the handler invocation.
+
+SEE ALSO
+       chttpsvr_req_read
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_read - read body bytes sequentially (streaming handlers)
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
+
+DESCRIPTION
+       Reads up to buflen bytes from the request body into buf, advancing an
+       internal position cursor.
+
+       Return values:
+         > 0   Number of bytes copied into buf.
+           0   End of body reached, or buflen is 0 (valid no-op).
+          -1   Hard error: req is NULL; buf is NULL with buflen > 0; or the
+               handler was registered with chttpsvr_register_handler (buffered), not
+               chttpsvr_register_streaming_handler.
+
+       When buflen is 0 the function returns 0 immediately regardless of the
+       value of buf.  Passing NULL for buf with buflen == 0 is therefore
+       valid and returns 0 (a no-op), consistent with POSIX read(2)
+       semantics.  Only when buflen > 0 is buf required to be non-NULL.
+
+       This function is intended for streaming handlers registered with
+       chttpsvr_register_streaming_handler.  For buffered handlers, use chttpsvr_req_body.
+
+SEE ALSO
+       chttpsvr_req_body, chttpsvr_register_streaming_handler
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_param - look up a named path parameter
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       const char *chttpsvr_req_param(const chttpsvr_req *req,
+                                       const char *name);
+
+DESCRIPTION
+       Returns the URL-decoded value of the named path parameter, or NULL if
+       the parameter is not part of the matched route pattern.
+
+SEE ALSO
+       chttpsvr_req_path, chttpsvr_req_query
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_query - look up all values for a query parameter
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
+                                        size_t *count_out);
+
+DESCRIPTION
+       Parses the query string lazily on first call and returns a
+       NULL-terminated array of all URL-decoded values associated with key.
+       If count_out is non-NULL, stores the count.  Returns NULL if the key
+       is not present.
+
+       The string values pointed to by the array elements are valid for the
+       lifetime of the handler invocation.  The array pointer itself is a
+       per-request scratch buffer that is recycled on every call to
+       chttpsvr_req_query: copy any pointers you need from the returned array
+       before making a subsequent call to chttpsvr_req_query on the same
+       request.
+
+NOTES
+       This function cannot distinguish an OOM failure (during query-string
+       parsing or while growing the result array) from a genuine key-absent
+       result.  Both conditions produce (NULL, count=0).  Call
+       chttpsvr_req_query_oom(req) after a NULL return to distinguish the two
+       cases.  Alternatively, use chttpsvr_req_query_one for single-valued
+       keys; that function returns ccol_not_enough_memory on OOM.
+
+SEE ALSO
+       chttpsvr_req_query_one, chttpsvr_req_query_oom, chttpsvr_req_raw_query
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_query_one - look up a single-valued query parameter
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req,
+                                             const char *key,
+                                             const char **val_out);
+
+DESCRIPTION
+       Looks up a query parameter that is expected to appear exactly once.
+       Unlike chttpsvr_req_query, this function distinguishes an OOM failure
+       from a missing key and avoids allocating a scratch result array.
+
+RETURN VALUE
+       ccol_success            -- exactly one value found; stored in *val_out.
+       ccol_key_not_found      -- key is absent.
+       ccol_not_permitted      -- key appears more than once.
+       ccol_not_enough_memory  -- query-string parse buffer could not be allocated.
+       ccol_invalid_args       -- req or key is NULL.
+
+SEE ALSO
+       chttpsvr_req_query, chttpsvr_req_query_oom
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_query_oom - check whether chttpsvr_req_query ran out of memory
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       bool chttpsvr_req_query_oom(const chttpsvr_req *req);
+
+DESCRIPTION
+       Returns true if chttpsvr_req_query could not grow its internal result
+       array due to an allocation failure during the current request.
+
+       chttpsvr_req_query returns (NULL, count=0) both when the requested key
+       is absent and when an OOM condition prevents building the result array.
+       Use this function to distinguish the two cases after any NULL return
+       from chttpsvr_req_query.
+
+       The flag is latching: once set it remains true for the remainder of the
+       request regardless of subsequent query calls.  Returns false when req is
+       NULL.
+
+RETURN VALUE
+       true  -- chttpsvr_req_query failed with an allocation error.
+       false -- no allocation error occurred (or req is NULL).
+
+SEE ALSO
+       chttpsvr_req_query, chttpsvr_req_query_one
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_resp_set_status - set the HTTP response status code
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
+
+DESCRIPTION
+       Sets the HTTP status code for the response.  The default is 200.
+
+       status_code must be in the range 100-999 (inclusive).  Values outside
+       this range are clamped to 500 Internal Server Error when the response
+       is sent; the stored value itself is not altered.
+
+SEE ALSO
+       chttpsvr_resp_set_header, chttpsvr_resp_write
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_resp_set_header - set a response header
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp,
+                                               const char *name,
+                                               const char *value);
+
+DESCRIPTION
+       Sets or replaces a response header.  If a header with the same name
+       already exists (case-insensitive comparison per RFC 7230), the stored
+       value is replaced in-place and the function returns immediately.
+
+       Name casing: when a duplicate is detected the stored header name retains
+       the casing supplied by the FIRST call; the casing of subsequent calls is
+       ignored.  HTTP/1.1 header names are case-insensitive on the wire, so
+       this does not affect correctness, but callers who read back stored header
+       names directly should account for this behaviour.
+
+       All three arguments must be non-NULL; passing NULL for any of them
+       returns ccol_invalid_args without modifying the response.
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if resp, name, or value is NULL.
+       ccol_not_enough_memory if the underlying allocation fails.
+
+SEE ALSO
+       chttpsvr_resp_set_status, chttpsvr_resp_write
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_resp_write - append bytes to the response body
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp,
+                                          const void *data, size_t len);
+
+DESCRIPTION
+       Appends len bytes of data to the internal response body buffer.  The
+       buffer grows automatically using an overflow-safe doubling strategy:
+       capacity is at least doubled on each reallocation and the computation
+       is guarded against size_t wrap-around.  ccol_not_enough_memory is
+       returned both when len would overflow size_t when added to the current
+       body length and when the underlying allocator returns NULL.
+
+RETURN VALUE
+       ccol_success on success.
+       ccol_invalid_args if resp is NULL, or if data is NULL and len > 0.
+       ccol_not_enough_memory if the body length would overflow size_t or if
+                              the allocator cannot satisfy the request.
+
+SEE ALSO
+       chttpsvr_resp_write_str, chttpsvr_resp_write_json
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_resp_write_str - append a string to the response body
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp,
+                                              const char *str);
+
+DESCRIPTION
+       Equivalent to chttpsvr_resp_write(resp, str, strlen(str)).
+
+SEE ALSO
+       chttpsvr_resp_write, chttpsvr_resp_write_json
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_resp_write_json - append JSON to the response body
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp,
+                                               const char *json, size_t len);
+
+DESCRIPTION
+       Appends len bytes of json to the response body and then sets the
+       Content-Type response header to "application/json".  The body is
+       written first so that an OOM failure on body allocation leaves resp
+       completely unchanged (no header is installed, no bytes are buffered).
+
+       Returns ccol_invalid_args immediately (without modifying resp) when
+       resp or json is NULL, or when len is 0.  A zero-length JSON body with
+       Content-Type set is semantically invalid, so the function rejects it
+       rather than silently setting the header with no body bytes.
+
+RETURN VALUE
+       ccol_success           - Body bytes appended and Content-Type header set.
+       ccol_invalid_args      - resp or json is NULL, or len is 0.
+       ccol_not_enough_memory - Body or header buffer allocation failed.
+
+SEE ALSO
+       chttpsvr_resp_write, chttpsvr_resp_set_header
 
 ================================================================================
                               END OF MAN PAGES

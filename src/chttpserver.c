@@ -1,0 +1,2267 @@
+/*
+MIT License
+
+Copyright (c) 2026 - A bunch of nerds
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+*/
+
+#include <chttpserver.h>
+#include <cthreadpool.h>
+#include <fio.h>
+#include <fio_tls.h>
+#include <fiobj.h>
+#include <http.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <time.h>
+#include <unistd.h>
+
+/* ========================================================================== */
+/*                         INTERNAL TYPES                                     */
+/* ========================================================================== */
+
+/* Forward declaration required for the self-referential next pointer below. */
+typedef struct chttpsvr_mw_node chttpsvr_mw_node_t;
+
+/** Linked list node for middleware entries.
+ *
+ * next is a plain pointer.  All reads traverse the list while holding the
+ * routes_lock read-lock; all writes append under the write-lock.  The lock
+ * provides the ordering guarantee, so no atomic operations are needed. */
+struct chttpsvr_mw_node {
+  chttpsvr_middleware_fn fn;
+  void *ctx;
+  chttpsvr_mw_node_t *next;
+};
+
+/** Compiled route entry. */
+typedef struct chttpsvr_route {
+  chttp_method_t method;
+  char **segs; /* split pattern segments */
+  int seg_count;
+  char **param_names; /* extracted from {name} segments */
+  int param_count;
+  chttpsvr_handler_fn fn;
+  void *ctx;
+  bool is_streaming;
+} chttpsvr_route_t;
+
+/** Sub-router (also used as the root router). */
+struct chttpsvr_router {
+  char *prefix; /* e.g. "/api/v1"; "" for root */
+  size_t prefix_len;
+  chttpsvr_mw_node_t *mw_head;
+  chttpsvr_mw_node_t *mw_tail;
+  int mw_count; /* number of registered middleware; capped at _CHTTPSVR_MAX_MW
+                 */
+  chttpsvr_route_t **routes; /* pointer array -- each entry is a stable alloc */
+  size_t route_count;
+  size_t route_cap;
+  struct chttpserver *srv; /* back-pointer */
+  ccol_memmgmt_procs_t *m_procs;
+};
+
+/** One response header entry stored in the flat headers array. */
+typedef struct {
+  char *name;
+  char *value;
+} resp_header_t;
+
+/** Per-request response accumulator.
+ *
+ * Response headers are kept in a flat dynamic array (not a linked list) so
+ * that the duplicate-detection scan in chttpsvr_resp_set_header is
+ * cache-friendly and no per-header node allocation is required. */
+struct chttpsvr_resp {
+  int status_code;
+  resp_header_t *headers; /* flat array; grows 2x+8 on overflow */
+  size_t header_count;
+  size_t header_cap;
+  char *body;
+  size_t body_len;
+  size_t body_cap;
+  ccol_memmgmt_procs_t *m_procs;
+};
+
+/** Lazy-parsed query parameters. */
+typedef struct chttpsvr_qparams {
+  char **keys;   /* URL-decoded, owned */
+  char **values; /* URL-decoded, owned */
+  size_t count;
+  size_t cap;
+  ccol_memmgmt_procs_t *m_procs;
+} chttpsvr_qparams_t;
+
+/* Maximum number of middleware steps (global + router combined) per request.
+ * Exceeding this limit causes the server to respond with 500. */
+#define _CHTTPSVR_MAX_MW 32
+
+/* Snapshot entry for one middleware step. */
+typedef struct {
+  chttpsvr_middleware_fn fn;
+  void *ctx;
+} _mw_entry_t;
+
+/** Middleware dispatch state (stack-allocated per request). */
+typedef struct dispatch_ctx {
+  struct chttpserver *srv;
+  chttpsvr_router *router;
+  chttpsvr_route_t *route;
+  _mw_entry_t
+      mw_snap[_CHTTPSVR_MAX_MW]; /* fn/ctx pairs, snapshotted under lock */
+  int mw_count;                  /* total snapshotted entries */
+  int mw_idx;                    /* next entry to dispatch */
+} dispatch_ctx_t;
+
+/** Per-request object. */
+struct chttpsvr_req {
+  chttp_method_t method;
+  const char *path;      /* NUL-terminated decoded path */
+  const char *raw_query; /* NUL-terminated raw query, or NULL */
+  const void *body_data;
+  size_t body_len;
+  bool is_streaming;
+  size_t _stream_pos;
+
+  /* Pre-extracted headers (always populated; all requests go through ctpool). */
+  char **_hdr_names;
+  char **_hdr_values;
+  size_t _hdr_count;
+
+  const char **param_names; /* borrowed from route (const aliases) */
+  char **param_values;      /* owned */
+  int param_count;
+
+  chttpsvr_qparams_t *_qparams; /* NULL until first query access */
+  bool _qparams_attempted;      /* true after first parse attempt */
+  bool _qparams_parse_oom;      /* true when _parse_qparams returned OOM */
+  const char **_qresult;        /* scratch for multi-value return */
+  size_t _qresult_cap;
+  bool _qresult_oom; /* true when _qresult realloc failed in chttpsvr_req_query
+                      */
+
+  dispatch_ctx_t *_dispatch;
+  ccol_memmgmt_procs_t *m_procs;
+};
+
+/** Streaming-dispatch context (heap-allocated before http_pause). */
+typedef struct streaming_ctx {
+  http_pause_handle_s *ph;
+  struct chttpserver *srv;
+  chttpsvr_router *router;
+  chttpsvr_route_t *route;
+  chttp_method_t method;
+  char *path;      /* owned */
+  char *raw_query; /* owned, or NULL */
+  char *body;      /* owned, or NULL */
+  size_t body_len;
+  char **hdr_names; /* owned arrays */
+  char **hdr_values;
+  size_t hdr_count;
+  char **param_values; /* owned */
+  int param_count;
+  chttpsvr_resp resp;
+  dispatch_ctx_t dispatch;
+  ccol_memmgmt_procs_t *m_procs;
+} streaming_ctx_t;
+
+/** Main server struct. */
+struct chttpserver {
+  chttpsvr_router **routers; /* [0] = root, [1..n] = sub-routers */
+  size_t router_count;
+  size_t router_cap;
+  ctpool worker_pool;  /* owned; created at chttpsvr_start, destroyed at __chttpsvr_destroy */
+  fio_tls_s
+      *tls; /* non-NULL when TLS was configured; freed in __chttpsvr_destroy */
+  mutex_t mutex;
+  cond_var_t requests_done_cv; /* signalled when in_flight_requests drops to 0 */
+  int in_flight_requests; /* # tasks queued/running in worker_pool; guarded by mutex */
+  pthread_rwlock_t
+      routes_lock; /* guards routers[], route_count, routes[], mw lists */
+  clog cl;         /* per-server logger; passed at creation time */
+  intptr_t listen_uuid; /* facio listener uuid; -1 when not started */
+  bool started;         /* true after a successful chttpsvr_start call */
+  bool contributed_to_engine; /* true when this server was counted in g_server_count */
+  ccol_memmgmt_procs_t *m_procs;
+};
+
+/* ========================================================================== */
+/*                         GLOBAL STATE                                       */
+/* ========================================================================== */
+
+/* Shared facil.io event loop engine state. */
+static pthread_mutex_t g_engine_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_engine_ready_cv = PTHREAD_COND_INITIALIZER;
+static bool g_engine_running = false;
+static bool g_engine_ready = false;
+static bool g_engine_thread_started = false;
+static pthread_t g_engine_thread;
+static int16_t g_engine_threads = 1;
+/* Number of servers that contributed to the engine start (incremented in
+ * chttpsvr_start, decremented in __chttpsvr_destroy).  Engine stops when
+ * this count reaches 0. */
+static int g_server_count = 0;
+
+/* Lazy facil.io init: runs exactly once on the first chttpsvr_engine_start
+ * call.  http_lib_constructor must be called first to queue the
+ * ON_INITIALIZE callback before fio_lib_init fires it.  fio_lib_destroy is
+ * registered via atexit so it runs at process exit regardless of teardown
+ * order.  fio_lib_init and http_lib_constructor are declared in fio.h /
+ * http_internal.h but http_internal.h pulls in heavy third-party headers;
+ * forward-declare here.
+ */
+extern void http_lib_constructor(void);
+extern void fio_lib_init(void);
+extern void fio_lib_destroy(void);
+static pthread_once_t _fio_init_once = PTHREAD_ONCE_INIT;
+static void _fio_global_init(void) {
+  http_lib_constructor();
+  fio_lib_init();
+  atexit(fio_lib_destroy);
+}
+
+/* Private sentinel returned by _parse_method for unrecognised method strings.
+ * Not part of the public chttp_method_t enum; using it as a route method is
+ * impossible, so it can never match any registered route. */
+#define _CHTTP_METHOD_UNKNOWN ((chttp_method_t)(CHTTP_ANY + 1))
+
+/* ========================================================================== */
+/*                         FORWARD DECLARATIONS                               */
+/* ========================================================================== */
+
+static void _chttpsvr_next(chttpsvr_req *req, chttpsvr_resp *resp);
+static void _on_request(http_s *h);
+static void _task_pause_cb(http_pause_handle_s *ph);
+static void _task_worker(void *arg);
+static void _task_send_response(http_s *h);
+static void _task_cleanup(void *udata);
+static void _free_task_ctx(streaming_ctx_t *sctx);
+static void _destroy_resp(chttpsvr_resp *resp, ccol_memmgmt_procs_t *mp);
+static void _finalize_response(http_s *h, chttpsvr_resp *resp);
+
+/* ========================================================================== */
+/*                         PATTERN COMPILATION                                */
+/* ========================================================================== */
+
+static ccol_retval_t _compile_pattern(const char *pattern, char ***segs_out,
+                                      int *seg_count_out,
+                                      char ***param_names_out,
+                                      int *param_count_out,
+                                      ccol_memmgmt_procs_t *mp) {
+  /* All valid HTTP paths begin with '/'.  Reject patterns that don't so that
+   * callers receive an immediate error rather than a silently-registered route
+   * that happens to work (both the pattern and request path have the leading
+   * '/' stripped before comparison, so "health" and "/health" would match the
+   * same requests -- but the API contract is unambiguous about the leading
+   * slash being required).  Empty string is also rejected by this check. */
+  if (pattern[0] != '/') return ccol_invalid_args;
+
+  const char *p = pattern;
+  if (*p == '/') p++;
+
+  /* Reject a trailing slash.  _match_segments always rejects trailing slashes
+   * in request paths, so a pattern ending with '/' would match nothing with a
+   * trailing slash and silently behave like the no-trailing-slash pattern for
+   * everything else -- the opposite of what the registration implies. */
+  {
+    size_t plen = strlen(p);
+    if (plen > 0 && p[plen - 1] == '/') return ccol_invalid_args;
+  }
+
+  /* Count segments; reject patterns that contain consecutive slashes (empty
+   * segments), which would produce ambiguous or silently-normalised routes. */
+  int seg_count = 0;
+  {
+    const char *s = p;
+    while (*s) {
+      const char *e = strchr(s, '/');
+      size_t len = e ? (size_t)(e - s) : strlen(s);
+      if (len == 0 && e != NULL) {
+        /* Two adjacent slashes: /foo//bar or a leading // after stripping one
+         */
+        return ccol_invalid_args;
+      }
+      if (len > 0) seg_count++;
+      if (!e) break;
+      s = e + 1;
+    }
+  }
+
+  if (seg_count == 0) {
+    *segs_out = NULL;
+    *seg_count_out = 0;
+    *param_names_out = NULL;
+    *param_count_out = 0;
+    return ccol_success;
+  }
+
+  char **segs = (char **)_mem_calloc(mp, (size_t)seg_count, sizeof(char *));
+  if (!segs) return ccol_not_enough_memory;
+
+  int si = 0;
+  int param_count = 0;
+  const char *s = p;
+  while (*s && si < seg_count) {
+    const char *e = strchr(s, '/');
+    size_t len = e ? (size_t)(e - s) : strlen(s);
+    if (len == 0) {
+      if (!e) break;
+      s = e + 1;
+      continue;
+    }
+    segs[si] = (char *)_mem_alloc(mp, len + 1);
+    if (!segs[si]) {
+      for (int j = 0; j < si; j++) _mem_free(mp, segs[j]);
+      _mem_free(mp, segs);
+      return ccol_not_enough_memory;
+    }
+    memcpy(segs[si], s, len);
+    segs[si][len] = '\0';
+    if (segs[si][0] == '{') {
+      /* Validate that the parameter segment is well-formed: {name} */
+      if (len < 3 || segs[si][len - 1] != '}') {
+        for (int j = 0; j <= si; j++) _mem_free(mp, segs[j]);
+        _mem_free(mp, segs);
+        return ccol_invalid_args;
+      }
+      /* Validate param name: only [A-Za-z0-9_] are accepted.  Names with
+       * other characters (spaces, hyphens, etc.) can never be looked up via
+       * chttpsvr_req_param and would create silently unreachable parameters. */
+      for (size_t ci = 1; ci < len - 1; ci++) {
+        char c = segs[si][ci];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '_')) {
+          for (int j = 0; j <= si; j++) _mem_free(mp, segs[j]);
+          _mem_free(mp, segs);
+          return ccol_invalid_args;
+        }
+      }
+      param_count++;
+    }
+    si++;
+    if (!e) break;
+    s = e + 1;
+  }
+
+  char **param_names = NULL;
+  if (param_count > 0) {
+    param_names = (char **)_mem_calloc(mp, (size_t)param_count, sizeof(char *));
+    if (!param_names) {
+      for (int j = 0; j < seg_count; j++) _mem_free(mp, segs[j]);
+      _mem_free(mp, segs);
+      return ccol_not_enough_memory;
+    }
+    int pi = 0;
+    for (int i = 0; i < seg_count; i++) {
+      if (segs[i][0] == '{') {
+        size_t len = strlen(segs[i]);
+        /* Strip leading '{' and trailing '}'. */
+        param_names[pi] =
+            (char *)_mem_alloc(mp, len - 1); /* len-2+1 for NULL */
+        if (!param_names[pi]) {
+          for (int j = 0; j < pi; j++) _mem_free(mp, param_names[j]);
+          _mem_free(mp, param_names);
+          for (int j = 0; j < seg_count; j++) _mem_free(mp, segs[j]);
+          _mem_free(mp, segs);
+          return ccol_not_enough_memory;
+        }
+        memcpy(param_names[pi], segs[i] + 1, len - 2);
+        param_names[pi][len - 2] = '\0';
+        pi++;
+      }
+    }
+  }
+
+  *segs_out = segs;
+  *seg_count_out = seg_count;
+  *param_names_out = param_names;
+  *param_count_out = param_count;
+  return ccol_success;
+}
+
+static void _free_route_data(chttpsvr_route_t *r, ccol_memmgmt_procs_t *mp) {
+  for (int i = 0; i < r->seg_count; i++) _mem_free(mp, r->segs[i]);
+  _mem_free(mp, r->segs);
+  for (int i = 0; i < r->param_count; i++) _mem_free(mp, r->param_names[i]);
+  _mem_free(mp, r->param_names);
+}
+
+/* ========================================================================== */
+/*                         URL DECODING HELPERS                               */
+/* ========================================================================== */
+
+/* Decode a path segment (not NUL-terminated) into a heap-allocated string.
+ *
+ * Returns the decoded string on success.  Returns NULL on failure; when NULL
+ * is returned *oom_out (if non-NULL) distinguishes the two failure modes:
+ *   true  -- allocation failure; caller should propagate as OOM (500)
+ *   false -- bad percent-encoding; caller may treat as no-match (404) */
+static char *_decode_seg_alloc(const char *seg, size_t len,
+                               ccol_memmgmt_procs_t *mp, bool *oom_out) {
+  if (oom_out) *oom_out = false;
+
+  char src_buf[512];
+  char *src = src_buf;
+  bool src_heap = false;
+  if (len + 1 > sizeof(src_buf)) {
+    src = (char *)_mem_alloc(mp, len + 1);
+    if (!src) {
+      if (oom_out) *oom_out = true;
+      return NULL;
+    }
+    src_heap = true;
+  }
+  memcpy(src, seg, len);
+  src[len] = '\0';
+
+  char *dest = (char *)_mem_alloc(mp, len + 1);
+  if (!dest) {
+    if (src_heap) _mem_free(mp, src);
+    if (oom_out) *oom_out = true;
+    return NULL;
+  }
+  /* Use path semantics: '+' is a literal plus character in a path segment,
+   * not a space.  http_decode_url_unsafe (query-string semantics) would
+   * silently turn '+' into ' ', producing inconsistent param values vs the
+   * full decoded path returned by chttpsvr_req_path. */
+  ssize_t dlen = http_decode_path_unsafe(dest, src);
+  if (src_heap) _mem_free(mp, src);
+  if (dlen < 0) {
+    _mem_free(mp, dest);
+    return NULL; /* bad encoding -- *oom_out stays false */
+  }
+  dest[(size_t)dlen] = '\0';
+  return dest;
+}
+
+/* Decode a path segment and compare with a literal pattern segment.
+ *
+ * Returns  1 on match,
+ *          0 on no-match (including bad percent-encoding in the path),
+ *         -1 on OOM (caller should propagate as a 500, not a 404). */
+static int _seg_matches_literal(const char *path_seg, size_t seg_len,
+                                const char *pattern_seg,
+                                ccol_memmgmt_procs_t *mp) {
+  char src_buf[512];
+  char decoded_buf[512];
+  char *src = src_buf;
+  char *decoded = decoded_buf;
+  bool src_heap = false;
+  bool dec_heap = false;
+
+  if (seg_len + 1 > sizeof(src_buf)) {
+    src = (char *)_mem_alloc(mp, seg_len + 1);
+    if (!src) return -1; /* OOM */
+    src_heap = true;
+  }
+  if (seg_len + 1 > sizeof(decoded_buf)) {
+    decoded = (char *)_mem_alloc(mp, seg_len + 1);
+    if (!decoded) {
+      if (src_heap) _mem_free(mp, src);
+      return -1; /* OOM */
+    }
+    dec_heap = true;
+  }
+  memcpy(src, path_seg, seg_len);
+  src[seg_len] = '\0';
+  ssize_t dlen = http_decode_path_unsafe(decoded, src);
+  if (dlen >= 0) decoded[(size_t)dlen] = '\0';
+  int result = (dlen >= 0 && strcmp(decoded, pattern_seg) == 0) ? 1 : 0;
+  if (src_heap) _mem_free(mp, src);
+  if (dec_heap) _mem_free(mp, decoded);
+  return result;
+}
+
+/* ========================================================================== */
+/*                         ROUTE MATCHING                                     */
+/* ========================================================================== */
+
+typedef enum {
+  ROUTE_MATCH_OK,
+  ROUTE_MATCH_METHOD,
+  ROUTE_MATCH_OOM,
+  ROUTE_MATCH_NONE
+} route_match_t;
+
+typedef struct {
+  chttpsvr_router *router;
+  chttpsvr_route_t *route;
+  char **param_values; /* must be freed by caller on OK */
+  route_match_t result;
+} match_result_t;
+
+/* Returns 0 (no path match), 1 (path matched), or -1 (OOM during capture).
+ *
+ * pv_out: when non-NULL the function allocates the param_values array lazily
+ *         (on first captured parameter) and writes the pointer to *pv_out on
+ *         success.  On no-match any partially-allocated entries are freed and
+ *         *pv_out is set to NULL.  Pass NULL to perform a structure-only check
+ *         with zero heap allocation (dry-run mode).
+ *
+ * OOM is returned when _mem_calloc fails (capture mode) or when a {param}
+ * token is longer than 511 bytes and heap allocation for encoding validation
+ * fails (dry-run mode).  _decode_seg_alloc failures (bad encoding) are treated
+ * as no-match in both modes, ensuring consistent 404 behaviour regardless of
+ * whether the method matched. */
+static int _match_segments(const char *sub_path, chttpsvr_route_t *route,
+                           char ***pv_out, ccol_memmgmt_procs_t *mp) {
+  const char *p = sub_path;
+  if (*p == '/') p++;
+
+  if (route->seg_count == 0) {
+    /* Matches "/" or "" only. */
+    return (*p == '\0') ? 1 : 0;
+  }
+
+  char **pv = NULL;
+  int param_idx = 0;
+  for (int i = 0; i < route->seg_count; i++) {
+    const char *next_sep = strchr(p, '/');
+    size_t tok_len = next_sep ? (size_t)(next_sep - p) : strlen(p);
+
+    /* Empty tokens are not valid (trailing slash or double slash). */
+    if (tok_len == 0) goto no_match;
+
+    if (route->segs[i][0] == '{') {
+      if (pv_out) {
+        /* Capture mode: allocate the array lazily on the first parameter so
+         * that routes with params that do not fully match avoid any heap
+         * allocation at all. */
+        if (!pv) {
+          pv = (char **)_mem_calloc(mp, (size_t)route->param_count,
+                                    sizeof(char *));
+          if (!pv) return -1; /* OOM -- propagate to caller */
+        }
+        bool seg_oom = false;
+        char *val = _decode_seg_alloc(p, tok_len, mp, &seg_oom);
+        if (!val) {
+          if (seg_oom) {
+            /* OOM: free partial captures and propagate so the server returns
+             * 500 rather than a misleading 404. */
+            for (int j = 0; j < param_idx; j++) _mem_free(mp, pv[j]);
+            _mem_free(mp, pv);
+            if (pv_out) *pv_out = NULL;
+            return -1;
+          }
+          goto no_match; /* bad percent-encoding: treat as no-match (404) */
+        }
+        pv[param_idx++] = val;
+      } else {
+        /* Dry-run: validate percent-encoding without capturing.  Accepting a
+         * malformed token here while capture mode rejects it would make
+         * _match_segments return different results for the same path depending
+         * on whether the method matched, producing incorrect 405 responses
+         * instead of the correct 404.  In-place decoding is safe because
+         * output is always <= input length.  Stack buffer handles tokens up to
+         * 511 bytes; heap fallback for oversized tokens only. */
+        char _vbuf[512];
+        char *_vp = _vbuf;
+        bool _vheap = false;
+        if (tok_len + 1 > sizeof(_vbuf)) {
+          _vp = (char *)_mem_alloc(mp, tok_len + 1);
+          if (!_vp) return -1; /* OOM */
+          _vheap = true;
+        }
+        memcpy(_vp, p, tok_len);
+        _vp[tok_len] = '\0';
+        ssize_t _vl = http_decode_path_unsafe(_vp, _vp);
+        if (_vheap) _mem_free(mp, _vp);
+        if (_vl < 0) goto no_match; /* bad encoding -- mirrors capture mode */
+      }
+    } else {
+      /* Literal: compare decoded path token against the pattern literal.
+       * -1 means OOM (propagate as 500), 0 means no-match (404), 1 matches. */
+      int lit = _seg_matches_literal(p, tok_len, route->segs[i], mp);
+      if (lit < 0) {
+        if (pv) {
+          for (int j = 0; j < param_idx; j++) _mem_free(mp, pv[j]);
+          _mem_free(mp, pv);
+          if (pv_out) *pv_out = NULL;
+        }
+        return -1;
+      }
+      if (!lit) goto no_match;
+    }
+
+    if (i == route->seg_count - 1) {
+      /* Last segment: a trailing '/' means the path has one too many
+       * components -- /items/1/ must NOT match /items/{id}. */
+      if (next_sep != NULL) goto no_match;
+      p += tok_len;
+    } else {
+      p = next_sep ? next_sep + 1 : p + tok_len;
+    }
+  }
+  if (*p != '\0') goto no_match;
+  if (pv_out) *pv_out = pv;
+  return 1;
+
+no_match:
+  if (pv) {
+    for (int j = 0; j < param_idx; j++) _mem_free(mp, pv[j]);
+    _mem_free(mp, pv);
+    if (pv_out) *pv_out = NULL;
+  }
+  return 0;
+}
+
+static match_result_t _find_route(struct chttpserver *srv, const char *path,
+                                  chttp_method_t method) {
+  /* Track whether any route matched the path with the wrong method.  We must
+   * exhaust all routers and routes before concluding 405, because a later
+   * entry may match BOTH path and method (e.g. GET and POST registered on
+   * the same path, or a sub-router shadowing a root-router route). */
+  bool method_mismatch_seen = false;
+
+  for (size_t ri = 0; ri < srv->router_count; ri++) {
+    chttpsvr_router *router = srv->routers[ri];
+
+    /* Determine the sub-path relative to this router's prefix. */
+    const char *sub_path;
+    if (router->prefix_len == 0) {
+      sub_path = path;
+    } else {
+      if (strncmp(path, router->prefix, router->prefix_len) != 0) continue;
+      char next_ch = path[router->prefix_len];
+      if (next_ch != '/' && next_ch != '\0') continue;
+      sub_path = path + router->prefix_len;
+      if (*sub_path == '\0') sub_path = "/";
+    }
+
+    for (size_t i = 0; i < router->route_count; i++) {
+      chttpsvr_route_t *route = router->routes[i];
+
+      /* Single-pass strategy: pass &pv to capture param values only when the
+       * method also matches; pass NULL otherwise.  For non-matching paths the
+       * return is 0 with zero allocation.  For path-match / method-mismatch
+       * the dry-run (NULL pv_out) also allocates nothing.  Only a full
+       * (path + method) hit pays for the param capture. */
+      char **pv = NULL;
+      bool method_ok = (route->method == CHTTP_ANY || route->method == method);
+      int ms = _match_segments(sub_path, route, method_ok ? &pv : NULL,
+                               srv->m_procs);
+      if (ms == -1) return (match_result_t){NULL, NULL, NULL, ROUTE_MATCH_OOM};
+      if (ms == 0) continue; /* path structure did not match */
+
+      /* Path matched. */
+      if (!method_ok) {
+        /* Record the mismatch and keep searching -- a later route or router
+         * may still produce a full match. */
+        method_mismatch_seen = true;
+        continue;
+      }
+      return (match_result_t){router, route, pv, ROUTE_MATCH_OK};
+    }
+  }
+  if (method_mismatch_seen)
+    return (match_result_t){NULL, NULL, NULL, ROUTE_MATCH_METHOD};
+  return (match_result_t){NULL, NULL, NULL, ROUTE_MATCH_NONE};
+}
+
+static void _free_param_values(char **pv, int count, ccol_memmgmt_procs_t *mp) {
+  if (!pv) return;
+  for (int i = 0; i < count; i++) _mem_free(mp, pv[i]);
+  _mem_free(mp, pv);
+}
+
+/* ========================================================================== */
+/*                         METHOD PARSING                                     */
+/* ========================================================================== */
+
+static chttp_method_t _parse_method(const char *s, size_t len) {
+  if (len == 3 && memcmp(s, "GET", 3) == 0) return CHTTP_GET;
+  if (len == 4 && memcmp(s, "POST", 4) == 0) return CHTTP_POST;
+  if (len == 3 && memcmp(s, "PUT", 3) == 0) return CHTTP_PUT;
+  if (len == 6 && memcmp(s, "DELETE", 6) == 0) return CHTTP_DELETE;
+  if (len == 5 && memcmp(s, "PATCH", 5) == 0) return CHTTP_PATCH;
+  if (len == 4 && memcmp(s, "HEAD", 4) == 0) return CHTTP_HEAD;
+  if (len == 7 && memcmp(s, "OPTIONS", 7) == 0) return CHTTP_OPTIONS;
+  return _CHTTP_METHOD_UNKNOWN;
+}
+
+/* ========================================================================== */
+/*                         RESPONSE HELPERS                                   */
+/* ========================================================================== */
+
+static void _destroy_resp(chttpsvr_resp *resp, ccol_memmgmt_procs_t *mp) {
+  for (size_t i = 0; i < resp->header_count; i++) {
+    _mem_free(mp, resp->headers[i].name);
+    _mem_free(mp, resp->headers[i].value);
+  }
+  _mem_free(mp, resp->headers);
+  resp->headers = NULL;
+  resp->header_count = 0;
+  resp->header_cap = 0;
+  _mem_free(mp, resp->body);
+  resp->body = NULL;
+  resp->body_len = 0;
+  resp->body_cap = 0;
+}
+
+static void _destroy_req_qparams(chttpsvr_req *req) {
+  ccol_memmgmt_procs_t *mp = req->m_procs;
+  if (req->_qparams) {
+    chttpsvr_qparams_t *qp = req->_qparams;
+    for (size_t i = 0; i < qp->count; i++) {
+      _mem_free(mp, qp->keys[i]);
+      _mem_free(mp, qp->values[i]);
+    }
+    _mem_free(mp, qp->keys);
+    _mem_free(mp, qp->values);
+    _mem_free(mp, qp);
+  }
+  if (req->_qresult) _mem_free(mp, req->_qresult);
+}
+
+static void _finalize_response(http_s *h, chttpsvr_resp *resp) {
+  h->status = (resp->status_code >= 100 && resp->status_code <= 999)
+                  ? (uintptr_t)resp->status_code
+                  : (uintptr_t)500;
+
+  /* Set response headers.
+   * http_set_header2 copies the name and value strings into internal FIOBJ
+   * string objects synchronously before returning, so resp->headers may be
+   * freed immediately after this loop (same contract as http_send_body). */
+  for (size_t _hi = 0; _hi < resp->header_count; _hi++) {
+    fio_str_info_s name_info = {.capa = 0,
+                                .len = strlen(resp->headers[_hi].name),
+                                .data = resp->headers[_hi].name};
+    fio_str_info_s val_info = {.capa = 0,
+                               .len = strlen(resp->headers[_hi].value),
+                               .data = resp->headers[_hi].value};
+    http_set_header2(h, name_info, val_info);
+  }
+
+  /* Send body or finish headers-only.
+   * http_send_body copies resp->body into an internal facil.io buffer before
+   * returning, so it is safe to free resp->body immediately afterward. */
+  if (resp->body && resp->body_len > 0) {
+    http_send_body(h, resp->body, (uintptr_t)resp->body_len);
+  } else {
+    http_finish(h);
+  }
+}
+
+/* ========================================================================== */
+/*                         MIDDLEWARE DISPATCH                                */
+/* ========================================================================== */
+
+static void _chttpsvr_next(chttpsvr_req *req, chttpsvr_resp *resp) {
+  dispatch_ctx_t *ctx = req->_dispatch;
+  if (ctx->mw_idx < ctx->mw_count) {
+    _mw_entry_t entry = ctx->mw_snap[ctx->mw_idx++];
+    entry.fn(req, resp, entry.ctx, _chttpsvr_next);
+    return;
+  }
+  ctx->route->fn(req, resp, ctx->route->ctx);
+}
+
+/* ========================================================================== */
+/*                         STREAMING HELPERS                                  */
+/* ========================================================================== */
+
+/* Header extraction callback for streaming mode. */
+typedef struct {
+  char **names;
+  char **values;
+  size_t count;
+  size_t cap;
+  ccol_memmgmt_procs_t *mp;
+  bool oom;
+} hdr_extract_t;
+
+static int _extract_hdr_cb(FIOBJ val, void *arg) {
+  hdr_extract_t *he = (hdr_extract_t *)arg;
+  FIOBJ key = fiobj_hash_key_in_loop();
+  if (!key) return 0; /* skip null FIOBJ (internal sentinel entries) */
+  fio_str_info_s key_info = fiobj_obj2cstr(key);
+  if (!key_info.data || key_info.len == 0) return 0;
+
+  fio_str_info_s val_info;
+  if (FIOBJ_TYPE_IS(val, FIOBJ_T_ARRAY)) {
+    FIOBJ last = fiobj_ary_index(val, -1);
+    if (!last)
+      return 0; /* empty multi-value array -- skip, matching _find_hdr_cb */
+    val_info = fiobj_obj2cstr(last);
+  } else {
+    val_info = fiobj_obj2cstr(val);
+  }
+  /* FIOBJ types that are not strings return NULL data from obj2cstr. */
+  if (!val_info.data) {
+    val_info.data = (char *)"";
+    val_info.len = 0;
+  }
+
+  if (he->count >= he->cap) {
+    size_t new_cap = he->cap * 2 + 8;
+    char **nn =
+        (char **)_mem_realloc(he->mp, he->names, new_cap * sizeof(char *));
+    if (!nn) {
+      he->oom = true;
+      return -1;
+    }
+    char **nv =
+        (char **)_mem_realloc(he->mp, he->values, new_cap * sizeof(char *));
+    if (!nv) {
+      /* nn is the new (larger) allocation for he->names.  Update he->names
+       * now so the cleanup loop in _on_request frees the live allocation.
+       * he->cap stays at the old value; cleanup iterates he->count (not
+       * he->cap), so the temporarily mismatched capacities are harmless. */
+      he->names = nn;
+      he->oom = true;
+      return -1;
+    }
+    he->names = nn;
+    he->values = nv;
+    he->cap = new_cap;
+  }
+
+  char *hdr_name = ccol_strdup(he->mp, key_info.data);
+  char *hdr_val = ccol_strdup(he->mp, val_info.data);
+  if (!hdr_name || !hdr_val) {
+    _mem_free(he->mp, hdr_name);
+    _mem_free(he->mp, hdr_val);
+    he->oom = true;
+    return -1;
+  }
+  he->names[he->count] = hdr_name;
+  he->values[he->count] = hdr_val;
+  he->count++;
+  return 0;
+}
+
+static void _free_task_ctx(streaming_ctx_t *sctx) {
+  ccol_memmgmt_procs_t *mp = sctx->m_procs;
+  _mem_free(mp, sctx->path);
+  _mem_free(mp, sctx->raw_query);
+  _mem_free(mp, sctx->body);
+  for (size_t i = 0; i < sctx->hdr_count; i++) {
+    _mem_free(mp, sctx->hdr_names[i]);
+    _mem_free(mp, sctx->hdr_values[i]);
+  }
+  _mem_free(mp, sctx->hdr_names);
+  _mem_free(mp, sctx->hdr_values);
+  _free_param_values(sctx->param_values, sctx->param_count, mp);
+  _destroy_resp(&sctx->resp, mp);
+  _mem_free(mp, sctx);
+}
+
+static void _task_pause_cb(http_pause_handle_s *ph) {
+  streaming_ctx_t *sctx = (streaming_ctx_t *)http_paused_udata_get(ph);
+  sctx->ph = ph;
+
+  /* Increment in_flight_requests BEFORE the submit attempt.  Both the success
+   * and failure paths end with exactly one http_resume call, guaranteeing that
+   * either _task_send_response or _task_cleanup fires.  Both decrement
+   * in_flight_requests under the mutex.  Pre-incrementing prevents a window
+   * where __chttpsvr_destroy sees count==0 and frees resources while a
+   * resume callback still holds a server pointer. */
+  mutex_lock(sctx->srv->mutex);
+  sctx->srv->in_flight_requests++;
+  ctpool pool = sctx->srv->worker_pool;
+  mutex_unlock(sctx->srv->mutex);
+
+  if (ctpool_try_submit(pool, _task_worker, sctx, NULL) != ccol_success) {
+    sctx->resp.status_code = CHTTP_STATUS_SERVICE_UNAVAILABLE;
+    http_resume(ph, _task_send_response, _task_cleanup);
+    return;
+  }
+  /* On successful submit the worker holds the reference; the decrement
+   * happens in _task_send_response or _task_cleanup. */
+}
+
+static void _task_worker(void *arg) {
+  streaming_ctx_t *sctx = (streaming_ctx_t *)arg;
+
+  chttpsvr_req req;
+  memset(&req, 0, sizeof(req));
+  req.method = sctx->method;
+  req.path = sctx->path;
+  req.raw_query = sctx->raw_query;
+  req.body_data = sctx->body;
+  req.body_len = sctx->body_len;
+  req.is_streaming = sctx->route->is_streaming;
+  req._stream_pos = 0;
+  req._hdr_names = sctx->hdr_names;
+  req._hdr_values = sctx->hdr_values;
+  req._hdr_count = sctx->hdr_count;
+  req.param_names = (const char **)sctx->route->param_names;
+  req.param_values = sctx->param_values;
+  req.param_count = sctx->param_count;
+  req._dispatch = &sctx->dispatch;
+  req.m_procs = sctx->m_procs;
+
+  _chttpsvr_next(&req, &sctx->resp);
+
+  _destroy_req_qparams(&req);
+
+  http_resume(sctx->ph, _task_send_response, _task_cleanup);
+}
+
+static void _task_send_response(http_s *h) {
+  streaming_ctx_t *sctx = (streaming_ctx_t *)h->udata;
+  struct chttpserver *srv = sctx->srv; /* save before sctx is freed */
+  _finalize_response(h, &sctx->resp);
+  /* _finalize_response transfers all header strings and body to facil.io
+   * synchronously; sctx and the embedded resp may be freed now. */
+  _free_task_ctx(sctx);
+  mutex_lock(srv->mutex);
+  if (--srv->in_flight_requests == 0)
+    cond_var_broadcast(srv->requests_done_cv);
+  mutex_unlock(srv->mutex);
+}
+
+static void _task_cleanup(void *udata) {
+  /* Connection was closed before we could send; just free resources. */
+  streaming_ctx_t *sctx = (streaming_ctx_t *)udata;
+  struct chttpserver *srv = sctx->srv; /* save before sctx is freed */
+  _free_task_ctx(sctx);
+  mutex_lock(srv->mutex);
+  if (--srv->in_flight_requests == 0)
+    cond_var_broadcast(srv->requests_done_cv);
+  mutex_unlock(srv->mutex);
+}
+
+/* ========================================================================== */
+/*                         MAIN REQUEST HANDLER                               */
+/* ========================================================================== */
+
+static void _on_request(http_s *h) {
+  struct chttpserver *srv = (struct chttpserver *)http_settings(h)->udata;
+
+  /* Extract path (server-side: h->path is the path only, not query). */
+  fio_str_info_s path_fi = fiobj_obj2cstr(h->path);
+  if (!path_fi.data) {
+    http_send_error(h, 400);
+    return;
+  }
+
+  /* Copy to NUL-terminated buffer; use stack for short paths. */
+  char path_stk[512];
+  char *path = path_stk;
+  bool path_heap = false;
+  if (path_fi.len + 1 > sizeof(path_stk)) {
+    path = (char *)_mem_alloc(srv->m_procs, path_fi.len + 1);
+    if (!path) {
+      http_send_error(h, 500);
+      return;
+    }
+    path_heap = true;
+  }
+  memcpy(path, path_fi.data, path_fi.len);
+  path[path_fi.len] = '\0';
+
+  /* Extract method. */
+  fio_str_info_s method_fi = fiobj_obj2cstr(h->method);
+  if (!method_fi.data) {
+    if (path_heap) _mem_free(srv->m_procs, path);
+    http_send_error(h, 400);
+    return;
+  }
+  chttp_method_t method = _parse_method(method_fi.data, method_fi.len);
+
+  if (method == _CHTTP_METHOD_UNKNOWN) {
+    if (path_heap) _mem_free(srv->m_procs, path);
+    http_send_error(h, 501);
+    return;
+  }
+
+  /* Route lookup and middleware snapshot under the routes read lock.
+   * The read lock prevents _router_add_route / _router_add_mw /
+   * chttpsvr_subrouter from mutating the routing tables while we read them. The
+   * lock is held only long enough to find the route and snapshot the middleware
+   * head pointers; handler dispatch runs without it.
+   *
+   * Note: _find_route calls _mem_calloc while this read lock is held.  For the
+   * default allocator (malloc) this is safe.  Custom allocators passed via
+   * create_chttpsvr_mp must not acquire any lock that _router_add_route,
+   * _router_add_mw, or chttpsvr_subrouter also hold; otherwise deadlock is
+   * possible. */
+  pthread_rwlock_rdlock(&srv->routes_lock);
+  match_result_t mr = _find_route(srv, path, method);
+  if (mr.result == ROUTE_MATCH_NONE) {
+    pthread_rwlock_unlock(&srv->routes_lock);
+    if (path_heap) _mem_free(srv->m_procs, path);
+    http_send_error(h, 404);
+    return;
+  }
+  if (mr.result == ROUTE_MATCH_METHOD) {
+    pthread_rwlock_unlock(&srv->routes_lock);
+    if (path_heap) _mem_free(srv->m_procs, path);
+    http_send_error(h, 405);
+    return;
+  }
+  if (mr.result == ROUTE_MATCH_OOM) {
+    pthread_rwlock_unlock(&srv->routes_lock);
+    if (path_heap) _mem_free(srv->m_procs, path);
+    http_send_error(h, 500);
+    return;
+  }
+  /* Build a snapshot of the middleware chain while the read lock is still
+   * held.  Walking the list here -- rather than after releasing the lock --
+   * guarantees the snapshot is consistent with the route found by _find_route
+   * and cannot include middleware appended by a concurrent writer after the
+   * lock is released.  Global middleware is snapshotted first, then any
+   * router-specific middleware. */
+  dispatch_ctx_t dispatch;
+  memset(&dispatch, 0, sizeof(dispatch));
+  dispatch.srv = srv;
+  dispatch.router = mr.router;
+  dispatch.route = mr.route;
+  dispatch.mw_idx = 0;
+  {
+    int mc = 0;
+    chttpsvr_mw_node_t *n;
+    for (n = srv->routers[0]->mw_head; n && mc < _CHTTPSVR_MAX_MW; n = n->next)
+      dispatch.mw_snap[mc++] = (_mw_entry_t){n->fn, n->ctx};
+    bool overflow =
+        (n != NULL); /* stopped because cap was reached, not list end */
+    if (!overflow && mr.router != srv->routers[0]) {
+      for (n = mr.router->mw_head; n && mc < _CHTTPSVR_MAX_MW; n = n->next)
+        dispatch.mw_snap[mc++] = (_mw_entry_t){n->fn, n->ctx};
+      overflow = (n != NULL);
+    }
+    dispatch.mw_count = mc;
+    if (overflow) {
+      pthread_rwlock_unlock(&srv->routes_lock);
+      _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
+      if (path_heap) _mem_free(srv->m_procs, path);
+      http_send_error(h, 500);
+      return;
+    }
+  }
+  pthread_rwlock_unlock(&srv->routes_lock);
+
+  /* URL-decode the path in-place now that routing is done.
+   * The raw (encoded) path was needed for segment comparison; the user-facing
+   * chttpsvr_req_path() API is documented to return the decoded path.
+   * http_decode_path_unsafe output is always <= input length, so in-place is
+   * safe: the write pointer never overtakes the read pointer.
+   * Failure (-1) means malformed percent-encoding; return 400.  This is a
+   * defensive check: current segment matching also decodes with hex2byte and
+   * would reject any bad encoding before reaching this point, but future
+   * routing extensions (wildcards, catch-alls) might not. */
+  {
+    ssize_t _dlen = http_decode_path_unsafe(path, path);
+    if (_dlen < 0) {
+      _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
+      if (path_heap) _mem_free(srv->m_procs, path);
+      http_send_error(h, 400);
+      return;
+    }
+    path[(size_t)_dlen] = '\0';
+  }
+
+  /* Extract body (raw bytes from fiobj_data). */
+  size_t body_len = 0;
+  fio_str_info_s body_fi;
+  memset(&body_fi, 0, sizeof(body_fi));
+  if (h->body) {
+    fiobj_data_seek(h->body, 0);
+    body_fi = fiobj_data_read(h->body, 0);
+    if (body_fi.data) body_len = body_fi.len;
+  }
+
+  /* Extract raw query string. */
+  const char *raw_query = NULL;
+  fio_str_info_s query_fi;
+  memset(&query_fi, 0, sizeof(query_fi));
+  if (h->query) {
+    query_fi = fiobj_obj2cstr(h->query);
+    if (query_fi.len > 0) raw_query = query_fi.data;
+  }
+
+  /* --- ALL REQUESTS dispatched through server ctpool via http_pause --- */
+  streaming_ctx_t *sctx =
+      (streaming_ctx_t *)_mem_calloc(srv->m_procs, 1, sizeof(streaming_ctx_t));
+  if (!sctx) {
+    _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
+    if (path_heap) _mem_free(srv->m_procs, path);
+    http_send_error(h, 500);
+    return;
+  }
+  sctx->m_procs = srv->m_procs;
+  sctx->srv = srv;
+  sctx->router = mr.router;
+  sctx->route = mr.route;
+  sctx->method = method;
+  sctx->param_values = mr.param_values;
+  sctx->param_count = mr.route->param_count;
+  sctx->resp.status_code = CHTTP_STATUS_OK;
+  sctx->resp.m_procs = srv->m_procs;
+  sctx->dispatch = dispatch;
+
+  /* Copy path. */
+  sctx->path = ccol_strdup(srv->m_procs, path);
+  if (!sctx->path) goto task_oom;
+
+  /* Copy raw query. */
+  if (raw_query) {
+    sctx->raw_query = ccol_strdup(srv->m_procs, raw_query);
+    if (!sctx->raw_query) goto task_oom;
+  }
+
+  /* Copy body bytes. */
+  if (body_len > 0 && body_fi.data) {
+    sctx->body = (char *)_mem_alloc(srv->m_procs, body_len);
+    if (!sctx->body) goto task_oom;
+    memcpy(sctx->body, body_fi.data, body_len);
+    sctx->body_len = body_len;
+  }
+
+  /* Extract all request headers before http_pause so the reactor thread
+   * does not need to touch the FIOBJ after the pause. */
+  if (h->headers) {
+    hdr_extract_t he;
+    memset(&he, 0, sizeof(he));
+    he.mp = srv->m_procs;
+    fiobj_each2(h->headers, _extract_hdr_cb, &he);
+    if (he.oom) {
+      for (size_t i = 0; i < he.count; i++) {
+        _mem_free(srv->m_procs, he.names[i]);
+        _mem_free(srv->m_procs, he.values[i]);
+      }
+      _mem_free(srv->m_procs, he.names);
+      _mem_free(srv->m_procs, he.values);
+      goto task_oom;
+    }
+    sctx->hdr_names = he.names;
+    sctx->hdr_values = he.values;
+    sctx->hdr_count = he.count;
+  }
+
+  if (path_heap) _mem_free(srv->m_procs, path);
+  h->udata = sctx;
+  http_pause(h, _task_pause_cb);
+  return;
+
+task_oom:
+  _free_task_ctx(sctx);
+  if (path_heap) _mem_free(srv->m_procs, path);
+  http_send_error(h, 500);
+}
+
+/* ========================================================================== */
+/*                         BACKGROUND THREAD                                  */
+/* ========================================================================== */
+
+/* Called by facil.io on FIO_CALL_ON_START, after fio_listen_on_startup has
+ * bound all pre-registered listeners.  Signals chttpsvr_start that the engine
+ * is up and the port is accepting connections. */
+static void _engine_ready_cb(void *arg) {
+  (void)arg;
+  pthread_mutex_lock(&g_engine_mutex);
+  g_engine_ready = true;
+  pthread_cond_broadcast(&g_engine_ready_cv);
+  pthread_mutex_unlock(&g_engine_mutex);
+}
+
+static void *_fio_thread_fn(void *arg) {
+  (void)arg;
+  fio_start(.threads = g_engine_threads, .workers = 1);
+  pthread_mutex_lock(&g_engine_mutex);
+  g_engine_running = false;
+  pthread_mutex_unlock(&g_engine_mutex);
+  return NULL;
+}
+
+/* ========================================================================== */
+/*                         ROUTER INTERNAL HELPERS                            */
+/* ========================================================================== */
+
+static chttpsvr_router *_create_router(struct chttpserver *srv,
+                                       const char *prefix,
+                                       ccol_memmgmt_procs_t *mp) {
+  chttpsvr_router *r =
+      (chttpsvr_router *)_mem_calloc(mp, 1, sizeof(chttpsvr_router));
+  if (!r) return NULL;
+  r->prefix = ccol_strdup(mp, prefix ? prefix : "");
+  if (!r->prefix) {
+    _mem_free(mp, r);
+    return NULL;
+  }
+  /* Strip trailing slashes so "/api/v1/" and "/api/v1" route identically.
+   * The root router's empty prefix and the degenerate single-char "/" are
+   * left unchanged (the loop condition plen > 1 guards both). */
+  size_t plen = strlen(r->prefix);
+  while (plen > 1 && r->prefix[plen - 1] == '/') r->prefix[--plen] = '\0';
+  r->prefix_len = plen;
+  r->srv = srv;
+  r->m_procs = mp;
+  return r;
+}
+
+static void _destroy_router(chttpsvr_router *r, ccol_memmgmt_procs_t *mp) {
+  /* Free middleware nodes.  Destroy is called only after all in-flight
+   * streams have drained (__chttpsvr_destroy guarantees this), so plain
+   * pointer access is safe here. */
+  chttpsvr_mw_node_t *mw = r->mw_head;
+  while (mw) {
+    chttpsvr_mw_node_t *next = mw->next;
+    _mem_free(mp, mw);
+    mw = next;
+  }
+  /* Free routes (each entry is an individual allocation). */
+  for (size_t i = 0; i < r->route_count; i++) {
+    _free_route_data(r->routes[i], mp);
+    _mem_free(mp, r->routes[i]);
+  }
+  _mem_free(mp, r->routes);
+  _mem_free(mp, r->prefix);
+  _mem_free(mp, r);
+}
+
+static ccol_retval_t _router_add_route(chttpsvr_router *router,
+                                       chttp_method_t method,
+                                       const char *pattern,
+                                       chttpsvr_handler_fn fn, void *ctx,
+                                       bool is_streaming) {
+  if (!router || !pattern || !fn) return ccol_invalid_args;
+
+  ccol_memmgmt_procs_t *mp = router->m_procs;
+
+  /* Allocate and fully initialise the route BEFORE taking the write lock so
+   * that readers never observe a partially-constructed entry. */
+  chttpsvr_route_t *rt =
+      (chttpsvr_route_t *)_mem_alloc(mp, sizeof(chttpsvr_route_t));
+  if (!rt) return ccol_not_enough_memory;
+  memset(rt, 0, sizeof(*rt));
+  rt->method = method;
+  rt->fn = fn;
+  rt->ctx = ctx;
+  rt->is_streaming = is_streaming;
+
+  ccol_retval_t rv = _compile_pattern(pattern, &rt->segs, &rt->seg_count,
+                                      &rt->param_names, &rt->param_count, mp);
+  if (rv != ccol_success) {
+    _mem_free(mp, rt);
+    return rv;
+  }
+
+  /* Publish the fully-initialised route pointer under the write lock. */
+  pthread_rwlock_wrlock(&router->srv->routes_lock);
+  if (router->route_count >= router->route_cap) {
+    size_t new_cap = router->route_cap * 2 + 4;
+    chttpsvr_route_t **nr = (chttpsvr_route_t **)_mem_realloc(
+        mp, router->routes, new_cap * sizeof(chttpsvr_route_t *));
+    if (!nr) {
+      pthread_rwlock_unlock(&router->srv->routes_lock);
+      _free_route_data(rt, mp);
+      _mem_free(mp, rt);
+      return ccol_not_enough_memory;
+    }
+    router->routes = nr;
+    router->route_cap = new_cap;
+  }
+  router->routes[router->route_count++] = rt;
+  pthread_rwlock_unlock(&router->srv->routes_lock);
+  return ccol_success;
+}
+
+static ccol_retval_t _router_add_mw(chttpsvr_router *router,
+                                    chttpsvr_middleware_fn fn, void *ctx) {
+  if (!router || !fn) return ccol_invalid_args;
+  ccol_memmgmt_procs_t *mp = router->m_procs;
+  /* Allocate the node before taking the write lock. */
+  chttpsvr_mw_node_t *node =
+      (chttpsvr_mw_node_t *)_mem_alloc(mp, sizeof(chttpsvr_mw_node_t));
+  if (!node) return ccol_not_enough_memory;
+  node->fn = fn;
+  node->ctx = ctx;
+  node->next = NULL;
+
+  /* Append under the write lock.  The lock provides the ordering needed to
+   * make the new node visible to snapshot readers under the read-lock. */
+  pthread_rwlock_wrlock(&router->srv->routes_lock);
+  if (router->mw_count >= _CHTTPSVR_MAX_MW) {
+    pthread_rwlock_unlock(&router->srv->routes_lock);
+    _mem_free(mp, node);
+    return ccol_not_permitted;
+  }
+  if (!router->mw_tail) {
+    router->mw_head = router->mw_tail = node;
+  } else {
+    router->mw_tail->next = node;
+    router->mw_tail = node;
+  }
+  router->mw_count++;
+  pthread_rwlock_unlock(&router->srv->routes_lock);
+  return ccol_success;
+}
+
+/* ========================================================================== */
+/*                         QUERY PARAMETER PARSING                            */
+/* ========================================================================== */
+
+static ccol_retval_t _parse_qparams(const char *raw_query,
+                                    chttpsvr_qparams_t **qp_out,
+                                    ccol_memmgmt_procs_t *mp) {
+  chttpsvr_qparams_t *qp =
+      (chttpsvr_qparams_t *)_mem_calloc(mp, 1, sizeof(chttpsvr_qparams_t));
+  if (!qp) return ccol_not_enough_memory;
+  qp->m_procs = mp;
+
+  const char *p = raw_query;
+  while (p && *p) {
+    /* Find end of this pair. */
+    const char *amp = strchr(p, '&');
+    size_t pair_len = amp ? (size_t)(amp - p) : strlen(p);
+    const char *eq = (const char *)memchr(p, '=', pair_len);
+
+    size_t key_raw_len = eq ? (size_t)(eq - p) : pair_len;
+    const char *val_raw = eq ? eq + 1 : NULL;
+    size_t val_raw_len = eq ? pair_len - key_raw_len - 1 : 0;
+
+    /* Decode key. */
+    char key_src[512];
+    char *key_sp = key_src;
+    bool kh = false;
+    if (key_raw_len + 1 > sizeof(key_src)) {
+      key_sp = (char *)_mem_alloc(mp, key_raw_len + 1);
+      kh = true;
+      if (!key_sp) goto oom;
+    }
+    memcpy(key_sp, p, key_raw_len);
+    /* URL query uses + for space. */
+    for (size_t i = 0; i < key_raw_len; i++) {
+      if (key_sp[i] == '+') key_sp[i] = ' ';
+    }
+    key_sp[key_raw_len] = '\0';
+    char *key_decoded = (char *)_mem_alloc(mp, key_raw_len + 1);
+    if (!key_decoded) {
+      if (kh) _mem_free(mp, key_sp);
+      goto oom;
+    }
+    ssize_t kl = http_decode_url_unsafe(key_decoded, key_sp);
+    if (kh) _mem_free(mp, key_sp);
+    if (kl < 0) {
+      _mem_free(mp, key_decoded);
+      goto next;
+    }
+    key_decoded[(size_t)kl] = '\0';
+
+    /* Decode value. */
+    char *val_decoded = NULL;
+    if (val_raw) {
+      char val_src[512];
+      char *val_sp = val_src;
+      bool vh = false;
+      if (val_raw_len + 1 > sizeof(val_src)) {
+        val_sp = (char *)_mem_alloc(mp, val_raw_len + 1);
+        vh = true;
+        if (!val_sp) {
+          _mem_free(mp, key_decoded);
+          goto oom;
+        }
+      }
+      memcpy(val_sp, val_raw, val_raw_len);
+      for (size_t i = 0; i < val_raw_len; i++) {
+        if (val_sp[i] == '+') val_sp[i] = ' ';
+      }
+      val_sp[val_raw_len] = '\0';
+      val_decoded = (char *)_mem_alloc(mp, val_raw_len + 1);
+      if (!val_decoded) {
+        if (vh) _mem_free(mp, val_sp);
+        _mem_free(mp, key_decoded);
+        goto oom;
+      }
+      ssize_t vl = http_decode_url_unsafe(val_decoded, val_sp);
+      if (vh) _mem_free(mp, val_sp);
+      if (vl < 0) {
+        _mem_free(mp, val_decoded);
+        _mem_free(mp, key_decoded);
+        goto next;
+      }
+      val_decoded[(size_t)vl] = '\0';
+    } else {
+      val_decoded = ccol_strdup(mp, "");
+      if (!val_decoded) {
+        _mem_free(mp, key_decoded);
+        goto oom;
+      }
+    }
+
+    /* Grow arrays if needed. */
+    if (qp->count >= qp->cap) {
+      size_t nc = qp->cap * 2 + 8;
+      char **nk = (char **)_mem_realloc(mp, qp->keys, nc * sizeof(char *));
+      if (!nk) {
+        _mem_free(mp, key_decoded);
+        _mem_free(mp, val_decoded);
+        goto oom;
+      }
+      qp->keys = nk;
+      char **nv = (char **)_mem_realloc(mp, qp->values, nc * sizeof(char *));
+      if (!nv) {
+        /* qp->keys already points to nk (updated above).  qp->cap is
+         * intentionally NOT updated here: it now understates the actual
+         * keys-array capacity but remains consistent with the values-array
+         * capacity.  The oom cleanup path iterates by qp->count (not
+         * qp->cap) for individual string entries, then frees each array
+         * pointer once -- both arrays are released correctly. */
+        _mem_free(mp, key_decoded);
+        _mem_free(mp, val_decoded);
+        goto oom;
+      }
+      qp->values = nv;
+      qp->cap = nc;
+    }
+    qp->keys[qp->count] = key_decoded;
+    qp->values[qp->count] = val_decoded;
+    qp->count++;
+
+  next:
+    p = amp ? amp + 1 : NULL;
+  }
+
+  *qp_out = qp;
+  return ccol_success;
+
+oom:
+  for (size_t i = 0; i < qp->count; i++) {
+    _mem_free(mp, qp->keys[i]);
+    _mem_free(mp, qp->values[i]);
+  }
+  _mem_free(mp, qp->keys);
+  _mem_free(mp, qp->values);
+  _mem_free(mp, qp);
+  return ccol_not_enough_memory;
+}
+
+static chttpsvr_qparams_t *_ensure_qparams(chttpsvr_req *req) {
+  if (req->_qparams) return req->_qparams;
+  /* _qparams_attempted guards against retrying a failed allocation on every
+   * subsequent query call.  Once set, any path that leaves _qparams NULL (both
+   * the empty-query sentinel calloc failure and the parse OOM path) returns
+   * NULL immediately rather than spinning in a tight OOM retry loop. */
+  if (req->_qparams_attempted) return NULL;
+  req->_qparams_attempted = true;
+
+  if (!req->raw_query || !*req->raw_query) {
+    chttpsvr_qparams_t *qp = (chttpsvr_qparams_t *)_mem_calloc(
+        req->m_procs, 1, sizeof(chttpsvr_qparams_t));
+    if (!qp) return NULL;
+    qp->m_procs = req->m_procs;
+    req->_qparams = qp;
+    return qp;
+  }
+  if (_parse_qparams(req->raw_query, &req->_qparams, req->m_procs) !=
+      ccol_success) {
+    /* OOM during parse.  Record it so that chttpsvr_req_query_one can
+     * distinguish a parse failure from a genuine key-absent result (both
+     * would otherwise surface as an empty param set). */
+    req->_qparams_parse_oom = true;
+    /* Install an empty sentinel so that subsequent calls take the fast path
+     * (_qparams non-NULL) and _destroy_req_qparams has a valid struct to
+     * clean up.  If the sentinel allocation also fails, return NULL -- the
+     * OOM flag is already set regardless. */
+    chttpsvr_qparams_t *qp = (chttpsvr_qparams_t *)_mem_calloc(
+        req->m_procs, 1, sizeof(chttpsvr_qparams_t));
+    if (qp) {
+      qp->m_procs = req->m_procs;
+      req->_qparams = qp;
+      return qp;
+    }
+    return NULL;
+  }
+  return req->_qparams;
+}
+
+/* ========================================================================== */
+/*                         PUBLIC API IMPLEMENTATION                          */
+/* ========================================================================== */
+
+chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
+                            char **err_str) {
+  if (!cl) {
+    if (err_str) *err_str = CCOL_ERR_STR("clog handle must not be NULL");
+    return NULL;
+  }
+  if (!ccol_verify_memmgmt_procs(mprocs, err_str)) return NULL;
+
+  struct chttpserver *srv =
+      (struct chttpserver *)_mem_calloc(mprocs, 1, sizeof(struct chttpserver));
+  if (!srv) {
+    if (err_str) *err_str = CCOL_ERR_STR("out of memory");
+    return NULL;
+  }
+
+  if (mprocs) {
+    srv->m_procs = (ccol_memmgmt_procs_t *)_mem_alloc(
+        mprocs, sizeof(ccol_memmgmt_procs_t));
+    if (!srv->m_procs) {
+      _mem_free(mprocs, srv);
+      if (err_str) *err_str = CCOL_ERR_STR("out of memory");
+      return NULL;
+    }
+    memcpy(srv->m_procs, mprocs, sizeof(ccol_memmgmt_procs_t));
+  }
+
+  if (mutex_init(srv->mutex) != 0) {
+    _mem_free(mprocs, srv->m_procs);
+    _mem_free(mprocs, srv);
+    if (err_str) *err_str = CCOL_ERR_STR("mutex_init failed");
+    return NULL;
+  }
+
+  {
+    pthread_condattr_t _cv_attr;
+    int _cv_rc = 0;
+    if (pthread_condattr_init(&_cv_attr) == 0) {
+      pthread_condattr_setclock(&_cv_attr, CLOCK_MONOTONIC);
+      _cv_rc = pthread_cond_init(&srv->requests_done_cv, &_cv_attr);
+      pthread_condattr_destroy(&_cv_attr);
+    } else {
+      _cv_rc = 1;
+    }
+    if (_cv_rc != 0) {
+      mutex_destroy(srv->mutex);
+      _mem_free(mprocs, srv->m_procs);
+      _mem_free(mprocs, srv);
+      if (err_str) *err_str = CCOL_ERR_STR("cond_var_init failed");
+      return NULL;
+    }
+  }
+
+  if (pthread_rwlock_init(&srv->routes_lock, NULL) != 0) {
+    cond_var_destroy(srv->requests_done_cv);
+    mutex_destroy(srv->mutex);
+    _mem_free(mprocs, srv->m_procs);
+    _mem_free(mprocs, srv);
+    if (err_str) *err_str = CCOL_ERR_STR("pthread_rwlock_init failed");
+    return NULL;
+  }
+
+  /* Create the root router (prefix = ""). */
+  chttpsvr_router *root = _create_router(srv, "", srv->m_procs);
+  if (!root) {
+    pthread_rwlock_destroy(&srv->routes_lock);
+    cond_var_destroy(srv->requests_done_cv);
+    mutex_destroy(srv->mutex);
+    _mem_free(mprocs, srv->m_procs);
+    _mem_free(mprocs, srv);
+    if (err_str) *err_str = CCOL_ERR_STR("out of memory");
+    return NULL;
+  }
+
+  srv->routers =
+      (chttpsvr_router **)_mem_alloc(srv->m_procs, sizeof(chttpsvr_router *));
+  if (!srv->routers) {
+    _destroy_router(root, srv->m_procs);
+    pthread_rwlock_destroy(&srv->routes_lock);
+    cond_var_destroy(srv->requests_done_cv);
+    mutex_destroy(srv->mutex);
+    _mem_free(mprocs, srv->m_procs);
+    _mem_free(mprocs, srv);
+    if (err_str) *err_str = CCOL_ERR_STR("out of memory");
+    return NULL;
+  }
+  srv->routers[0] = root;
+  srv->router_count = 1;
+  srv->router_cap = 1;
+  srv->cl = cl;
+  srv->listen_uuid = -1;
+  srv->started = false;
+  return srv;
+}
+
+void __chttpsvr_destroy(chttpsvr srv) {
+  if (!srv) return;
+
+  /* Atomically close the listener and claim the stop. */
+  mutex_lock(srv->mutex);
+  bool was_started = srv->started;
+  intptr_t uuid = srv->listen_uuid;
+  if (was_started) {
+    srv->started = false;
+    srv->listen_uuid = -1;
+  }
+  mutex_unlock(srv->mutex);
+  if (was_started) fio_close(uuid);
+
+  /* Determine whether this is the last server and we should stop the engine.
+   * Only decrement g_server_count once, and only if we previously contributed
+   * to it (contributed_to_engine is set in chttpsvr_start). */
+  bool should_stop_engine = false;
+  bool should_join_engine = false;
+  if (srv->contributed_to_engine) {
+    pthread_mutex_lock(&g_engine_mutex);
+    g_server_count--;
+    if (g_server_count == 0 && g_engine_running) {
+      fio_stop();
+      should_stop_engine = true;
+    }
+    if (g_server_count == 0 && g_engine_thread_started) {
+      g_engine_thread_started = false;
+      should_join_engine = true;
+    }
+    pthread_mutex_unlock(&g_engine_mutex);
+  }
+  (void)should_stop_engine; /* fio_stop already called above; flag documents intent */
+
+  /* Block until every in-flight task has called http_resume and its
+   * send/cleanup callback has completed.  All handlers now run through the
+   * server's ctpool, so in_flight_requests tracks all dispatched work.
+   *
+   * For the last server: fio_stop() above signals the reactor to drain; the
+   * reactor fires all pending http_resume callbacks before fio_start() returns,
+   * so in_flight_requests will typically reach 0 before the join below.
+   * For non-last servers: the reactor keeps running for other servers, so
+   * http_resume callbacks fire naturally.
+   *
+   * 30-second timeout as a safety net: a permanent hang is worse than a
+   * potential use-after-free in that degenerate edge case. */
+  mutex_lock(srv->mutex);
+  if (srv->in_flight_requests > 0) {
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += 30;
+    while (srv->in_flight_requests > 0) {
+      if (cond_var_timedwait(srv->requests_done_cv, srv->mutex, deadline) ==
+          ETIMEDOUT)
+        break;
+    }
+  }
+  mutex_unlock(srv->mutex);
+
+  /* Join the engine thread if we stopped it. */
+  if (should_join_engine) {
+    pthread_join(g_engine_thread, NULL);
+    /* Clear the logger pointer so that fio_lib_destroy (atexit) logging calls
+     * hit the null-guard in _fio_vlog and do not access a freed handle. */
+    fio_set_logger(NULL);
+  }
+
+  /* Drain then destroy the server-owned worker pool. */
+  if (srv->worker_pool) {
+    ctpool_shutdown_drain(srv->worker_pool);
+    ctpool_destroy(srv->worker_pool);
+    srv->worker_pool = NULL;
+  }
+
+  if (srv->tls) {
+    fio_tls_destroy(srv->tls);
+    srv->tls = NULL;
+  }
+
+  for (size_t i = 0; i < srv->router_count; i++) {
+    _destroy_router(srv->routers[i], srv->m_procs);
+  }
+  _mem_free(srv->m_procs, srv->routers);
+  mutex_destroy(srv->mutex);
+  cond_var_destroy(srv->requests_done_cv);
+  pthread_rwlock_destroy(&srv->routes_lock);
+
+  ccol_memmgmt_procs_t *mp = srv->m_procs;
+  _mem_free(mp, srv);
+  _mem_free(mp, mp);
+}
+
+ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
+  if (!srv) return ccol_invalid_args;
+  if (cfg && cfg->port == 0) return ccol_invalid_args;
+
+  static const chttpsvr_config_t default_cfg = {
+      .host = "0.0.0.0",
+      .port = 8080,
+      .max_body_size = (4U * 1024U * 1024U),
+      .read_timeout_ms = 0,
+      .idle_timeout_ms = 0,
+      .tls = NULL,
+      .worker_thread_count = 0,
+      .worker_queue_capacity = 0,
+  };
+  if (!cfg) cfg = &default_cfg;
+
+  /* Guard against double-start on the same server instance. */
+  mutex_lock(srv->mutex);
+  if (srv->started) {
+    mutex_unlock(srv->mutex);
+    return ccol_not_permitted;
+  }
+  mutex_unlock(srv->mutex);
+
+  /* Drain and destroy any pool left over from a previous start/stop cycle. */
+  if (srv->worker_pool) {
+    ctpool_shutdown_drain(srv->worker_pool);
+    ctpool_destroy(srv->worker_pool);
+    srv->worker_pool = NULL;
+  }
+
+  /* Determine worker thread count and queue capacity. */
+  int nthreads = cfg->worker_thread_count;
+  if (nthreads <= 0) {
+    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    nthreads = (cpus > 0) ? (int)cpus : 1;
+  }
+  size_t queue_cap;
+  if (cfg->worker_queue_capacity == CHTTPSVR_QUEUE_UNBOUNDED) {
+    queue_cap = 0; /* ctpool: 0 means unbounded */
+  } else if (cfg->worker_queue_capacity == 0) {
+    queue_cap = (size_t)256 * (size_t)nthreads; /* library default */
+  } else {
+    queue_cap = cfg->worker_queue_capacity;
+  }
+
+  char *pool_err = NULL;
+  srv->worker_pool =
+      create_cthread_pool_mp((size_t)nthreads, queue_cap, srv->m_procs, &pool_err);
+  if (!srv->worker_pool) return ccol_not_enough_memory;
+
+  /* Compute timeout in seconds (facil.io uses uint8_t seconds).
+   *
+   * idle_timeout_ms, when non-zero, overrides read_timeout_ms as the
+   * connection timeout.  Both map to the single facil.io timeout parameter;
+   * idle_timeout_ms takes precedence because it more directly describes the
+   * keep-alive idle semantics that facil.io enforces on quiescent
+   * connections. */
+  uint8_t timeout_sec = 0;
+  {
+    long _eff_ms = (cfg->idle_timeout_ms > 0) ? cfg->idle_timeout_ms
+                                              : cfg->read_timeout_ms;
+    if (_eff_ms > 0) {
+      long sec = _eff_ms / 1000;
+      timeout_sec = (sec > 255) ? 255 : (sec == 0 ? 1 : (uint8_t)sec);
+    }
+  }
+
+  /* Build port string. */
+  char port_str[8];
+  snprintf(port_str, sizeof(port_str), "%u", cfg->port);
+
+  /* Release any TLS context left over from a previous start/stop cycle.
+   * fio_tls_s is reference-counted: fio_tls_new starts at ref=1 and
+   * http_listen calls fio_tls_dup (ref=2).  After chttpsvr_stop the
+   * listener is scheduled for close asynchronously; facil.io still holds
+   * its reference.  Our fio_tls_destroy here only decrements our own ref;
+   * the memory is freed when facil.io releases the last reference. */
+  if (srv->tls) {
+    fio_tls_destroy(srv->tls);
+    srv->tls = NULL;
+  }
+
+  /* Configure TLS if requested. */
+  fio_tls_s *tls = NULL;
+  if (cfg->tls && cfg->tls->cert_path && cfg->tls->key_path) {
+    tls = fio_tls_new(cfg->host, cfg->tls->cert_path, cfg->tls->key_path,
+                      NULL);
+    if (!tls) {
+      ctpool_shutdown_drain(srv->worker_pool);
+      ctpool_destroy(srv->worker_pool);
+      srv->worker_pool = NULL;
+      return ccol_unexpected_failure;
+    }
+    if (cfg->tls->ca_bundle_path) fio_tls_trust(tls, cfg->tls->ca_bundle_path);
+  }
+
+  /* Start the shared engine on the first chttpsvr_start call in this process.
+   * Subsequent calls reuse the already-running engine.  g_engine_mutex
+   * serialises concurrent chttpsvr_start calls so exactly one thread starts
+   * the engine.
+   *
+   * uuid is set inside the mutex on the first start (before the engine
+   * thread is spawned), and outside the mutex on subsequent starts.  A value
+   * of -1 after the mutex section signals the subsequent-start path. */
+  intptr_t uuid = -1;
+
+  pthread_mutex_lock(&g_engine_mutex);
+
+  if (!g_engine_running) {
+    /* First chttpsvr_start: bring up the shared engine. */
+
+    /* One-time facil.io global initialisation. */
+    pthread_once(&_fio_init_once, _fio_global_init);
+
+    /* Install a minimal default engine logger if the caller has not already
+     * set one via chttpsvr_set_engine_logger(). */
+    if (!fio_has_logger()) {
+      clog base = clog_open_fd(2, CLOG_FATAL);
+      if (base) {
+        clog derived = clog_derive(base);
+        clog_close(base);
+        if (derived) {
+          clog_set_field(derived, "component", "http-engine");
+          fio_set_logger(derived);
+        }
+      }
+    }
+
+    /* Compute reactor thread count (fixed at CPU count; not user-configurable).
+     */
+    long raw = sysconf(_SC_NPROCESSORS_ONLN);
+    if (raw < 1) raw = 1;
+    g_engine_threads = (raw > INT16_MAX) ? INT16_MAX : (int16_t)raw;
+
+    /* Register the readiness callback BEFORE http_listen.
+     * fio_state_callback_force(FIO_CALL_ON_START) fires in reverse
+     * registration order (builds a reversed copy via unshift).  Registering
+     * _engine_ready_cb first means it fires AFTER fio_listen_on_startup
+     * (registered by http_listen below), so the port is fully bound before
+     * we wake up. */
+    fio_state_callback_add(FIO_CALL_ON_START, _engine_ready_cb, NULL);
+
+    /* Register the listener BEFORE spawning the engine thread so that when
+     * the reactor enters its event loop for the first time, fio_listen_on_startup
+     * is already queued and the socket is bound atomically at startup. */
+    uuid = http_listen(port_str, cfg->host, .on_request = _on_request,
+                       .udata = srv, .max_body_size = cfg->max_body_size,
+                       .timeout = timeout_sec, .tls = tls);
+    if (uuid < 0) {
+      fio_state_callback_remove(FIO_CALL_ON_START, _engine_ready_cb, NULL);
+      pthread_mutex_unlock(&g_engine_mutex);
+      if (tls) fio_tls_destroy(tls);
+      ctpool_shutdown_drain(srv->worker_pool);
+      ctpool_destroy(srv->worker_pool);
+      srv->worker_pool = NULL;
+      return ccol_unexpected_failure;
+    }
+
+    int rc = pthread_create(&g_engine_thread, NULL, _fio_thread_fn, NULL);
+    if (rc != 0) {
+      fio_state_callback_remove(FIO_CALL_ON_START, _engine_ready_cb, NULL);
+      fio_close(uuid);
+      uuid = -1;
+      pthread_mutex_unlock(&g_engine_mutex);
+      if (tls) fio_tls_destroy(tls);
+      ctpool_shutdown_drain(srv->worker_pool);
+      ctpool_destroy(srv->worker_pool);
+      srv->worker_pool = NULL;
+      return ccol_unexpected_failure;
+    }
+
+    g_engine_thread_started = true;
+    g_engine_running = true;
+
+    /* Block until the engine fires FIO_CALL_ON_START: fio_listen_on_startup
+     * has bound the port, and _engine_ready_cb has signalled us.  The
+     * reactor is now in its event loop and ready to accept connections. */
+    while (!g_engine_ready) {
+      pthread_cond_wait(&g_engine_ready_cv, &g_engine_mutex);
+    }
+  }
+
+  /* Register this server's contribution to the engine reference count the
+   * first time it is started.  On a restart (stop + start again) the flag is
+   * already true, so we avoid double-counting. */
+  if (!srv->contributed_to_engine) {
+    g_server_count++;
+    srv->contributed_to_engine = true;
+  }
+
+  pthread_mutex_unlock(&g_engine_mutex);
+
+  if (uuid < 0) {
+    /* Subsequent start: engine already running.  http_listen calls fio_attach
+     * directly (fio_is_running() is true), registering the listener
+     * immediately with the live reactor. */
+    uuid = http_listen(port_str, cfg->host, .on_request = _on_request,
+                       .udata = srv, .max_body_size = cfg->max_body_size,
+                       .timeout = timeout_sec, .tls = tls);
+    if (uuid < 0) {
+      if (tls) fio_tls_destroy(tls);
+      ctpool_shutdown_drain(srv->worker_pool);
+      ctpool_destroy(srv->worker_pool);
+      srv->worker_pool = NULL;
+      return ccol_unexpected_failure;
+    }
+  }
+
+  /* Store the TLS reference so __chttpsvr_destroy can release it when the
+   * server is torn down.  facil.io's reference (from fio_tls_dup inside
+   * http_listen) keeps the context alive for ongoing TLS handshakes. */
+  srv->tls = tls;
+  srv->listen_uuid = uuid;
+  srv->started = true;
+
+  return ccol_success;
+}
+
+void chttpsvr_stop(chttpsvr srv) {
+  if (!srv) return;
+  /* Atomically claim the stop to prevent concurrent callers from issuing
+   * multiple fio_close calls on the same uuid. */
+  mutex_lock(srv->mutex);
+  bool was_started = srv->started;
+  intptr_t uuid = srv->listen_uuid;
+  if (was_started) {
+    srv->started = false;
+    srv->listen_uuid = -1;
+  }
+  mutex_unlock(srv->mutex);
+  /* fio_close schedules the listener socket for close on the reactor; the
+   * shared engine and all other registered listeners are unaffected. */
+  if (was_started) fio_close(uuid);
+}
+
+ccol_retval_t chttpsvr_set_engine_logger(clog cl) {
+  if (!cl) return ccol_invalid_args;
+  clog derived = clog_derive(cl);
+  if (!derived) return ccol_not_enough_memory;
+  clog_set_field(derived, "component", "http-engine");
+  /* fio_set_logger takes ownership of derived: it closes the previous logger
+   * (if any) after swapping the pointer under the write lock. */
+  fio_set_logger(derived);
+  return ccol_success;
+}
+
+void chttpsvr_engine_stop(void) { fio_stop(); }
+
+void chttpsvr_engine_wait(void) {
+  pthread_mutex_lock(&g_engine_mutex);
+  bool should_join = g_engine_thread_started;
+  if (should_join) g_engine_thread_started = false;
+  pthread_mutex_unlock(&g_engine_mutex);
+  if (should_join) {
+    pthread_join(g_engine_thread, NULL);
+    /* fio_lib_destroy (registered via atexit in _fio_global_init) fires after
+     * all other cleanup and calls logging functions.  Clear g_fio_logger now so
+     * those calls hit the null-guard in _fio_vlog and do not access a freed
+     * handle. */
+    fio_set_logger(NULL);
+  }
+}
+
+ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
+                                        const char *pattern,
+                                        chttpsvr_handler_fn fn, void *ctx) {
+  if (!srv || !pattern || !fn) return ccol_invalid_args;
+  return _router_add_route(srv->routers[0], method, pattern, fn, ctx, false);
+}
+
+ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
+                                                  chttp_method_t method,
+                                                  const char *pattern,
+                                                  chttpsvr_handler_fn fn,
+                                                  void *ctx) {
+  if (!srv || !pattern || !fn) return ccol_invalid_args;
+  return _router_add_route(srv->routers[0], method, pattern, fn, ctx, true);
+}
+
+ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx) {
+  if (!srv || !fn) return ccol_invalid_args;
+  return _router_add_mw(srv->routers[0], fn, ctx);
+}
+
+chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix) {
+  if (!srv || !prefix || prefix[0] != '/') return NULL;
+
+  /* Reject prefixes that contain consecutive slashes (e.g. "//api" or
+   * "/api//v1").  Such prefixes can never match a valid HTTP path (the router
+   * matching code checks path[prefix_len] == '/' || '\0', which requires the
+   * prefix itself to be a clean path segment sequence) and would silently
+   * create an unreachable router. */
+  if (strstr(prefix, "//")) return NULL;
+
+  /* Create the router object outside the write lock (no shared-state access).
+   */
+  chttpsvr_router *r = _create_router(srv, prefix, srv->m_procs);
+  if (!r) return NULL;
+
+  /* Publish under the write lock so _find_route readers never see a
+   * partially-updated routers array. */
+  pthread_rwlock_wrlock(&srv->routes_lock);
+  if (srv->router_count >= srv->router_cap) {
+    size_t nc = srv->router_cap * 2 + 2;
+    chttpsvr_router **nr = (chttpsvr_router **)_mem_realloc(
+        srv->m_procs, srv->routers, nc * sizeof(chttpsvr_router *));
+    if (!nr) {
+      pthread_rwlock_unlock(&srv->routes_lock);
+      _destroy_router(r, srv->m_procs);
+      return NULL;
+    }
+    srv->routers = nr;
+    srv->router_cap = nc;
+  }
+  srv->routers[srv->router_count++] = r;
+  pthread_rwlock_unlock(&srv->routes_lock);
+  return r;
+}
+
+ccol_retval_t chttpsvr_router_on(chttpsvr_router *router, chttp_method_t method,
+                                 const char *pattern, chttpsvr_handler_fn fn,
+                                 void *ctx) {
+  if (!router || !pattern || !fn) return ccol_invalid_args;
+  return _router_add_route(router, method, pattern, fn, ctx, false);
+}
+
+ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
+                                        chttp_method_t method,
+                                        const char *pattern,
+                                        chttpsvr_handler_fn fn, void *ctx) {
+  if (!router || !pattern || !fn) return ccol_invalid_args;
+  return _router_add_route(router, method, pattern, fn, ctx, true);
+}
+
+ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
+                                  chttpsvr_middleware_fn fn, void *ctx) {
+  if (!router || !fn) return ccol_invalid_args;
+  return _router_add_mw(router, fn, ctx);
+}
+
+/* ========================================================================== */
+/*                         REQUEST API                                        */
+/* ========================================================================== */
+
+chttp_method_t chttpsvr_req_method(const chttpsvr_req *req) {
+  if (!req) return CHTTP_GET;
+  return req->method;
+}
+
+const char *chttpsvr_req_path(const chttpsvr_req *req) {
+  if (!req) return NULL;
+  return req->path;
+}
+
+const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name) {
+  if (!req || !name) return NULL;
+  /* All requests are dispatched through ctpool with pre-extracted headers. */
+  for (size_t i = 0; i < req->_hdr_count; i++) {
+    if (strcasecmp(req->_hdr_names[i], name) == 0) return req->_hdr_values[i];
+  }
+  return NULL;
+}
+
+const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out) {
+  if (!req) {
+    if (len_out) *len_out = 0;
+    return NULL;
+  }
+  if (len_out) *len_out = req->body_len;
+  return req->body_data;
+}
+
+ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
+  if (!req) return -1;
+  if (buflen == 0) return 0; /* read zero bytes: valid no-op, not an error */
+  if (!buf) return -1;
+  if (!req->is_streaming) return -1;
+  if (!req->body_data || req->_stream_pos >= req->body_len) return 0;
+  size_t remaining = req->body_len - req->_stream_pos;
+  size_t to_read = (remaining < buflen) ? remaining : buflen;
+  memcpy(buf, (const char *)req->body_data + req->_stream_pos, to_read);
+  req->_stream_pos += to_read;
+  return (ssize_t)to_read;
+}
+
+const char *chttpsvr_req_param(const chttpsvr_req *req, const char *name) {
+  if (!req || !name) return NULL;
+  for (int i = 0; i < req->param_count; i++) {
+    if (req->param_names[i] && strcmp(req->param_names[i], name) == 0) {
+      return req->param_values[i];
+    }
+  }
+  return NULL;
+}
+
+const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
+                                size_t *count_out) {
+  if (!req || !key) {
+    if (count_out) *count_out = 0;
+    return NULL;
+  }
+
+  chttpsvr_qparams_t *qp = _ensure_qparams(req);
+  if (!qp) {
+    if (count_out) *count_out = 0;
+    return NULL;
+  }
+
+  /* Count matching pairs. */
+  size_t n = 0;
+  for (size_t i = 0; i < qp->count; i++) {
+    if (strcmp(qp->keys[i], key) == 0) n++;
+  }
+  if (n == 0) {
+    if (count_out) *count_out = 0;
+    return NULL;
+  }
+
+  /* Build result array (NULL-terminated). */
+  if (n + 1 > req->_qresult_cap) {
+    const char **nr = (const char **)_mem_realloc(req->m_procs, req->_qresult,
+                                                  (n + 1) * sizeof(char *));
+    if (!nr) {
+      req->_qresult_oom = true;
+      if (count_out) *count_out = 0;
+      return NULL;
+    }
+    req->_qresult = nr;
+    req->_qresult_cap = n + 1;
+  }
+  size_t idx = 0;
+  for (size_t i = 0; i < qp->count; i++) {
+    if (strcmp(qp->keys[i], key) == 0) req->_qresult[idx++] = qp->values[i];
+  }
+  req->_qresult[idx] = NULL;
+  if (count_out) *count_out = n;
+  return req->_qresult;
+}
+
+ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req, const char *key,
+                                     const char **val_out) {
+  if (!req || !key) return ccol_invalid_args;
+
+  /* Go directly to the parsed parameter store so OOM is distinguishable from
+   * "key absent": chttpsvr_req_query returns (NULL, count=0) for both cases,
+   * making them indistinguishable at that level. */
+  chttpsvr_qparams_t *qp = _ensure_qparams(req);
+  if (!qp) return ccol_not_enough_memory;
+  /* Even when a fallback sentinel was installed (qp != NULL), the underlying
+   * parse may have failed with OOM.  Propagate the error so the caller is not
+   * misled into thinking the key was simply absent from the query string. */
+  if (req->_qparams_parse_oom) return ccol_not_enough_memory;
+
+  size_t n = 0;
+  const char *found_val = NULL;
+  for (size_t i = 0; i < qp->count; i++) {
+    if (strcmp(qp->keys[i], key) == 0) {
+      n++;
+      found_val = qp->values[i];
+    }
+  }
+  if (n == 0) {
+    if (val_out) *val_out = NULL;
+    return ccol_key_not_found;
+  }
+  if (n > 1) {
+    if (val_out) *val_out = NULL;
+    return ccol_not_permitted;
+  }
+  if (val_out) *val_out = found_val;
+  return ccol_success;
+}
+
+const char *chttpsvr_req_raw_query(const chttpsvr_req *req) {
+  if (!req) return NULL;
+  return req->raw_query;
+}
+
+bool chttpsvr_req_query_oom(const chttpsvr_req *req) {
+  if (!req) return false;
+  return req->_qresult_oom || req->_qparams_parse_oom;
+}
+
+/* ========================================================================== */
+/*                         RESPONSE API                                       */
+/* ========================================================================== */
+
+void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code) {
+  if (resp) resp->status_code = status_code;
+}
+
+ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
+                                       const char *value) {
+  if (!resp || !name || !value) return ccol_invalid_args;
+  ccol_memmgmt_procs_t *mp = resp->m_procs;
+
+  /* Case-insensitive scan for an existing entry.  When a duplicate is found
+   * the stored value is replaced in-place; the stored name retains the casing
+   * from the FIRST call (HTTP header names are case-insensitive per RFC 7230,
+   * so this does not affect wire-level correctness).  The flat-array layout
+   * keeps this O(n) scan cache-friendly for the typical response header count
+   * of fewer than ~20 entries. */
+  for (size_t i = 0; i < resp->header_count; i++) {
+    if (strcasecmp(resp->headers[i].name, name) == 0) {
+      char *new_val = ccol_strdup(mp, value);
+      if (!new_val) return ccol_not_enough_memory;
+      _mem_free(mp, resp->headers[i].value);
+      resp->headers[i].value = new_val;
+      return ccol_success;
+    }
+  }
+
+  /* New header -- grow the flat array if needed. */
+  if (resp->header_count >= resp->header_cap) {
+    if (resp->header_cap > (SIZE_MAX - 8) / 2) return ccol_not_enough_memory;
+    size_t new_cap = resp->header_cap * 2 + 8;
+    if (new_cap > SIZE_MAX / sizeof(resp_header_t))
+      return ccol_not_enough_memory;
+    resp_header_t *nh = (resp_header_t *)_mem_realloc(
+        mp, resp->headers, new_cap * sizeof(resp_header_t));
+    if (!nh) return ccol_not_enough_memory;
+    resp->headers = nh;
+    resp->header_cap = new_cap;
+  }
+
+  char *n_name = ccol_strdup(mp, name);
+  char *n_val = ccol_strdup(mp, value);
+  if (!n_name || !n_val) {
+    _mem_free(mp, n_name);
+    _mem_free(mp, n_val);
+    return ccol_not_enough_memory;
+  }
+  resp->headers[resp->header_count].name = n_name;
+  resp->headers[resp->header_count].value = n_val;
+  resp->header_count++;
+  return ccol_success;
+}
+
+ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
+                                  size_t len) {
+  if (!resp || (!data && len > 0)) return ccol_invalid_args;
+  if (len == 0) return ccol_success;
+
+  ccol_memmgmt_procs_t *mp = resp->m_procs;
+
+  /* Grow buffer if needed.  Use subtraction-based check (body_len <= body_cap
+   * is a class invariant) to avoid the addition overflow that would occur with
+   * the naive body_len + len > body_cap form. */
+  if (len > resp->body_cap - resp->body_len) {
+    /* Guard against len + body_len wrapping before we compute min_cap. */
+    if (len > SIZE_MAX - resp->body_len) return ccol_not_enough_memory;
+    size_t min_cap = resp->body_len + len;
+    size_t new_cap = min_cap;
+    /* Double the current cap (plus a small constant) as long as the doubling
+     * itself doesn't overflow size_t.  The guard uses (SIZE_MAX-256)/2 rather
+     * than SIZE_MAX/2 so that the +256 addend never wraps either. */
+    if (resp->body_cap <= (SIZE_MAX - 256) / 2) {
+      size_t doubled = resp->body_cap * 2 + 256;
+      if (doubled > new_cap) new_cap = doubled;
+    }
+    char *nb = (char *)_mem_realloc(mp, resp->body, new_cap);
+    if (!nb) return ccol_not_enough_memory;
+    resp->body = nb;
+    resp->body_cap = new_cap;
+  }
+  memcpy(resp->body + resp->body_len, data, len);
+  resp->body_len += len;
+  return ccol_success;
+}
+
+ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp, const char *str) {
+  if (!resp || !str) return ccol_invalid_args;
+  return chttpsvr_resp_write(resp, str, strlen(str));
+}
+
+ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp, const char *json,
+                                       size_t len) {
+  if (!resp || !json || len == 0) return ccol_invalid_args;
+  /* Write the body first so that a body-OOM leaves resp completely unchanged
+   * (no header is set, no bytes are appended).  The header string is tiny and
+   * far less likely to fail, so if the body succeeds and the header then fails
+   * the caller receives ccol_not_enough_memory with the body bytes already
+   * buffered -- an unlikely but documented partial-state scenario. */
+  ccol_retval_t rv = chttpsvr_resp_write(resp, json, len);
+  if (rv != ccol_success) return rv;
+  return chttpsvr_resp_set_header(resp, "content-type", "application/json");
+}

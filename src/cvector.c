@@ -298,6 +298,14 @@ bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count) {
     ccol_assert(false);
   }
 
+  if (elem_count == 0) {
+    return true;
+  }
+
+  if (!arr_ptr) {
+    return false;
+  }
+
   size_t new_elem_count = v->elem_count + elem_count;
   if (new_elem_count < v->elem_count || new_elem_count > max_elem_count) {
     // Either new_elem_count wrapped or it's greater than the max_elem_count
@@ -400,6 +408,30 @@ void cvector_reset(cvec v) {
   v->elem_count = 0;
 }
 
+/* Linear scan for the first element equal to *elem. When cmp is NULL the
+ * comparison falls back to memcmp over elem_size bytes. Returns the zero-based
+ * index of the first match, or ccol_invalid_size when no match is found. */
+size_t cvector_find(cvec v, const void *elem, ccol_comparison_proc_t cmp) {
+  if (!v) {
+    ccol_assert(false);
+  }
+
+  if (!elem) {
+    return ccol_invalid_size;
+  }
+
+  for (size_t i = 0; i < v->elem_count; i++) {
+    const void *current = (const char *)v->data_ptr + i * v->elem_size;
+    bool match = cmp ? (cmp(current, elem) == 0)
+                     : (memcmp(current, elem, v->elem_size) == 0);
+    if (match) {
+      return i;
+    }
+  }
+
+  return ccol_invalid_size;
+}
+
 /* Internal iterator implementation — NOT exposed in the public header.
  * The cmap_iterator base field MUST be first so that a cmap_iterator *
  * pointing at it is also a valid cvec_iter_impl_t *. */
@@ -437,7 +469,7 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err) {
     *err = NULL;
   }
   if (!v) {
-    ccol_assert(false);
+    return NULL;
   }
   if (v->elem_count == 0) {
     return NULL;

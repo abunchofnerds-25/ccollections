@@ -13,6 +13,7 @@ Feel free to copy, use and enjoy according to the license provided.
 #define FIO_FORCE_MALLOC_TMP 1
 #define FIO_INCLUDE_LINKED_LIST
 #include <arpa/inet.h>
+#include <clogger.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fio.h>
@@ -31,7 +32,6 @@ Feel free to copy, use and enjoy according to the license provided.
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <clogger.h>
 
 #if HAVE_OPENSSL
 #include <openssl/bio.h>
@@ -515,8 +515,6 @@ fio_str_info_s fio_peer_addr(intptr_t uuid) {
                           .capa = 0};
 }
 
-
-
 /* *****************************************************************************
 Section Start Marker
 
@@ -547,7 +545,6 @@ Section Start Marker
 
 ***************************************************************************** */
 
-
 /**
  * OVERRIDE THIS to replace the default pthread implementation.
  *
@@ -570,7 +567,6 @@ error:
   free(thread);
   return NULL;
 }
-
 
 /**
  * OVERRIDE THIS to replace the default pthread implementation.
@@ -1022,7 +1018,6 @@ int fio_defer_has_queue(void) {
 #endif
 }
 
-
 /* Thread pool task */
 static void *fio_defer_cycle(void *ignr) {
   fio_defer_on_thread_start();
@@ -1221,7 +1216,6 @@ static void fio_timer_clear_all(void) {
   fio_unlock(&fio_timer_lock);
 }
 
-
 /* *****************************************************************************
 Section Start Marker
 
@@ -1257,7 +1251,6 @@ static struct sigaction fio_old_sig_pipe;
 static struct sigaction fio_old_sig_term;
 static struct sigaction fio_old_sig_int;
 
-
 void fio_signal_handler_reset(void) {
   struct sigaction old;
   if (fio_signal_set_flag) return;
@@ -1273,7 +1266,6 @@ void fio_signal_handler_reset(void) {
   memset(&fio_old_sig_chld, 0, sizeof(fio_old_sig_chld));
 }
 
-
 /**
  * Returns 1 if the current process is the master (root) process.
  *
@@ -1282,7 +1274,6 @@ void fio_signal_handler_reset(void) {
 int fio_is_master(void) {
   return fio_data->is_worker == 0 || fio_data->workers == 1;
 }
-
 
 static inline size_t fio_detect_cpu_cores(void) {
   ssize_t cpu_count = 0;
@@ -1371,7 +1362,6 @@ void fio_expected_concurrency(int16_t *threads, int16_t *processes) {
   if (*processes <= 0) *processes = 1;
   if (*threads <= 0) *threads = 1;
 }
-
 
 /* *****************************************************************************
 Section Start Marker
@@ -2605,7 +2595,6 @@ error:
   return -1;
 }
 
-
 /**
  * Returns the number of `fio_write` calls that are waiting in the socket's
  * queue and haven't been processed.
@@ -2786,7 +2775,6 @@ attacked:
   fio_clear_fd(fio_uuid2fd(uuid), 0);
   return -1;
 }
-
 
 /* *****************************************************************************
 Connection Read / Write Hooks, for overriding the system calls
@@ -2983,7 +2971,6 @@ void fio_attach(intptr_t uuid, fio_protocol_s *protocol) {
   fio_attach__internal((void *)uuid, protocol);
 }
 
-
 /** Sets a timeout for a specific connection (only when running and valid). */
 void fio_timeout_set(intptr_t uuid, uint8_t timeout) {
   if (uuid_is_valid(uuid)) {
@@ -2993,7 +2980,6 @@ void fio_timeout_set(intptr_t uuid, uint8_t timeout) {
     FIO_LOG_DEBUG("Called fio_timeout_set for invalid uuid %p", (void *)uuid);
   }
 }
-
 
 /* *****************************************************************************
 Core Callbacks for forking / starting up / cleaning up
@@ -3195,7 +3181,6 @@ void fio_defer_io_task FIO_IGNORE_MACRO(intptr_t uuid,
 Initialize the library
 ***************************************************************************** */
 
-
 /* Called within a child process after it starts. */
 static void fio_on_fork(void) {
   fio_timer_lock = FIO_LOCK_INIT;
@@ -3359,7 +3344,6 @@ Section Start Marker
 
 ***************************************************************************** */
 
-
 static void fio_review_timeout(void *arg, void *ignr) {
   // TODO: Fix review for connections with no protocol?
   (void)ignr;
@@ -3515,7 +3499,6 @@ static void fio_worker_cleanup(void) {
     FIO_LOG_INFO("(%d) cleanup complete.", (int)getpid());
   }
 }
-
 
 /**
  * Starts the facil.io event loop. This function will return after facil.io is
@@ -4006,7 +3989,6 @@ void FIO_TLS_WEAK fio_tls_accept(intptr_t uuid, void *tls, void *udata) {
   (void)udata;
 }
 
-
 /**
  * Increase the reference count for the TLS object.
  *
@@ -4229,8 +4211,6 @@ error:
   }
   return -1;
 }
-
-
 
 /* *****************************************************************************
 Section Start Marker
@@ -4964,7 +4944,6 @@ void *realloc(void *ptr, size_t new_size) { return fio_realloc(ptr, new_size); }
 
 #endif
 
-
 /* *****************************************************************************
 Section Start Marker
 
@@ -5093,10 +5072,7 @@ static inline uint64_t fio_siphash_xy(const void *data, size_t len, size_t x,
   return v0;
 }
 
-
 uint64_t fio_siphash13(const void *data, size_t len, uint64_t key1,
                        uint64_t key2) {
   return fio_siphash_xy(data, len, 1, 3, key1, key2);
 }
-
-

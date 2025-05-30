@@ -143,7 +143,8 @@ struct chttpsvr_req {
   bool is_streaming;
   size_t _stream_pos;
 
-  /* Pre-extracted headers (always populated; all requests go through ctpool). */
+  /* Pre-extracted headers (always populated; all requests go through ctpool).
+   */
   char **_hdr_names;
   char **_hdr_values;
   size_t _hdr_count;
@@ -190,18 +191,22 @@ struct chttpserver {
   chttpsvr_router **routers; /* [0] = root, [1..n] = sub-routers */
   size_t router_count;
   size_t router_cap;
-  ctpool worker_pool;  /* owned; created at chttpsvr_start, destroyed at __chttpsvr_destroy */
+  ctpool worker_pool; /* owned; created at chttpsvr_start, destroyed at
+                         __chttpsvr_destroy */
   fio_tls_s
       *tls; /* non-NULL when TLS was configured; freed in __chttpsvr_destroy */
   mutex_t mutex;
-  cond_var_t requests_done_cv; /* signalled when in_flight_requests drops to 0 */
-  int in_flight_requests; /* # tasks queued/running in worker_pool; guarded by mutex */
+  cond_var_t
+      requests_done_cv;   /* signalled when in_flight_requests drops to 0 */
+  int in_flight_requests; /* # tasks queued/running in worker_pool; guarded by
+                             mutex */
   pthread_rwlock_t
-      routes_lock; /* guards routers[], route_count, routes[], mw lists */
-  clog cl;         /* per-server logger; passed at creation time */
+      routes_lock;      /* guards routers[], route_count, routes[], mw lists */
+  clog cl;              /* per-server logger; passed at creation time */
   intptr_t listen_uuid; /* facio listener uuid; -1 when not started */
   bool started;         /* true after a successful chttpsvr_start call */
-  bool contributed_to_engine; /* true when this server was counted in g_server_count */
+  bool contributed_to_engine; /* true when this server was counted in
+                                 g_server_count */
   ccol_memmgmt_procs_t *m_procs;
 };
 
@@ -926,8 +931,7 @@ static void _task_send_response(http_s *h) {
    * synchronously; sctx and the embedded resp may be freed now. */
   _free_task_ctx(sctx);
   mutex_lock(srv->mutex);
-  if (--srv->in_flight_requests == 0)
-    cond_var_broadcast(srv->requests_done_cv);
+  if (--srv->in_flight_requests == 0) cond_var_broadcast(srv->requests_done_cv);
   mutex_unlock(srv->mutex);
 }
 
@@ -937,8 +941,7 @@ static void _task_cleanup(void *udata) {
   struct chttpserver *srv = sctx->srv; /* save before sctx is freed */
   _free_task_ctx(sctx);
   mutex_lock(srv->mutex);
-  if (--srv->in_flight_requests == 0)
-    cond_var_broadcast(srv->requests_done_cv);
+  if (--srv->in_flight_requests == 0) cond_var_broadcast(srv->requests_done_cv);
   mutex_unlock(srv->mutex);
 }
 
@@ -1617,7 +1620,8 @@ void __chttpsvr_destroy(chttpsvr srv) {
     }
     pthread_mutex_unlock(&g_engine_mutex);
   }
-  (void)should_stop_engine; /* fio_stop already called above; flag documents intent */
+  (void)should_stop_engine; /* fio_stop already called above; flag documents
+                               intent */
 
   /* Block until every in-flight task has called http_resume and its
    * send/cleanup callback has completed.  All handlers now run through the
@@ -1718,14 +1722,14 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   if (cfg->worker_queue_capacity == CHTTPSVR_QUEUE_UNBOUNDED) {
     queue_cap = 0; /* ctpool: 0 means unbounded */
   } else if (cfg->worker_queue_capacity == 0) {
-    queue_cap = (size_t)256 * (size_t)nthreads; /* library default */
+    queue_cap = (size_t)1024 * (size_t)nthreads; /* library default */
   } else {
     queue_cap = cfg->worker_queue_capacity;
   }
 
   char *pool_err = NULL;
-  srv->worker_pool =
-      create_cthread_pool_mp((size_t)nthreads, queue_cap, srv->m_procs, &pool_err);
+  srv->worker_pool = create_cthread_pool_mp((size_t)nthreads, queue_cap,
+                                            srv->m_procs, &pool_err);
   if (!srv->worker_pool) return ccol_not_enough_memory;
 
   /* Compute timeout in seconds (facil.io uses uint8_t seconds).
@@ -1763,8 +1767,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   /* Configure TLS if requested. */
   fio_tls_s *tls = NULL;
   if (cfg->tls && cfg->tls->cert_path && cfg->tls->key_path) {
-    tls = fio_tls_new(cfg->host, cfg->tls->cert_path, cfg->tls->key_path,
-                      NULL);
+    tls = fio_tls_new(cfg->host, cfg->tls->cert_path, cfg->tls->key_path, NULL);
     if (!tls) {
       ctpool_shutdown_drain(srv->worker_pool);
       ctpool_destroy(srv->worker_pool);
@@ -1821,8 +1824,9 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
     fio_state_callback_add(FIO_CALL_ON_START, _engine_ready_cb, NULL);
 
     /* Register the listener BEFORE spawning the engine thread so that when
-     * the reactor enters its event loop for the first time, fio_listen_on_startup
-     * is already queued and the socket is bound atomically at startup. */
+     * the reactor enters its event loop for the first time,
+     * fio_listen_on_startup is already queued and the socket is bound
+     * atomically at startup. */
     uuid = http_listen(port_str, cfg->host, .on_request = _on_request,
                        .udata = srv, .max_body_size = cfg->max_body_size,
                        .timeout = timeout_sec, .tls = tls);

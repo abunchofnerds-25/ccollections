@@ -264,7 +264,6 @@ FIOBJ fiobj_data_newstr(void) {
   return o;
 }
 
-
 /** Creates a new local file IO object */
 FIOBJ fiobj_data_newfd(int fd) {
   FIOBJ o = fiobj_data_alloc(fio_malloc(4096), fd);

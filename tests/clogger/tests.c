@@ -3064,7 +3064,8 @@ TEST(json, fatal_has_inline_bt_array) {
   read_file(path, buf, sizeof buf);
 
   REQUIRE_NE(strstr(buf, "\"bt\":["), NULL);
-  REQUIRE_EQ(strstr(buf, "\t#"), NULL); /* JSON embeds bt inline, no tab lines */
+  REQUIRE_EQ(strstr(buf, "\t#"),
+             NULL); /* JSON embeds bt inline, no tab lines */
   REQUIRE_EQ(buf[0], '{');
   char *nl = strchr(buf, '\n');
   REQUIRE_NE(nl, NULL);

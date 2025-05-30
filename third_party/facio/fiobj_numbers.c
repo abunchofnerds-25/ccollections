@@ -128,4 +128,3 @@ fio_str_info_s fio_ltocstr(long i) {
   return (fio_str_info_s){.data = num_buffer,
                           .len = fio_ltoa(num_buffer, i, 10)};
 }
-

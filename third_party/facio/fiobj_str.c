@@ -147,7 +147,6 @@ FIOBJ fiobj_str_new(const char *str, size_t len) {
   return ((uintptr_t)s | FIOBJECT_STRING_FLAG);
 }
 
-
 /**
  * Returns a thread-static temporary string. Avoid calling `fiobj_dup` or
  * `fiobj_free`.

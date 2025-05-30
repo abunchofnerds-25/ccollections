@@ -199,4 +199,3 @@ FIOBJ fiobj_hash_get2(const FIOBJ hash, uint64_t key_hash) {
   return fio_hash___find(&obj2hash(hash)->hash, key_hash, -1);
   ;
 }
-

@@ -21,7 +21,7 @@ Copyright (c) 2021 Jason Dsouza <@jasmcaus>
 #else
 #define TAU_CAST(type, x) ((type)x)
 #define TAU_PTRCAST(type, x) ((type)x)
-#endif // __cplusplus
+#endif  // __cplusplus
 
 // printf format-string specifiers for tau_i64 and tau_u64 respectively
 #if defined(_MSC_VER) && (_MSC_VER < 1920)
@@ -40,7 +40,7 @@ Copyright (c) 2021 Jason Dsouza <@jasmcaus>
 
 #ifndef TAU_IS_SIGNED
 #define TAU_IS_SIGNED(x) (((x) - 1) < 0)
-#endif // TAU_IS_SIGNED
+#endif  // TAU_IS_SIGNED
 
 // A signed sizeof is more useful
 #ifndef TAU_SIZEOF
@@ -50,29 +50,29 @@ Copyright (c) 2021 Jason Dsouza <@jasmcaus>
 // Compare `SOME` and `NONE` values
 #ifndef TAU_SOME
 #define TAU_SOME(x) ((x) != TAU_NULL)
-#endif // TAU_SOME
+#endif  // TAU_SOME
 
 #ifndef TAU_NONE
 #define TAU_NONE(x) ((x) == TAU_NULL)
-#endif // TAU_NONE
+#endif  // TAU_NONE
 
 // Get the type of `val`
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
-#define TAU_TYPEOF(val)                                                                            \
-  printf("%s\n", _Generic((val),                                                                   \
-             signed char: "signed char",                                                           \
-             unsigned char: "unsigned char",                                                       \
-             signed short: "signed short",                                                         \
-             unsigned short: "unsigned short",                                                     \
-             signed int: "signed int",                                                             \
-             unsigned int: "unsigned int",                                                         \
-             signed long long: "signed long long",                                                 \
-             unsigned long long: "unsigned long long",                                             \
-             float: "float",                                                                       \
-             double: "double",                                                                     \
+#define TAU_TYPEOF(val)                                \
+  printf("%s\n", _Generic((val),                       \
+             signed char: "signed char",               \
+             unsigned char: "unsigned char",           \
+             signed short: "signed short",             \
+             unsigned short: "unsigned short",         \
+             signed int: "signed int",                 \
+             unsigned int: "unsigned int",             \
+             signed long long: "signed long long",     \
+             unsigned long long: "unsigned long long", \
+             float: "float",                           \
+             double: "double",                         \
              default: "unknown type"))
 #else
 #define TAU_TYPEOF(val)
 #endif
 
-#endif // TAU_MISCELLANEOUS_H
+#endif  // TAU_MISCELLANEOUS_H

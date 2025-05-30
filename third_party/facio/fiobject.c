@@ -498,4 +498,3 @@ double fiobject___noop_to_f(const FIOBJ o) {
   (void)o;
   return 0;
 }
-

@@ -612,7 +612,7 @@ static _Atomic int g_blk_count = 0; /* handlers currently blocking */
 static bool g_blk_go = false;
 
 static void _bounded_blk_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                                  void *ctx) {
+                                 void *ctx) {
   (void)req;
   (void)ctx;
   g_blk_count++;
@@ -770,7 +770,8 @@ __attribute__((constructor)) static void _setup(void) {
   /* Streaming GET route that calls chttpsvr_req_body() on a request with no
    * body -- exercises the (body && len > 0) else branch and must return
    * "(empty)" rather than crashing or producing undefined output. */
-  chttpsvr_register_streaming_handler(g_srv, CHTTP_GET, "/stream-body-get-no-body",
+  chttpsvr_register_streaming_handler(g_srv, CHTTP_GET,
+                                      "/stream-body-get-no-body",
                                       _stream_get_body_check_handler, NULL);
   /* Streaming routes for chttpsvr_req_read edge-case coverage. */
   chttpsvr_register_streaming_handler(g_srv, CHTTP_GET, "/stream-zero-buflen",
@@ -779,7 +780,8 @@ __attribute__((constructor)) static void _setup(void) {
                                       _stream_read_empty_body_handler, NULL);
   chttpsvr_register_streaming_handler(g_srv, CHTTP_GET, "/stream-null-buf",
                                       _stream_null_buf_handler, NULL);
-  chttpsvr_register_streaming_handler(g_srv, CHTTP_GET, "/stream-null-buf-zero-len",
+  chttpsvr_register_streaming_handler(g_srv, CHTTP_GET,
+                                      "/stream-null-buf-zero-len",
                                       _stream_null_buf_zero_len_handler, NULL);
 
   /* Sub-router for /api/v1 with its own middleware. */
@@ -813,7 +815,6 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_router_use(mw_chain, _mw_b, NULL);
   chttpsvr_router_on(mw_chain, CHTTP_GET, "/ping", _hello_handler, NULL);
 
-
   /* Sub-router registered with a trailing-slash prefix; the server normalises
      it to "/api/v3" so routing behaves identically to a clean prefix. */
   chttpsvr_router *api_v3 = chttpsvr_subrouter(g_srv, "/api/v3/");
@@ -839,7 +840,8 @@ __attribute__((constructor)) static void _setup(void) {
                             _json_zero_len_handler, &g_json_zero_len_result);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/query-empty-key",
                             _empty_query_key_handler, NULL);
-  chttpsvr_register_streaming_handler(g_srv, CHTTP_GET, "/stream-read-eof-twice",
+  chttpsvr_register_streaming_handler(g_srv, CHTTP_GET,
+                                      "/stream-read-eof-twice",
                                       _stream_read_eof_twice_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/param-null-name",
                             _param_null_name_handler, NULL);
@@ -905,8 +907,8 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* CHTTP_ANY registered BEFORE a specific GET on the same pattern.
      First-wins: CHTTP_ANY wins for every method including GET. */
-  chttpsvr_register_handler(g_srv, CHTTP_ANY, "/any-first",
-                            _any_method_handler, NULL);
+  chttpsvr_register_handler(g_srv, CHTTP_ANY, "/any-first", _any_method_handler,
+                            NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/any-first", _hello_handler,
                             NULL);
 
@@ -918,7 +920,8 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_set_engine_logger(g_test_logger);
 
   /* Start the primary test server.  4 worker threads with default (unbounded)
-   * queue so streaming and buffered handlers both run on the server's ctpool. */
+   * queue so streaming and buffered handlers both run on the server's ctpool.
+   */
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = TEST_PORT;
@@ -1707,7 +1710,8 @@ TEST(chttpserver, bounded_pool_full_returns_503) {
 
   /* Pool is now full (1 active + 1 queued).  Third request must get 503. */
   char burl[128];
-  snprintf(burl, sizeof(burl), "http://127.0.0.1:%d/bounded-503", TEST_PORT + 2);
+  snprintf(burl, sizeof(burl), "http://127.0.0.1:%d/bounded-503",
+           TEST_PORT + 2);
   chttpcli_response *resp = NULL;
   chttp_get(burl, &resp);
   REQUIRE_TRUE(resp != NULL);
@@ -2083,8 +2087,8 @@ TEST(chttpserver, router_on_stream_null_pattern_rejected) {
   REQUIRE_TRUE(g_srv2 != NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-pat-stream");
   REQUIRE_TRUE(r != NULL);
-  ccol_retval_t rv = chttpsvr_router_on_stream(r, CHTTP_POST, NULL,
-                                               _hello_handler, NULL);
+  ccol_retval_t rv =
+      chttpsvr_router_on_stream(r, CHTTP_POST, NULL, _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -2303,8 +2307,7 @@ TEST(chttpserver, router_on_stream_null_fn_rejected) {
   REQUIRE_TRUE(g_srv2 != NULL);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-stream-fn");
   REQUIRE_TRUE(r != NULL);
-  ccol_retval_t rv =
-      chttpsvr_router_on_stream(r, CHTTP_POST, "/x", NULL, NULL);
+  ccol_retval_t rv = chttpsvr_router_on_stream(r, CHTTP_POST, "/x", NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -2762,9 +2765,8 @@ TEST(chttpserver, serve_stopped_server_state_valid) {
   chttpsvr_stop(g_srv2); /* no-op: g_srv2 is not started */
   chttpsvr_stop(g_srv2); /* second call: must also be a no-op */
 
-  ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET,
-                                               "/state-valid-check",
-                                               _hello_handler, NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(
+      g_srv2, CHTTP_GET, "/state-valid-check", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 }
 
@@ -3027,8 +3029,8 @@ TEST(chttpserver, router_on_null_router_returns_invalid_args) {
 TEST(chttpserver, router_on_stream_null_router_returns_invalid_args) {
   /* chttpsvr_router_on_stream must validate router != NULL, consistent with
    * chttpsvr_router_on. */
-  ccol_retval_t rv = chttpsvr_router_on_stream(NULL, CHTTP_GET, "/any",
-                                               _hello_handler, NULL);
+  ccol_retval_t rv =
+      chttpsvr_router_on_stream(NULL, CHTTP_GET, "/any", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -3115,7 +3117,8 @@ TEST(chttpserver, any_method_catches_unregistered_method) {
   /* CHTTP_ANY registered after a specific GET catches methods that do not have
      their own route entry on the same pattern. */
   char buf[2048] = {0};
-  int status = _raw_request("PUT", "/any-with-specific", NULL, buf, sizeof(buf));
+  int status =
+      _raw_request("PUT", "/any-with-specific", NULL, buf, sizeof(buf));
   REQUIRE_EQ(status, 200);
   char *body = _decode_raw_body(buf);
   REQUIRE_TRUE(body != NULL);

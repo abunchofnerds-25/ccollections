@@ -7,7 +7,6 @@ Feel free to copy, use and enjoy according to the license provided.
 #ifndef H_HTTP_INTERNAL_H
 #define H_HTTP_INTERNAL_H
 
-#include <fio.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fio.h>

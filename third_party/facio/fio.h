@@ -174,7 +174,6 @@ Version and helper macros
 #define FIO_PRINT_STATE 0
 #endif
 
-
 #ifndef FIO_LOG_LENGTH_LIMIT
 /**
  * Since logging uses stack memory rather than dynamic allocation, it's memory
@@ -200,8 +199,8 @@ Version and helper macros
 #include <fcntl.h>
 #include <limits.h>
 #include <signal.h>
-#include <stdbool.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -445,11 +444,9 @@ void __fio_log_debug(const char *file, int line, const char *func,
                      const char *fmt, ...)
     __attribute__((format(printf, 4, 5)));
 void __fio_log_info(const char *file, int line, const char *func,
-                    const char *fmt, ...)
-    __attribute__((format(printf, 4, 5)));
+                    const char *fmt, ...) __attribute__((format(printf, 4, 5)));
 void __fio_log_warn(const char *file, int line, const char *func,
-                    const char *fmt, ...)
-    __attribute__((format(printf, 4, 5)));
+                    const char *fmt, ...) __attribute__((format(printf, 4, 5)));
 void __fio_log_error(const char *file, int line, const char *func,
                      const char *fmt, ...)
     __attribute__((format(printf, 4, 5)));
@@ -476,21 +473,21 @@ void __fio_log_fatal(const char *file, int line, const char *func,
 #define FIO_LOG_STATE(...)
 
 #undef FIO_ASSERT
-#define FIO_ASSERT(cond, ...)                                          \
-  do {                                                                 \
-    if (!(cond)) {                                                     \
-      __fio_log_fatal(__FILE__, __LINE__, __func__, __VA_ARGS__);      \
-    }                                                                  \
+#define FIO_ASSERT(cond, ...)                                     \
+  do {                                                            \
+    if (!(cond)) {                                                \
+      __fio_log_fatal(__FILE__, __LINE__, __func__, __VA_ARGS__); \
+    }                                                             \
   } while (0)
 
 #ifndef FIO_ASSERT_ALLOC
 /** Tests for an allocation failure. */
-#define FIO_ASSERT_ALLOC(ptr)                                          \
-  do {                                                                 \
-    if (!(ptr)) {                                                      \
-      __fio_log_fatal(__FILE__, __LINE__, __func__,                    \
-                      "memory allocation failed.");                    \
-    }                                                                  \
+#define FIO_ASSERT_ALLOC(ptr)                       \
+  do {                                              \
+    if (!(ptr)) {                                   \
+      __fio_log_fatal(__FILE__, __LINE__, __func__, \
+                      "memory allocation failed."); \
+    }                                               \
   } while (0)
 #endif
 
@@ -594,7 +591,6 @@ struct fio_protocol_s {
  */
 void fio_attach(intptr_t uuid, fio_protocol_s *protocol);
 
-
 /**
  * Sets a socket to non blocking state.
  *
@@ -618,7 +614,6 @@ size_t fio_capa(void);
 
 /** Sets a timeout for a specific connection (only when running and valid). */
 void fio_timeout_set(intptr_t uuid, uint8_t timeout);
-
 
 /**
  * "Touches" a socket connection, resetting it's timeout counter.
@@ -843,14 +838,12 @@ void fio_expected_concurrency(int16_t *threads, int16_t *workers);
  */
 int16_t fio_is_running(void);
 
-
 /**
  * Returns 1 if the current process is the master (root) process.
  *
  * Otherwise returns 0.
  */
 int fio_is_master(void);
-
 
 /**
  * Resets any existing signal handlers, restoring their state to before they
@@ -951,7 +944,6 @@ void fio_force_close(intptr_t uuid);
  */
 fio_str_info_s fio_peer_addr(intptr_t uuid);
 
-
 /**
  * `fio_read` attempts to read up to count bytes from the socket into the
  * buffer starting at `buffer`.
@@ -1040,7 +1032,6 @@ ssize_t fio_write2_fn(intptr_t uuid, fio_write_args_s options);
 #define fio_write2(uuid, ...) \
   fio_write2_fn(uuid, (fio_write_args_s){__VA_ARGS__})
 
-
 /**
  * `fio_write` copies `legnth` data from the buffer and schedules the data to
  * be sent over the socket.
@@ -1109,7 +1100,6 @@ ssize_t fio_flush(intptr_t uuid);
     errno = 0;                 \
   } while (fio_flush(uuid) > 0 || errno == EWOULDBLOCK)
 
-
 /**
  * Convert between a facil.io connection's identifier (uuid) and system's fd.
  */
@@ -1145,7 +1135,6 @@ intptr_t fio_fd2uuid(int fd);
  * Returns -1 on error. Returns a valid socket (non-random) UUID.
  */
 intptr_t fio_fd2uuid(int fd);
-
 
 /* *****************************************************************************
 Connection Read / Write Hooks, for overriding the system calls
@@ -1242,7 +1231,6 @@ Concurrency overridable functions
 These functions can be overridden so as to adjust for different environments.
 ***************************************************************************** */
 
-
 /**
  * OVERRIDE THIS to replace the default pthread implementation.
  *
@@ -1255,7 +1243,6 @@ These functions can be overridden so as to adjust for different environments.
  * On error NULL should be returned.
  */
 void *fio_thread_new(void *(*thread_func)(void *), void *arg);
-
 
 /**
  * OVERRIDE THIS to replace the default pthread implementation.
@@ -1334,7 +1321,6 @@ Event / Task scheduling
  * Returns -1 or error, 0 on success.
  */
 int fio_defer(void (*task)(void *, void *), void *udata1, void *udata2);
-
 
 /**
  * Performs all deferred tasks.
@@ -1435,7 +1421,6 @@ fio_protocol_s *fio_protocol_try_lock(intptr_t uuid, enum fio_protocol_lock_e);
 /** Don't unlock what you don't own... see `fio_protocol_try_lock` for
  * details. */
 void fio_protocol_unlock(fio_protocol_s *pr, enum fio_protocol_lock_e);
-
 
 /* *****************************************************************************
 
@@ -2003,7 +1988,6 @@ FIO_FUNC inline uint64_t fio_risky_hash(const void *data_, size_t len,
 SipHash
 ***************************************************************************** */
 
-
 /**
  * A SipHash 1-3 variation.
  */
@@ -2017,8 +2001,6 @@ uint64_t fio_siphash13(const void *data, size_t len, uint64_t key1,
  */
 #define fio_siphash(data, length, k1, k2) \
   fio_siphash13((data), (length), (k1), (k2))
-
-
 
 /* *****************************************************************************
 C++ extern end
@@ -2652,7 +2634,8 @@ typedef struct {
 /**
  * Allocates a new fio_str_s object on the heap and initializes it.
  *
- * Use `fio_str_free` then `fio_free` to free both the String data and the container.
+ * Use `fio_str_free` then `fio_free` to free both the String data and the
+ * container.
  *
  * NOTE: This makes the allocation and reference counting logic more intuitive.
  */
@@ -2662,7 +2645,8 @@ inline FIO_FUNC fio_str_s *fio_str_new2(void);
  * Allocates a new fio_str_s object on the heap, initializes it and copies the
  * original (`src`) string into the new string.
  *
- * Use `fio_str_free` then `fio_free` to free the new string's data and it's container.
+ * Use `fio_str_free` then `fio_free` to free the new string's data and it's
+ * container.
  */
 inline FIO_FUNC fio_str_s *fio_str_new_copy2(fio_str_s *src);
 
@@ -2845,7 +2829,8 @@ inline FIO_FUNC fio_str_info_s fio_str_info(const fio_str_s *s) {
 /**
  * Allocates a new fio_str_s object on the heap and initializes it.
  *
- * Use `fio_str_free` then `fio_free` to free both the String data and the container.
+ * Use `fio_str_free` then `fio_free` to free both the String data and the
+ * container.
  *
  * NOTE: This makes the allocation and reference counting logic more intuitive.
  */
@@ -2860,7 +2845,8 @@ inline FIO_FUNC fio_str_s *fio_str_new2(void) {
  * Allocates a new fio_str_s object on the heap, initializes it and copies the
  * original (`src`) string into the new string.
  *
- * Use `fio_str_free` then `fio_free` to free the new string's data and it's container.
+ * Use `fio_str_free` then `fio_free` to free the new string's data and it's
+ * container.
  */
 inline FIO_FUNC fio_str_s *fio_str_new_copy2(fio_str_s *src) {
   fio_str_s *cpy = fio_str_new2();

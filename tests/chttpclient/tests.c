@@ -113,7 +113,8 @@ static int srv_find_header(const char *raw, const char *name, char *out,
   return 0;
 }
 
-/* Count how many header lines match name (case-insensitive) in the raw request. */
+/* Count how many header lines match name (case-insensitive) in the raw request.
+ */
 static int srv_count_header(const char *raw, const char *name) {
   int count = 0;
   const char *p = raw;
@@ -282,7 +283,8 @@ static void srv_handle_route(int conn_fd, const char *method, const char *path,
   }
 
   if (strcmp(path, "/count-content-type") == 0) {
-    /* Respond with the number of Content-Type header lines seen (any method). */
+    /* Respond with the number of Content-Type header lines seen (any method).
+     */
     int count = srv_count_header(raw, "content-type");
     char body[8];
     int blen = snprintf(body, sizeof(body), "%d", count);

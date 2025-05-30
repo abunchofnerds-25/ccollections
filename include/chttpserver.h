@@ -248,16 +248,16 @@ typedef struct chttpsvr_config {
  * Port 8080, all interfaces, 4 MiB body limit, no TLS,
  * CPU-count worker threads, library-default queue capacity.
  */
-#define CHTTPSVR_CONFIG_DEFAULT                  \
-  ((chttpsvr_config_t){                          \
-      .host = "0.0.0.0",                         \
-      .port = 8080,                              \
-      .max_body_size = (4U * 1024U * 1024U),     \
-      .read_timeout_ms = 0,                      \
-      .idle_timeout_ms = 0,                      \
-      .tls = NULL,                               \
-      .worker_thread_count = 0,                  \
-      .worker_queue_capacity = 0,                \
+#define CHTTPSVR_CONFIG_DEFAULT              \
+  ((chttpsvr_config_t){                      \
+      .host = "0.0.0.0",                     \
+      .port = 8080,                          \
+      .max_body_size = (4U * 1024U * 1024U), \
+      .read_timeout_ms = 0,                  \
+      .idle_timeout_ms = 0,                  \
+      .tls = NULL,                           \
+      .worker_thread_count = 0,              \
+      .worker_queue_capacity = 0,            \
   })
 
 /* ========================================================================== */
@@ -338,7 +338,7 @@ void chttpsvr_engine_stop(void);
  * @return New server handle, or NULL on failure.
  */
 chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
-                             char **err_str);
+                            char **err_str);
 
 /**
  * @brief Create an HTTP server with the default allocator.

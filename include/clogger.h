@@ -77,7 +77,7 @@ typedef enum {
   CLOG_FATAL, /**< Appends a backtrace and terminates the process via
                  exit(EXIT_FAILURE). Bypasses min_level: the fatal message
                  is always written regardless of the logger's level setting. */
-  CLOG_OFF /**< Disables all output when used as min_level */
+  CLOG_OFF    /**< Disables all output when used as min_level */
 } clog_level_t;
 
 /* ========================================================================== */

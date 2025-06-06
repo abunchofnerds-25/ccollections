@@ -109,6 +109,21 @@ static int http1_on_version(http1_parser_s *parser, char *version, size_t len);
 /** called when a header is parsed. */
 static int http1_on_header(http1_parser_s *parser, char *name, size_t name_len,
                            char *data, size_t data_len);
+/**
+ * called once, right after all headers were parsed and before any body byte
+ * is consumed. `leftover`/`leftover_len` point at whatever bytes (if any)
+ * already sit in the current parse buffer immediately after the headers --
+ * i.e. the start of the body, already read off the socket.
+ *
+ * Return 0 to continue normal parsing (the existing body-chunk/completion
+ * flow runs as usual). Return 1 to signal that the message has been fully
+ * handled elsewhere (e.g. handed off to a worker thread) -- parsing of this
+ * message stops immediately and `http1_on_body_chunk`/`http1_on_request`
+ * will NOT be called for it. Return -1 on error (same as the other
+ * callbacks).
+ */
+static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
+                                     size_t leftover_len);
 /** called when a body chunk is parsed. */
 static int http1_on_body_chunk(http1_parser_s *parser, char *data,
                                size_t data_len);
@@ -794,6 +809,15 @@ re_eval:
       if (*start == '\n') ++start;
       end = start;
       parser->state.reserved |= HTTP1_P_FLAG_HEADER_COMPLETE;
+      {
+        int hc = http1_on_headers_complete(parser, start, stop - start);
+        if (hc < 0) goto error;
+        if (hc > 0) {
+          /* message handed off elsewhere -- stop parsing it here. */
+          parser->state.next = start;
+          return HTTP1_CONSUMED;
+        }
+      }
     /* fallthrough */
     case (HTTP1_P_FLAG_HEADER_COMPLETE | HTTP1_P_FLAG_STATUS_LINE):
       /* request body */

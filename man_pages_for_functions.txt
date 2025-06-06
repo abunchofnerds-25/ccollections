@@ -6732,9 +6732,14 @@ DESCRIPTION
        pattern.  See chttpsvr_register_handler for the full CHTTP_ANY
        semantics.
 
-       The body is fully buffered before the handler runs.  chttpsvr_req_read
-       reads it sequentially and returns 0 at EOF; subsequent calls also
-       return 0 (idempotent EOF).
+       Routing happens as soon as headers are parsed, before any body byte is
+       read, so the worker (never the reactor thread) reads the body itself,
+       batch by batch, directly off the socket. chttpsvr_req_read hands each
+       batch to the handler as it arrives and returns 0 once the body ends;
+       subsequent calls also return 0 (idempotent EOF). It returns -1 on a
+       dropped connection, an exceeded max_body_size, or a stalled client
+       (bounded by chttpsvr_config_t.stream_read_timeout_ms) -- call
+       chttpsvr_req_stream_error to distinguish these.
 
        When the server's ctpool queue is at capacity when a request arrives,
        the server responds with 503 Service Unavailable immediately rather
@@ -7038,7 +7043,9 @@ SYNOPSIS
 DESCRIPTION
        Returns a pointer to the buffered request body bytes.  If len_out is
        non-NULL, the body length in bytes is stored there.  Returns NULL and
-       stores 0 if there is no body.
+       stores 0 if there is no body, or if req belongs to a streaming route
+       (chttpsvr_register_streaming_handler) -- a streaming route's body is
+       never pre-extracted; use chttpsvr_req_read instead.
 
        The buffer is valid for the lifetime of the handler invocation.
 
@@ -7047,7 +7054,7 @@ SEE ALSO
 
 ------------------------------------------------------------------------------
 NAME
-       chttpsvr_req_read - read body bytes sequentially (streaming handlers)
+       chttpsvr_req_read - read body bytes as they arrive (streaming handlers)
 
 SYNOPSIS
        #include <chttpserver.h>
@@ -7055,15 +7062,23 @@ SYNOPSIS
        ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
 
 DESCRIPTION
-       Reads up to buflen bytes from the request body into buf, advancing an
-       internal position cursor.
+       Reads up to buflen bytes of the request body into buf, batch by batch,
+       as they actually arrive on the connection.  This call reads the socket
+       itself -- on the worker thread executing the handler, never the
+       reactor thread -- and blocks the calling worker until at least one
+       byte is available, the body ends, an error occurs, or
+       chttpsvr_config_t.stream_read_timeout_ms elapses without new data.
 
        Return values:
          > 0   Number of bytes copied into buf.
            0   End of body reached, or buflen is 0 (valid no-op).
-          -1   Hard error: req is NULL; buf is NULL with buflen > 0; or the
-               handler was registered with chttpsvr_register_handler (buffered), not
-               chttpsvr_register_streaming_handler.
+          -1   req is NULL; buf is NULL with buflen > 0; the handler was
+               registered with chttpsvr_register_handler (buffered), not
+               chttpsvr_register_streaming_handler; the connection was
+               dropped or reset; stream_read_timeout_ms elapsed with no new
+               data; or the body exceeded max_body_size mid-stream.  Call
+               chttpsvr_req_stream_error immediately afterward to
+               distinguish these.
 
        When buflen is 0 the function returns 0 immediately regardless of the
        value of buf.  Passing NULL for buf with buflen == 0 is therefore
@@ -7074,7 +7089,34 @@ DESCRIPTION
        chttpsvr_register_streaming_handler.  For buffered handlers, use chttpsvr_req_body.
 
 SEE ALSO
-       chttpsvr_req_body, chttpsvr_register_streaming_handler
+       chttpsvr_req_body, chttpsvr_req_stream_error, chttpsvr_register_streaming_handler
+
+------------------------------------------------------------------------------
+NAME
+       chttpsvr_req_stream_error - report why the last chttpsvr_req_read call failed
+
+SYNOPSIS
+       #include <chttpserver.h>
+
+       ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req);
+
+DESCRIPTION
+       Reports the reason the most recent chttpsvr_req_read call on req
+       returned -1.  Meaningful only immediately after such a -1 return;
+       otherwise the result is unspecified.
+
+       Return values:
+         ccol_timed_out             stream_read_timeout_ms elapsed while
+                                     waiting for the next batch.
+         ccol_msg_too_large         The body exceeded max_body_size
+                                     mid-stream.
+         ccol_http_transfer_aborted The connection was closed or reset, or
+                                     the body's framing was malformed.
+         ccol_success               No error is on record for req.
+         ccol_unexpected_failure    req is NULL or its handle is invalid.
+
+SEE ALSO
+       chttpsvr_req_read, chttpsvr_register_streaming_handler
 
 ------------------------------------------------------------------------------
 NAME

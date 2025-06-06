@@ -4147,9 +4147,18 @@ DESCRIPTION
          max_body_size         = 4 MiB
          read_timeout_ms       = 0   (no timeout; use facil.io default ~40 s)
          idle_timeout_ms       = 0   (0 = fall back to read_timeout_ms)
+         stream_read_timeout_ms = 30000   (30 s; 0 = wait indefinitely)
          tls                   = NULL
          worker_thread_count   = 0   (0 = CPU core count)
          worker_queue_capacity = 0   (0 = 256 * worker_thread_count)
+
+       stream_read_timeout_ms bounds how long a worker thread will wait for
+       the *next* batch of body bytes while reading a request body (buffered
+       or streaming), independent of read_timeout_ms/idle_timeout_ms -- those
+       reset on any connection activity and so do not protect against a
+       client that trickles bytes just fast enough to always beat them.  On
+       expiry, chttpsvr_req_read returns -1 and chttpsvr_req_stream_error
+       reports ccol_timed_out; buffered routes respond 408 automatically.
 
        Use CHTTPSVR_QUEUE_UNBOUNDED for worker_queue_capacity to create a pool
        with no capacity limit.

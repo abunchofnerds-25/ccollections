@@ -217,6 +217,17 @@ struct http_settings_s {
   /** Callback for normal HTTP requests. */
   void (*on_request)(http_s *request);
   /**
+   * (optional) Called once, right after headers are parsed and before any
+   * body byte is read, for HTTP/1.1 requests. Return non-zero to take over
+   * the request (typically after calling `http_pause`) -- in that case
+   * `on_request` will NOT be called for it, and the caller becomes
+   * responsible for reading the body itself via `http1_stream_read` and for
+   * eventually calling `http_resume`. Return 0 to let normal parsing and
+   * `on_request` dispatch proceed unchanged (the default behavior when this
+   * callback is left NULL).
+   */
+  int (*on_headers_complete)(http_s *request);
+  /**
    * Callback for Upgrade and EventSource (SSE) requests.
    *
    * SSE/EventSource requests set the `requested_protocol` string to `"sse"`.

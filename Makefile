@@ -55,6 +55,7 @@ THIRD_PARTY_OBJ_FILES_STATIC = $(THIRD_PARTY_SRC_FILES:$(THIRD_PARTY_DIR)/%.c=$(
 
 SOURCE_FILES = $(wildcard $(SOURCE_DIR)/*.c)
 HEADER_FILES = $(wildcard $(INCLUDE_DIR)/*.h)
+THIRD_PARTY_HEADER_FILES = $(wildcard $(THIRD_PARTY_DIR)/*.h)
 OBJ_FILES_SHARED = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.o)
 OBJ_FILES_STATIC = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.static.o)
 
@@ -91,11 +92,11 @@ $(OBJECT_DIR)/%.static.o: $(SOURCE_DIR)/%.c $(HEADER_FILES)
 	$(CC) -c $(STATIC_CFLAGS) $< -o $@
 
 # Third party shared objects (relaxed warning flags, no -Werror)
-$(THIRD_PARTY_OBJ_DIR)/%.o: $(THIRD_PARTY_DIR)/%.c
+$(THIRD_PARTY_OBJ_DIR)/%.o: $(THIRD_PARTY_DIR)/%.c $(THIRD_PARTY_HEADER_FILES)
 	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
 
 # Third party static objects
-$(THIRD_PARTY_OBJ_DIR)/%.static.o: $(THIRD_PARTY_DIR)/%.c
+$(THIRD_PARTY_OBJ_DIR)/%.static.o: $(THIRD_PARTY_DIR)/%.c $(THIRD_PARTY_HEADER_FILES)
 	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
 
 clean:

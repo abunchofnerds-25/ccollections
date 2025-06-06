@@ -55,20 +55,29 @@ SOFTWARE.
  *
  * ### Threading model
  *
- * Every request -- whether registered with chttpsvr_register_handler
- * (buffered body) or chttpsvr_register_streaming_handler (streaming body) --
- * is dispatched off the facil.io reactor thread and run inside the server's
- * own ctpool worker thread pool.  Reactor threads are never blocked by user
- * handler code.
+ * Routing happens as soon as a request's headers are parsed -- before any
+ * body byte is read.  An unmatched route is rejected immediately, without
+ * ever reading the body it's about to discard.  A matched route -- whether
+ * registered with chttpsvr_register_handler (buffered body) or
+ * chttpsvr_register_streaming_handler (streaming body) -- is handed to the
+ * server's own ctpool worker thread pool right away, regardless of body
+ * size.  The worker thread reads the request body itself, batch by batch,
+ * directly off the socket; the facil.io reactor thread's job on any request
+ * is therefore O(1) and it is never blocked reading a large or slow body,
+ * let alone by user handler code.
  *
  * Each server owns one ctpool, created when chttpsvr_start() is called.  The
  * pool size is governed by chttpsvr_config_t.worker_thread_count and
  * chttpsvr_config_t.worker_queue_capacity.  If the task queue is full when a
  * request arrives, the server returns 503 Service Unavailable immediately.
  *
- * Streaming handlers may call chttpsvr_req_read() to pull body bytes
- * incrementally.  Buffered handlers receive the complete body in memory via
- * chttpsvr_req_body().  Both handler types run on worker threads and may block.
+ * Streaming handlers call chttpsvr_req_read() to pull each body batch as it
+ * arrives, before the rest of the body has necessarily even reached the
+ * server.  Buffered handlers receive the complete body in memory via
+ * chttpsvr_req_body() once the worker has finished reading it in full.  Both
+ * handler types run on worker threads and may block; chttpsvr_req_read()
+ * itself blocks the calling worker (never the reactor) until data arrives,
+ * EOF, an error, or chttpsvr_config_t.stream_read_timeout_ms elapses.
  *
  * ### Engine lifecycle (implicit)
  *
@@ -229,6 +238,15 @@ typedef struct chttpsvr_config {
    *  timeout.  Both fields map to the single timeout parameter exposed by
    *  the underlying facil.io http_listen call. */
   long idle_timeout_ms;
+  /** Bounds how long a worker thread will wait for the *next* batch of body
+   *  bytes while reading a request body (buffered or streaming), in ms.
+   *  0 = wait indefinitely (bounded only by read_timeout_ms/idle_timeout_ms,
+   *  which reset on any connection activity and so do not protect against a
+   *  client that trickles bytes slowly enough to always beat them).
+   *  Default 30000 (30 s). On expiry, chttpsvr_req_read() returns -1 and
+   *  chttpsvr_req_stream_error() reports ccol_timed_out; buffered routes
+   *  respond 408 automatically. */
+  unsigned stream_read_timeout_ms;
   /** TLS config; NULL = plaintext. */
   const chttp_tls_config_t *tls;
   /** Number of worker threads in the server-owned ctpool (default: CPU count).
@@ -255,6 +273,7 @@ typedef struct chttpsvr_config {
       .max_body_size = (4U * 1024U * 1024U), \
       .read_timeout_ms = 0,                  \
       .idle_timeout_ms = 0,                  \
+      .stream_read_timeout_ms = 30000,       \
       .tls = NULL,                           \
       .worker_thread_count = 0,              \
       .worker_queue_capacity = 0,            \
@@ -520,9 +539,11 @@ ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
 /**
  * @brief Register a streaming-body route on the server.
  *
- * The reactor thread is never blocked: the request is paused and the handler
- * is dispatched to the server's ctpool.  Inside the handler use
- * chttpsvr_req_read() to pull body bytes incrementally.
+ * The reactor thread is never blocked: routing happens as soon as headers
+ * are parsed, before any body byte is read, and the handler is dispatched to
+ * the server's ctpool right away regardless of body size.  Inside the
+ * handler use chttpsvr_req_read() to pull each body batch as it actually
+ * arrives on the socket -- read live by the worker thread, not pre-buffered.
  *
  * If the server's task queue is full when a request arrives, the server
  * returns 503 Service Unavailable immediately.
@@ -698,15 +719,22 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
 /**
  * @brief Read body bytes for streaming routes (pull-reader model).
  *
- * Reads up to buflen bytes of the request body into buf.  Successive calls
- * advance the read position.
+ * Reads up to buflen bytes of the request body into buf, batch by batch, as
+ * they actually arrive on the connection -- this call reads the socket
+ * itself (via the worker thread executing the handler, never the reactor
+ * thread) and blocks the calling worker until at least one byte is
+ * available, the body ends, an error occurs, or stream_read_timeout_ms
+ * (chttpsvr_config_t) elapses without new data.
  *
  * If buflen is 0 the function returns 0 immediately regardless of buf (the
  * call is a no-op, consistent with POSIX read(2) semantics).
  *
- * Returns -1 only for hard errors: req is NULL, buf is NULL with buflen > 0,
- * or the handler was registered with chttpsvr_register_handler (buffered)
- * rather than chttpsvr_register_streaming_handler.
+ * Returns -1 for hard errors (req is NULL, buf is NULL with buflen > 0, or
+ * the handler was registered with chttpsvr_register_handler rather than
+ * chttpsvr_register_streaming_handler) as well as for a broken connection,
+ * an exceeded stream_read_timeout_ms, or a body that exceeds max_body_size
+ * mid-stream -- call chttpsvr_req_stream_error() immediately afterward to
+ * distinguish these.
  *
  * @param req     Request handle (must be from a
  * chttpsvr_register_streaming_handler route).
@@ -715,6 +743,21 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
  * @return Number of bytes read (>0), 0 at EOF or for buflen==0, -1 on error.
  */
 ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
+
+/**
+ * @brief Report why the most recent chttpsvr_req_read() call returned -1.
+ *
+ * Meaningful only immediately after a -1 return from chttpsvr_req_read();
+ * otherwise the result is unspecified (there may be no error to report).
+ *
+ * @param req  Request handle.
+ * @return ccol_timed_out (stream_read_timeout_ms elapsed),
+ *         ccol_msg_too_large (max_body_size exceeded mid-stream),
+ *         ccol_http_transfer_aborted (connection closed or malformed
+ *         framing), ccol_success (no error recorded), or
+ *         ccol_unexpected_failure (req or its handle is invalid).
+ */
+ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req);
 
 /**
  * @brief Return a named path parameter extracted from the URL pattern.

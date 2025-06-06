@@ -38,11 +38,12 @@ THIRD_PARTY_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fPIC -g -O0 \
 LFLAGS = -lpthread -lcurl -lssl -lcrypto -lm -lz
 
 THIRD_PARTY_OBJS = $(THIRD_PARTY_SRC_FILES:$(THIRD_PARTY_DIR)/%.c=third_party_obj/%.o)
+THIRD_PARTY_HEADER_FILES = $(wildcard $(THIRD_PARTY_DIR)/*.h)
 
 third_party_obj:
 	mkdir -p third_party_obj
 
-third_party_obj/%.o: $(THIRD_PARTY_DIR)/%.c | third_party_obj
+third_party_obj/%.o: $(THIRD_PARTY_DIR)/%.c $(THIRD_PARTY_HEADER_FILES) | third_party_obj
 	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
 
 build: $(THIRD_PARTY_OBJS)

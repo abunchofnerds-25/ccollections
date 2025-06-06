@@ -3222,6 +3222,7 @@ cfg.port                 = 8080;
 cfg.max_body_size        = 4*1024*1024;         /* 4 MiB body limit */
 cfg.read_timeout_ms      = 30000;               /* 30 s read timeout (baseline) */
 cfg.idle_timeout_ms      = 60000;               /* 60 s keep-alive idle timeout */
+cfg.stream_read_timeout_ms = 30000;             /* 30 s wait for the next body batch; 0 = unbounded */
 cfg.worker_thread_count  = 4;                   /* 0 = CPU core count */
 cfg.worker_queue_capacity = 128;                /* 0 = default (256 * threads); CHTTPSVR_QUEUE_UNBOUNDED = no limit */
 cfg.tls                  = &tls_cfg;            /* optional TLS (chttp_tls_config_t) */
@@ -3314,23 +3315,32 @@ chttpsvr_register_handler(srv, CHTTP_ANY,  "/users/{id}", any_user,  NULL);
 
 ### Streaming Handlers
 
-ALL handlers (buffered and streaming) run on the server's own `ctpool`; the reactor thread is never blocked by user code. Streaming handlers additionally expose `chttpsvr_req_read` for sequential body access, making them the preferred choice when the body is consumed incrementally:
+Routing happens as soon as headers are parsed, before any body byte is read -- an unmatched route is rejected immediately without ever reading the body it's about to discard, and a matched route (buffered or streaming) is handed to the server's `ctpool` right away, regardless of body size. The reactor thread's job is therefore O(1) per request: it never blocks reading a large or slow body. The worker thread that picks up the request reads the body itself, batch by batch, directly off the socket via the same Content-Length/chunked framing logic the reactor would otherwise use -- there is no temp file and no whole-body pre-buffering anywhere in the path.
+
+For a **buffered** handler, the worker reads the entire body into one growable buffer before invoking the handler, so `chttpsvr_req_body` still returns the complete body in one call. For a **streaming** handler, the worker hands each batch to `chttpsvr_req_read` as it arrives, so the handler can act on data before the rest of the body has even reached the server:
 
 ```c
-chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/upload", upload_handler, NULL);
+chttpsvr_register_streaming_handler(srv, CHTTP_POST,
+    "/upload", upload_handler, NULL);
 
 static void upload_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     (void)ctx;
     char buf[4096];
     ssize_t n;
     while ((n = chttpsvr_req_read(req, buf, sizeof(buf))) > 0) {
-        /* process chunk */
+        /* process chunk as it arrives -- no need to wait for the rest */
+    }
+    if (n < 0) {
+        /* connection dropped, timed out, or the body exceeded max_body_size --
+           chttpsvr_req_stream_error(req) reports which. */
     }
     chttpsvr_resp_write_str(resp, "received");
 }
 ```
 
-The `chttpsvr_req_read` function reads bytes sequentially from the pre-buffered body and returns 0 at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1.
+`chttpsvr_req_read` blocks the calling worker thread (never the reactor) until at least one byte is available, the body ends, an error occurs, or `chttpsvr_config_t.stream_read_timeout_ms` elapses with no new data. It returns `>0` bytes read, `0` at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics), or `-1` on error -- call `chttpsvr_req_stream_error(req)` immediately afterward to distinguish a timeout (`ccol_timed_out`), an oversized body (`ccol_msg_too_large`), or a dropped connection (`ccol_http_transfer_aborted`). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1, and `chttpsvr_req_body` on a streaming handler returns `NULL`/0 (its body is never pre-extracted).
+
+`stream_read_timeout_ms` (default 30000ms) bounds how long a worker will wait for the *next* batch while reading a body, for both buffered and streaming routes -- it exists because `read_timeout_ms`/`idle_timeout_ms` reset on any connection activity and so do not protect against a client that trickles bytes just fast enough to never trip them, tying up a worker thread indefinitely.
 
 The server's `ctpool` is created at `chttpsvr_start` time. Its capacity is controlled by `chttpsvr_config_t.worker_thread_count` and `worker_queue_capacity`. If the queue is full when a request arrives, the server responds immediately with `503 Service Unavailable` -- it never stalls the reactor thread.
 
@@ -3379,8 +3389,9 @@ chttp_method_t  chttpsvr_req_method(req);
 const char     *chttpsvr_req_path(req);
 const char     *chttpsvr_req_raw_query(req);
 const char     *chttpsvr_req_header(req, "content-type");
-const void     *chttpsvr_req_body(req, &body_len);
+const void     *chttpsvr_req_body(req, &body_len);    /* buffered only */
 ssize_t         chttpsvr_req_read(req, buf, buflen);  /* streaming only */
+ccol_retval_t   chttpsvr_req_stream_error(req);       /* reason for the last -1 */
 const char     *chttpsvr_req_param(req, "id");        /* named path param */
 
 /* Multi-value query parameters (e.g. ?q=a&q=b): */
@@ -3494,8 +3505,9 @@ cfg.tls = &tls;
 | `chttpsvr_req_path(req)` | URL path (decoded, without query string) |
 | `chttpsvr_req_raw_query(req)` | Raw query string (without leading `?`); NULL if absent |
 | `chttpsvr_req_header(req, name)` | Look up a request header (case-insensitive); NULL if absent |
-| `chttpsvr_req_body(req, &len)` | Pointer to buffered body bytes and length |
-| `chttpsvr_req_read(req, buf, n)` | Sequential body read for streaming handlers; returns bytes read, 0 at EOF or when n==0 (no-op), -1 on error (NULL req, NULL buf with n>0, or called from a buffered handler) |
+| `chttpsvr_req_body(req, &len)` | Pointer to the buffered body bytes and length; NULL/0 on a streaming route (its body is never pre-extracted) |
+| `chttpsvr_req_read(req, buf, n)` | Reads the next batch of body bytes for a streaming handler directly off the socket, blocking the worker (never the reactor) until data arrives, EOF, an error, or `stream_read_timeout_ms` elapses; returns bytes read, 0 at EOF or when n==0 (no-op), -1 on error (NULL req, NULL buf with n>0, called from a buffered handler, timeout, oversized body, or dropped connection) |
+| `chttpsvr_req_stream_error(req)` | Reports why the most recent `chttpsvr_req_read` returned -1: `ccol_timed_out`, `ccol_msg_too_large`, `ccol_http_transfer_aborted`, or `ccol_success`/`ccol_unexpected_failure` |
 | `chttpsvr_req_param(req, name)` | Named path parameter (URL-decoded); NULL if not in pattern |
 | `chttpsvr_req_query(req, key, &count)` | All values for a query parameter (lazy-parsed, NULL-terminated array); returns NULL on key-absent or OOM |
 | `chttpsvr_req_query_one(req, key, &val)` | Single-value query parameter; `ccol_not_permitted` if key appears more than once; `ccol_not_enough_memory` on OOM |
@@ -3600,10 +3612,10 @@ typedef struct {
 ### Providing a Custom Allocator
 
 ```c
-void *my_malloc(size_t size)              { return arena_alloc(&g_arena, size); }
-void *my_calloc(size_t n, size_t size)    { return arena_calloc(&g_arena, n, size); }
-void *my_realloc(void *p, size_t size)    { return arena_realloc(&g_arena, p, size); }
-void  my_free(void *p)                    { arena_free(&g_arena, p); }
+void *my_malloc(size_t size)           { return arena_alloc(&g_arena, size); }
+void *my_calloc(size_t n, size_t size) { return arena_calloc(&g_arena, n, size); }
+void *my_realloc(void *p, size_t size) { return arena_realloc(&g_arena, p, size); }
+void  my_free(void *p)                 { arena_free(&g_arena, p); }
 
 ccol_memmgmt_procs_t arena_mprocs = {
     .malloc  = my_malloc,
@@ -3623,10 +3635,21 @@ r_mempool *node_pool = r_mempool_create(4, 10, 6,
                                         fallback_at_last_exhaustion,
                                         false, NULL, NULL);
 
-void *pool_malloc(size_t size)              { return r_mempool_alloc_entry(node_pool, size); }
-void *pool_calloc(size_t n, size_t size)    { return r_mempool_calloc_entry(node_pool, n * size); }
-void *pool_realloc(void *p, size_t size)    { return r_mempool_realloc_entry(node_pool, p, size); }
-void  pool_free(void *p)                    { r_mempool_free_entry(p); }
+void *pool_malloc(size_t size) {
+    return r_mempool_alloc_entry(node_pool, size);
+}
+
+void *pool_calloc(size_t n, size_t size) {
+    return r_mempool_calloc_entry(node_pool, n * size);
+}
+
+void *pool_realloc(void *p, size_t size) {
+    return r_mempool_realloc_entry(node_pool, p, size);
+}
+
+void  pool_free(void *p) {
+    r_mempool_free_entry(p);
+}
 
 ccol_memmgmt_procs_t pool_mprocs = {
     .malloc  = pool_malloc,

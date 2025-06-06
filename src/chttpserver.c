@@ -28,6 +28,7 @@ SOFTWARE.
 #include <fio_tls.h>
 #include <fiobj.h>
 #include <http.h>
+#include <http1.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -141,7 +142,10 @@ struct chttpsvr_req {
   const void *body_data;
   size_t body_len;
   bool is_streaming;
-  size_t _stream_pos;
+  void *_h;          /* opaque http_s*, valid for the life of the worker's
+                         dispatch; used by chttpsvr_req_read/_stream_error */
+  void *_body_owned; /* buffered-route ingestion buffer; freed by
+                         _task_worker after the handler chain returns */
 
   /* Pre-extracted headers (always populated; all requests go through ctpool).
    */
@@ -165,17 +169,22 @@ struct chttpsvr_req {
   ccol_memmgmt_procs_t *m_procs;
 };
 
-/** Streaming-dispatch context (heap-allocated before http_pause). */
+/** Streaming-dispatch context (heap-allocated before http_pause).
+ *
+ * Built at headers-complete time, before the body has arrived -- there is no
+ * body/body_len here. Buffered routes accumulate the body in _task_worker
+ * (via http1_stream_read) directly into the stack-local chttpsvr_req; only
+ * streaming routes pull it lazily through chttpsvr_req_read. */
 typedef struct streaming_ctx {
   http_pause_handle_s *ph;
   struct chttpserver *srv;
   chttpsvr_router *router;
   chttpsvr_route_t *route;
   chttp_method_t method;
-  char *path;      /* owned */
-  char *raw_query; /* owned, or NULL */
-  char *body;      /* owned, or NULL */
-  size_t body_len;
+  void *h;          /* opaque http_s*; still valid (paused, not destroyed) until
+                       http1_stream_release is called in _task_worker */
+  char *path;       /* owned */
+  char *raw_query;  /* owned, or NULL */
   char **hdr_names; /* owned arrays */
   char **hdr_values;
   size_t hdr_count;
@@ -205,8 +214,12 @@ struct chttpserver {
   clog cl;              /* per-server logger; passed at creation time */
   intptr_t listen_uuid; /* facio listener uuid; -1 when not started */
   bool started;         /* true after a successful chttpsvr_start call */
-  bool contributed_to_engine; /* true when this server was counted in
-                                 g_server_count */
+  bool contributed_to_engine;      /* true when this server was counted in
+                                      g_server_count */
+  unsigned stream_read_timeout_ms; /* set at chttpsvr_start; bounds each
+                                       http1_stream_read wait for more body
+                                       bytes, for both buffered and
+                                       streaming routes */
   ccol_memmgmt_procs_t *m_procs;
 };
 
@@ -255,7 +268,7 @@ static void _fio_global_init(void) {
 /* ========================================================================== */
 
 static void _chttpsvr_next(chttpsvr_req *req, chttpsvr_resp *resp);
-static void _on_request(http_s *h);
+static int _on_headers_complete(http_s *h);
 static void _task_pause_cb(http_pause_handle_s *ph);
 static void _task_worker(void *arg);
 static void _task_send_response(http_s *h);
@@ -829,7 +842,8 @@ static int _extract_hdr_cb(FIOBJ val, void *arg) {
         (char **)_mem_realloc(he->mp, he->values, new_cap * sizeof(char *));
     if (!nv) {
       /* nn is the new (larger) allocation for he->names.  Update he->names
-       * now so the cleanup loop in _on_request frees the live allocation.
+       * now so the cleanup loop in _on_headers_complete frees the live
+       * allocation.
        * he->cap stays at the old value; cleanup iterates he->count (not
        * he->cap), so the temporarily mismatched capacities are harmless. */
       he->names = nn;
@@ -859,7 +873,6 @@ static void _free_task_ctx(streaming_ctx_t *sctx) {
   ccol_memmgmt_procs_t *mp = sctx->m_procs;
   _mem_free(mp, sctx->path);
   _mem_free(mp, sctx->raw_query);
-  _mem_free(mp, sctx->body);
   for (size_t i = 0; i < sctx->hdr_count; i++) {
     _mem_free(mp, sctx->hdr_names[i]);
     _mem_free(mp, sctx->hdr_values[i]);
@@ -887,12 +900,72 @@ static void _task_pause_cb(http_pause_handle_s *ph) {
   mutex_unlock(sctx->srv->mutex);
 
   if (ctpool_try_submit(pool, _task_worker, sctx, NULL) != ccol_success) {
+    /* No worker will ever call http1_stream_read/http1_stream_release for
+     * this message now -- release it here so http1_destroy doesn't defer
+     * forever waiting for a release that will never come. */
+    http1_stream_release((http_s *)sctx->h);
     sctx->resp.status_code = CHTTP_STATUS_SERVICE_UNAVAILABLE;
     http_resume(ph, _task_send_response, _task_cleanup);
     return;
   }
   /* On successful submit the worker holds the reference; the decrement
    * happens in _task_send_response or _task_cleanup. */
+}
+
+/* Translate the reason http1_stream_read most recently failed for `h` into
+ * this library's error code space. */
+static ccol_retval_t _stream_err_to_retval(http_s *h) {
+  switch (http1_stream_last_error(h)) {
+    case HTTP1_STREAM_ERR_TIMEOUT:
+      return ccol_timed_out;
+    case HTTP1_STREAM_ERR_TOO_LARGE:
+      return ccol_msg_too_large;
+    case HTTP1_STREAM_ERR_CLOSED:
+    case HTTP1_STREAM_ERR_PROTOCOL:
+    case HTTP1_STREAM_ERR_NONE:
+    default:
+      return ccol_http_transfer_aborted;
+  }
+}
+
+/* Reads the entire request body into one growable heap buffer before a
+ * buffered handler is invoked. max_body_size is already enforced by the
+ * same parser logic that would enforce it for a streaming route (see
+ * http1_on_body_chunk) -- http1_stream_read simply reports the failure. */
+static ccol_retval_t _ingest_buffered_body(streaming_ctx_t *sctx,
+                                           chttpsvr_req *req) {
+  http_s *h = (http_s *)sctx->h;
+  ccol_memmgmt_procs_t *mp = sctx->m_procs;
+  unsigned timeout_ms = sctx->srv->stream_read_timeout_ms;
+  size_t cap = 0, len = 0;
+  char *buf = NULL;
+
+  for (;;) {
+    if (len == cap) {
+      size_t new_cap = cap ? cap * 2 : 16384;
+      char *nb = (char *)_mem_realloc(mp, buf, new_cap);
+      if (!nb) {
+        _mem_free(mp, buf);
+        return ccol_not_enough_memory;
+      }
+      buf = nb;
+      cap = new_cap;
+    }
+    ssize_t n = http1_stream_read(h, buf + len, cap - len, timeout_ms);
+    if (n > 0) {
+      len += (size_t)n;
+      continue;
+    }
+    if (n == 0) break;
+    ccol_retval_t err = _stream_err_to_retval(h);
+    _mem_free(mp, buf);
+    return err;
+  }
+
+  req->body_data = buf;
+  req->body_len = len;
+  req->_body_owned = buf;
+  return ccol_success;
 }
 
 static void _task_worker(void *arg) {
@@ -903,10 +976,8 @@ static void _task_worker(void *arg) {
   req.method = sctx->method;
   req.path = sctx->path;
   req.raw_query = sctx->raw_query;
-  req.body_data = sctx->body;
-  req.body_len = sctx->body_len;
   req.is_streaming = sctx->route->is_streaming;
-  req._stream_pos = 0;
+  req._h = sctx->h;
   req._hdr_names = sctx->hdr_names;
   req._hdr_values = sctx->hdr_values;
   req._hdr_count = sctx->hdr_count;
@@ -916,8 +987,29 @@ static void _task_worker(void *arg) {
   req._dispatch = &sctx->dispatch;
   req.m_procs = sctx->m_procs;
 
+  if (!sctx->route->is_streaming) {
+    ccol_retval_t ing = _ingest_buffered_body(sctx, &req);
+    if (ing != ccol_success) {
+      http1_stream_release((http_s *)sctx->h);
+      sctx->resp.status_code =
+          (ing == ccol_msg_too_large) ? CHTTP_STATUS_PAYLOAD_TOO_LARGE
+          : (ing == ccol_timed_out)   ? CHTTP_STATUS_REQUEST_TIMEOUT
+                                      : CHTTP_STATUS_INTERNAL_ERROR;
+      _destroy_req_qparams(&req);
+      http_resume(sctx->ph, _task_send_response, _task_cleanup);
+      return;
+    }
+  }
+
   _chttpsvr_next(&req, &sctx->resp);
 
+  /* Streaming handlers may stop reading before EOF; buffered ingestion
+   * above always runs to completion or an error. Either way, release
+   * exactly once, before resuming, whether or not http1_stream_read ever
+   * naturally reached end-of-body. */
+  http1_stream_release((http_s *)sctx->h);
+
+  _mem_free(sctx->m_procs, req._body_owned);
   _destroy_req_qparams(&req);
 
   http_resume(sctx->ph, _task_send_response, _task_cleanup);
@@ -949,14 +1041,40 @@ static void _task_cleanup(void *udata) {
 /*                         MAIN REQUEST HANDLER                               */
 /* ========================================================================== */
 
-static void _on_request(http_s *h) {
+/**
+ * http_listen() hard-requires .on_request to be set (it calls exit() at
+ * startup otherwise) -- but _on_headers_complete below always returns 1
+ * (handled) for every request that reaches it, which stops http1.c from
+ * ever calling on_request. This is therefore unreachable in practice and
+ * exists only to satisfy that startup check.
+ */
+static void _on_request_unreachable(http_s *h) { http_send_error(h, 500); }
+
+/**
+ * Called by http1.c right after headers are parsed, before any body byte is
+ * read (see http_settings_s.on_headers_complete). Routing happens here now
+ * -- not after the body arrives -- so an unmatched route is rejected without
+ * ever reading a body it's about to discard, and a matched route is hand
+ * off to a worker immediately regardless of body size, freeing the reactor
+ * thread. The worker (see _task_worker) reads the body itself via
+ * http1_stream_read, batch by batch, whether the route is buffered or
+ * streaming.
+ *
+ * Returns 1 if the request was paused and handed to the worker pool (the
+ * only outcome for a matched route), or 0 if an error response was already
+ * sent synchronously (no match, wrong method, or OOM) -- in the 0 case
+ * http1.c forces the connection closed afterward, since the client's
+ * still-arriving body would otherwise be misread as the start of a new
+ * pipelined request.
+ */
+static int _on_headers_complete(http_s *h) {
   struct chttpserver *srv = (struct chttpserver *)http_settings(h)->udata;
 
   /* Extract path (server-side: h->path is the path only, not query). */
   fio_str_info_s path_fi = fiobj_obj2cstr(h->path);
   if (!path_fi.data) {
     http_send_error(h, 400);
-    return;
+    return 0;
   }
 
   /* Copy to NUL-terminated buffer; use stack for short paths. */
@@ -967,7 +1085,7 @@ static void _on_request(http_s *h) {
     path = (char *)_mem_alloc(srv->m_procs, path_fi.len + 1);
     if (!path) {
       http_send_error(h, 500);
-      return;
+      return 0;
     }
     path_heap = true;
   }
@@ -979,14 +1097,14 @@ static void _on_request(http_s *h) {
   if (!method_fi.data) {
     if (path_heap) _mem_free(srv->m_procs, path);
     http_send_error(h, 400);
-    return;
+    return 0;
   }
   chttp_method_t method = _parse_method(method_fi.data, method_fi.len);
 
   if (method == _CHTTP_METHOD_UNKNOWN) {
     if (path_heap) _mem_free(srv->m_procs, path);
     http_send_error(h, 501);
-    return;
+    return 0;
   }
 
   /* Route lookup and middleware snapshot under the routes read lock.
@@ -1006,19 +1124,19 @@ static void _on_request(http_s *h) {
     pthread_rwlock_unlock(&srv->routes_lock);
     if (path_heap) _mem_free(srv->m_procs, path);
     http_send_error(h, 404);
-    return;
+    return 0;
   }
   if (mr.result == ROUTE_MATCH_METHOD) {
     pthread_rwlock_unlock(&srv->routes_lock);
     if (path_heap) _mem_free(srv->m_procs, path);
     http_send_error(h, 405);
-    return;
+    return 0;
   }
   if (mr.result == ROUTE_MATCH_OOM) {
     pthread_rwlock_unlock(&srv->routes_lock);
     if (path_heap) _mem_free(srv->m_procs, path);
     http_send_error(h, 500);
-    return;
+    return 0;
   }
   /* Build a snapshot of the middleware chain while the read lock is still
    * held.  Walking the list here -- rather than after releasing the lock --
@@ -1050,7 +1168,7 @@ static void _on_request(http_s *h) {
       _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
       if (path_heap) _mem_free(srv->m_procs, path);
       http_send_error(h, 500);
-      return;
+      return 0;
     }
   }
   pthread_rwlock_unlock(&srv->routes_lock);
@@ -1070,22 +1188,14 @@ static void _on_request(http_s *h) {
       _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
       if (path_heap) _mem_free(srv->m_procs, path);
       http_send_error(h, 400);
-      return;
+      return 0;
     }
     path[(size_t)_dlen] = '\0';
   }
 
-  /* Extract body (raw bytes from fiobj_data). */
-  size_t body_len = 0;
-  fio_str_info_s body_fi;
-  memset(&body_fi, 0, sizeof(body_fi));
-  if (h->body) {
-    fiobj_data_seek(h->body, 0);
-    body_fi = fiobj_data_read(h->body, 0);
-    if (body_fi.data) body_len = body_fi.len;
-  }
-
-  /* Extract raw query string. */
+  /* Extract raw query string. Populated from the request line, which is
+   * parsed well before headers complete, so this is available here exactly
+   * as it was when this extraction ran after the full body previously. */
   const char *raw_query = NULL;
   fio_str_info_s query_fi;
   memset(&query_fi, 0, sizeof(query_fi));
@@ -1101,13 +1211,14 @@ static void _on_request(http_s *h) {
     _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
     if (path_heap) _mem_free(srv->m_procs, path);
     http_send_error(h, 500);
-    return;
+    return 0;
   }
   sctx->m_procs = srv->m_procs;
   sctx->srv = srv;
   sctx->router = mr.router;
   sctx->route = mr.route;
   sctx->method = method;
+  sctx->h = h;
   sctx->param_values = mr.param_values;
   sctx->param_count = mr.route->param_count;
   sctx->resp.status_code = CHTTP_STATUS_OK;
@@ -1122,14 +1233,6 @@ static void _on_request(http_s *h) {
   if (raw_query) {
     sctx->raw_query = ccol_strdup(srv->m_procs, raw_query);
     if (!sctx->raw_query) goto task_oom;
-  }
-
-  /* Copy body bytes. */
-  if (body_len > 0 && body_fi.data) {
-    sctx->body = (char *)_mem_alloc(srv->m_procs, body_len);
-    if (!sctx->body) goto task_oom;
-    memcpy(sctx->body, body_fi.data, body_len);
-    sctx->body_len = body_len;
   }
 
   /* Extract all request headers before http_pause so the reactor thread
@@ -1156,12 +1259,13 @@ static void _on_request(http_s *h) {
   if (path_heap) _mem_free(srv->m_procs, path);
   h->udata = sctx;
   http_pause(h, _task_pause_cb);
-  return;
+  return 1;
 
 task_oom:
   _free_task_ctx(sctx);
   if (path_heap) _mem_free(srv->m_procs, path);
   http_send_error(h, 500);
+  return 0;
 }
 
 /* ========================================================================== */
@@ -1691,6 +1795,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
       .max_body_size = (4U * 1024U * 1024U),
       .read_timeout_ms = 0,
       .idle_timeout_ms = 0,
+      .stream_read_timeout_ms = 30000,
       .tls = NULL,
       .worker_thread_count = 0,
       .worker_queue_capacity = 0,
@@ -1731,6 +1836,8 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   srv->worker_pool = create_cthread_pool_mp((size_t)nthreads, queue_cap,
                                             srv->m_procs, &pool_err);
   if (!srv->worker_pool) return ccol_not_enough_memory;
+
+  srv->stream_read_timeout_ms = cfg->stream_read_timeout_ms;
 
   /* Compute timeout in seconds (facil.io uses uint8_t seconds).
    *
@@ -1827,9 +1934,11 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
      * the reactor enters its event loop for the first time,
      * fio_listen_on_startup is already queued and the socket is bound
      * atomically at startup. */
-    uuid = http_listen(port_str, cfg->host, .on_request = _on_request,
-                       .udata = srv, .max_body_size = cfg->max_body_size,
-                       .timeout = timeout_sec, .tls = tls);
+    uuid =
+        http_listen(port_str, cfg->host, .on_request = _on_request_unreachable,
+                    .on_headers_complete = _on_headers_complete, .udata = srv,
+                    .max_body_size = cfg->max_body_size, .timeout = timeout_sec,
+                    .tls = tls);
     if (uuid < 0) {
       fio_state_callback_remove(FIO_CALL_ON_START, _engine_ready_cb, NULL);
       pthread_mutex_unlock(&g_engine_mutex);
@@ -1878,9 +1987,11 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
     /* Subsequent start: engine already running.  http_listen calls fio_attach
      * directly (fio_is_running() is true), registering the listener
      * immediately with the live reactor. */
-    uuid = http_listen(port_str, cfg->host, .on_request = _on_request,
-                       .udata = srv, .max_body_size = cfg->max_body_size,
-                       .timeout = timeout_sec, .tls = tls);
+    uuid =
+        http_listen(port_str, cfg->host, .on_request = _on_request_unreachable,
+                    .on_headers_complete = _on_headers_complete, .udata = srv,
+                    .max_body_size = cfg->max_body_size, .timeout = timeout_sec,
+                    .tls = tls);
     if (uuid < 0) {
       if (tls) fio_tls_destroy(tls);
       ctpool_shutdown_drain(srv->worker_pool);
@@ -2059,12 +2170,26 @@ ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
   if (buflen == 0) return 0; /* read zero bytes: valid no-op, not an error */
   if (!buf) return -1;
   if (!req->is_streaming) return -1;
-  if (!req->body_data || req->_stream_pos >= req->body_len) return 0;
-  size_t remaining = req->body_len - req->_stream_pos;
-  size_t to_read = (remaining < buflen) ? remaining : buflen;
-  memcpy(buf, (const char *)req->body_data + req->_stream_pos, to_read);
-  req->_stream_pos += to_read;
-  return (ssize_t)to_read;
+  if (!req->_h) return -1;
+  unsigned timeout_ms =
+      req->_dispatch ? req->_dispatch->srv->stream_read_timeout_ms : 0;
+  return http1_stream_read((http_s *)req->_h, buf, buflen, timeout_ms);
+}
+
+ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req) {
+  if (!req || !req->_h) return ccol_unexpected_failure;
+  switch (http1_stream_last_error((http_s *)req->_h)) {
+    case HTTP1_STREAM_ERR_TIMEOUT:
+      return ccol_timed_out;
+    case HTTP1_STREAM_ERR_TOO_LARGE:
+      return ccol_msg_too_large;
+    case HTTP1_STREAM_ERR_CLOSED:
+    case HTTP1_STREAM_ERR_PROTOCOL:
+      return ccol_http_transfer_aborted;
+    case HTTP1_STREAM_ERR_NONE:
+    default:
+      return ccol_success;
+  }
 }
 
 const char *chttpsvr_req_param(const chttpsvr_req *req, const char *name) {

@@ -219,6 +219,40 @@ static void _stream_echo_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   }
 }
 
+/* Streaming handler that counts how many separate chttpsvr_req_read() calls
+   returned data before EOF, reporting the count via a response header.
+   Used to prove the body is delivered in genuinely separate batches as it
+   arrives on the wire, rather than being fully buffered ahead of the
+   handler and handed over as one blob. */
+static void _stream_batch_count_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+                                        void *ctx) {
+  (void)ctx;
+  char buf[8];
+  ssize_t n;
+  int batches = 0;
+  while ((n = chttpsvr_req_read(req, buf, sizeof(buf))) > 0) batches++;
+  char cbuf[16];
+  snprintf(cbuf, sizeof(cbuf), "%d", batches);
+  chttpsvr_resp_set_header(resp, "x-batch-count", cbuf);
+  chttpsvr_resp_write_str(resp, "ok");
+}
+
+/* Streaming handler that drains the body and reports why the final
+   chttpsvr_req_read() call returned -1 (if it did), via a response header.
+   Used to test stream_read_timeout_ms and mid-stream abort reporting. */
+static void _stream_error_report_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+                                         void *ctx) {
+  (void)ctx;
+  char buf[64];
+  ssize_t n;
+  while ((n = chttpsvr_req_read(req, buf, sizeof(buf))) > 0) {
+  }
+  const char *err_str =
+      (n < 0) ? ccol_retval_to_str(chttpsvr_req_stream_error(req)) : "none";
+  chttpsvr_resp_set_header(resp, "x-stream-err", err_str);
+  chttpsvr_resp_write_str(resp, "done");
+}
+
 /* Raw query echo handler. */
 static void _raw_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                void *ctx) {
@@ -300,8 +334,10 @@ static void _read_on_buffered_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Streaming handler that accesses the body via chttpsvr_req_body() (not
-   chttpsvr_req_read()).  The body is pre-extracted before http_pause, so
-   the body API must work on streaming routes just as on buffered ones. */
+   chttpsvr_req_read()).  Streaming routes read their body live off the
+   socket via chttpsvr_req_read(); chttpsvr_req_body() is documented as
+   buffered-route-only and must return NULL/0 here rather than the body a
+   handler never asked to have read. */
 static void _stream_body_check_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                        void *ctx) {
   (void)ctx;
@@ -773,6 +809,10 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_register_streaming_handler(g_srv, CHTTP_GET,
                                       "/stream-body-get-no-body",
                                       _stream_get_body_check_handler, NULL);
+  chttpsvr_register_streaming_handler(g_srv, CHTTP_POST, "/stream-batch-count",
+                                      _stream_batch_count_handler, NULL);
+  chttpsvr_register_streaming_handler(g_srv, CHTTP_POST, "/stream-error-report",
+                                      _stream_error_report_handler, NULL);
   /* Streaming routes for chttpsvr_req_read edge-case coverage. */
   chttpsvr_register_streaming_handler(g_srv, CHTTP_GET, "/stream-zero-buflen",
                                       _stream_zero_buflen_handler, NULL);
@@ -945,12 +985,19 @@ __attribute__((constructor)) static void _setup(void) {
   }
   chttpsvr_register_streaming_handler(g_bounded_srv, CHTTP_GET, "/bounded-503",
                                       _bounded_blk_handler, NULL);
+  chttpsvr_register_streaming_handler(g_bounded_srv, CHTTP_POST,
+                                      "/stream-error-report-slow",
+                                      _stream_error_report_handler, NULL);
   {
     chttpsvr_config_t bcfg = CHTTPSVR_CONFIG_DEFAULT;
     bcfg.host = "127.0.0.1";
     bcfg.port = TEST_PORT + 2;
     bcfg.worker_thread_count = 1;
     bcfg.worker_queue_capacity = 1;
+    /* Short enough that a client which stops sending mid-body triggers a
+     * timeout quickly in tests, without affecting /bounded-503 (which never
+     * calls chttpsvr_req_read). */
+    bcfg.stream_read_timeout_ms = 300;
     ccol_retval_t brv = chttpsvr_start(g_bounded_srv, &bcfg);
     if (brv != ccol_success) {
       fprintf(stderr, "FATAL: bounded chttpsvr_start failed: %d\n", brv);
@@ -1804,6 +1851,153 @@ static int _raw_request(const char *method, const char *path,
   return status;
 }
 
+/* Connects, sends a request whose body is written in several delayed
+   chunks (forcing the server to observe separate incremental reads off the
+   socket rather than one blob that already arrived in a single recv), then
+   reads the full response. Returns the HTTP status code, or -1 on a
+   socket-level failure. Always closes after one response. */
+static int _raw_request_drip_body(const char *method, const char *path,
+                                  const char *body, size_t chunk_len,
+                                  unsigned delay_us, char *buf, size_t buf_sz) {
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  if (inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr) != 1) return -1;
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+    close(fd);
+    return -1;
+  }
+
+  size_t body_len = strlen(body);
+  char hdr[512];
+  int hn = snprintf(hdr, sizeof(hdr),
+                    "%s %s HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Content-Type: text/plain\r\n"
+                    "Content-Length: %zu\r\n"
+                    "Connection: close\r\n"
+                    "\r\n",
+                    method, path, body_len);
+  if (hn < 0 || (size_t)hn >= sizeof(hdr)) {
+    close(fd);
+    return -1;
+  }
+  if (write(fd, hdr, (size_t)hn) != hn) {
+    close(fd);
+    return -1;
+  }
+
+  size_t sent = 0;
+  while (sent < body_len) {
+    size_t n = body_len - sent < chunk_len ? body_len - sent : chunk_len;
+    ssize_t w = write(fd, body + sent, n);
+    if (w < 0) {
+      close(fd);
+      return -1;
+    }
+    sent += (size_t)w;
+    if (sent < body_len && delay_us) usleep(delay_us);
+  }
+
+  size_t total = 0;
+  ssize_t r;
+  while (total < buf_sz - 1 &&
+         (r = read(fd, buf + total, buf_sz - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  int status = -1;
+  sscanf(buf, "HTTP/1.1 %d", &status);
+  return status;
+}
+
+/* Connects, sends headers declaring a Content-Length far larger than the
+   bytes actually written, writes only `sent_len` of the body, then closes
+   the socket immediately without waiting for (or reading) any response --
+   simulating a client that aborts mid-upload. Returns 0 on a successful
+   connect+write, -1 on a socket-level failure; the caller has no response
+   to inspect since the connection was torn down deliberately. */
+static int _raw_request_abort_mid_body(const char *path,
+                                       const char *partial_body,
+                                       size_t declared_len) {
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  if (inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr) != 1) return -1;
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+    close(fd);
+    return -1;
+  }
+
+  char hdr[512];
+  int hn = snprintf(hdr, sizeof(hdr),
+                    "POST %s HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Content-Type: text/plain\r\n"
+                    "Content-Length: %zu\r\n"
+                    "\r\n",
+                    path, declared_len);
+  if (hn < 0 || (size_t)hn >= sizeof(hdr)) {
+    close(fd);
+    return -1;
+  }
+  if (write(fd, hdr, (size_t)hn) != hn) {
+    close(fd);
+    return -1;
+  }
+  size_t partial_len = strlen(partial_body);
+  if (partial_len && write(fd, partial_body, partial_len) < 0) {
+    close(fd);
+    return -1;
+  }
+  close(fd); /* abort: never send the rest of the declared body */
+  return 0;
+}
+
+/* Reads exactly one HTTP/1.1 response (headers + Content-Length body) off
+   an already-connected socket, leaving the connection open for a
+   subsequent request -- used to test keep-alive across two requests on one
+   connection. Assumes a short, non-chunked response (true for every
+   fixture handler used with this helper). Returns the status code, or -1
+   on failure. */
+static int _read_one_http_response(int fd, char *buf, size_t buf_sz) {
+  size_t total = 0;
+  char *hdr_end = NULL;
+  while (total < buf_sz - 1) {
+    ssize_t r = read(fd, buf + total, buf_sz - 1 - total);
+    if (r <= 0) return -1;
+    total += (size_t)r;
+    buf[total] = '\0';
+    hdr_end = strstr(buf, "\r\n\r\n");
+    if (hdr_end) break;
+  }
+  if (!hdr_end) return -1;
+
+  size_t need = (size_t)(hdr_end - buf) + 4;
+  char *cl = strstr(buf, "content-length:");
+  if (cl && cl < hdr_end) need += (size_t)strtoul(cl + 15, NULL, 10);
+
+  while (total < need && total < buf_sz - 1) {
+    ssize_t r = read(fd, buf + total, buf_sz - 1 - total);
+    if (r <= 0) break;
+    total += (size_t)r;
+  }
+  buf[total] = '\0';
+
+  int status = -1;
+  sscanf(buf, "HTTP/1.1 %d", &status);
+  return status;
+}
+
 /* Extract and decode the response body from the raw response written by
    _raw_request.  Handles both Content-Length and Transfer-Encoding: chunked
    responses.  Decodes the body in-place inside buf; returns a pointer to the
@@ -1871,14 +2065,15 @@ TEST(chttpserver, req_read_on_buffered_returns_minus_one) {
 }
 
 TEST(chttpserver, req_body_via_api_on_streaming_route) {
-  /* chttpsvr_req_body() must work on streaming routes: the body bytes are
-     pre-copied before http_pause() is called, so they are available via
-     the same req->body_data/body_len fields used by buffered routes. */
+  /* chttpsvr_req_body() is buffered-route-only: a streaming route's body is
+     never pre-extracted (it's read live via chttpsvr_req_read(), batch by
+     batch, off the socket), so calling chttpsvr_req_body() on one must
+     return NULL/0 rather than silently handing back a buffered copy. */
   const char *payload = "body-via-api";
   chttpcli_response *resp = _post("/stream-body-api", payload, "text/plain");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  REQUIRE_STREQ(resp->body, payload);
+  REQUIRE_STREQ(resp->body, "(empty)");
   chttpclient_resp_free(resp);
 }
 
@@ -1897,6 +2092,127 @@ TEST(chttpserver, streaming_repeated_header) {
   char *body = _decode_raw_body(buf);
   REQUIRE_TRUE(body != NULL);
   REQUIRE_STREQ(body, "second");
+}
+
+/* ========================================================================== */
+/*                    WORKER-DRIVEN INGESTION TESTS                           */
+/* ========================================================================== */
+
+TEST(chttpserver, streaming_body_delivered_in_separate_batches) {
+  /* A client that writes its body in several delayed chunks must cause the
+     streaming handler's chttpsvr_req_read() to observe more than one batch
+     -- proving the body is read live off the socket by the worker thread
+     as it arrives, not pre-buffered whole before the handler starts. */
+  char buf[4096] = {0};
+  int status = _raw_request_drip_body("POST", "/stream-batch-count",
+                                      "aaaabbbbccccddddeeee", 4, 20000, buf,
+                                      sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  char *hdr_end = strstr(buf, "\r\n\r\n");
+  REQUIRE_TRUE(hdr_end != NULL);
+  char saved = hdr_end[0];
+  hdr_end[0] = '\0';
+  char *count_hdr = strstr(buf, "x-batch-count:");
+  REQUIRE_TRUE(count_hdr != NULL);
+  int batches = atoi(count_hdr + 14);
+  hdr_end[0] = saved;
+  /* 21 bytes written 4 at a time with a delay between writes must arrive
+     as multiple separate reads server-side, not one. */
+  REQUIRE_GT(batches, 1);
+}
+
+TEST(chttpserver, unmatched_route_rejected_without_reading_body) {
+  /* Routing now happens at headers-complete time, before any body byte is
+     read -- an unmatched route must be rejected immediately even though
+     the client claims (but never sends) a huge body. If the server tried
+     to read the body before responding, this would hang instead of
+     returning promptly. */
+  char buf[4096] = {0};
+  int status = _raw_request("POST", "/no-such-route-at-all",
+                            "Content-Length: 100000000\r\n", buf, sizeof(buf));
+  REQUIRE_EQ(status, 404);
+}
+
+TEST(chttpserver, keep_alive_across_two_requests_on_one_connection) {
+  /* Two matched requests sent back to back on the same connection (no
+     Connection: close) must both succeed -- verifies that pausing at
+     headers-complete time (instead of after the full body, as before)
+     does not break normal keep-alive/pipelining. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+  char buf[1024];
+
+  for (int i = 0; i < 2; i++) {
+    REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+    memset(buf, 0, sizeof(buf));
+    int status = _read_one_http_response(fd, buf, sizeof(buf));
+    REQUIRE_EQ(status, 200);
+    REQUIRE_TRUE(strstr(buf, "Hello, world!") != NULL);
+  }
+  close(fd);
+}
+
+TEST(chttpserver, stream_read_timeout_reports_ccol_timed_out) {
+  /* A client that sends headers declaring more body than it ever delivers,
+     then stalls, must eventually cause chttpsvr_req_read() to return -1
+     with chttpsvr_req_stream_error() == ccol_timed_out (bounded by
+     stream_read_timeout_ms, set to 300ms for this server in test setup) --
+     rather than blocking the worker thread forever. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT + 2);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *hdr =
+      "POST /stream-error-report-slow HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Content-Type: text/plain\r\n"
+      "Content-Length: 100\r\n"
+      "Connection: close\r\n"
+      "\r\n"
+      "only-ten-"; /* 9 of the declared 100 bytes; never send more */
+  REQUIRE_EQ(write(fd, hdr, strlen(hdr)), (ssize_t)strlen(hdr));
+
+  char buf[1024] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:ccol_timed_out") != NULL);
+}
+
+TEST(chttpserver, client_disconnect_mid_body_does_not_hang_server) {
+  /* A client that sends part of its body then disconnects entirely must
+     not hang the worker thread or leak the connection's resources. There
+     is no response to check (the client tore the connection down), so the
+     test instead proves the server is still healthy afterward: a fresh,
+     unrelated request must still succeed promptly. */
+  int rc = _raw_request_abort_mid_body("/stream-error-report", "partial", 1000);
+  REQUIRE_EQ(rc, 0);
+
+  chttpcli_response *resp = _get("/hello");
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  chttpclient_resp_free(resp);
 }
 
 /* ========================================================================== */

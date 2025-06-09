@@ -537,7 +537,10 @@ static open_addr_map* oa_create(size_t capacity, ccol_data_type key_type,
 /* Resizes the slot array to new_capacity and reinserts all live entries.
  * Deleted slots are not carried over so the deleted_count resets to zero,
  * which reduces probing length after many deletions. The hash is recomputed
- * for each entry because the slot array does not store hash values. */
+ * for each entry because the slot array does not store hash values.
+ * new_capacity is always a power of two (see should_use_open_addressing's
+ * callers), so index arithmetic uses & (new_capacity - 1) instead of the far
+ * costlier % new_capacity. */
 static void oa_rehash(open_addr_map* map, size_t new_capacity) {
   oa_slot* old_slots = map->slots;
   size_t old_capacity = map->capacity;
@@ -559,14 +562,15 @@ static void oa_rehash(open_addr_map* map, size_t new_capacity) {
         !(old_slots[i].metadata & SLOT_DELETED)) {
       size_t hash_val = hash_key_data(&old_slots[i].key_data, map->key_size,
                                       map->key_type, map->custom_hashing_proc);
-      size_t index = hash_val % new_capacity;
+      size_t index = hash_val & (new_capacity - 1);
 
       // Prefetch likely next location
-      __builtin_prefetch(&map->slots[(index + 1) % new_capacity], 1, 1);
+      __builtin_prefetch(&map->slots[(index + 1) & (new_capacity - 1)], 1, 1);
 
       while (map->slots[index].metadata & SLOT_OCCUPIED) {
-        index = (index + 1) % new_capacity;
-        __builtin_prefetch(&map->slots[(index + 1) % new_capacity], 1, 1);
+        index = (index + 1) & (new_capacity - 1);
+        __builtin_prefetch(&map->slots[(index + 1) & (new_capacity - 1)], 1,
+                           1);
       }
 
       map->slots[index] = old_slots[i];
@@ -600,7 +604,7 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
 
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
-  size_t index = hash_val % map->capacity;
+  size_t index = hash_val & (map->capacity - 1);
   size_t start_index = index;
   size_t first_deleted = map->capacity;
 
@@ -609,7 +613,7 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
 
   do {
     // Prefetch next likely location
-    __builtin_prefetch(&map->slots[(index + 1) % map->capacity], 1, 1);
+    __builtin_prefetch(&map->slots[(index + 1) & (map->capacity - 1)], 1, 1);
 
     if (!(map->slots[index].metadata & SLOT_OCCUPIED)) {
       if (first_deleted < map->capacity) {
@@ -638,7 +642,7 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
       return ccol_key_already_present;
     }
 
-    index = (index + 1) % map->capacity;
+    index = (index + 1) & (map->capacity - 1);
   } while (index != start_index);
 
   if (first_deleted < map->capacity) {
@@ -663,7 +667,7 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
                             cmap_pair** val_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
-  size_t index = hash_val % map->capacity;
+  size_t index = hash_val & (map->capacity - 1);
   size_t start_index = index;
 
   // Prefetch first location
@@ -671,7 +675,7 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
 
   do {
     // Prefetch next likely location
-    __builtin_prefetch(&map->slots[(index + 1) % map->capacity], 0, 1);
+    __builtin_prefetch(&map->slots[(index + 1) & (map->capacity - 1)], 0, 1);
 
     if (!(map->slots[index].metadata & SLOT_OCCUPIED) &&
         !(map->slots[index].metadata & SLOT_DELETED)) {
@@ -687,7 +691,7 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
       return ccol_success;
     }
 
-    index = (index + 1) % map->capacity;
+    index = (index + 1) & (map->capacity - 1);
   } while (index != start_index);
 
   return ccol_key_not_found;
@@ -699,7 +703,7 @@ static ccol_retval_t oa_get(open_addr_map* map, const cmap_pair* key_pair,
 static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
   size_t hash_val = hash_key_data(key_pair->ptr, key_pair->size, map->key_type,
                                   map->custom_hashing_proc);
-  size_t index = hash_val % map->capacity;
+  size_t index = hash_val & (map->capacity - 1);
   size_t start_index = index;
 
   do {
@@ -724,7 +728,7 @@ static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
       return ccol_success;
     }
 
-    index = (index + 1) % map->capacity;
+    index = (index + 1) & (map->capacity - 1);
   } while (index != start_index);
 
   return ccol_key_not_found;
@@ -910,14 +914,18 @@ static inline bool sc_compare_keys(const llist_node* node, const void* key_ptr,
   }
 }
 
-/* Linear search through a bucket's singly-linked chain. Returns the matching
- * node or NULL. Chains are expected to be short (O(1) average) due to the
- * bucket scaling strategy. */
-static llist_node* sc_find_in_llist(llist_node* head, const void* key_ptr,
-                                    size_t key_size) {
+/* Linear search through a bucket's singly-linked chain. hash_val is the
+ * caller's full (pre-modulo) hash of key_ptr; comparing it against each
+ * node's stored hash_val first turns most rejections into a single size_t
+ * comparison, only falling through to sc_compare_keys' memcmp/strcmp when
+ * the hashes actually collide. Returns the matching node or NULL. Chains are
+ * expected to be short (O(1) average) due to the bucket scaling strategy. */
+static llist_node* sc_find_in_llist(llist_node* head, size_t hash_val,
+                                    const void* key_ptr, size_t key_size) {
   llist_node* tracker = head;
   while (tracker) {
-    if (sc_compare_keys(tracker, key_ptr, key_size)) {
+    if (tracker->data.hash_val == hash_val &&
+        sc_compare_keys(tracker, key_ptr, key_size)) {
       return tracker;
     }
     tracker = tracker->next;
@@ -972,18 +980,21 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
 }
 
 /* Removes the node matching key_ptr from a bucket's chain, sets *found, and
- * returns the updated chain head. The previous-pointer tracking enables O(n)
- * deletion without a doubly-linked bucket list. */
+ * returns the updated chain head. hash_val lets the search reject
+ * non-matching nodes via a size_t comparison before falling back to
+ * sc_compare_keys, same as sc_find_in_llist. The previous-pointer tracking
+ * enables O(n) deletion without a doubly-linked bucket list. */
 static llist_node* sc_delete_from_llist(llist_node* head,
                                         dllist_ref_node** head_of_all_elems,
-                                        const void* key_ptr, size_t key_size,
-                                        bool* found) {
+                                        size_t hash_val, const void* key_ptr,
+                                        size_t key_size, bool* found) {
   *found = false;
   llist_node* tracker = head;
   llist_node* previous = NULL;
 
   while (tracker) {
-    if (sc_compare_keys(tracker, key_ptr, key_size)) {
+    if (tracker->data.hash_val == hash_val &&
+        sc_compare_keys(tracker, key_ptr, key_size)) {
       *found = true;
       if (!previous) {
         head = tracker->next;
@@ -1102,8 +1113,8 @@ static ccol_retval_t sc_insert(sep_chain_map* map, const cmap_pair* key_pair,
 
   size_t index = data.hash_val & (map->bucket_arr_size - 1);
 
-  llist_node* existing =
-      sc_find_in_llist(map->bucket_arr[index], key_pair->ptr, key_pair->size);
+  llist_node* existing = sc_find_in_llist(map->bucket_arr[index], data.hash_val,
+                                          key_pair->ptr, key_pair->size);
   if (existing) {
     return sc_reset_val_of_llist_node(existing, val_pair->ptr, val_pair->size)
                ? ccol_key_already_present
@@ -1135,8 +1146,8 @@ static ccol_retval_t sc_get(sep_chain_map* map, const cmap_pair* key_pair,
                                   map->custom_hashing_proc);
   size_t index = hash_val & (map->bucket_arr_size - 1);
 
-  llist_node* node =
-      sc_find_in_llist(map->bucket_arr[index], key_pair->ptr, key_pair->size);
+  llist_node* node = sc_find_in_llist(map->bucket_arr[index], hash_val,
+                                      key_pair->ptr, key_pair->size);
   if (node) {
     *val_pair = &node->val_pair_accessor;
     return ccol_success;
@@ -1155,7 +1166,7 @@ static ccol_retval_t sc_delete(sep_chain_map* map, const cmap_pair* key_pair) {
   bool found = false;
   map->bucket_arr[index] =
       sc_delete_from_llist(map->bucket_arr[index], &map->head_of_all_elems,
-                           key_pair->ptr, key_pair->size, &found);
+                           hash_val, key_pair->ptr, key_pair->size, &found);
 
   if (found) {
     if (--map->elem_count < map->elem_count_to_scale_down &&

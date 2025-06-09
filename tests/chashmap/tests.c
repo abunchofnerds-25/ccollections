@@ -2691,3 +2691,65 @@ TEST(chash_maps, chmap_as_a_struct_field_two_levels_access_via_ptr) {
 
   chmap_destroy(tmp->s->hm);
 }
+
+// Forces every key into the same bucket with the exact same stored hash_val,
+// so the sc_find_in_llist/sc_delete_from_llist hash_val pre-check can never
+// short-circuit: every lookup must fall through to the full memcmp on every
+// candidate in the chain to land on the right one.
+static unsigned long constant_struct_key_hasher(const void *ptr) {
+  (void)ptr;
+  return 42;
+}
+
+TEST(chash_maps, sc_struct_key_full_hash_collision_still_resolves_correctly) {
+  ccol_hashing_proc_t ch = &constant_struct_key_hasher;
+  chmap_construct_ch(hm, helper_struct, int, ch);
+
+  // helper_struct has 2 bytes of padding after b. memset first, then set
+  // fields individually (a whole-struct assignment from a compound literal
+  // would just copy its own uninitialised padding back in) so
+  // sc_compare_keys' memcmp never reads uninitialised padding bytes.
+  helper_struct k1, k2, k3, k4;
+  memset(&k1, 0, sizeof(k1));
+  memset(&k2, 0, sizeof(k2));
+  memset(&k3, 0, sizeof(k3));
+  memset(&k4, 0, sizeof(k4));
+  k1.a = 1;
+  k1.b = 10;
+  k2.a = 2;
+  k2.b = 20;
+  k3.a = 3;
+  k3.b = 30;
+  k4.a = 4;
+  k4.b = 40;
+
+  int v1 = 100, v2 = 200, v3 = 300, v4 = 400;
+  chmap_insert(hm, k1, v1);
+  chmap_insert(hm, k2, v2);
+  chmap_insert(hm, k3, v3);
+  chmap_insert(hm, k4, v4);
+
+  REQUIRE_EQ(chmap_elem_count(hm), (size_t)4);
+
+  REQUIRE_EQ(chmap_get(hm, k1), 100);
+  REQUIRE_EQ(chmap_get(hm, k2), 200);
+  REQUIRE_EQ(chmap_get(hm, k3), 300);
+  REQUIRE_EQ(chmap_get(hm, k4), 400);
+
+  int v999 = 999;
+  chmap_insert(hm, k2, v999);
+  REQUIRE_EQ(chmap_get(hm, k2), 999);
+
+  ccol_retval_t r = chmap_remove(hm, k3);
+  REQUIRE_EQ(r, ccol_success);
+  REQUIRE_EQ(chmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ((void *)chmap_get_ptr(hm, k3), (void *)NULL);
+
+  // The rest of the (still fully-colliding) chain must resolve correctly
+  // after a deletion from the middle of it.
+  REQUIRE_EQ(chmap_get(hm, k1), 100);
+  REQUIRE_EQ(chmap_get(hm, k2), 999);
+  REQUIRE_EQ(chmap_get(hm, k4), 400);
+
+  chmap_destroy(hm);
+}

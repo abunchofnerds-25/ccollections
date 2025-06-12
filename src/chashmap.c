@@ -569,8 +569,7 @@ static void oa_rehash(open_addr_map* map, size_t new_capacity) {
 
       while (map->slots[index].metadata & SLOT_OCCUPIED) {
         index = (index + 1) & (new_capacity - 1);
-        __builtin_prefetch(&map->slots[(index + 1) & (new_capacity - 1)], 1,
-                           1);
+        __builtin_prefetch(&map->slots[(index + 1) & (new_capacity - 1)], 1, 1);
       }
 
       map->slots[index] = old_slots[i];

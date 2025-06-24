@@ -3219,12 +3219,17 @@ chttpsvr srv  = create_chttpsvr_mp(mp, logger, &err);  /* custom allocator */
 chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
 cfg.host                 = "0.0.0.0";          /* listen address */
 cfg.port                 = 8080;
-cfg.max_body_size        = 4*1024*1024;         /* 4 MiB body limit */
+cfg.max_body_size        = 4*1024*1024;         /* 4 MiB body limit -- exceeding it
+                                                    is a 413 (buffered) or a stream
+                                                    error the handler observes via
+                                                    chttpsvr_req_stream_error()
+                                                    (streaming); either way the
+                                                    connection closes afterward */
 cfg.read_timeout_ms      = 30000;               /* 30 s read timeout (baseline) */
 cfg.idle_timeout_ms      = 60000;               /* 60 s keep-alive idle timeout */
 cfg.stream_read_timeout_ms = 30000;             /* 30 s wait for the next body batch; 0 = unbounded */
 cfg.worker_thread_count  = 4;                   /* 0 = CPU core count */
-cfg.worker_queue_capacity = 128;                /* 0 = default (256 * threads); CHTTPSVR_QUEUE_UNBOUNDED = no limit */
+cfg.worker_queue_capacity = 128;                /* 0 = default (1024 * threads); CHTTPSVR_QUEUE_UNBOUNDED = no limit */
 cfg.tls                  = &tls_cfg;            /* optional TLS (chttp_tls_config_t) */
 
 ccol_retval_t rv = chttpsvr_start(srv, &cfg);   /* starts the engine on first call */
@@ -3309,7 +3314,7 @@ chttpsvr_register_handler(srv, CHTTP_ANY,  "/users/{id}", any_user,  NULL);
 
 **Duplicate routes:** Registering the same method and pattern more than once is permitted and succeeds each time, but only the first registered handler is ever invoked (first-wins policy). There is no error or warning for duplicate registrations.
 
-**Middleware limit:** The total number of middleware steps (global plus router-specific) active for a single request is capped at 32. The limit is enforced at dispatch time, not at registration time -- `chttpsvr_use` and `chttpsvr_router_use` always return `ccol_success` regardless of how many entries have already been registered. Exceeding the limit causes the server to respond with `500 Internal Server Error` on the affected request. In practice the limit is generous and is not expected to be reached.
+**Middleware limit:** Each router (the root router for global middleware, and each sub-router) caps its own middleware chain at 32 entries, enforced at registration time -- `chttpsvr_use` / `chttpsvr_router_use` return `ccol_not_permitted` (without adding the entry) on the call that would exceed the cap for that router. Separately, dispatch time also enforces a combined cap of 32 for the effective chain of a given request (global middleware + the matched router's own middleware); since each side of that sum can independently reach 32, the combined count can still exceed 32 even when neither router hit its own registration-time cap, in which case the server responds with `500 Internal Server Error` on the affected request. In practice the limit is generous and is not expected to be reached.
 
 **Root-router shadowing:** Routes registered directly on the server (via `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler`) are part of the root router, which is always evaluated before any sub-router. A root-level route whose path conflicts with a sub-router pattern will always win, regardless of registration order. Avoid registering root-level routes whose paths overlap with a sub-router's prefix and pattern combination.
 

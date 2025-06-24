@@ -4123,7 +4123,7 @@ DESCRIPTION
        to passing 0 to the ctpool API).
 
        The default value of 0 for worker_queue_capacity instead maps to a
-       library-defined default of 256 * worker_thread_count queue slots.
+       library-defined default of 1024 * worker_thread_count queue slots.
 
 SEE ALSO
        CHTTPSVR_CONFIG_DEFAULT, chttpsvr_start
@@ -4150,7 +4150,7 @@ DESCRIPTION
          stream_read_timeout_ms = 30000   (30 s; 0 = wait indefinitely)
          tls                   = NULL
          worker_thread_count   = 0   (0 = CPU core count)
-         worker_queue_capacity = 0   (0 = 256 * worker_thread_count)
+         worker_queue_capacity = 0   (0 = 1024 * worker_thread_count)
 
        stream_read_timeout_ms bounds how long a worker thread will wait for
        the *next* batch of body bytes while reading a request body (buffered

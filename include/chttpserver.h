@@ -109,12 +109,18 @@ SOFTWARE.
  *
  * ### Middleware chain limit
  *
- * The combined middleware chain per request (global middleware + the matched
- * router's own middleware) is capped at 32 entries.  Exceeding this limit
- * causes every request through the affected router to receive a 500 response.
- * The limit is enforced at dispatch time, not at registration time:
- * chttpsvr_use and chttpsvr_router_use always return ccol_success regardless
- * of how many entries have already been registered.
+ * Each router (the root router for global middleware, and each sub-router)
+ * caps its own middleware chain at 32 entries.  The limit is enforced at
+ * registration time: chttpsvr_use / chttpsvr_router_use return
+ * ccol_not_permitted (without adding the entry) on the call that would exceed
+ * the 32-entry cap for that specific router.
+ *
+ * Separately, dispatch time also enforces a combined cap of 32 for the
+ * effective chain of a given request (global middleware + the matched
+ * router's own middleware).  Because each side of that sum can independently
+ * hold up to 32 entries, the combined count can still exceed 32 even though
+ * neither router individually hit its own registration-time cap; when this
+ * happens every request through the affected router receives a 500 response.
  *
  * ### Route registration order and shadowing
  *
@@ -228,7 +234,13 @@ typedef struct chttpsvr_config {
   const char *host;
   /** Listening port (default 8080). */
   uint16_t port;
-  /** Max request body in bytes before 413 is returned (default 4 MiB). */
+  /** Max request body in bytes (default 4 MiB). A buffered route whose body
+   *  exceeds this is rejected with 413 before the handler ever runs; a
+   *  streaming route's handler is always invoked, and chttpsvr_req_read()
+   *  returns -1 with chttpsvr_req_stream_error() == ccol_msg_too_large once
+   *  the limit is crossed. Either way the connection is closed after the
+   *  resulting response (Connection: close) rather than kept alive, since
+   *  the excess body bytes beyond the limit are discarded, not drained. */
   size_t max_body_size;
   /** Per-connection read timeout in ms; 0 = facil.io default (~40 s).
    *  Used as the facil.io connection timeout when idle_timeout_ms is 0. */
@@ -253,7 +265,7 @@ typedef struct chttpsvr_config {
    *  Pass 0 to use the CPU count. */
   int worker_thread_count;
   /** Capacity of the worker task queue.
-   *  0                       = library default (256 * worker_thread_count).
+   *  0                       = library default (1024 * worker_thread_count).
    *  CHTTPSVR_QUEUE_UNBOUNDED = no limit (never returns 503 due to overflow).
    *  Any other value         = exact bounded capacity; 503 is returned when
    *                            the queue is full. */
@@ -575,7 +587,9 @@ ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
  * @param srv  Server handle.
  * @param fn   Middleware function.
  * @param ctx  Opaque user data passed to fn.
- * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
+ *         ccol_not_permitted if the root router's middleware chain is already
+ *         at the 32-entry cap (see "Middleware chain limit" above).
  */
 ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx);
 
@@ -668,7 +682,9 @@ ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
  * @param router  Sub-router.
  * @param fn      Middleware function.
  * @param ctx     Opaque user data.
- * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
+ *         ccol_not_permitted if this router's middleware chain is already at
+ *         the 32-entry cap (see "Middleware chain limit" above).
  */
 ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
                                   chttpsvr_middleware_fn fn, void *ctx);

@@ -207,8 +207,8 @@ struct chttpserver {
   mutex_t mutex;
   cond_var_t
       requests_done_cv;   /* signalled when in_flight_requests drops to 0 */
-  int in_flight_requests; /* # tasks queued/running in worker_pool; guarded by
-                             mutex */
+  int in_flight_requests; /* # requests dispatched (from http_pause onward)
+                             through completion; guarded by mutex */
   pthread_rwlock_t
       routes_lock;      /* guards routers[], route_count, routes[], mw lists */
   clog cl;              /* per-server logger; passed at creation time */
@@ -643,6 +643,73 @@ no_match:
   return 0;
 }
 
+/* Matches `path` (raw, not yet percent-decoded) against `router`'s prefix,
+ * segment by segment, decoding each raw path segment before comparing it to
+ * the corresponding literal prefix segment -- exactly what _seg_matches_literal
+ * already does for route-pattern segments. A byte-for-byte strncmp against
+ * the raw path (the previous approach) would fail to match a request whose
+ * prefix portion happens to be percent-encoded (e.g. "/%61pi/v1/x" for a
+ * prefix of "/api/v1"), even though an equivalent root-level route
+ * registration would match it via the per-segment decoding _match_segments
+ * already performs.
+ *
+ * Returns 1 on match (sets *sub_path_out to the remainder, "/" if the path
+ * was exactly the prefix), 0 on no-match, -1 on OOM.
+ *
+ * router->prefix is always non-NULL, starts with '/', and contains no "//"
+ * (validated in chttpsvr_subrouter at registration time) -- this function is
+ * only ever called for a router with prefix_len > 0 (the caller handles the
+ * prefix_len == 0 root-router case directly). */
+static int _prefix_matches(const char *path, chttpsvr_router *router,
+                           ccol_memmgmt_procs_t *mp,
+                           const char **sub_path_out) {
+  const char *pp = router->prefix + 1; /* skip leading '/' */
+  const char *rp = path;
+  if (*rp == '/') rp++;
+
+  if (*pp == '\0') {
+    /* Degenerate "/" prefix: matches only the exact root path "/" -- see the
+     * "/" prefix edge case documented on chttpsvr_subrouter in
+     * include/chttpserver.h. */
+    if (*rp != '\0') return 0;
+    *sub_path_out = "/";
+    return 1;
+  }
+
+  const char *rp_after_last_seg = path;
+  while (*pp) {
+    const char *pe = strchr(pp, '/');
+    size_t plen = pe ? (size_t)(pe - pp) : strlen(pp);
+
+    const char *re = strchr(rp, '/');
+    size_t rlen = re ? (size_t)(re - rp) : strlen(rp);
+    if (rlen == 0) return 0; /* path ran out of segments */
+
+    char pseg_buf[256];
+    char *pseg = pseg_buf;
+    bool pseg_heap = false;
+    if (plen + 1 > sizeof(pseg_buf)) {
+      pseg = (char *)_mem_alloc(mp, plen + 1);
+      if (!pseg) return -1;
+      pseg_heap = true;
+    }
+    memcpy(pseg, pp, plen);
+    pseg[plen] = '\0';
+
+    int lit = _seg_matches_literal(rp, rlen, pseg, mp);
+    if (pseg_heap) _mem_free(mp, pseg);
+    if (lit < 0) return -1;
+    if (!lit) return 0;
+
+    rp_after_last_seg = rp + rlen;
+    rp = re ? re + 1 : rp + rlen;
+    pp = pe ? pe + 1 : pp + plen;
+  }
+
+  *sub_path_out = (*rp_after_last_seg == '\0') ? "/" : rp_after_last_seg;
+  return 1;
+}
+
 static match_result_t _find_route(struct chttpserver *srv, const char *path,
                                   chttp_method_t method) {
   /* Track whether any route matched the path with the wrong method.  We must
@@ -659,11 +726,9 @@ static match_result_t _find_route(struct chttpserver *srv, const char *path,
     if (router->prefix_len == 0) {
       sub_path = path;
     } else {
-      if (strncmp(path, router->prefix, router->prefix_len) != 0) continue;
-      char next_ch = path[router->prefix_len];
-      if (next_ch != '/' && next_ch != '\0') continue;
-      sub_path = path + router->prefix_len;
-      if (*sub_path == '\0') sub_path = "/";
+      int pm = _prefix_matches(path, router, srv->m_procs, &sub_path);
+      if (pm < 0) return (match_result_t){NULL, NULL, NULL, ROUTE_MATCH_OOM};
+      if (pm == 0) continue;
     }
 
     for (size_t i = 0; i < router->route_count; i++) {
@@ -888,14 +953,12 @@ static void _task_pause_cb(http_pause_handle_s *ph) {
   streaming_ctx_t *sctx = (streaming_ctx_t *)http_paused_udata_get(ph);
   sctx->ph = ph;
 
-  /* Increment in_flight_requests BEFORE the submit attempt.  Both the success
-   * and failure paths end with exactly one http_resume call, guaranteeing that
-   * either _task_send_response or _task_cleanup fires.  Both decrement
-   * in_flight_requests under the mutex.  Pre-incrementing prevents a window
-   * where __chttpsvr_destroy sees count==0 and frees resources while a
-   * resume callback still holds a server pointer. */
+  /* in_flight_requests was already incremented in _on_headers_complete,
+   * before http_pause was called -- see the comment there. Both the success
+   * and failure paths below end with exactly one http_resume call,
+   * guaranteeing that either _task_send_response or _task_cleanup fires;
+   * both decrement in_flight_requests under the mutex. */
   mutex_lock(sctx->srv->mutex);
-  sctx->srv->in_flight_requests++;
   ctpool pool = sctx->srv->worker_pool;
   mutex_unlock(sctx->srv->mutex);
 
@@ -942,6 +1005,15 @@ static ccol_retval_t _ingest_buffered_body(streaming_ctx_t *sctx,
 
   for (;;) {
     if (len == cap) {
+      /* Overflow-safe doubling, mirroring chttpsvr_resp_write's growth
+       * guard: max_body_size already bounds how large this buffer can
+       * legitimately grow (enforced by http1_on_body_chunk), so this is
+       * defense-in-depth against a caller-supplied max_body_size near
+       * SIZE_MAX rather than a normally reachable path. */
+      if (cap > (SIZE_MAX - 16384) / 2) {
+        _mem_free(mp, buf);
+        return ccol_not_enough_memory;
+      }
       size_t new_cap = cap ? cap * 2 : 16384;
       char *nb = (char *)_mem_realloc(mp, buf, new_cap);
       if (!nb) {
@@ -1258,6 +1330,19 @@ static int _on_headers_complete(http_s *h) {
 
   if (path_heap) _mem_free(srv->m_procs, path);
   h->udata = sctx;
+
+  /* Increment in_flight_requests BEFORE calling http_pause, not inside the
+   * deferred _task_pause_cb. http_pause() only queues _task_pause_cb via
+   * fio_defer -- it does not run it synchronously -- so incrementing inside
+   * _task_pause_cb would leave a window, between this call returning and the
+   * deferred callback actually running, where __chttpsvr_destroy could
+   * observe in_flight_requests == 0 and free the server while this request
+   * is still (invisibly) in flight. Incrementing here, before the request
+   * can be un-tracked by any code path, closes that window entirely. */
+  mutex_lock(srv->mutex);
+  srv->in_flight_requests++;
+  mutex_unlock(srv->mutex);
+
   http_pause(h, _task_pause_cb);
   return 1;
 
@@ -2003,10 +2088,19 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
 
   /* Store the TLS reference so __chttpsvr_destroy can release it when the
    * server is torn down.  facil.io's reference (from fio_tls_dup inside
-   * http_listen) keeps the context alive for ongoing TLS handshakes. */
+   * http_listen) keeps the context alive for ongoing TLS handshakes.
+   *
+   * Committed under the mutex so a concurrent chttpsvr_stop cannot read a
+   * torn/stale view of these three fields: chttpsvr_stop reads `started`
+   * and `listen_uuid` under the same lock, and without it a stop racing the
+   * tail end of a start could see the pre-start state (started == false)
+   * and silently no-op, even though this call is about to (or just did)
+   * mark the server started -- the caller's stop would then be lost. */
+  mutex_lock(srv->mutex);
   srv->tls = tls;
   srv->listen_uuid = uuid;
   srv->started = true;
+  mutex_unlock(srv->mutex);
 
   return ccol_success;
 }

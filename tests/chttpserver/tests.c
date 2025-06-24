@@ -253,6 +253,19 @@ static void _stream_error_report_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "done");
 }
 
+/* Streaming handler that reads exactly one small batch of the body and then
+   returns without draining the rest -- used to prove that a connection
+   whose body is left partially unread by the handler is still safely usable
+   for a subsequent request (http1_stream_release must discard, not stash,
+   the unread remainder). */
+static void _stream_read_once_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+                                      void *ctx) {
+  (void)ctx;
+  char buf[8];
+  chttpsvr_req_read(req, buf, sizeof(buf));
+  chttpsvr_resp_write_str(resp, "early-stop");
+}
+
 /* Raw query echo handler. */
 static void _raw_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                void *ctx) {
@@ -638,6 +651,12 @@ static void _any_method_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 */
 static chttpsvr g_bounded_srv = NULL;
 
+/* Dedicated server with a small max_body_size (64 bytes) for boundary tests
+   of the 413/PAYLOAD_TOO_LARGE enforcement (buffered and streaming).
+   Listening on TEST_PORT+3. */
+static chttpsvr g_small_body_srv = NULL;
+#define SMALL_BODY_MAX 64
+
 /* Mutex/condvar for synchronising the blocking handler used in the 503 test.
    The test fires two concurrent HTTP requests that block inside
    _bounded_blk_handler, filling the 1-thread pool and the 1-slot queue, then
@@ -685,6 +704,7 @@ static void _teardown(void) {
 
   /* Stop all listeners first so no new requests are accepted. */
   if (g_bounded_srv) chttpsvr_stop(g_bounded_srv);
+  if (g_small_body_srv) chttpsvr_stop(g_small_body_srv);
   if (g_srv) chttpsvr_stop(g_srv);
   if (g_srv2) chttpsvr_stop(g_srv2);
 
@@ -693,6 +713,10 @@ static void _teardown(void) {
   if (g_bounded_srv) {
     __chttpsvr_destroy(g_bounded_srv);
     g_bounded_srv = NULL;
+  }
+  if (g_small_body_srv) {
+    __chttpsvr_destroy(g_small_body_srv);
+    g_small_body_srv = NULL;
   }
   if (g_srv) {
     __chttpsvr_destroy(g_srv);
@@ -823,6 +847,8 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_register_streaming_handler(g_srv, CHTTP_GET,
                                       "/stream-null-buf-zero-len",
                                       _stream_null_buf_zero_len_handler, NULL);
+  chttpsvr_register_streaming_handler(g_srv, CHTTP_POST, "/stream-read-once",
+                                      _stream_read_once_handler, NULL);
 
   /* Sub-router for /api/v1 with its own middleware. */
   chttpsvr_router *api = chttpsvr_subrouter(g_srv, "/api/v1");
@@ -1006,6 +1032,30 @@ __attribute__((constructor)) static void _setup(void) {
   }
   /* No readiness poll needed: http_listen binds the socket synchronously on
    * a subsequent chttpsvr_start (engine already running). */
+
+  /* Create and start the small-max_body_size server for the
+   * max_body_size/413 boundary tests (both buffered and streaming). */
+  g_small_body_srv = create_chttpsvr(g_test_logger, NULL);
+  if (!g_small_body_srv) {
+    fprintf(stderr, "FATAL: could not create small-body chttpsvr\n");
+    exit(1);
+  }
+  chttpsvr_register_handler(g_small_body_srv, CHTTP_POST, "/small-body-echo",
+                            _echo_body_handler, NULL);
+  chttpsvr_register_streaming_handler(g_small_body_srv, CHTTP_POST,
+                                      "/small-body-stream",
+                                      _stream_error_report_handler, NULL);
+  {
+    chttpsvr_config_t scfg = CHTTPSVR_CONFIG_DEFAULT;
+    scfg.host = "127.0.0.1";
+    scfg.port = TEST_PORT + 3;
+    scfg.max_body_size = SMALL_BODY_MAX;
+    ccol_retval_t srv_rv = chttpsvr_start(g_small_body_srv, &scfg);
+    if (srv_rv != ccol_success) {
+      fprintf(stderr, "FATAL: small-body chttpsvr_start failed: %d\n", srv_rv);
+      exit(1);
+    }
+  }
 
   atexit(_teardown);
 }
@@ -1222,6 +1272,30 @@ TEST(chttpserver, subrouter_with_param) {
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_STREQ(resp->body, "item:99");
+  chttpclient_resp_free(resp);
+}
+
+TEST(chttpserver, subrouter_percent_encoded_prefix_segment_matches) {
+  /* "%61" decodes to 'a' -- the request path's prefix portion is
+     percent-encoded but must still match the /api/v1 sub-router exactly
+     like the unencoded request does, since a root-level registration of the
+     same effective pattern would match it (route-pattern segments are
+     already decoded before comparison; the sub-router prefix must be
+     equally decode-aware, not a raw byte-for-byte comparison). */
+  chttpcli_response *resp = _get("/%61pi/v1/items/99");
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "item:99");
+  chttpclient_resp_free(resp);
+}
+
+TEST(chttpserver, subrouter_percent_encoded_prefix_root_matches) {
+  /* Same as above but for the prefix-only path (no trailing route
+     segments) -- /api/v1/ vs /%61pi/v1/. */
+  chttpcli_response *resp = _get("/%61pi/v1/");
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "api_root");
   chttpclient_resp_free(resp);
 }
 
@@ -2158,6 +2232,108 @@ TEST(chttpserver, keep_alive_across_two_requests_on_one_connection) {
     REQUIRE_EQ(status, 200);
     REQUIRE_TRUE(strstr(buf, "Hello, world!") != NULL);
   }
+  close(fd);
+}
+
+TEST(chttpserver,
+     streaming_handler_early_stop_of_fully_arrived_body_stays_keepalive) {
+  /* /stream-read-once reads only the first 8 bytes of the body and returns
+     without calling chttpsvr_req_read() again. Here the whole 64-byte body
+     is written in one shot and arrives on the wire before the handler's
+     single read call runs, so the worker's underlying ingestion loop (see
+     http1_stream_read/http1_on_body_chunk) ends up parsing the ENTIRE
+     declared body in that one internal pass regardless of how few bytes the
+     handler's own buffer captured -- content_length is fully consumed, so
+     http1_on_request sets stream_body_done=1 before the handler even
+     returns. http1_stream_release only forces Connection: close when
+     stream_body_done is still false (see the paired
+     ..._with_undrained_body_forces_close test below for that case); here it
+     is true, so the connection must remain usable for a second, unrelated
+     request. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  /* Declare and send a 64-byte body; the handler only reads the first 8. */
+  char body[64];
+  memset(body, 'x', sizeof(body));
+  char hdr[256];
+  int hn = snprintf(hdr, sizeof(hdr),
+                    "POST /stream-read-once HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Content-Type: text/plain\r\n"
+                    "Content-Length: %zu\r\n"
+                    "\r\n",
+                    sizeof(body));
+  REQUIRE_TRUE(hn > 0 && (size_t)hn < sizeof(hdr));
+  REQUIRE_EQ(write(fd, hdr, (size_t)hn), (ssize_t)hn);
+  REQUIRE_EQ(write(fd, body, sizeof(body)), (ssize_t)sizeof(body));
+
+  char buf[1024];
+  memset(buf, 0, sizeof(buf));
+  int status1 = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status1, 200);
+  REQUIRE_TRUE(strstr(buf, "early-stop") != NULL);
+  REQUIRE_TRUE(strstr(buf, "connection:close") == NULL);
+
+  /* Second, unrelated request on the same connection. */
+  const char *req2 = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+  REQUIRE_EQ(write(fd, req2, strlen(req2)), (ssize_t)strlen(req2));
+  memset(buf, 0, sizeof(buf));
+  int status2 = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status2, 200);
+  REQUIRE_TRUE(strstr(buf, "Hello, world!") != NULL);
+
+  close(fd);
+}
+
+TEST(chttpserver,
+     streaming_handler_early_stop_with_undrained_body_forces_close) {
+  /* Unlike the fully-arrived-body case above, here the client only ever
+     sends the first 8 bytes of a declared 64-byte body -- the exact amount
+     /stream-read-once's single chttpsvr_req_read(req, buf, 8) call
+     consumes. content_length(64) > read(8) when the handler returns, so
+     the body is genuinely undrained: http1_stream_release's own safety net
+     (see http1.c) must force Connection: close, since the remaining
+     (never-sent) 56 bytes could otherwise be misread as the start of a new
+     pipelined request if this connection were reused. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  char hdr[256];
+  int hn = snprintf(hdr, sizeof(hdr),
+                    "POST /stream-read-once HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Content-Type: text/plain\r\n"
+                    "Content-Length: 64\r\n"
+                    "\r\n");
+  REQUIRE_TRUE(hn > 0 && (size_t)hn < sizeof(hdr));
+  REQUIRE_EQ(write(fd, hdr, (size_t)hn), (ssize_t)hn);
+
+  char partial_body[8];
+  memset(partial_body, 'x', sizeof(partial_body));
+  REQUIRE_EQ(write(fd, partial_body, sizeof(partial_body)),
+             (ssize_t)sizeof(partial_body));
+
+  char buf[1024] = {0};
+  int status = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  REQUIRE_TRUE(strstr(buf, "early-stop") != NULL);
+  REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
+
   close(fd);
 }
 
@@ -3449,4 +3625,131 @@ TEST(chttpserver, any_method_first_wins_over_specific) {
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_STREQ(resp->body, "GET");
   chttpclient_resp_free(resp);
+}
+
+/* ========================================================================== */
+/*                    max_body_size / 413 BOUNDARY TESTS                      */
+/* ========================================================================== */
+
+/* Connects to `port`, POSTs a body of exactly `body_len` 'a' bytes to `path`
+   with Connection: close, reads the response (or until the connection
+   closes), and returns the parsed status code, or -1 if no valid status
+   line was ever received (e.g. the connection was reset before any response
+   bytes arrived). */
+static int _raw_post_fixed_body(int port, const char *path, size_t body_len,
+                                char *buf, size_t buf_sz) {
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(port);
+  if (inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr) != 1) return -1;
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+    close(fd);
+    return -1;
+  }
+
+  char hdr[256];
+  int hn = snprintf(hdr, sizeof(hdr),
+                    "POST %s HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Content-Type: text/plain\r\n"
+                    "Content-Length: %zu\r\n"
+                    "Connection: close\r\n"
+                    "\r\n",
+                    path, body_len);
+  if (hn < 0 || (size_t)hn >= sizeof(hdr)) {
+    close(fd);
+    return -1;
+  }
+  if (write(fd, hdr, (size_t)hn) != hn) {
+    close(fd);
+    return -1;
+  }
+
+  char *body = (char *)malloc(body_len ? body_len : 1);
+  if (!body) {
+    close(fd);
+    return -1;
+  }
+  memset(body, 'a', body_len);
+  size_t sent = 0;
+  while (sent < body_len) {
+    ssize_t w = write(fd, body + sent, body_len - sent);
+    if (w < 0) {
+      free(body);
+      close(fd);
+      return -1;
+    }
+    sent += (size_t)w;
+  }
+  free(body);
+
+  size_t total = 0;
+  ssize_t r;
+  while (total < buf_sz - 1 &&
+         (r = read(fd, buf + total, buf_sz - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  int status = -1;
+  sscanf(buf, "HTTP/1.1 %d", &status);
+  return status;
+}
+
+TEST(chttpserver, buffered_max_body_size_at_limit_succeeds) {
+  /* A body of exactly max_body_size (64) bytes must be accepted and echoed
+     back in full -- the enforcement check inside http1_on_body_chunk is
+     strictly-greater-than, so the boundary value itself must succeed. */
+  char buf[4096] = {0};
+  int status = _raw_post_fixed_body(TEST_PORT + 3, "/small-body-echo",
+                                    SMALL_BODY_MAX, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  char *body = _decode_raw_body(buf);
+  REQUIRE_TRUE(body != NULL);
+  REQUIRE_EQ(strlen(body), (size_t)SMALL_BODY_MAX);
+}
+
+TEST(chttpserver, buffered_max_body_size_exceeded_rejected) {
+  /* A body one byte over max_body_size must be rejected with a real
+     413 Payload Too Large response -- not a bare connection reset -- and the
+     connection must close afterward (Connection: close) rather than stay
+     alive for a corrupted next request, since excess body bytes beyond the
+     limit were left unread on the wire. */
+  char buf[4096] = {0};
+  int status = _raw_post_fixed_body(TEST_PORT + 3, "/small-body-echo",
+                                    SMALL_BODY_MAX + 1, buf, sizeof(buf));
+  REQUIRE_EQ(status, 413);
+  REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
+}
+
+TEST(chttpserver, streaming_max_body_size_at_limit_succeeds) {
+  /* A streaming route reading a body of exactly max_body_size bytes via
+     chttpsvr_req_read must see the full body with no stream error. */
+  char buf[4096] = {0};
+  int status = _raw_post_fixed_body(TEST_PORT + 3, "/small-body-stream",
+                                    SMALL_BODY_MAX, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:none") != NULL);
+}
+
+TEST(chttpserver, streaming_max_body_size_exceeded_reported) {
+  /* Unlike the buffered path (which the framework itself turns into a 413
+     before ever calling the handler), a streaming route's handler is always
+     invoked and decides its own response -- chttpsvr_req_read() simply
+     returns -1 and chttpsvr_req_stream_error() reports ccol_msg_too_large,
+     exactly like the existing stream_read_timeout_reports_ccol_timed_out
+     test's ccol_timed_out case. The connection must still carry a real,
+     complete HTTP response (not a bare reset) and must close afterward
+     (Connection: close) rather than staying alive for a corrupted next
+     request, since excess body bytes beyond the limit were left unread. */
+  char buf[4096] = {0};
+  int status = _raw_post_fixed_body(TEST_PORT + 3, "/small-body-stream",
+                                    SMALL_BODY_MAX + 1, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:ccol_msg_too_large") != NULL);
+  REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
 }

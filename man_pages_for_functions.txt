@@ -6580,9 +6580,18 @@ DESCRIPTION
 
        A ctpool for dispatching all handlers (buffered and streaming) is
        created at start time using cfg->worker_thread_count threads and a
-       queue whose capacity is cfg->worker_queue_capacity (0 = 256 * threads;
+       queue whose capacity is cfg->worker_queue_capacity (0 = 1024 * threads;
        CHTTPSVR_QUEUE_UNBOUNDED = no capacity limit).  The pool is owned by
        the server and destroyed in __chttpsvr_destroy.
+
+       Body size limit: cfg->max_body_size caps the request body.  A buffered
+       route whose body exceeds this is rejected with 413 before the handler
+       ever runs; a streaming route's handler is always invoked, and
+       chttpsvr_req_read() returns -1 with chttpsvr_req_stream_error() ==
+       ccol_msg_too_large once the limit is crossed.  Either way the
+       connection is closed after the resulting response (Connection: close)
+       rather than kept alive, since the excess body bytes beyond the limit
+       are discarded, not drained.
 
        Connection timeout: both cfg->read_timeout_ms and cfg->idle_timeout_ms
        map to the single connection-timeout parameter exposed by the underlying
@@ -6784,12 +6793,19 @@ DESCRIPTION
        chttpsvr_start is running.
 
 NOTES
-       The combined number of global and router-specific middleware functions
-       active for a single request is capped at 32.  If this limit is exceeded
-       at dispatch time, the server responds with HTTP 500.  The limit is
-       enforced at dispatch time, not at registration time: chttpsvr_use and
-       chttpsvr_router_use always return ccol_success regardless of how many
-       middleware entries have already been registered.
+       Each router (the root router for global middleware, and each
+       sub-router) caps its own middleware chain at 32 entries.  This cap is
+       enforced at REGISTRATION time: chttpsvr_use and chttpsvr_router_use
+       return ccol_not_permitted, without adding the entry, on the call that
+       would exceed the 32-entry cap for that specific router.
+
+       Separately, dispatch time also enforces a combined cap of 32 for the
+       effective chain of a given request (global middleware + the matched
+       router's own middleware).  Because each side of that sum can
+       independently hold up to 32 entries, the combined count can still
+       exceed 32 even though neither router individually hit its own
+       registration-time cap; when this happens the server responds with
+       HTTP 500 on the affected request.
 
        Registering the same path and method more than once is permitted and
        returns ccol_success each time, but only the FIRST registered handler
@@ -6799,6 +6815,8 @@ RETURN VALUE
        ccol_success on success.
        ccol_invalid_args if srv or fn is NULL.
        ccol_not_enough_memory if allocation fails.
+       ccol_not_permitted if the root router's middleware chain is already at
+       the 32-entry cap.
 
 SEE ALSO
        chttpsvr_register_handler, chttpsvr_router_use
@@ -6941,13 +6959,16 @@ DESCRIPTION
        chttpsvr_start is running.
 
 NOTES
-       See the NOTES section of chttpsvr_use for the combined middleware limit
-       (32 steps per request) and the first-wins duplicate-route policy.
+       See the NOTES section of chttpsvr_use for the per-router
+       registration-time cap, the combined dispatch-time middleware limit (32
+       steps per request), and the first-wins duplicate-route policy.
 
 RETURN VALUE
        ccol_success on success.
        ccol_invalid_args if router or fn is NULL.
        ccol_not_enough_memory if allocation fails.
+       ccol_not_permitted if this router's middleware chain is already at the
+       32-entry cap.
 
 SEE ALSO
        chttpsvr_use, chttpsvr_subrouter

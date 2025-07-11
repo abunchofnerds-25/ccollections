@@ -18,6 +18,7 @@ Feel free to copy, use and enjoy according to the license provided.
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/x509v3.h>
 
 #define REQUIRE_LIBRARY()
 #define FIO_TLS_WEAK
@@ -132,6 +133,7 @@ struct fio_tls_s {
 
   cert_ary_s sni;    /* SNI (server name extension) stores ID certificates */
   trust_ary_s trust; /* Trusted certificate registry (peer verification) */
+  uint8_t verify_default_store; /* trust the system's default CA store too */
 
   /************ TODO: implementation data fields go here ******************/
 
@@ -289,14 +291,14 @@ SSL/TLS Context (re)-building
 ***************************************************************************** */
 
 #define TLS_BUFFER_LENGTH (1 << 15)
-typedef struct {
+struct fio_tls_connection_s {
   SSL *ssl;
   fio_tls_s *tls;
   void *alpn_arg;
   intptr_t uuid;
   uint8_t is_server;
   volatile uint8_t alpn_ok;
-} fio_tls_connection_s;
+};
 
 static void fio_tls_alpn_fallback(fio_tls_connection_s *c) {
   alpn_s *alpn = alpn_default(c->tls);
@@ -469,11 +471,15 @@ static void fio_tls_build_context(fio_tls_s *tls) {
   }
 
   /* Peer Verification / Trust */
-  if (trust_ary_count(&tls->trust)) {
+  if (trust_ary_count(&tls->trust) || tls->verify_default_store) {
     /* TODO: enable peer verification */
     X509_STORE *store = X509_STORE_new();
     SSL_CTX_set_cert_store(tls->ctx, store);
     SSL_CTX_set_verify(tls->ctx, SSL_VERIFY_PEER, NULL);
+    if (tls->verify_default_store) {
+      FIO_LOG_DEBUG("TLS trusting the system's default CA store.");
+      SSL_CTX_set_default_verify_paths(tls->ctx);
+    }
     /* TODO: Add each ceriticate in the PEM to the trust "store" */
     FIO_ARY_FOR(&tls->trust, pos) {
       fio_str_info_s pem = fio_str_info(&pos->pem);
@@ -981,6 +987,99 @@ void FIO_TLS_WEAK fio_tls_destroy(fio_tls_s *tls) {
   cert_ary_free(&tls->sni);
   trust_ary_free(&tls->trust);
   free(tls);
+}
+
+/**
+ * Marks this TLS context as trusting the system's default CA store.
+ */
+void FIO_TLS_WEAK fio_tls_trust_system(fio_tls_s *tls) {
+  REQUIRE_LIBRARY();
+  tls->verify_default_store = 1;
+  fio_tls_build_context(tls);
+}
+
+/* *****************************************************************************
+Client-mode TLS connections over a raw file descriptor (no reactor/uuid use)
+***************************************************************************** */
+
+fio_tls_connection_s *FIO_TLS_WEAK fio_tls_connect_create(fio_tls_s *tls,
+                                                          int fd,
+                                                          const char *hostname,
+                                                          uint8_t verify_host) {
+  REQUIRE_LIBRARY();
+  fio_tls_connection_s *c = malloc(sizeof(*c));
+  if (!c) return NULL;
+  SSL *ssl = SSL_new(tls->ctx);
+  if (!ssl) {
+    free(c);
+    return NULL;
+  }
+  BIO *bio = BIO_new_socket(fd, 0);
+  if (!bio) {
+    SSL_free(ssl);
+    free(c);
+    return NULL;
+  }
+  /* rbio/wbio share one BIO; each SSL_set0_*bio call consumes a reference. */
+  BIO_up_ref(bio);
+  SSL_set0_rbio(ssl, bio);
+  SSL_set0_wbio(ssl, bio);
+  if (hostname && *hostname) {
+    SSL_set_tlsext_host_name(ssl, hostname);
+    if (verify_host) {
+      X509_VERIFY_PARAM *param = SSL_get0_param(ssl);
+      X509_VERIFY_PARAM_set_hostflags(param,
+                                      X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+      X509_VERIFY_PARAM_set1_host(param, hostname, 0);
+    }
+  }
+  SSL_set_connect_state(ssl);
+  fio_tls_dup(tls);
+  *c = (fio_tls_connection_s){
+      .ssl = ssl,
+      .tls = tls,
+      .alpn_arg = NULL,
+      .uuid = -1,
+      .is_server = 0,
+      .alpn_ok = 1,
+  };
+  return c;
+}
+
+fio_tls_handshake_result_e FIO_TLS_WEAK
+fio_tls_client_handshake_step(fio_tls_connection_s *c) {
+  int ri = SSL_connect(c->ssl);
+  if (ri == 1) return FIO_TLS_HANDSHAKE_DONE;
+  switch (SSL_get_error(c->ssl, ri)) {
+    case SSL_ERROR_WANT_READ:
+      return FIO_TLS_HANDSHAKE_WANT_READ;
+    case SSL_ERROR_WANT_WRITE:
+      return FIO_TLS_HANDSHAKE_WANT_WRITE;
+    default:
+      return FIO_TLS_HANDSHAKE_ERROR;
+  }
+}
+
+long FIO_TLS_WEAK fio_tls_connection_verify_result(fio_tls_connection_s *c) {
+  return SSL_get_verify_result(c->ssl);
+}
+
+ssize_t FIO_TLS_WEAK fio_tls_connection_read(fio_tls_connection_s *c, void *buf,
+                                             size_t len) {
+  return fio_tls_read(-1, c, buf, len);
+}
+
+ssize_t FIO_TLS_WEAK fio_tls_connection_write(fio_tls_connection_s *c,
+                                              const void *buf, size_t len) {
+  return fio_tls_write(-1, c, buf, len);
+}
+
+void FIO_TLS_WEAK fio_tls_connection_destroy(fio_tls_connection_s *c) {
+  if (!c) return;
+  SSL_shutdown(c->ssl);
+  SSL_free(c->ssl);
+  fio_tls_destroy(c->tls);
+  free(c);
 }
 
 #endif /* Library compiler flags */

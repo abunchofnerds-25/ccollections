@@ -30,15 +30,26 @@ SOFTWARE.
 
 /**
  * @file chttpclient.h
- * @brief HTTP/1.1 client backed by libcurl with a lazy-initialized
- *        connection pool.
+ * @brief Hand-rolled HTTP/1.1 client: a vendored llhttp parser drives
+ *        request/response framing over raw sockets, with TLS provided by
+ *        the same vendored facil.io ("facio") OpenSSL layer that backs
+ *        chttpserver.
  *
  * ### Connection pool
  *
- * Each chttpcli handle owns a pool of CURL * easy handles (one per concurrent
- * in-flight request). Pool slots are created on first use (lazy). When all
- * slots are in use, chttpclient_do blocks until one becomes free. The pool
- * size defaults to the CPU count; call chttpclient_set_pool_size to override.
+ * Each chttpcli handle has two independent layers. A concurrency limiter
+ * bounds the number of simultaneous in-flight requests (chttpclient_do
+ * blocks once the limit is reached); it defaults to the CPU count and is
+ * overridden via chttpclient_set_pool_size. Separately, a keep-alive idle
+ * connection cache -- keyed by origin (scheme + host + port) -- lets a
+ * request reuse an already-open (and, for HTTPS, already-handshaked)
+ * connection from a prior request instead of paying for DNS resolution and
+ * the TCP/TLS handshakes again. A cheap liveness probe runs before reuse;
+ * a connection the peer has since closed is discarded and replaced
+ * transparently. Idle connections are bounded per origin and in total and
+ * expire after a short idle period; once a cap is hit, a completed
+ * connection is simply closed instead of cached (a lost optimisation, never
+ * a correctness issue).
  *
  * ### Default client
  *
@@ -50,11 +61,6 @@ SOFTWARE.
  * ### Thread safety
  *
  * All public functions in this module are thread-safe.
- *
- * ### libcurl initialisation
- *
- * curl_global_init(CURL_GLOBAL_ALL) is called once at library load via
- * __attribute__((constructor)). curl_global_cleanup() is called at unload.
  *
  * ### Example
  *
@@ -226,12 +232,12 @@ void chttp_request_free(chttp_request_t *req);
  * @brief Create an HTTP client with a custom allocator.
  *
  * The client is created with default settings. Call chttpclient_set_* before
- * the first request to customise behaviour. Pool slots are created lazily.
+ * the first request to customise behaviour.
  *
  * Default configuration (before any chttpclient_set_* calls):
  *   pool_size          = CPU count (resolved on first request)
- *   connect_timeout_ms = 0 (libcurl default - no timeout)
- *   request_timeout_ms = 0 (libcurl default - no timeout)
+ *   connect_timeout_ms = 0 (no timeout)
+ *   request_timeout_ms = 0 (no timeout)
  *   TLS                = peer + host verification on, system CA bundle
  *
  * @param mprocs   Custom allocator, or NULL for malloc/free.
@@ -256,20 +262,30 @@ create_chttpclient(char **err_str) {
  * @brief Set the maximum number of concurrent in-flight requests.
  *
  * Excess callers of chttpclient_do block until a slot is free. May be called
- * before or after the first request. Passing 0 selects the CPU count.
+ * before or after the first request, and takes effect immediately in either
+ * case. Passing 0 selects the CPU count.
  *
- * When called after pool initialisation, expanding is allowed (realloc).
- * Shrinking marks excess capacity unreachable; in-flight requests on those
- * slots complete normally and their handles are cleaned up on release.
+ * This is purely a concurrency cap; it is independent of the client's
+ * keep-alive idle-connection cache (see the file-level doc comment), which
+ * has its own fixed internal per-origin/total caps.
  *
  * @param cli  Client handle.
  * @param n    Pool size; 0 = CPU count.
- * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ * @return ccol_success or ccol_invalid_args.
  */
 ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
 
 /**
  * @brief Set the TCP connect timeout in milliseconds (0 = no timeout).
+ *
+ * For HTTPS requests, this also bounds the TLS handshake (folded into the
+ * same budget as the TCP connect phase).
+ *
+ * Note: DNS resolution itself is a single blocking getaddrinfo() call with
+ * no native cancellation; if resolution alone exceeds this timeout, the
+ * connect attempt that follows is skipped and ccol_timed_out is returned
+ * without waiting further, but the resolution call itself cannot be
+ * interrupted mid-flight.
  *
  * @param cli  Client handle.
  * @param ms   Timeout in milliseconds.
@@ -294,6 +310,12 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, long ms);
  *
  * Passing NULL restores the default (verify_peer=true, verify_host=true,
  * system CA bundle, no client certificate).
+ *
+ * cert_path/key_path/ca_bundle_path are validated for readability lazily, at
+ * the time an HTTPS request actually needs them, rather than here -- a path
+ * that does not currently exist is accepted here without error and only
+ * surfaces as ccol_http_tls_cert_verification_failed from chttpclient_do /
+ * chttpclient_do_streaming once a request needs it.
  *
  * @param cli  Client handle.
  * @param tls  TLS configuration to copy, or NULL to restore defaults.
@@ -397,27 +419,45 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * returns a heap-allocated response. The caller owns *resp_out and must call
  * chttpclient_resp_free when done.
  *
+ * Redirects (301, 302, 303, 307, 308) are followed automatically, up to 50
+ * hops. 301/302/303 rewrite the method to a bodyless GET (HEAD is left as
+ * HEAD, per RFC semantics); 307/308 preserve the original method and resend
+ * the original body unchanged.
+ *
  * @param cli       Client handle.
  * @param req       Request to execute.
  * @param resp_out  On success, receives a pointer to the response.
- * @return ccol_success                        Request completed; *resp_out is
- * valid. ccol_invalid_args                   Any argument is NULL.
- *         ccol_not_enough_memory              Allocation failed.
- *         ccol_timed_out                      Request or connect timeout
- * triggered. ccol_not_permitted                  Client is being destroyed.
- *         ccol_http_invalid_url               URL is malformed or uses an
- * unsupported scheme. ccol_http_host_resolution_failed    DNS or hostname
- * resolution failed. ccol_http_connection_failed         TCP connection to the
- * server could not be established. ccol_http_too_many_redirects        HTTP
- * redirect limit was exceeded. ccol_http_tls_handshake_failed      TLS/SSL
- * handshake with the server failed. ccol_http_tls_cert_verification_failed Peer
- * TLS certificate could not be verified. ccol_http_transfer_aborted
- * Transfer-level failure: server error response (CURLOPT_FAILONERROR),
- * empty/unparseable reply, upload failure, read callback abort, range error,
- *                                             content-encoding error, size
- * limit exceeded, chunk callback error, network send/recv error, HTTP/2 or
- * HTTP/3 stream error, auth error, etc. ccol_unexpected_failure             Any
- * other internal libcurl error.
+ * @return ccol_success
+ *             Request completed; *resp_out is valid.
+ *         ccol_invalid_args
+ *             Any argument is NULL.
+ *         ccol_not_enough_memory
+ *             Allocation failed.
+ *         ccol_timed_out
+ *             Request or connect timeout triggered.
+ *         ccol_not_permitted
+ *             Client is being destroyed.
+ *         ccol_http_invalid_url
+ *             URL is malformed, uses an unsupported scheme (only http:// and
+ *             https:// are supported), or has a missing/invalid host or port.
+ *         ccol_http_host_resolution_failed
+ *             DNS resolution failed for the target host.
+ *         ccol_http_connection_failed
+ *             The TCP connection could not be established.
+ *         ccol_http_too_many_redirects
+ *             The redirect chain exceeded 50 hops.
+ *         ccol_http_tls_handshake_failed
+ *             The TLS handshake failed for a reason other than certificate
+ *             verification.
+ *         ccol_http_tls_cert_verification_failed
+ *             The peer certificate or hostname could not be verified, or the
+ *             configured client certificate/key/CA bundle path was not
+ *             readable.
+ *         ccol_http_transfer_aborted
+ *             The connection failed mid-transfer, or the server sent a
+ *             malformed HTTP/1.1 response.
+ *         ccol_unexpected_failure
+ *             Any other internal failure not covered above.
  */
 ccol_retval_t chttpclient_do(chttpcli cli, const chttp_request_t *req,
                              chttpcli_response **resp_out);

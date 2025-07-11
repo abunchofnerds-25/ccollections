@@ -60,6 +60,7 @@ typedef struct {
 static test_server_t g_srv;
 static pthread_once_t g_srv_once = PTHREAD_ONCE_INIT;
 static atomic_int g_slow_started = 0;
+static atomic_int g_accept_count = 0;
 
 /* Connection-thread registry so stop_test_server can join them all. */
 #define MAX_CONN_THREADS 256
@@ -67,21 +68,28 @@ static pthread_t g_conn_threads[MAX_CONN_THREADS];
 static int g_conn_thread_count = 0;
 static pthread_mutex_t g_conn_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* Send a complete HTTP response. */
+/*
+ * Send a complete HTTP response. keep_alive controls whether "Connection:
+ * close" is sent -- when true, the response relies on HTTP/1.1's implicit
+ * keep-alive default instead. All pre-existing routes pass false, preserving
+ * their exact original behavior; only the new keep-alive-specific routes
+ * (added for real connection-reuse test coverage) pass true.
+ */
 static void srv_respond(int fd, int status, const char *status_text,
                         const char *content_type, const char *extra_hdrs,
-                        const char *body, size_t body_len) {
+                        const char *body, size_t body_len, bool keep_alive) {
   char header[2048];
   int hlen =
       snprintf(header, sizeof(header),
                "HTTP/1.1 %d %s\r\n"
                "Content-Type: %s\r\n"
                "Content-Length: %zu\r\n"
-               "Connection: close\r\n"
+               "%s"
                "%s"
                "\r\n",
                status, status_text, content_type ? content_type : "text/plain",
-               body_len, extra_hdrs ? extra_hdrs : "");
+               body_len, keep_alive ? "" : "Connection: close\r\n",
+               extra_hdrs ? extra_hdrs : "");
   if (hlen > 0) {
     size_t to_send =
         ((size_t)hlen < sizeof(header)) ? (size_t)hlen : sizeof(header) - 1;
@@ -170,53 +178,61 @@ static ssize_t srv_read_request(int fd, char *buf, size_t max) {
   return total;
 }
 
-/* Route the request and send a response. */
-static void srv_handle_route(int conn_fd, const char *method, const char *path,
+/*
+ * Route the request and send a response. Returns true if the connection
+ * should be closed after this response, false if the caller (srv_conn_thread)
+ * should loop and read another request off the same fd (keep-alive).
+ */
+static bool srv_handle_route(int conn_fd, const char *method, const char *path,
                              const char *raw, const char *body,
                              size_t body_len) {
   if (strcmp(method, "GET") == 0 && strcmp(path, "/get") == 0) {
     const char *b = "{\"status\":\"ok\"}";
-    srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b));
-    return;
+    srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
+                false);
+    return true;
   }
 
   if ((strcmp(method, "POST") == 0 && strcmp(path, "/post") == 0) ||
       (strcmp(method, "PATCH") == 0 && strcmp(path, "/patch") == 0)) {
     /* Echo the request body. */
-    srv_respond(conn_fd, 200, "OK", "application/json", NULL, body, body_len);
-    return;
+    srv_respond(conn_fd, 200, "OK", "application/json", NULL, body, body_len,
+                false);
+    return true;
   }
 
   if (strcmp(method, "PUT") == 0 && strcmp(path, "/put") == 0) {
     const char *b = "{\"status\":\"ok\"}";
-    srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b));
-    return;
+    srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
+                false);
+    return true;
   }
 
   if (strcmp(method, "PUT") == 0 && strcmp(path, "/put-echo") == 0) {
     srv_respond(conn_fd, 200, "OK", "application/octet-stream", NULL, body,
-                body_len);
-    return;
+                body_len, false);
+    return true;
   }
 
   if (strcmp(method, "DELETE") == 0 && strcmp(path, "/delete") == 0) {
-    srv_respond(conn_fd, 204, "No Content", "text/plain", NULL, NULL, 0);
-    return;
+    srv_respond(conn_fd, 204, "No Content", "text/plain", NULL, NULL, 0,
+                false);
+    return true;
   }
 
   if (strcmp(method, "GET") == 0 && strcmp(path, "/headers") == 0) {
     const char *b = "{\"status\":\"ok\"}";
     srv_respond(conn_fd, 200, "OK", "application/json",
-                "X-Chttp-Test: hello\r\n", b, strlen(b));
-    return;
+                "X-Chttp-Test: hello\r\n", b, strlen(b), false);
+    return true;
   }
 
   if (strcmp(method, "GET") == 0 && strcmp(path, "/echo-header") == 0) {
     char echo_val[256] = {0};
     srv_find_header(raw, "x-echo", echo_val, sizeof(echo_val));
     srv_respond(conn_fd, 200, "OK", "text/plain", NULL, echo_val,
-                strlen(echo_val));
-    return;
+                strlen(echo_val), false);
+    return true;
   }
 
   /* /status/NNN */
@@ -224,13 +240,14 @@ static void srv_handle_route(int conn_fd, const char *method, const char *path,
     int code = atoi(path + 8);
     if (code >= 100 && code <= 599) {
       const char *b = "status";
-      srv_respond(conn_fd, code, "Status", "text/plain", NULL, b, strlen(b));
+      srv_respond(conn_fd, code, "Status", "text/plain", NULL, b, strlen(b),
+                  false);
     } else {
       const char *b = "bad code";
       srv_respond(conn_fd, 400, "Bad Request", "text/plain", NULL, b,
-                  strlen(b));
+                  strlen(b), false);
     }
-    return;
+    return true;
   }
 
   if (strcmp(method, "GET") == 0 && strcmp(path, "/redirect") == 0) {
@@ -238,20 +255,20 @@ static void srv_handle_route(int conn_fd, const char *method, const char *path,
     snprintf(loc_hdr, sizeof(loc_hdr), "Location: http://127.0.0.1:%d/get\r\n",
              g_srv.port);
     srv_respond(conn_fd, 301, "Moved Permanently", "text/plain", loc_hdr, NULL,
-                0);
-    return;
+                0, false);
+    return true;
   }
 
   if (strcmp(method, "HEAD") == 0 && strcmp(path, "/head") == 0) {
-    srv_respond(conn_fd, 200, "OK", "application/json", NULL, NULL, 0);
-    return;
+    srv_respond(conn_fd, 200, "OK", "application/json", NULL, NULL, 0, false);
+    return true;
   }
 
   if (strcmp(method, "OPTIONS") == 0 && strcmp(path, "/options") == 0) {
     srv_respond(conn_fd, 200, "OK", "text/plain",
                 "Allow: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS\r\n", NULL,
-                0);
-    return;
+                0, false);
+    return true;
   }
 
   if (strcmp(method, "GET") == 0 && strcmp(path, "/slow") == 0) {
@@ -261,8 +278,9 @@ static void srv_handle_route(int conn_fd, const char *method, const char *path,
     atomic_fetch_add(&g_slow_started, 1);
     usleep(100000); /* 100 ms */
     const char *b = "{\"status\":\"ok\"}";
-    srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b));
-    return;
+    srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
+                false);
+    return true;
   }
 
   if (strcmp(method, "GET") == 0 && strcmp(path, "/large") == 0) {
@@ -270,41 +288,101 @@ static void srv_handle_route(int conn_fd, const char *method, const char *path,
     static char large_body[8192];
     memset(large_body, 'x', sizeof(large_body));
     srv_respond(conn_fd, 200, "OK", "text/plain", NULL, large_body,
-                sizeof(large_body));
-    return;
+                sizeof(large_body), false);
+    return true;
   }
 
   if (strcmp(path, "/echo-content-type") == 0) {
     /* Respond with the content-type the client sent us (any method). */
     char ct[256] = {0};
     srv_find_header(raw, "content-type", ct, sizeof(ct));
-    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, ct, strlen(ct));
-    return;
+    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, ct, strlen(ct), false);
+    return true;
   }
 
   if (strcmp(path, "/count-content-type") == 0) {
     /* Respond with the number of Content-Type header lines seen (any method).
      */
     int count = srv_count_header(raw, "content-type");
-    char body[8];
-    int blen = snprintf(body, sizeof(body), "%d", count);
-    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, body, (size_t)blen);
-    return;
+    char body_buf[8];
+    int blen = snprintf(body_buf, sizeof(body_buf), "%d", count);
+    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, body_buf,
+                (size_t)blen, false);
+    return true;
   }
 
   if (strcmp(method, "DELETE") == 0 && strcmp(path, "/delete-echo") == 0) {
     /* Echo the request body for DELETE (body_len is 0 when not sent). */
     srv_respond(conn_fd, 200, "OK", "application/octet-stream", NULL, body,
-                body_len);
-    return;
+                body_len, false);
+    return true;
+  }
+
+  if (strcmp(method, "GET") == 0 && strcmp(path, "/keepalive") == 0) {
+    /* No "Connection: close" -- relies on HTTP/1.1's implicit keep-alive
+     * default so the client's idle-pool reuse logic can be exercised. */
+    const char *b = "{\"status\":\"ok\"}";
+    srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
+                true);
+    return false;
+  }
+
+  if (strcmp(method, "GET") == 0 && strcmp(path, "/keepalive-then-close") == 0) {
+    /* Responds as keep-alive-eligible (no Connection: close) but the server
+     * closes its end immediately after -- exercises the client's
+     * dead-idle-connection detection (liveness probe on reuse). */
+    const char *b = "{\"status\":\"ok\"}";
+    srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
+                true);
+    return true;
+  }
+
+  if (strcmp(path, "/echo-method-body") == 0) {
+    /* Echoes "<METHOD>:<body_len>" -- used to verify the redirect-following
+     * method/body policy (301/302/303 -> bodyless GET except HEAD; 307/308 ->
+     * method and body preserved). */
+    char b[64];
+    int blen = snprintf(b, sizeof(b), "%s:%zu", method, body_len);
+    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, b, (size_t)blen,
+                false);
+    return true;
+  }
+
+  if (strcmp(path, "/redirect-301-to-echo") == 0) {
+    char loc_hdr[128];
+    snprintf(loc_hdr, sizeof(loc_hdr),
+             "Location: http://127.0.0.1:%d/echo-method-body\r\n",
+             g_srv.port);
+    srv_respond(conn_fd, 301, "Moved Permanently", "text/plain", loc_hdr, NULL,
+                0, false);
+    return true;
+  }
+
+  if (strcmp(path, "/redirect-307-to-echo") == 0) {
+    char loc_hdr[128];
+    snprintf(loc_hdr, sizeof(loc_hdr),
+             "Location: http://127.0.0.1:%d/echo-method-body\r\n",
+             g_srv.port);
+    srv_respond(conn_fd, 307, "Temporary Redirect", "text/plain", loc_hdr,
+                NULL, 0, false);
+    return true;
   }
 
   /* 404 for everything else. */
   const char *b = "not found";
-  srv_respond(conn_fd, 404, "Not Found", "text/plain", NULL, b, strlen(b));
+  srv_respond(conn_fd, 404, "Not Found", "text/plain", NULL, b, strlen(b),
+              false);
+  return true;
 }
 
-/* Per-connection handler thread. */
+/*
+ * Per-connection handler thread. Loops reading additional requests off the
+ * same fd as long as srv_handle_route says the connection should stay open
+ * (keep-alive routes), bounded so a misbehaving client can never wedge this
+ * thread open forever.
+ */
+#define MAX_KEEPALIVE_REQUESTS_PER_CONN 100
+
 static void *srv_conn_thread(void *arg) {
   int conn_fd = (int)(intptr_t)arg;
   char *buf = (char *)malloc(TEST_SERVER_BUF);
@@ -313,31 +391,30 @@ static void *srv_conn_thread(void *arg) {
     return NULL;
   }
 
-  ssize_t n = srv_read_request(conn_fd, buf, TEST_SERVER_BUF);
-  if (n <= 0) {
-    free(buf);
-    close(conn_fd);
-    return NULL;
-  }
+  for (int iter = 0; iter < MAX_KEEPALIVE_REQUESTS_PER_CONN; iter++) {
+    ssize_t n = srv_read_request(conn_fd, buf, TEST_SERVER_BUF);
+    if (n <= 0) break;
 
-  char method[16], path[512];
-  srv_parse_request_line(buf, method, sizeof(method), path, sizeof(path));
+    char method[16], path[512];
+    srv_parse_request_line(buf, method, sizeof(method), path, sizeof(path));
 
-  char *body = NULL;
-  size_t body_len = 0;
-  char *hdr_end = strstr(buf, "\r\n\r\n");
-  if (hdr_end) {
-    char cl_str[32] = {0};
-    long cl = 0;
-    if (srv_find_header(buf, "content-length", cl_str, sizeof(cl_str)))
-      cl = atol(cl_str);
-    if (cl > 0) {
-      body = hdr_end + 4;
-      body_len = (size_t)cl;
+    char *body = NULL;
+    size_t body_len = 0;
+    char *hdr_end = strstr(buf, "\r\n\r\n");
+    if (hdr_end) {
+      char cl_str[32] = {0};
+      long cl = 0;
+      if (srv_find_header(buf, "content-length", cl_str, sizeof(cl_str)))
+        cl = atol(cl_str);
+      if (cl > 0) {
+        body = hdr_end + 4;
+        body_len = (size_t)cl;
+      }
     }
-  }
 
-  srv_handle_route(conn_fd, method, path, buf, body, body_len);
+    bool close_after = srv_handle_route(conn_fd, method, path, buf, body, body_len);
+    if (close_after) break;
+  }
   free(buf);
   close(conn_fd);
   return NULL;
@@ -349,6 +426,7 @@ static void *srv_accept_loop(void *arg) {
   while (atomic_load(&g_srv.running)) {
     int conn_fd = accept(g_srv.server_fd, NULL, NULL);
     if (conn_fd < 0) break;
+    atomic_fetch_add(&g_accept_count, 1);
 
     pthread_t tid;
     if (pthread_create(&tid, NULL, srv_conn_thread,
@@ -421,6 +499,13 @@ __attribute__((destructor)) static void stop_test_server(void) {
 static int get_test_port(void) {
   pthread_once(&g_srv_once, start_test_server);
   return g_srv.port;
+}
+
+/* Number of TCP connections accepted so far by the test server -- used to
+ * assert that keep-alive reuse actually skipped the handshake/TCP setup for
+ * a given request, rather than opening a fresh connection. */
+static int test_server_accept_count(void) {
+  return atomic_load(&g_accept_count);
 }
 
 /* Build a URL for the test server: http://127.0.0.1:<port><path>. */
@@ -1999,6 +2084,199 @@ TEST(error_codes, connection_refused) {
   ccol_retval_t rv = chttp_get(url, &resp);
   REQUIRE_EQ(rv, ccol_http_connection_failed);
   REQUIRE_EQ((void *)resp, NULL);
+}
+
+/* ========================================================================== */
+/*                     KEEP-ALIVE / IDLE POOL TESTS                           */
+/*                                                                            */
+/* These exercise mechanics that did not exist under the old libcurl-backed  */
+/* implementation: the client's own hand-rolled connection reuse.           */
+/* ========================================================================== */
+
+TEST(keepalive, sequential_requests_reuse_connection) {
+  char url[128];
+  make_url(url, sizeof(url), "/keepalive");
+
+  chttpcli_construct(cli);
+  int accepts_before = test_server_accept_count();
+
+  for (int i = 0; i < 5; i++) {
+    chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+    REQUIRE_NE((void *)req, NULL);
+    chttpcli_response *resp = NULL;
+    ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+    chttp_request_free(req);
+    REQUIRE_EQ(rv, ccol_success);
+    REQUIRE_NE((void *)resp, NULL);
+    REQUIRE_EQ(resp->status_code, 200);
+    chttpclient_resp_free(resp);
+  }
+
+  /* Give the server's own accept-count increment a brief moment: it happens
+   * on the accept()-side thread, not synchronously with the client's read of
+   * the response. */
+  usleep(20000);
+  int accepts_after = test_server_accept_count();
+  REQUIRE_EQ(accepts_after - accepts_before, 1);
+
+  chttpclient_destroy(cli);
+}
+
+TEST(keepalive, dead_connection_detected_and_reconnects) {
+  char url1[160], url2[160];
+  make_url(url1, sizeof(url1), "/keepalive-then-close");
+  make_url(url2, sizeof(url2), "/keepalive");
+
+  chttpcli_construct(cli);
+  int accepts_before = test_server_accept_count();
+
+  chttp_request_t *req1 = chttp_request_new(CHTTP_GET, url1, NULL, NULL);
+  REQUIRE_NE((void *)req1, NULL);
+  chttpcli_response *resp1 = NULL;
+  ccol_retval_t rv1 = chttpclient_do(cli, req1, &resp1);
+  chttp_request_free(req1);
+  REQUIRE_EQ(rv1, ccol_success);
+  REQUIRE_NE((void *)resp1, NULL);
+  REQUIRE_EQ(resp1->status_code, 200);
+  chttpclient_resp_free(resp1);
+
+  /* The server closed its end after that response; a naive pool would try to
+   * reuse the now-dead connection here and fail. The client's liveness probe
+   * must detect this and transparently reconnect. */
+  chttp_request_t *req2 = chttp_request_new(CHTTP_GET, url2, NULL, NULL);
+  REQUIRE_NE((void *)req2, NULL);
+  chttpcli_response *resp2 = NULL;
+  ccol_retval_t rv2 = chttpclient_do(cli, req2, &resp2);
+  chttp_request_free(req2);
+  REQUIRE_EQ(rv2, ccol_success);
+  REQUIRE_NE((void *)resp2, NULL);
+  REQUIRE_EQ(resp2->status_code, 200);
+  chttpclient_resp_free(resp2);
+
+  usleep(20000);
+  int accepts_after = test_server_accept_count();
+  REQUIRE_EQ(accepts_after - accepts_before, 2);
+
+  chttpclient_destroy(cli);
+}
+
+TEST(keepalive, concurrent_requests_exceeding_idle_cap_no_crash) {
+  /* Fires more concurrent keep-alive requests than the idle pool's
+   * per-origin cap can hold; excess connections simply are not pooled
+   * (documented, intentional v1 simplification) rather than causing any
+   * crash, leak, or failure. */
+  char url[128];
+  make_url(url, sizeof(url), "/keepalive");
+
+  chttpcli_construct(cli);
+  chttpclient_set_pool_size(cli, 16);
+
+  const int n = 12;
+  pthread_t threads[12];
+  concurrent_req_arg_t args[12];
+  for (int i = 0; i < n; i++) {
+    args[i].cli = cli;
+    snprintf(args[i].url, sizeof(args[i].url), "%s", url);
+    args[i].result_status = 0;
+    args[i].result_rv = ccol_unexpected_failure;
+    pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]);
+  }
+  for (int i = 0; i < n; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < n; i++) {
+    REQUIRE_EQ(args[i].result_rv, ccol_success);
+    REQUIRE_EQ(args[i].result_status, 200);
+  }
+
+  chttpclient_destroy(cli);
+}
+
+/* ========================================================================== */
+/*                     URL PARSER EDGE CASES                                  */
+/* ========================================================================== */
+
+TEST(url_parsing, missing_host_returns_invalid_url) {
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get("http:///get", &resp);
+  REQUIRE_EQ(rv, ccol_http_invalid_url);
+  REQUIRE_EQ((void *)resp, NULL);
+}
+
+TEST(url_parsing, non_numeric_port_returns_invalid_url) {
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get("http://127.0.0.1:abc/get", &resp);
+  REQUIRE_EQ(rv, ccol_http_invalid_url);
+  REQUIRE_EQ((void *)resp, NULL);
+}
+
+TEST(url_parsing, port_out_of_range_returns_invalid_url) {
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get("http://127.0.0.1:99999/get", &resp);
+  REQUIRE_EQ(rv, ccol_http_invalid_url);
+  REQUIRE_EQ((void *)resp, NULL);
+}
+
+TEST(url_parsing, zero_port_returns_invalid_url) {
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get("http://127.0.0.1:0/get", &resp);
+  REQUIRE_EQ(rv, ccol_http_invalid_url);
+  REQUIRE_EQ((void *)resp, NULL);
+}
+
+TEST(url_parsing, explicit_non_default_port_succeeds) {
+  /* The whole test suite already runs against a non-default (OS-assigned)
+   * port, but this makes the "explicit port is parsed and connected to
+   * correctly" property an explicit, named assertion. */
+  char url[128];
+  make_url(url, sizeof(url), "/get");
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get(url, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  chttpclient_resp_free(resp);
+}
+
+/* ========================================================================== */
+/*                     REDIRECT METHOD/BODY POLICY                            */
+/* ========================================================================== */
+
+TEST(redirect_policy, post_301_becomes_bodyless_get) {
+  char url[160];
+  make_url(url, sizeof(url), "/redirect-301-to-echo");
+
+  const char *body = "some=data";
+  chttp_request_t *req = chttp_request_new(
+      CHTTP_POST, url, &CHTTP_FORM_BODY(body, strlen(body)), NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  chttp_request_free(req);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "GET:0");
+  chttpclient_resp_free(resp);
+}
+
+TEST(redirect_policy, post_307_preserves_method_and_body) {
+  char url[160];
+  make_url(url, sizeof(url), "/redirect-307-to-echo");
+
+  const char *body = "some=data";
+  chttp_request_t *req = chttp_request_new(
+      CHTTP_POST, url, &CHTTP_FORM_BODY(body, strlen(body)), NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
+  chttp_request_free(req);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+
+  char expected[32];
+  snprintf(expected, sizeof(expected), "POST:%zu", strlen(body));
+  REQUIRE_STREQ(resp->body, expected);
+  chttpclient_resp_free(resp);
 }
 
 /* ========================================================================== */

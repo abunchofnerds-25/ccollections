@@ -1,0 +1,35 @@
+# Suppressions for reachable memory held by the glibc dynamic linker (ld.so)
+# when getaddrinfo(3) lazily loads an NSS service module (libnss_dns.so.2,
+# libnss_mdns4_minimal.so.2, ...) via dlopen(3).
+#
+# These blocks are owned by ld.so's internal bookkeeping (link_map structs,
+# library path strings, symbol-version hash tables) and are intentionally
+# kept live until process exit. glibc loads NSS modules through its own
+# private loader (__nss_module_load -> __libc_dlopen_mode) and never calls
+# a matching dlclose-equivalent; the mapping cannot be released from
+# application code, even by dlopen()/dlclose()-ing the same module yourself
+# first (that only manipulates your own independent reference, not glibc's
+# internal one). They are not leaks.
+#
+# Two suppressions cover all variants because the allocations go through
+# either malloc (for link_map structs and strdup'd path strings) or calloc
+# (for _dl_new_object and _dl_check_map_versions tables), with _dl_open
+# always present somewhere in the call chain above them.
+
+{
+   ld_so_dlopen_reachable_malloc
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   ...
+   fun:_dl_open
+}
+
+{
+   ld_so_dlopen_reachable_calloc
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:calloc
+   ...
+   fun:_dl_open
+}

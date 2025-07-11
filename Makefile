@@ -11,19 +11,27 @@ INCLUDE_DIR = include
 OBJECT_DIR = obj
 THIRD_PARTY_DIR = third_party/facio
 THIRD_PARTY_OBJ_DIR = obj/third_party
+# llhttp (HTTP/1.1 parser used by chttpclient), vendored from nodejs/node's
+# deps/llhttp @ llhttp v9.4.2 (node commit b59def5e8113382ac0ba1931c0168677bb2a1761).
+# Kept in its own dir/object-subdirectory because llhttp's http.c and facio's
+# http.c share a basename; a shared flat object dir would clobber one with the
+# other depending on build order.
+THIRD_PARTY_LLHTTP_DIR = third_party/llhttp
+THIRD_PARTY_LLHTTP_OBJ_DIR = obj/third_party/llhttp
 TEST_FOLDERS = $(shell ls -1d tests/*/ | grep -v /tau/)
 COVERAGE_TEST_FOLDERS = $(shell ls -1d tests/*/ | grep -vE '/tau/|/mixed/')
 
-_create_object_dir := $(shell mkdir -p $(OBJECT_DIR) $(THIRD_PARTY_OBJ_DIR))
+_create_object_dir := $(shell mkdir -p $(OBJECT_DIR) $(THIRD_PARTY_OBJ_DIR) $(THIRD_PARTY_LLHTTP_OBJ_DIR))
 
-COMMON_CFLAGS = -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR) -DHAVE_OPENSSL=1 \
+COMMON_CFLAGS = -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR) -I$(THIRD_PARTY_LLHTTP_DIR) -DHAVE_OPENSSL=1 \
 	-fstack-protector-all \
 	-Wstrict-overflow -Wformat=2 -Wformat-security -Wall -Wextra \
 	-g -O3 -Werror -fPIC
 
 # Third party sources are compiled without -Werror and with extra suppression flags
-# because facil.io triggers several warnings with GCC/OpenSSL 3.0.
-THIRD_PARTY_CFLAGS = -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR) -DHAVE_OPENSSL=1 \
+# because facil.io triggers several warnings with GCC/OpenSSL 3.0, and llhttp's
+# generated state machine triggers -Wunused-parameter pervasively.
+THIRD_PARTY_CFLAGS = -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR) -I$(THIRD_PARTY_LLHTTP_DIR) -DHAVE_OPENSSL=1 \
 	-fPIC -g -O3 \
 	-Wno-deprecated-declarations -Wno-cast-function-type \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-type-limits
@@ -33,7 +41,7 @@ SHARED_CFLAGS = $(COMMON_CFLAGS)
 STATIC_CFLAGS = $(COMMON_CFLAGS)
 
 # Separate ldflags for shared and static builds
-SHARED_LDFLAGS = -shared -lpthread -lz -lcurl -lssl -lcrypto -lm
+SHARED_LDFLAGS = -shared -lpthread -lz -lssl -lcrypto -lm
 STATIC_LDFLAGS =
 
 # facil.io third_party sources (fio_tls_missing.c is excluded: conflicts with openssl)
@@ -53,9 +61,19 @@ THIRD_PARTY_SRC_FILES = \
 THIRD_PARTY_OBJ_FILES_SHARED = $(THIRD_PARTY_SRC_FILES:$(THIRD_PARTY_DIR)/%.c=$(THIRD_PARTY_OBJ_DIR)/%.o)
 THIRD_PARTY_OBJ_FILES_STATIC = $(THIRD_PARTY_SRC_FILES:$(THIRD_PARTY_DIR)/%.c=$(THIRD_PARTY_OBJ_DIR)/%.static.o)
 
+# llhttp third_party sources (pre-generated parser + hand-written API/helper glue)
+THIRD_PARTY_LLHTTP_SRC_FILES = \
+	$(THIRD_PARTY_LLHTTP_DIR)/llhttp.c \
+	$(THIRD_PARTY_LLHTTP_DIR)/api.c \
+	$(THIRD_PARTY_LLHTTP_DIR)/http.c
+
+THIRD_PARTY_LLHTTP_OBJ_FILES_SHARED = $(THIRD_PARTY_LLHTTP_SRC_FILES:$(THIRD_PARTY_LLHTTP_DIR)/%.c=$(THIRD_PARTY_LLHTTP_OBJ_DIR)/%.o)
+THIRD_PARTY_LLHTTP_OBJ_FILES_STATIC = $(THIRD_PARTY_LLHTTP_SRC_FILES:$(THIRD_PARTY_LLHTTP_DIR)/%.c=$(THIRD_PARTY_LLHTTP_OBJ_DIR)/%.static.o)
+
 SOURCE_FILES = $(wildcard $(SOURCE_DIR)/*.c)
 HEADER_FILES = $(wildcard $(INCLUDE_DIR)/*.h)
 THIRD_PARTY_HEADER_FILES = $(wildcard $(THIRD_PARTY_DIR)/*.h)
+THIRD_PARTY_LLHTTP_HEADER_FILES = $(wildcard $(THIRD_PARTY_LLHTTP_DIR)/*.h)
 OBJ_FILES_SHARED = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.o)
 OBJ_FILES_STATIC = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.static.o)
 
@@ -75,11 +93,11 @@ generate_coverage_report:
 
 all: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME)
 
-$(SHARED_LIBRARY_NAME): $(OBJ_FILES_SHARED) $(THIRD_PARTY_OBJ_FILES_SHARED)
-	$(CC) -o $(SHARED_LIBRARY_NAME) $(OBJ_FILES_SHARED) $(THIRD_PARTY_OBJ_FILES_SHARED) $(SHARED_LDFLAGS)
+$(SHARED_LIBRARY_NAME): $(OBJ_FILES_SHARED) $(THIRD_PARTY_OBJ_FILES_SHARED) $(THIRD_PARTY_LLHTTP_OBJ_FILES_SHARED)
+	$(CC) -o $(SHARED_LIBRARY_NAME) $(OBJ_FILES_SHARED) $(THIRD_PARTY_OBJ_FILES_SHARED) $(THIRD_PARTY_LLHTTP_OBJ_FILES_SHARED) $(SHARED_LDFLAGS)
 
-$(STATIC_LIBRARY_NAME): $(OBJ_FILES_STATIC) $(THIRD_PARTY_OBJ_FILES_STATIC)
-	$(AR) rcs $(STATIC_LIBRARY_NAME) $(OBJ_FILES_STATIC) $(THIRD_PARTY_OBJ_FILES_STATIC) $(STATIC_LDFLAGS)
+$(STATIC_LIBRARY_NAME): $(OBJ_FILES_STATIC) $(THIRD_PARTY_OBJ_FILES_STATIC) $(THIRD_PARTY_LLHTTP_OBJ_FILES_STATIC)
+	$(AR) rcs $(STATIC_LIBRARY_NAME) $(OBJ_FILES_STATIC) $(THIRD_PARTY_OBJ_FILES_STATIC) $(THIRD_PARTY_LLHTTP_OBJ_FILES_STATIC) $(STATIC_LDFLAGS)
 	$(RANLIB) $(STATIC_LIBRARY_NAME)
 
 # Objects for shared library (with -fPIC)
@@ -97,6 +115,14 @@ $(THIRD_PARTY_OBJ_DIR)/%.o: $(THIRD_PARTY_DIR)/%.c $(THIRD_PARTY_HEADER_FILES)
 
 # Third party static objects
 $(THIRD_PARTY_OBJ_DIR)/%.static.o: $(THIRD_PARTY_DIR)/%.c $(THIRD_PARTY_HEADER_FILES)
+	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
+
+# llhttp shared/static objects (own object subdirectory: llhttp's http.c and
+# facio's http.c share a basename, so they must not land in the same flat dir)
+$(THIRD_PARTY_LLHTTP_OBJ_DIR)/%.o: $(THIRD_PARTY_LLHTTP_DIR)/%.c $(THIRD_PARTY_LLHTTP_HEADER_FILES)
+	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
+
+$(THIRD_PARTY_LLHTTP_OBJ_DIR)/%.static.o: $(THIRD_PARTY_LLHTTP_DIR)/%.c $(THIRD_PARTY_LLHTTP_HEADER_FILES)
 	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
 
 clean:

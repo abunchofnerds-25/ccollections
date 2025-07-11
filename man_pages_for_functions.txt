@@ -5732,7 +5732,8 @@ RETURN VALUE
 NOTES
        All allocations use mprocs when non-NULL.
        The request must remain alive until any chttpclient_do call using it
-       returns, because CURLOPT_POSTFIELDS is passed without copying.
+       returns: the request's method/body/headers are read directly during
+       that synchronous call.
 
 SEE ALSO
        chttp_request_new, chttp_request_set_header, chttp_request_free,
@@ -5899,16 +5900,16 @@ SYNOPSIS
 
 DESCRIPTION
        Sets the maximum number of concurrent in-flight requests.  Callers
-       that call chttpclient_do when all slots are busy will block until one
-       becomes free.
+       that call chttpclient_do when the limit is reached will block until
+       one becomes free.
 
        Passing 0 selects the CPU count (the default).
 
-       If called after the pool has been initialised: growing the pool
-       reallocates the internal slots array and broadcasts to wake any blocked
-       callers; shrinking reduces pool_cap so new requests use only the lower
-       slots (in-flight requests on exiled slots complete normally and their
-       handles are released on completion).
+       May be called before or after the client has issued any requests, and
+       takes effect immediately (broadcasting to wake any blocked callers if
+       the limit grew).  This is purely a concurrency cap; it is unrelated to
+       the separate keep-alive idle-connection cache, which has its own
+       internal, fixed per-origin and total caps.
 
 PARAMETERS
        cli   Client handle; must not be NULL.
@@ -5917,7 +5918,6 @@ PARAMETERS
 RETURN VALUE
        ccol_success            Pool size updated.
        ccol_invalid_args       cli is NULL.
-       ccol_not_enough_memory  Realloc failed when growing.
 
 SEE ALSO
        create_chttpclient, chttpclient_do
@@ -5932,8 +5932,8 @@ SYNOPSIS
        ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, long ms);
 
 DESCRIPTION
-       Sets the maximum time allowed for the TCP connection phase.  Pass 0
-       to disable the timeout (libcurl default).
+       Sets the maximum time allowed for the TCP connection phase (and, for
+       HTTPS, the TLS handshake).  Pass 0 to disable the timeout (default).
 
 PARAMETERS
        cli   Client handle; must not be NULL.
@@ -5988,8 +5988,14 @@ DESCRIPTION
        CA bundle, no client certificate).
 
        The strings in chttp_tls_config_t (cert_path, key_path, ca_bundle_path)
-       are stored by pointer, not copied.  They must remain valid for the
-       lifetime of the client.
+       are deep-copied into client-owned buffers; the caller's originals may
+       be freed or reused immediately after this call returns.
+
+       cert_path/key_path/ca_bundle_path are validated for readability
+       lazily, at the time an HTTPS request actually needs them, rather than
+       here -- a path that does not currently exist is accepted here without
+       error and only surfaces as ccol_http_tls_cert_verification_failed from
+       chttpclient_do/chttpclient_do_streaming once a request needs it.
 
 PARAMETERS
        cli   Client handle; must not be NULL.
@@ -6012,9 +6018,10 @@ SYNOPSIS
        void __chttpclient_destroy(chttpcli cli);
 
 DESCRIPTION
-       Waits for all in-flight requests to complete, then frees all CURL
-       handles, synchronisation primitives, the slots array, and the client
-       struct.
+       Waits for all in-flight requests to complete, then closes all pooled
+       connections (both idle and TLS), frees the idle-connection pool,
+       destroys the client's TLS context, frees synchronisation primitives,
+       and frees the client struct.
 
        Do not call directly; use the chttpclient_destroy macro, which also
        sets the handle to NULL.
@@ -6041,8 +6048,9 @@ DESCRIPTION
        The caller owns *resp_out on success and must call
        chttpclient_resp_free when done.
 
-       libcurl follows redirects automatically (up to the default limit of
-       30).
+       Redirects (301, 302, 303, 307, 308) are followed automatically, up to
+       50 hops.  301/302/303 rewrite the method to a bodyless GET (HEAD is
+       left as HEAD); 307/308 preserve the original method and body.
 
 PARAMETERS
        cli       Client handle; must not be NULL.
@@ -6060,68 +6068,41 @@ RETURN VALUE
               Memory allocation failed.
 
        ccol_timed_out
-              Request or connect timeout triggered (CURLE_OPERATION_TIMEDOUT).
+              Request or connect timeout triggered.
 
        ccol_not_permitted
               Client is being destroyed; no new requests are accepted.
 
        ccol_http_invalid_url
-              URL is malformed or uses an unsupported scheme
-              (CURLE_URL_MALFORMAT, CURLE_UNSUPPORTED_PROTOCOL).
+              URL is malformed, uses an unsupported scheme (only http:// and
+              https:// are supported), or has a missing/invalid host or port.
 
        ccol_http_host_resolution_failed
-              DNS or hostname resolution failed
-              (CURLE_COULDNT_RESOLVE_HOST, CURLE_COULDNT_RESOLVE_PROXY).
+              DNS resolution failed for the target host.
 
        ccol_http_connection_failed
-              TCP connection or proxy tunnel could not be established; also
-              covers local interface binding errors and QUIC failures
-              (CURLE_COULDNT_CONNECT, CURLE_INTERFACE_FAILED,
-              CURLE_NO_CONNECTION_AVAILABLE, CURLE_QUIC_CONNECT_ERROR,
-              CURLE_PROXY).
+              The TCP connection could not be established (e.g. connection
+              refused).
 
        ccol_http_too_many_redirects
-              HTTP redirect limit was exceeded (CURLE_TOO_MANY_REDIRECTS).
+              The redirect chain exceeded 50 hops.
 
        ccol_http_tls_handshake_failed
-              TLS/SSL handshake failed; includes SSL engine initialisation
-              errors, upgrade-to-TLS failures, and ECH negotiation failure
-              (CURLE_SSL_CONNECT_ERROR, CURLE_SSL_CIPHER,
-              CURLE_SSL_ENGINE_NOTFOUND, CURLE_SSL_ENGINE_SETFAILED,
-              CURLE_SSL_ENGINE_INITFAILED, CURLE_USE_SSL_FAILED,
-              CURLE_SSL_SHUTDOWN_FAILED, CURLE_ECH_REQUIRED).
+              The TLS handshake failed for a reason other than certificate
+              verification.
 
        ccol_http_tls_cert_verification_failed
-              Peer certificate or CA chain could not be verified; also covers
-              bad CA/CRL files, OCSP failures, public-key pinning mismatches,
-              and missing client certificates
-              (CURLE_PEER_FAILED_VERIFICATION, CURLE_SSL_CERTPROBLEM,
-              CURLE_SSL_CACERT_BADFILE, CURLE_SSL_CRL_BADFILE,
-              CURLE_SSL_ISSUER_ERROR, CURLE_SSL_INVALIDCERTSTATUS,
-              CURLE_SSL_PINNEDPUBKEYNOTMATCH, CURLE_SSL_CLIENTCERT).
+              The peer certificate or hostname could not be verified, or the
+              configured client certificate/key/CA bundle path was not
+              readable.
 
        ccol_http_transfer_aborted
-              Transfer failed after the connection was established; covers
-              server error responses (when CURLOPT_FAILONERROR is set),
-              server sending an unparseable or empty response, mid-transfer
-              network errors, upload read callback abort, HTTP range request
-              not satisfied, content-encoding problems, response body
-              exceeding CURLOPT_MAXFILESIZE, HTTP/2 and HTTP/3 stream errors,
-              upload failures, upload rewind failures, transport-level auth
-              failures, chunk-data callback errors, fatal poll/select errors,
-              response-too-large errors, and a streaming write_fn that
-              returned short
-              (CURLE_HTTP_RETURNED_ERROR, CURLE_WEIRD_SERVER_REPLY,
-              CURLE_GOT_NOTHING, CURLE_PARTIAL_FILE, CURLE_UPLOAD_FAILED,
-              CURLE_READ_ERROR, CURLE_RANGE_ERROR, CURLE_SEND_ERROR,
-              CURLE_RECV_ERROR, CURLE_WRITE_ERROR, CURLE_SEND_FAIL_REWIND,
-              CURLE_BAD_CONTENT_ENCODING, CURLE_FILESIZE_EXCEEDED,
-              CURLE_ABORTED_BY_CALLBACK, CURLE_CHUNK_FAILED,
-              CURLE_HTTP2, CURLE_HTTP2_STREAM, CURLE_HTTP3, CURLE_AUTH_ERROR,
-              CURLE_UNRECOVERABLE_POLL, CURLE_TOO_LARGE).
+              The connection failed mid-transfer, the server sent a
+              malformed HTTP/1.1 response, or a streaming chttpcli_write_fn
+              returned fewer bytes than it was given.
 
        ccol_unexpected_failure
-              Any other libcurl error not covered by the above codes.
+              Any other internal failure not covered by the above codes.
 
 SEE ALSO
        chttpclient_do_streaming, chttp_do, chttpclient_resp_free
@@ -6158,7 +6139,7 @@ PARAMETERS
 RETURN VALUE
        Same codes as chttpclient_do.  Additionally,
        ccol_http_transfer_aborted is returned when write_fn returns fewer
-       bytes than len, aborting the transfer (CURLE_ABORTED_BY_CALLBACK).
+       bytes than len, aborting the transfer.
 
 SEE ALSO
        chttpclient_do, chttpcli_write_fn

@@ -114,4 +114,76 @@ void fio_tls_dup(fio_tls_s *tls);
  */
 void fio_tls_destroy(fio_tls_s *tls);
 
+/**
+ * Marks this TLS context as trusting the system's default CA store (in
+ * addition to any certificates added via `fio_tls_trust`). Rebuilds the
+ * context, same as `fio_tls_trust` does.
+ */
+void fio_tls_trust_system(fio_tls_s *tls);
+
+/* *****************************************************************************
+Client-mode TLS connections over a raw file descriptor
+
+These entry points are for synchronous, thread-per-connection clients (e.g.
+c_collections' chttpclient) that drive their own read/write/poll loop and do
+NOT run facil.io's reactor (`fio_start`). Unlike `fio_tls_accept`, they never
+touch facil.io's uuid/fd table or its reactor primitives -- they operate
+directly on a connection object the caller owns and passes back in.
+***************************************************************************** */
+
+/** An opaque client-mode TLS connection object. */
+typedef struct fio_tls_connection_s fio_tls_connection_s;
+
+typedef enum {
+  FIO_TLS_HANDSHAKE_DONE = 0,
+  FIO_TLS_HANDSHAKE_WANT_READ,
+  FIO_TLS_HANDSHAKE_WANT_WRITE,
+  FIO_TLS_HANDSHAKE_ERROR,
+} fio_tls_handshake_result_e;
+
+/**
+ * Creates a client-mode TLS connection object bound to an already-connected
+ * file descriptor `fd`. Does NOT take ownership of `fd` -- the caller must
+ * close it only after calling `fio_tls_connection_destroy`.
+ *
+ * `hostname` (may be NULL) is used for SNI and, if `verify_host` is nonzero,
+ * for X.509 hostname verification.
+ *
+ * Returns NULL on allocation / SSL_new / BIO_new_socket failure.
+ */
+fio_tls_connection_s *fio_tls_connect_create(fio_tls_s *tls, int fd,
+                                             const char *hostname,
+                                             uint8_t verify_host);
+
+/**
+ * Drives one (non-blocking) step of the client handshake. On
+ * FIO_TLS_HANDSHAKE_WANT_READ / _WANT_WRITE, wait for the fd to become
+ * readable / writable (e.g. via `poll`) and call this again.
+ */
+fio_tls_handshake_result_e fio_tls_client_handshake_step(
+    fio_tls_connection_s *c);
+
+/**
+ * Returns the X.509 verification result (0 / X509_V_OK on success) for a
+ * connection whose handshake step returned FIO_TLS_HANDSHAKE_ERROR, so the
+ * caller can distinguish a certificate-verification failure from any other
+ * TLS error.
+ */
+long fio_tls_connection_verify_result(fio_tls_connection_s *c);
+
+/**
+ * Synchronous read/write, semantics matching a raw `read`/`write` syscall:
+ * >0 bytes read/written; 0 = clean EOF; -1 with errno set to EWOULDBLOCK =
+ * retry after the fd is ready for the corresponding direction.
+ */
+ssize_t fio_tls_connection_read(fio_tls_connection_s *c, void *buf, size_t len);
+ssize_t fio_tls_connection_write(fio_tls_connection_s *c, const void *buf,
+                                 size_t len);
+
+/**
+ * Shuts down and frees the SSL object and the connection handle. Does NOT
+ * close the underlying fd -- the caller owns the socket's lifecycle.
+ */
+void fio_tls_connection_destroy(fio_tls_connection_s *c);
+
 #endif

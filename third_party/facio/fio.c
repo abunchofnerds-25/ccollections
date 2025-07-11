@@ -188,6 +188,15 @@ typedef struct {
   fio_rw_hook_s *rw_hooks;
   /** RW udata. */
   void *rw_udata;
+  /** Number of external calls (fio_read / before_close) currently mid-call
+   * with a snapshot of rw_hooks/rw_udata taken outside of sock_lock. Guards
+   * against fio_clear_fd freeing rw_udata (e.g. a TLS SSL/BIO object) while
+   * one of those calls is still using it; see fio_read and fio_clear_fd. */
+  uint16_t rw_busy;
+  /** Set by fio_clear_fd when it had to defer the rw_hooks cleanup (and the
+   * fd close) because rw_busy was non-zero; the last matching busy-release
+   * finishes the job once rw_busy reaches zero. */
+  uint8_t rw_cleanup_pending;
   /* Objects linked to the UUID */
   fio_uuid_links_s links;
 } fio_fd_data_s;
@@ -355,19 +364,35 @@ static inline fio_packet_s *fio_packet_alloc(void) {
 Core Connection Data Clearing
 ***************************************************************************** */
 
-/* resets connection data, marking it as either open or closed. */
+/* Finishes an rw_hooks cleanup (+ the fd close it gates) that fio_clear_fd
+ * had to defer because a fio_read / before_close call was still using
+ * rw_hooks/rw_udata when it ran. Called both from fio_clear_fd itself (when
+ * nothing was busy, so it can finish immediately) and from
+ * fio_rw_busy_release (when the last busy caller finishes later). */
+static inline void _fio_finalize_rw_cleanup(intptr_t fd, fio_rw_hook_s *rw_hooks,
+                                            void *rw_udata) {
+  if (rw_hooks && rw_hooks->cleanup) rw_hooks->cleanup(rw_udata);
+}
+
+/* resets connection data, marking it as either open or closed. Returns 1 if
+ * the rw_hooks cleanup (and the caller's fd close) had to be deferred
+ * because a fio_read / before_close call was still mid-use of rw_udata;
+ * returns 0 if the caller may clean up / close(fd) immediately, as before. */
 static inline int fio_clear_fd(intptr_t fd, uint8_t is_open) {
   fio_packet_s *packet;
   fio_protocol_s *protocol;
   fio_rw_hook_s *rw_hooks;
   void *rw_udata;
+  uint16_t rw_busy;
   fio_uuid_links_s links;
+  int deferred;
   fio_lock(&(fd_data(fd).sock_lock));
   links = fd_data(fd).links;
   packet = fd_data(fd).packet;
   protocol = fd_data(fd).protocol;
   rw_hooks = fd_data(fd).rw_hooks;
   rw_udata = fd_data(fd).rw_udata;
+  rw_busy = fd_data(fd).rw_busy;
   fd_data(fd) = (fio_fd_data_s){
       .open = is_open,
       .sock_lock = fd_data(fd).sock_lock,
@@ -376,6 +401,20 @@ static inline int fio_clear_fd(intptr_t fd, uint8_t is_open) {
       .counter = fd_data(fd).counter + 1,
       .packet_last = &fd_data(fd).packet,
   };
+  deferred = rw_busy != 0;
+  if (deferred) {
+    /* A fio_read / before_close call elsewhere already snapshotted this
+     * exact rw_hooks/rw_udata pair (outside of this lock, by design -- see
+     * fio_read) and is still mid-call using it. Freeing it now (or letting
+     * the caller close(fd)) would race with that call -- e.g. fio_tls_
+     * cleanup's SSL_free landing under fio_tls_read's SSL_read. Restore
+     * them so the busy call keeps a live target, and defer the actual
+     * cleanup + fd close to fio_rw_busy_release, once rw_busy hits zero. */
+    fd_data(fd).rw_hooks = rw_hooks;
+    fd_data(fd).rw_udata = rw_udata;
+    fd_data(fd).rw_busy = rw_busy;
+    fd_data(fd).rw_cleanup_pending = 1;
+  }
   if (fio_data->max_protocol_fd < fd) {
     fio_data->max_protocol_fd = fd;
   } else {
@@ -384,7 +423,7 @@ static inline int fio_clear_fd(intptr_t fd, uint8_t is_open) {
       --fio_data->max_protocol_fd;
   }
   fio_unlock(&(fd_data(fd).sock_lock));
-  if (rw_hooks && rw_hooks->cleanup) rw_hooks->cleanup(rw_udata);
+  if (!deferred) _fio_finalize_rw_cleanup(fd, rw_hooks, rw_udata);
   while (packet) {
     fio_packet_s *tmp = packet;
     packet = packet->next;
@@ -401,7 +440,36 @@ static inline int fio_clear_fd(intptr_t fd, uint8_t is_open) {
   }
   FIO_LOG_DEBUG("FD %d re-initialized (state: %p-%s).", (int)fd,
                 (void *)fd2uuid(fd), (is_open ? "open" : "closed"));
-  return 0;
+  return deferred;
+}
+
+/* Releases one "busy" use of rw_hooks/rw_udata previously registered by the
+ * caller (fio_read or fio_force_close's before_close call) under sock_lock.
+ * If this was the last busy user and fio_clear_fd deferred its cleanup +
+ * fd close while waiting for it, performs that deferred work now.
+ * rw_cleanup_pending is only ever set by fio_clear_fd as part of an actual
+ * close, so closing the fd here whenever that flag is found set is always
+ * correct, regardless of which caller happens to drain the last busy use. */
+static void fio_rw_busy_release(intptr_t uuid) {
+  intptr_t fd = fio_uuid2fd(uuid);
+  fio_rw_hook_s *finalize_hooks = NULL;
+  void *finalize_udata = NULL;
+  fio_lock(&fd_data(fd).sock_lock);
+  if (fd_data(fd).rw_busy) --fd_data(fd).rw_busy;
+  if (!fd_data(fd).rw_busy && fd_data(fd).rw_cleanup_pending) {
+    finalize_hooks = fd_data(fd).rw_hooks;
+    finalize_udata = fd_data(fd).rw_udata;
+    fd_data(fd).rw_hooks = (fio_rw_hook_s *)&FIO_DEFAULT_RW_HOOKS;
+    fd_data(fd).rw_udata = NULL;
+    fd_data(fd).rw_cleanup_pending = 0;
+  }
+  fio_unlock(&fd_data(fd).sock_lock);
+  if (!finalize_hooks) return;
+  _fio_finalize_rw_cleanup(fd, finalize_hooks, finalize_udata);
+  close(fd);
+#if FIO_ENGINE_POLL
+  fio_poll_remove_fd(fd);
+#endif
 }
 
 static inline void fio_force_close_in_poll(intptr_t uuid) {
@@ -2512,16 +2580,21 @@ ssize_t fio_read(intptr_t uuid, void *buffer, size_t count) {
   ssize_t (*rw_read)(intptr_t, void *, void *, size_t) =
       uuid_data(uuid).rw_hooks->read;
   void *udata = uuid_data(uuid).rw_udata;
+  /* Mark rw_udata as busy atomically with this snapshot (same sock_lock
+   * fio_clear_fd uses to decide whether it may free rw_udata immediately),
+   * so a concurrent close can't free it out from under the call below. */
+  ++uuid_data(uuid).rw_busy;
   fio_unlock(&uuid_data(uuid).sock_lock);
   int old_errno = errno;
   ssize_t ret;
 retry_int:
   ret = rw_read(uuid, udata, buffer, count);
+  if (ret < 0 && errno == EINTR) goto retry_int;
+  fio_rw_busy_release(uuid);
   if (ret > 0) {
     fio_touch(uuid);
     return ret;
   }
-  if (ret < 0 && errno == EINTR) goto retry_int;
   if (ret < 0 &&
       (errno == EWOULDBLOCK || errno == EAGAIN || errno == ENOTCONN)) {
     errno = old_errno;
@@ -2634,8 +2707,6 @@ void fio_force_close(intptr_t uuid) {
     return;
   }
   // FIO_LOG_DEBUG("fio_force_close called for uuid %p", (void *)uuid);
-  /* make sure the close marker is set */
-  if (!uuid_data(uuid).close) uuid_data(uuid).close = 1;
   /* clear away any packets in case we want to cut the connection short. */
   fio_packet_s *packet = NULL;
   fio_lock(&uuid_data(uuid).sock_lock);
@@ -2649,21 +2720,44 @@ void fio_force_close(intptr_t uuid) {
     packet = packet->next;
     fio_packet_free(tmp);
   }
-  /* check for rw-hooks termination packet */
-  if (uuid_data(uuid).open && (uuid_data(uuid).close & 1) &&
-      uuid_data(uuid).rw_hooks->before_close(uuid, uuid_data(uuid).rw_udata)) {
+  /* Claim the right to run the rw-hooks termination callback (before_close)
+   * atomically under sock_lock: only the thread that wins the 0/1 -> 2
+   * transition runs it, and rw_busy is held for its duration exactly like
+   * fio_read does, so a concurrent fio_clear_fd can't free rw_udata (e.g. a
+   * TLS SSL/BIO object) out from under it. Without this lock, two threads
+   * racing to close the same uuid (e.g. a read error on one thread and a
+   * poll-detected hangup on another) could both see close & 1 and both
+   * invoke before_close (SSL_shutdown) on the same connection at once. */
+  fio_rw_hook_s *hooks_for_before_close = NULL;
+  void *udata_for_before_close = NULL;
+  fio_lock(&uuid_data(uuid).sock_lock);
+  if (!uuid_data(uuid).close) uuid_data(uuid).close = 1;
+  if (uuid_data(uuid).open && (uuid_data(uuid).close & 1)) {
     uuid_data(uuid).close = 2; /* don't repeat the before_close callback */
-    fio_touch(uuid);
-    fio_poll_add_write(fio_uuid2fd(uuid));
-    return;
+    hooks_for_before_close = uuid_data(uuid).rw_hooks;
+    udata_for_before_close = uuid_data(uuid).rw_udata;
+    ++uuid_data(uuid).rw_busy;
+  }
+  fio_unlock(&uuid_data(uuid).sock_lock);
+  if (hooks_for_before_close) {
+    int should_wait =
+        hooks_for_before_close->before_close(uuid, udata_for_before_close);
+    fio_rw_busy_release(uuid);
+    if (should_wait) {
+      fio_touch(uuid);
+      fio_poll_add_write(fio_uuid2fd(uuid));
+      return;
+    }
   }
   fio_lock(&uuid_data(uuid).protocol_lock);
-  fio_clear_fd(fio_uuid2fd(uuid), 0);
+  int deferred = fio_clear_fd(fio_uuid2fd(uuid), 0);
   fio_unlock(&uuid_data(uuid).protocol_lock);
-  close(fio_uuid2fd(uuid));
+  if (!deferred) {
+    close(fio_uuid2fd(uuid));
 #if FIO_ENGINE_POLL
-  fio_poll_remove_fd(fio_uuid2fd(uuid));
+    fio_poll_remove_fd(fio_uuid2fd(uuid));
 #endif
+  }
   if (fio_data->connection_count)
     fio_atomic_sub(&fio_data->connection_count, 1);
 }

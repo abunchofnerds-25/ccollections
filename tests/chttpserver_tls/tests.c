@@ -52,12 +52,18 @@ TAU_MAIN()
 
 #define TLS_TEST_PORT 18790
 #define BASE_URL "https://127.0.0.1:18790"
+/* Same server, addressed by a name the cert's CN=127.0.0.1 does NOT cover --
+ * used to exercise hostname verification (both /etc/hosts entries for
+ * "localhost" resolve to this same loopback server). */
+#define BASE_URL_MISMATCHED_HOST "https://localhost:18790"
 
 static clog g_test_logger = NULL;
 static chttpsvr g_tls_srv = NULL;
 static char g_cert_dir[256];
 static char g_cert_path[320];
 static char g_key_path[320];
+static char g_client_cert_path[320];
+static char g_client_key_path[320];
 static bool g_cert_ready = false;
 
 static void _hello_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
@@ -73,6 +79,20 @@ static void _hello_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    -1 as "TLS integration could not be verified in this environment" rather
    than crash, since fio_tls_cert_add's FIO_LOG_FATAL on a missing/invalid
    cert file would abort the whole process. */
+static int _openssl_selfsigned(const char *key_path, const char *cert_path,
+                               const char *cn) {
+  char cmd[1024];
+  int cn_len = snprintf(cmd, sizeof(cmd),
+                        "openssl req -x509 -newkey rsa:2048 -nodes "
+                        "-keyout '%s' -out '%s' -days 1 -subj '/CN=%s' "
+                        ">/dev/null 2>&1",
+                        key_path, cert_path, cn);
+  if (cn_len < 0 || (size_t)cn_len >= sizeof(cmd)) return -1;
+  if (system(cmd) != 0) return -1;
+  if (access(cert_path, R_OK) != 0 || access(key_path, R_OK) != 0) return -1;
+  return 0;
+}
+
 static int _generate_self_signed_cert(void) {
   snprintf(g_cert_dir, sizeof(g_cert_dir), "/tmp/chttpserver_tls_test_XXXXXX");
   if (!mkdtemp(g_cert_dir)) return -1;
@@ -80,21 +100,25 @@ static int _generate_self_signed_cert(void) {
   int dn =
       snprintf(g_cert_path, sizeof(g_cert_path), "%s/cert.pem", g_cert_dir);
   int kn = snprintf(g_key_path, sizeof(g_key_path), "%s/key.pem", g_cert_dir);
+  int cdn = snprintf(g_client_cert_path, sizeof(g_client_cert_path),
+                     "%s/client_cert.pem", g_cert_dir);
+  int ckn = snprintf(g_client_key_path, sizeof(g_client_key_path),
+                     "%s/client_key.pem", g_cert_dir);
   if (dn < 0 || (size_t)dn >= sizeof(g_cert_path) || kn < 0 ||
-      (size_t)kn >= sizeof(g_key_path))
+      (size_t)kn >= sizeof(g_key_path) || cdn < 0 ||
+      (size_t)cdn >= sizeof(g_client_cert_path) || ckn < 0 ||
+      (size_t)ckn >= sizeof(g_client_key_path))
     return -1;
 
-  char cmd[1024];
-  int cn = snprintf(cmd, sizeof(cmd),
-                    "openssl req -x509 -newkey rsa:2048 -nodes "
-                    "-keyout '%s' -out '%s' -days 1 -subj '/CN=127.0.0.1' "
-                    ">/dev/null 2>&1",
-                    g_key_path, g_cert_path);
-  if (cn < 0 || (size_t)cn >= sizeof(cmd)) return -1;
-
-  int rc = system(cmd);
-  if (rc != 0) return -1;
-  if (access(g_cert_path, R_OK) != 0 || access(g_key_path, R_OK) != 0)
+  if (_openssl_selfsigned(g_key_path, g_cert_path, "127.0.0.1") != 0)
+    return -1;
+  /* Client identity cert for the mTLS smoke test -- self-signed and never
+   * actually trusted by the server in this suite; it only needs to be a
+   * well-formed cert/key pair so fio_tls_new's cert-loading path (real
+   * files, not the fake nonexistent paths used by chttpclient's own
+   * set_tls_deep_copies_strings test) is exercised end-to-end. */
+  if (_openssl_selfsigned(g_client_key_path, g_client_cert_path,
+                         "chttpclient-test-client") != 0)
     return -1;
   return 0;
 }
@@ -102,6 +126,8 @@ static int _generate_self_signed_cert(void) {
 static void _remove_generated_cert(void) {
   if (g_cert_path[0]) unlink(g_cert_path);
   if (g_key_path[0]) unlink(g_key_path);
+  if (g_client_cert_path[0]) unlink(g_client_cert_path);
+  if (g_client_key_path[0]) unlink(g_client_key_path);
   if (g_cert_dir[0]) rmdir(g_cert_dir);
 }
 
@@ -237,4 +263,117 @@ TEST(chttpserver_tls, handshake_fails_when_ca_is_untrusted) {
 
   REQUIRE_EQ(rv, ccol_http_tls_cert_verification_failed);
   REQUIRE_TRUE((void *)resp == NULL);
+}
+
+TEST(chttpserver_tls, hostname_mismatch_rejected_when_verify_host_enabled) {
+  /* Connects to the same server via "localhost" -- which resolves to the
+     same loopback address but does NOT match the cert's CN=127.0.0.1 --
+     with verify_host left at its default (true). This exercises the new
+     client-side SNI/hostname-verification wiring (fio_tls_connect_create's
+     X509_VERIFY_PARAM_set1_host call) added specifically for the hand-rolled
+     client; the CA is trusted (ca_bundle_path), so any rejection here can
+     only be due to the hostname check, not an untrusted-issuer failure. */
+  if (!g_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this "
+            "environment\n");
+    return;
+  }
+
+  chttpcli cli = create_chttpclient(NULL);
+  REQUIRE_TRUE(cli != NULL);
+
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_cert_path;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  chttp_request_t *req = chttp_request_new(
+      CHTTP_GET, BASE_URL_MISMATCHED_HOST "/hello", NULL, NULL);
+  REQUIRE_TRUE(req != NULL);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttp_request_free(req);
+
+  REQUIRE_EQ(rv, ccol_http_tls_cert_verification_failed);
+  REQUIRE_TRUE((void *)resp == NULL);
+
+  chttpclient_destroy(cli);
+}
+
+TEST(chttpserver_tls, hostname_mismatch_allowed_when_verify_host_disabled) {
+  /* Same mismatched-hostname connection as above, but with verify_host
+     explicitly turned off: the handshake must now succeed, proving
+     verify_host actually gates the check rather than always enforcing it. */
+  if (!g_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this "
+            "environment\n");
+    return;
+  }
+
+  chttpcli cli = create_chttpclient(NULL);
+  REQUIRE_TRUE(cli != NULL);
+
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_cert_path;
+  tls.verify_host = false;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  chttp_request_t *req = chttp_request_new(
+      CHTTP_GET, BASE_URL_MISMATCHED_HOST "/hello", NULL, NULL);
+  REQUIRE_TRUE(req != NULL);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttp_request_free(req);
+
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "Hello, TLS!");
+
+  chttpclient_resp_free(resp);
+  chttpclient_destroy(cli);
+}
+
+TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
+  /* mTLS smoke test: the client presents its own certificate/key pair.
+     The server in this suite does not require or verify a client
+     certificate, so this does not prove server-side enforcement -- it
+     proves that chttpclient's cert_path/key_path plumbing through
+     fio_tls_new (a real cert+key pair, not the fake nonexistent paths
+     used by chttpclient's own set_tls_deep_copies_strings test) loads
+     correctly and does not break a normal handshake. */
+  if (!g_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this "
+            "environment\n");
+    return;
+  }
+
+  chttpcli cli = create_chttpclient(NULL);
+  REQUIRE_TRUE(cli != NULL);
+
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_cert_path;
+  tls.cert_path = g_client_cert_path;
+  tls.key_path = g_client_key_path;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  chttp_request_t *req =
+      chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
+  REQUIRE_TRUE(req != NULL);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttp_request_free(req);
+
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "Hello, TLS!");
+
+  chttpclient_resp_free(resp);
+  chttpclient_destroy(cli);
 }

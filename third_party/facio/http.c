@@ -348,12 +348,41 @@ static void http_on_open(intptr_t uuid, void *set) {
   http_on_server_protocol_http1(uuid, set, NULL);
 }
 
+/*
+ * fio_tls's ALPN dispatch (fio_tls_openssl.c: alpn_select/alpn_select___task)
+ * defers the actual on_selected callback (here, http_on_server_protocol_http1)
+ * via fio_defer, since it runs from within a TLS handshake r/w-hook context
+ * where re-entering facio is unsafe. That deferred task reads this listener's
+ * http_settings_s via its udata_connection argument. If the listener closes
+ * while such a task is still queued for an in-flight connection, freeing
+ * `settings` synchronously here (at listener-close time) creates a
+ * use-after-free once the queued task finally runs.
+ *
+ * For TLS listeners, http_listen (below) registers this as the "http/1.1"
+ * ALPN entry's on_cleanup hook instead of freeing here directly. on_cleanup
+ * fires exactly when fio_tls_destroy releases the LAST reference to
+ * settings->tls -- which fio_tls_attach2uuid/fio_tls_cleanup already bump and
+ * drop correctly for every accepted connection, plus the listener's own
+ * reference. That is exactly the lifetime `settings` needs: it must outlive
+ * any connection that might still dispatch a deferred ALPN callback
+ * referencing it, and this ties the free to the already-correct refcount
+ * instead of racing a fixed "listener closed" event.
+ */
+static void _http_settings_on_tls_cleanup(void *set) {
+  http_settings_free((http_settings_s *)set);
+}
+
 static void http_on_finish(intptr_t uuid, void *set) {
   http_settings_s *settings = set;
 
   if (settings->on_finish) settings->on_finish(settings);
 
-  http_settings_free(settings);
+  if (!settings->tls) {
+    /* No TLS/ALPN involved: nothing can reference `settings` asynchronously
+     * after this point, so it is safe to free immediately. */
+    http_settings_free(settings);
+  }
+  /* else: freed via _http_settings_on_tls_cleanup, see comment above. */
   (void)uuid;
 }
 
@@ -379,7 +408,7 @@ intptr_t http_listen(const char *port, const char *binding,
   settings->is_client = 0;
   if (settings->tls) {
     fio_tls_alpn_add(settings->tls, "http/1.1", http_on_server_protocol_http1,
-                     NULL, NULL);
+                     settings, _http_settings_on_tls_cleanup);
   }
 
   return fio_listen(.port = port, .address = binding, .tls = arg_settings.tls,

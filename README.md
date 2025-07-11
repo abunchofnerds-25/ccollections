@@ -199,7 +199,7 @@ cd tests/chttpserver  && make test
 To link an application against the library:
 
 ```bash
-gcc -o myapp myapp.c -lccollections -lpthread -lcurl
+gcc -o myapp myapp.c -lccollections -lpthread
 ```
 
 Include only the headers you need:
@@ -221,13 +221,7 @@ Include only the headers you need:
 #include <chttpserver.h>
 ```
 
-When linking against `chttpclient`, add `-lcurl` to the linker flags:
-
-```bash
-gcc -o myapp myapp.c -lccollections -lpthread -lcurl
-```
-
-When linking against `chttpserver`, add `-lssl -lcrypto -lm` in addition to `-lpthread`:
+When linking against `chttpclient` or `chttpserver`, add `-lssl -lcrypto -lm` in addition to `-lpthread` (both are backed by TLS via OpenSSL):
 
 ```bash
 gcc -o myapp myapp.c -lccollections -lpthread -lssl -lcrypto -lm
@@ -2826,13 +2820,13 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 
 ## 18. HTTP Client - `chttpclient`
 
-`chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is backed by libcurl, which handles TLS, redirects, and low-level networking, while this module adds a connection pool, case-insensitive header maps, and an API that integrates with the rest of the library.
+`chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: a vendored `llhttp` parser drives request/response framing over raw sockets, TLS is provided by the same vendored facil.io ("facio") OpenSSL layer that backs `chttpserver`, and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library.
 
 The module is split across two headers: `chttp.h` declares shared types (`chttp_method_t`, `chttp_tls_config_t`, `chttp_request_body_t`, and status-code constants), and `chttpclient.h` declares the client API. Including `chttpclient.h` pulls in `chttp.h` automatically.
 
 **Header:** `#include <chttpclient.h>`
 
-**Link with:** `-lcurl`
+**Link with:** `-lssl -lcrypto -lm` (TLS support; no other external dependency)
 
 ### Convenience API - One-Liner Requests
 
@@ -2963,7 +2957,12 @@ Pass `NULL` to restore the defaults.
 
 ### Connection Pool Behaviour
 
-Each `chttpcli` handle manages a pool of libcurl easy handles, one per concurrent in-flight request. Slots are created lazily on first use. The pool size defaults to the CPU count. When all slots are in use, `chttpclient_do` blocks until one becomes free, providing natural backpressure with no external semaphore required.
+Each `chttpcli` handle has two independent layers:
+
+- **Concurrency limiter** -- bounds the number of simultaneous in-flight requests. The limit defaults to the CPU count (`chttpclient_set_pool_size`); when the limit is reached, `chttpclient_do` blocks until a slot frees up, providing natural backpressure with no external semaphore required.
+- **Keep-alive idle pool** -- after a request completes on an HTTP/1.1 keep-alive connection, the connection (and, for HTTPS, its already-established TLS session) is kept open and cached per origin (scheme + host + port) so a later request to the same origin can skip DNS resolution, the TCP handshake, and the TLS handshake entirely. A cheap liveness probe runs before reuse; a connection the peer has since closed is transparently discarded and replaced with a fresh one. Idle connections are bounded per origin and in total, and expire after a short idle period -- once the caps are hit, a completed connection is simply closed instead of cached, which only forfeits the reuse optimisation and never affects correctness.
+
+Redirects (`chttpclient_do` and `chttpclient_do_streaming` both follow up to 50 hops) apply an explicit method/body policy on each hop: 301, 302, and 303 rewrite the method to a bodyless GET (HEAD is left as HEAD), while 307 and 308 preserve the original method and resend the original body.
 
 ### Scoped Variant
 
@@ -3027,18 +3026,19 @@ If the pool size is smaller than the number of concurrent callers, excess thread
 
 ### Error Return Values
 
-`chttpclient_do`, `chttpclient_do_streaming`, and the convenience wrappers return a `ccol_retval_t`. In addition to the generic codes shared by the rest of the library (`ccol_success`, `ccol_invalid_args`, `ccol_not_enough_memory`, `ccol_timed_out`, `ccol_not_permitted`), the HTTP client maps libcurl failure codes to the following specific values:
+`chttpclient_do`, `chttpclient_do_streaming`, and the convenience wrappers return a `ccol_retval_t`. In addition to the generic codes shared by the rest of the library (`ccol_success`, `ccol_invalid_args`, `ccol_not_enough_memory`, `ccol_timed_out`, `ccol_not_permitted`), the HTTP client returns the following specific values:
 
-| Return value | Meaning | Underlying libcurl code(s) |
-|---|---|---|
-| `ccol_http_invalid_url` | URL is malformed or uses an unsupported scheme | `CURLE_URL_MALFORMAT`, `CURLE_UNSUPPORTED_PROTOCOL` |
-| `ccol_http_host_resolution_failed` | DNS or hostname resolution failed | `CURLE_COULDNT_RESOLVE_HOST`, `CURLE_COULDNT_RESOLVE_PROXY` |
-| `ccol_http_connection_failed` | TCP connection or proxy tunnel could not be established; covers local interface binding errors and QUIC failures | `CURLE_COULDNT_CONNECT`, `CURLE_INTERFACE_FAILED`, `CURLE_NO_CONNECTION_AVAILABLE`, `CURLE_QUIC_CONNECT_ERROR`, `CURLE_PROXY` |
-| `ccol_http_too_many_redirects` | HTTP redirect limit was exceeded | `CURLE_TOO_MANY_REDIRECTS` |
-| `ccol_http_tls_handshake_failed` | TLS/SSL handshake failed; includes SSL engine initialisation errors, upgrade-to-TLS failures, and ECH negotiation failure | `CURLE_SSL_CONNECT_ERROR`, `CURLE_SSL_CIPHER`, `CURLE_SSL_ENGINE_NOTFOUND`, `CURLE_SSL_ENGINE_SETFAILED`, `CURLE_SSL_ENGINE_INITFAILED`, `CURLE_USE_SSL_FAILED`, `CURLE_SSL_SHUTDOWN_FAILED`, `CURLE_ECH_REQUIRED` |
-| `ccol_http_tls_cert_verification_failed` | Peer certificate or CA chain could not be verified; covers bad CA/CRL files, OCSP failures, pinning mismatches, and missing client certificates | `CURLE_PEER_FAILED_VERIFICATION`, `CURLE_SSL_CERTPROBLEM`, `CURLE_SSL_CACERT_BADFILE`, `CURLE_SSL_CRL_BADFILE`, `CURLE_SSL_ISSUER_ERROR`, `CURLE_SSL_INVALIDCERTSTATUS`, `CURLE_SSL_PINNEDPUBKEYNOTMATCH`, `CURLE_SSL_CLIENTCERT` |
-| `ccol_http_transfer_aborted` | Transfer failed after the connection was established; covers server error responses (when CURLOPT_FAILONERROR is set), empty/unparseable responses, mid-transfer network errors, upload failures, upload read callback abort, HTTP range request not satisfied, HTTP/2 and HTTP/3 stream errors, upload rewind failures, content-encoding problems, response body exceeding CURLOPT_MAXFILESIZE, chunk-data callback errors, transport-level auth failures, fatal poll errors, response-too-large errors, and a streaming write_fn returning short | `CURLE_HTTP_RETURNED_ERROR`, `CURLE_WEIRD_SERVER_REPLY`, `CURLE_GOT_NOTHING`, `CURLE_PARTIAL_FILE`, `CURLE_UPLOAD_FAILED`, `CURLE_READ_ERROR`, `CURLE_RANGE_ERROR`, `CURLE_SEND_ERROR`, `CURLE_RECV_ERROR`, `CURLE_WRITE_ERROR`, `CURLE_SEND_FAIL_REWIND`, `CURLE_BAD_CONTENT_ENCODING`, `CURLE_FILESIZE_EXCEEDED`, `CURLE_ABORTED_BY_CALLBACK`, `CURLE_CHUNK_FAILED`, `CURLE_HTTP2`, `CURLE_HTTP2_STREAM`, `CURLE_HTTP3`, `CURLE_AUTH_ERROR`, `CURLE_UNRECOVERABLE_POLL`, `CURLE_TOO_LARGE` |
-| `ccol_unexpected_failure` | Any other libcurl error not covered above | -- |
+| Return value | Meaning |
+|---|---|
+| `ccol_http_invalid_url` | URL is malformed, uses an unsupported scheme (only `http://`/`https://` are supported), or has a missing/invalid host or port |
+| `ccol_http_host_resolution_failed` | DNS resolution failed for the target host |
+| `ccol_http_connection_failed` | The TCP connection could not be established (e.g. connection refused) |
+| `ccol_http_too_many_redirects` | The redirect chain exceeded 50 hops |
+| `ccol_http_tls_handshake_failed` | The TLS handshake failed for a reason other than certificate verification |
+| `ccol_http_tls_cert_verification_failed` | The peer certificate or hostname could not be verified, or the configured client certificate/key/CA bundle path was not readable |
+| `ccol_http_transfer_aborted` | The connection failed mid-transfer, the server sent a malformed HTTP/1.1 response, or a streaming `chttpcli_write_fn` returned fewer bytes than it was given |
+| `ccol_timed_out` | `chttpclient_set_connect_timeout` or `chttpclient_set_request_timeout` elapsed before the operation completed |
+| `ccol_unexpected_failure` | Any other internal failure not covered above |
 
 `ccol_retval_to_str()` from `common.h` returns a string literal for any of these codes.
 

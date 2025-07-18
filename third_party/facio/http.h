@@ -219,12 +219,19 @@ struct http_settings_s {
   /**
    * (optional) Called once, right after headers are parsed and before any
    * body byte is read, for HTTP/1.1 requests. Return non-zero to take over
-   * the request (typically after calling `http_pause`) -- in that case
-   * `on_request` will NOT be called for it, and the caller becomes
-   * responsible for reading the body itself via `http1_stream_read` and for
-   * eventually calling `http_resume`. Return 0 to let normal parsing and
-   * `on_request` dispatch proceed unchanged (the default behavior when this
-   * callback is left NULL).
+   * the request -- in that case `on_request` will NOT be called for it, and
+   * the caller becomes responsible for reading the body itself via
+   * `http1_stream_read` and for eventually calling `http_resume`. Return 0
+   * to let normal parsing and `on_request` dispatch proceed unchanged (the
+   * default behavior when this callback is left NULL).
+   *
+   * IMPORTANT: an implementation that intends to return non-zero MUST call
+   * `http1_stream_prepare(request)` (declared in http1.h) BEFORE calling
+   * `http_pause`, not after. `http_pause` defers the actual handoff via
+   * `fio_defer`, and a worker thread may start running `http1_stream_read`
+   * on another core as soon as that deferred task is queued -- possibly
+   * before this callback even returns. Any state a worker depends on must
+   * therefore already be established before `http_pause` runs.
    */
   int (*on_headers_complete)(http_s *request);
   /**
@@ -281,7 +288,20 @@ struct http_settings_s {
   intptr_t max_clients;
   /** SSL/TLS support. */
   void *tls;
-  /** reserved for future use. */
+  /**
+   * Internal use only -- do not set. Reference count gating when this
+   * settings object is actually freed: initialized to 1 (representing the
+   * listener's own baseline hold) by `http_listen`, incremented once per
+   * accepted connection (`http1_new`) and decremented once that connection
+   * is fully torn down (`http1_destroy`), so that a connection still being
+   * read by a worker thread (per the worker-driven body ingestion design;
+   * see `on_headers_complete`) always keeps this settings object alive.
+   * The baseline hold is released via `http_on_finish` for non-TLS
+   * listeners, or via `_http_settings_on_tls_cleanup` for TLS listeners
+   * (which additionally covers the window before a deferred ALPN dispatch
+   * has even called `http1_new` yet). Whichever release brings this to 0
+   * actually frees the settings object.
+   */
   intptr_t reserved1;
   /** reserved for future use. */
   intptr_t reserved2;

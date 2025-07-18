@@ -80,6 +80,14 @@ FIOBJ fiobj_hash_replace(FIOBJ hash, FIOBJ key, FIOBJ obj);
  * variations.
  *
  * Returns FIOBJ_INVALID if no object is associated with this hashed key value.
+ *
+ * WARNING: per this header's own collision-resistance-vs-speed tradeoff,
+ * this match is purely on the 64-bit digest -- two different keys that
+ * happen to collide on it resolve to the same slot. For a Hash storing
+ * attacker-influenced keys (e.g. HTTP header names), whether that is safe
+ * depends entirely on the `fio_siphash` key being randomized per process;
+ * that randomization lives in fio_siphash.h, outside this file, and was not
+ * verified as part of the review that produced this note.
  */
 FIOBJ fiobj_hash_get2(const FIOBJ hash, uint64_t key_hash);
 

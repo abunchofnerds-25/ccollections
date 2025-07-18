@@ -65,6 +65,18 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
 http1_stream_err_t http1_stream_last_error(http_s *h);
 
 /**
+ * Marks `h` as diverted to worker-driven body ingestion. MUST be called
+ * synchronously, on the reactor thread, from inside an `on_headers_complete`
+ * callback that intends to return non-zero -- and it MUST be called before
+ * that callback calls `http_pause`. `http_pause` defers the actual handoff
+ * via `fio_defer`, which can be picked up and run by a worker thread on
+ * another core before the callback that called it even returns; any state
+ * this function establishes must therefore already be in place before
+ * `http_pause` runs, not after `on_headers_complete` returns.
+ */
+void http1_stream_prepare(http_s *h);
+
+/**
  * Must be called exactly once per diverted request, after the caller is done
  * calling `http1_stream_read` for it (whether because it reached end of body,
  * hit an error, or simply chose to stop reading early) and before calling

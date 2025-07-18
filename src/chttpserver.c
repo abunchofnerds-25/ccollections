@@ -167,6 +167,11 @@ struct chttpsvr_req {
 
   dispatch_ctx_t *_dispatch;
   ccol_memmgmt_procs_t *m_procs;
+
+  /* max_body_read_duration_ms bookkeeping -- see _check_read_deadline. */
+  struct timespec _read_deadline;
+  bool _read_deadline_set;
+  bool _deadline_exceeded;
 };
 
 /** Streaming-dispatch context (heap-allocated before http_pause).
@@ -214,12 +219,18 @@ struct chttpserver {
   clog cl;              /* per-server logger; passed at creation time */
   intptr_t listen_uuid; /* facio listener uuid; -1 when not started */
   bool started;         /* true after a successful chttpsvr_start call */
-  bool contributed_to_engine;      /* true when this server was counted in
-                                      g_server_count */
-  unsigned stream_read_timeout_ms; /* set at chttpsvr_start; bounds each
-                                       http1_stream_read wait for more body
-                                       bytes, for both buffered and
-                                       streaming routes */
+  bool contributed_to_engine;         /* true when this server was counted in
+                                         g_server_count */
+  unsigned stream_read_timeout_ms;    /* set at chttpsvr_start; bounds each
+                                          http1_stream_read wait for more body
+                                          bytes, for both buffered and
+                                          streaming routes */
+  unsigned max_body_read_duration_ms; /* set at chttpsvr_start; 0 = no limit.
+                                          Bounds the *total* time spent
+                                          reading one request's body, closing
+                                          the trickle-forever loophole that
+                                          stream_read_timeout_ms alone leaves
+                                          open (see _check_read_deadline). */
   ccol_memmgmt_procs_t *m_procs;
 };
 
@@ -991,6 +1002,49 @@ static ccol_retval_t _stream_err_to_retval(http_s *h) {
   }
 }
 
+/* Caps *timeout_ms_inout so a single http1_stream_read call cannot block
+ * past req's overall max_body_read_duration_ms deadline (lazily computed on
+ * the first call), and returns false once that deadline has already passed
+ * -- in which case req->_deadline_exceeded is set and the caller must not
+ * call http1_stream_read again (chttpsvr_req_stream_error /
+ * _ingest_buffered_body's caller report ccol_timed_out from that flag
+ * directly, without ever consulting http1_stream_last_error).
+ *
+ * stream_read_timeout_ms alone only bounds each individual gap between
+ * batches of bytes, so a client that trickles a byte or two just before
+ * every such gap expires can otherwise pin a worker thread indefinitely --
+ * this closes that loophole. A max_body_read_duration_ms of 0 disables the
+ * check entirely (the default), leaving existing behavior unchanged. */
+static bool _check_read_deadline(chttpsvr_req *req,
+                                 unsigned *timeout_ms_inout) {
+  unsigned max_dur =
+      req->_dispatch ? req->_dispatch->srv->max_body_read_duration_ms : 0;
+  if (!max_dur) return true;
+
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  if (!req->_read_deadline_set) {
+    req->_read_deadline = now;
+    req->_read_deadline.tv_sec += (time_t)(max_dur / 1000);
+    req->_read_deadline.tv_nsec += (long)(max_dur % 1000) * 1000000L;
+    if (req->_read_deadline.tv_nsec >= 1000000000L) {
+      req->_read_deadline.tv_nsec -= 1000000000L;
+      req->_read_deadline.tv_sec += 1;
+    }
+    req->_read_deadline_set = true;
+  }
+
+  long remaining_ms = (long)(req->_read_deadline.tv_sec - now.tv_sec) * 1000 +
+                      (req->_read_deadline.tv_nsec - now.tv_nsec) / 1000000L;
+  if (remaining_ms <= 0) {
+    req->_deadline_exceeded = true;
+    return false;
+  }
+  if (!*timeout_ms_inout || (unsigned)remaining_ms < *timeout_ms_inout)
+    *timeout_ms_inout = (unsigned)remaining_ms;
+  return true;
+}
+
 /* Reads the entire request body into one growable heap buffer before a
  * buffered handler is invoked. max_body_size is already enforced by the
  * same parser logic that would enforce it for a streaming route (see
@@ -999,7 +1053,7 @@ static ccol_retval_t _ingest_buffered_body(streaming_ctx_t *sctx,
                                            chttpsvr_req *req) {
   http_s *h = (http_s *)sctx->h;
   ccol_memmgmt_procs_t *mp = sctx->m_procs;
-  unsigned timeout_ms = sctx->srv->stream_read_timeout_ms;
+  unsigned configured_timeout_ms = sctx->srv->stream_read_timeout_ms;
   size_t cap = 0, len = 0;
   char *buf = NULL;
 
@@ -1022,6 +1076,11 @@ static ccol_retval_t _ingest_buffered_body(streaming_ctx_t *sctx,
       }
       buf = nb;
       cap = new_cap;
+    }
+    unsigned timeout_ms = configured_timeout_ms;
+    if (!_check_read_deadline(req, &timeout_ms)) {
+      _mem_free(mp, buf);
+      return ccol_timed_out;
     }
     ssize_t n = http1_stream_read(h, buf + len, cap - len, timeout_ms);
     if (n > 0) {
@@ -1343,6 +1402,14 @@ static int _on_headers_complete(http_s *h) {
   srv->in_flight_requests++;
   mutex_unlock(srv->mutex);
 
+  /* Must run before http_pause: http_pause defers the actual handoff via
+   * fio_defer, and a worker thread may start running http1_stream_read on
+   * another core the moment that deferred task is queued -- possibly before
+   * this function even returns. http1_stream_prepare establishes every
+   * piece of state that worker depends on (diversion flags, the zero-body
+   * short-circuit) synchronously, right here, so none of it is still being
+   * set up after the handoff has already begun. */
+  http1_stream_prepare(h);
   http_pause(h, _task_pause_cb);
   return 1;
 
@@ -1923,6 +1990,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   if (!srv->worker_pool) return ccol_not_enough_memory;
 
   srv->stream_read_timeout_ms = cfg->stream_read_timeout_ms;
+  srv->max_body_read_duration_ms = cfg->max_body_read_duration_ms;
 
   /* Compute timeout in seconds (facil.io uses uint8_t seconds).
    *
@@ -2267,11 +2335,13 @@ ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
   if (!req->_h) return -1;
   unsigned timeout_ms =
       req->_dispatch ? req->_dispatch->srv->stream_read_timeout_ms : 0;
+  if (!_check_read_deadline(req, &timeout_ms)) return -1;
   return http1_stream_read((http_s *)req->_h, buf, buflen, timeout_ms);
 }
 
 ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req) {
   if (!req || !req->_h) return ccol_unexpected_failure;
+  if (req->_deadline_exceeded) return ccol_timed_out;
   switch (http1_stream_last_error((http_s *)req->_h)) {
     case HTTP1_STREAM_ERR_TIMEOUT:
       return ccol_timed_out;

@@ -15,6 +15,7 @@ Feel free to copy, use and enjoy according to the license provided.
 #include "fio_tls.h"
 
 #if HAVE_OPENSSL
+#include <arpa/inet.h>
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
@@ -477,8 +478,20 @@ static void fio_tls_build_context(fio_tls_s *tls) {
     SSL_CTX_set_cert_store(tls->ctx, store);
     SSL_CTX_set_verify(tls->ctx, SSL_VERIFY_PEER, NULL);
     if (tls->verify_default_store) {
-      FIO_LOG_DEBUG("TLS trusting the system's default CA store.");
-      SSL_CTX_set_default_verify_paths(tls->ctx);
+      if (SSL_CTX_set_default_verify_paths(tls->ctx)) {
+        FIO_LOG_DEBUG("TLS trusting the system's default CA store.");
+      } else {
+        /* Fails closed: SSL_VERIFY_PEER is already set above against a
+         * store that may now be missing its system-default lookup path, so
+         * handshakes will fail their chain check rather than silently skip
+         * verification -- but without this warning, "unable to get local
+         * issuer certificate" at handshake time would be the only clue,
+         * with nothing pointing at the real cause (e.g. a minimal/container
+         * image lacking the OS default CA bundle). */
+        FIO_LOG_WARNING(
+            "TLS failed to load the system's default CA store; "
+            "certificate verification will likely fail.");
+      }
     }
     /* TODO: Add each ceriticate in the PEM to the trust "store" */
     FIO_ARY_FOR(&tls->trust, pos) {
@@ -532,9 +545,18 @@ static ssize_t fio_tls_read(intptr_t uuid, void *udata, void *buf,
   if (ret > 0) return ret;
   ret = SSL_get_error(c->ssl, ret);
   switch (ret) {
-    case SSL_ERROR_SSL: /* overflow */
     case SSL_ERROR_ZERO_RETURN:
-      return 0;                      /* EOF */
+      return 0; /* EOF: peer sent a clean TLS close_notify */
+    case SSL_ERROR_SSL:
+      /* A fatal record-layer problem (corrupted/injected record, bad MAC,
+       * protocol violation) -- NOT a clean close. Conflating this with
+       * SSL_ERROR_ZERO_RETURN above would let a truncated or tampered TLS
+       * stream look like an ordinary closed connection instead of the hard
+       * error it actually is; this matters most for the client-mode
+       * connect-side path (fio_tls_connection_read, reached via this same
+       * function), which faces an arbitrary, potentially hostile server. */
+      errno = ECONNRESET;
+      return -1;
     case SSL_ERROR_NONE:             /* overflow */
     case SSL_ERROR_WANT_CONNECT:     /* overflow */
     case SSL_ERROR_WANT_ACCEPT:      /* overflow */
@@ -585,9 +607,13 @@ static ssize_t fio_tls_write(intptr_t uuid, void *udata, const void *buf,
   if (ret > 0) return ret;
   ret = SSL_get_error(c->ssl, ret);
   switch (ret) {
-    case SSL_ERROR_SSL: /* overflow */
     case SSL_ERROR_ZERO_RETURN:
-      return 0;                      /* EOF */
+      return 0; /* EOF: peer sent a clean TLS close_notify */
+    case SSL_ERROR_SSL:
+      /* See the matching case in fio_tls_read: a fatal record-layer problem
+       * is not a clean close and must not be reported as one. */
+      errno = ECONNRESET;
+      return -1;
     case SSL_ERROR_NONE:             /* overflow */
     case SSL_ERROR_WANT_CONNECT:     /* overflow */
     case SSL_ERROR_WANT_ACCEPT:      /* overflow */
@@ -1007,6 +1033,7 @@ fio_tls_connection_s *FIO_TLS_WEAK fio_tls_connect_create(fio_tls_s *tls,
                                                           const char *hostname,
                                                           uint8_t verify_host) {
   REQUIRE_LIBRARY();
+  if (!tls) return NULL; /* documented contract: NULL on failure, not a crash */
   fio_tls_connection_s *c = malloc(sizeof(*c));
   if (!c) return NULL;
   SSL *ssl = SSL_new(tls->ctx);
@@ -1025,12 +1052,43 @@ fio_tls_connection_s *FIO_TLS_WEAK fio_tls_connect_create(fio_tls_s *tls,
   SSL_set0_rbio(ssl, bio);
   SSL_set0_wbio(ssl, bio);
   if (hostname && *hostname) {
-    SSL_set_tlsext_host_name(ssl, hostname);
+    /* An IP-literal target (e.g. connecting to "203.0.113.5") needs a
+     * different verification call than a DNS name: X509_check_host (which
+     * set1_host configures) only ever inspects dNSName SAN entries, never
+     * iPAddress ones, so a certificate correctly secured for that literal IP
+     * via an iPAddress SAN -- the RFC-correct way to do it, with no CN and
+     * no dNSName SAN -- would otherwise always fail verification even
+     * though it's valid. set1_ip_asc is the call that actually matches
+     * iPAddress SAN entries. SNI (RFC 6066) also must never carry a literal
+     * IP address, only a DNS name, so it's skipped entirely for one. */
+    struct in_addr v4_probe;
+    struct in6_addr v6_probe;
+    int is_ip_literal = inet_pton(AF_INET, hostname, &v4_probe) == 1 ||
+                        inet_pton(AF_INET6, hostname, &v6_probe) == 1;
+    if (!is_ip_literal && !SSL_set_tlsext_host_name(ssl, hostname)) {
+      FIO_LOG_WARNING("(TLS) failed to set the SNI host name to %s", hostname);
+    }
     if (verify_host) {
       X509_VERIFY_PARAM *param = SSL_get0_param(ssl);
-      X509_VERIFY_PARAM_set_hostflags(param,
-                                      X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
-      X509_VERIFY_PARAM_set1_host(param, hostname, 0);
+      int verify_param_ok;
+      if (is_ip_literal) {
+        verify_param_ok = X509_VERIFY_PARAM_set1_ip_asc(param, hostname);
+      } else {
+        /* set_hostflags returns void; only set1_host's outcome is checked. */
+        X509_VERIFY_PARAM_set_hostflags(param,
+                                        X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+        verify_param_ok = X509_VERIFY_PARAM_set1_host(param, hostname, 0);
+      }
+      if (!verify_param_ok) {
+        /* Fail closed: if the hostname/IP verification target couldn't
+         * actually be configured, don't silently let the handshake proceed
+         * as though verify_host's request for it had taken effect.
+         * SSL_free(ssl) alone releases both bio references: SSL_set0_rbio
+         * and SSL_set0_wbio above each already took ownership of one. */
+        SSL_free(ssl);
+        free(c);
+        return NULL;
+      }
     }
   }
   SSL_set_connect_state(ssl);

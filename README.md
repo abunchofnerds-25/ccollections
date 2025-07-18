@@ -3228,6 +3228,10 @@ cfg.max_body_size        = 4*1024*1024;         /* 4 MiB body limit -- exceeding
 cfg.read_timeout_ms      = 30000;               /* 30 s read timeout (baseline) */
 cfg.idle_timeout_ms      = 60000;               /* 60 s keep-alive idle timeout */
 cfg.stream_read_timeout_ms = 30000;             /* 30 s wait for the next body batch; 0 = unbounded */
+cfg.max_body_read_duration_ms = 0;              /* 0 = no cap (default); caps the *total* time spent
+                                                    reading one request's body, closing the loophole a
+                                                    client that trickles bytes just fast enough to always
+                                                    beat stream_read_timeout_ms would otherwise leave open */
 cfg.worker_thread_count  = 4;                   /* 0 = CPU core count */
 cfg.worker_queue_capacity = 128;                /* 0 = default (1024 * threads); CHTTPSVR_QUEUE_UNBOUNDED = no limit */
 cfg.tls                  = &tls_cfg;            /* optional TLS (chttp_tls_config_t) */
@@ -3343,9 +3347,9 @@ static void upload_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 }
 ```
 
-`chttpsvr_req_read` blocks the calling worker thread (never the reactor) until at least one byte is available, the body ends, an error occurs, or `chttpsvr_config_t.stream_read_timeout_ms` elapses with no new data. It returns `>0` bytes read, `0` at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics), or `-1` on error -- call `chttpsvr_req_stream_error(req)` immediately afterward to distinguish a timeout (`ccol_timed_out`), an oversized body (`ccol_msg_too_large`), or a dropped connection (`ccol_http_transfer_aborted`). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1, and `chttpsvr_req_body` on a streaming handler returns `NULL`/0 (its body is never pre-extracted).
+`chttpsvr_req_read` blocks the calling worker thread (never the reactor) until at least one byte is available, the body ends, an error occurs, `chttpsvr_config_t.stream_read_timeout_ms` elapses with no new data, or (if set) `max_body_read_duration_ms` elapses. It returns `>0` bytes read, `0` at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics), or `-1` on error -- call `chttpsvr_req_stream_error(req)` immediately afterward to distinguish a timeout (`ccol_timed_out`), an oversized body (`ccol_msg_too_large`), or a dropped connection (`ccol_http_transfer_aborted`). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1, and `chttpsvr_req_body` on a streaming handler returns `NULL`/0 (its body is never pre-extracted).
 
-`stream_read_timeout_ms` (default 30000ms) bounds how long a worker will wait for the *next* batch while reading a body, for both buffered and streaming routes -- it exists because `read_timeout_ms`/`idle_timeout_ms` reset on any connection activity and so do not protect against a client that trickles bytes just fast enough to never trip them, tying up a worker thread indefinitely.
+`stream_read_timeout_ms` (default 30000ms) bounds how long a worker will wait for the *next* batch while reading a body, for both buffered and streaming routes -- it exists because `read_timeout_ms`/`idle_timeout_ms` reset on any connection activity and so do not protect against a client that trickles bytes just fast enough to never trip them, tying up a worker thread indefinitely. Note that `stream_read_timeout_ms` itself resets on *any* new byte too, so a client that sends a byte or two just before each gap expires defeats it the same way -- `max_body_read_duration_ms` (default 0, disabled) closes that loophole by capping the *total* time spent reading one request's body regardless of per-gap progress, independent of how many individual gaps it took to get there.
 
 The server's `ctpool` is created at `chttpsvr_start` time. Its capacity is controlled by `chttpsvr_config_t.worker_thread_count` and `worker_queue_capacity`. If the queue is full when a request arrives, the server responds immediately with `503 Service Unavailable` -- it never stalls the reactor thread.
 
@@ -3511,7 +3515,7 @@ cfg.tls = &tls;
 | `chttpsvr_req_raw_query(req)` | Raw query string (without leading `?`); NULL if absent |
 | `chttpsvr_req_header(req, name)` | Look up a request header (case-insensitive); NULL if absent |
 | `chttpsvr_req_body(req, &len)` | Pointer to the buffered body bytes and length; NULL/0 on a streaming route (its body is never pre-extracted) |
-| `chttpsvr_req_read(req, buf, n)` | Reads the next batch of body bytes for a streaming handler directly off the socket, blocking the worker (never the reactor) until data arrives, EOF, an error, or `stream_read_timeout_ms` elapses; returns bytes read, 0 at EOF or when n==0 (no-op), -1 on error (NULL req, NULL buf with n>0, called from a buffered handler, timeout, oversized body, or dropped connection) |
+| `chttpsvr_req_read(req, buf, n)` | Reads the next batch of body bytes for a streaming handler directly off the socket, blocking the worker (never the reactor) until data arrives, EOF, an error, `stream_read_timeout_ms` elapses, or (if set) `max_body_read_duration_ms` elapses; returns bytes read, 0 at EOF or when n==0 (no-op), -1 on error (NULL req, NULL buf with n>0, called from a buffered handler, timeout, oversized body, or dropped connection) |
 | `chttpsvr_req_stream_error(req)` | Reports why the most recent `chttpsvr_req_read` returned -1: `ccol_timed_out`, `ccol_msg_too_large`, `ccol_http_transfer_aborted`, or `ccol_success`/`ccol_unexpected_failure` |
 | `chttpsvr_req_param(req, name)` | Named path parameter (URL-decoded); NULL if not in pattern |
 | `chttpsvr_req_query(req, key, &count)` | All values for a query parameter (lazy-parsed, NULL-terminated array); returns NULL on key-absent or OOM |

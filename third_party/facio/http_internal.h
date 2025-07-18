@@ -102,6 +102,13 @@ static inline void http_s_clear(http_s *h, uint8_t log) {
 #define HTTP_INVALID_HANDLE(h) \
   (!(h) || (!(h)->method && !(h)->status_str && (h)->status))
 
+/* Releases one hold on `settings` (see the reserved1 field's doc comment in
+ * http.h) and frees it once every hold has been released. Defined in
+ * http.c; called from http1.c once a connection (and any worker thread
+ * still reading its body) is fully done with the settings it was accepted
+ * under. */
+void http_settings_release(http_settings_s *settings);
+
 /* *****************************************************************************
 Request / Response Handlers
 ***************************************************************************** */

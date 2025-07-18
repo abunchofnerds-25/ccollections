@@ -77,7 +77,8 @@ SOFTWARE.
  * chttpsvr_req_body() once the worker has finished reading it in full.  Both
  * handler types run on worker threads and may block; chttpsvr_req_read()
  * itself blocks the calling worker (never the reactor) until data arrives,
- * EOF, an error, or chttpsvr_config_t.stream_read_timeout_ms elapses.
+ * EOF, an error, chttpsvr_config_t.stream_read_timeout_ms elapses, or (if
+ * set) chttpsvr_config_t.max_body_read_duration_ms elapses.
  *
  * ### Engine lifecycle (implicit)
  *
@@ -259,6 +260,19 @@ typedef struct chttpsvr_config {
    *  chttpsvr_req_stream_error() reports ccol_timed_out; buffered routes
    *  respond 408 automatically. */
   unsigned stream_read_timeout_ms;
+  /** Bounds the *total* wall-clock time a worker thread will spend reading
+   *  one request's body (buffered or streaming), in ms; 0 = no limit.
+   *  Unlike stream_read_timeout_ms (which only bounds each individual gap
+   *  between batches, and so never fires against a client that trickles a
+   *  byte or two just before every gap expires), this caps the sum of all
+   *  such waits for a single request -- closing that trickle-forever loophole,
+   *  which would otherwise let a handful of slow connections pin the entire
+   *  worker pool indefinitely. On expiry, chttpsvr_req_read() returns -1 and
+   *  chttpsvr_req_stream_error() reports ccol_timed_out (the same outcome as
+   *  a stream_read_timeout_ms expiry); buffered routes respond 408
+   *  automatically. Default 0 (disabled) so existing deployments are
+   *  unaffected until this is explicitly opted into. */
+  unsigned max_body_read_duration_ms;
   /** TLS config; NULL = plaintext. */
   const chttp_tls_config_t *tls;
   /** Number of worker threads in the server-owned ctpool (default: CPU count).
@@ -286,6 +300,7 @@ typedef struct chttpsvr_config {
       .read_timeout_ms = 0,                  \
       .idle_timeout_ms = 0,                  \
       .stream_read_timeout_ms = 30000,       \
+      .max_body_read_duration_ms = 0,        \
       .tls = NULL,                           \
       .worker_thread_count = 0,              \
       .worker_queue_capacity = 0,            \
@@ -739,8 +754,9 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
  * they actually arrive on the connection -- this call reads the socket
  * itself (via the worker thread executing the handler, never the reactor
  * thread) and blocks the calling worker until at least one byte is
- * available, the body ends, an error occurs, or stream_read_timeout_ms
- * (chttpsvr_config_t) elapses without new data.
+ * available, the body ends, an error occurs, stream_read_timeout_ms
+ * (chttpsvr_config_t) elapses without new data, or the request's total body
+ * read time exceeds max_body_read_duration_ms (chttpsvr_config_t), if set.
  *
  * If buflen is 0 the function returns 0 immediately regardless of buf (the
  * call is a no-op, consistent with POSIX read(2) semantics).
@@ -748,9 +764,9 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
  * Returns -1 for hard errors (req is NULL, buf is NULL with buflen > 0, or
  * the handler was registered with chttpsvr_register_handler rather than
  * chttpsvr_register_streaming_handler) as well as for a broken connection,
- * an exceeded stream_read_timeout_ms, or a body that exceeds max_body_size
- * mid-stream -- call chttpsvr_req_stream_error() immediately afterward to
- * distinguish these.
+ * an exceeded stream_read_timeout_ms or max_body_read_duration_ms, or a body
+ * that exceeds max_body_size mid-stream -- call chttpsvr_req_stream_error()
+ * immediately afterward to distinguish these.
  *
  * @param req     Request handle (must be from a
  * chttpsvr_register_streaming_handler route).
@@ -767,7 +783,8 @@ ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
  * otherwise the result is unspecified (there may be no error to report).
  *
  * @param req  Request handle.
- * @return ccol_timed_out (stream_read_timeout_ms elapsed),
+ * @return ccol_timed_out (stream_read_timeout_ms or
+ *         max_body_read_duration_ms elapsed),
  *         ccol_msg_too_large (max_body_size exceeded mid-stream),
  *         ccol_http_transfer_aborted (connection closed or malformed
  *         framing), ccol_success (no error recorded), or

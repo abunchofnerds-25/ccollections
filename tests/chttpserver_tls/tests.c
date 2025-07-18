@@ -80,13 +80,29 @@ static void _hello_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    than crash, since fio_tls_cert_add's FIO_LOG_FATAL on a missing/invalid
    cert file would abort the whole process. */
 static int _openssl_selfsigned(const char *key_path, const char *cert_path,
-                               const char *cn) {
+                               const char *cn, const char *san) {
   char cmd[1024];
-  int cn_len = snprintf(cmd, sizeof(cmd),
-                        "openssl req -x509 -newkey rsa:2048 -nodes "
-                        "-keyout '%s' -out '%s' -days 1 -subj '/CN=%s' "
-                        ">/dev/null 2>&1",
-                        key_path, cert_path, cn);
+  int cn_len;
+  if (san) {
+    /* A real IP-address certificate is secured via a subjectAltName
+     * iPAddress entry, per RFC 6125 -- not the legacy CN-matching fallback,
+     * which fio_tls_openssl.c's connect-side verification (X509_check_ip,
+     * reached via X509_VERIFY_PARAM_set1_ip_asc for an IP-literal target)
+     * does not use. Without this, the hostname tests below would only ever
+     * be exercising CN string matching by coincidence, not genuine
+     * IP-address certificate validation. */
+    cn_len = snprintf(cmd, sizeof(cmd),
+                      "openssl req -x509 -newkey rsa:2048 -nodes "
+                      "-keyout '%s' -out '%s' -days 1 -subj '/CN=%s' "
+                      "-addext 'subjectAltName=%s' >/dev/null 2>&1",
+                      key_path, cert_path, cn, san);
+  } else {
+    cn_len = snprintf(cmd, sizeof(cmd),
+                      "openssl req -x509 -newkey rsa:2048 -nodes "
+                      "-keyout '%s' -out '%s' -days 1 -subj '/CN=%s' "
+                      ">/dev/null 2>&1",
+                      key_path, cert_path, cn);
+  }
   if (cn_len < 0 || (size_t)cn_len >= sizeof(cmd)) return -1;
   if (system(cmd) != 0) return -1;
   if (access(cert_path, R_OK) != 0 || access(key_path, R_OK) != 0) return -1;
@@ -110,7 +126,8 @@ static int _generate_self_signed_cert(void) {
       (size_t)ckn >= sizeof(g_client_key_path))
     return -1;
 
-  if (_openssl_selfsigned(g_key_path, g_cert_path, "127.0.0.1") != 0)
+  if (_openssl_selfsigned(g_key_path, g_cert_path, "127.0.0.1",
+                          "IP:127.0.0.1") != 0)
     return -1;
   /* Client identity cert for the mTLS smoke test -- self-signed and never
    * actually trusted by the server in this suite; it only needs to be a
@@ -118,7 +135,7 @@ static int _generate_self_signed_cert(void) {
    * files, not the fake nonexistent paths used by chttpclient's own
    * set_tls_deep_copies_strings test) is exercised end-to-end. */
   if (_openssl_selfsigned(g_client_key_path, g_client_cert_path,
-                         "chttpclient-test-client") != 0)
+                          "chttpclient-test-client", NULL) != 0)
     return -1;
   return 0;
 }

@@ -79,6 +79,11 @@ Allocation
 static inline FIOBJ fiobj_ary_alloc(size_t capa) {
   fiobj_ary_s *ary = fio_malloc(sizeof(*ary));
   if (!ary) {
+    /* WARNING: terminates the entire process on OOM, taking down every
+     * other in-flight connection with it -- not just the one request that
+     * happened to trigger the allocation. This is this vendor library's
+     * allocation philosophy throughout (see also fiobj_str.c, fiobj_hash.c),
+     * not something specific to this call site or fixable in isolation. */
     perror("ERROR: fiobj array couldn't allocate memory");
     exit(errno);
   }

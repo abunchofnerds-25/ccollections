@@ -369,7 +369,8 @@ Core Connection Data Clearing
  * rw_hooks/rw_udata when it ran. Called both from fio_clear_fd itself (when
  * nothing was busy, so it can finish immediately) and from
  * fio_rw_busy_release (when the last busy caller finishes later). */
-static inline void _fio_finalize_rw_cleanup(intptr_t fd, fio_rw_hook_s *rw_hooks,
+static inline void _fio_finalize_rw_cleanup(intptr_t fd,
+                                            fio_rw_hook_s *rw_hooks,
                                             void *rw_udata) {
   if (rw_hooks && rw_hooks->cleanup) rw_hooks->cleanup(rw_udata);
 }
@@ -2727,16 +2728,33 @@ void fio_force_close(intptr_t uuid) {
    * TLS SSL/BIO object) out from under it. Without this lock, two threads
    * racing to close the same uuid (e.g. a read error on one thread and a
    * poll-detected hangup on another) could both see close & 1 and both
-   * invoke before_close (SSL_shutdown) on the same connection at once. */
+   * invoke before_close (SSL_shutdown) on the same connection at once.
+   *
+   * rw_busy != 0 here means a read (e.g. a worker thread inside fio_read,
+   * per chttpserver's worker-driven body ingestion) is already in flight
+   * against this same rw_udata. before_close (e.g. SSL_shutdown) is not
+   * safe to run concurrently with that call -- unlike fio_clear_fd, which
+   * can safely defer freeing rw_udata until the busy count drains,
+   * before_close needs to actually run its hook *now* to be useful, and
+   * there is no safe way to defer just the hook call without blocking this
+   * thread (which, when fio_force_close runs on the reactor thread, would
+   * stall every other connection on it for as long as the other read
+   * blocks). Skip the graceful before_close entirely in that case: the
+   * connection still gets torn down immediately below via fio_clear_fd, it
+   * just does so without sending a clean TLS close_notify -- the same
+   * outcome as any other abrupt disconnect (a crash, a network failure),
+   * which every well-behaved peer already has to tolerate. */
   fio_rw_hook_s *hooks_for_before_close = NULL;
   void *udata_for_before_close = NULL;
   fio_lock(&uuid_data(uuid).sock_lock);
   if (!uuid_data(uuid).close) uuid_data(uuid).close = 1;
   if (uuid_data(uuid).open && (uuid_data(uuid).close & 1)) {
     uuid_data(uuid).close = 2; /* don't repeat the before_close callback */
-    hooks_for_before_close = uuid_data(uuid).rw_hooks;
-    udata_for_before_close = uuid_data(uuid).rw_udata;
-    ++uuid_data(uuid).rw_busy;
+    if (!uuid_data(uuid).rw_busy) {
+      hooks_for_before_close = uuid_data(uuid).rw_hooks;
+      udata_for_before_close = uuid_data(uuid).rw_udata;
+      ++uuid_data(uuid).rw_busy;
+    }
   }
   fio_unlock(&uuid_data(uuid).sock_lock);
   if (hooks_for_before_close) {
@@ -2862,7 +2880,17 @@ invalid:
   return -1;
 
 attacked:
-  /* don't close, just detach from facil.io and mark uuid as invalid */
+  /* don't close, just detach from facil.io and mark uuid as invalid.
+   * Note: this intent only holds if fio_clear_fd finds rw_busy == 0 at this
+   * exact moment. If some other call (e.g. a worker thread's fio_read) is
+   * concurrently in flight against this same connection, fio_clear_fd
+   * defers its cleanup, and fio_rw_busy_release *does* close(fd) once that
+   * deferred cleanup finally runs -- silently closing the fd anyway, purely
+   * as a function of unrelated thread timing rather than anything about
+   * this Slowloris path itself. Narrow window, and the connection is being
+   * torn down either way, so this doesn't change the outcome for the
+   * caller in practice -- noted here since it does contradict the comment
+   * above under that specific race. */
   FIO_LOG_WARNING("(facil.io) possible Slowloris attack from %.*s",
                   (int)fio_peer_addr(uuid).len, fio_peer_addr(uuid).data);
   fio_unlock(&uuid_data(uuid).sock_lock);
@@ -2953,6 +2981,22 @@ int fio_rw_hook_set(intptr_t uuid, fio_rw_hook_s *rw_hooks, void *udata) {
     fio_unlock(&fd_data(fd).sock_lock);
     goto invalid_uuid;
   }
+  if (fd_data(fd).rw_busy) {
+    /* A fio_read / before_close call elsewhere already snapshotted the
+     * current rw_hooks/rw_udata (outside of this lock, by design -- see
+     * fio_read) and is still mid-call using them. Swapping hooks now would
+     * be fine on its own (that in-flight call doesn't re-read this field),
+     * but calling old_rw_hooks->cleanup(old_udata) below could free the
+     * very udata (e.g. a TLS SSL/BIO object) that call is still using --
+     * the same use-after-free fio_clear_fd's own rw_cleanup_pending defers
+     * against. Unlike fio_clear_fd, there is no fd close happening here to
+     * hang a deferred completion off of, so refuse the swap outright rather
+     * than risk it; the only current caller (fio_tls_attach2uuid) runs
+     * immediately after accept, before any read is possible, so this is not
+     * expected to trigger in practice. */
+    fio_unlock(&fd_data(fd).sock_lock);
+    goto invalid_uuid;
+  }
   old_rw_hooks = fd_data(fd).rw_hooks;
   old_udata = fd_data(fd).rw_udata;
   fd_data(fd).rw_hooks = rw_hooks;
@@ -2961,7 +3005,10 @@ int fio_rw_hook_set(intptr_t uuid, fio_rw_hook_s *rw_hooks, void *udata) {
   if (old_rw_hooks && old_rw_hooks->cleanup) old_rw_hooks->cleanup(old_udata);
   return 0;
 invalid_uuid:
-  if (!rw_hooks->cleanup) rw_hooks->cleanup(udata);
+  /* Per this function's contract (see fio.h): rw_hooks->cleanup is always
+   * called, even on failure, so the caller's udata is never leaked just
+   * because the hook couldn't be installed. */
+  if (rw_hooks->cleanup) rw_hooks->cleanup(udata);
   return -1;
 }
 
@@ -4162,10 +4209,19 @@ typedef struct {
 
 static void fio_listen_cleanup_task(void *pr_) {
   fio_listen_protocol_s *pr = pr_;
-  if (pr->tls) fio_tls_destroy(pr->tls);
+  /* on_finish runs before fio_tls_destroy, not after: for a TLS listener,
+   * on_finish's udata (http.c's http_settings_s) can be freed as a side
+   * effect of fio_tls_destroy itself -- it's registered as the "http/1.1"
+   * ALPN entry's on_cleanup hook, which fio_tls_destroy fires synchronously
+   * the moment it releases the last reference to this tls object. Calling
+   * on_finish afterward would then read (and, for a non-TLS listener,
+   * separately free) already-freed memory. Neither on_finish nor
+   * fio_force_close below depends on tls having been torn down first, so
+   * this order costs nothing. */
   if (pr->on_finish) {
     pr->on_finish(pr->uuid, pr->udata);
   }
+  if (pr->tls) fio_tls_destroy(pr->tls);
   fio_force_close(pr->uuid);
   if (pr->addr &&
       (!pr->port || *pr->port == 0 ||

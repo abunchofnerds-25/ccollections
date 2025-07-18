@@ -1930,13 +1930,14 @@ static int _raw_request(const char *method, const char *path,
    socket rather than one blob that already arrived in a single recv), then
    reads the full response. Returns the HTTP status code, or -1 on a
    socket-level failure. Always closes after one response. */
-static int _raw_request_drip_body(const char *method, const char *path,
-                                  const char *body, size_t chunk_len,
-                                  unsigned delay_us, char *buf, size_t buf_sz) {
+static int _raw_request_drip_body(int port, const char *method,
+                                  const char *path, const char *body,
+                                  size_t chunk_len, unsigned delay_us,
+                                  char *buf, size_t buf_sz) {
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
-  sa.sin_port = htons(TEST_PORT);
+  sa.sin_port = htons((uint16_t)port);
   if (inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr) != 1) return -1;
 
   int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -2178,7 +2179,7 @@ TEST(chttpserver, streaming_body_delivered_in_separate_batches) {
      -- proving the body is read live off the socket by the worker thread
      as it arrives, not pre-buffered whole before the handler starts. */
   char buf[4096] = {0};
-  int status = _raw_request_drip_body("POST", "/stream-batch-count",
+  int status = _raw_request_drip_body(TEST_PORT, "POST", "/stream-batch-count",
                                       "aaaabbbbccccddddeeee", 4, 20000, buf,
                                       sizeof(buf));
   REQUIRE_EQ(status, 200);
@@ -3752,4 +3753,192 @@ TEST(chttpserver, streaming_max_body_size_exceeded_reported) {
   REQUIRE_EQ(status, 200);
   REQUIRE_TRUE(strstr(buf, "x-stream-err:ccol_msg_too_large") != NULL);
   REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
+}
+
+/* ========================================================================== */
+/*                    SERVER DESTROY-WHILE-IN-FLIGHT TESTS                    */
+/* ========================================================================== */
+
+/* Connects to `port`, sends a POST whose body is dripped one byte at a time
+   (50ms apart) so a ctpool worker stays blocked inside chttpsvr_req_read /
+   http1_stream_read for the whole drip, and finally drains and discards
+   whatever response (or abrupt close) it gets. Used as background traffic
+   while the main thread destroys the server out from under it. */
+static void *_drip_body_bg_thread(void *arg) {
+  int port = *(int *)arg;
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)port);
+  if (inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr) != 1) return NULL;
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+    close(fd);
+    return NULL;
+  }
+
+  const char *body = "abcdefghijklmnopqrst";
+  const size_t body_len = 20;
+  char hdr[256];
+  int hn = snprintf(hdr, sizeof(hdr),
+                    "POST /destroy-slow-body HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Content-Type: text/plain\r\n"
+                    "Content-Length: %zu\r\n"
+                    "Connection: close\r\n"
+                    "\r\n",
+                    body_len);
+  if (hn < 0 || (size_t)hn >= sizeof(hdr) || write(fd, hdr, (size_t)hn) != hn) {
+    close(fd);
+    return NULL;
+  }
+
+  for (size_t i = 0; i < body_len; i++) {
+    if (write(fd, body + i, 1) != 1) break;
+    usleep(50000);
+  }
+
+  char buf[256];
+  ssize_t r;
+  while ((r = read(fd, buf, sizeof(buf))) > 0) {
+  }
+  close(fd);
+  return NULL;
+}
+
+TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
+  /* Regression test: __chttpsvr_destroy used to close the listener (freeing
+   * the shared http_settings_s via facio's http_on_finish) before waiting for
+   * in_flight_requests to drain. A ctpool worker still blocked inside
+   * chttpsvr_req_read for a slow/dripped body on another connection would
+   * then dereference settings fields (max_body_size, udata) through freed
+   * memory. The fix ties settings' lifetime to a connection-count refcount
+   * (http.h's http_settings_s.reserved1) instead of the listener socket
+   * alone. This test doesn't assert on a return value -- the bug is a
+   * use-after-free, so the real verification is `make memtest` (valgrind)
+   * running this test clean; a debug build would also abort/crash outright
+   * under the old code once the race actually landed. Uses its own
+   * short-lived server so it cannot disturb the shared test fixture. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv =
+      chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/destroy-slow-body",
+                                          _stream_error_report_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 4;
+  cfg.stream_read_timeout_ms = 2000;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  int port = TEST_PORT + 4;
+  pthread_t bg;
+  REQUIRE_EQ(pthread_create(&bg, NULL, _drip_body_bg_thread, &port), 0);
+
+  /* Give the background connection time to be accepted, headers parsed, and
+   * dispatched to a ctpool worker (which will then be blocked mid-drip
+   * inside chttpsvr_req_read) before destroying the server underneath it. */
+  usleep(100000);
+
+  __chttpsvr_destroy(srv);
+
+  pthread_join(bg, NULL);
+}
+
+/* ========================================================================== */
+/*                   MAX_BODY_READ_DURATION_MS TESTS                          */
+/* ========================================================================== */
+
+TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
+  /* stream_read_timeout_ms only bounds each individual gap between batches
+   * of body bytes -- a client that sends a little data and then stalls
+   * *within* that gap never trips it. max_body_read_duration_ms bounds the
+   * *total* time spent reading one request's body regardless of per-gap
+   * progress, closing that loophole. Configure a generous per-gap timeout
+   * (so it cannot possibly fire first) alongside a short overall duration
+   * cap; send part of the declared body once and then never send the rest,
+   * mirroring stream_read_timeout_reports_ccol_timed_out's proven
+   * send-once-then-just-read pattern (a drip-writing client risks the
+   * server responding and closing the connection mid-upload, which would
+   * fail the client's own subsequent writes with EPIPE before it ever gets
+   * to read the response). */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_streaming_handler(
+      srv, CHTTP_POST, "/deadline-test", _stream_error_report_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 5;
+  cfg.stream_read_timeout_ms = 5000;   /* generous; must not fire first */
+  cfg.max_body_read_duration_ms = 300; /* the cap actually under test */
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 5));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *hdr =
+      "POST /deadline-test HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Content-Type: text/plain\r\n"
+      "Content-Length: 10\r\n"
+      "Connection: close\r\n"
+      "\r\n"
+      "abc"; /* 3 of the declared 10 bytes; never send the rest */
+  REQUIRE_EQ(write(fd, hdr, strlen(hdr)), (ssize_t)strlen(hdr));
+
+  char buf[1024] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:ccol_timed_out") != NULL);
+
+  __chttpsvr_destroy(srv);
+}
+
+TEST(chttpserver, max_body_read_duration_default_disabled_allows_slow_drip) {
+  /* max_body_read_duration_ms defaults to 0 (disabled) -- a slow-but-steady
+   * drip that would trip a short overall cap must still succeed when the
+   * cap is left unset, on a server whose stream_read_timeout_ms is generous
+   * enough that the per-gap timeout doesn't fire either. Guards against the
+   * deadline check misfiring when it's supposed to be a no-op. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv =
+      chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/deadline-disabled",
+                                          _stream_error_report_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 6;
+  cfg.stream_read_timeout_ms = 5000;
+  REQUIRE_EQ((int)cfg.max_body_read_duration_ms, 0);
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  char buf[4096] = {0};
+  int status =
+      _raw_request_drip_body(TEST_PORT + 6, "POST", "/deadline-disabled",
+                             "0123456789", 1, 80000, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:none") != NULL);
+
+  __chttpsvr_destroy(srv);
 }

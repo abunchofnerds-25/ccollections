@@ -4148,6 +4148,7 @@ DESCRIPTION
          read_timeout_ms       = 0   (no timeout; use facil.io default ~40 s)
          idle_timeout_ms       = 0   (0 = fall back to read_timeout_ms)
          stream_read_timeout_ms = 30000   (30 s; 0 = wait indefinitely)
+         max_body_read_duration_ms = 0   (disabled; no cap on total read time)
          tls                   = NULL
          worker_thread_count   = 0   (0 = CPU core count)
          worker_queue_capacity = 0   (0 = 1024 * worker_thread_count)
@@ -4159,6 +4160,16 @@ DESCRIPTION
        client that trickles bytes just fast enough to always beat them.  On
        expiry, chttpsvr_req_read returns -1 and chttpsvr_req_stream_error
        reports ccol_timed_out; buffered routes respond 408 automatically.
+
+       Note that stream_read_timeout_ms itself resets on any new byte too, so
+       a client that trickles a byte or two just before each gap expires
+       defeats it the same way it defeats read_timeout_ms/idle_timeout_ms.
+       max_body_read_duration_ms closes that loophole by separately capping
+       the *total* wall-clock time spent reading one request's body,
+       regardless of how many individual gaps it took to get there.  It is
+       disabled (0) by default so existing deployments are unaffected unless
+       they opt in.  On expiry it reports the same ccol_timed_out outcome as
+       a stream_read_timeout_ms expiry.
 
        Use CHTTPSVR_QUEUE_UNBOUNDED for worker_queue_capacity to create a pool
        with no capacity limit.

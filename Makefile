@@ -31,10 +31,22 @@ COMMON_CFLAGS = -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR) -I$(THIRD_PARTY_LLHTTP_DIR
 # Third party sources are compiled without -Werror and with extra suppression flags
 # because facil.io triggers several warnings with GCC/OpenSSL 3.0, and llhttp's
 # generated state machine triggers -Wunused-parameter pervasively.
+# -Wno-stringop-overflow: facil.io's fio_str_s implements a small-string
+# optimization by reusing struct bytes *after* the single-byte `frozen` field
+# as inline storage (FIO_STR_SMALL_DATA(s) = (&s->frozen)+1), with capacity
+# computed as sizeof(fio_str_s) minus that offset -- provably in-bounds by
+# construction. GCC's -Wstringop-overflow instead infers the target's size
+# from `frozen`'s own declared type (a single byte), sees an OOB write, and
+# only surfaces this at -O2/-O3 (the interprocedural inlining chain needed to
+# trace it through fio_str_resize/fio_str_concat requires it) -- hence why
+# this is invisible in the -O0 test builds and only appears here. Verified as
+# a false positive: FIO_STR_SMALL_CAPA is derived directly from sizeof(fio_str_s),
+# so the write can never exceed the struct's real allocation.
 THIRD_PARTY_CFLAGS = -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR) -I$(THIRD_PARTY_LLHTTP_DIR) -DHAVE_OPENSSL=1 \
 	-fPIC -g -O3 \
 	-Wno-deprecated-declarations -Wno-cast-function-type \
-	-Wno-unused-parameter -Wno-sign-compare -Wno-type-limits
+	-Wno-unused-parameter -Wno-sign-compare -Wno-type-limits \
+	-Wno-stringop-overflow
 
 # Separate cflags for shared and static builds
 SHARED_CFLAGS = $(COMMON_CFLAGS)

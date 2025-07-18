@@ -6574,6 +6574,14 @@ DESCRIPTION
        rather than kept alive, since the excess body bytes beyond the limit
        are discarded, not drained.
 
+       Body read timeouts: cfg->stream_read_timeout_ms bounds how long a
+       worker will wait for the next batch of body bytes (buffered or
+       streaming); 0 waits indefinitely.  Because it resets on any new byte,
+       a client that trickles data just fast enough never trips it, so
+       cfg->max_body_read_duration_ms (0 = disabled, the default) separately
+       bounds the *total* time spent reading one request's body regardless of
+       per-gap progress -- see chttpsvr_req_read.
+
        Connection timeout: both cfg->read_timeout_ms and cfg->idle_timeout_ms
        map to the single connection-timeout parameter exposed by the underlying
        facil.io http_listen call.  When idle_timeout_ms is non-zero it takes
@@ -6728,7 +6736,8 @@ DESCRIPTION
        batch to the handler as it arrives and returns 0 once the body ends;
        subsequent calls also return 0 (idempotent EOF). It returns -1 on a
        dropped connection, an exceeded max_body_size, or a stalled client
-       (bounded by chttpsvr_config_t.stream_read_timeout_ms) -- call
+       (bounded by chttpsvr_config_t.stream_read_timeout_ms per gap and,
+       if set, chttpsvr_config_t.max_body_read_duration_ms overall) -- call
        chttpsvr_req_stream_error to distinguish these.
 
        When the server's ctpool queue is at capacity when a request arrives,
@@ -7068,8 +7077,9 @@ DESCRIPTION
        as they actually arrive on the connection.  This call reads the socket
        itself -- on the worker thread executing the handler, never the
        reactor thread -- and blocks the calling worker until at least one
-       byte is available, the body ends, an error occurs, or
-       chttpsvr_config_t.stream_read_timeout_ms elapses without new data.
+       byte is available, the body ends, an error occurs,
+       chttpsvr_config_t.stream_read_timeout_ms elapses without new data, or
+       (if set) chttpsvr_config_t.max_body_read_duration_ms elapses.
 
        Return values:
          > 0   Number of bytes copied into buf.
@@ -7077,10 +7087,10 @@ DESCRIPTION
           -1   req is NULL; buf is NULL with buflen > 0; the handler was
                registered with chttpsvr_register_handler (buffered), not
                chttpsvr_register_streaming_handler; the connection was
-               dropped or reset; stream_read_timeout_ms elapsed with no new
-               data; or the body exceeded max_body_size mid-stream.  Call
-               chttpsvr_req_stream_error immediately afterward to
-               distinguish these.
+               dropped or reset; stream_read_timeout_ms or
+               max_body_read_duration_ms elapsed; or the body exceeded
+               max_body_size mid-stream.  Call chttpsvr_req_stream_error
+               immediately afterward to distinguish these.
 
        When buflen is 0 the function returns 0 immediately regardless of the
        value of buf.  Passing NULL for buf with buflen == 0 is therefore
@@ -7109,7 +7119,9 @@ DESCRIPTION
 
        Return values:
          ccol_timed_out             stream_read_timeout_ms elapsed while
-                                     waiting for the next batch.
+                                     waiting for the next batch, or the
+                                     request's total body read time exceeded
+                                     max_body_read_duration_ms (if set).
          ccol_msg_too_large         The body exceeded max_body_size
                                      mid-stream.
          ccol_http_transfer_aborted The connection was closed or reset, or

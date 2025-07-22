@@ -539,8 +539,20 @@ void http1_stream_prepare(http_s *h) {
      * (there's nothing to read), so it will never reach the reset that
      * normally happens right after http1_on_request runs. Do it here --
      * otherwise the next request parsed on this (kept-alive) connection
-     * inherits stale reserved/content_length bits and gets misparsed. */
+     * inherits stale reserved/content_length bits and gets misparsed.
+     * h1_reset(p) (zeroing p->header_size) belongs to that same "normally
+     * happens right after http1_on_request" reset and was missing here:
+     * p->header_size lives on http1pr_s itself, not in parser.state, so
+     * resetting parser.state alone left it accumulating this message's
+     * header bytes on top of every previous message's on this same
+     * connection, forever, since no other reset for it exists on the
+     * zero-body path. On a reused keep-alive connection sending many
+     * bodyless requests, header_size eventually crosses max_header_size
+     * (HTTP_MAX_HEADER_LENGTH, unrelated to the actual current request's
+     * header size) and http1_on_header starts rejecting perfectly normal
+     * requests with a spurious 413. */
     p->parser.state = (struct http1_parser_protected_read_only_state_s){0};
+    h1_reset(p);
   }
 }
 
@@ -593,18 +605,27 @@ static inline void http1_consume_data(intptr_t uuid, http1pr_s *p) {
       /* http_pause, called synchronously inside the settings hook that
        * http1_parse just invoked, defers the actual handoff via fio_defer --
        * a worker may already be running http1_stream_read's one-time setup
-       * on another thread by the time this line runs. p->buf_len still needs
-       * to end up holding the correct leftover-byte count, though (it isn't
-       * merely "redundant" to compute): if ctpool has no free worker,
-       * http1_stream_read is never called for this message and nothing else
-       * will ever fix up p->buf_len for this connection's next request. Take
-       * the same lock http1_destroy/http1_stream_release already use to
-       * serialize the diversion handoff so this write and the worker's
-       * cannot interleave; skip the p->buf compaction below entirely --
+       * on another thread by the time this line runs, and that setup
+       * unconditionally zeroes p->buf_len (see the comment there: the true
+       * leftover bytes are captured in stream_primed once diverted, not
+       * here). Whichever of the two critical sections below runs second
+       * must defer to whatever the first one already decided -- subtracting
+       * `i` from a buf_len the worker has already reset to 0 would underflow
+       * the (unsigned) field to a huge garbage value, which previously went
+       * on to corrupt this same struct's other fields and crash the process
+       * once something finally dereferenced the result. Checking
+       * stream_prepared under the same lock the worker uses to set it
+       * (atomically with its own zeroing of buf_len) makes the two
+       * critical sections agree on ordering regardless of which runs first:
+       * if the worker's reset already happened, buf_len is correctly 0 and
+       * must be left alone; otherwise it is still safe to apply our own
+       * leftover-byte accounting here (and harmless if the worker's reset
+       * then runs afterward and overwrites it with 0 anyway, which is what
+       * it wants regardless). Skip the p->buf compaction below entirely --
        * touching p->buf itself is never needed here (the same bytes are
        * already captured in stream_primed) and would race unprotected. */
       fio_lock(&p->stream_lock);
-      p->buf_len -= i;
+      if (!p->stream_prepared) p->buf_len -= i;
       fio_unlock(&p->stream_lock);
       return;
     }
@@ -806,11 +827,21 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
      * the same lock http1_consume_data uses around its own p->buf_len write
      * so the two cannot interleave; p->buf's leftover bytes were already
      * captured in stream_primed before diversion was decided, so there is
-     * nothing left to preserve from p->buf_len's current value here. */
+     * nothing left to preserve from p->buf_len's current value here.
+     *
+     * stream_prepared is set to 1 *inside* this same locked section (not
+     * after releasing the lock): http1_consume_data's diverted branch reads
+     * stream_prepared, under this same lock, to decide whether it is still
+     * safe to apply its own "subtract consumed bytes" update to buf_len (see
+     * the comment there). If that flag were set after unlocking, there would
+     * be a window where buf_len has already been zeroed here but
+     * stream_prepared still reads 0, letting http1_consume_data's own
+     * (unsigned) subtraction underflow buf_len against the already-zeroed
+     * value. */
     fio_lock(&p->stream_lock);
     p->buf_len = 0;
-    fio_unlock(&p->stream_lock);
     p->stream_prepared = 1;
+    fio_unlock(&p->stream_lock);
   }
 
   if (!buflen) return 0;

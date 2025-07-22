@@ -806,6 +806,23 @@ re_eval:
       } while ((parser->state.reserved & HTTP1_P_FLAG_HEADER_COMPLETE) == 0);
     finished_headers:
       ++start;
+      if (start >= stop) {
+        /* Only the first byte of the blank line terminating the headers
+         * ('\r', or a lone '\n') has arrived so far in this buffer -- the
+         * matching '\n' (if any) hasn't been read yet. Dereferencing *start
+         * here would read one byte past the end of the caller's buffer;
+         * if that stray byte happened to equal '\n', start (and therefore
+         * this function's "consumed" return value) would end up one past
+         * the actual buffer length, which underflows the caller's
+         * (unsigned) remaining-length bookkeeping on the next call --
+         * observed to eventually corrupt http1pr_s's own fields and crash.
+         * Back off to the still-ambiguous byte (already confirmed
+         * in-bounds by the check at the top of this loop) and ask the
+         * caller to resubmit once more data arrives, exactly like every
+         * other "not enough data yet" return in this function. */
+        --start;
+        return HTTP1_CONSUMED;
+      }
       if (*start == '\n') ++start;
       end = start;
       parser->state.reserved |= HTTP1_P_FLAG_HEADER_COMPLETE;

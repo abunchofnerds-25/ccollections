@@ -1950,6 +1950,18 @@ static void deferred_on_close(void *uuid_, void *pr_) {
   pr->on_close((intptr_t)uuid_, pr);
   return;
 postpone:
+  /* pr->rsv (one of the FIO_PR_LOCK_* bytes) is held by an in-flight task
+   * elsewhere -- most commonly a worker's deferred http_resume, still
+   * waiting its turn on this same shared queue. Re-pushing immediately with
+   * no backoff keeps this task (and every other thread that happens to pop
+   * it) spinning at the front of task_queue_normal: fio_defer_perform's
+   * while-loop never sees the queue empty, so it never returns, and the
+   * owning fio_defer_cycle thread never reaches its fio_is_running() check
+   * -- under enough concurrent closes this starves the very task that would
+   * clear pr->rsv, and also blocks that thread from ever noticing fio_stop().
+   * fio_reschedule_thread() (already used the same way in fio_lock's own
+   * spin-retry, just above) gives the real lock-holder a chance to run. */
+  fio_reschedule_thread();
   fio_defer_push_task(deferred_on_close, uuid_, pr_);
 }
 

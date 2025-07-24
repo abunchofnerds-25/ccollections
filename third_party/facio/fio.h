@@ -629,6 +629,27 @@ enum fio_io_event {
 void fio_force_event(intptr_t uuid, enum fio_io_event);
 
 /**
+ * Unconditionally re-arms the reactor's read interest for `uuid` (an
+ * idempotent `epoll_ctl`-equivalent MOD/ADD), independent of the
+ * `scheduled` bookkeeping that guards `fio_force_event(FIO_EVENT_ON_DATA)`.
+ *
+ * `fio_force_event(FIO_EVENT_ON_DATA)` both (a) schedules an immediate
+ * follow-up read attempt and (b) claims the per-connection `scheduled` lock
+ * as a side effect. When called from *within* an active `on_data`
+ * invocation (as `fio_tls_handshake` does right after a handshake
+ * completes), that side effect wins a race against the *current*
+ * invocation's own post-callback re-arm check in `deferred_on_data`,
+ * causing it to skip re-arming the (edge-triggered, one-shot) poll
+ * interest entirely -- on the assumption that the scheduled follow-up will
+ * handle it. If that follow-up's own read attempt finds no data yet
+ * available, nothing is left to ever re-arm the socket, even once data
+ * later arrives: the reactor was never told to watch for it again. Call
+ * this alongside `fio_force_event(FIO_EVENT_ON_DATA)` in such cases to
+ * close that window unconditionally.
+ */
+void fio_force_read_rearm(intptr_t uuid);
+
+/**
  * Temporarily prevents `on_data` events from firing.
  *
  * The `on_data` event will be automatically rescheduled when (if) the socket's

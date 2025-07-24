@@ -2106,6 +2106,11 @@ void fio_suspend(intptr_t uuid) {
   if (uuid_is_valid(uuid)) fio_trylock(&uuid_data(uuid).scheduled);
 }
 
+void fio_force_read_rearm(intptr_t uuid) {
+  if (!uuid_is_valid(uuid)) return;
+  fio_poll_add_read(fio_uuid2fd(uuid));
+}
+
 /* *****************************************************************************
 Section Start Marker
 
@@ -2226,6 +2231,20 @@ intptr_t fio_accept(intptr_t srv_uuid) {
 
   fio_lock(&fd_data(client).protocol_lock);
   fio_clear_fd(client, 1);
+  /* fio_clear_fd zero-initializes fd_data(client), leaving `.active` at 0
+   * until a protocol is attached (fio_attach) or the first successful
+   * fio_read/fio_write touches it. Until then, fio_review_timeout's idle
+   * check (`fd_data(fd).active + timeout >= review`) treats `active == 0`
+   * as "idle since the epoch" -- true on its very first sweep, regardless
+   * of how recently the connection was actually accepted. For a connection
+   * whose low-level rw_hooks have already been replaced (e.g. a TLS
+   * handshake in progress or just completed) but which has no protocol
+   * attached yet (attachment happens slightly later, e.g. after ALPN
+   * negotiation), that first sweep's "no protocol, non-default rw_hooks"
+   * branch calls fio_close() on a connection that isn't idle at all -- it's
+   * brand new. Touching it here starts the idle clock at accept time,
+   * matching the invariant the review sweep is meant to enforce. */
+  touchfd(client);
   fio_unlock(&fd_data(client).protocol_lock);
   /* copy peer address */
   if (((struct sockaddr *)addrinfo)->sa_family == AF_UNIX) {

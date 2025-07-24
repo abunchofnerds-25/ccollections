@@ -771,7 +771,23 @@ static size_t fio_tls_handshake(intptr_t uuid, void *udata) {
                   (void *)uuid);
     return 0;
   }
-  /* make sure the connection is re-added to the reactor */
+  /* make sure the connection is re-added to the reactor.
+   *
+   * fio_force_event alone is not sufficient here: this handshake completion
+   * runs from *within* an active on_data invocation (the read that drove
+   * SSL_accept/SSL_connect to completion), and fio_force_event's own
+   * fio_trylock on the connection's `scheduled` flag always wins the race
+   * against that invocation's own post-callback re-arm check in
+   * deferred_on_data, causing the latter to skip re-arming the
+   * edge-triggered, one-shot poll interest -- on the assumption that the
+   * event fio_force_event just scheduled will handle it. If that follow-up's
+   * own read attempt finds no application data yet available (a real
+   * possibility: the peer's next flight may simply not have reached the
+   * kernel socket buffer yet), nothing is left to ever re-arm the socket, so
+   * a request sent moments later can sit unread until the connection's idle
+   * timeout eventually force-closes it. fio_force_read_rearm closes that
+   * window unconditionally, independent of the `scheduled` race. */
+  fio_force_read_rearm(uuid);
   fio_force_event(uuid, FIO_EVENT_ON_DATA);
   /* log session ID for WireShark */
 #if FIO_TLS_PRINT_SECRET

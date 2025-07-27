@@ -3211,10 +3211,20 @@ int main(void) {
 
 ### Construction and Lifecycle
 
+`create_chttpsvr` / `create_chttpsvr_mp` always manage their own logger,
+separate from any handle the caller passes in: passing `NULL` for `cl`
+creates an internal logger that writes only FATAL messages to stderr;
+passing a logger derives a new one from it (tagged `component=http-server`)
+that the server owns from then on. The server's own logger is closed
+automatically by `chttpsvr_destroy` / `__chttpsvr_destroy` -- the caller's
+original `cl` handle (when non-NULL) is never touched and remains the
+caller's responsibility to close.
+
 ```c
 clog logger = clog_open_fd(2, CLOG_INFO);
-chttpsvr srv  = create_chttpsvr(logger, NULL);         /* default allocator */
-chttpsvr srv  = create_chttpsvr_mp(mp, logger, &err);  /* custom allocator */
+chttpsvr srv  = create_chttpsvr(logger, NULL);         /* default allocator; derives from logger */
+chttpsvr srv  = create_chttpsvr_mp(mp, logger, &err);  /* custom allocator; derives from logger */
+chttpsvr srv2 = create_chttpsvr(NULL, NULL);           /* internal stderr/FATAL-only logger */
 
 chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
 cfg.host                 = "0.0.0.0";          /* listen address */
@@ -3469,9 +3479,9 @@ cfg.tls = &tls;
 
 | Function | Description |
 |---|---|
-| `create_chttpsvr(cl, err)` | Create a server with the default allocator; `cl` is the clog handle for this server; returns NULL on failure |
-| `create_chttpsvr_mp(mp, cl, err)` | Create a server with a custom allocator |
-| `__chttpsvr_destroy(srv)` | Destroy and free the server; does not NULL the pointer; call only after engine is stopped |
+| `create_chttpsvr(cl, err)` | Create a server with the default allocator; `cl` may be NULL (an internal stderr/FATAL-only logger is used) or a parent logger to derive this server's logger from (tagged `component=http-server`); returns NULL on failure |
+| `create_chttpsvr_mp(mp, cl, err)` | Create a server with a custom allocator; same `cl` semantics as `create_chttpsvr` |
+| `__chttpsvr_destroy(srv)` | Destroy and free the server, including closing the server's own logger (`clog_close`); does not NULL the pointer; call only after engine is stopped |
 | `chttpsvr_destroy(srv)` | Macro: calls `__chttpsvr_destroy` then sets pointer to NULL |
 
 **Engine Lifecycle (shared, process-level)**

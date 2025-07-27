@@ -6378,9 +6378,18 @@ DESCRIPTION
 
        mprocs may be NULL, in which case the default system allocator is used.
 
-       cl is the clog handle that this server will use for per-connection
-       diagnostic output.  It must remain valid until __chttpsvr_destroy
-       returns.  cl must not be NULL.
+       cl controls the server's logger and may be NULL:
+
+       - cl == NULL: the server creates its own internal logger that writes
+         only FATAL messages to stderr.
+       - cl != NULL: the server derives a new logger from cl (see
+         clog_derive) and tags it with the field component=http-server.  The
+         derived logger is what the server actually uses and manages; the
+         caller's cl handle is left untouched and remains owned by the
+         caller.
+
+       Either way, the server's own logger (internal or derived) is closed
+       automatically by __chttpsvr_destroy.
 
        On failure, err_str (if non-NULL) is set to a static diagnostic string
        and NULL is returned.
@@ -6389,7 +6398,7 @@ RETURN VALUE
        A valid chttpsvr handle on success, or NULL on failure.
 
 SEE ALSO
-       create_chttpsvr, __chttpsvr_destroy, chttpsvr_start
+       create_chttpsvr, __chttpsvr_destroy, chttpsvr_start, clog_derive
 
 ------------------------------------------------------------------------------
 NAME
@@ -6403,7 +6412,7 @@ SYNOPSIS
 DESCRIPTION
        Inline wrapper for create_chttpsvr_mp with mprocs = NULL.
 
-       cl must not be NULL.
+       cl may be NULL; see create_chttpsvr_mp for the logger semantics.
 
 RETURN VALUE
        A valid chttpsvr handle on success, or NULL on failure.
@@ -6426,6 +6435,12 @@ DESCRIPTION
        and the server struct itself.  If this is the last active server, also
        stops the shared facil.io engine and joins the engine thread before
        freeing.
+
+       Also calls clog_close on the server's own logger (the internal
+       stderr/FATAL-only logger, or the logger derived from the cl passed to
+       create_chttpsvr_mp / create_chttpsvr).  This never closes a
+       caller-supplied cl directly, since the server only ever stores a
+       derived copy of it.
 
        For clean multi-server teardown, call chttpsvr_stop on all servers
        first to close their listeners, then call __chttpsvr_destroy on each

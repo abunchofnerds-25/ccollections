@@ -376,10 +376,19 @@ void chttpsvr_engine_stop(void);
  * The server is idle until chttpsvr_start() is called.  Routes and middleware
  * may be registered at any time before or after serving.
  *
+ * The server always manages its own logger, distinct from any handle passed
+ * in by the caller:
+ *   - cl == NULL:  an internal logger writing only FATAL messages to stderr
+ *                  is created.
+ *   - cl != NULL:  a new logger is derived from cl (clog_derive()) with the
+ *                  field component=http-server set on it.  The caller's cl
+ *                  is left untouched and remains owned by the caller.
+ * Either way, the resulting server-owned logger is closed automatically by
+ * chttpsvr_destroy().
+ *
  * @param mprocs   Custom allocator, or NULL for malloc/free.
- * @param cl       Logger for this server's request/routing events.  Must not
- *                 be NULL; pass a derived logger at a suppressed level to
- *                 silence output.
+ * @param cl       Parent logger to derive this server's logger from, or NULL
+ *                 to use an internal stderr/FATAL-only logger.
  * @param err_str  Optional: receives a static error string on failure.
  * @return New server handle, or NULL on failure.
  */
@@ -448,7 +457,9 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  * @brief Declare and initialise a server; fatal_err on failure.
  *
  * @param name  Variable name for the server handle.
- * @param cl    Logger for this server's request/routing events.
+ * @param cl    Parent logger to derive this server's logger from, or NULL to
+ *              use an internal stderr/FATAL-only logger.  See
+ *              create_chttpsvr_mp() for details.
  *
  * Example:
  * @code
@@ -477,7 +488,9 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  *        failure.
  *
  * @param name  Variable name for the server handle.
- * @param cl    Logger for this server's request/routing events.
+ * @param cl    Parent logger to derive this server's logger from, or NULL to
+ *              use an internal stderr/FATAL-only logger.  See
+ *              create_chttpsvr_mp() for details.
  */
 #define chttpsvr_construct_scoped(name, cl)                   \
   chttpsvr name _ccol_destructor(___chttpsvr_destroy) = NULL; \

@@ -215,12 +215,14 @@ struct chttpserver {
   int in_flight_requests; /* # requests dispatched (from http_pause onward)
                              through completion; guarded by mutex */
   pthread_rwlock_t
-      routes_lock;      /* guards routers[], route_count, routes[], mw lists */
-  clog cl;              /* per-server logger; passed at creation time */
-  intptr_t listen_uuid; /* facio listener uuid; -1 when not started */
-  bool started;         /* true after a successful chttpsvr_start call */
-  bool contributed_to_engine;         /* true when this server was counted in
-                                         g_server_count */
+      routes_lock; /* guards routers[], route_count, routes[], mw lists */
+  clog cl; /* server-owned logger; a derived logger (component=http-server)
+              when cl was passed in, or an internal stderr/FATAL-only logger
+              when NULL was passed; closed in __chttpsvr_destroy */
+  intptr_t listen_uuid;       /* facio listener uuid; -1 when not started */
+  bool started;               /* true after a successful chttpsvr_start call */
+  bool contributed_to_engine; /* true when this server was counted in
+                                 g_server_count */
   unsigned stream_read_timeout_ms;    /* set at chttpsvr_start; bounds each
                                           http1_stream_read wait for more body
                                           bytes, for both buffered and
@@ -1752,10 +1754,6 @@ static chttpsvr_qparams_t *_ensure_qparams(chttpsvr_req *req) {
 
 chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
                             char **err_str) {
-  if (!cl) {
-    if (err_str) *err_str = CCOL_ERR_STR("clog handle must not be NULL");
-    return NULL;
-  }
   if (!ccol_verify_memmgmt_procs(mprocs, err_str)) return NULL;
 
   struct chttpserver *srv =
@@ -1776,7 +1774,22 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     memcpy(srv->m_procs, mprocs, sizeof(ccol_memmgmt_procs_t));
   }
 
+  /* Set up the server-owned logger.  cl == NULL: create a minimal internal
+   * logger that writes only FATAL messages to stderr.  cl != NULL: derive a
+   * new logger from it (tagged component=http-server) that this server will
+   * manage -- the caller's handle is never stored directly and is left
+   * untouched (and still owned by the caller). */
+  clog logger = cl ? clog_derive(cl) : clog_open_fd_mp(2, CLOG_FATAL, mprocs);
+  if (logger && cl) clog_set_field(logger, "component", "http-server");
+  if (!logger) {
+    _mem_free(mprocs, srv->m_procs);
+    _mem_free(mprocs, srv);
+    if (err_str) *err_str = CCOL_ERR_STR("failed to create server logger");
+    return NULL;
+  }
+
   if (mutex_init(srv->mutex) != 0) {
+    clog_close(logger);
     _mem_free(mprocs, srv->m_procs);
     _mem_free(mprocs, srv);
     if (err_str) *err_str = CCOL_ERR_STR("mutex_init failed");
@@ -1795,6 +1808,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     }
     if (_cv_rc != 0) {
       mutex_destroy(srv->mutex);
+      clog_close(logger);
       _mem_free(mprocs, srv->m_procs);
       _mem_free(mprocs, srv);
       if (err_str) *err_str = CCOL_ERR_STR("cond_var_init failed");
@@ -1805,6 +1819,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
   if (pthread_rwlock_init(&srv->routes_lock, NULL) != 0) {
     cond_var_destroy(srv->requests_done_cv);
     mutex_destroy(srv->mutex);
+    clog_close(logger);
     _mem_free(mprocs, srv->m_procs);
     _mem_free(mprocs, srv);
     if (err_str) *err_str = CCOL_ERR_STR("pthread_rwlock_init failed");
@@ -1817,6 +1832,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     pthread_rwlock_destroy(&srv->routes_lock);
     cond_var_destroy(srv->requests_done_cv);
     mutex_destroy(srv->mutex);
+    clog_close(logger);
     _mem_free(mprocs, srv->m_procs);
     _mem_free(mprocs, srv);
     if (err_str) *err_str = CCOL_ERR_STR("out of memory");
@@ -1830,6 +1846,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     pthread_rwlock_destroy(&srv->routes_lock);
     cond_var_destroy(srv->requests_done_cv);
     mutex_destroy(srv->mutex);
+    clog_close(logger);
     _mem_free(mprocs, srv->m_procs);
     _mem_free(mprocs, srv);
     if (err_str) *err_str = CCOL_ERR_STR("out of memory");
@@ -1838,7 +1855,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
   srv->routers[0] = root;
   srv->router_count = 1;
   srv->router_cap = 1;
-  srv->cl = cl;
+  srv->cl = logger;
   srv->listen_uuid = -1;
   srv->started = false;
   return srv;
@@ -1931,6 +1948,9 @@ void __chttpsvr_destroy(chttpsvr srv) {
   mutex_destroy(srv->mutex);
   cond_var_destroy(srv->requests_done_cv);
   pthread_rwlock_destroy(&srv->routes_lock);
+
+  clog_close(srv->cl);
+  srv->cl = NULL;
 
   ccol_memmgmt_procs_t *mp = srv->m_procs;
   _mem_free(mp, srv);

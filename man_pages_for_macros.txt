@@ -4232,7 +4232,9 @@ DESCRIPTION
 
 PARAMETERS
        name     Identifier for the new handle variable.
-       cl       clog handle for this server's diagnostic output.
+       cl       Parent logger to derive this server's logger from, or NULL
+                to use an internal stderr/FATAL-only logger.  See
+                create_chttpsvr_mp for details.
 
 SEE ALSO
        chttpsvr_construct_scoped, chttpsvr_declare, create_chttpsvr
@@ -4255,7 +4257,9 @@ DESCRIPTION
 
 PARAMETERS
        name     Identifier for the new handle variable.
-       cl       clog handle for this server's diagnostic output.
+       cl       Parent logger to derive this server's logger from, or NULL
+                to use an internal stderr/FATAL-only logger.  See
+                create_chttpsvr_mp for details.
 
 SEE ALSO
        chttpsvr_construct, chttpsvr_declare_scoped, __chttpsvr_destroy

@@ -3942,3 +3942,80 @@ TEST(chttpserver, max_body_read_duration_default_disabled_allows_slow_drip) {
 
   __chttpsvr_destroy(srv);
 }
+
+/* ========================================================================== */
+/*                         SERVER-OWNED LOGGER TESTS                          */
+/* ========================================================================== */
+
+TEST(chttpserver, create_with_null_logger_uses_internal_fatal_only_logger) {
+  /* cl == NULL must be accepted: the server creates its own internal logger
+   * (stderr, FATAL-only) instead of requiring a caller-supplied one. The
+   * server must still be fully functional. */
+  chttpsvr srv = create_chttpsvr(NULL, NULL);
+  REQUIRE_TRUE(srv != NULL);
+
+  ccol_retval_t rv = chttpsvr_register_handler(
+      srv, CHTTP_GET, "/null-logger-hello", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 7;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  char url[256];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/null-logger-hello",
+           TEST_PORT + 7);
+  chttpcli_response *resp = NULL;
+  chttp_get(url, &resp);
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "Hello, world!");
+  chttpclient_resp_free(resp);
+
+  __chttpsvr_destroy(srv);
+}
+
+TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
+  /* cl != NULL must not be stored directly: the server derives its own
+   * logger from it (tagged component=http-server) and closes only that
+   * derived logger on destroy, leaving the caller's handle open and
+   * reusable. */
+  clog parent = clog_open_fd(2, CLOG_INFO);
+  REQUIRE_TRUE(parent != NULL);
+
+  chttpsvr srv = create_chttpsvr(parent, NULL);
+  REQUIRE_TRUE(srv != NULL);
+
+  ccol_retval_t rv = chttpsvr_register_handler(
+      srv, CHTTP_GET, "/derived-logger-hello", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 8;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  char url[256];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/derived-logger-hello",
+           TEST_PORT + 8);
+  chttpcli_response *resp = NULL;
+  chttp_get(url, &resp);
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "Hello, world!");
+  chttpclient_resp_free(resp);
+
+  __chttpsvr_destroy(srv);
+
+  /* parent must still be alive: write through it, and derive another
+   * (unrelated) server from it, both of which would misbehave under
+   * valgrind/ASan if the server had wrongly closed the caller's handle. */
+  log_info(parent, "parent logger still usable after server destroy");
+
+  chttpsvr srv2 = create_chttpsvr(parent, NULL);
+  REQUIRE_TRUE(srv2 != NULL);
+  __chttpsvr_destroy(srv2);
+
+  clog_close(parent);
+}

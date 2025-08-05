@@ -352,7 +352,7 @@ static int fio_tls_alpn_selector_cb(SSL *ssl, const unsigned char **out,
 static void fio_tls_destroy_context(fio_tls_s *tls) {
   /* TODO: Library specific implementation */
   SSL_CTX_free(tls->ctx);
-  free(tls->alpn_str);
+  fio_free(tls->alpn_str);
 
   tls->ctx = NULL;
   tls->alpn_str = NULL;
@@ -457,7 +457,8 @@ static void fio_tls_build_context(fio_tls_s *tls) {
       if (!s.len) continue;
       alpn_pos += s.len + 1;
     }
-    tls->alpn_str = malloc((alpn_pos | 15) + 1); /* round up to 16 + padding */
+    tls->alpn_str =
+        fio_malloc((alpn_pos | 15) + 1); /* round up to 16 + padding */
     alpn_pos = 0;
     FIO_SET_FOR_LOOP(&tls->alpn, pos) {
       fio_str_info_s s = fio_str_info(&pos->obj.name);
@@ -657,7 +658,7 @@ static void fio_tls_cleanup(void *udata) {
   SSL_free(c->ssl);
   FIO_LOG_DEBUG("TLS cleanup for %p", (void *)c->uuid);
   fio_tls_destroy(c->tls); /* manage reference count */
-  free(udata);
+  fio_free(udata);
 }
 
 static fio_rw_hook_s FIO_TLS_HOOKS = {
@@ -848,7 +849,7 @@ static inline void fio_tls_attach2uuid(intptr_t uuid, fio_tls_s *tls,
                                        void *udata, uint8_t is_server) {
   fio_atomic_add(&tls->ref, 1);
   /* create SSL connection context from global context */
-  fio_tls_connection_s *c = malloc(sizeof(*c));
+  fio_tls_connection_s *c = fio_malloc(sizeof(*c));
   FIO_ASSERT_ALLOC(c);
   *c = (fio_tls_connection_s){
       .alpn_arg = udata,
@@ -893,7 +894,7 @@ SSL/TLS API implementation - this can be pretty much used as is...
 fio_tls_s *FIO_TLS_WEAK fio_tls_new(const char *server_name, const char *cert,
                                     const char *key, const char *pk_password) {
   REQUIRE_LIBRARY();
-  fio_tls_s *tls = calloc(sizeof(*tls), 1);
+  fio_tls_s *tls = fio_calloc(sizeof(*tls), 1);
   tls->ref = 1;
   fio_tls_cert_add(tls, server_name, key, cert, pk_password);
   return tls;
@@ -1028,7 +1029,7 @@ void FIO_TLS_WEAK fio_tls_destroy(fio_tls_s *tls) {
   alpn_list_free(&tls->alpn);
   cert_ary_free(&tls->sni);
   trust_ary_free(&tls->trust);
-  free(tls);
+  fio_free(tls);
 }
 
 /**
@@ -1050,17 +1051,17 @@ fio_tls_connection_s *FIO_TLS_WEAK fio_tls_connect_create(fio_tls_s *tls,
                                                           uint8_t verify_host) {
   REQUIRE_LIBRARY();
   if (!tls) return NULL; /* documented contract: NULL on failure, not a crash */
-  fio_tls_connection_s *c = malloc(sizeof(*c));
+  fio_tls_connection_s *c = fio_malloc(sizeof(*c));
   if (!c) return NULL;
   SSL *ssl = SSL_new(tls->ctx);
   if (!ssl) {
-    free(c);
+    fio_free(c);
     return NULL;
   }
   BIO *bio = BIO_new_socket(fd, 0);
   if (!bio) {
     SSL_free(ssl);
-    free(c);
+    fio_free(c);
     return NULL;
   }
   /* rbio/wbio share one BIO; each SSL_set0_*bio call consumes a reference. */
@@ -1102,7 +1103,7 @@ fio_tls_connection_s *FIO_TLS_WEAK fio_tls_connect_create(fio_tls_s *tls,
          * SSL_free(ssl) alone releases both bio references: SSL_set0_rbio
          * and SSL_set0_wbio above each already took ownership of one. */
         SSL_free(ssl);
-        free(c);
+        fio_free(c);
         return NULL;
       }
     }
@@ -1153,7 +1154,7 @@ void FIO_TLS_WEAK fio_tls_connection_destroy(fio_tls_connection_s *c) {
   SSL_shutdown(c->ssl);
   SSL_free(c->ssl);
   fio_tls_destroy(c->tls);
-  free(c);
+  fio_free(c);
 }
 
 #endif /* Library compiler flags */

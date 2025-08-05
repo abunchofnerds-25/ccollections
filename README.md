@@ -3173,6 +3173,27 @@ clog logger = clog_open_fd(2, CLOG_INFO);
 chttpsvr_set_engine_logger(logger);   /* derive engine sub-logger; optional */
 ```
 
+To redirect the engine's own internal memory management (the connection-state
+table, protocol/listener structs, TLS connection objects, request-body
+streaming buffers, and everything else the shared facio engine allocates for
+itself) to a custom allocator, call `chttpsvr_set_engine_mem_mgmt_procs`
+before the first `chttpsvr_start`:
+
+```c
+ccol_memmgmt_procs_t mp = {
+    .malloc = my_malloc, .free = my_free,
+    .calloc = my_calloc, .realloc = my_realloc,
+};
+chttpsvr_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default */
+```
+
+Unlike `chttpsvr_set_engine_logger`, this may only be called before the first
+`chttpsvr_start` in the process (it returns `ccol_not_permitted` afterward):
+swapping allocators once the engine has already allocated memory with the
+previous one would produce mismatched malloc/free pairs. Passing NULL later
+(also before the first start, or after the engine has fully stopped) reverts
+to the default facio arena/libc behavior.
+
 ### Quick Start
 
 ```c
@@ -3489,6 +3510,7 @@ cfg.tls = &tls;
 | Function | Description |
 |---|---|
 | `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-engine`); must be called before the first `chttpsvr_start`; returns `ccol_invalid_args` if `cl` is NULL |
+| `chttpsvr_set_engine_mem_mgmt_procs(mp)` | Redirect the engine's own internal memory management to `mp`, or to the default facio arena/libc behavior if `mp` is NULL; must be called before the first `chttpsvr_start` (may be called again once the engine has fully stopped); returns `ccol_invalid_args` if `mp` is non-NULL but has a NULL function pointer, or `ccol_not_permitted` if the engine is already running |
 | `chttpsvr_engine_stop()` | Signal the engine to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler |
 | `chttpsvr_engine_wait()` | Block until the engine thread exits; use as an escape hatch when you need to wait for all servers to shut down |
 

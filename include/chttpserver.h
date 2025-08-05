@@ -334,6 +334,45 @@ typedef struct chttpsvr_config {
 ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 
 /* ========================================================================== */
+/*                    ENGINE MEMORY MANAGEMENT                                */
+/* ========================================================================== */
+
+/**
+ * @brief Install custom memory management procs for facil.io engine-level
+ * allocations.
+ *
+ * By default, the facil.io engine shared by every chttpsvr instance in this
+ * process (see the module notes on the shared engine) allocates all of its
+ * own memory -- the connection-state table, protocol/listener structs, TLS
+ * connection objects, request-body streaming buffers, and so on -- using its
+ * own internal allocator (falling back to libc malloc/free/calloc/realloc for
+ * a handful of auxiliary structures). Calling this function with a non-NULL
+ * *mp* redirects all of that to the supplied procs instead, exactly like the
+ * memory management procs accepted by every other module in this library.
+ * Passing NULL reverts to the default behavior.
+ *
+ * Unlike chttpsvr_set_engine_logger(), which can be swapped at any time, this
+ * function may only be called before the first chttpsvr_start() in the
+ * process: once the engine has allocated memory with one set of procs,
+ * swapping to a different malloc/free pairing would corrupt the heap. It may
+ * be called again after the engine has fully stopped (chttpsvr_engine_wait()
+ * has returned), before the next chttpsvr_start().
+ *
+ * A small amount of memory (a few blocks used by facio's default arena) is
+ * always allocated once via mmap at library load time, before any call to
+ * this function is possible; this is harmless and freed normally at process
+ * exit, but it means a custom allocator can never observe absolutely every
+ * byte ever mapped by the process.
+ *
+ * @param mp  Custom memory management procs, or NULL to revert to the
+ *            default. If non-NULL, all four function pointers must be set.
+ * @return ccol_success, ccol_invalid_args (mp is non-NULL but has a NULL
+ *         function pointer), or ccol_not_permitted (the engine is already
+ *         running; stop it first).
+ */
+ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
+
+/* ========================================================================== */
 /*                         ENGINE WAIT                                        */
 /* ========================================================================== */
 

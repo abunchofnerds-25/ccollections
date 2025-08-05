@@ -391,8 +391,8 @@ static int http1_on_body_chunk(http1_parser_s *parser, char *data,
       }
       if (to_copy < data_len) {
         size_t spill = data_len - to_copy;
-        uint8_t *nc =
-            (uint8_t *)realloc(p->stream_carry, p->stream_carry_len + spill);
+        uint8_t *nc = (uint8_t *)fio_realloc(p->stream_carry,
+                                             p->stream_carry_len + spill);
         if (!nc) return -1;
         memcpy(nc + p->stream_carry_len, data + to_copy, spill);
         p->stream_carry = nc;
@@ -424,8 +424,8 @@ static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
   /* `p` is reused across every request on a keep-alive connection -- reset
    * all per-message ingestion state left over from a previous message
    * before deciding anything about this one. */
-  free(p->stream_primed);
-  free(p->stream_carry);
+  fio_free(p->stream_primed);
+  fio_free(p->stream_carry);
   p->stream_primed = NULL;
   p->stream_primed_len = p->stream_primed_pos = 0;
   p->stream_carry = NULL;
@@ -453,7 +453,7 @@ static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
   p->close = 1;
 
   if (leftover_len) {
-    uint8_t *primed = (uint8_t *)malloc(leftover_len);
+    uint8_t *primed = (uint8_t *)fio_malloc(leftover_len);
     if (!primed) {
       http_send_error(&http1_pr2handle(p), 500);
       /* Headers were already fully parsed (that's how we got a non-zero
@@ -495,7 +495,7 @@ static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
      * primed bytes were never consumed by anyone, and `close` is already 1
      * from above -- the client's still-arriving body would otherwise be
      * misread as the start of a new pipelined request. */
-    free(p->stream_primed);
+    fio_free(p->stream_primed);
     p->stream_primed = NULL;
     p->stream_primed_len = 0;
     p->stream_primed_pos = 0;
@@ -772,8 +772,8 @@ void http1_destroy(fio_protocol_s *pr) {
     return;
   }
   fio_unlock(&p->stream_lock);
-  free(p->stream_primed);
-  free(p->stream_carry);
+  fio_free(p->stream_primed);
+  fio_free(p->stream_carry);
   http1_pr2handle(p).status = 0;
   http_s_destroy(&http1_pr2handle(p), 0);
   {
@@ -862,7 +862,7 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
     p->stream_out_len = n;
     p->stream_carry_pos += n;
     if (p->stream_carry_pos == p->stream_carry_len) {
-      free(p->stream_carry);
+      fio_free(p->stream_carry);
       p->stream_carry = NULL;
       p->stream_carry_len = p->stream_carry_pos = 0;
     }

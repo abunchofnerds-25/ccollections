@@ -2221,6 +2221,20 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl) {
   return ccol_success;
 }
 
+ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp) {
+  if (mp && (!mp->malloc || !mp->free || !mp->calloc || !mp->realloc))
+    return ccol_invalid_args;
+  ccol_retval_t rc = ccol_success;
+  pthread_mutex_lock(&g_engine_mutex);
+  if (g_engine_running) {
+    rc = ccol_not_permitted;
+  } else {
+    fio_set_mem_mgmt_procs((const struct ccol_memmgmt_procs_t *)mp);
+  }
+  pthread_mutex_unlock(&g_engine_mutex);
+  return rc;
+}
+
 void chttpsvr_engine_stop(void) { fio_stop(); }
 
 void chttpsvr_engine_wait(void) {

@@ -628,12 +628,12 @@ Section Start Marker
 #pragma weak fio_thread_new
 void *__attribute__((weak)) fio_thread_new(void *(*thread_func)(void *),
                                            void *arg) {
-  pthread_t *thread = malloc(sizeof(*thread));
+  pthread_t *thread = fio_malloc(sizeof(*thread));
   FIO_ASSERT_ALLOC(thread);
   if (pthread_create(thread, NULL, thread_func, arg)) goto error;
   return thread;
 error:
-  free(thread);
+  fio_free(thread);
   return NULL;
 }
 
@@ -650,7 +650,7 @@ int __attribute__((weak)) fio_thread_join(void *p_thr) {
   if (!p_thr || !(*((pthread_t *)p_thr))) return -1;
   pthread_join(*((pthread_t *)p_thr), NULL);
   *((pthread_t *)p_thr) = (pthread_t)NULL;
-  free(p_thr);
+  fio_free(p_thr);
   return 0;
 }
 
@@ -1004,7 +1004,7 @@ static inline void fio_defer_clear_tasks_for_queue(fio_task_queue_s *queue) {
     queue->reader = queue->reader->next;
     if (tmp != &queue->static_queue) {
       COUNT_DEALLOC;
-      free(tmp);
+      fio_free(tmp);
     }
   }
   queue->static_queue = (fio_defer_queue_block_s){.next = NULL};
@@ -1110,14 +1110,14 @@ static void fio_defer_thread_pool_join(fio_defer_thread_pool_s *pool) {
   for (size_t i = 0; i < pool->thread_count; ++i) {
     fio_thread_join(pool->threads[i]);
   }
-  free(pool);
+  fio_free(pool);
 }
 
 /* creates a thread pool */
 static fio_defer_thread_pool_s *fio_defer_thread_pool_new(size_t count) {
   if (!count) count = 1;
   fio_defer_thread_pool_s *pool =
-      malloc(sizeof(*pool) + (count * sizeof(void *)));
+      fio_malloc(sizeof(*pool) + (count * sizeof(void *)));
   FIO_ASSERT_ALLOC(pool);
   pool->thread_count = count;
   for (size_t i = 0; i < count; ++i) {
@@ -1252,7 +1252,7 @@ static void fio_timer_perform_single(void *timer_, void *ignr) {
   if (!timer->repetitions || fio_atomic_sub(&timer->repetitions, 1))
     goto reschedule;
   if (timer->on_finish) timer->on_finish(timer->arg);
-  free(timer);
+  fio_free(timer);
   return;
   (void)ignr;
 reschedule:
@@ -1280,7 +1280,7 @@ static void fio_timer_clear_all(void) {
     fio_timer_s *timer =
         FIO_LS_EMBD_OBJ(fio_timer_s, node, fio_ls_embd_pop(&fio_timers));
     if (timer->on_finish) timer->on_finish(timer->arg);
-    free(timer);
+    fio_free(timer);
   }
   fio_unlock(&fio_timer_lock);
 }
@@ -3189,6 +3189,12 @@ void fio_state_callback_add(callback_type_e c_type, void (*func)(void *),
   if (!func || (int)c_type < 0 || c_type > FIO_CALL_NEVER) return;
   fio_lock(&callback_collection[c_type].lock);
   fio_state_callback_ensure(&callback_collection[c_type]);
+  /* Deliberately plain malloc, not fio_malloc/procs: this can run (via
+   * FIO_CALL_ON_INITIALIZE) from http_lib_constructor, which is invoked
+   * before fio_lib_init/fio_mem_init has initialized the arena and before
+   * chttpsvr_set_engine_mem_mgmt_procs could ever have been called -- see
+   * _fio_global_init in chttpserver.c. Freed with plain free() below and in
+   * fio_state_callback_clear(), matching this allocator. */
   callback_data_s *tmp = malloc(sizeof(*tmp));
   FIO_ASSERT_ALLOC(tmp);
   *tmp = (callback_data_s){.func = func, .arg = arg};
@@ -3205,7 +3211,7 @@ int fio_state_callback_remove(callback_type_e c_type, void (*func)(void *),
     callback_data_s *tmp = (FIO_LS_EMBD_OBJ(callback_data_s, node, pos));
     if (tmp->func == func && tmp->arg == arg) {
       fio_ls_embd_remove(&tmp->node);
-      free(tmp);
+      free(tmp); /* matches the plain malloc() in fio_state_callback_add */
       goto success;
     }
   }
@@ -3284,7 +3290,7 @@ void fio_state_callback_clear(callback_type_e c_type) {
     callback_data_s *tmp = FIO_LS_EMBD_OBJ(
         callback_data_s, node,
         fio_ls_embd_shift(&callback_collection[c_type].callbacks));
-    free(tmp);
+    free(tmp); /* matches the plain malloc() in fio_state_callback_add */
   }
   fio_unlock(&callback_collection[c_type].lock);
 }
@@ -4261,7 +4267,7 @@ static void fio_listen_cleanup_task(void *pr_) {
     /* delete Unix sockets */
     unlink(pr->addr);
   }
-  free(pr_);
+  fio_free(pr_);
 }
 
 static void fio_listen_on_startup(void *pr_) {
@@ -4342,8 +4348,8 @@ intptr_t fio_listen FIO_IGNORE_MACRO(struct fio_listen_args args) {
   const intptr_t uuid = fio_socket(args.address, args.port, 1);
   if (uuid == -1) goto error;
 
-  fio_listen_protocol_s *pr = malloc(sizeof(*pr) + addr_len + port_len +
-                                     ((addr_len + port_len) ? 2 : 0));
+  fio_listen_protocol_s *pr = fio_malloc(sizeof(*pr) + addr_len + port_len +
+                                         ((addr_len + port_len) ? 2 : 0));
   FIO_ASSERT_ALLOC(pr);
 
   if (args.tls) fio_tls_dup(args.tls);
@@ -4473,29 +4479,68 @@ Allocator default settings
   (FIO_MEMORY_BLOCK_SLICES - FIO_MEMORY_BLOCK_START_POS)
 
 /* *****************************************************************************
+Custom memory management via ccol_memmgmt_procs_t
+
+Redirects fio_malloc/fio_calloc/fio_free/fio_realloc/fio_realloc2/fio_mmap to
+a caller-supplied ccol_memmgmt_procs_t instead of the arena (or, under
+FIO_FORCE_MALLOC, instead of plain calloc/realloc/free) below.  See the
+comment on fio_set_mem_mgmt_procs() in fio.h for the contract.
+***************************************************************************** */
+
+static ccol_memmgmt_procs_t g_fio_mem_procs;
+static bool g_fio_mem_procs_set = false;
+
+void fio_set_mem_mgmt_procs(const struct ccol_memmgmt_procs_t *mp) {
+  if (mp) {
+    g_fio_mem_procs = *(const ccol_memmgmt_procs_t *)mp;
+    g_fio_mem_procs_set = true;
+  } else {
+    g_fio_mem_procs_set = false;
+  }
+}
+
+bool fio_has_mem_mgmt_procs(void) { return g_fio_mem_procs_set; }
+
+/* *****************************************************************************
 FIO_FORCE_MALLOC handler
 ***************************************************************************** */
 
 #if FIO_FORCE_MALLOC
 
-void *fio_malloc(size_t size) { return calloc(size, 1); }
+void *fio_malloc(size_t size) {
+  if (g_fio_mem_procs_set) return _mem_calloc(&g_fio_mem_procs, 1, size);
+  return calloc(size, 1);
+}
 
 void *fio_calloc(size_t size_per_unit, size_t unit_count) {
+  if (g_fio_mem_procs_set)
+    return _mem_calloc(&g_fio_mem_procs, unit_count, size_per_unit);
   return calloc(size_per_unit, unit_count);
 }
 
-void fio_free(void *ptr) { free(ptr); }
+void fio_free(void *ptr) {
+  if (g_fio_mem_procs_set) {
+    _mem_free(&g_fio_mem_procs, ptr);
+    return;
+  }
+  free(ptr);
+}
 
 void *fio_realloc(void *ptr, size_t new_size) {
+  if (g_fio_mem_procs_set) return _mem_realloc(&g_fio_mem_procs, ptr, new_size);
   return realloc((ptr), (new_size));
 }
 
 void *fio_realloc2(void *ptr, size_t new_size, size_t copy_length) {
+  if (g_fio_mem_procs_set) return _mem_realloc(&g_fio_mem_procs, ptr, new_size);
   return realloc((ptr), (new_size));
   (void)copy_length;
 }
 
-void *fio_mmap(size_t size) { return calloc(size, 1); }
+void *fio_mmap(size_t size) {
+  if (g_fio_mem_procs_set) return _mem_calloc(&g_fio_mem_procs, 1, size);
+  return calloc(size, 1);
+}
 
 void fio_malloc_after_fork(void) {}
 void fio_mem_destroy(void) {}
@@ -5026,9 +5071,27 @@ Memory allocation / deacclocation API
 ***************************************************************************** */
 
 void *fio_malloc(size_t size) {
-#if FIO_OVERRIDE_MALLOC
+  if (g_fio_mem_procs_set) {
+    if (!size) {
+      /* changed behavior prevents "allocation failed" test for `malloc(0)` */
+      return (void *)(&on_malloc_zero);
+    }
+    /* fio_calloc simply delegates to fio_malloc and relies on the result
+     * being pre-zeroed (see fio_calloc below); preserve that guarantee by
+     * calloc'ing through the custom procs instead of malloc'ing. */
+    return _mem_calloc(&g_fio_mem_procs, 1, size);
+  }
+  /* Lazily initialize the arena on first real use, regardless of
+   * FIO_OVERRIDE_MALLOC: fio_lib_init (which used to be the only caller of
+   * fio_mem_init) is not guaranteed to have run yet by the time this is
+   * reached -- chttpsvr_start() creates its TLS context (which allocates via
+   * fio_tls_new -> fio_calloc/fio_malloc) before triggering the engine's own
+   * lazy pthread_once init. fio_mem_init() is idempotent (returns
+   * immediately if arenas is already set), so this costs nothing on the
+   * common path. Not safe against a genuine concurrent race between two
+   * threads racing this same first call -- same as the pre-existing
+   * FIO_OVERRIDE_MALLOC code below ever was. */
   if (!arenas) fio_mem_init();
-#endif
   if (!size) {
     /* changed behavior prevents "allocation failed" test for `malloc(0)` */
     return (void *)(&on_malloc_zero);
@@ -5053,6 +5116,10 @@ void *fio_calloc(size_t size, size_t count) {
 
 void fio_free(void *ptr) {
   if (!ptr || ptr == (void *)&on_malloc_zero) return;
+  if (g_fio_mem_procs_set) {
+    _mem_free(&g_fio_mem_procs, ptr);
+    return;
+  }
   if (((uintptr_t)ptr & FIO_MEMORY_BLOCK_MASK) == 16) {
     /* big allocation - direct from the system */
     big_free(ptr);
@@ -5075,6 +5142,17 @@ void *fio_realloc2(void *ptr, size_t new_size, size_t copy_length) {
   if (!new_size) {
     goto zero_size;
   }
+  if (g_fio_mem_procs_set) {
+    /* Mirror the arena's actual behavior: only `copy_length` bytes of old
+     * data are guaranteed to survive a fio_realloc2 call (the arena achieves
+     * this by allocating a fresh zeroed block and memcpy-ing just that much);
+     * a real realloc() would otherwise happily preserve more, so the tail
+     * beyond copy_length is explicitly zeroed to match. */
+    void *new_mem = _mem_realloc(&g_fio_mem_procs, ptr, new_size);
+    if (new_mem && new_size > copy_length)
+      memset((uint8_t *)new_mem + copy_length, 0, new_size - copy_length);
+    return new_mem;
+  }
   if (((uintptr_t)ptr & FIO_MEMORY_BLOCK_MASK) == 16) {
     /* big reallocation - direct from the system */
     return big_realloc(ptr, new_size);
@@ -5095,6 +5173,18 @@ zero_size:
 }
 
 void *fio_realloc(void *ptr, size_t new_size) {
+  if (g_fio_mem_procs_set) {
+    /* Unlike fio_realloc2, plain fio_realloc has no caller-supplied
+     * copy_length and must preserve all old data, like standard realloc --
+     * delegate directly instead of going through fio_realloc2's zero-fill
+     * logic (which would discard everything beyond copy_length). */
+    if (!ptr || ptr == (void *)&on_malloc_zero) return fio_malloc(new_size);
+    if (!new_size) {
+      fio_free(ptr);
+      return fio_malloc(0);
+    }
+    return _mem_realloc(&g_fio_mem_procs, ptr, new_size);
+  }
   const size_t max_old =
       FIO_MEMORY_BLOCK_SIZE - ((uintptr_t)ptr & FIO_MEMORY_BLOCK_MASK);
   return fio_realloc2(ptr, new_size, max_old);
@@ -5110,6 +5200,7 @@ void *fio_mmap(size_t size) {
   if (!size) {
     return NULL;
   }
+  if (g_fio_mem_procs_set) return _mem_calloc(&g_fio_mem_procs, 1, size);
   return big_alloc(size);
 }
 

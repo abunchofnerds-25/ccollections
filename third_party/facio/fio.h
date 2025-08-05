@@ -371,6 +371,24 @@ void *FIO_ALIGN_NEW fio_mmap(size_t size);
  */
 void fio_malloc_after_fork(void);
 
+/* ===========================================================================
+ * Custom memory management via ccol_memmgmt_procs_t
+ *
+ * By default fio_malloc/fio_calloc/fio_free/fio_realloc/fio_realloc2/fio_mmap
+ * are backed by facil.io's own per-CPU block/mmap arena.  Calling
+ * fio_set_mem_mgmt_procs() with a non-NULL ccol_memmgmt_procs_t redirects all
+ * of the above (and every internal facio allocation that goes through them)
+ * to the supplied malloc/free/calloc/realloc instead, bypassing the arena
+ * entirely.  Passing NULL reverts to the default arena behavior.
+ *
+ * fio.h intentionally does NOT include common.h -- struct ccol_memmgmt_procs_t
+ * is forward-declared so the prototypes compile without pulling in the full
+ * ccol API.
+ * =========================================================================*/
+struct ccol_memmgmt_procs_t;
+void fio_set_mem_mgmt_procs(const struct ccol_memmgmt_procs_t *mp);
+bool fio_has_mem_mgmt_procs(void);
+
 #undef FIO_ALIGN
 
 /* *****************************************************************************

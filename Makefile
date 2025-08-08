@@ -16,6 +16,19 @@ THIRD_PARTY_OBJ_DIR = obj/third_party
 # Kept in its own dir/object-subdirectory because llhttp's http.c and facio's
 # http.c share a basename; a shared flat object dir would clobber one with the
 # other depending on build order.
+# Local patch: the upstream __wasm__-only llhttp_alloc/llhttp_free API (and
+# its supporting wasm_on_*/wasm_settings glue) was stripped from api.c and
+# llhttp.h -- this project never defines __wasm__, so that code was dead and
+# unlinkable (the declarations in llhttp.h were not themselves __wasm__-gated).
+# Local patch: llhttp_get_type/http_major/http_minor/method/status_code/upgrade
+# take a const llhttp_t* in both llhttp.h and api.c, matching the constness of
+# llhttp_get_errno/error_reason/error_pos -- all nine are read-only accessors;
+# upstream just declared these six inconsistently.
+# Reviewed and intentionally left unchanged: llhttp_errno_name/method_name/
+# status_name (api.c) abort() on an out-of-range enum value. This is upstream
+# behavior; see the comment directly above llhttp_errno_name in api.c for the
+# rationale for keeping it.
+# Reapply or re-evaluate these trims after any future re-vendor of llhttp.
 THIRD_PARTY_LLHTTP_DIR = third_party/llhttp
 THIRD_PARTY_LLHTTP_OBJ_DIR = obj/third_party/llhttp
 TEST_FOLDERS = $(shell ls -1d tests/*/ | grep -v /tau/)
@@ -29,8 +42,7 @@ COMMON_CFLAGS = -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR) -I$(THIRD_PARTY_LLHTTP_DIR
 	-g -O3 -Werror -fPIC
 
 # Third party sources are compiled without -Werror and with extra suppression flags
-# because facil.io triggers several warnings with GCC/OpenSSL 3.0, and llhttp's
-# generated state machine triggers -Wunused-parameter pervasively.
+# because facil.io triggers several warnings with GCC/OpenSSL 3.0.
 # -Wno-stringop-overflow: facil.io's fio_str_s implements a small-string
 # optimization by reusing struct bytes *after* the single-byte `frozen` field
 # as inline storage (FIO_STR_SMALL_DATA(s) = (&s->frozen)+1), with capacity
@@ -47,6 +59,17 @@ THIRD_PARTY_CFLAGS = -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR) -I$(THIRD_PARTY_LLHTT
 	-Wno-deprecated-declarations -Wno-cast-function-type \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-type-limits \
 	-Wno-stringop-overflow
+
+# llhttp's own compilation gets a narrower suppression list than facio's: its
+# generated state machine only ever triggers -Wunused-parameter (verified by
+# compiling it under the strict -Wall -Wextra flags above -- nothing else
+# fires). Reusing facio's broader THIRD_PARTY_CFLAGS here would silently mask
+# a real -Wsign-compare/-Wstringop-overflow/etc. regression if a future
+# llhttp re-vendor ever introduced one, since third-party objects are not
+# built with -Werror.
+THIRD_PARTY_LLHTTP_CFLAGS = -I$(INCLUDE_DIR) -I$(THIRD_PARTY_DIR) -I$(THIRD_PARTY_LLHTTP_DIR) -DHAVE_OPENSSL=1 \
+	-fPIC -g -O3 \
+	-Wno-unused-parameter
 
 # Separate cflags for shared and static builds
 SHARED_CFLAGS = $(COMMON_CFLAGS)
@@ -132,10 +155,10 @@ $(THIRD_PARTY_OBJ_DIR)/%.static.o: $(THIRD_PARTY_DIR)/%.c $(THIRD_PARTY_HEADER_F
 # llhttp shared/static objects (own object subdirectory: llhttp's http.c and
 # facio's http.c share a basename, so they must not land in the same flat dir)
 $(THIRD_PARTY_LLHTTP_OBJ_DIR)/%.o: $(THIRD_PARTY_LLHTTP_DIR)/%.c $(THIRD_PARTY_LLHTTP_HEADER_FILES)
-	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
+	$(CC) -c $(THIRD_PARTY_LLHTTP_CFLAGS) $< -o $@
 
 $(THIRD_PARTY_LLHTTP_OBJ_DIR)/%.static.o: $(THIRD_PARTY_LLHTTP_DIR)/%.c $(THIRD_PARTY_LLHTTP_HEADER_FILES)
-	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
+	$(CC) -c $(THIRD_PARTY_LLHTTP_CFLAGS) $< -o $@
 
 clean:
 	rm -rf $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) $(OBJECT_DIR) \

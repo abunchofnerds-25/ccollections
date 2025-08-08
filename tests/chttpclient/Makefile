@@ -32,11 +32,15 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O0 -Werror
 
 # Third party sources are compiled without -Werror and with extra suppression
-# flags because facil.io triggers several warnings with GCC/OpenSSL 3.0, and
-# llhttp's generated state machine triggers -Wunused-parameter pervasively.
+# flags because facil.io triggers several warnings with GCC/OpenSSL 3.0.
 THIRD_PARTY_CFLAGS = $(INCLUDES) $(DEFINITIONS) -g -O0 \
 	-Wno-deprecated-declarations -Wno-cast-function-type \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-type-limits
+
+# llhttp's generated state machine only ever triggers -Wunused-parameter
+# (verified under -Wall -Wextra); reusing facio's broader suppression list
+# would silently mask a real regression on a future llhttp re-vendor.
+LLHTTP_CFLAGS = $(INCLUDES) $(DEFINITIONS) -g -O0 -Wno-unused-parameter
 
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 LFLAGS = -lpthread -lssl -lcrypto -lz -lm
@@ -48,7 +52,7 @@ third_party_obj/facio/%.o: $(FACIO_DIR)/%.c $(FACIO_HEADER_FILES) | third_party_
 	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
 
 third_party_obj/llhttp/%.o: $(LLHTTP_DIR)/%.c $(LLHTTP_HEADER_FILES) | third_party_obj/llhttp
-	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
+	$(CC) -c $(LLHTTP_CFLAGS) $< -o $@
 
 build: $(FACIO_OBJS) $(LLHTTP_OBJS)
 	$(CC) $(CFLAGS) $(FACIO_OBJS) $(LLHTTP_OBJS) $(OUR_SRC_FILES) -o tests $(LFLAGS)

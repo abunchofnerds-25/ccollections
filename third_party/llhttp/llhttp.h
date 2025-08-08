@@ -619,28 +619,22 @@ void llhttp_init(llhttp_t* parser, llhttp_type_t type,
                  const llhttp_settings_t* settings);
 
 LLHTTP_EXPORT
-llhttp_t* llhttp_alloc(llhttp_type_t type);
+uint8_t llhttp_get_type(const llhttp_t* parser);
 
 LLHTTP_EXPORT
-void llhttp_free(llhttp_t* parser);
+uint8_t llhttp_get_http_major(const llhttp_t* parser);
 
 LLHTTP_EXPORT
-uint8_t llhttp_get_type(llhttp_t* parser);
+uint8_t llhttp_get_http_minor(const llhttp_t* parser);
 
 LLHTTP_EXPORT
-uint8_t llhttp_get_http_major(llhttp_t* parser);
+uint8_t llhttp_get_method(const llhttp_t* parser);
 
 LLHTTP_EXPORT
-uint8_t llhttp_get_http_minor(llhttp_t* parser);
+int llhttp_get_status_code(const llhttp_t* parser);
 
 LLHTTP_EXPORT
-uint8_t llhttp_get_method(llhttp_t* parser);
-
-LLHTTP_EXPORT
-int llhttp_get_status_code(llhttp_t* parser);
-
-LLHTTP_EXPORT
-uint8_t llhttp_get_upgrade(llhttp_t* parser);
+uint8_t llhttp_get_upgrade(const llhttp_t* parser);
 
 /* Reset an already initialized parser back to the start state, preserving the
  * existing parser type, callback settings, user data, and lenient flags.

@@ -38,57 +38,25 @@ void llhttp_init(llhttp_t* parser, llhttp_type_t type,
   parser->settings = (void*)settings;
 }
 
-#if defined(__wasm__)
-
-extern int wasm_on_message_begin(llhttp_t* p);
-extern int wasm_on_url(llhttp_t* p, const char* at, size_t length);
-extern int wasm_on_status(llhttp_t* p, const char* at, size_t length);
-extern int wasm_on_header_field(llhttp_t* p, const char* at, size_t length);
-extern int wasm_on_header_value(llhttp_t* p, const char* at, size_t length);
-extern int wasm_on_headers_complete(llhttp_t* p, int status_code,
-                                    uint8_t upgrade, int should_keep_alive);
-extern int wasm_on_body(llhttp_t* p, const char* at, size_t length);
-extern int wasm_on_message_complete(llhttp_t* p);
-
-static int wasm_on_headers_complete_wrap(llhttp_t* p) {
-  return wasm_on_headers_complete(p, p->status_code, p->upgrade,
-                                  llhttp_should_keep_alive(p));
-}
-
-const llhttp_settings_t wasm_settings = {
-    .on_message_begin = wasm_on_message_begin,
-    .on_url = wasm_on_url,
-    .on_status = wasm_on_status,
-    .on_header_field = wasm_on_header_field,
-    .on_header_value = wasm_on_header_value,
-    .on_headers_complete = wasm_on_headers_complete_wrap,
-    .on_body = wasm_on_body,
-    .on_message_complete = wasm_on_message_complete,
-};
-
-llhttp_t* llhttp_alloc(llhttp_type_t type) {
-  llhttp_t* parser = malloc(sizeof(llhttp_t));
-  llhttp_init(parser, type, &wasm_settings);
-  return parser;
-}
-
-void llhttp_free(llhttp_t* parser) { free(parser); }
-
-#endif  // defined(__wasm__)
-
 /* Some getters required to get stuff from the parser */
 
-uint8_t llhttp_get_type(llhttp_t* parser) { return parser->type; }
+uint8_t llhttp_get_type(const llhttp_t* parser) { return parser->type; }
 
-uint8_t llhttp_get_http_major(llhttp_t* parser) { return parser->http_major; }
+uint8_t llhttp_get_http_major(const llhttp_t* parser) {
+  return parser->http_major;
+}
 
-uint8_t llhttp_get_http_minor(llhttp_t* parser) { return parser->http_minor; }
+uint8_t llhttp_get_http_minor(const llhttp_t* parser) {
+  return parser->http_minor;
+}
 
-uint8_t llhttp_get_method(llhttp_t* parser) { return parser->method; }
+uint8_t llhttp_get_method(const llhttp_t* parser) { return parser->method; }
 
-int llhttp_get_status_code(llhttp_t* parser) { return parser->status_code; }
+int llhttp_get_status_code(const llhttp_t* parser) {
+  return parser->status_code;
+}
 
-uint8_t llhttp_get_upgrade(llhttp_t* parser) { return parser->upgrade; }
+uint8_t llhttp_get_upgrade(const llhttp_t* parser) { return parser->upgrade; }
 
 void llhttp_reset(llhttp_t* parser) {
   llhttp_type_t type = parser->type;
@@ -177,6 +145,16 @@ const char* llhttp_get_error_pos(const llhttp_t* parser) {
   return parser->error_pos;
 }
 
+/* llhttp_errno_name/llhttp_method_name/llhttp_status_name each abort() on an
+ * out-of-range enum value (upstream behavior, kept as-is here on purpose).
+ * None of the three is called anywhere in this codebase today, so the
+ * default case is unreachable in practice; the value these functions ever
+ * see always originates from llhttp's own parser state, never from
+ * caller-supplied data. If a future caller starts passing in a value from a
+ * different enum (e.g. this project's own chttp_method_t) instead of one
+ * llhttp produced itself, a mismatch there would abort() the whole process,
+ * not just the one connection/request -- verify any such call site maps
+ * values correctly before relying on it. */
 const char* llhttp_errno_name(llhttp_errno_t err) {
 #define HTTP_ERRNO_GEN(CODE, NAME, _) \
   case HPE_##NAME:                    \

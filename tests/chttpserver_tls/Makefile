@@ -45,6 +45,11 @@ THIRD_PARTY_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fPIC -g -O0 \
 	-Wno-deprecated-declarations -Wno-cast-function-type \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-type-limits
 
+# llhttp's generated state machine only ever triggers -Wunused-parameter
+# (verified under -Wall -Wextra); reusing facio's broader suppression list
+# would silently mask a real regression on a future llhttp re-vendor.
+LLHTTP_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fPIC -g -O0 -Wno-unused-parameter
+
 LFLAGS = -lpthread -lssl -lcrypto -lm -lz
 
 THIRD_PARTY_OBJS = $(THIRD_PARTY_SRC_FILES:$(THIRD_PARTY_DIR)/%.c=third_party_obj/facio/%.o)
@@ -57,7 +62,7 @@ third_party_obj/facio/%.o: $(THIRD_PARTY_DIR)/%.c $(THIRD_PARTY_HEADER_FILES) | 
 	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
 
 third_party_obj/llhttp/%.o: $(LLHTTP_DIR)/%.c $(LLHTTP_HEADER_FILES) | third_party_obj/llhttp
-	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
+	$(CC) -c $(LLHTTP_CFLAGS) $< -o $@
 
 build: $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS)
 	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) $(OUR_SRC_FILES) -o tests $(LFLAGS)

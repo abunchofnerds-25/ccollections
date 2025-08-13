@@ -317,6 +317,20 @@ static void _multi_write_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   chttpsvr_resp_write_str(resp, "baz");
 }
 
+/* Handler that exercises chttpsvr_resp_printf: a mix of scalar types on a
+   short call (fits the internal stack buffer) followed by a long call whose
+   formatted output exceeds that stack buffer, forcing the heap fallback
+   path. Both calls must accumulate into the same body, exactly like
+   chttpsvr_resp_write_str. */
+static void _printf_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
+  (void)req;
+  (void)ctx;
+  chttpsvr_resp_printf(resp, "n=%d s=%s f=%.2f ", 42, "hi", 3.5);
+  for (int i = 0; i < 40; i++) {
+    chttpsvr_resp_printf(resp, "%08d-", i);
+  }
+}
+
 /* Handler that queries two distinct keys in one request to verify that the
    _qresult scratch array is correctly reused across calls. */
 static void _multi_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
@@ -778,6 +792,7 @@ __attribute__((constructor)) static void _setup(void) {
                             NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/multi-write",
                             _multi_write_handler, NULL);
+  chttpsvr_register_handler(g_srv, CHTTP_GET, "/printf", _printf_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/multi-query",
                             _multi_query_handler, NULL);
   /* /echo-path/{v} reuses _path_handler to test URL-decoding of req->path. */
@@ -1672,6 +1687,24 @@ TEST(chttpserver, multi_write_accumulates) {
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_STREQ(resp->body, "foobarbaz");
+  chttpclient_resp_free(resp);
+}
+
+TEST(chttpserver, printf_accumulates) {
+  /* chttpsvr_resp_printf must format like printf and accumulate across
+     calls, including a call whose formatted output is long enough to force
+     the heap fallback path inside chttpsvr_resp_printf. */
+  chttpcli_response *resp = _get("/printf");
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+
+  char expected[512];
+  size_t off =
+      (size_t)snprintf(expected, sizeof(expected), "n=42 s=hi f=3.50 ");
+  for (int i = 0; i < 40; i++) {
+    off += (size_t)snprintf(expected + off, sizeof(expected) - off, "%08d-", i);
+  }
+  REQUIRE_STREQ(resp->body, expected);
   chttpclient_resp_free(resp);
 }
 

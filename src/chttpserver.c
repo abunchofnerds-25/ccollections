@@ -30,6 +30,7 @@ SOFTWARE.
 #include <http.h>
 #include <http1.h>
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2578,6 +2579,43 @@ ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
 ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp, const char *str) {
   if (!resp || !str) return ccol_invalid_args;
   return chttpsvr_resp_write(resp, str, strlen(str));
+}
+
+ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...) {
+  if (!resp || !fmt) return ccol_invalid_args;
+
+  ccol_memmgmt_procs_t *mp = resp->m_procs;
+  char stack_buf[256];
+  va_list ap, ap2;
+  va_start(ap, fmt);
+  va_copy(ap2, ap);
+
+  int n = vsnprintf(stack_buf, sizeof(stack_buf), fmt, ap);
+  va_end(ap);
+  if (n < 0) {
+    va_end(ap2);
+    return ccol_invalid_args;
+  }
+
+  if ((size_t)n < sizeof(stack_buf)) {
+    va_end(ap2);
+    return chttpsvr_resp_write(resp, stack_buf, (size_t)n);
+  }
+
+  char *heap_buf = (char *)_mem_alloc(mp, (size_t)n + 1);
+  if (!heap_buf) {
+    va_end(ap2);
+    return ccol_not_enough_memory;
+  }
+  int n2 = vsnprintf(heap_buf, (size_t)n + 1, fmt, ap2);
+  va_end(ap2);
+  if (n2 < 0) {
+    _mem_free(mp, heap_buf);
+    return ccol_invalid_args;
+  }
+  ccol_retval_t rv = chttpsvr_resp_write(resp, heap_buf, (size_t)n2);
+  _mem_free(mp, heap_buf);
+  return rv;
 }
 
 ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp, const char *json,

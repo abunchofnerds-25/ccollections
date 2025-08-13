@@ -975,6 +975,21 @@ ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
 ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp, const char *str);
 
 /**
+ * @brief Format and append a printf-style string to the response body.
+ *
+ * Equivalent to formatting `format`/`...` with printf semantics and passing
+ * the result to chttpsvr_resp_write_str(), without an intermediate
+ * caller-visible allocation.
+ *
+ * @param resp    Response handle (must not be NULL).
+ * @param fmt  printf-style format string (must not be NULL).
+ * @return ccol_success, ccol_invalid_args (resp/format is NULL, or the
+ *         underlying vsnprintf encoding fails), or ccol_not_enough_memory.
+ */
+ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
+
+/**
  * @brief Append a JSON body and set Content-Type to application/json.
  *
  * Appends len bytes of json to the response body and then sets the

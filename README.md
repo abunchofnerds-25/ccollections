@@ -3459,6 +3459,7 @@ chttpsvr_resp_set_status(resp, CHTTP_STATUS_CREATED);
 chttpsvr_resp_set_header(resp, "x-request-id", "abc123");
 chttpsvr_resp_write(resp, data, len);        /* append raw bytes */
 chttpsvr_resp_write_str(resp, "text");       /* append NUL-terminated string */
+chttpsvr_resp_printf(resp, "id=%d name=%s", id, name); /* printf-style append */
 chttpsvr_resp_write_json(resp, json, len);   /* sets Content-Type + appends */
 ```
 
@@ -3562,6 +3563,7 @@ cfg.tls = &tls;
 | `chttpsvr_resp_set_header(resp, name, value)` | Set or replace a response header |
 | `chttpsvr_resp_write(resp, data, len)` | Append raw bytes to the response body |
 | `chttpsvr_resp_write_str(resp, str)` | Append a NUL-terminated string |
+| `chttpsvr_resp_printf(resp, format, ...)` | Format a printf-style string and append it to the response body |
 | `chttpsvr_resp_write_json(resp, json, len)` | Append JSON body and set `Content-Type: application/json`; returns `ccol_invalid_args` when len is 0 |
 
 ---

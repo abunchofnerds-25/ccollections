@@ -1148,11 +1148,19 @@ static void _parse_ctx_free_fields(chttp_parse_ctx_t *ctx) {
  * ccol_success, *keep_alive_out reflects whether the connection may be
  * reused for a subsequent request (llhttp's own bookkeeping, further gated
  * by "no trailing garbage after the message boundary").
+ *
+ * *any_bytes_read_out is set to true the moment the first byte of the
+ * response is actually received off the wire. Callers use this to decide
+ * whether a failure is safe to silently retry against a fresh connection
+ * (nothing has been parsed or handed to the caller yet) versus one that
+ * must be surfaced (partial response already in flight, possibly already
+ * streamed out to a user callback).
  */
 static ccol_retval_t _chttp_read_response(chttp_conn_t *conn,
                                           chttp_parse_ctx_t *pctx,
                                           chttp_deadline_t *overall,
-                                          bool *keep_alive_out) {
+                                          bool *keep_alive_out,
+                                          bool *any_bytes_read_out) {
   pthread_once(&g_llhttp_settings_once, _init_llhttp_settings);
 
   llhttp_t parser;
@@ -1171,6 +1179,7 @@ static ccol_retval_t _chttp_read_response(chttp_conn_t *conn,
       if (errno == EWOULDBLOCK) continue;
       return ccol_http_transfer_aborted;
     }
+    if (n > 0) *any_bytes_read_out = true;
     if (n == 0) {
       llhttp_errno_t fe = llhttp_finish(&parser);
       if (fe != HPE_OK || !pctx->message_complete)
@@ -1528,26 +1537,6 @@ static ccol_retval_t chttp_do_internal(chttpcli cli, const chttp_request_t *req,
       }
     }
 
-    prv = _chttp_send_all(&conn, wire, wire_len, &overall_dl);
-    if (prv != ccol_success && reused) {
-      /* The reused connection may have died between our liveness probe and
-       * this write; retry exactly once against a brand-new connection. */
-      _conn_teardown(mp, &conn);
-      prv = _conn_open(mp, &url, url.is_https, tls_ctx, tls_cfg.verify_host,
-                       &connect_dl, &overall_dl, &conn);
-      if (prv == ccol_success) {
-        reused = false;
-        prv = _chttp_send_all(&conn, wire, wire_len, &overall_dl);
-      }
-    }
-    _mem_free(mp, wire);
-    if (prv != ccol_success) {
-      _conn_teardown(mp, &conn);
-      _url_free(mp, &url);
-      result = prv;
-      break;
-    }
-
     chttp_parse_ctx_t pctx;
     memset(&pctx, 0, sizeof(pctx));
     pctx.mp = mp;
@@ -1571,7 +1560,33 @@ static ccol_retval_t chttp_do_internal(chttpcli cli, const chttp_request_t *req,
     }
 
     bool keep_alive = false;
-    prv = _chttp_read_response(&conn, &pctx, &overall_dl, &keep_alive);
+    bool any_bytes_read = false;
+    prv = _chttp_send_all(&conn, wire, wire_len, &overall_dl);
+    if (prv == ccol_success) {
+      prv = _chttp_read_response(&conn, &pctx, &overall_dl, &keep_alive,
+                                 &any_bytes_read);
+    }
+    if (prv != ccol_success && reused && !any_bytes_read) {
+      /* The reused connection may have died between our liveness probe and
+       * this attempt -- either the write silently succeeded into the local
+       * send buffer before the peer's close became visible, or the read
+       * never produced a single byte. Either way nothing has been parsed or
+       * handed to the caller yet, so it is safe to retry exactly once
+       * against a brand-new connection. */
+      _conn_teardown(mp, &conn);
+      prv = _conn_open(mp, &url, url.is_https, tls_ctx, tls_cfg.verify_host,
+                       &connect_dl, &overall_dl, &conn);
+      if (prv == ccol_success) {
+        reused = false;
+        prv = _chttp_send_all(&conn, wire, wire_len, &overall_dl);
+        if (prv == ccol_success) {
+          any_bytes_read = false;
+          prv = _chttp_read_response(&conn, &pctx, &overall_dl, &keep_alive,
+                                     &any_bytes_read);
+        }
+      }
+    }
+    _mem_free(mp, wire);
     if (prv != ccol_success) {
       _conn_teardown(mp, &conn);
       _parse_ctx_free_fields(&pctx);

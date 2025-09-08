@@ -320,6 +320,59 @@ bool ctpool_future_cancelled(ctpool_future *f);
  */
 void ctpool_future_free(ctpool_future *f);
 
+/**
+ * @brief Create a detached future with no associated pool or queued task
+ *
+ * Unlike ctpool_submit_future, a detached future is not backed by any
+ * cthread_pool task queue -- it exists purely as a standalone
+ * caller-waits/producer-fulfills handshake. An external producer (for
+ * example an event-driven engine that is not itself a ctpool worker) is
+ * responsible for calling ctpool_future_fulfill() exactly once to deliver the
+ * result.
+ *
+ * Starts with a refcount of 2, mirroring ctpool_submit_future's convention:
+ * one reference for the caller (released via ctpool_future_free) and one for
+ * the producer (released by ctpool_future_fulfill). The struct is freed once
+ * both sides have released their reference, in either order -- so
+ * ctpool_future_free may be called before ctpool_future_fulfill, exactly as
+ * with pool-backed futures.
+ *
+ * Always allocated with plain malloc/free, independent of any pool's or
+ * caller's custom allocator -- matching ctpool_submit_future's existing
+ * futures, whose lifetime is deliberately decoupled from any single
+ * allocator so producer and consumer do not need to agree on one.
+ *
+ * @param err_str Optional: receives error description on failure
+ * @return New future handle (not yet done), or NULL on allocation failure
+ *
+ * @see ctpool_future_fulfill
+ */
+ctpool_future *ctpool_future_create_detached(char **err_str);
+
+/**
+ * @brief Deliver a result to a detached future (external-producer completion)
+ *
+ * Must be called exactly once per future created via
+ * ctpool_future_create_detached, by whichever code is producing the result.
+ * Do not call this on a future returned by ctpool_submit_future /
+ * ctpool_try_submit_future / ctpool_timed_submit_future -- those are
+ * fulfilled internally by the worker thread that runs their task.
+ *
+ * Wakes any callers currently blocked in ctpool_future_get(), then releases
+ * the producer's reference (freeing the future here if the caller already
+ * released its own reference via ctpool_future_free).
+ *
+ * @param f      Future to fulfill; must have been created via
+ *               ctpool_future_create_detached and not already fulfilled
+ * @param result Result value to deliver; retrievable via ctpool_future_get()
+ * @return ccol_success on delivery
+ * @return ccol_invalid_args if f is NULL
+ * @return ccol_not_permitted if f was already fulfilled
+ *
+ * @see ctpool_future_create_detached
+ */
+ccol_retval_t ctpool_future_fulfill(ctpool_future *f, void *result);
+
 /* ========================================================================== */
 /*                         POOL MANAGEMENT                                    */
 /* ========================================================================== */

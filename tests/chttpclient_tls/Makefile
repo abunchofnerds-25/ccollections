@@ -5,11 +5,10 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 
 # Our source files (compiled with strict flags + -Werror). clogger.c is a
 # transitive dependency: facio's fio.c resolves its FIO_LOG_* macros there.
-# cthreadpool.c is a transitive dependency of the async engine's DNS/connect
-# worker pool (g_client_dns_pool).
-SRC_FILE_PREFIX = chttpclient
+# cthreadpool.c is a transitive dependency of chttpclient's async engine's
+# DNS/connect worker pool.
 OUR_SRC_FILES = tests.c \
-	../../src/$(SRC_FILE_PREFIX).c \
+	../../src/chttpclient.c \
 	../../src/clogger.c \
 	../../src/chashmap.c \
 	../../src/cthreadpool.c \
@@ -17,9 +16,10 @@ OUR_SRC_FILES = tests.c \
 	../../src/common.c
 
 # Minimal facio subset needed for client-mode TLS: fio.c (core types/uuid
-# table symbols referenced by fio_tls_openssl.c) + fio_tls_openssl.c itself.
-# The fiobj_*/http*/http_internal.c files are exclusively for chttpserver's
-# own HTTP/1.1 server engine and are NOT needed here.
+# table symbols) + fio_tls_openssl.c itself. This suite's own mock TLS server
+# (in tests.c) is a hand-rolled raw-OpenSSL server -- NOT chttpserver.c/
+# http.c/http1.c -- since chttpclient's async engine cannot share a process
+# with chttpserver's engine (see chttpclient.c's g_client_engine_* comments).
 FACIO_DIR = ../../third_party/facio
 FACIO_SRC_FILES = $(FACIO_DIR)/fio.c $(FACIO_DIR)/fio_tls_openssl.c
 FACIO_HEADER_FILES = $(wildcard $(FACIO_DIR)/*.h)
@@ -45,7 +45,6 @@ THIRD_PARTY_CFLAGS = $(INCLUDES) $(DEFINITIONS) -g -O0 \
 # would silently mask a real regression on a future llhttp re-vendor.
 LLHTTP_CFLAGS = $(INCLUDES) $(DEFINITIONS) -g -O0 -Wno-unused-parameter
 
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 LFLAGS = -lpthread -lssl -lcrypto -lz -lm
 
 third_party_obj/facio third_party_obj/llhttp:
@@ -60,21 +59,26 @@ third_party_obj/llhttp/%.o: $(LLHTTP_DIR)/%.c $(LLHTTP_HEADER_FILES) | third_par
 build: $(FACIO_OBJS) $(LLHTTP_OBJS)
 	$(CC) $(CFLAGS) $(FACIO_OBJS) $(LLHTTP_OBJS) $(OUR_SRC_FILES) -o tests $(LFLAGS)
 
+# This suite drives a real TLS handshake against a genuine self-signed cert
+# generated at test-startup via the `openssl` CLI. Kept isolated in its own
+# binary (mirroring tests/chttpserver_tls) so a missing/broken openssl CLI
+# or an invalid cert file cannot take the rest of the chttpclient test suite
+# down with it.
 test: build
 	./tests
 
 memtest: build
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
-		--error-exitcode=1 --suppressions=ld_so_dlopen.supp ./tests
+		--error-exitcode=1 ./tests
 
 generate_coverage_report:
-	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(FACIO_OBJS) $(LLHTTP_OBJS) $(OUR_SRC_FILES) \
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) $(FACIO_OBJS) $(LLHTTP_OBJS) $(OUR_SRC_FILES) \
 		-o tests $(LFLAGS) && \
 	./tests && \
-	gcov -d -w tests-$(SRC_FILE_PREFIX) && \
+	gcov -d -w tests-chttpclient && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --capture --directory . \
-	--output-file $(SRC_FILE_PREFIX).c.info && \
-	genhtml --ignore-errors inconsistent -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
+	--output-file chttpclient.c.info && \
+	genhtml --ignore-errors inconsistent -s chttpclient.c.info --output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info
 
 all: build test memtest generate_coverage_report

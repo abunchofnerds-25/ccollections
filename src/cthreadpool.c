@@ -654,6 +654,47 @@ void ctpool_future_free(ctpool_future *f) {
   future_deref(f);
 }
 
+ctpool_future *ctpool_future_create_detached(char **err_str) {
+  ctpool_future *f = (ctpool_future *)calloc(1, sizeof(ctpool_future));
+  if (!f) {
+    if (err_str) *err_str = CCOL_ERR_STR("failed to allocate future");
+    return NULL;
+  }
+  if (mutex_init(f->mu) != 0) {
+    free(f);
+    if (err_str) *err_str = CCOL_ERR_STR("future mutex init failed");
+    return NULL;
+  }
+  if (cond_var_init(f->cv) != 0) {
+    mutex_destroy(f->mu);
+    free(f);
+    if (err_str) *err_str = CCOL_ERR_STR("future cond_var init failed");
+    return NULL;
+  }
+  f->refcount = 2; /* caller reference + producer reference */
+  return f;
+}
+
+ccol_retval_t ctpool_future_fulfill(ctpool_future *f, void *result) {
+  if (!f) return ccol_invalid_args;
+  mutex_lock(f->mu);
+  if (f->done) {
+    mutex_unlock(f->mu);
+    return ccol_not_permitted;
+  }
+  f->result = result;
+  f->done = true;
+  cond_var_broadcast(f->cv);
+  int remaining = --f->refcount;
+  mutex_unlock(f->mu);
+  if (remaining == 0) {
+    mutex_destroy(f->mu);
+    cond_var_destroy(f->cv);
+    free(f);
+  }
+  return ccol_success;
+}
+
 /* ========================================================================== */
 /*                         POOL MANAGEMENT                                    */
 /* ========================================================================== */

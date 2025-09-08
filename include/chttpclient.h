@@ -27,6 +27,7 @@ SOFTWARE.
 #include <chttp.h>
 #include <citerators.h>
 #include <common.h>
+#include <cthreadpool.h>
 
 /**
  * @file chttpclient.h
@@ -481,6 +482,189 @@ ccol_retval_t chttpclient_do(chttpcli cli, const chttp_request_t *req,
 ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
                                        chttpcli_write_fn write_fn,
                                        void *write_ctx, int *status_code_out);
+
+/* ========================================================================== */
+/*                         ASYNC API (TIER 2)                                 */
+/* ========================================================================== */
+
+/**
+ * @brief Result of a request submitted via chttpclient_do_async or
+ *        chttpclient_do_async_streaming.
+ *
+ * rv carries the same result codes chttpclient_do returns (see its own
+ * documentation). resp is non-NULL only when rv == ccol_success; free it
+ * with chttpclient_resp_free before freeing this result, exactly as with
+ * chttpclient_do's resp_out. For a request submitted via
+ * chttpclient_do_async_streaming, resp is still populated on success (so
+ * status_code and headers presence can be checked uniformly), but its body
+ * is NULL -- the body was already delivered via the write callback as it
+ * arrived, exactly mirroring chttpclient_do_streaming's own
+ * chttpcli_response.body == NULL convention for the streaming path.
+ *
+ * Obtained via chttpclient_async_result_get (a thin, typed wrapper over
+ * ctpool_future_get) and released via chttpclient_async_result_free -- do
+ * this before calling ctpool_future_free on the future itself.
+ */
+typedef struct chttpcli_async_result {
+  ccol_retval_t rv;
+  chttpcli_response *resp;
+  ccol_memmgmt_procs_t *_m_procs;
+} chttpcli_async_result_t;
+
+/**
+ * @brief Submit an HTTP request for asynchronous execution.
+ *
+ * Non-blocking: queues the request onto chttpclient's shared, lazily-started
+ * reactor engine (independent of chttpclient_do's synchronous connection
+ * handling, and independent of chttpserver's own engine -- see "Async engine"
+ * below) and returns immediately. The whole request/response cycle,
+ * including any redirect hops, runs on the engine's own threads.
+ *
+ * @param cli Client handle.
+ * @param req Request to execute. Unlike chttpclient_do, req need not remain
+ *            valid after this call returns -- everything needed is copied
+ *            or serialised internally before the call returns.
+ * @return A future, or NULL if the request could not even be queued (NULL
+ *         cli/req, malformed URL, TLS unusable, OOM, or the engine failing
+ *         to start). On success, the caller owns the future and must
+ *         eventually call chttpclient_async_result_free (after
+ *         chttpclient_async_result_get) followed by exactly one
+ *         ctpool_future_free.
+ *
+ * ### Async engine
+ *
+ * The first call to chttpclient_do_async or chttpclient_do_async_streaming
+ * anywhere in the process lazily starts a small, shared pool of reactor
+ * threads (sized to the CPU count) plus a companion worker pool used solely
+ * to offload DNS resolution and connect() off of reactor threads. The engine
+ * is reference-counted and stops automatically once no request is in flight
+ * and no connection remains in any chttpcli's async idle pool; it restarts
+ * transparently on the next call. This engine is entirely separate from
+ * chttpserver's own facil.io-based engine and from chttpclient_do's
+ * synchronous connection handling -- a process may freely use
+ * chttpclient_do and chttpclient_do_async/_streaming together, but must not
+ * run chttpserver in the same process as chttpclient_do_async/_streaming
+ * (both would independently believe they own the one process-wide facio
+ * reactor).
+ */
+ctpool_future *chttpclient_do_async(chttpcli cli, const chttp_request_t *req);
+
+/**
+ * @brief Submit an HTTP request for asynchronous execution with a streaming
+ *        response body.
+ *
+ * Same non-blocking submission semantics as chttpclient_do_async, but
+ * write_fn is invoked one or more times with chunks of the response body as
+ * they arrive over the wire, exactly like chttpclient_do_streaming.
+ *
+ * write_fn runs on one of the engine's own reactor threads, NOT on the
+ * calling thread and NOT on a dedicated thread for this request. This has
+ * two hard requirements, unlike chttpclient_do_streaming's caller-thread
+ * callback: write_fn must not block (no blocking I/O, no long-held locks,
+ * no waiting on another request's future) -- doing so stalls every other
+ * connection the engine is currently multiplexing on that reactor thread --
+ * and write_fn must not call back into chttpclient_do_async/_streaming (or
+ * anything that transitively waits on this same request's future) for the
+ * same or a different chttpcli sharing the engine, or it may deadlock
+ * against the very reactor thread it is running on.
+ *
+ * @param cli       Client handle.
+ * @param req       Request to execute (see chttpclient_do_async).
+ * @param write_fn  Chunk delivery callback (must not be NULL). Returning
+ *                  fewer bytes than len aborts the transfer; the future's
+ *                  result then carries ccol_http_transfer_aborted.
+ * @param write_ctx Passed verbatim to write_fn.
+ * @return A future, or NULL under the same conditions as
+ *         chttpclient_do_async (including a NULL write_fn).
+ */
+ctpool_future *chttpclient_do_async_streaming(chttpcli cli,
+                                              const chttp_request_t *req,
+                                              chttpcli_write_fn write_fn,
+                                              void *write_ctx);
+
+/**
+ * @brief Block until an async request's future is fulfilled and return its
+ *        typed result.
+ *
+ * A thin wrapper over ctpool_future_get that casts its void* result to
+ * chttpcli_async_result_t*. Safe to call more than once on the same future
+ * (matching ctpool_future_get's own contract) -- every call after the first
+ * returns the same result pointer, still owned by the future until freed.
+ *
+ * @param f Future returned by chttpclient_do_async or
+ *          chttpclient_do_async_streaming.
+ * @return The result, or NULL if f is NULL or the future was cancelled
+ *         before being fulfilled.
+ */
+chttpcli_async_result_t *chttpclient_async_result_get(ctpool_future *f);
+
+/**
+ * @brief Release a chttpcli_async_result_t obtained via
+ *        chttpclient_async_result_get.
+ *
+ * Does NOT free result->resp -- free that separately with
+ * chttpclient_resp_free first if rv == ccol_success. Does NOT free the
+ * future itself -- pair with exactly one ctpool_future_free, called
+ * separately (before or after this call, order does not matter).
+ *
+ * @param result Result to free; NULL is a safe no-op.
+ */
+void chttpclient_async_result_free(chttpcli_async_result_t *result);
+
+/* ========================================================================== */
+/*                    POOLED-SYNC API (TIER 3)                                */
+/* ========================================================================== */
+
+/**
+ * @brief Perform an HTTP request using the shared Tier 2 engine, blocking
+ *        until it completes.
+ *
+ * A thin wrapper over chttpclient_do_async: submits the request to the
+ * shared engine, blocks until it completes, and returns the exact same
+ * ccol_retval_t / resp_out call shape chttpclient_do uses -- but the
+ * connect/write/read work happens on the engine's own reactor threads
+ * rather than the calling thread, and concurrent callers across many
+ * chttpcli handles share one small, fixed-size reactor thread pool instead
+ * of each blocking its own OS thread for the duration of its request.
+ *
+ * @param cli      Client handle.
+ * @param req      Request to execute.
+ * @param resp_out Receives the response on success; must not be NULL.
+ * @return Same result codes as chttpclient_do, with one difference: a
+ *         failure to even submit the request to the engine (OOM, or the
+ *         engine failing to start) is reported as ccol_unexpected_failure
+ *         rather than a more specific code. Everything detected once the
+ *         request is actually in flight -- bad URL, TLS failure, connection
+ *         failure, transfer errors, timeouts, too many redirects -- is
+ *         reported with the exact same specific codes chttpclient_do uses.
+ */
+ccol_retval_t chttpclient_do_pooled(chttpcli cli, const chttp_request_t *req,
+                                    chttpcli_response **resp_out);
+
+/**
+ * @brief Perform an HTTP request with a streaming response body using the
+ *        shared Tier 2 engine, blocking until it completes.
+ *
+ * A thin wrapper over chttpclient_do_async_streaming with the exact same
+ * call shape as chttpclient_do_streaming. write_fn runs on one of the
+ * engine's own reactor threads -- see chttpclient_do_async_streaming's
+ * documentation for the resulting must-not-block, must-not-call-back-into-
+ * the-engine contract -- rather than the calling thread; that is the only
+ * respect in which this function behaves differently from
+ * chttpclient_do_streaming's caller-thread callback.
+ *
+ * @param cli             Client handle.
+ * @param req             Request to execute.
+ * @param write_fn        Chunk delivery callback (must not be NULL).
+ * @param write_ctx       Passed verbatim to write_fn.
+ * @param status_code_out Receives HTTP status code on success, or NULL.
+ * @return Same codes as chttpclient_do_pooled.
+ */
+ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
+                                              const chttp_request_t *req,
+                                              chttpcli_write_fn write_fn,
+                                              void *write_ctx,
+                                              int *status_code_out);
 
 /* ========================================================================== */
 /*                    DEFAULT CLIENT AND CONVENIENCE API */

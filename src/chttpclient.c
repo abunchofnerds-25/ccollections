@@ -24,15 +24,18 @@ SOFTWARE.
 
 #include <chashmap.h>
 #include <chttpclient.h>
+#include <cthreadpool.h>
 #include <ctype.h>
 #include <cvector.h>
 #include <errno.h>
+#include <fio.h>
 #include <fio_tls.h>
 #include <limits.h>
 #include <llhttp.h>
 #include <netdb.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,6 +136,20 @@ struct chttpclient {
    * independent of the concurrency limiter above. */
   chmap idle_pools;
   size_t idle_total_count;
+
+  /* Tier 2's own keep-alive idle pool: chmap(char *origin_key -> cvec of
+   * chttp_async_ctx_t*). Separate from idle_pools above since the stored
+   * value type differs (a plain fd this thread owns vs. a connection
+   * attached to the shared async reactor) -- see the "ASYNC IDLE POOL"
+   * section further down for the full design. idle_async_drained is
+   * broadcast whenever idle_total_count_async reaches 0, so
+   * __chttpclient_destroy can wait for any in-flight idle-connection
+   * teardowns (triggered by its own drain, or already in progress from a
+   * natural death) to actually finish before freeing this struct out from
+   * under them. */
+  chmap idle_pools_async;
+  size_t idle_total_count_async;
+  cond_var_t idle_async_drained;
 
   long connect_timeout_ms;
   long request_timeout_ms;
@@ -1266,6 +1283,2659 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
 }
 
 /* ========================================================================== */
+/*                         ASYNC ENGINE (TIER 2/3)                            */
+/* ========================================================================== */
+
+/*
+ * chttpclient's async engine (chttpclient_do_async and the pooled-sync
+ * wrappers built on top of it) is driven by a small, fixed-size pool of
+ * facio reactor threads, entirely independent of chttpserver.c's own engine.
+ *
+ * facio's fio_data is a process-wide singleton (see fio.c) -- there can only
+ * be one fio_start() reactor running per process. This module therefore owns
+ * its own private copy of the lazy-start/ref-counted-stop lifecycle pattern
+ * chttpserver.c already uses for its engine (g_engine_mutex / g_engine_running
+ * / g_engine_thread there; g_client_engine_* here), rather than sharing state
+ * with it.
+ *
+ * KNOWN LIMITATION (deliberate, for now): a single process must not use both
+ * chttpserver's engine and chttpclient's async engine (Tier 2/3) at the same
+ * time -- two independent callers each believing they own fio_data's one
+ * process-wide reactor would corrupt shared facio state. This module and
+ * chttpserver.c's engine are safe to link into the same binary as long as at
+ * most one of them is ever actually started; combining them safely (a single
+ * shared, ref-counted acquire/release both modules call into) is deferred
+ * future work. chttpclient's synchronous API (Tier 1: chttpclient_do,
+ * chttpclient_do_streaming, and the chttp_* convenience wrappers) never
+ * touches this engine at all and has no such restriction.
+ *
+ * Unlike chttpserver.c's bootstrap, this one does not call
+ * http_lib_constructor(): that function (and the FIO_CALL_ON_INITIALIZE
+ * registration timing it exists for) is specific to facio's HTTP request/
+ * response layer (http.c/http1.c), which chttpclient does not link at all
+ * (see tests/chttpclient/Makefile) -- fio_lib_init() is fully self-contained
+ * without it.
+ */
+static pthread_mutex_t g_client_engine_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_client_engine_ready_cv = PTHREAD_COND_INITIALIZER;
+/* Signalled once a reaper thread (see _client_engine_reaper_fn) finishes
+ * tearing an engine instance down (g_client_engine_stopping -> false). */
+static pthread_cond_t g_client_engine_stopped_cv = PTHREAD_COND_INITIALIZER;
+static bool g_client_engine_running = false;
+/* True from the moment the last reference is released until the reaper
+ * thread has fully finished tearing the engine down (joined the thread,
+ * destroyed g_client_dns_pool). While true, a concurrent acquire must wait
+ * rather than starting a fresh engine or touching the dying one's
+ * resources -- see _client_engine_acquire's wait loop. */
+static bool g_client_engine_stopping = false;
+static bool g_client_engine_ready = false;
+static bool g_client_engine_thread_started = false;
+static pthread_t g_client_engine_thread;
+static int16_t g_client_engine_threads = 1;
+/* Number of chttpcli instances (or, more precisely, outstanding Tier 2/3
+ * users) currently relying on the engine. Engine stops when this reaches 0. */
+static int g_client_engine_ref_count = 0;
+/* Offloads fio_socket()'s synchronous DNS resolution off of caller threads.
+ * Lives and dies with the engine (created/destroyed alongside it, guarded by
+ * the same g_client_engine_mutex) rather than being a separate lazy
+ * singleton, since nothing needs it once the engine itself is not running. */
+static ctpool g_client_dns_pool = NULL;
+
+/* fio_lib_init / fio_lib_destroy have no fio.h declaration (only defined in
+ * fio.c) -- chttpserver.c's _fio_global_init forward-declares them for the
+ * same reason; mirrored here. */
+extern void fio_lib_init(void);
+extern void fio_lib_destroy(void);
+/* Forward declaration: defined below (near _client_engine_wait_for_
+ * quiescence, which it also calls), but must be registered via atexit here,
+ * immediately after atexit(fio_lib_destroy) -- see its own comment for why
+ * this exact ordering matters. */
+static void _client_engine_atexit_safety_net(void);
+/* Forward declarations: the reactor-owned deadline sweep (connect_timeout_ms/
+ * request_timeout_ms enforcement for Tier 2/3) is defined later, in the
+ * "ASYNC DEADLINE SWEEP" section after chttp_async_ctx_t/chttp_async_chain_t
+ * are declared -- the sweep needs to inspect those types. It must still be
+ * started/stopped in lockstep with the engine's own reactor thread here. */
+static ccol_retval_t _client_deadline_sweep_start(void);
+static void _client_deadline_sweep_stop_and_join(void);
+static pthread_once_t _client_fio_init_once = PTHREAD_ONCE_INIT;
+static void _client_fio_global_init(void) {
+  fio_lib_init();
+  atexit(fio_lib_destroy);
+  atexit(_client_engine_atexit_safety_net);
+}
+
+/* Called by facil.io on FIO_CALL_ON_START, once the reactor has entered its
+ * event loop. Signals _client_engine_acquire that the engine is ready. */
+static void _client_engine_ready_cb(void *arg) {
+  (void)arg;
+  pthread_mutex_lock(&g_client_engine_mutex);
+  g_client_engine_ready = true;
+  pthread_cond_broadcast(&g_client_engine_ready_cv);
+  pthread_mutex_unlock(&g_client_engine_mutex);
+}
+
+static void *_client_fio_thread_fn(void *arg) {
+  (void)arg;
+  fio_start(.threads = g_client_engine_threads, .workers = 1);
+  /* g_client_engine_running is cleared by _client_engine_release itself (see
+   * its comment) rather than here -- this thread must not touch
+   * g_client_engine_mutex, since _client_engine_release holds it across the
+   * pthread_join that waits for this function to return. */
+  return NULL;
+}
+
+/*
+ * Runs on a freshly spawned, detached thread (never on one of the engine's
+ * own reactor/worker threads -- see _client_engine_release's comment for why
+ * that distinction is essential) to perform the actual blocking teardown:
+ * stop the reactor, join its thread, then destroy g_client_dns_pool and
+ * clear g_client_engine_stopping so a waiting acquirer can proceed.
+ */
+static void *_client_engine_reaper_fn(void *arg) {
+  (void)arg;
+  fio_stop();
+  pthread_join(g_client_engine_thread, NULL);
+  /* Stopped after the reactor thread, not before: the deadline sweep calls
+   * fio_force_close on expired connections, which is only meaningful while
+   * the reactor is still alive to act on it. By this point every registered
+   * ctx is guaranteed already gone anyway -- see _client_deadline_register's
+   * own comment for why a ctx being registered always implies a live engine
+   * reference is held for it, so the registry is empty once ref_count (and
+   * therefore this reaper) is reached. */
+  _client_deadline_sweep_stop_and_join();
+  pthread_mutex_lock(&g_client_engine_mutex);
+  g_client_engine_thread_started = false;
+  ctpool_destroy(g_client_dns_pool); /* implicit drain shutdown; see
+                                       * __ctpool_destroy */
+  g_client_engine_stopping = false;
+  pthread_cond_broadcast(&g_client_engine_stopped_cv);
+  pthread_mutex_unlock(&g_client_engine_mutex);
+  /* fio_lib_destroy (registered via atexit in _client_fio_global_init) fires
+   * after all other cleanup, at process exit. Nothing further to clear here
+   * (unlike chttpserver.c, this module installs no facio logger). */
+  return NULL;
+}
+
+/*
+ * Acquires a reference to the shared async engine, starting it (and its
+ * companion DNS/connect worker pool -- see g_client_dns_pool) on the first
+ * call, blocking until the reactor's event loop is confirmed running.
+ * Subsequent calls just bump the ref count. Must be paired with exactly one
+ * _client_engine_release() call.
+ */
+static ccol_retval_t _client_engine_acquire(void) {
+  pthread_mutex_lock(&g_client_engine_mutex);
+
+  /* A previous engine instance may still be mid-teardown on the reaper
+   * thread (see _client_engine_release). Reusing g_client_dns_pool or
+   * g_client_engine_thread while that's in flight would be a use-after-free,
+   * so wait for it to fully finish before deciding whether to start fresh. */
+  while (g_client_engine_stopping) {
+    pthread_cond_wait(&g_client_engine_stopped_cv, &g_client_engine_mutex);
+  }
+
+  if (!g_client_engine_running) {
+    pthread_once(&_client_fio_init_once, _client_fio_global_init);
+
+    long raw = sysconf(_SC_NPROCESSORS_ONLN);
+    if (raw < 1) raw = 1;
+    g_client_engine_threads = (raw > INT16_MAX) ? INT16_MAX : (int16_t)raw;
+
+    /* fio_socket() resolves DNS synchronously (see fio_tcp_socket in
+     * fio.c) -- offloaded here so chttpclient_do_async's caller thread never
+     * blocks on it. Created before the reactor thread so a failure here
+     * needs no rollback of anything else. */
+    char *dns_err = NULL;
+    g_client_dns_pool = create_cthread_pool((size_t)g_client_engine_threads,
+                                            0, &dns_err);
+    if (!g_client_dns_pool) {
+      pthread_mutex_unlock(&g_client_engine_mutex);
+      return ccol_not_enough_memory;
+    }
+
+    /* Started before the reactor thread: if the reactor thread then fails to
+     * start, the rollback below needs the sweep thread already running so it
+     * can be torn down uniformly via _client_deadline_sweep_stop_and_join. */
+    if (_client_deadline_sweep_start() != ccol_success) {
+      ctpool_destroy(g_client_dns_pool);
+      pthread_mutex_unlock(&g_client_engine_mutex);
+      return ccol_unexpected_failure;
+    }
+
+    g_client_engine_ready = false;
+    fio_state_callback_add(FIO_CALL_ON_START, _client_engine_ready_cb, NULL);
+
+    int rc = pthread_create(&g_client_engine_thread, NULL,
+                            _client_fio_thread_fn, NULL);
+    if (rc != 0) {
+      fio_state_callback_remove(FIO_CALL_ON_START, _client_engine_ready_cb,
+                                NULL);
+      _client_deadline_sweep_stop_and_join();
+      ctpool_destroy(g_client_dns_pool);
+      pthread_mutex_unlock(&g_client_engine_mutex);
+      return ccol_unexpected_failure;
+    }
+
+    g_client_engine_thread_started = true;
+    g_client_engine_running = true;
+
+    /* Block until the engine fires FIO_CALL_ON_START: the reactor is now in
+     * its event loop. Mirrors chttpsvr_start's own synchronisation. */
+    while (!g_client_engine_ready) {
+      pthread_cond_wait(&g_client_engine_ready_cv, &g_client_engine_mutex);
+    }
+  }
+
+  g_client_engine_ref_count++;
+  pthread_mutex_unlock(&g_client_engine_mutex);
+  return ccol_success;
+}
+
+/*
+ * Releases a reference acquired via _client_engine_acquire(). Once the ref
+ * count returns to zero, hands the actual engine teardown off to a freshly
+ * spawned, detached reaper thread rather than performing it inline.
+ *
+ * This is essential, not just a style choice: _client_engine_release() is
+ * routinely called from inside a facio protocol callback (_async_on_close),
+ * i.e. from a thread that facio itself owns as part of the very reactor
+ * being stopped. Tearing the engine down inline would mean fio_stop()
+ * followed by pthread_join(g_client_engine_thread, ...) -- but
+ * g_client_engine_thread is blocked inside fio_start(), which (for
+ * g_client_engine_threads > 1, the common case) itself blocks in
+ * fio_defer_thread_pool_join() waiting for every one of its own worker
+ * threads -- including whichever one is currently running this exact
+ * on_close callback -- to finish. A worker thread can never "finish" while
+ * it is still inside this call, so joining the engine thread from here would
+ * deadlock permanently, and since this is called under g_client_engine_mutex,
+ * that deadlock would also wedge every subsequent acquire/release forever
+ * (this was caught by async_step_a.post_echoes_body hanging in testing).
+ * The reaper thread is a genuinely separate thread with no membership in
+ * facio's own worker pool, so it can join it without any such cycle.
+ *
+ * g_client_engine_running is cleared here (synchronously, before spawning
+ * the reaper) so no concurrent acquire can be satisfied by the now-dying
+ * engine; g_client_engine_stopping is set alongside it so a concurrent
+ * acquire waits for the reaper to fully finish (join done, g_client_dns_pool
+ * destroyed) rather than possibly touching either mid-teardown.
+ */
+/* Spawns the detached reaper thread (see _client_engine_reaper_fn's own
+ * comment for why it must be detached rather than run inline). Shared by
+ * _client_engine_release and _client_engine_atexit_safety_net -- both reach
+ * the same "something must stop the engine now" decision, just via
+ * different triggers (ref count hitting 0 vs. process exit). */
+static void _client_engine_spawn_reaper(void) {
+  pthread_t reaper;
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+  if (pthread_create(&reaper, &attr, _client_engine_reaper_fn, NULL) != 0) {
+    /* Could not spawn the reaper (OOM-class failure). No safer fallback
+     * exists than doing it inline; this reintroduces the deadlock risk
+     * documented on _client_engine_reaper_fn only in this already-degenerate
+     * case. */
+    _client_engine_reaper_fn(NULL);
+  }
+  pthread_attr_destroy(&attr);
+}
+
+static void _client_engine_release(void) {
+  bool should_reap = false;
+  pthread_mutex_lock(&g_client_engine_mutex);
+  if (g_client_engine_ref_count > 0) g_client_engine_ref_count--;
+  if (g_client_engine_ref_count == 0 && g_client_engine_running) {
+    g_client_engine_running = false;
+    g_client_engine_stopping = true;
+    should_reap = true;
+  }
+  pthread_mutex_unlock(&g_client_engine_mutex);
+
+  if (should_reap) _client_engine_spawn_reaper();
+}
+
+/*
+ * Blocks until any in-flight reaper thread (see _client_engine_release) has
+ * fully finished tearing the engine down. A no-op if the engine is not
+ * currently stopping (including if it's not running at all, or running and
+ * staying up because other references remain).
+ *
+ * _client_engine_release() deliberately does not block the calling thread
+ * itself -- it is routinely called from inside a facio callback (on_close),
+ * where blocking would risk the self-join deadlock documented on that
+ * function. That makes engine teardown asynchronous from every caller's
+ * point of view, including this module's own atexit-registered
+ * fio_lib_destroy: without a way to wait for a just-triggered teardown to
+ * actually finish, process exit can race a still-running reaper thread,
+ * with fio_lib_destroy unmapping fio_data's backing memory while one of
+ * facio's own worker threads is still reading it (a crash caught by
+ * valgrind during testing, since each test tears its engine fully down
+ * after a single request rather than keeping it warm the way a real
+ * long-lived application would). Callers that need a guaranteed-quiescent
+ * engine -- this test suite between requests, or eventually a real
+ * application at shutdown -- must call this explicitly, mirroring
+ * chttpserver.c's own chttpsvr_engine_wait() for the identical class of
+ * problem on the server side.
+ */
+static void _client_engine_wait_for_quiescence(void) {
+  pthread_mutex_lock(&g_client_engine_mutex);
+  while (g_client_engine_stopping) {
+    pthread_cond_wait(&g_client_engine_stopped_cv, &g_client_engine_mutex);
+  }
+  pthread_mutex_unlock(&g_client_engine_mutex);
+}
+
+/*
+ * Process-exit safety net: registered via atexit() immediately after
+ * atexit(fio_lib_destroy) inside _client_fio_global_init, so -- atexit runs
+ * handlers in reverse registration order -- this always runs *before*
+ * fio_lib_destroy, exactly mirroring the ordering tests/chttpserver_tls's
+ * own _teardown relies on for the identical reason.
+ *
+ * _client_engine_wait_for_quiescence alone only protects a caller who
+ * *knows* to call it once no more async work is outstanding. Nothing
+ * forces that discipline: an application can exit (or, as happened
+ * developing this module's own tests, a test can abort via a failed
+ * assertion) while requests are still genuinely in flight -- ref count
+ * still nonzero, no release ever triggered a reaper. Without this
+ * function, fio_lib_destroy would then unmap fio_data's backing memory
+ * while a facio worker thread from this engine is potentially still
+ * running, a use-after-free/segfault.
+ *
+ * If the engine is still running at process-exit time, forces the ref
+ * count to 0 (there is no meaningful outstanding caller left to wait for)
+ * and triggers the same stop-and-reap path _client_engine_release uses,
+ * then waits for it -- covering both "we just triggered a stop" and "a
+ * concurrent ordinary release already triggered one that hadn't finished
+ * yet".
+ */
+static void _client_engine_atexit_safety_net(void) {
+  bool should_reap = false;
+  pthread_mutex_lock(&g_client_engine_mutex);
+  if (g_client_engine_running) {
+    g_client_engine_ref_count = 0;
+    g_client_engine_running = false;
+    g_client_engine_stopping = true;
+    should_reap = true;
+  }
+  pthread_mutex_unlock(&g_client_engine_mutex);
+
+  if (should_reap) _client_engine_spawn_reaper();
+  _client_engine_wait_for_quiescence();
+}
+
+/* ========================================================================== */
+/*                    ASYNC CONNECTION STATE MACHINE (STEP A + B)             */
+/* ========================================================================== */
+
+/*
+ * Tier 2/3 engine: a non-blocking HTTP or HTTPS request/response cycle per
+ * connection, now with redirect-following (Step B) layered on top of the
+ * original single-hop pipeline (Step A). There is still no idle-pool reuse
+ * yet -- every hop opens, then always closes, its own fresh connection; that
+ * remains a separate, later increment. Per-request connect/request timeouts
+ * are also not yet enforced here -- see the "reactor-owned timer/cancellation
+ * handling" roadmap item.
+ *
+ * TLS: uses the same reactor-independent, client-mode TLS API Tier 1 uses
+ * (fio_tls_connect_create / fio_tls_client_handshake_step /
+ * fio_tls_connection_read / fio_tls_connection_write), driven from
+ * on_data/on_ready instead of a blocking poll() loop. Those calls write and
+ * read straight through OpenSSL's BIO layer on the raw fd, bypassing
+ * facio's fio_write2/fio_read data path entirely -- see
+ * _async_tls_try_write's comment for what that implies for write-readiness
+ * notification (fio_force_write_rearm).
+ *
+ * Redirect-chain lifetime (Step B): a redirect chain spans multiple
+ * connections (one chttp_async_ctx_t per hop, exactly mirroring Tier 1's "a
+ * fresh chttp_parse_ctx_t per hop" comment), but must still fulfil the
+ * caller's future exactly once and release exactly one engine reference for
+ * the whole chain. chttp_async_chain_t is the small heap-allocated struct
+ * that outlives any single hop's ctx to carry that shared state: the future,
+ * the fulfilled-once guard, an owned deep copy of the original request's
+ * headers and body (the original chttp_request_t may be freed by the caller
+ * the moment chttpclient_do_async returns -- long before a redirect hop two
+ * or three requests later would need to re-serialise them), the pinned TLS
+ * context (constant across hops, exactly like Tier 1's tls_ctx local), and a
+ * refcount tracking how many hops' ctx are currently live. Every ctx
+ * teardown path (_async_ctx_teardown) releases one chain reference; when the
+ * count reaches zero -- meaning no further hop was ever queued to take over
+ * -- _async_chain_release both frees the chain and, via a fulfilled-guarded
+ * backstop, fulfils the future with a generic error if nothing else already
+ * did (mirroring _async_on_close's old per-ctx backstop, now centralised so
+ * it naturally does the right thing regardless of which hop's ctx happens to
+ * be the last one torn down).
+ */
+
+/* The ctpool_future's result is a chttpcli_async_result_t (public, declared
+ * in chttpclient.h) -- built by _async_fulfill_chain below. */
+
+typedef enum {
+  CHTTP_ASYNC_CONNECTING,
+  CHTTP_ASYNC_TLS_HANDSHAKING,
+  CHTTP_ASYNC_WRITING,
+  CHTTP_ASYNC_READING,
+  CHTTP_ASYNC_IDLE, /* sitting in cli->idle_pools_async, not owned by any
+                     * chain (ctx->chain == NULL); see the "ASYNC IDLE
+                     * POOL" section below */
+} chttp_async_state_t;
+
+/*
+ * Shared, per-request (not per-hop) state for a redirect chain. See the
+ * file-level comment above for the ownership/lifetime rationale.
+ */
+typedef struct {
+  ccol_memmgmt_procs_t *mp;
+  struct chttpclient *cli; /* owning client; needed by _async_submit_hop to
+                            * reach the async idle pool (cli->idle_pools_async)
+                            * for both taking a reusable connection and
+                            * offering one back */
+  ctpool_future *future; /* the caller's own reference is separate -- see
+                          * _chttp_do_async_internal's return value; this
+                          * module only ever calls ctpool_future_fulfill on
+                          * it (the producer-side reference) */
+
+  chttpcli_write_fn write_fn; /* NULL for a buffered (chttpclient_do_async)
+                               * request; non-NULL for a streaming
+                               * (chttpclient_do_async_streaming) one. Wired
+                               * into every hop's ctx->pctx.requested_sink_fn
+                               * in _async_submit_hop/_async_retry_hop --
+                               * constant across the whole chain, exactly
+                               * like Tier 1's identical streaming/write_fn
+                               * locals in chttp_do_internal. Called on
+                               * whichever reactor thread is driving this
+                               * hop's on_data callback -- see this field's
+                               * public documentation on
+                               * chttpclient_do_async_streaming for the
+                               * must-not-block contract that implies. */
+  void *write_ctx;            /* passed verbatim to write_fn */
+
+  chmap req_headers; /* owned deep copy of the original request's headers
+                      * (chmap(char* -> char*)); re-sent unchanged on every
+                      * hop, exactly like Tier 1's hop_req.headers. NULL if
+                      * the original request had none. */
+  void *body_data;   /* owned deep copy of the original request body bytes;
+                      * NULL if the original request had none. Re-sent
+                      * verbatim on 307/308 hops; a non-preserving redirect
+                      * (301/302/303 with a non-HEAD method) drops it. */
+  size_t body_len;
+  char *body_content_type; /* owned copy; NULL if none */
+
+  fio_tls_s *tls_ctx;    /* pinned once (fio_tls_dup'd from cli->tls_ctx) for
+                          * the whole chain, exactly like Tier 1's tls_ctx
+                          * local -- a redirect can hop between http and
+                          * https, so this must survive every hop regardless
+                          * of which scheme the chain started with. Released
+                          * once via fio_tls_destroy when the chain is freed. */
+  bool tls_ctx_usable;
+  bool verify_host;
+
+  long connect_timeout_ms; /* re-read fresh into ctx->connect_deadline at the
+                            * start of every hop that actually connects (the
+                            * reused-connection path never consults it, since
+                            * it skips CONNECTING/TLS_HANDSHAKING entirely) --
+                            * see the "ASYNC DEADLINE SWEEP" section below. */
+  chttp_deadline_t overall_deadline; /* computed once, here, for the whole
+                                      * chain's lifetime -- mirrors Tier 1's
+                                      * overall_dl, computed once before its
+                                      * hop loop rather than reset per hop. */
+
+  mutex_t lock; /* guards fulfilled and refcount, both mutated from
+                * potentially concurrent hops' reactor callbacks (see the
+                * file-level comment: an old hop's on_close can fire
+                * concurrently with a new hop's on_data/on_ready once the
+                * redirect handoff has queued the next connection) */
+  bool fulfilled;
+  int refcount; /* number of currently-live per-hop ctx referencing this
+                * chain; reaches zero exactly once, when the last hop's
+                * teardown runs with no further hop having been queued to
+                * take over */
+} chttp_async_chain_t;
+
+/* Tagged (not anonymous) specifically so deadline_prev/deadline_next below
+ * can self-reference the struct -- an anonymous struct has no name to spell
+ * a pointer to itself with. */
+typedef struct chttp_async_ctx_s {
+  fio_protocol_s protocol; /* MUST be the first member: on_data/on_ready/
+                            * on_close receive a fio_protocol_s* that is cast
+                            * straight back to chttp_async_ctx_t*. */
+  ccol_memmgmt_procs_t *mp;
+  struct chttpclient *cli;    /* owning client -- needed while idle
+                               * (chain == NULL then) to reach
+                               * cli->idle_pools_async, and while active to
+                               * offer this connection back to the pool on a
+                               * reusable completion */
+  chttp_async_chain_t *_Atomic chain; /* shared, whole-redirect-chain state;
+                               * not owned by ctx -- see _async_ctx_teardown.
+                               * NULL while ctx is idle-pooled. _Atomic (like
+                               * state/uuid below) so the deadline sweep can
+                               * read it without idle_lock -- see that lock's
+                               * own comment and the "ASYNC DEADLINE SWEEP"
+                               * section for why individual atomic loads are
+                               * sufficient there even though idle_lock's
+                               * stronger *compound* (state+chain together)
+                               * consistency guarantee remains necessary, and
+                               * is left completely undisturbed, for every
+                               * pre-existing idle_lock call site. */
+  int hop;                    /* 0-based hop index of THIS connection */
+  chttp_method_t cur_method;  /* method used to build THIS hop's wire; the
+                               * basis for deciding the next hop's method on
+                               * redirect, exactly like Tier 1's cur_method
+                               * loop variable */
+  _Atomic chttp_async_state_t state;
+  _Atomic intptr_t uuid;
+
+  char *host; /* owned copy; port is passed separately */
+  uint16_t port;
+  char *origin_key; /* owned copy, "scheme://host:port" -- matches Tier 1's
+                     * chttp_conn_t.origin_key; used to place/remove this
+                     * ctx in cli->idle_pools_async */
+  bool reused;          /* true if this hop's connection came from the idle
+                         * pool rather than a fresh connect, for THIS
+                         * attempt (a retry always resets this to false --
+                         * see _async_retry_hop) */
+  bool any_bytes_read;  /* true once >=1 response byte has been read for the
+                         * CURRENT attempt; gates the reused-connection
+                         * dead-connection retry, exactly like Tier 1's
+                         * identically-named any_bytes_read output param */
+  struct timespec last_used; /* set when offered to the idle pool; used by
+                              * _async_idle_pool_take's staleness check */
+  char *wire; /* owned serialized request bytes. Plain HTTP: ownership
+               * transfers to fio_write2 once sent (set NULL after). TLS:
+               * this module retains ownership and frees it once fully
+               * written via fio_tls_connection_write (see wire_sent) --
+               * either way, freeing it in _async_ctx_free is always safe
+               * (a no-op once NULL). */
+  size_t wire_len;
+  size_t wire_sent; /* TLS only: bytes of wire already handed to
+                     * fio_tls_connection_write -- that call has raw write(2)
+                     * semantics (short writes are normal), unlike fio_write2
+                     * which tracks this internally for the plain path. */
+
+  bool is_https;
+  bool verify_host;
+  bool hop_completed; /* set once this hop's response has been fully parsed
+                       * and either fulfilled or handed off to a redirect --
+                       * guards _async_on_data against re-running that (for
+                       * _async_handle_redirect, non-idempotent) logic on a
+                       * spurious extra on_data call; see that check's own
+                       * comment for why this can happen. */
+  fio_tls_connection_s *tls;   /* NULL until the TCP connect succeeds and the
+                                * handshake begins; NULL for plain HTTP */
+  mutex_t tls_lock; /* Guards every access to tls: facio's on_data and
+                     * on_ready callbacks for the SAME connection are only
+                     * mutually exclusive with themselves (they take
+                     * different internal lock types -- FIO_PR_LOCK_TASK vs
+                     * FIO_PR_LOCK_WRITE -- see deferred_on_data/
+                     * deferred_on_ready_usr in fio.c), NOT with each other.
+                     * Both _async_on_data and _async_on_ready can call into
+                     * _async_tls_advance for the same ctx, so two reactor
+                     * threads can end up calling
+                     * fio_tls_client_handshake_step/fio_tls_connection_read/
+                     * fio_tls_connection_write on the same underlying SSL*
+                     * concurrently without this lock -- a real data race on
+                     * OpenSSL's internal BIO state (use-after-free, caught
+                     * by valgrind: BIO_free from one thread racing
+                     * BIO_copy_next_retry from another on the same freed
+                     * block). Unused (left zero-initialised) for plain HTTP
+                     * connections, which never touch tls at all. */
+
+  mutex_t idle_lock; /* Guards the state/chain pair specifically across the
+                      * idle<->active transition. A connection popped out of
+                      * cli->idle_pools_async by _async_idle_pool_take stays
+                      * fully attached to the reactor the whole time (there
+                      * is no way to "pause" polling for a single uuid) --
+                      * removing it from the POOL's bookkeeping does nothing
+                      * to stop facio from independently dispatching
+                      * on_data/on_ready/on_close for it on another thread
+                      * the moment the peer sends something (or the
+                      * connection dies) while _async_submit_hop is still in
+                      * the middle of reconfiguring ctx->state away from
+                      * CHTTP_ASYNC_IDLE and ctx->chain away from NULL for
+                      * its new owner. Without this lock, on_data's
+                      * IDLE-state guard could read a stale (already-popped
+                      * but not-yet-reconfigured) ctx->state, fall through
+                      * past the guard, and dereference ctx->chain while it
+                      * is still NULL -- caught by a real SIGSEGV in
+                      * _async_fulfill_chain during this feature's own
+                      * development. Only ever held very briefly, around the
+                      * handful of statements that flip state+chain in
+                      * either direction, never across I/O. Deliberately NOT
+                      * used by the deadline sweep (see g_client_deadline_
+                      * lock's own comment in the "ASYNC DEADLINE SWEEP"
+                      * section): the sweep runs on an independent thread and
+                      * needs to read state/chain/uuid/timed_out from
+                      * *every* registered ctx on every tick, which taking
+                      * this lock for would create a genuine lock-order
+                      * inversion against call sites that call into the
+                      * deadline registry (_client_deadline_register/
+                      * _unregister) while already holding this exact lock
+                      * (e.g. _async_submit_hop's reused-connection-write-
+                      * failure path calling _async_retry_hop) -- caught as
+                      * a real deadlock (gdb: sweep thread blocked on this
+                      * lock while holding g_client_deadline_lock, main
+                      * thread blocked on g_client_deadline_lock while
+                      * holding this lock) during this feature's own
+                      * development. state/chain/uuid/timed_out are instead
+                      * _Atomic specifically so the sweep can read them
+                      * lock-free; see those fields' own comments for why
+                      * individual atomic reads (rather than this lock's
+                      * stronger compound guarantee) are sufficient for the
+                      * sweep's specific use, even though every OTHER
+                      * consumer of state/chain (on_data/on_ready/on_close,
+                      * via _async_ctx_is_idle) still needs -- and keeps
+                      * getting -- the full compound protection this lock
+                      * alone provides. */
+
+  chttp_deadline_t connect_deadline; /* Only meaningful while state is
+                                      * CHTTP_ASYNC_CONNECTING or
+                                      * CHTTP_ASYNC_TLS_HANDSHAKING -- set
+                                      * fresh (by the thread about to submit
+                                      * this hop attempt) at the start of
+                                      * every hop that actually connects
+                                      * (never for a reused connection, which
+                                      * skips both those states entirely).
+                                      * Deliberately NOT _Atomic: it is
+                                      * written exactly once, strictly
+                                      * before _client_deadline_register is
+                                      * called for this attempt -- that
+                                      * call's own mutex lock/unlock is
+                                      * itself a release/acquire pair, so it
+                                      * already guarantees the sweep (which
+                                      * only ever observes a ctx AFTER
+                                      * finding it via the registry) sees a
+                                      * fully-initialised value with no
+                                      * separate synchronisation needed. See
+                                      * the "ASYNC DEADLINE SWEEP" section. */
+  _Atomic bool timed_out; /* Set by the deadline sweep, lock-free, right
+                           * before it force-closes this connection -- lets
+                           * _async_on_close report ccol_timed_out and skip
+                           * the ordinary dead-connection retry (retrying
+                           * past an already-blown deadline would only
+                           * extend the overrun for no benefit). _Atomic for
+                           * the same reason state/chain/uuid are, above. */
+  bool deadline_registered; /* True once this ctx has been linked into
+                             * g_client_deadline_head at least once.
+                             * Registration is idempotent and, once made,
+                             * persists for ctx's whole lifetime (including
+                             * every idle-pool cycle) -- see
+                             * _client_deadline_register's own comment. */
+  struct chttp_async_ctx_s *deadline_prev, *deadline_next; /* Intrusive
+      * doubly-linked membership in the process-wide deadline registry,
+      * guarded by g_client_deadline_lock (a different lock than idle_lock
+      * above -- see that global's own comment for the lock-ordering
+      * contract between the two). */
+
+  llhttp_t parser;
+  chttp_parse_ctx_t pctx;
+  chttp_bodybuf_t bb;
+} chttp_async_ctx_t;
+
+/* ========================================================================== */
+/*                    ASYNC DEADLINE SWEEP (TIER 2)                           */
+/* ========================================================================== */
+
+/*
+ * Enforces connect_timeout_ms/request_timeout_ms for Tier 2/3 as true
+ * absolute wall-clock deadlines, mirroring Tier 1's _deadline_make/
+ * _deadline_remaining_ms semantics exactly -- including catching a
+ * connection that never goes fully idle (e.g. a slow trickle of bytes just
+ * before an activity-reset timeout would fire) but has still blown its
+ * deadline. facio's own built-in per-connection timer (fio_timeout_set + a
+ * .ping callback fired by fio_review_timeout) is activity-reset only and
+ * cannot express that, so this is a genuinely new, small periodic-sweep
+ * mechanism, entirely separate from the engine's fio_start() reactor thread
+ * and the DNS/connect ctpool -- started/stopped alongside them (see
+ * _client_deadline_sweep_start/_stop_and_join, called from
+ * _client_engine_acquire/_client_engine_reaper_fn above).
+ *
+ * g_client_deadline_lock serialises three things: (1) the intrusive
+ * doubly-linked registry list itself (ctx->deadline_prev/deadline_next),
+ * (2) the sweep thread's own sleep/wake condvar, and (3) -- the reason a
+ * ctx is never explicitly unregistered except from within _async_ctx_free,
+ * the single reliable point ctx memory is actually released -- mutual
+ * exclusion between the sweep reading a registered ctx's fields and any
+ * other thread freeing that same ctx concurrently: _client_deadline_
+ * unregister cannot complete (and therefore _async_ctx_free cannot proceed
+ * to actually free ctx) while the sweep is still walking the registry with
+ * this lock held.
+ *
+ * Registration (_client_deadline_register) is idempotent and, once made,
+ * persists for a ctx's entire lifetime, including every idle-pool cycle it
+ * goes through -- a pooled/idle ctx just sits in the registry inertly (the
+ * sweep's own state==CONNECTING/TLS_HANDSHAKING and chain!=NULL checks
+ * naturally skip it while idle), which is simpler and just as correct as
+ * explicitly unregistering on every idle-pool-offer and re-registering on
+ * every reuse.
+ *
+ * Lock ordering: g_client_deadline_lock is only ever taken OUTSIDE of any
+ * ctx->idle_lock (never the reverse) -- _client_deadline_register/
+ * _unregister are never called while idle_lock is held (see their call
+ * sites), and the sweep itself takes idle_lock only after already holding
+ * g_client_deadline_lock. This one-directional order is what makes nesting
+ * the two safe.
+ */
+static pthread_mutex_t g_client_deadline_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_client_deadline_cv = PTHREAD_COND_INITIALIZER;
+static chttp_async_ctx_t *g_client_deadline_head = NULL;
+static pthread_t g_client_deadline_thread;
+static bool g_client_deadline_stop = false;
+
+#define CHTTP_DEADLINE_SWEEP_INTERVAL_MS 100
+/* Soft cap on how many expired connections one sweep tick force-closes.
+ * Self-healing, not a hard limit: anything beyond this on one tick simply
+ * stays registered (not yet marked timed_out, so it is picked up again) and
+ * gets its fio_force_close call from a later tick instead, at worst another
+ * CHTTP_DEADLINE_SWEEP_INTERVAL_MS later per extra batch -- a practically
+ * irrelevant delay for the number of simultaneously-expiring connections it
+ * would take to ever exceed this. */
+#define CHTTP_DEADLINE_SWEEP_BATCH 256
+
+/*
+ * Adds ctx to the deadline registry if not already present. Must be called
+ * with ctx->idle_lock NOT held (see the lock-ordering note above).
+ */
+static void _client_deadline_register(chttp_async_ctx_t *ctx) {
+  pthread_mutex_lock(&g_client_deadline_lock);
+  if (!ctx->deadline_registered) {
+    ctx->deadline_prev = NULL;
+    ctx->deadline_next = g_client_deadline_head;
+    if (g_client_deadline_head) g_client_deadline_head->deadline_prev = ctx;
+    g_client_deadline_head = ctx;
+    ctx->deadline_registered = true;
+  }
+  pthread_mutex_unlock(&g_client_deadline_lock);
+}
+
+/* Removes ctx from the deadline registry if present. Called exactly once,
+ * as the first thing _async_ctx_free does -- see that function's own
+ * comment for why that is the single correct place for this. */
+static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
+  pthread_mutex_lock(&g_client_deadline_lock);
+  if (ctx->deadline_registered) {
+    if (ctx->deadline_prev) {
+      ctx->deadline_prev->deadline_next = ctx->deadline_next;
+    } else {
+      g_client_deadline_head = ctx->deadline_next;
+    }
+    if (ctx->deadline_next) ctx->deadline_next->deadline_prev = ctx->deadline_prev;
+    ctx->deadline_prev = ctx->deadline_next = NULL;
+    ctx->deadline_registered = false;
+  }
+  pthread_mutex_unlock(&g_client_deadline_lock);
+}
+
+/*
+ * One sweep pass: walks the whole registry under g_client_deadline_lock,
+ * checking each ctx's connect_deadline (only while it is actually in a
+ * connecting phase) and its chain's overall_deadline (whenever it has a
+ * live chain at all), collecting the uuids of newly-expired connections
+ * into a small stack buffer. fio_force_close is deliberately called AFTER
+ * releasing g_client_deadline_lock, once the whole walk is done: calling it
+ * while still holding the lock risks a same-thread reentrant deadlock,
+ * since fio_force_close can synchronously invoke this same ctx's on_close
+ * callback (the same general hazard documented on _async_handle_redirect's
+ * fd-reuse-race fix elsewhere in this file), which calls _async_ctx_free ->
+ * _client_deadline_unregister -> tries to re-lock this exact mutex on the
+ * exact same thread.
+ *
+ * state/chain/uuid/timed_out are read as plain (but _Atomic-qualified, so
+ * individually race-free) loads here -- deliberately NOT under the ctx's
+ * own idle_lock. An earlier version of this function did take idle_lock
+ * here, which produced a real deadlock during development: some call paths
+ * (_async_submit_hop's reused-connection-write-failure branch, calling
+ * _async_retry_hop -> _client_deadline_register) legitimately need to hold
+ * a ctx's idle_lock while also needing g_client_deadline_lock, and this
+ * function held g_client_deadline_lock while trying to acquire a (possibly
+ * different) ctx's idle_lock -- classic AB-BA lock-order inversion, caught
+ * live via gdb (sweep thread blocked on some ctx's idle_lock while holding
+ * g_client_deadline_lock; the submitting thread blocked on
+ * g_client_deadline_lock while holding that same ctx's idle_lock).
+ *
+ * This is safe without idle_lock's stronger *compound* (state-and-chain-
+ * together) consistency guarantee specifically because of what this
+ * function does with a possibly-torn snapshot: at both points idle_lock
+ * actually protects (_async_idle_pool_take's idle->active transition and
+ * _async_idle_pool_offer's active->idle transition), every reachable torn
+ * combination of (state, chain) either skips both deadline checks (chain
+ * NULL, or state not a connecting state) or evaluates a chain that is,
+ * worst case, a moment away from being released but still guaranteed
+ * alive (the chain reference is only actually dropped strictly after the
+ * state/chain pair is updated) -- so the worst possible outcome of a torn
+ * read here is force-closing a connection a few instructions before or
+ * after it would otherwise have been cleanly pooled or hopped, i.e. a lost
+ * optimisation opportunity, never an incorrect abort of a still-in-flight,
+ * unrelated request. Every OTHER consumer of state/chain (on_data/on_ready/
+ * on_close, via _async_ctx_is_idle) has a stronger need for idle_lock's
+ * full guarantee and keeps using it entirely unchanged.
+ *
+ * A ctx is marked ctx->timed_out before being queued for force-close, both
+ * to tell _async_on_close "this is a timeout, not an ordinary connection
+ * failure" (it reports ccol_timed_out and skips the usual dead-connection
+ * retry -- retrying past an already-blown deadline would just extend the
+ * overrun) and to make repeated sweep ticks idempotent against a ctx that
+ * is still mid-teardown from an earlier tick's force-close.
+ */
+static void _client_deadline_sweep_once(void) {
+  intptr_t to_close[CHTTP_DEADLINE_SWEEP_BATCH];
+  size_t n_to_close = 0;
+
+  pthread_mutex_lock(&g_client_deadline_lock);
+  chttp_async_ctx_t *node = g_client_deadline_head;
+  while (node && n_to_close < CHTTP_DEADLINE_SWEEP_BATCH) {
+    chttp_async_ctx_t *next = node->deadline_next;
+
+    chttp_async_state_t state = node->state;
+    chttp_async_chain_t *chain = node->chain;
+    intptr_t uuid = node->uuid;
+    bool expired = false;
+    if (!node->timed_out) {
+      int ms;
+      if ((state == CHTTP_ASYNC_CONNECTING ||
+           state == CHTTP_ASYNC_TLS_HANDSHAKING) &&
+          !_deadline_remaining_ms(&node->connect_deadline, &ms)) {
+        expired = true;
+      }
+      if (!expired && chain &&
+          !_deadline_remaining_ms(&chain->overall_deadline, &ms)) {
+        expired = true;
+      }
+      if (expired) node->timed_out = true;
+    }
+
+    if (expired && uuid >= 0) to_close[n_to_close++] = uuid;
+    node = next;
+  }
+  pthread_mutex_unlock(&g_client_deadline_lock);
+
+  for (size_t i = 0; i < n_to_close; i++) fio_force_close(to_close[i]);
+}
+
+static void *_client_deadline_sweep_fn(void *arg) {
+  (void)arg;
+  pthread_mutex_lock(&g_client_deadline_lock);
+  while (!g_client_deadline_stop) {
+    struct timespec wake;
+    clock_gettime(CLOCK_MONOTONIC, &wake);
+    wake.tv_nsec += CHTTP_DEADLINE_SWEEP_INTERVAL_MS * 1000000L;
+    if (wake.tv_nsec >= 1000000000L) {
+      wake.tv_nsec -= 1000000000L;
+      wake.tv_sec += 1;
+    }
+    pthread_cond_timedwait(&g_client_deadline_cv, &g_client_deadline_lock,
+                           &wake);
+    if (g_client_deadline_stop) break;
+    pthread_mutex_unlock(&g_client_deadline_lock);
+    _client_deadline_sweep_once();
+    pthread_mutex_lock(&g_client_deadline_lock);
+  }
+  pthread_mutex_unlock(&g_client_deadline_lock);
+  return NULL;
+}
+
+/* Starts the sweep thread. Called from _client_engine_acquire, alongside
+ * spawning the engine's own reactor thread -- see that function for
+ * rollback-on-failure handling. */
+static ccol_retval_t _client_deadline_sweep_start(void) {
+  g_client_deadline_stop = false;
+  int rc = pthread_create(&g_client_deadline_thread, NULL,
+                          _client_deadline_sweep_fn, NULL);
+  return (rc == 0) ? ccol_success : ccol_unexpected_failure;
+}
+
+/* Signals and joins the sweep thread. Called from _client_engine_reaper_fn,
+ * alongside joining the engine's own reactor thread -- see that function's
+ * own comment for why teardown always happens on a dedicated reaper thread,
+ * never inline from a facio callback. */
+static void _client_deadline_sweep_stop_and_join(void) {
+  pthread_mutex_lock(&g_client_deadline_lock);
+  g_client_deadline_stop = true;
+  pthread_cond_broadcast(&g_client_deadline_cv);
+  pthread_mutex_unlock(&g_client_deadline_lock);
+  pthread_join(g_client_deadline_thread, NULL);
+}
+
+/* Deep-copies a chmap(char* -> char*) header map -- used to give a redirect
+ * chain its own copy of the original request's headers, since the caller's
+ * chttp_request_t may be freed the moment chttpclient_do_async returns, long
+ * before a later hop needs to re-serialise them. Returns NULL on OOM (input
+ * NULL is not an error -- it just means "no headers", and returns NULL too,
+ * which is indistinguishable from an OOM failure taken alone; callers that
+ * need to tell the two apart check the source map first, exactly like every
+ * other call site in this file that treats "no headers" as normal). */
+static chmap _clone_headers_map(ccol_memmgmt_procs_t *mp, chmap src) {
+  char *err = NULL;
+  chmap dst = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+                                ccol_string, mp, NULL, &err);
+  if (!dst) return NULL;
+  cmap_iterator *it = chashmap_begin_iter(src, NULL);
+  for (; it; it = it->_next_fn(it)) {
+    if (chmap_insert_elem(dst, it->key_pair, it->val_pair) != ccol_success) {
+      ccol_iter_destroy(it);
+      __chmap_destroy(dst);
+      return NULL;
+    }
+  }
+  return dst;
+}
+
+/*
+ * Allocates the shared, whole-redirect-chain state (see the file-level
+ * comment above chttp_async_chain_t). Takes ownership of tls_ctx on success
+ * (released once via fio_tls_destroy when the chain is freed) -- on failure,
+ * the caller still owns tls_ctx and must release it itself. req_headers/
+ * body_data/body_content_type are NOT taken by reference: this function
+ * deep-copies whatever it needs from them and never retains the originals.
+ */
+static chttp_async_chain_t *_async_chain_create(
+    ccol_memmgmt_procs_t *mp, struct chttpclient *cli, ctpool_future *future,
+    chmap req_headers, const void *body_data, size_t body_len,
+    const char *body_content_type, fio_tls_s *tls_ctx, bool tls_ctx_usable,
+    bool verify_host, long connect_timeout_ms, long request_timeout_ms,
+    chttpcli_write_fn write_fn, void *write_ctx) {
+  chttp_async_chain_t *chain =
+      (chttp_async_chain_t *)_mem_calloc(mp, 1, sizeof(*chain));
+  if (!chain) return NULL;
+  if (mutex_init(chain->lock) != 0) {
+    _mem_free(mp, chain);
+    return NULL;
+  }
+  chain->mp = mp;
+  chain->cli = cli;
+  chain->future = future;
+  chain->tls_ctx = tls_ctx;
+  chain->tls_ctx_usable = tls_ctx_usable;
+  chain->verify_host = verify_host;
+  chain->connect_timeout_ms = connect_timeout_ms;
+  chain->overall_deadline = _deadline_make(request_timeout_ms);
+  chain->write_fn = write_fn;
+  chain->write_ctx = write_ctx;
+
+  if (req_headers) {
+    chain->req_headers = _clone_headers_map(mp, req_headers);
+    if (!chain->req_headers) goto fail;
+  }
+  if (body_data && body_len > 0) {
+    chain->body_data = _mem_alloc(mp, body_len);
+    if (!chain->body_data) goto fail;
+    memcpy(chain->body_data, body_data, body_len);
+    chain->body_len = body_len;
+  }
+  if (body_content_type) {
+    chain->body_content_type = ccol_strdup(mp, body_content_type);
+    if (!chain->body_content_type) goto fail;
+  }
+  return chain;
+
+fail:
+  if (chain->req_headers) __chmap_destroy(chain->req_headers);
+  _mem_free(mp, chain->body_data);
+  _mem_free(mp, chain->body_content_type);
+  mutex_destroy(chain->lock);
+  _mem_free(mp, chain);
+  return NULL;
+}
+
+/* Forward declaration: needed by _async_chain_release's backstop, defined
+ * further below once chttp_async_result_t's construction logic is in scope. */
+static void _async_fulfill_chain(chttp_async_chain_t *chain, ccol_retval_t rv,
+                                 chttpcli_response *resp);
+
+/* Adds one live-hop reference to chain. Must be paired with exactly one
+ * _async_chain_release call. Called with the chain already known to be
+ * live (either freshly created with refcount 0 -> 1, or retained again by a
+ * redirect handoff while the old hop's ctx is still alive). */
+static void _async_chain_retain(chttp_async_chain_t *chain) {
+  mutex_lock(chain->lock);
+  chain->refcount++;
+  mutex_unlock(chain->lock);
+}
+
+/*
+ * Releases one live-hop reference. When the count reaches zero -- meaning no
+ * further hop was ever queued to take over from the last one torn down --
+ * this is the single reliable point to both fulfil the future as a backstop
+ * (a no-op if some hop already fulfilled it, via the same fulfilled guard
+ * _async_fulfill_chain checks) and free the chain itself, including
+ * releasing the one engine reference held for the whole chain's lifetime.
+ */
+static void _async_chain_release(chttp_async_chain_t *chain) {
+  if (!chain) return;
+  mutex_lock(chain->lock);
+  int remaining = --chain->refcount;
+  mutex_unlock(chain->lock);
+  if (remaining > 0) return;
+
+  _async_fulfill_chain(chain, ccol_http_transfer_aborted, NULL);
+  if (chain->tls_ctx) fio_tls_destroy(chain->tls_ctx);
+  if (chain->req_headers) __chmap_destroy(chain->req_headers);
+  _mem_free(chain->mp, chain->body_data);
+  _mem_free(chain->mp, chain->body_content_type);
+  mutex_destroy(chain->lock);
+  _mem_free(chain->mp, chain);
+  _client_engine_release();
+}
+
+static chttp_async_ctx_t *_async_ctx_create(ccol_memmgmt_procs_t *mp) {
+  chttp_async_ctx_t *ctx =
+      (chttp_async_ctx_t *)_mem_calloc(mp, 1, sizeof(*ctx));
+  if (!ctx) return NULL;
+  ctx->mp = mp;
+  ctx->uuid = -1;
+  if (mutex_init(ctx->tls_lock) != 0) {
+    _mem_free(mp, ctx);
+    return NULL;
+  }
+  if (mutex_init(ctx->idle_lock) != 0) {
+    mutex_destroy(ctx->tls_lock);
+    _mem_free(mp, ctx);
+    return NULL;
+  }
+  return ctx;
+}
+
+/* The single reliable place ctx (a single hop's connection state) is freed
+ * -- called from on_close (the guaranteed-exactly-once terminal callback for
+ * any attached protocol) or, for failures that occur before fio_attach ever
+ * runs (so on_close will never fire for this ctx), directly by the failing
+ * code path. Every field is safe to free/destroy unconditionally: fields
+ * whose ownership was transferred elsewhere (wire -> fio_write2, headers/
+ * bb.buf -> a successfully built response) are set NULL/cleared at the
+ * transfer site, and _mem_free/_parse_ctx_free_fields/a NULL tls are all
+ * no-ops. Does NOT touch ctx->chain -- that is shared, whole-chain state;
+ * see _async_ctx_teardown, which pairs this with the matching chain release. */
+static void _async_ctx_free(chttp_async_ctx_t *ctx) {
+  if (!ctx) return;
+  _client_deadline_unregister(ctx); /* no-op if never registered */
+  if (ctx->tls) fio_tls_connection_destroy(ctx->tls);
+  mutex_destroy(ctx->tls_lock);
+  mutex_destroy(ctx->idle_lock);
+  _mem_free(ctx->mp, ctx->wire);
+  _mem_free(ctx->mp, ctx->host);
+  _mem_free(ctx->mp, ctx->origin_key);
+  _parse_ctx_free_fields(&ctx->pctx);
+  _mem_free(ctx->mp, ctx->bb.buf);
+  _mem_free(ctx->mp, ctx);
+}
+
+/* Frees a single hop's per-connection state and releases its chain
+ * reference -- the standard way every terminal code path for a ctx (on_close,
+ * or an early failure before fio_attach ever ran) ends. Captures chain into
+ * a local first since _async_ctx_free frees ctx itself. */
+static void _async_ctx_teardown(chttp_async_ctx_t *ctx) {
+  chttp_async_chain_t *chain = ctx->chain;
+  _async_ctx_free(ctx);
+  _async_chain_release(chain);
+}
+
+/*
+ * Delivers a terminal result to the caller's future exactly once (guarded by
+ * chain->fulfilled, under chain->lock -- see that field's comment for why
+ * this must be lock-protected rather than a plain bool now that a redirect
+ * chain can have two hops' callbacks running concurrently) -- safe to call
+ * from multiple exit paths (e.g. an error path followed by
+ * _async_chain_release's backstop call) since only the first call has any
+ * effect. On the (rare) allocation failure building the result struct
+ * itself, still fulfills with NULL rather than leaving the caller's
+ * ctpool_future_get blocked forever.
+ */
+static void _async_fulfill_chain(chttp_async_chain_t *chain, ccol_retval_t rv,
+                                 chttpcli_response *resp) {
+  mutex_lock(chain->lock);
+  bool already = chain->fulfilled;
+  chain->fulfilled = true;
+  mutex_unlock(chain->lock);
+  if (already) {
+    if (resp) {
+      if (resp->headers) __chmap_destroy(resp->headers);
+      _mem_free(chain->mp, resp->body);
+      _mem_free(chain->mp, resp);
+    }
+    return;
+  }
+  chttpcli_async_result_t *result =
+      (chttpcli_async_result_t *)_mem_calloc(chain->mp, 1, sizeof(*result));
+  if (!result) {
+    ctpool_future_fulfill(chain->future, NULL);
+    if (resp) {
+      if (resp->headers) __chmap_destroy(resp->headers);
+      _mem_free(chain->mp, resp->body);
+      _mem_free(chain->mp, resp);
+    }
+    return;
+  }
+  result->rv = rv;
+  result->resp = resp;
+  result->_m_procs = chain->mp;
+  ctpool_future_fulfill(chain->future, result);
+}
+
+static void _async_fulfill(chttp_async_ctx_t *ctx, ccol_retval_t rv,
+                           chttpcli_response *resp) {
+  /* Marks this ctx terminal so _async_on_data/_async_on_ready's own
+   * top-of-function guard skips any further work for it -- see
+   * ctx->hop_completed's field comment for why a stray extra callback
+   * invocation after this point must be a no-op rather than re-running
+   * (non-idempotent) logic like _async_handle_redirect or a second
+   * fio_tls_client_handshake_step call on an already-failed handshake. */
+  ctx->hop_completed = true;
+  _async_fulfill_chain(ctx->chain, rv, resp);
+}
+
+/* Builds the chttpcli_response from the completed parse (mirrors Tier 1's
+ * own response-building code at the tail of chttp_do_internal). Transfers
+ * ownership of ctx->pctx.headers/ctx->bb.buf out of ctx (nulling them there)
+ * -- called BEFORE _async_finish_connection's idle-pool-offer path, which
+ * would otherwise free those exact same fields while resetting ctx for its
+ * idle life; see _async_on_data's HPE_PAUSED handling for why the ordering
+ * (build response, then finish the connection, then actually fulfil) matters
+ * on its own terms too.
+ *
+ * For a streaming request (ctx->chain->write_fn set), body bytes were
+ * already delivered to the caller's callback as they arrived off the wire
+ * (see _async_submit_hop/_async_retry_hop's sink wiring) -- ctx->bb was
+ * never used as the sink at all, so there is nothing to transfer into
+ * resp->body, which stays NULL/0 exactly like Tier 1's
+ * chttpclient_do_streaming leaves chttpcli_response.body. Headers ARE still
+ * parsed internally (redirect detection needs them regardless of sink), but
+ * are freed here rather than exposed, matching chttpclient_do_streaming's
+ * documented "response headers are not accessible via this path". */
+static chttpcli_response *_async_build_response(chttp_async_ctx_t *ctx) {
+  chttpcli_response *resp =
+      (chttpcli_response *)_mem_calloc(ctx->mp, 1, sizeof(*resp));
+  if (!resp) return NULL;
+  resp->_m_procs = ctx->mp;
+  resp->status_code = ctx->pctx.status_code;
+  if (ctx->chain->write_fn) {
+    _parse_ctx_free_fields(&ctx->pctx);
+  } else {
+    resp->body = ctx->bb.buf;
+    resp->body_len = ctx->bb.len;
+    resp->headers = ctx->pctx.headers;
+    ctx->pctx.headers = NULL; /* ownership transferred to resp */
+    ctx->bb.buf = NULL;       /* ownership transferred to resp */
+  }
+  return resp;
+}
+
+/* Builds the response and fulfills with it in one step -- used by the eof-
+ * driven completion path, which never pools its connection (a peer that
+ * closes the connection to signal end-of-body is, by definition, not
+ * offering keep-alive), so there is no ordering hazard with
+ * _async_finish_connection to worry about here. */
+static void _async_fulfill_success(chttp_async_ctx_t *ctx) {
+  chttpcli_response *resp = _async_build_response(ctx);
+  _async_fulfill(ctx, resp ? ccol_success : ccol_not_enough_memory, resp);
+}
+
+/* ========================================================================== */
+/*                         ASYNC IDLE POOL (TIER 2)                           */
+/* ========================================================================== */
+
+/*
+ * Tier 2's own keep-alive idle pool: chmap(char *origin_key -> cvec of
+ * chttp_async_ctx_t*), scoped per chttpcli (cli->idle_pools_async), mirroring
+ * Tier 1's idle_pools/_idle_pool_take/_idle_pool_offer in shape and policy
+ * (same CHTTP_MAX_IDLE_PER_ORIGIN/CHTTP_MAX_IDLE_TOTAL/CHTTP_IDLE_MAX_AGE_MS
+ * caps) but necessarily different in mechanism: a pooled connection here is
+ * still attached to the shared reactor (there is no way to "detach" a live
+ * uuid in facio without closing it), so pooling a ctx means transitioning it
+ * to CHTTP_ASYNC_IDLE and letting _async_on_data/_async_on_ready/
+ * _async_on_close's own IDLE-state branches keep driving it -- any activity
+ * (or the natural EOF/hangup a dead connection eventually produces) is
+ * treated as "no longer usable" and torn down through the exact same
+ * on_close path a normal failed connection would use, just entered from a
+ * different state. Because there is no way to synchronously peek a reactor-
+ * owned fd the way Tier 1's MSG_PEEK liveness probe does, a connection that
+ * dies in the narrow window between being popped out of the pool and
+ * actually being reused is instead caught by the reused/any_bytes_read
+ * retry-once mechanism at the point of use (see _async_retry_hop) --
+ * together these two mechanisms give Tier 2 the same effective guarantee
+ * Tier 1's probe-then-retry combination does.
+ *
+ * A pooled ctx holds its OWN engine reference (acquired in
+ * _async_idle_pool_offer, released in whichever of _async_idle_pool_take's
+ * reuse path or the IDLE-state on_close path claims it next) -- separate
+ * from any chain's, since the chain that produced this connection has
+ * already been (or is about to be) fully fulfilled and torn down, but the
+ * pooled connection itself must keep the engine alive for as long as it
+ * sits there.
+ */
+
+/* Decrements idle_total_count_async and, if it just reached zero, wakes
+ * anyone (namely __chttpclient_destroy) waiting on idle_async_drained for
+ * every pooled connection to finish tearing down. Must be called with
+ * cli->lock held. */
+static void _async_idle_count_dec_locked(struct chttpclient *cli) {
+  if (cli->idle_total_count_async > 0) cli->idle_total_count_async--;
+  if (cli->idle_total_count_async == 0)
+    cond_var_broadcast(cli->idle_async_drained);
+}
+
+/* Removes `target` from its origin's idle list if it's still there (swap-
+ * with-last, since cvector only supports push_back/pop_back) and decrements
+ * the count. A no-op (returns false) if target isn't found -- e.g. it was
+ * already popped out by _async_idle_pool_take's own staleness eviction just
+ * before its natural death was ALSO detected via the IDLE-state on_data/
+ * on_close path; both sides are safe to call this unconditionally. Must be
+ * called with cli->lock held. */
+static bool _async_idle_remove_locked(struct chttpclient *cli,
+                                      chttp_async_ctx_t *target) {
+  if (!cli->idle_pools_async || !target->origin_key) return false;
+  cmap_pair kp = {.ptr = target->origin_key,
+                  .size = strlen(target->origin_key) + 1};
+  cmap_pair *vp = NULL;
+  if (chmap_get_elem_ref(cli->idle_pools_async, &kp, &vp) != ccol_success ||
+      !vp)
+    return false;
+  cvec list = _read_cvec(vp->ptr);
+  if (!list) return false;
+  size_t n = cvector_elem_count(list);
+  for (size_t i = 0; i < n; i++) {
+    chttp_async_ctx_t **slot = (chttp_async_ctx_t **)cvector_at(list, i);
+    if (*slot != target) continue;
+    chttp_async_ctx_t *last = NULL;
+    cvector_pop_back(list, &last); /* removes the last element; may shrink
+                                    * the backing array, so any pointer into
+                                    * it taken before this call is stale */
+    if (i < cvector_elem_count(list)) {
+      chttp_async_ctx_t **slot2 = (chttp_async_ctx_t **)cvector_at(list, i);
+      *slot2 = last;
+    }
+    _async_idle_count_dec_locked(cli);
+    return true;
+  }
+  return false;
+}
+
+/*
+ * Attempts to pop a usable idle connection for `origin_key`. Returns true
+ * and fills *out on success. May pop and discard several stale candidates
+ * (age only -- see the file-level comment above for why there is no
+ * liveness probe here) before finding a fresh one or exhausting the list.
+ *
+ * IMPORTANT -- return contract: on a true return, ctx->idle_lock is left
+ * LOCKED. The caller (_async_submit_hop) must keep it held for as long as
+ * it takes to finish reconfiguring ctx for the new hop and attempting the
+ * write, only unlocking once ctx is fully consistent again (all fields set,
+ * write attempted). This is not a stylistic choice: popping a candidate out
+ * of the pool's cvec makes it un-findable by a concurrent _async_idle_
+ * pool_take, but does nothing to stop facio from independently dispatching
+ * on_data/on_ready/on_close for its uuid on another thread at any moment --
+ * the connection stays fully attached to the reactor for as long as it sat
+ * in the pool, exactly like every other race described in this section.
+ * Without holding idle_lock across the WHOLE reconfiguration (not just the
+ * state/chain pair, as an earlier version of this function attempted), a
+ * concurrent on_close could see ctx in a half-reconfigured state -- state
+ * already flipped off CHTTP_ASYNC_IDLE, but hop/pctx/wire/etc. still being
+ * written by this thread -- and tear ctx down (freeing it, destroying
+ * idle_lock itself) while this function's caller is still using it: a real,
+ * caught-in-development use-after-free, distinct from (and deeper than) the
+ * earlier state/chain torn-write bug. _async_ctx_is_idle (used by on_data/
+ * on_ready/on_close) takes the same lock, so any of them racing this
+ * function simply blocks until the caller releases it, by which point ctx
+ * is fully self-consistent one way or the other.
+ *
+ * A discarded stale candidate is torn down via the SAME normal active-hop
+ * on_close path every other failed hop uses (chain retained just for this,
+ * hop_completed forced true to skip the reused-retry check, which does not
+ * apply -- this was never a real request attempt) rather than freed
+ * directly here, for the identical reason: a concurrent, independently
+ * triggered on_close for its uuid may already be racing this function and
+ * must find a live, consistent ctx if it gets there first.
+ */
+static bool _async_idle_pool_take(struct chttpclient *cli,
+                                  const char *origin_key,
+                                  chttp_async_chain_t *chain,
+                                  chttp_async_ctx_t **out) {
+  for (;;) {
+    chttp_async_ctx_t *ctx = NULL;
+    mutex_lock(cli->lock);
+    if (cli->idle_pools_async) {
+      cmap_pair kp = {.ptr = (void *)origin_key,
+                      .size = strlen(origin_key) + 1};
+      cmap_pair *vp = NULL;
+      if (chmap_get_elem_ref(cli->idle_pools_async, &kp, &vp) ==
+              ccol_success &&
+          vp) {
+        cvec list = _read_cvec(vp->ptr);
+        if (list && cvector_elem_count(list) > 0 &&
+            cvector_pop_back(list, &ctx) == ccol_success) {
+          _async_idle_count_dec_locked(cli);
+        }
+      }
+    }
+    mutex_unlock(cli->lock);
+    if (!ctx) return false;
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long age_ms = (now.tv_sec - ctx->last_used.tv_sec) * 1000L +
+                  (now.tv_nsec - ctx->last_used.tv_nsec) / 1000000L;
+    if (age_ms <= CHTTP_IDLE_MAX_AGE_MS) {
+      mutex_lock(ctx->idle_lock); /* left locked -- see contract above */
+      ctx->chain = chain;
+      ctx->state = CHTTP_ASYNC_WRITING;
+      *out = ctx;
+      return true;
+    }
+
+    _async_chain_retain(chain); /* throwaway -- balanced by the normal
+                                 * teardown this candidate's own on_close
+                                 * runs once force-closed below */
+    mutex_lock(ctx->idle_lock);
+    ctx->chain = chain;
+    ctx->state = CHTTP_ASYNC_WRITING; /* just needs to be non-IDLE */
+    ctx->hop_completed = true;
+    ctx->reused = false;
+    mutex_unlock(ctx->idle_lock);
+    if (ctx->uuid >= 0) fio_force_close(ctx->uuid);
+    /* loop: try the next candidate (if any) for this origin */
+  }
+}
+
+/*
+ * Offers a still-good, keep-alive-eligible connection back to cli's async
+ * idle pool, bounded by the same per-origin/total caps Tier 1 uses. Returns
+ * true if pooled (ownership of the connection, and this ctx's memory,
+ * transfers to the pool -- the caller must not touch ctx again) or false if
+ * it doesn't fit (caps hit, client destroying, or the idle-slot engine
+ * reference couldn't be acquired) -- in which case ctx is left COMPLETELY
+ * UNTOUCHED (still attached to its original chain, in whatever state it was
+ * in on entry) and the caller is expected to fall back to closing it
+ * normally, exactly like Tier 1's identical "a lost optimisation
+ * opportunity, never a correctness issue" comment.
+ *
+ * On success, detaches ctx from its original chain, releasing the one chain
+ * reference this hop was holding for it (the hop is over; the chain no
+ * longer owns this connection, the idle pool does) -- forgetting this
+ * release was a real, valgrind-caught reference leak during this feature's
+ * own development, since a pooled connection never goes through the normal
+ * _async_ctx_teardown path (which is the only OTHER place that releases a
+ * ctx's chain reference) until it is later reused or evicted.
+ *
+ * The capacity check (is there room in the pool for this origin, creating
+ * the per-origin list on demand if needed) happens FIRST, entirely under
+ * cli->lock, deciding definitively whether this offer can succeed before
+ * touching ctx AT ALL. Only once that is certain does this function reset
+ * ctx to a clean idle state (clearing the per-hop parse/body/wire buffers
+ * and marking it CHTTP_ASYNC_IDLE) and insert it -- both still under the
+ * SAME cli->lock critical section, so no other thread can pop from the list
+ * in between. This ordering matters for two independent reasons: (1) ctx
+ * must never become visible/poppable via _async_idle_pool_take while only
+ * partially reset -- _async_idle_pool_take unconditionally overwrites
+ * whatever it finds without waiting for anything, so a concurrent take()
+ * starting to reconfigure ctx for a brand new hop while this function was
+ * still freeing/resetting those exact same fields for the OLD hop would be
+ * a genuine concurrent-access data race on the fields themselves, not just
+ * a logical inconsistency -- caught during this feature's own development;
+ * (2) the caller's "ctx untouched on failure" contract above would
+ * otherwise be violated by a version of this function that resets ctx
+ * speculatively before knowing whether the pool has room.
+ */
+static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
+  struct chttpclient *cli = ctx->cli;
+
+  /* This ctx is about to belong to the idle pool, not any chain -- it needs
+   * its own engine reference to keep the reactor alive while it sits here,
+   * independent of whichever chain's lifetime just ended. Acquired before
+   * anything else so a failure here need not unwind any pool state at all. */
+  if (_client_engine_acquire() != ccol_success) return false;
+
+  cvec list = NULL;
+  bool has_room = false;
+  mutex_lock(cli->lock);
+  if (!cli->destroying && cli->idle_pools_async &&
+      cli->idle_total_count_async < CHTTP_MAX_IDLE_TOTAL) {
+    cmap_pair kp = {.ptr = ctx->origin_key,
+                    .size = strlen(ctx->origin_key) + 1};
+    cmap_pair *vp = NULL;
+    if (chmap_get_elem_ref(cli->idle_pools_async, &kp, &vp) == ccol_success &&
+        vp) {
+      list = _read_cvec(vp->ptr);
+    }
+    if (!list) {
+      char *cverr = NULL;
+      list = cvector_create_full(sizeof(chttp_async_ctx_t *), cli->m_procs,
+                                 &cverr);
+      if (list) {
+        cmap_pair vp2 = {.ptr = &list, .size = sizeof(list)};
+        if (chmap_insert_elem(cli->idle_pools_async, &kp, &vp2) !=
+            ccol_success) {
+          __cvector_destroy(list);
+          list = NULL;
+        }
+      }
+    }
+    has_room = (list && cvector_elem_count(list) < CHTTP_MAX_IDLE_PER_ORIGIN);
+  }
+  if (!has_room) {
+    mutex_unlock(cli->lock);
+    _client_engine_release();
+    return false; /* ctx untouched -- caller falls back to a normal close */
+  }
+
+  /* Committed: this ctx WILL leave chain and become idle-pooled. Capture
+   * the chain reference to release below, then reset ctx while STILL
+   * holding cli->lock (see the file-level comment above for why). */
+  chttp_async_chain_t *old_chain = ctx->chain;
+
+  /* _parse_ctx_free_fields only frees+nulls cur_field/cur_value/location/
+   * headers -- every other field (cur_field_cap/cur_value_cap in
+   * particular) is left stale. That has always been safe at its other call
+   * sites (_async_ctx_free, right before the whole ctx is freed; and Tier
+   * 1's per-hop chttp_parse_ctx_t, a fresh stack struct every hop) because
+   * the struct itself is discarded immediately after. Here it is NOT
+   * discarded -- ctx is about to be reused for a future hop -- so a stale,
+   * non-zero cur_field_cap paired with a freshly-NULLed cur_field would
+   * make _accum_append's very next call skip its realloc (capacity already
+   * "big enough") and memcpy into a NULL buffer. The explicit memset below
+   * (after _parse_ctx_free_fields has freed everything that needs freeing)
+   * restores the same all-zero state a freshly _mem_calloc'd ctx already
+   * has, which every other user of chttp_parse_ctx_t implicitly relies on. */
+  _parse_ctx_free_fields(&ctx->pctx);
+  memset(&ctx->pctx, 0, sizeof(ctx->pctx));
+  _mem_free(ctx->mp, ctx->bb.buf);
+  ctx->bb.buf = NULL;
+  ctx->bb.len = ctx->bb.cap = 0;
+  _mem_free(ctx->mp, ctx->wire);
+  ctx->wire = NULL;
+  ctx->wire_len = ctx->wire_sent = 0;
+  ctx->hop_completed = false;
+  ctx->reused = false;
+  ctx->any_bytes_read = false;
+  /* ctx->chain and ctx->state flip together, under idle_lock -- see that
+   * field's comment for why an unsynchronised pair of writes here could be
+   * observed torn (state already IDLE, chain not yet NULL, or vice versa)
+   * by a concurrent on_data/on_ready/on_close dispatch on another thread. */
+  mutex_lock(ctx->idle_lock);
+  ctx->chain = NULL;
+  ctx->state = CHTTP_ASYNC_IDLE;
+  mutex_unlock(ctx->idle_lock);
+
+  clock_gettime(CLOCK_MONOTONIC, &ctx->last_used);
+  bool pushed = (cvector_push_back(list, &ctx) == ccol_success);
+  if (pushed) cli->idle_total_count_async++;
+  mutex_unlock(cli->lock);
+
+  if (!pushed) {
+    /* Vanishingly rare (OOM inside cvector_push_back itself, despite room
+     * being confirmed available above) -- ctx has already been fully
+     * detached from old_chain and reset to an idle shape, so it can no
+     * longer be handed back to the caller as "just fio_close it as a
+     * normal active ctx" the way the has_room==false path above can. Tear
+     * it down directly instead. */
+    _async_chain_release(old_chain);
+    _async_ctx_free(ctx);
+    _client_engine_release();
+    return false;
+  }
+
+  _async_chain_release(old_chain);
+  return true;
+}
+
+/*
+ * Called once a hop's response has been fully consumed, before deciding
+ * whether to redirect or fulfil -- offers the connection back to cli's idle
+ * pool if `reusable`, otherwise closes it. Mirrors Tier 1's identical
+ * reusable/_idle_pool_offer dance in chttp_do_internal, applied uniformly
+ * regardless of whether this hop turns out to be a redirect or the final
+ * response (see _async_handle_redirect and _async_on_data's HPE_PAUSED
+ * handling, both of which call this before doing anything else with the
+ * connection).
+ */
+static void _async_finish_connection(chttp_async_ctx_t *ctx, intptr_t uuid,
+                                     bool reusable) {
+  if (reusable && ctx->origin_key && _async_idle_pool_offer(ctx)) return;
+  fio_close(uuid);
+}
+
+/* Forward declaration: _async_on_data/_async_on_close (below) call this on a
+ * reused connection that turns out to be dead before any response byte was
+ * read; the full definition (after _async_connect_task, which it needs to
+ * queue the replacement attempt) comes later in this file, alongside
+ * _async_submit_hop. */
+static void _async_retry_hop(chttp_async_ctx_t *ctx);
+
+/* Forward declaration: _async_tls_advance (below) calls this once the
+ * handshake completes, before its own definition later in this file. */
+static void _async_tls_try_write(chttp_async_ctx_t *ctx, intptr_t uuid);
+
+/*
+ * Drives the client TLS handshake one step at a time from either on_data or
+ * on_ready, whichever fires next.
+ *
+ * Explicitly re-arms write interest on WANT_WRITE via fio_force_write_rearm:
+ * the raw OpenSSL calls inside fio_tls_client_handshake_step read/write the
+ * fd directly through the BIO layer, bypassing fio_write2's own packet-queue
+ * (and its accompanying re-arm-on_ready-only-if-still-pending logic)
+ * entirely -- so nothing else would ever schedule a follow-up on_ready.
+ * WANT_READ needs no equivalent call: deferred_on_data (fio.c) re-arms read
+ * interest after every on_data invocation unconditionally, regardless of
+ * what this function does.
+ */
+static void _async_tls_advance(chttp_async_ctx_t *ctx, intptr_t uuid) {
+  mutex_lock(ctx->tls_lock);
+  fio_tls_handshake_result_e r = fio_tls_client_handshake_step(ctx->tls);
+  mutex_unlock(ctx->tls_lock);
+  if (r == FIO_TLS_HANDSHAKE_DONE) {
+    ctx->state = CHTTP_ASYNC_WRITING;
+    _async_tls_try_write(ctx, uuid);
+    return;
+  }
+  if (r == FIO_TLS_HANDSHAKE_ERROR) {
+    /* 0 == X509_V_OK by OpenSSL convention; fio_tls.h intentionally does not
+     * expose OpenSSL headers to callers, so the raw value is compared
+     * directly rather than via the X509_V_OK symbol (mirrors Tier 1's
+     * _tls_handshake). */
+    mutex_lock(ctx->tls_lock);
+    long vr = fio_tls_connection_verify_result(ctx->tls);
+    mutex_unlock(ctx->tls_lock);
+    _async_fulfill(ctx,
+                   vr != 0 ? ccol_http_tls_cert_verification_failed
+                           : ccol_http_tls_handshake_failed,
+                   NULL);
+    fio_force_close(uuid);
+    return;
+  }
+  if (r == FIO_TLS_HANDSHAKE_WANT_WRITE) fio_force_write_rearm(uuid);
+  /* FIO_TLS_HANDSHAKE_WANT_READ: nothing further needed, see comment above. */
+}
+
+/*
+ * Writes as much of ctx->wire[ctx->wire_sent..] as the raw TLS layer will
+ * currently accept, tracking partial progress -- fio_tls_connection_write
+ * has raw write(2) semantics (a short write is normal, not an error),
+ * unlike fio_write2 which tracks this internally for the plain-HTTP path.
+ * Called once right after the handshake completes and again from on_ready
+ * each time write interest re-arms (see fio_force_write_rearm above).
+ */
+static void _async_tls_try_write(chttp_async_ctx_t *ctx, intptr_t uuid) {
+  while (ctx->wire_sent < ctx->wire_len) {
+    mutex_lock(ctx->tls_lock);
+    ssize_t n = fio_tls_connection_write(ctx->tls, ctx->wire + ctx->wire_sent,
+                                         ctx->wire_len - ctx->wire_sent);
+    int werrno = errno; /* captured before unlock, which -- while extremely
+                         * unlikely to touch errno itself -- must not be
+                         * allowed to intervene between the OpenSSL call and
+                         * this read */
+    mutex_unlock(ctx->tls_lock);
+    if (n > 0) {
+      ctx->wire_sent += (size_t)n;
+      continue;
+    }
+    if (n < 0 && (werrno == EWOULDBLOCK || werrno == EAGAIN)) {
+      fio_force_write_rearm(uuid);
+      return;
+    }
+    /* n == 0 or a hard error: the connection is dead. facio has no idea --
+     * this was a raw OpenSSL call bypassing its own write path -- so close
+     * it explicitly, matching the TLS read-side EOF/error handling below.
+     * A reused connection that dies before any response byte came back is
+     * exactly Tier 1's retry-once scenario -- queue a fresh attempt for the
+     * same hop instead of failing the whole chain over it. */
+    if (ctx->reused && !ctx->any_bytes_read) {
+      _async_retry_hop(ctx);
+    } else {
+      _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
+    }
+    fio_force_close(uuid);
+    return;
+  }
+  /* Fully sent -- this module owns ctx->wire for TLS connections (unlike the
+   * plain-HTTP path, where fio_write2 takes ownership), so free it here. */
+  _mem_free(ctx->mp, ctx->wire);
+  ctx->wire = NULL;
+  ctx->state = CHTTP_ASYNC_READING;
+}
+
+/* Forward declaration: _async_on_data's redirect-detection branches (below)
+ * call this; its full definition comes after _async_connect_task, which it
+ * needs in order to queue the next hop. */
+static void _async_handle_redirect(chttp_async_ctx_t *ctx, intptr_t uuid,
+                                   bool reusable);
+
+/* Reads ctx->state under ctx->idle_lock -- see that field's comment for why
+ * a plain unlocked read is not safe here specifically. */
+static bool _async_ctx_is_idle(chttp_async_ctx_t *ctx) {
+  mutex_lock(ctx->idle_lock);
+  bool idle = (ctx->state == CHTTP_ASYNC_IDLE);
+  mutex_unlock(ctx->idle_lock);
+  return idle;
+}
+
+static void _async_on_ready(intptr_t uuid, fio_protocol_s *pr) {
+  chttp_async_ctx_t *ctx = (chttp_async_ctx_t *)pr;
+  /* See ctx->hop_completed's field comment: a stray on_ready can still
+   * arrive after this ctx already reached a terminal outcome (e.g. a
+   * connect failure or TLS handshake error detected by on_data), and must
+   * not re-run any of the state-transition logic below. */
+  if (ctx->hop_completed) return;
+
+  if (_async_ctx_is_idle(ctx)) {
+    /* Nothing of ours should ever be pending to flush on an idle pooled
+     * connection -- a stray on_ready here means facio has something to
+     * report about it regardless (e.g. a write-readiness event racing a
+     * hangup), which this connection has no active request to make sense
+     * of. Treat it the same as idle-state on_data: no longer usable. */
+    fio_force_close(uuid);
+    return;
+  }
+
+  if (ctx->state == CHTTP_ASYNC_CONNECTING) {
+    int soerr = 0;
+    socklen_t slen = sizeof(soerr);
+    if (getsockopt(fio_uuid2fd(uuid), SOL_SOCKET, SO_ERROR, &soerr, &slen) !=
+            0 ||
+        soerr != 0) {
+      _async_fulfill(ctx, ccol_http_connection_failed, NULL);
+      fio_force_close(uuid);
+      return;
+    }
+
+    if (ctx->is_https) {
+      /* Configured cert/key/ca path(s) not being readable is deferred all
+       * the way to here (mirroring Tier 1's own _rebuild_tls_ctx_locked
+       * comment) rather than failing at chttpclient_set_tls time -- but that
+       * deferred failure is checked synchronously in
+       * _chttp_do_async_internal (tls_ctx_usable), before any connection is
+       * even opened, so reaching here means TLS is genuinely usable. */
+      mutex_lock(ctx->tls_lock);
+      ctx->tls = fio_tls_connect_create(ctx->chain->tls_ctx, fio_uuid2fd(uuid),
+                                        ctx->host, ctx->verify_host ? 1 : 0);
+      mutex_unlock(ctx->tls_lock);
+      if (!ctx->tls) {
+        _async_fulfill(ctx, ccol_not_enough_memory, NULL);
+        fio_force_close(uuid);
+        return;
+      }
+      ctx->state = CHTTP_ASYNC_TLS_HANDSHAKING;
+      _async_tls_advance(ctx, uuid);
+      return;
+    }
+
+    /* Plain HTTP: hand the serialized request to facio's write buffer.
+     * Uses the COPYING fio_write (not fio_write2's ownership-transferring
+     * .data.buffer mode) so ctx->wire stays valid and owned by ctx the
+     * whole time, exactly like the TLS path already retains it until
+     * wire_sent==wire_len -- required so a dead-reused-connection retry
+     * (_async_retry_hop) always has the already-serialized bytes on hand to
+     * resend verbatim, mirroring Tier 1's identical retry-with-the-same-
+     * wire-buffer behaviour. ctx->wire is freed normally by _async_ctx_free
+     * once this ctx is torn down. */
+    ctx->state = CHTTP_ASYNC_WRITING;
+    if (fio_write(uuid, ctx->wire, ctx->wire_len) == -1) {
+      _async_fulfill(ctx, ccol_not_enough_memory, NULL);
+      fio_force_close(uuid);
+    }
+    return;
+  }
+
+  if (ctx->state == CHTTP_ASYNC_TLS_HANDSHAKING) {
+    _async_tls_advance(ctx, uuid);
+    return;
+  }
+
+  if (ctx->state == CHTTP_ASYNC_WRITING) {
+    if (ctx->tls) {
+      _async_tls_try_write(ctx, uuid);
+      return;
+    }
+    /* Plain HTTP: on_ready fires once all pending fio_write calls are
+     * flushed -- the request has now been fully sent. */
+    ctx->state = CHTTP_ASYNC_READING;
+    return;
+  }
+  /* CHTTP_ASYNC_READING: nothing of ours is pending to flush; a stray
+   * on_ready here is a no-op. */
+}
+
+static void _async_on_data(intptr_t uuid, fio_protocol_s *pr) {
+  chttp_async_ctx_t *ctx = (chttp_async_ctx_t *)pr;
+
+  /* This hop already reached a terminal outcome (fulfilled -- including a
+   * TLS handshake failure detected mid-handshake -- or handed off to a
+   * redirect hop) via a previous on_data/on_ready invocation for this same
+   * uuid; a spurious extra on_data can still arrive afterward (e.g. every
+   * route in the test server's mock sends "Connection: close" and closes
+   * its end right after writing the response, so the peer's EOF can be
+   * observed in a SEPARATE on_data callback from the one that already
+   * consumed the response bytes and hit HPE_PAUSED, racing our own
+   * subsequent fio_close/fio_force_close call). Re-running the completion
+   * logic would be harmless for a plain fulfill (guarded by
+   * chain->fulfilled) or a repeat fio_tls_client_handshake_step call on an
+   * already-failed handshake (which just returns another, ignored, error),
+   * but _async_handle_redirect is NOT idempotent -- it unconditionally
+   * queues another hop every time it runs, so without this guard a single
+   * hop could fan out into multiple redirect chains sharing the same chain
+   * state, corrupting its refcount bookkeeping and, in the worst case
+   * observed while stress-testing the CHTTP_MAX_REDIRECTS cap, permanently
+   * wedging the caller's ctpool_future_get in a way that never gets
+   * fulfilled. Checked before the TLS_HANDSHAKING branch too, since a
+   * handshake failure detected by one on_data call must stop a second,
+   * racing on_data call from re-entering _async_tls_advance. on_data
+   * invocations for the same uuid are serialised by facio itself (see
+   * tls_lock's comment on FIO_PR_LOCK_TASK), so a plain bool is sufficient
+   * here -- no additional locking needed. */
+  if (ctx->hop_completed) return;
+
+  if (_async_ctx_is_idle(ctx)) {
+    /* Any activity (or the EOF/error a dead connection eventually produces)
+     * on an idle pooled connection means it's no longer safely reusable --
+     * force-close it; the IDLE branch of _async_on_close finishes the
+     * actual pool removal + teardown once that close completes. */
+    fio_force_close(uuid);
+    return;
+  }
+
+  if (ctx->state == CHTTP_ASYNC_TLS_HANDSHAKING) {
+    _async_tls_advance(ctx, uuid);
+    return;
+  }
+
+  char buf[8192];
+  ssize_t n;
+  bool eof;
+
+  if (ctx->tls) {
+    /* fio_tls_connection_read has raw read(2) semantics: >0 = data, 0 =
+     * clean EOF, -1 with EWOULDBLOCK/EAGAIN = try again once readable,
+     * anything else = a hard error -- distinct from fio_read's convention
+     * below, and (like the write side) never observed by facio itself, so
+     * this function must force the close explicitly on EOF/error. Guarded
+     * by tls_lock: see that field's comment for why on_data and on_ready
+     * can otherwise race on the same SSL* from separate threads. */
+    mutex_lock(ctx->tls_lock);
+    n = fio_tls_connection_read(ctx->tls, buf, sizeof(buf));
+    int rerrno = errno; /* captured before unlock; see _async_tls_try_write's
+                         * identical precaution */
+    mutex_unlock(ctx->tls_lock);
+    if (n < 0) {
+      if (rerrno == EWOULDBLOCK || rerrno == EAGAIN) return; /* wait; read
+                                                               * interest is
+                                                               * auto-rearmed
+                                                               */
+      eof = true;
+    } else {
+      eof = (n == 0);
+    }
+  } else {
+    n = fio_read(uuid, buf, sizeof(buf));
+    if (n == 0) return; /* nothing available right now; wait for next on_data */
+    eof = (n < 0); /* facio has already force-closed the connection itself
+                    * (fatal error or EOF) when fio_read returns -1. */
+  }
+  if (!eof) ctx->any_bytes_read = true;
+
+  if (eof) {
+    /* Mirrors Tier 1's own n==0/EOF handling in _chttp_read_response: a
+     * clean llhttp_finish with a complete message is valid for responses
+     * that signal their end via connection-close rather than
+     * Content-Length/chunked framing. A reused connection that produces
+     * this before any response byte came back is Tier 1's retry-once
+     * scenario, checked BEFORE marking hop_completed/fulfilling -- the
+     * whole point is that nothing has failed for the caller yet. */
+    llhttp_errno_t fe = llhttp_finish(&ctx->parser);
+    bool ok = (fe == HPE_OK && ctx->pctx.message_complete);
+    if (!ok && ctx->reused && !ctx->any_bytes_read) {
+      _async_retry_hop(ctx); /* marks ctx->hop_completed = true itself */
+      /* Plain HTTP: facio already force-closed the connection as part of
+       * fio_read's own EOF/error handling; nothing further to do. TLS: this
+       * was a raw OpenSSL call facio never saw, so close it explicitly. */
+      if (ctx->tls) fio_force_close(uuid);
+      return;
+    }
+    ctx->hop_completed = true;
+    if (!ok) {
+      _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
+      if (ctx->tls) fio_force_close(uuid);
+    } else if (ctx->pctx.will_redirect) {
+      /* Peer-closed (rather than Content-Length/chunked) framing is never
+       * keep-alive eligible -- matches Tier 1's _chttp_read_response, which
+       * hard-codes *keep_alive_out = false for this exact case. */
+      _async_handle_redirect(ctx, uuid, false); /* closes uuid either way */
+    } else {
+      _async_fulfill_success(ctx);
+      if (ctx->tls) fio_force_close(uuid);
+    }
+    return; /* on_close runs the actual teardown either way. */
+  }
+
+  llhttp_errno_t err = llhttp_execute(&ctx->parser, buf, (size_t)n);
+  if (err == HPE_PAUSED) {
+    /* Message complete; llhttp intentionally pauses right after, exactly
+     * like Tier 1's own HPE_PAUSED handling. */
+    ctx->hop_completed = true;
+    const char *pos = llhttp_get_error_pos(&ctx->parser);
+    size_t consumed = (size_t)(pos - buf);
+    if (consumed < (size_t)n) ctx->pctx.trailing_garbage = true;
+    bool keep_alive =
+        llhttp_should_keep_alive(&ctx->parser) && !ctx->pctx.trailing_garbage;
+
+    if (ctx->pctx.will_redirect) {
+      _async_handle_redirect(ctx, uuid, keep_alive); /* closes/pools uuid */
+    } else {
+      /* Capture chain (with a temporary extra retain -- see
+       * _async_handle_redirect's identical one for why: _async_finish_
+       * connection below can trigger a concurrent teardown of THIS ctx's
+       * own chain reference on another reactor thread, which could free
+       * chain before the _async_fulfill_chain call below runs if nothing
+       * else were holding it) and build the response BEFORE calling
+       * _async_finish_connection: when keep_alive is true, that call can
+       * successfully offer ctx to the idle pool, which resets ctx->chain to
+       * NULL and ctx->pctx/ctx->bb for reuse (see _async_idle_pool_offer)
+       * as part of a normal, expected, successful outcome -- so both
+       * ctx->chain and ctx->pctx/ctx->bb must be captured/extracted first,
+       * or a NULL ctx->chain would crash the fulfil below (or the response
+       * would be built from already-cleared fields). Finishing the
+       * connection before fulfilling also matters independently:
+       * fulfilling can unblock the caller immediately (e.g. a
+       * ctpool_future_get on another thread), and if that caller then
+       * destroys cli, _async_finish_connection's idle-pool-offer path
+       * touching cli->lock afterward would race a use-after-free. */
+      chttp_async_chain_t *chain = ctx->chain;
+      _async_chain_retain(chain);
+      chttpcli_response *resp = _async_build_response(ctx);
+      _async_finish_connection(ctx, uuid, keep_alive);
+      _async_fulfill_chain(chain, resp ? ccol_success : ccol_not_enough_memory,
+                           resp);
+      _async_chain_release(chain);
+    }
+    return;
+  }
+  if (err == HPE_USER) {
+    ctx->hop_completed = true;
+    _async_fulfill(
+        ctx, ctx->pctx.error ? ccol_not_enough_memory : ccol_http_transfer_aborted,
+        NULL);
+    fio_force_close(uuid);
+    return;
+  }
+  if (err != HPE_OK) {
+    ctx->hop_completed = true;
+    _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
+    fio_force_close(uuid);
+    return;
+  }
+  /* else: message not yet complete, wait for more on_data */
+}
+
+static void _async_on_close(intptr_t uuid, fio_protocol_s *pr) {
+  (void)uuid;
+  chttp_async_ctx_t *ctx = (chttp_async_ctx_t *)pr;
+
+  if (_async_ctx_is_idle(ctx)) {
+    /* This pooled connection died (or was force-closed above by the
+     * IDLE-state on_data/on_ready branches, or by _async_idle_pool_take's
+     * staleness eviction). Remove it from the pool if it's still listed
+     * there (a no-op if some other path already removed it -- see
+     * _async_idle_remove_locked's own comment) and free it; it holds its
+     * own engine reference (acquired in _async_idle_pool_offer), not any
+     * chain's, since ctx->chain is NULL while idle. */
+    struct chttpclient *cli = ctx->cli;
+    mutex_lock(cli->lock);
+    _async_idle_remove_locked(cli, ctx);
+    mutex_unlock(cli->lock);
+    _async_ctx_free(ctx);
+    _client_engine_release();
+    return;
+  }
+
+  if (!ctx->hop_completed) {
+    if (ctx->timed_out) { /* _Atomic -- plain read is already race-free */
+      /* The deadline sweep force-closed this connection because
+       * connect_timeout_ms/request_timeout_ms was exceeded -- report the
+       * specific timeout error rather than retrying (retrying past an
+       * already-blown deadline would only extend the overrun) or falling
+       * through to the generic chain-release backstop error below. */
+      _async_fulfill(ctx, ccol_timed_out, NULL);
+    } else if (ctx->reused && !ctx->any_bytes_read) {
+      /* The reused connection died (write failure, or a hangup facio itself
+       * detected -- e.g. a pure HUP with nothing left to read, dispatched
+       * straight to on_close without ever going through on_data) before any
+       * response byte came back: exactly Tier 1's retry-once scenario. */
+      _async_retry_hop(ctx); /* marks ctx->hop_completed = true itself */
+    }
+  }
+
+  /* Frees this hop's connection state and releases its chain reference.
+   * _async_chain_release's own backstop (guarded by chain->fulfilled)
+   * guarantees the future is eventually fulfilled exactly once even along
+   * paths that didn't already call _async_fulfill (e.g. a connection error
+   * signalled by facio itself rather than detected by one of our own
+   * callbacks) -- but only once this was truly the LAST live hop, i.e. no
+   * redirect handoff queued a next one that is still in flight. */
+  _async_ctx_teardown(ctx);
+}
+
+/* Runs on a g_client_dns_pool worker: resolves DNS and issues the
+ * non-blocking connect() (fio_socket does both synchronously), then hands
+ * the connection off to the reactor via fio_attach. Never touches the
+ * caller's thread. */
+static void _async_connect_task(void *arg) {
+  chttp_async_ctx_t *ctx = (chttp_async_ctx_t *)arg;
+
+  char port_str[8];
+  snprintf(port_str, sizeof(port_str), "%u", (unsigned)ctx->port);
+
+  intptr_t uuid = fio_socket(ctx->host, port_str, 0);
+  if (uuid == -1) {
+    _async_fulfill(ctx, ccol_http_connection_failed, NULL);
+    _async_ctx_teardown(ctx);
+    return;
+  }
+
+  /* ctx->uuid/state are _Atomic (see their own field comments), so these
+   * plain assignments are already race-free against the deadline sweep --
+   * an independent thread, registered against this ctx since before it was
+   * ever submitted here (see _async_submit_hop), which can run at any time,
+   * including concurrently with this exact assignment. This also covers the
+   * case where connect_timeout_ms already expired while this task merely
+   * sat queued on g_client_dns_pool (e.g. a saturated pool): the sweep
+   * cannot force-close a uuid that doesn't exist yet, so on that path it
+   * can only mark ctx->timed_out and wait -- checked here, the moment a
+   * uuid finally exists. */
+  ctx->uuid = uuid;
+  ctx->state = CHTTP_ASYNC_CONNECTING;
+
+  if (ctx->timed_out) {
+    /* Never attached, so no protocol/on_close exists for it yet -- close
+     * the bare uuid directly and report the timeout ourselves. */
+    fio_force_close(uuid);
+    _async_fulfill(ctx, ccol_timed_out, NULL);
+    _async_ctx_teardown(ctx);
+    return;
+  }
+
+  ctx->protocol.on_data = _async_on_data;
+  ctx->protocol.on_ready = _async_on_ready;
+  ctx->protocol.on_close = _async_on_close;
+  /* From here on the reactor drives everything via the protocol callbacks.
+   * fio_attach's own contract guarantees on_close eventually fires exactly
+   * once -- "On error, the new protocol's on_close callback will be called
+   * immediately" -- making it the single reliable point where ctx is freed
+   * and this hop's chain reference (acquired when this ctx was created) is
+   * released, regardless of how this connection ends. */
+  fio_attach(uuid, &ctx->protocol);
+}
+
+/*
+ * Called when a REUSED connection turns out to be dead before any response
+ * byte was read (write failure, immediate EOF, or a facio-detected close) --
+ * mirrors Tier 1's identical "retry exactly once against a brand-new
+ * connection" liveness-probe-failure recovery in chttp_do_internal.
+ *
+ * Rather than reusing old_ctx's own struct in place for the new attempt
+ * (which would require neutralising its protocol callbacks to guard against
+ * a stale deferred on_close -- facio's deferred_on_close reads
+ * protocol->on_close at DISPATCH time, not at schedule time, so a close
+ * already scheduled against the OLD connection before we got here could
+ * otherwise fire against whatever the NEW attempt's state has become by the
+ * time it actually runs -- and that neutralisation is itself unsafe if some
+ * OTHER, independent close was already mid-flight when we tried it), this
+ * allocates a fresh ctx and transfers just what the retry needs (the
+ * already-serialized wire bytes, host/port, origin_key, the empty response
+ * headers map, and hop metadata) out of old_ctx, nulling those fields there
+ * so old_ctx's own upcoming normal teardown (via its caller, exactly as if
+ * this were an ordinary failure) doesn't double-free them. old_ctx is left
+ * otherwise untouched and continues through its NORMAL teardown path
+ * afterward -- this function does not free it or touch its chain reference;
+ * only ctx->hop_completed is set, both to prevent old_ctx's own on_data/
+ * on_close from re-triggering this a second time and because, from
+ * old_ctx's own perspective, it genuinely has reached a terminal outcome.
+ *
+ * Retains a SECOND chain reference for the new ctx (old_ctx keeps its own
+ * until its own teardown releases it) -- retaining before old_ctx's release
+ * can possibly happen guarantees the chain's refcount never dips to zero
+ * prematurely during the handoff, exactly like a redirect hop's own
+ * retain-before-release ordering.
+ */
+static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
+  old_ctx->hop_completed = true;
+  chttp_async_chain_t *chain = old_ctx->chain;
+
+  _async_chain_retain(chain);
+
+  chttp_async_ctx_t *ctx = _async_ctx_create(chain->mp);
+  if (!ctx) {
+    _async_fulfill_chain(chain, ccol_not_enough_memory, NULL);
+    _async_chain_release(chain);
+    return;
+  }
+
+  ctx->chain = chain;
+  ctx->cli = old_ctx->cli;
+  ctx->hop = old_ctx->hop;
+  ctx->cur_method = old_ctx->cur_method;
+  ctx->is_https = old_ctx->is_https;
+  ctx->verify_host = old_ctx->verify_host;
+
+  ctx->host = old_ctx->host;
+  old_ctx->host = NULL;
+  ctx->port = old_ctx->port;
+  ctx->wire = old_ctx->wire;
+  old_ctx->wire = NULL;
+  ctx->wire_len = old_ctx->wire_len;
+  ctx->origin_key = old_ctx->origin_key;
+  old_ctx->origin_key = NULL;
+
+  ctx->pctx.mp = chain->mp;
+  ctx->pctx.is_head_request = old_ctx->pctx.is_head_request;
+  ctx->pctx.redirects_still_allowed = old_ctx->pctx.redirects_still_allowed;
+  /* Streaming (chain->write_fn set) delivers body bytes straight to the
+   * caller's callback; buffered uses ctx->bb -- see _async_build_response's
+   * own comment for why this must be consistent with what it later does. */
+  ctx->pctx.requested_sink_fn = chain->write_fn ? chain->write_fn : _sink_buffered;
+  ctx->pctx.requested_sink_ctx = chain->write_fn ? chain->write_ctx : &ctx->bb;
+  ctx->pctx.headers = old_ctx->pctx.headers; /* empty -- nothing was ever
+                                              * parsed into it, since retry
+                                              * requires !any_bytes_read */
+  old_ctx->pctx.headers = NULL;
+  ctx->bb.mp = chain->mp;
+
+  ctx->reused = false; /* the retry itself is a fresh connection */
+  ctx->any_bytes_read = false;
+  /* A retry always connects fresh (see above), so it needs its own
+   * connect_deadline exactly like _async_submit_hop's fresh path -- the
+   * chain's overall_deadline is unaffected (it was never per-hop) and
+   * continues to apply unchanged across the retry. */
+  ctx->connect_deadline = _deadline_make(chain->connect_timeout_ms);
+
+  pthread_once(&g_llhttp_settings_once, _init_llhttp_settings);
+  llhttp_init(&ctx->parser, HTTP_RESPONSE, &g_llhttp_settings);
+  ctx->parser.data = &ctx->pctx;
+
+  /* Registered BEFORE submitting -- see _async_submit_hop's identical
+   * comment for why (a worker could otherwise run this hop to completion
+   * and free ctx before this thread registers it). */
+  _client_deadline_register(ctx);
+
+  ccol_retval_t sr =
+      ctpool_submit(g_client_dns_pool, _async_connect_task, ctx, NULL);
+  if (sr != ccol_success) {
+    _async_fulfill_chain(chain, ccol_not_enough_memory, NULL);
+    _async_ctx_free(ctx); /* unregisters ctx too */
+    _async_chain_release(chain);
+  }
+}
+
+/*
+ * Prepares and submits one hop of a redirect chain -- used for both the very
+ * first hop (from _chttp_do_async_internal) and every subsequent redirect
+ * hop (from _async_handle_redirect). Retains one chain reference on success
+ * (released when this hop's ctx is eventually torn down); on any failure,
+ * that retain is released again internally (net effect: no refcount change)
+ * and the chain's future is fulfilled with a specific error code before
+ * returning, so callers never need their own fallback fulfil-on-failure
+ * logic here -- only _async_chain_release's generic backstop remains as a
+ * true last resort for paths that can't be reached with a more specific
+ * error (e.g. an already-in-flight connection dying).
+ *
+ * body_data/body_len/body_content_type describe THIS hop's body (usually
+ * chain->body_data/len/content_type verbatim, or all-empty once a
+ * non-preserving redirect has rewritten the method to GET) -- passed
+ * explicitly rather than always read from chain because the caller (Tier 1
+ * loop equivalent) is the one that knows, from the previous hop's status
+ * code, whether to preserve or drop them.
+ *
+ * Returns true if the hop was successfully queued.
+ */
+
+/*
+ * Handles a setup failure (headers-map allocation, request serialisation, or
+ * origin_key allocation) that occurs AFTER a reused connection has already
+ * been popped from the idle pool -- i.e. ctx->uuid is a live, attached
+ * connection, not a not-yet-connected fresh ctx, and ctx->idle_lock is still
+ * held per _async_idle_pool_take's return contract. Freeing ctx directly
+ * (via _async_ctx_teardown, as a fresh-connect failure at this same point
+ * safely would) would leave that still-attached connection's protocol
+ * pointing at freed memory, a use-after-free the moment facio next touches
+ * the uuid. Instead: report the error, mark the ctx terminal (both because
+ * it already has been, and to stop on_close's retry-check from queuing a
+ * pointless retry of what is an allocation failure, not a dead connection),
+ * release idle_lock (this function is always the last thing _async_submit_
+ * hop does with ctx on this path), and let the connection's own normal
+ * on_close teardown run. A fresh (not yet connected) ctx never had
+ * idle_lock locked and has no such attachment to worry about, and is simply
+ * freed directly, exactly like every other pre-connect failure path.
+ */
+static void _async_submit_hop_fail(chttp_async_ctx_t *ctx, ccol_retval_t rv) {
+  chttp_async_chain_t *chain = ctx->chain;
+  _async_fulfill_chain(chain, rv, NULL);
+  if (ctx->reused) {
+    ctx->hop_completed = true;
+    mutex_unlock(ctx->idle_lock);
+    fio_force_close(ctx->uuid);
+  } else {
+    _async_ctx_free(ctx);
+    _async_chain_release(chain);
+  }
+}
+
+static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
+                              chttp_method_t method, const void *body_data,
+                              size_t body_len, const char *body_content_type,
+                              int hop) {
+  _async_chain_retain(chain);
+
+  chttp_url_t url;
+  ccol_retval_t prv = _parse_chttp_url(chain->mp, url_str, &url);
+  if (prv != ccol_success) {
+    _async_fulfill_chain(chain, prv, NULL);
+    _async_chain_release(chain);
+    return false;
+  }
+  if (url.is_https && !chain->tls_ctx_usable) {
+    /* Mirrors Tier 1's identical per-hop check: the configured cert/key/ca
+     * path(s) were not readable at set_tls time. */
+    _url_free(chain->mp, &url);
+    _async_fulfill_chain(chain, ccol_http_tls_handshake_failed, NULL);
+    _async_chain_release(chain);
+    return false;
+  }
+
+  chttp_async_ctx_t *ctx = NULL;
+  bool reused = _async_idle_pool_take(chain->cli, url.origin_key, chain, &ctx);
+  if (!reused) {
+    ctx = _async_ctx_create(chain->mp);
+    if (!ctx) {
+      _url_free(chain->mp, &url);
+      _async_fulfill_chain(chain, ccol_not_enough_memory, NULL);
+      _async_chain_release(chain);
+      return false;
+    }
+    ctx->cli = chain->cli;
+    /* Only a fresh connection actually goes through CHTTP_ASYNC_CONNECTING/
+     * TLS_HANDSHAKING -- a reused one skips straight to WRITING below, so
+     * connect_deadline is simply never consulted for it (see the "ASYNC
+     * DEADLINE SWEEP" section). */
+    ctx->connect_deadline = _deadline_make(chain->connect_timeout_ms);
+  }
+  /* For the reused case, _async_idle_pool_take has already set ctx->chain
+   * and ctx->state (to CHTTP_ASYNC_WRITING) under ctx->idle_lock, and
+   * returned with that lock STILL HELD -- see its own doc comment for why.
+   * This function must keep it held for everything below, only releasing it
+   * once the write attempt (success or failure) at the bottom of this
+   * function has actually happened -- ctx is not safe for any concurrent
+   * on_data/on_ready/on_close to touch until then. */
+  ctx->chain = chain;
+  ctx->hop = hop;
+  ctx->cur_method = method;
+  ctx->is_https = url.is_https;
+  ctx->verify_host = chain->verify_host;
+  ctx->reused = reused;
+  ctx->any_bytes_read = false;
+  ctx->hop_completed = false;
+
+  ctx->pctx.mp = chain->mp;
+  ctx->pctx.is_head_request = (method == CHTTP_HEAD);
+  ctx->pctx.redirects_still_allowed = (hop < CHTTP_MAX_REDIRECTS);
+  /* Streaming (chain->write_fn set) delivers body bytes straight to the
+   * caller's callback; buffered uses ctx->bb -- see _async_build_response's
+   * own comment for why this must be consistent with what it later does. */
+  ctx->pctx.requested_sink_fn = chain->write_fn ? chain->write_fn : _sink_buffered;
+  ctx->pctx.requested_sink_ctx = chain->write_fn ? chain->write_ctx : &ctx->bb;
+  ctx->bb.mp = chain->mp;
+
+  char *herr = NULL;
+  ctx->pctx.headers = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
+                                        ccol_string, ccol_string, chain->mp,
+                                        NULL, &herr);
+  if (!ctx->pctx.headers) {
+    _url_free(chain->mp, &url);
+    _async_submit_hop_fail(ctx, ccol_not_enough_memory);
+    return false;
+  }
+
+  chttp_request_t hop_req;
+  memset(&hop_req, 0, sizeof(hop_req));
+  hop_req.method = method;
+  hop_req.headers = chain->req_headers;
+  hop_req.body.data = body_data;
+  hop_req.body.len = body_len;
+  hop_req.body.content_type = body_content_type;
+
+  prv = _serialize_request(chain->mp, &hop_req, &url, &ctx->wire,
+                           &ctx->wire_len);
+  if (prv != ccol_success) {
+    _url_free(chain->mp, &url);
+    _async_submit_hop_fail(ctx, prv);
+    return false;
+  }
+
+  if (!ctx->origin_key) {
+    /* Always set except on the reused path, where it already carries the
+     * origin this connection was pooled under (identical to url.origin_key
+     * by construction -- _async_idle_pool_take only ever returns a
+     * connection filed under the exact origin_key being looked up). */
+    ctx->origin_key = ccol_strdup(chain->mp, url.origin_key);
+    if (!ctx->origin_key) {
+      _url_free(chain->mp, &url);
+      _async_submit_hop_fail(ctx, ccol_not_enough_memory);
+      return false;
+    }
+  }
+
+  if (!reused) {
+    ctx->host = ccol_strdup(chain->mp, url.host);
+    ctx->port = url.port;
+    if (!ctx->host) {
+      _url_free(chain->mp, &url);
+      _async_fulfill_chain(chain, ccol_not_enough_memory, NULL);
+      _async_ctx_teardown(ctx);
+      return false;
+    }
+  }
+  _url_free(chain->mp, &url);
+
+  pthread_once(&g_llhttp_settings_once, _init_llhttp_settings);
+  llhttp_init(&ctx->parser, HTTP_RESPONSE, &g_llhttp_settings);
+  ctx->parser.data = &ctx->pctx;
+
+  if (reused) {
+    /* Already connected (and, if HTTPS, already handshaked) -- skip
+     * CONNECTING/TLS_HANDSHAKING entirely and attempt the write directly,
+     * on whichever thread called _async_submit_hop (the caller's own
+     * thread for hop 0, or a reactor thread for a redirect hand-off);
+     * fio_tls_connection_write/fio_write are both non-blocking regardless
+     * of calling thread. ctx->state was already moved to
+     * CHTTP_ASYNC_WRITING (under idle_lock, together with ctx->chain)
+     * above, before any of the other per-hop fields below were touched. */
+    if (ctx->tls) {
+      _async_tls_try_write(ctx, ctx->uuid);
+    } else if (fio_write(ctx->uuid, ctx->wire, ctx->wire_len) == -1) {
+      /* fio_write2_fn (which fio_write calls after its own copy succeeds)
+       * returns -1 both for a real OOM AND for an already-invalid uuid --
+       * exactly what a reused connection that died while pooled looks like.
+       * ctx->reused is always true and ctx->any_bytes_read always false
+       * here (this whole branch only runs for a freshly reused, not-yet-
+       * written-to connection), so this is unconditionally Tier 1's
+       * retry-once scenario -- retrying is harmless even in the rare real-
+       * OOM case, since the fresh connection's own first write attempt
+       * (ctx->reused == false there) reports ccol_not_enough_memory
+       * normally if it fails again. */
+      _async_retry_hop(ctx);
+      mutex_unlock(ctx->idle_lock);
+      fio_force_close(ctx->uuid);
+      return true; /* the hop WAS queued (onto an existing connection); its
+                    * outcome (retried, or reported) is handled the normal
+                    * way, through on_close */
+    }
+    /* Write attempted (successfully, or via _async_tls_try_write's own
+     * retry-on-failure) -- ctx is fully consistent again, so idle_lock can
+     * finally be released; any concurrent on_data/on_ready/on_close that
+     * was blocked waiting for it now proceeds against a coherent ctx. */
+    mutex_unlock(ctx->idle_lock);
+    /* This ctx's connection now belongs to the chain, not the idle pool --
+     * release the engine reference it was holding while pooled (the
+     * chain's own single reference, held for its whole lifetime, covers it
+     * from here on). No deadline (re-)registration needed here: this ctx
+     * was already registered back when it was first created on its very
+     * first (fresh) hop attempt, and registration persists across every
+     * idle-pool cycle since -- see _client_deadline_register's own comment.
+     * Registering again here would also be unsafe, not just redundant: the
+     * moment idle_lock is released, a concurrent on_data/on_ready/on_close
+     * on another reactor thread is free to run this hop to completion and
+     * free ctx before this thread got a chance to touch it again. */
+    _client_engine_release();
+    return true;
+  }
+
+  /* Registered BEFORE submitting, not after: once ctpool_submit hands ctx to
+   * a worker, that worker can connect, run the whole hop to completion, and
+   * free ctx before this thread would otherwise get a chance to register it
+   * -- registering first guarantees ctx is already safely in the registry
+   * for the entire time any other thread can possibly touch it. */
+  _client_deadline_register(ctx);
+
+  ccol_retval_t sr =
+      ctpool_submit(g_client_dns_pool, _async_connect_task, ctx, NULL);
+  if (sr != ccol_success) {
+    _async_fulfill_chain(chain, ccol_not_enough_memory, NULL);
+    _async_ctx_teardown(ctx); /* unregisters ctx too, via _async_ctx_free */
+    return false;
+  }
+  return true;
+}
+
+/*
+ * Called once a hop's response has fully parsed as a redirect (pctx.
+ * will_redirect). Resolves the Location header against this hop's URL,
+ * applies Tier 1's identical method/body preservation rules (307/308 keep
+ * the method and body; any other redirect status downgrades to GET and
+ * drops the body unless the current method is already HEAD), finishes this
+ * hop's connection (offering it to the idle pool if `reusable`, otherwise
+ * closing it -- see _async_finish_connection), and only THEN queues the
+ * next hop.
+ *
+ * That order is deliberate and load-bearing, not cosmetic, for the close
+ * case specifically: fio_close (when nothing is still queued to write,
+ * always true here since the response was already fully read) synchronously
+ * runs fio_force_close -> fio_clear_fd -> close(fd) -> fio_poll_remove_fd on
+ * THIS thread before returning. The next hop's fio_socket() call runs on a
+ * completely different ctpool worker thread and, on a loopback redirect
+ * chain that opens and closes a fresh fd every hop in quick succession, can
+ * be handed back the EXACT SAME fd number the kernel just freed. Submitting
+ * the next hop first (as an earlier version of this function did) left a
+ * window where that worker thread's fio_socket()+fio_attach() could run
+ * concurrently with -- and potentially interleave its own epoll_ctl(ADD)
+ * around -- this thread's still-in-progress fio_poll_remove_fd's
+ * epoll_ctl(DEL) for the SAME fd number, silently leaving the new
+ * connection registered nowhere in epoll: fio_attach would appear to
+ * succeed (traced -- see git history of this file for the diagnostic
+ * session) but no on_ready/on_data callback would ever follow, permanently
+ * wedging that hop (and, transitively, the whole chain's future) since
+ * nothing else would ever move it forward. Finishing the connection
+ * unconditionally FIRST guarantees the old fd's epoll registration is fully
+ * torn down (when it's actually being closed) before the new socket() call
+ * that might reuse its fd number even has a chance to run; when the
+ * connection is pooled instead, no fd is freed at all, so this ordering
+ * costs nothing there either.
+ *
+ * Whether the handoff to the next hop succeeds or not, this connection's
+ * job is done either way; on failure, _async_submit_hop has already
+ * fulfilled the future with a specific error (or, for a Location that fails
+ * to resolve, this function never creates a next hop at all and the
+ * chain's refcount is unaffected) -- either way, this ctx's own upcoming
+ * on_close is the one guaranteed to notice, via _async_chain_release's
+ * backstop, that nothing fulfilled the future, and do so itself with a
+ * generic error.
+ */
+static void _async_handle_redirect(chttp_async_ctx_t *ctx, intptr_t uuid,
+                                   bool reusable) {
+  chttp_async_chain_t *chain = ctx->chain;
+  /* Temporary, extra reference: _async_finish_connection below can trigger
+   * (via fio_close's deferred on_close, or a successful idle-pool-offer's
+   * own explicit release) a full teardown of THIS ctx's chain reference on
+   * a DIFFERENT, concurrently-running reactor thread -- if that happened to
+   * be the last live reference, chain would be freed while this function
+   * is still using its local `chain` pointer below (in _async_submit_hop's
+   * argument and _mem_free(chain->mp, ...)). This is the same class of "a
+   * concurrent teardown can free something a synchronous caller still
+   * needs" race documented throughout this section, just one level higher
+   * than the ctx-local ones -- caught by a real SIGSEGV in
+   * _async_fulfill_chain during this feature's own development, since
+   * _async_submit_hop's own retain (previously relied on to keep chain
+   * alive for the next hop) only happens AFTER _async_finish_connection has
+   * already returned, too late to close this specific window. Retaining
+   * here first, and releasing only once this function is completely done
+   * with `chain`, guarantees it never hits zero out from under us
+   * regardless of how fast a concurrent teardown races. */
+  _async_chain_retain(chain);
+
+  chttp_url_t base;
+  memset(&base, 0, sizeof(base));
+  base.is_https = ctx->is_https;
+  base.host = ctx->host;
+  base.port = ctx->port;
+
+  char *next_url = _resolve_redirect_url(chain->mp, &base, ctx->pctx.location);
+  bool preserve = (ctx->pctx.status_code == 307 || ctx->pctx.status_code == 308);
+  chttp_method_t next_method = ctx->cur_method;
+  const void *next_body_data = chain->body_data;
+  size_t next_body_len = chain->body_len;
+  const char *next_body_ct = chain->body_content_type;
+  if (!preserve && ctx->cur_method != CHTTP_HEAD) {
+    next_method = CHTTP_GET;
+    next_body_data = NULL;
+    next_body_len = 0;
+    next_body_ct = NULL;
+  }
+  /* Captured BEFORE _async_finish_connection, not after: that call can
+   * trigger (via fio_close's deferred on_close, on a concurrent reactor
+   * thread) the normal teardown of THIS ctx itself -- freeing it -- so
+   * ctx->hop must not be read afterward. The temporary chain retain above
+   * only protects `chain`; it does nothing for ctx, which is never safe to
+   * touch once its own connection has been handed to _async_finish_
+   * connection. A stale read here (caught as heap corruption -- a later,
+   * unrelated free() aborting with "free(): invalid size" -- during this
+   * feature's own development) is exactly the kind of bug that can surface
+   * far away from its actual cause. */
+  int next_hop = ctx->hop + 1;
+
+  _async_finish_connection(ctx, uuid, reusable);
+
+  if (next_url) {
+    _async_submit_hop(chain, next_url, next_method, next_body_data,
+                      next_body_len, next_body_ct, next_hop);
+    _mem_free(chain->mp, next_url);
+  }
+  _async_chain_release(chain); /* release the temporary ref taken above */
+}
+
+/*
+ * Shared pre-flight validation for Tier 2 (_chttp_do_async_internal) and
+ * Tier 3 (chttpclient_do_pooled/_streaming): validates cli/req, parses
+ * req->url into *url_out (caller must _url_free it on ccol_success), and
+ * checks TLS usability -- the same three checks Tier 1's chttp_do_internal
+ * performs, with the exact same result codes (ccol_invalid_args,
+ * whatever _parse_chttp_url returns, ccol_http_tls_handshake_failed).
+ *
+ * Tier 1 is NOT refactored to call this: its equivalent checks are woven
+ * into the per-hop loop of chttp_do_internal, re-run fresh on every hop
+ * (a redirect can change URL/scheme hop to hop, so there's no single
+ * upfront check to extract there the way Tier 2/3 have -- they only ever
+ * need this once, before a chain/future exists at all). Tier 1 already
+ * returns fully specific ccol_retval_t codes natively, so extracting its
+ * inline logic would touch already-hardened, already-shipped code for no
+ * functional benefit.
+ *
+ * This exists specifically so Tier 3 does not have to accept
+ * chttpclient_do_async/_streaming's collapsed "NULL for any pre-queue
+ * failure" -- it can call this directly first and return the specific
+ * code, matching Tier 1's error granularity for exactly the two failure
+ * classes (bad URL, TLS unusable) that can be detected before a request is
+ * ever queued.
+ */
+static ccol_retval_t _chttp_async_preflight_check(chttpcli cli,
+                                                   const chttp_request_t *req,
+                                                   chttp_url_t *url_out) {
+  if (!cli || !req) return ccol_invalid_args;
+
+  ccol_retval_t prv = _parse_chttp_url(cli->m_procs, req->url, url_out);
+  if (prv != ccol_success) return prv;
+
+  mutex_lock(cli->lock);
+  bool tls_ctx_usable = cli->tls_ctx_usable;
+  mutex_unlock(cli->lock);
+
+  if (url_out->is_https && !tls_ctx_usable) {
+    /* Configured cert/key/ca path(s) were not readable at set_tls time;
+     * that failure was deferred here rather than aborting the process (see
+     * _rebuild_tls_ctx_locked). Mirrors Tier 1's identical check and its
+     * choice of error code for it. */
+    _url_free(cli->m_procs, url_out);
+    return ccol_http_tls_handshake_failed;
+  }
+  return ccol_success;
+}
+
+/*
+ * Internal entry point: submits req for asynchronous execution against cli,
+ * returning a future the caller must eventually pair with exactly one
+ * ctpool_future_free (after an optional ctpool_future_get/_done). Returns
+ * NULL if the request could not even be queued (bad arguments, invalid URL,
+ * TLS unusable, OOM, or the engine failing to start) -- mirrors
+ * ctpool_submit_future's own "NULL on failure" convention. Once a future has
+ * been created, every subsequent failure (including one on a later redirect
+ * hop) instead fulfils that future with a specific error and still returns
+ * it, exactly like Tier 1 returns a ccol_retval_t instead of aborting
+ * silently. Every queued hop is unconditionally freed, and the whole chain's
+ * one engine reference released, once the redirect chain reaches a terminal
+ * connection state (see chttp_async_chain_t's file-level comment).
+ */
+static ctpool_future *_chttp_do_async_internal(chttpcli cli,
+                                               const chttp_request_t *req,
+                                               chttpcli_write_fn write_fn,
+                                               void *write_ctx) {
+  chttp_url_t url;
+  if (_chttp_async_preflight_check(cli, req, &url) != ccol_success) return NULL;
+  ccol_memmgmt_procs_t *mp = cli->m_procs;
+  _url_free(mp, &url); /* only needed for the pre-check above;
+                        * _async_submit_hop re-parses req->url itself */
+
+  /* Read and pin the client's TLS context under its lock, exactly like
+   * Tier 1's chttp_do_internal does -- fio_tls_dup pins it against a
+   * concurrent chttpclient_set_tls freeing/rebuilding it while this request
+   * is still using it. Pinned unconditionally (not just for an https first
+   * hop) since a redirect chain can hop between http and https, exactly
+   * like Tier 1's own tls_ctx local; the pinned reference is released once
+   * by _async_chain_release (via fio_tls_destroy) when the whole chain's
+   * last hop is torn down. */
+  fio_tls_s *tls_ctx;
+  bool tls_ctx_usable;
+  bool verify_host;
+  long connect_timeout_ms;
+  long request_timeout_ms;
+  mutex_lock(cli->lock);
+  tls_ctx = cli->tls_ctx;
+  tls_ctx_usable = cli->tls_ctx_usable;
+  verify_host = cli->tls.verify_host;
+  connect_timeout_ms = cli->connect_timeout_ms;
+  request_timeout_ms = cli->request_timeout_ms;
+  if (tls_ctx) fio_tls_dup(tls_ctx);
+  mutex_unlock(cli->lock);
+
+  if (_client_engine_acquire() != ccol_success) {
+    if (tls_ctx) fio_tls_destroy(tls_ctx);
+    return NULL;
+  }
+
+  char *ferr = NULL;
+  ctpool_future *future = ctpool_future_create_detached(&ferr);
+  if (!future) {
+    if (tls_ctx) fio_tls_destroy(tls_ctx);
+    _client_engine_release();
+    return NULL;
+  }
+  /* From here on a future exists and is always returned to the caller (who
+   * owns pairing it with exactly one ctpool_future_free) -- any subsequent
+   * failure fulfils it with a specific error instead of returning NULL,
+   * exactly mirroring this function's previous, single-hop behaviour on a
+   * ctpool_submit failure. Captured into a local now: once hop 0 is queued
+   * below, a worker may run the request to completion and free the chain
+   * via _async_chain_release before this function's own thread runs another
+   * instruction -- reading chain->future afterward would be a
+   * use-after-free. */
+  ctpool_future *f = future;
+
+  chttp_async_chain_t *chain = _async_chain_create(
+      mp, cli, future, (chmap)req->headers, req->body.data, req->body.len,
+      req->body.content_type, tls_ctx, tls_ctx_usable, verify_host,
+      connect_timeout_ms, request_timeout_ms, write_fn, write_ctx);
+  if (!chain) {
+    if (tls_ctx) fio_tls_destroy(tls_ctx);
+    ctpool_future_fulfill(future, NULL); /* producer side; caller's own ref
+                                          * is released via its eventual
+                                          * ctpool_future_free(f) call */
+    _client_engine_release();
+    return f;
+  }
+
+  _async_submit_hop(chain, req->url, req->method, req->body.data,
+                    req->body.len, req->body.content_type, 0);
+  return f;
+}
+
+/* White-box test helpers exposing internal engine state. Not part of the
+ * public API -- gated so these symbols do not leak into a production build
+ * of libccollections.so (the surrounding engine code itself is no longer
+ * gated now that chttpclient_do_async/_streaming are real public callers,
+ * but these five functions exist purely for test instrumentation). */
+#ifdef RUNNING_UNIT_TESTS
+int _chttpclient_engine_ref_count_for_tests(void) {
+  pthread_mutex_lock(&g_client_engine_mutex);
+  int n = g_client_engine_ref_count;
+  pthread_mutex_unlock(&g_client_engine_mutex);
+  return n;
+}
+
+bool _chttpclient_engine_running_for_tests(void) {
+  pthread_mutex_lock(&g_client_engine_mutex);
+  bool running = g_client_engine_running;
+  pthread_mutex_unlock(&g_client_engine_mutex);
+  return running;
+}
+
+ccol_retval_t _chttpclient_engine_acquire_for_tests(void) {
+  return _client_engine_acquire();
+}
+
+void _chttpclient_engine_release_for_tests(void) {
+  _client_engine_release();
+}
+
+void _chttpclient_engine_wait_for_quiescence_for_tests(void) {
+  _client_engine_wait_for_quiescence();
+}
+#endif /* RUNNING_UNIT_TESTS */
+
+ctpool_future *chttpclient_do_async(chttpcli cli, const chttp_request_t *req) {
+  return _chttp_do_async_internal(cli, req, NULL, NULL);
+}
+
+ctpool_future *chttpclient_do_async_streaming(chttpcli cli,
+                                              const chttp_request_t *req,
+                                              chttpcli_write_fn write_fn,
+                                              void *write_ctx) {
+  if (!write_fn) return NULL;
+  return _chttp_do_async_internal(cli, req, write_fn, write_ctx);
+}
+
+chttpcli_async_result_t *chttpclient_async_result_get(ctpool_future *f) {
+  return (chttpcli_async_result_t *)ctpool_future_get(f);
+}
+
+void chttpclient_async_result_free(chttpcli_async_result_t *result) {
+  if (!result) return;
+  _mem_free(result->_m_procs, result);
+}
+
+/* ========================================================================== */
+/*                    POOLED-SYNC API (TIER 3)                                */
+/* ========================================================================== */
+
+/*
+ * Both functions below are thin wrappers: submit via Tier 2, block on the
+ * future, unwrap the result into the exact same ccol_retval_t/resp_out (or
+ * status_code_out) shape chttpclient_do/chttpclient_do_streaming use, then
+ * free the future and its result before returning -- the caller never sees
+ * ctpool_future or chttpcli_async_result_t at all. _chttp_async_preflight_
+ * check runs first specifically so a bad URL or unusable TLS config is
+ * reported with the same specific code chttpclient_do would use, rather
+ * than chttpclient_do_async/_streaming's collapsed NULL for that case (see
+ * that helper's own comment). Any OTHER pre-queue failure (OOM, the engine
+ * failing to start) still collapses to ccol_unexpected_failure -- Tier 1
+ * does not distinguish those cases with any more granularity either.
+ */
+
+ccol_retval_t chttpclient_do_pooled(chttpcli cli, const chttp_request_t *req,
+                                    chttpcli_response **resp_out) {
+  if (!resp_out) return ccol_invalid_args;
+  *resp_out = NULL;
+
+  chttp_url_t url;
+  ccol_retval_t prv = _chttp_async_preflight_check(cli, req, &url);
+  if (prv != ccol_success) return prv;
+  _url_free(cli->m_procs, &url);
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  if (!f) return ccol_unexpected_failure;
+
+  chttpcli_async_result_t *result = chttpclient_async_result_get(f);
+  if (!result) {
+    ctpool_future_free(f);
+    return ccol_unexpected_failure;
+  }
+
+  ccol_retval_t rv = result->rv;
+  *resp_out = result->resp;
+  chttpclient_async_result_free(result);
+  ctpool_future_free(f);
+  return rv;
+}
+
+ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
+                                              const chttp_request_t *req,
+                                              chttpcli_write_fn write_fn,
+                                              void *write_ctx,
+                                              int *status_code_out) {
+  if (!write_fn) return ccol_invalid_args;
+
+  chttp_url_t url;
+  ccol_retval_t prv = _chttp_async_preflight_check(cli, req, &url);
+  if (prv != ccol_success) return prv;
+  _url_free(cli->m_procs, &url);
+
+  ctpool_future *f = chttpclient_do_async_streaming(cli, req, write_fn, write_ctx);
+  if (!f) return ccol_unexpected_failure;
+
+  chttpcli_async_result_t *result = chttpclient_async_result_get(f);
+  if (!result) {
+    ctpool_future_free(f);
+    return ccol_unexpected_failure;
+  }
+
+  ccol_retval_t rv = result->rv;
+  if (result->resp) {
+    /* Streaming's chttpcli_response always exists internally (its body/
+     * headers just stay NULL -- see _async_build_response) purely so
+     * status_code has somewhere to travel through the single
+     * chttpcli_async_result_t.resp channel; this function's own public
+     * contract has no resp_out at all (mirrors chttpclient_do_streaming
+     * exactly), so it is unwrapped and freed here, never exposed. */
+    if (rv == ccol_success && status_code_out) {
+      *status_code_out = result->resp->status_code;
+    }
+    chttpclient_resp_free(result->resp);
+  }
+  chttpclient_async_result_free(result);
+  ctpool_future_free(f);
+  return rv;
+}
+
+/* ========================================================================== */
 /*                         CLIENT CONSTRUCTORS                                */
 /* ========================================================================== */
 
@@ -1294,6 +3964,7 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
   cli->tls = CHTTP_TLS_DEFAULT;
   mutex_init(cli->lock);
   cond_var_init(cli->available);
+  cond_var_init(cli->idle_async_drained);
 
   char *herr = NULL;
   cli->idle_pools =
@@ -1303,6 +3974,22 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to allocate idle pool map");
     mutex_destroy(cli->lock);
     cond_var_destroy(cli->available);
+    cond_var_destroy(cli->idle_async_drained);
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return NULL;
+  }
+
+  cli->idle_pools_async =
+      chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+                        ccol_pointer, mp, NULL, &herr);
+  if (!cli->idle_pools_async) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("failed to allocate async idle pool map");
+    __chmap_destroy(cli->idle_pools);
+    mutex_destroy(cli->lock);
+    cond_var_destroy(cli->available);
+    cond_var_destroy(cli->idle_async_drained);
     _mem_free(mp, cli);
     if (mp) mp->free(mp);
     return NULL;
@@ -1311,8 +3998,10 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
   if (_rebuild_tls_ctx_locked(cli) != ccol_success) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to build default TLS context");
     __chmap_destroy(cli->idle_pools);
+    __chmap_destroy(cli->idle_pools_async);
     mutex_destroy(cli->lock);
     cond_var_destroy(cli->available);
+    cond_var_destroy(cli->idle_async_drained);
     _mem_free(mp, cli);
     if (mp) mp->free(mp);
     return NULL;
@@ -1430,10 +4119,44 @@ void __chttpclient_destroy(chttpcli cli) {
     __chmap_destroy(cli->idle_pools);
   }
 
+  /* Tier 2's own idle pool (see the "ASYNC IDLE POOL" section earlier in
+   * this file). Force-close every currently pooled connection; each one's
+   * own IDLE-state on_close removes it from the pool and frees it
+   * (releasing its idle-held engine reference) asynchronously -- wait for
+   * idle_total_count_async to reach zero before proceeding, since cli is
+   * about to be freed below and those deferred teardowns read
+   * cli->lock/cli->idle_pools_async. */
+  mutex_lock(cli->lock);
+  if (cli->idle_pools_async) {
+    cmap_iterator *ait = chashmap_begin_iter(cli->idle_pools_async, NULL);
+    for (; ait; ait = ait->_next_fn(ait)) {
+      cvec list = _read_cvec(ait->val_pair->ptr);
+      if (!list) continue;
+      size_t n = cvector_elem_count(list);
+      for (size_t i = 0; i < n; i++) {
+        chttp_async_ctx_t *actx = *(chttp_async_ctx_t **)cvector_at(list, i);
+        if (actx->uuid >= 0) fio_force_close(actx->uuid);
+      }
+    }
+  }
+  while (cli->idle_total_count_async > 0)
+    cond_var_wait(cli->idle_async_drained, cli->lock);
+  mutex_unlock(cli->lock);
+
+  if (cli->idle_pools_async) {
+    cmap_iterator *it = chashmap_begin_iter(cli->idle_pools_async, NULL);
+    for (; it; it = it->_next_fn(it)) {
+      cvec list = _read_cvec(it->val_pair->ptr);
+      if (list) __cvector_destroy(list);
+    }
+    __chmap_destroy(cli->idle_pools_async);
+  }
+
   if (cli->tls_ctx) fio_tls_destroy(cli->tls_ctx);
 
   mutex_destroy(cli->lock);
   cond_var_destroy(cli->available);
+  cond_var_destroy(cli->idle_async_drained);
 
   ccol_memmgmt_procs_t *mp = cli->m_procs;
   _mem_free(mp, cli->owned_cert_path);

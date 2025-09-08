@@ -781,6 +781,118 @@ TEST(futures, submit_future_returns_null_on_oom) {
 }
 
 /* ========================================================================== */
+/*                         DETACHED FUTURES                                   */
+/* ========================================================================== */
+
+/* pthread start routine that fulfills a detached future after a short delay,
+ * used to prove ctpool_future_get() blocks until an external (non-worker)
+ * producer thread calls ctpool_future_fulfill(). */
+typedef struct {
+  ctpool_future *f;
+  void *result;
+  int delay_ms;
+} detached_producer_ctx_t;
+
+static void *detached_producer_fn(void *arg) {
+  detached_producer_ctx_t *ctx = (detached_producer_ctx_t *)arg;
+  if (ctx->delay_ms > 0) sleep_ms(ctx->delay_ms);
+  ctpool_future_fulfill(ctx->f, ctx->result);
+  return NULL;
+}
+
+TEST(detached_futures, create_and_fulfill_no_pool) {
+  /* No cthread_pool involved at all -- proves the future is genuinely
+   * standalone. */
+  char *err = NULL;
+  ctpool_future *f = ctpool_future_create_detached(&err);
+  REQUIRE_NE((void *)f, NULL);
+  REQUIRE_FALSE(ctpool_future_done(f));
+
+  int value = 123;
+  ccol_retval_t r = ctpool_future_fulfill(f, &value);
+  REQUIRE_EQ(r, ccol_success);
+
+  REQUIRE_TRUE(ctpool_future_done(f));
+  REQUIRE_FALSE(ctpool_future_cancelled(f));
+  REQUIRE_EQ(ctpool_future_get(f), (void *)&value);
+
+  ctpool_future_free(f);
+}
+
+TEST(detached_futures, get_blocks_until_external_fulfill) {
+  char *err = NULL;
+  ctpool_future *f = ctpool_future_create_detached(&err);
+  REQUIRE_NE((void *)f, NULL);
+
+  int value = 55;
+  detached_producer_ctx_t ctx = {.f = f, .result = &value, .delay_ms = 20};
+  pthread_t tid;
+  REQUIRE_EQ(pthread_create(&tid, NULL, detached_producer_fn, &ctx), 0);
+
+  /* Blocks until detached_producer_fn calls ctpool_future_fulfill. */
+  void *result = ctpool_future_get(f);
+  REQUIRE_EQ(result, (void *)&value);
+
+  pthread_join(tid, NULL);
+  ctpool_future_free(f);
+}
+
+TEST(detached_futures, free_before_fulfill_no_leak) {
+  /* Caller drops its reference before the producer fulfills; the future must
+   * stay alive (producer still holds a reference) and be freed once fulfill
+   * runs. Verified by valgrind -- no leak, no use-after-free. */
+  char *err = NULL;
+  ctpool_future *f = ctpool_future_create_detached(&err);
+  REQUIRE_NE((void *)f, NULL);
+
+  ctpool_future_free(f); /* caller drops its reference first */
+
+  int value = 7;
+  ccol_retval_t r = ctpool_future_fulfill(f, &value); /* producer's turn */
+  REQUIRE_EQ(r, ccol_success);
+}
+
+TEST(detached_futures, double_fulfill_returns_not_permitted) {
+  char *err = NULL;
+  ctpool_future *f = ctpool_future_create_detached(&err);
+  REQUIRE_NE((void *)f, NULL);
+
+  int v1 = 1, v2 = 2;
+  REQUIRE_EQ(ctpool_future_fulfill(f, &v1), ccol_success);
+  REQUIRE_EQ(ctpool_future_fulfill(f, &v2), ccol_not_permitted);
+
+  /* First result wins; second call must not have overwritten it. */
+  REQUIRE_EQ(ctpool_future_get(f), (void *)&v1);
+
+  ctpool_future_free(f);
+}
+
+TEST(detached_futures, fulfill_null_returns_invalid_args) {
+  REQUIRE_EQ(ctpool_future_fulfill(NULL, NULL), ccol_invalid_args);
+}
+
+TEST(detached_futures, independent_of_any_pool) {
+  /* Create/fulfill/free several detached futures with no ctpool ever
+   * constructed in this test, alongside a real pool doing unrelated work, to
+   * prove there is no hidden coupling between the two. */
+  ctpool_construct(pool, 2, 0);
+  atomic_int counter = 0;
+  ctpool_submit(pool, inc_counter, &counter, NULL);
+
+  char *err = NULL;
+  ctpool_future *f = ctpool_future_create_detached(&err);
+  REQUIRE_NE((void *)f, NULL);
+  int value = 9;
+  REQUIRE_EQ(ctpool_future_fulfill(f, &value), ccol_success);
+  REQUIRE_EQ(ctpool_future_get(f), (void *)&value);
+  ctpool_future_free(f);
+
+  ctpool_shutdown_drain(pool);
+  REQUIRE_EQ(atomic_load(&counter), 1);
+  ctpool_destroy(pool);
+}
+
+/* ========================================================================== */
 /*                         CTPOOL_WAIT                                        */
 /* ========================================================================== */
 

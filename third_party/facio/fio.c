@@ -1570,11 +1570,25 @@ static size_t fio_poll(void) {
         epoll_wait(internal[j].data.fd, events, FIO_POLL_MAX_EVENTS, 0);
     if (active_count > 0) {
       for (int i = 0; i < active_count; i++) {
-        if (events[i].events & (~(EPOLLIN | EPOLLOUT))) {
-          // errors are hendled as disconnections (on_close)
-          fio_force_close_in_poll(fd2uuid(events[i].data.fd));
-        } else {
-          // no error, then it's an active event(s)
+        /* A peer that closes its end shortly after writing its final bytes
+         * routinely produces a combined EPOLLIN|EPOLLRDHUP (or |EPOLLHUP)
+         * event -- data still sitting in the kernel receive buffer, reported
+         * in the same epoll_wait() return as the hangup. Treating any
+         * non-IN/OUT bit as an unconditional "discard as error" (the
+         * previous behaviour here) silently drops that already-delivered
+         * data: the connection is force-closed before deferred_on_data ever
+         * runs, so a still-unread response tail (or, on a listener-side
+         * connection, a request tail) is lost even though the kernel
+         * successfully delivered it. Dispatch on_data/on_ready for whichever
+         * of IN/OUT are actually set first, exactly as for a clean event;
+         * fio_read()'s own EOF/error handling (already relied on throughout
+         * this file, e.g. a plain recv()==0 with no EPOLLRDHUP at all) then
+         * correctly discovers and force-closes the connection once the
+         * already-buffered data has actually been drained. Only fall back to
+         * closing immediately here when the event carries neither IN nor
+         * OUT -- a pure error/hangup with nothing to read or write, where
+         * there is no buffered data this could discard. */
+        if (events[i].events & (EPOLLIN | EPOLLOUT)) {
           if (events[i].events & EPOLLOUT) {
             fio_defer_push_urgent(deferred_on_ready,
                                   (void *)fd2uuid(events[i].data.fd), NULL);
@@ -1582,6 +1596,9 @@ static size_t fio_poll(void) {
           if (events[i].events & EPOLLIN)
             fio_defer_push_task(deferred_on_data,
                                 (void *)fd2uuid(events[i].data.fd), NULL);
+        } else {
+          // pure error/hangup, nothing to read or write: disconnect (on_close)
+          fio_force_close_in_poll(fd2uuid(events[i].data.fd));
         }
       }  // end for loop
       total += active_count;
@@ -2109,6 +2126,11 @@ void fio_suspend(intptr_t uuid) {
 void fio_force_read_rearm(intptr_t uuid) {
   if (!uuid_is_valid(uuid)) return;
   fio_poll_add_read(fio_uuid2fd(uuid));
+}
+
+void fio_force_write_rearm(intptr_t uuid) {
+  if (!uuid_is_valid(uuid)) return;
+  fio_poll_add_write(fio_uuid2fd(uuid));
 }
 
 /* *****************************************************************************

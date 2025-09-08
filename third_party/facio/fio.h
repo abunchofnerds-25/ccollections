@@ -668,6 +668,23 @@ void fio_force_event(intptr_t uuid, enum fio_io_event);
 void fio_force_read_rearm(intptr_t uuid);
 
 /**
+ * Unconditionally re-arms the reactor's write interest for `uuid` (an
+ * idempotent `epoll_ctl`-equivalent MOD/ADD) -- the write-side mirror of
+ * `fio_force_read_rearm`.
+ *
+ * `on_ready` is normally only re-armed as a side effect of `fio_write2()`
+ * queueing a packet: `deferred_on_ready`'s post-flush re-arm path
+ * (`fio_poll_add_write`) only runs when there is still packet data pending,
+ * never merely because a caller wants to be notified once more. Code that
+ * drives its own raw writes directly on the fd instead of going through
+ * `fio_write2` -- e.g. client-mode TLS via `fio_tls_connection_write`/
+ * `fio_tls_client_handshake_step`, which write straight through OpenSSL's
+ * BIO layer -- therefore has no other way to ask for a follow-up `on_ready`
+ * once `WANT_WRITE`/a partial write is hit. Call this to arrange one.
+ */
+void fio_force_write_rearm(intptr_t uuid);
+
+/**
  * Temporarily prevents `on_data` events from firing.
  *
  * The `on_data` event will be automatically rescheduled when (if) the socket's

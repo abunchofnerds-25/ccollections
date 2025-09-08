@@ -2674,6 +2674,25 @@ The future carries a reference count of 2 at submission: one for the caller and 
 
 Multiple threads may each hold a pointer to the same future and call `ctpool_future_get` independently. Each must call `ctpool_future_free` exactly once.
 
+### Detached Futures
+
+A detached future is the same `ctpool_future` handle, but created and fulfilled without any `cthread_pool` involved at all -- useful when some other kind of external, event-driven producer (not a ctpool worker thread) needs to hand a `void *` result back to a waiting caller using the same wait/poll/free API as a pool-backed future:
+
+```c
+char *err = NULL;
+ctpool_future *f = ctpool_future_create_detached(&err);
+if (!f) { /* OOM */ }
+
+/* Handed off to, say, a reactor thread or any other producer: */
+ctpool_future_fulfill(f, result);   /* called exactly once by the producer */
+
+/* Meanwhile, the caller: */
+void *result = ctpool_future_get(f);   /* blocks until fulfilled */
+ctpool_future_free(f);                 /* release the caller's reference */
+```
+
+Like a pool-backed future, a detached future starts with a reference count of 2 (caller + producer) and is freed once both sides have released their reference, in either order -- `ctpool_future_free` may be called before `ctpool_future_fulfill`, giving the same fire-and-forget semantics as the pool-backed case. `ctpool_future_fulfill` returns `ccol_not_permitted` if called a second time on the same future -- it is a one-shot handoff, not a mutable slot. Do not call `ctpool_future_fulfill` on a future returned by `ctpool_submit_future`/`ctpool_try_submit_future`/`ctpool_timed_submit_future`; those are fulfilled internally by the worker thread that runs their task.
+
 ### Phase Synchronization
 
 `ctpool_wait` blocks until the queue is empty and all active tasks have completed, without shutting the pool down. New tasks may be submitted after it returns.
@@ -2805,6 +2824,8 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 | `ctpool_future_done(f)` | Non-blocking poll: `true` if the result is ready or the future was cancelled |
 | `ctpool_future_cancelled(f)` | `true` if the task was discarded by `ctpool_shutdown_immediate` |
 | `ctpool_future_free(f)` | Release the caller's reference; must be called exactly once per `ctpool_submit_future` |
+| `ctpool_future_create_detached(err_str)` | Create a standalone future with no pool/task, to be fulfilled by an external producer |
+| `ctpool_future_fulfill(f, result)` | Deliver a result to a detached future; `ccol_not_permitted` if already fulfilled |
 
 **Management**
 
@@ -2935,6 +2956,58 @@ fclose(out);
 ```
 
 Response headers are not accessible via the streaming path. Returning a value less than `len` from the write callback aborts the transfer.
+
+### Asynchronous Requests (Tier 2)
+
+`chttpclient_do` and `chttpclient_do_streaming` are synchronous -- each call blocks the calling thread for the duration of the request. `chttpclient_do_async` and `chttpclient_do_async_streaming` submit a request to a shared, lazily-started reactor engine and return immediately with a `ctpool_future *`:
+
+```c
+chttpcli_construct(cli);
+
+chttp_request_t *req = chttp_request_new(CHTTP_GET,
+    "https://api.example.com/items", NULL, NULL);
+ctpool_future *f = chttpclient_do_async(cli, req);
+chttp_request_free(req); /* req need not outlive this call, unlike chttpclient_do */
+
+/* ... do other work while the request is in flight ... */
+
+chttpcli_async_result_t *result = chttpclient_async_result_get(f); /* blocks */
+if (result->rv == ccol_success) {
+    printf("%d: %s\n", result->resp->status_code, result->resp->body);
+    chttpclient_resp_free(result->resp);
+}
+chttpclient_async_result_free(result);
+ctpool_future_free(f);
+
+chttpclient_destroy(cli);
+```
+
+The engine (a small pool of reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling and of `chttpserver`'s own engine (a process must not run `chttpserver` alongside `chttpclient_do_async`/`_streaming` -- both are independent, process-wide facio reactors, and only one can run at a time). `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so -- unlike `chttpclient_do` -- it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`.
+
+`chttpclient_do_async_streaming` delivers the response body via a `chttpcli_write_fn` callback, exactly like `chttpclient_do_streaming`:
+
+```c
+ctpool_future *f = chttpclient_do_async_streaming(cli, req, write_to_file, out);
+```
+
+The callback runs on one of the engine's own reactor threads -- **not** the calling thread. It must not block (no blocking I/O, no long-held locks) and must not call back into `chttpclient_do_async`/`_streaming` for any client sharing the engine, since doing so risks deadlocking against the very reactor thread it runs on. As with the synchronous streaming path, a return value less than `len` aborts the transfer (`ccol_http_transfer_aborted`), and response headers are not accessible.
+
+`chttpcli_async_result_t` (`rv`, `resp`) is obtained via `chttpclient_async_result_get` (a typed wrapper over `ctpool_future_get`) and released via `chttpclient_async_result_free` -- do this before `ctpool_future_free`. `resp` is non-NULL only when `rv == ccol_success`; for the streaming variant, `resp` is still populated (so `status_code` is available) but `resp->body` stays NULL, matching `chttpclient_do_streaming`'s own convention.
+
+### Pooled-Sync Requests (Tier 3)
+
+`chttpclient_do_pooled` and `chttpclient_do_pooled_streaming` are thin blocking wrappers over Tier 2: they submit the request to the shared reactor engine and block until it completes, but return the exact same `ccol_retval_t`/`resp_out` (or `status_code_out`) call shape `chttpclient_do`/`chttpclient_do_streaming` use -- no future, no result struct to manage:
+
+```c
+chttpcli_response *resp = NULL;
+ccol_retval_t rc = chttpclient_do_pooled(cli, req, &resp);
+if (rc == ccol_success) {
+    printf("%d: %s\n", resp->status_code, resp->body);
+    chttpclient_resp_free(resp);
+}
+```
+
+This gives blocking-call ergonomics while sharing the engine's small, fixed-size reactor thread pool across every concurrent caller, instead of each call blocking its own OS thread the way `chttpclient_do` does. Error codes match `chttpclient_do` exactly for everything detected once the request is in flight (bad URL, TLS failure, connection failure, transfer errors, timeouts, too many redirects); a failure to even submit the request to the engine (OOM, or the engine failing to start) is reported as `ccol_unexpected_failure` rather than a more specific code. `chttpclient_do_pooled_streaming` mirrors `chttpclient_do_streaming`'s signature and semantics, with the same reactor-thread callback contract `chttpclient_do_async_streaming` documents.
 
 ### TLS Configuration
 
@@ -3100,6 +3173,12 @@ See `chttp.h` for the complete list.
 |---|---|
 | `chttpclient_do(cli, req, resp_out)` | Execute a request and buffer the full response body; blocks until a pool slot is free |
 | `chttpclient_do_streaming(cli, req, write_fn, ctx, status_out)` | Execute a request and deliver the body via a streaming callback; response headers are not accessible |
+| `chttpclient_do_async(cli, req)` | Submit a request to the shared reactor engine; returns a `ctpool_future *` immediately, buffered response |
+| `chttpclient_do_async_streaming(cli, req, write_fn, ctx)` | Same as `chttpclient_do_async`, but delivers the body via a callback run on an engine reactor thread |
+| `chttpclient_async_result_get(f)` | Block until `f` is fulfilled; returns the typed `chttpcli_async_result_t *` |
+| `chttpclient_async_result_free(result)` | Free a `chttpcli_async_result_t`; does not free `result->resp` or the future itself |
+| `chttpclient_do_pooled(cli, req, resp_out)` | Submit via the shared reactor engine and block until complete; same call shape as `chttpclient_do` |
+| `chttpclient_do_pooled_streaming(cli, req, write_fn, ctx, status_out)` | Same as `chttpclient_do_pooled`, but delivers the body via a callback run on an engine reactor thread |
 
 **Default Client and Convenience API**
 
@@ -3627,13 +3706,13 @@ The following components include their own internal synchronisation and are safe
 | `clrucache` | Single mutex + per-entry condition variables; see constraints below |
 | `clogger` | Mutex on the shared backing store; all handles writing to the same fd are fully serialised; see constraints below |
 | `cthreadpool` | Internal mutex + condition variables; all public functions are safe to call concurrently except `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy`; see constraints below |
-| `chttpclient` | Internal pool mutex + condition variable; all public functions including `chttpclient_do` and `chttpclient_do_streaming` are safe to call concurrently on the same handle |
+| `chttpclient` | Internal pool mutex + condition variable; all public functions including `chttpclient_do`, `chttpclient_do_streaming`, `chttpclient_do_async`, `chttpclient_do_async_streaming`, `chttpclient_do_pooled`, and `chttpclient_do_pooled_streaming` are safe to call concurrently on the same handle |
 
 ### Per-Component Constraints
 
 **`clrucache` eviction callback.** The callback passed to `clru_construct` is invoked **while the cache mutex is held**. It must not call back into the same cache handle, doing so will deadlock. It may allocate memory or write to a logger, but must not call `clru_get` or `clru_set` on the cache that triggered the eviction.
 
-**`cthreadpool` shutdown and destroy.** `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy` must each be called at most once and must not be called concurrently with each other. All other public functions (`ctpool_submit`, `ctpool_try_submit`, `ctpool_timed_submit`, `ctpool_submit_future`, `ctpool_wait`, `ctpool_pending_count`, `ctpool_active_count`) are safe to call from multiple threads concurrently. The future functions (`ctpool_future_get`, `ctpool_future_done`, `ctpool_future_cancelled`, `ctpool_future_free`) are likewise safe to call concurrently on the same future object.
+**`cthreadpool` shutdown and destroy.** `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy` must each be called at most once and must not be called concurrently with each other. All other public functions (`ctpool_submit`, `ctpool_try_submit`, `ctpool_timed_submit`, `ctpool_submit_future`, `ctpool_wait`, `ctpool_pending_count`, `ctpool_active_count`) are safe to call from multiple threads concurrently. The future functions (`ctpool_future_get`, `ctpool_future_done`, `ctpool_future_cancelled`, `ctpool_future_free`) are likewise safe to call concurrently on the same future object. `ctpool_future_create_detached` and `ctpool_future_fulfill` have no pool to serialise against at all -- a detached future's only ordering requirement is that `ctpool_future_fulfill` is called exactly once.
 
 **`clogger` derived loggers.** `clog_derive` creates a sibling logger that shares the same fd, rotation state, and mutex as the root logger via the shared backing store. Writes from the root and all of its siblings are fully serialised with no additional locking required at the call site. The minimum-level check (`log_info`, `log_warn`, and similar macros) reads the per-logger level field without holding the mutex as a deliberate performance optimisation; a concurrent `clog_set_level` may therefore cause a single message near the boundary level to be inconsistently logged or dropped. This is intentional: the optimisation avoids mutex acquisition for every suppressed message, and the inconsistency window is not a data-corruption hazard.
 

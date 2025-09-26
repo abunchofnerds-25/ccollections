@@ -3,9 +3,12 @@ CC = gcc
 INCLUDES = -I.. -I../../include -I../../third_party/facio -I../../third_party/llhttp
 DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 
-# Our source files (compiled with strict flags + -Werror). cfio_engine.c is
-# the shared facio reactor lifecycle module both chttpserver.c and
-# chttpclient.c acquire/release references to -- see cfio_engine.h.
+# Our source files (compiled with strict flags + -Werror). This is the first
+# binary in the codebase to link chttpserver.c and chttpclient.c together
+# specifically to exercise both of their engines running simultaneously in
+# the same process -- see src/cfio_engine.c/.h, the shared facio reactor
+# lifecycle module both now acquire/release references to instead of each
+# owning an independent (mutually exclusive) reactor.
 OUR_SRC_FILES = tests.c \
 	../../src/chttpserver.c \
 	../../src/chttpclient.c \
@@ -70,11 +73,6 @@ third_party_obj/llhttp/%.o: $(LLHTTP_DIR)/%.c $(LLHTTP_HEADER_FILES) | third_par
 build: $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS)
 	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) $(OUR_SRC_FILES) -o tests $(LFLAGS)
 
-# This suite calls chttpsvr_set_engine_mem_mgmt_procs() before the first
-# chttpsvr_start() in the process, which is a process-wide, set-once-ever
-# requirement -- it is kept in its own binary (separate from tests/chttpserver)
-# so it cannot conflict with the many chttpsvr_start() calls already made by
-# the rest of the chttpserver test suite.
 test: build
 	./tests
 
@@ -86,10 +84,10 @@ generate_coverage_report:
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) $(OUR_SRC_FILES) \
 		$(THIRD_PARTY_OBJS) -o tests $(LFLAGS) && \
 	./tests && \
-	gcov -d -w tests-chttpserver_mem_mgmt && \
+	gcov -d -w tests-chttp_server_and_client && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent \
-		--capture --directory . --output-file chttpserver_mem_mgmt.c.info && \
-	genhtml --ignore-errors inconsistent -s chttpserver_mem_mgmt.c.info \
+		--capture --directory . --output-file chttp_server_and_client.c.info && \
+	genhtml --ignore-errors inconsistent -s chttp_server_and_client.c.info \
 		--output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info
 

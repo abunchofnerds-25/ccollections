@@ -1,6 +1,6 @@
 # C Collections
 
-`c_collections` is a library of generic data structures and utilities for C. It provides what the C standard library leaves out: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, inter-thread communication primitives, a thread pool, a structured logger, a JSON parser, a YAML parser, and an HTTP client -- all under one consistent API.
+`c_collections` is a library of generic data structures and utilities for C. It provides what the C standard library leaves out: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, inter-thread communication primitives, a thread pool, a structured logger, a JSON parser, a YAML parser, an HTTP client, and an HTTP server -- all under one consistent API.
 
 If you have used Python's `list` and `dict`, Java's `ArrayList` and `HashMap`, or C++'s `vector` and `map`, the containers here will feel familiar. The difference is that this library is plain C11 -- no code generators, no external build tools, no hidden runtime.
 
@@ -41,7 +41,7 @@ Every module follows the same naming conventions (`*_construct`, `*_destroy`, an
 
 ## 1. Rationale
 
-C gives you direct control over memory, near-zero runtime overhead, and programs that run on everything from microcontrollers to supercomputers. What it does not give you is a standard library of generic containers.
+C gives you direct control over memory, near-zero runtime overhead, and programs that run on everything from microcontrollers to supercomputers. What it does not give you, unfortunately, is a standard library of generic containers.
 
 In Python, `scores = []` gives you a resizable list that grows on demand. In Java, `new ArrayList<Integer>()` gives you a typed dynamic array. In C, the closest built-in equivalent is a fixed-size array whose size you must know at compile time. Growing it means calling `realloc` yourself. A hash map means implementing one from scratch or tracking down a library. This is a valuable learning exercise, but in a real program you usually want to spend your energy on the problem you are actually solving, not on reimplementing containers you have already studied.
 
@@ -2982,7 +2982,7 @@ ctpool_future_free(f);
 chttpclient_destroy(cli);
 ```
 
-The engine (a small pool of reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling and of `chttpserver`'s own engine (a process must not run `chttpserver` alongside `chttpclient_do_async`/`_streaming` -- both are independent, process-wide facio reactors, and only one can run at a time). `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so -- unlike `chttpclient_do` -- it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`.
+The engine (a small pool of reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. It shares its underlying reactor with `chttpserver`'s own engine (both acquire/release references to the same lazily-started, process-wide facio reactor), so a process may freely run `chttpserver` and `chttpclient_do_async`/`_streaming` at the same time -- e.g. a service that both serves HTTP and calls out to other HTTP services asynchronously. One consequence of that sharing: `chttpsvr_engine_stop()` (see the `chttpserver` section below) tears down the shared reactor for both modules at once, aborting any in-flight `chttpclient` async work along with every `chttpsvr` listener. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so -- unlike `chttpclient_do` -- it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`.
 
 `chttpclient_do_async_streaming` delivers the response body via a `chttpcli_write_fn` callback, exactly like `chttpclient_do_streaming`:
 
@@ -3223,7 +3223,7 @@ The module is split across two headers: `chttp.h` declares shared types (`chttp_
 
 ### Engine Lifecycle
 
-facil.io uses a single shared event loop ("engine") per process. The engine starts automatically on the first `chttpsvr_start` call and stops automatically when the last server is destroyed -- no explicit engine start or stop call is required.
+facil.io uses a single shared event loop ("engine") per process, shared with `chttpclient`'s async engine (`chttpclient_do_async`/`_streaming`/`chttpclient_do_pooled`/`_streaming`) as well -- a process may run both at once. The engine starts automatically on the first `chttpsvr_start` call (or the first `chttpclient` async call, if that happens first) and stops automatically once the last reference from either module is released -- no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the engine has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
 
 The library does not install any signal handlers. Applications are responsible for wiring shutdown into whatever signal or lifecycle mechanism they use. `chttpsvr_engine_stop()` is async-signal-safe and is the intended shutdown hook:
 
@@ -3241,9 +3241,11 @@ int main(void) {
     chttpsvr_start(srv, &cfg);   /* blocks until engine is up and port is bound */
 
     chttpsvr_engine_wait();      /* block until engine exits */
-    chttpsvr_destroy(srv);       /* engine stops when last server is destroyed */
+    chttpsvr_destroy(srv);       /* releases this server's engine reference */
 }
 ```
+
+Note that `chttpsvr_engine_stop()` tears down the shared engine, not just this application's servers: if the same process also has `chttpclient` async requests in flight (`chttpclient_do_async`/`_streaming`, `chttpclient_do_pooled`/`_streaming`), those are aborted too. This is an inherent consequence of the two modules sharing one process-wide reactor for what is meant to be process-shutdown-driven use.
 
 To redirect engine log output, call `chttpsvr_set_engine_logger` before the first `chttpsvr_start`:
 
@@ -3303,7 +3305,7 @@ int main(void) {
     chttpsvr_start(srv, &cfg);   /* blocks until engine is up and port is bound */
 
     chttpsvr_engine_wait();   /* block until SIGINT/SIGTERM triggers engine stop */
-    chttpsvr_destroy(srv);    /* engine stops when last server is destroyed */
+    chttpsvr_destroy(srv);    /* releases this server's engine reference */
     clog_close(logger);
     return 0;
 }
@@ -3591,8 +3593,8 @@ cfg.tls = &tls;
 |---|---|
 | `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-engine`); must be called before the first `chttpsvr_start`; returns `ccol_invalid_args` if `cl` is NULL |
 | `chttpsvr_set_engine_mem_mgmt_procs(mp)` | Redirect the engine's own internal memory management to `mp`, or to the default facio arena/libc behavior if `mp` is NULL; must be called before the first `chttpsvr_start` (may be called again once the engine has fully stopped); returns `ccol_invalid_args` if `mp` is non-NULL but has a NULL function pointer, or `ccol_not_permitted` if the engine is already running |
-| `chttpsvr_engine_stop()` | Signal the engine to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler |
-| `chttpsvr_engine_wait()` | Block until the engine thread exits; use as an escape hatch when you need to wait for all servers to shut down |
+| `chttpsvr_engine_stop()` | Signal the shared engine to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler. Also aborts any in-flight `chttpclient` async work in the same process (the engine is shared) |
+| `chttpsvr_engine_wait()` | Block until the shared engine has fully stopped; use as an escape hatch when you need a synchronous guarantee (e.g. after an external shutdown signal, or before reusing a just-freed port) |
 
 **Per-Server Lifecycle**
 

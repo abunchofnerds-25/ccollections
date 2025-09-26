@@ -80,8 +80,7 @@ static void *_counting_realloc(void *ptr, size_t size) {
   return realloc(ptr, size);
 }
 
-static void _hello_handler(chttpsvr_req *req, chttpsvr_resp *resp,
-                           void *ctx) {
+static void _hello_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   (void)req;
   (void)ctx;
   chttpsvr_resp_write_str(resp, "Hello, mem-mgmt!");
@@ -93,6 +92,14 @@ static void _teardown(void) {
     __chttpsvr_destroy(g_srv);
     g_srv = NULL;
   }
+  /* __chttpsvr_destroy releases this server's shared-engine reference but no
+   * longer synchronously waits for the shared facio reactor (shared with
+   * chttpclient's async engine -- see cfio_engine.h) to actually stop;
+   * chttpsvr_engine_wait() blocks until it has, which is required here so
+   * the engine-installed default logger is guaranteed reclaimed before this
+   * atexit handler returns. See tests/chttpserver_tls/tests.c for the same
+   * reasoning. */
+  chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
     g_test_logger = NULL;

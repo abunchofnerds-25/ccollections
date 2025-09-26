@@ -3,10 +3,13 @@ CC = gcc
 INCLUDES = -I.. -I../../include -I../../third_party/facio -I../../third_party/llhttp
 DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 
-# Our source files (compiled with strict flags + -Werror).
+# Our source files (compiled with strict flags + -Werror). cfio_engine.c is
+# the shared facio reactor lifecycle module both chttpserver.c and
+# chttpclient.c acquire/release references to -- see cfio_engine.h.
 OUR_SRC_FILES = tests.c \
 	../../src/chttpserver.c \
 	../../src/chttpclient.c \
+	../../src/cfio_engine.c \
 	../../src/cthreadpool.c \
 	../../src/clogger.c \
 	../../src/chashmap.c \

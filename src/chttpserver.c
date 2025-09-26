@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+#include <cfio_engine.h>
 #include <chttpserver.h>
 #include <cthreadpool.h>
 #include <fio.h>
@@ -222,8 +223,9 @@ struct chttpserver {
               when NULL was passed; closed in __chttpsvr_destroy */
   intptr_t listen_uuid;       /* facio listener uuid; -1 when not started */
   bool started;               /* true after a successful chttpsvr_start call */
-  bool contributed_to_engine; /* true when this server was counted in
-                                 g_server_count */
+  bool contributed_to_engine; /* true once this server has acquired its one
+                                  shared cfio_engine reference (see
+                                  chttpsvr_start/__chttpsvr_destroy) */
   unsigned stream_read_timeout_ms;    /* set at chttpsvr_start; bounds each
                                           http1_stream_read wait for more body
                                           bytes, for both buffered and
@@ -241,35 +243,48 @@ struct chttpserver {
 /*                         GLOBAL STATE                                       */
 /* ========================================================================== */
 
-/* Shared facil.io event loop engine state. */
-static pthread_mutex_t g_engine_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_engine_ready_cv = PTHREAD_COND_INITIALIZER;
-static bool g_engine_running = false;
-static bool g_engine_ready = false;
-static bool g_engine_thread_started = false;
-static pthread_t g_engine_thread;
-static int16_t g_engine_threads = 1;
-/* Number of servers that contributed to the engine start (incremented in
- * chttpsvr_start, decremented in __chttpsvr_destroy).  Engine stops when
- * this count reaches 0. */
-static int g_server_count = 0;
-
-/* Lazy facil.io init: runs exactly once on the first chttpsvr_engine_start
- * call.  http_lib_constructor must be called first to queue the
- * ON_INITIALIZE callback before fio_lib_init fires it.  fio_lib_destroy is
- * registered via atexit so it runs at process exit regardless of teardown
- * order.  fio_lib_init and http_lib_constructor are declared in fio.h /
- * http_internal.h but http_internal.h pulls in heavy third-party headers;
- * forward-declare here.
+/*
+ * The raw facil.io reactor lifecycle (start/stop/one-time global init) is
+ * owned by the shared cfio_engine module (src/cfio_engine.c), not by this
+ * file -- see cfio_engine.h for why: chttpclient.c's async engine (Tier 2/3)
+ * acquires/releases references to the exact same underlying reactor, so both
+ * modules can run simultaneously in the same process. What remains here is
+ * purely chttpserver-local bookkeeping: each chttpsvr instance acquires
+ * exactly one shared-engine reference for its whole lifetime (across any
+ * number of start/stop/restart cycles), tracked by
+ * chttpserver::contributed_to_engine and released exactly once, in
+ * __chttpsvr_destroy -- guarded by the instance's own srv->mutex, so no
+ * dedicated global mutex is needed for it any more.
  */
-extern void http_lib_constructor(void);
-extern void fio_lib_init(void);
-extern void fio_lib_destroy(void);
-static pthread_once_t _fio_init_once = PTHREAD_ONCE_INIT;
-static void _fio_global_init(void) {
-  http_lib_constructor();
-  fio_lib_init();
-  atexit(fio_lib_destroy);
+/* Installs a minimal default engine logger if the caller has not already set
+ * one via chttpsvr_set_engine_logger(). Deliberately NOT a pthread_once: a
+ * fully-stopped-then-restarted engine (chttpsvr_engine_wait() having already
+ * nulled the logger via fio_set_logger(NULL), followed by a fresh
+ * chttpsvr_start() well after that -- an explicitly supported restart
+ * pattern) must still get a fresh default logger, exactly like the
+ * pre-unification code's per-engine-start check did; a one-shot guard would
+ * silently leave the engine loggerless forever after the first stop. Instead
+ * this is called once per *server's own* first start (guarded by the
+ * need_acquire check at its call site in chttpsvr_start), and is idempotent
+ * in effect regardless of how many times or from how many concurrent callers
+ * it runs, since it only ever installs a default when fio_has_logger() is
+ * still false at the moment it runs -- also deliberately decoupled from "is
+ * this the very first chttpsvr_start() call to bring the shared engine up":
+ * with a shared engine, chttpclient's async engine may already have started
+ * it before chttpserver ever calls chttpsvr_start(), so this cannot be tied
+ * to that transition either. */
+static void _install_default_engine_logger(void) {
+  if (!fio_has_logger()) {
+    clog base = clog_open_fd(2, CLOG_FATAL);
+    if (base) {
+      clog derived = clog_derive(base);
+      clog_close(base);
+      if (derived) {
+        clog_set_field(derived, "component", "http-engine");
+        fio_set_logger(derived);
+      }
+    }
+  }
 }
 
 /* Private sentinel returned by _parse_method for unrecognised method strings.
@@ -1424,30 +1439,6 @@ task_oom:
 }
 
 /* ========================================================================== */
-/*                         BACKGROUND THREAD                                  */
-/* ========================================================================== */
-
-/* Called by facil.io on FIO_CALL_ON_START, after fio_listen_on_startup has
- * bound all pre-registered listeners.  Signals chttpsvr_start that the engine
- * is up and the port is accepting connections. */
-static void _engine_ready_cb(void *arg) {
-  (void)arg;
-  pthread_mutex_lock(&g_engine_mutex);
-  g_engine_ready = true;
-  pthread_cond_broadcast(&g_engine_ready_cv);
-  pthread_mutex_unlock(&g_engine_mutex);
-}
-
-static void *_fio_thread_fn(void *arg) {
-  (void)arg;
-  fio_start(.threads = g_engine_threads, .workers = 1);
-  pthread_mutex_lock(&g_engine_mutex);
-  g_engine_running = false;
-  pthread_mutex_unlock(&g_engine_mutex);
-  return NULL;
-}
-
-/* ========================================================================== */
 /*                         ROUTER INTERNAL HELPERS                            */
 /* ========================================================================== */
 
@@ -1876,36 +1867,40 @@ void __chttpsvr_destroy(chttpsvr srv) {
   mutex_unlock(srv->mutex);
   if (was_started) fio_close(uuid);
 
-  /* Determine whether this is the last server and we should stop the engine.
-   * Only decrement g_server_count once, and only if we previously contributed
-   * to it (contributed_to_engine is set in chttpsvr_start). */
-  bool should_stop_engine = false;
-  bool should_join_engine = false;
+  /* Release this server's single shared-engine reference (acquired once, in
+   * chttpsvr_start, for this server's entire lifetime) exactly once, only if
+   * it was ever actually acquired. Guarded by srv->mutex, not a global lock
+   * -- contributed_to_engine is purely this server's own state now that the
+   * shared reference count itself lives in cfio_engine.c.
+   *
+   * _cfio_engine_release() hands the actual reactor stop-and-join off to a
+   * detached reaper thread rather than performing it inline when this is the
+   * last reference (see cfio_engine.h) -- so, unlike the old per-module
+   * engine, dropping the last reference here does NOT guarantee the shared
+   * reactor has fully stopped by the time this function returns. A caller
+   * that needs that guarantee (e.g. before reusing the just-freed port, or
+   * before process exit) must call chttpsvr_engine_wait() afterward. */
+  bool should_release_engine = false;
+  mutex_lock(srv->mutex);
   if (srv->contributed_to_engine) {
-    pthread_mutex_lock(&g_engine_mutex);
-    g_server_count--;
-    if (g_server_count == 0 && g_engine_running) {
-      fio_stop();
-      should_stop_engine = true;
-    }
-    if (g_server_count == 0 && g_engine_thread_started) {
-      g_engine_thread_started = false;
-      should_join_engine = true;
-    }
-    pthread_mutex_unlock(&g_engine_mutex);
+    srv->contributed_to_engine = false;
+    should_release_engine = true;
   }
-  (void)should_stop_engine; /* fio_stop already called above; flag documents
-                               intent */
+  mutex_unlock(srv->mutex);
+  if (should_release_engine) _cfio_engine_release();
 
   /* Block until every in-flight task has called http_resume and its
    * send/cleanup callback has completed.  All handlers now run through the
    * server's ctpool, so in_flight_requests tracks all dispatched work.
    *
-   * For the last server: fio_stop() above signals the reactor to drain; the
-   * reactor fires all pending http_resume callbacks before fio_start() returns,
-   * so in_flight_requests will typically reach 0 before the join below.
-   * For non-last servers: the reactor keeps running for other servers, so
-   * http_resume callbacks fire naturally.
+   * For the last reference: _cfio_engine_release() above triggers fio_stop()
+   * on its reaper thread momentarily, which signals the reactor to drain;
+   * the reactor fires all pending http_resume callbacks as it winds down.
+   * For non-last references: the reactor keeps running for other servers (or
+   * for chttpclient's async engine), so http_resume callbacks fire
+   * naturally regardless. Either way this wait does not depend on the exact
+   * timing of the reaper's fio_stop() call -- a worker thread calls
+   * http_resume when it finishes regardless of engine-stop state.
    *
    * 30-second timeout as a safety net: a permanent hang is worse than a
    * potential use-after-free in that degenerate edge case. */
@@ -1921,14 +1916,6 @@ void __chttpsvr_destroy(chttpsvr srv) {
     }
   }
   mutex_unlock(srv->mutex);
-
-  /* Join the engine thread if we stopped it. */
-  if (should_join_engine) {
-    pthread_join(g_engine_thread, NULL);
-    /* Clear the logger pointer so that fio_lib_destroy (atexit) logging calls
-     * hit the null-guard in _fio_vlog and do not access a freed handle. */
-    fio_set_logger(NULL);
-  }
 
   /* Drain then destroy the server-owned worker pool. */
   if (srv->worker_pool) {
@@ -2058,121 +2045,64 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
     if (cfg->tls->ca_bundle_path) fio_tls_trust(tls, cfg->tls->ca_bundle_path);
   }
 
-  /* Start the shared engine on the first chttpsvr_start call in this process.
-   * Subsequent calls reuse the already-running engine.  g_engine_mutex
-   * serialises concurrent chttpsvr_start calls so exactly one thread starts
-   * the engine.
-   *
-   * uuid is set inside the mutex on the first start (before the engine
-   * thread is spawned), and outside the mutex on subsequent starts.  A value
-   * of -1 after the mutex section signals the subsequent-start path. */
-  intptr_t uuid = -1;
+  /* Acquire this server's single shared-engine reference, once for its
+   * entire lifetime (across any number of start/stop/restart cycles) --
+   * guarded by srv->mutex, atomically claiming the "first start of this
+   * server" slot before actually acquiring, and rolling the claim back if
+   * the acquire itself fails. On a restart (stop + start again on the same
+   * srv) contributed_to_engine is already true, so this is skipped entirely
+   * and the reference from the original start is reused. */
+  bool need_acquire;
+  mutex_lock(srv->mutex);
+  need_acquire = !srv->contributed_to_engine;
+  if (need_acquire) srv->contributed_to_engine = true;
+  mutex_unlock(srv->mutex);
 
-  pthread_mutex_lock(&g_engine_mutex);
-
-  if (!g_engine_running) {
-    /* First chttpsvr_start: bring up the shared engine. */
-
-    /* One-time facil.io global initialisation. */
-    pthread_once(&_fio_init_once, _fio_global_init);
-
+  if (need_acquire) {
     /* Install a minimal default engine logger if the caller has not already
-     * set one via chttpsvr_set_engine_logger(). */
-    if (!fio_has_logger()) {
-      clog base = clog_open_fd(2, CLOG_FATAL);
-      if (base) {
-        clog derived = clog_derive(base);
-        clog_close(base);
-        if (derived) {
-          clog_set_field(derived, "component", "http-engine");
-          fio_set_logger(derived);
-        }
-      }
-    }
+     * set one via chttpsvr_set_engine_logger() -- see
+     * _install_default_engine_logger's own comment for why this runs on
+     * every server's first start rather than being a one-shot,
+     * process-lifetime guard. */
+    _install_default_engine_logger();
 
-    /* Compute reactor thread count (fixed at CPU count; not user-configurable).
-     */
-    long raw = sysconf(_SC_NPROCESSORS_ONLN);
-    if (raw < 1) raw = 1;
-    g_engine_threads = (raw > INT16_MAX) ? INT16_MAX : (int16_t)raw;
-
-    /* Register the readiness callback BEFORE http_listen.
-     * fio_state_callback_force(FIO_CALL_ON_START) fires in reverse
-     * registration order (builds a reversed copy via unshift).  Registering
-     * _engine_ready_cb first means it fires AFTER fio_listen_on_startup
-     * (registered by http_listen below), so the port is fully bound before
-     * we wake up. */
-    fio_state_callback_add(FIO_CALL_ON_START, _engine_ready_cb, NULL);
-
-    /* Register the listener BEFORE spawning the engine thread so that when
-     * the reactor enters its event loop for the first time,
-     * fio_listen_on_startup is already queued and the socket is bound
-     * atomically at startup. */
-    uuid =
-        http_listen(port_str, cfg->host, .on_request = _on_request_unreachable,
-                    .on_headers_complete = _on_headers_complete, .udata = srv,
-                    .max_body_size = cfg->max_body_size, .timeout = timeout_sec,
-                    .tls = tls);
-    if (uuid < 0) {
-      fio_state_callback_remove(FIO_CALL_ON_START, _engine_ready_cb, NULL);
-      pthread_mutex_unlock(&g_engine_mutex);
+    ccol_retval_t engine_rc = _cfio_engine_acquire();
+    if (engine_rc != ccol_success) {
+      mutex_lock(srv->mutex);
+      srv->contributed_to_engine = false; /* roll back; nothing was acquired */
+      mutex_unlock(srv->mutex);
       if (tls) fio_tls_destroy(tls);
       ctpool_shutdown_drain(srv->worker_pool);
       ctpool_destroy(srv->worker_pool);
       srv->worker_pool = NULL;
-      return ccol_unexpected_failure;
-    }
-
-    int rc = pthread_create(&g_engine_thread, NULL, _fio_thread_fn, NULL);
-    if (rc != 0) {
-      fio_state_callback_remove(FIO_CALL_ON_START, _engine_ready_cb, NULL);
-      fio_close(uuid);
-      uuid = -1;
-      pthread_mutex_unlock(&g_engine_mutex);
-      if (tls) fio_tls_destroy(tls);
-      ctpool_shutdown_drain(srv->worker_pool);
-      ctpool_destroy(srv->worker_pool);
-      srv->worker_pool = NULL;
-      return ccol_unexpected_failure;
-    }
-
-    g_engine_thread_started = true;
-    g_engine_running = true;
-
-    /* Block until the engine fires FIO_CALL_ON_START: fio_listen_on_startup
-     * has bound the port, and _engine_ready_cb has signalled us.  The
-     * reactor is now in its event loop and ready to accept connections. */
-    while (!g_engine_ready) {
-      pthread_cond_wait(&g_engine_ready_cv, &g_engine_mutex);
+      return engine_rc;
     }
   }
 
-  /* Register this server's contribution to the engine reference count the
-   * first time it is started.  On a restart (stop + start again) the flag is
-   * already true, so we avoid double-counting. */
-  if (!srv->contributed_to_engine) {
-    g_server_count++;
-    srv->contributed_to_engine = true;
-  }
-
-  pthread_mutex_unlock(&g_engine_mutex);
-
+  /* The shared reactor is now confirmed running (per _cfio_engine_acquire's
+   * contract: it always blocks until the reactor has entered its event
+   * loop before returning success) -- http_listen always takes its
+   * fio_attach-immediately path (fio_is_running() is true), never the
+   * FIO_CALL_ON_START-deferred path. Verified via direct read of
+   * fio_listen() in fio.c: the socket bind itself (fio_socket()) is
+   * unconditional; only attachment timing depends on fio_is_running(), so
+   * there is no first-vs-subsequent-start branching left to do here -- this
+   * single call covers both cases. */
+  intptr_t uuid = http_listen(
+      port_str, cfg->host, .on_request = _on_request_unreachable,
+      .on_headers_complete = _on_headers_complete, .udata = srv,
+      .max_body_size = cfg->max_body_size, .timeout = timeout_sec, .tls = tls);
   if (uuid < 0) {
-    /* Subsequent start: engine already running.  http_listen calls fio_attach
-     * directly (fio_is_running() is true), registering the listener
-     * immediately with the live reactor. */
-    uuid =
-        http_listen(port_str, cfg->host, .on_request = _on_request_unreachable,
-                    .on_headers_complete = _on_headers_complete, .udata = srv,
-                    .max_body_size = cfg->max_body_size, .timeout = timeout_sec,
-                    .tls = tls);
-    if (uuid < 0) {
-      if (tls) fio_tls_destroy(tls);
-      ctpool_shutdown_drain(srv->worker_pool);
-      ctpool_destroy(srv->worker_pool);
-      srv->worker_pool = NULL;
-      return ccol_unexpected_failure;
-    }
+    /* Deliberately do NOT release the engine reference here (whether just
+     * acquired above, or already held from an earlier start of this same
+     * srv): contributed_to_engine stays true and __chttpsvr_destroy will
+     * release it later, mirroring this module's pre-unification behavior
+     * for this exact failure path. */
+    if (tls) fio_tls_destroy(tls);
+    ctpool_shutdown_drain(srv->worker_pool);
+    ctpool_destroy(srv->worker_pool);
+    srv->worker_pool = NULL;
+    return ccol_unexpected_failure;
   }
 
   /* Store the TLS reference so __chttpsvr_destroy can release it when the
@@ -2225,32 +2155,28 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl) {
 ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp) {
   if (mp && (!mp->malloc || !mp->free || !mp->calloc || !mp->realloc))
     return ccol_invalid_args;
-  ccol_retval_t rc = ccol_success;
-  pthread_mutex_lock(&g_engine_mutex);
-  if (g_engine_running) {
-    rc = ccol_not_permitted;
-  } else {
-    fio_set_mem_mgmt_procs((const struct ccol_memmgmt_procs_t *)mp);
-  }
-  pthread_mutex_unlock(&g_engine_mutex);
-  return rc;
+  if (_cfio_engine_running()) return ccol_not_permitted;
+  fio_set_mem_mgmt_procs((const struct ccol_memmgmt_procs_t *)mp);
+  return ccol_success;
 }
 
-void chttpsvr_engine_stop(void) { fio_stop(); }
+/*
+ * Now that the reactor is shared with chttpclient's async engine, forcing it
+ * down also tears down any in-flight chttpclient async work in the same
+ * process -- an inherent, correct consequence of sharing one process-wide
+ * reactor for what is meant to be process-shutdown-driven use (this
+ * function's documented contract, unchanged: async-signal-safe, non-blocking,
+ * safe to call from a SIGINT/SIGTERM handler), not a defect.
+ */
+void chttpsvr_engine_stop(void) { _cfio_engine_force_stop(); }
 
 void chttpsvr_engine_wait(void) {
-  pthread_mutex_lock(&g_engine_mutex);
-  bool should_join = g_engine_thread_started;
-  if (should_join) g_engine_thread_started = false;
-  pthread_mutex_unlock(&g_engine_mutex);
-  if (should_join) {
-    pthread_join(g_engine_thread, NULL);
-    /* fio_lib_destroy (registered via atexit in _fio_global_init) fires after
-     * all other cleanup and calls logging functions.  Clear g_fio_logger now so
-     * those calls hit the null-guard in _fio_vlog and do not access a freed
-     * handle. */
-    fio_set_logger(NULL);
-  }
+  _cfio_engine_wait_until_stopped();
+  /* fio_lib_destroy (registered via atexit as part of the shared engine's
+   * one-time global init) fires after all other cleanup and calls logging
+   * functions.  Clear g_fio_logger now so those calls hit the null-guard in
+   * _fio_vlog and do not access a freed handle. */
+  fio_set_logger(NULL);
 }
 
 ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,

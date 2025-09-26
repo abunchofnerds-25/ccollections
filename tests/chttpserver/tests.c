@@ -722,8 +722,16 @@ static void _teardown(void) {
   if (g_srv) chttpsvr_stop(g_srv);
   if (g_srv2) chttpsvr_stop(g_srv2);
 
-  /* Destroy each server: drains in-flight requests; the last destroy joins
-   * the facil.io engine thread automatically. */
+  /* Destroy each server: drains in-flight requests and releases this
+   * server's single shared-engine reference. The shared facio reactor is
+   * now stopped asynchronously (a detached reaper thread, shared with
+   * chttpclient's async engine -- see cfio_engine.h) rather than being
+   * joined inline by the last destroy, so chttpsvr_engine_wait() below is
+   * required to deterministically block until it has actually finished
+   * before this function (an atexit handler) returns -- otherwise the
+   * engine-installed logger (g_test_logger, routed via
+   * chttpsvr_set_engine_logger in _setup) would still be reachable from
+   * fio's global logger slot when the process exits. */
   if (g_bounded_srv) {
     __chttpsvr_destroy(g_bounded_srv);
     g_bounded_srv = NULL;
@@ -740,6 +748,7 @@ static void _teardown(void) {
     __chttpsvr_destroy(g_srv2);
     g_srv2 = NULL;
   }
+  chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
     g_test_logger = NULL;

@@ -154,6 +154,15 @@ static void _teardown(void) {
     __chttpsvr_destroy(g_tls_srv);
     g_tls_srv = NULL;
   }
+  /* __chttpsvr_destroy releases this server's shared-engine reference but no
+   * longer synchronously waits for the shared facio reactor (shared with
+   * chttpclient's async engine -- see cfio_engine.h) to actually stop;
+   * chttpsvr_engine_wait() blocks until it has, which is required here so
+   * the engine-installed default logger (see chttpserver.c's
+   * _install_default_engine_logger) is guaranteed reclaimed before this
+   * atexit handler returns. A no-op if TLS cert generation failed above and
+   * no server was ever started. */
+  chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
     g_test_logger = NULL;

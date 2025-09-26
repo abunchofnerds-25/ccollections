@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+#include <cfio_engine.h>
 #include <chashmap.h>
 #include <chttpclient.h>
 #include <cthreadpool.h>
@@ -1289,336 +1290,359 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
 /*
  * chttpclient's async engine (chttpclient_do_async and the pooled-sync
  * wrappers built on top of it) is driven by a small, fixed-size pool of
- * facio reactor threads, entirely independent of chttpserver.c's own engine.
+ * facio reactor threads. The raw reactor itself (fio_start/fio_stop and the
+ * one-time facio global init) is NOT owned by this module: facio's fio_data
+ * is a process-wide singleton (see fio.c) -- there can only be one
+ * fio_start() reactor running per process -- so that lifecycle is owned by
+ * the shared src/cfio_engine.c module and acquired/released via
+ * _cfio_engine_acquire()/_cfio_engine_release(), the exact same calls
+ * chttpserver.c's chttpsvr_start()/__chttpsvr_destroy() make. This is what
+ * allows chttpserver and chttpclient's async engine (Tier 2/3) to run
+ * simultaneously in the same process -- previously a hard, documented
+ * limitation (only one of the two could ever be running at a time), lifted
+ * by this shared module.
  *
- * facio's fio_data is a process-wide singleton (see fio.c) -- there can only
- * be one fio_start() reactor running per process. This module therefore owns
- * its own private copy of the lazy-start/ref-counted-stop lifecycle pattern
- * chttpserver.c already uses for its engine (g_engine_mutex / g_engine_running
- * / g_engine_thread there; g_client_engine_* here), rather than sharing state
- * with it.
- *
- * KNOWN LIMITATION (deliberate, for now): a single process must not use both
- * chttpserver's engine and chttpclient's async engine (Tier 2/3) at the same
- * time -- two independent callers each believing they own fio_data's one
- * process-wide reactor would corrupt shared facio state. This module and
- * chttpserver.c's engine are safe to link into the same binary as long as at
- * most one of them is ever actually started; combining them safely (a single
- * shared, ref-counted acquire/release both modules call into) is deferred
- * future work. chttpclient's synchronous API (Tier 1: chttpclient_do,
- * chttpclient_do_streaming, and the chttp_* convenience wrappers) never
- * touches this engine at all and has no such restriction.
- *
- * Unlike chttpserver.c's bootstrap, this one does not call
- * http_lib_constructor(): that function (and the FIO_CALL_ON_INITIALIZE
- * registration timing it exists for) is specific to facio's HTTP request/
- * response layer (http.c/http1.c), which chttpclient does not link at all
- * (see tests/chttpclient/Makefile) -- fio_lib_init() is fully self-contained
- * without it.
+ * What remains here, under g_client_async_mutex, is purely chttpclient's own
+ * bookkeeping layered on top of that shared reference: g_client_async_users
+ * (how many outstanding Tier 2/3 callers currently need the engine) and this
+ * module's own auxiliary resources that have nothing to do with chttpserver
+ * -- g_client_dns_pool (offloads fio_socket()'s synchronous DNS resolution
+ * off of caller threads) and the reactor-owned deadline sweep
+ * (connect_timeout_ms/request_timeout_ms enforcement). Exactly one
+ * _cfio_engine_acquire()/_cfio_engine_release() pair is made per
+ * g_client_async_users 0->1/1->0 transition, regardless of how many
+ * individual Tier 2/3 requests are in flight -- chttpclient is just one of
+ * (up to) two users of the shared reactor, not a re-implementation of its
+ * ref-counting.
  */
-static pthread_mutex_t g_client_engine_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_client_engine_ready_cv = PTHREAD_COND_INITIALIZER;
-/* Signalled once a reaper thread (see _client_engine_reaper_fn) finishes
- * tearing an engine instance down (g_client_engine_stopping -> false). */
-static pthread_cond_t g_client_engine_stopped_cv = PTHREAD_COND_INITIALIZER;
-static bool g_client_engine_running = false;
-/* True from the moment the last reference is released until the reaper
- * thread has fully finished tearing the engine down (joined the thread,
- * destroyed g_client_dns_pool). While true, a concurrent acquire must wait
- * rather than starting a fresh engine or touching the dying one's
- * resources -- see _client_engine_acquire's wait loop. */
-static bool g_client_engine_stopping = false;
-static bool g_client_engine_ready = false;
-static bool g_client_engine_thread_started = false;
-static pthread_t g_client_engine_thread;
-static int16_t g_client_engine_threads = 1;
-/* Number of chttpcli instances (or, more precisely, outstanding Tier 2/3
- * users) currently relying on the engine. Engine stops when this reaches 0. */
-static int g_client_engine_ref_count = 0;
 /* Offloads fio_socket()'s synchronous DNS resolution off of caller threads.
- * Lives and dies with the engine (created/destroyed alongside it, guarded by
- * the same g_client_engine_mutex) rather than being a separate lazy
- * singleton, since nothing needs it once the engine itself is not running. */
+ * Lives and dies with this module's own async-user tracking (created/
+ * destroyed alongside it, guarded by g_client_async_mutex) rather than being
+ * a separate lazy singleton, since nothing needs it once no Tier 2/3 caller
+ * is outstanding. */
 static ctpool g_client_dns_pool = NULL;
+static pthread_mutex_t g_client_async_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* Signalled once this module's own reaper thread (see
+ * _client_engine_reaper_fn) finishes tearing its resources down
+ * (g_client_async_stopping -> false). */
+static pthread_cond_t g_client_async_stopped_cv = PTHREAD_COND_INITIALIZER;
+/* True while g_client_dns_pool/the deadline sweep are up (i.e. this module
+ * currently holds its one shared-engine reference). */
+static bool g_client_async_running = false;
+/* True from the moment the last user reference is released until this
+ * module's own reaper thread has fully finished tearing its resources down
+ * (released the shared engine reference, joined the deadline sweep,
+ * destroyed g_client_dns_pool). While true, a concurrent acquire must wait
+ * rather than starting fresh or touching the dying instance's resources --
+ * see _client_engine_acquire's wait loop. */
+static bool g_client_async_stopping = false;
+/* Number of chttpcli instances (or, more precisely, outstanding Tier 2/3
+ * users) currently relying on this module's async resources. Torn down when
+ * this reaches 0. */
+static int g_client_async_users = 0;
+/* Handle of the most recently spawned reaper thread, and whether it still
+ * needs joining. Not detached -- see
+ * _client_engine_join_reaper_if_needed_locked's comment for why an explicit
+ * join, not just its stopped_cv broadcast, is required for a caller to be
+ * able to rely on this module's teardown having fully completed at the OS
+ * level (mirrors src/cfio_engine.c's identical reaper-joining pattern). */
+static pthread_t g_client_reaper_thread;
+static bool g_client_reaper_joinable = false;
 
-/* fio_lib_init / fio_lib_destroy have no fio.h declaration (only defined in
- * fio.c) -- chttpserver.c's _fio_global_init forward-declares them for the
- * same reason; mirrored here. */
-extern void fio_lib_init(void);
-extern void fio_lib_destroy(void);
 /* Forward declaration: defined below (near _client_engine_wait_for_
- * quiescence, which it also calls), but must be registered via atexit here,
- * immediately after atexit(fio_lib_destroy) -- see its own comment for why
- * this exact ordering matters. */
+ * quiescence, which it also calls), but must be registered via atexit only
+ * after this module's own first-ever successful _cfio_engine_acquire() call
+ * -- see _client_register_atexit_safety_net's own comment for why this
+ * exact ordering matters. */
 static void _client_engine_atexit_safety_net(void);
+static pthread_once_t _client_atexit_once = PTHREAD_ONCE_INIT;
+static void _client_register_atexit_safety_net(void) {
+  atexit(_client_engine_atexit_safety_net);
+}
 /* Forward declarations: the reactor-owned deadline sweep (connect_timeout_ms/
  * request_timeout_ms enforcement for Tier 2/3) is defined later, in the
  * "ASYNC DEADLINE SWEEP" section after chttp_async_ctx_t/chttp_async_chain_t
  * are declared -- the sweep needs to inspect those types. It must still be
- * started/stopped in lockstep with the engine's own reactor thread here. */
+ * started/stopped in lockstep with this module's own async-user tracking
+ * here. */
 static ccol_retval_t _client_deadline_sweep_start(void);
 static void _client_deadline_sweep_stop_and_join(void);
-static pthread_once_t _client_fio_init_once = PTHREAD_ONCE_INIT;
-static void _client_fio_global_init(void) {
-  fio_lib_init();
-  atexit(fio_lib_destroy);
-  atexit(_client_engine_atexit_safety_net);
-}
-
-/* Called by facil.io on FIO_CALL_ON_START, once the reactor has entered its
- * event loop. Signals _client_engine_acquire that the engine is ready. */
-static void _client_engine_ready_cb(void *arg) {
-  (void)arg;
-  pthread_mutex_lock(&g_client_engine_mutex);
-  g_client_engine_ready = true;
-  pthread_cond_broadcast(&g_client_engine_ready_cv);
-  pthread_mutex_unlock(&g_client_engine_mutex);
-}
-
-static void *_client_fio_thread_fn(void *arg) {
-  (void)arg;
-  fio_start(.threads = g_client_engine_threads, .workers = 1);
-  /* g_client_engine_running is cleared by _client_engine_release itself (see
-   * its comment) rather than here -- this thread must not touch
-   * g_client_engine_mutex, since _client_engine_release holds it across the
-   * pthread_join that waits for this function to return. */
-  return NULL;
-}
 
 /*
- * Runs on a freshly spawned, detached thread (never on one of the engine's
- * own reactor/worker threads -- see _client_engine_release's comment for why
- * that distinction is essential) to perform the actual blocking teardown:
- * stop the reactor, join its thread, then destroy g_client_dns_pool and
- * clear g_client_engine_stopping so a waiting acquirer can proceed.
+ * Runs on a freshly spawned thread (never inline on the calling thread --
+ * see _client_engine_release's comment for why that distinction is
+ * essential) to perform the actual teardown of this module's own
+ * resources: release this module's one shared-engine reference, wait for
+ * any resulting shared-reactor teardown to finish (a no-op if chttpserver
+ * still holds its own reference and the shared reactor stays up), then stop
+ * the deadline sweep and destroy g_client_dns_pool, and finally clear
+ * g_client_async_stopping so a waiting acquirer can proceed.
+ *
+ * Releasing the shared reference (and waiting for it) before stopping the
+ * deadline sweep, rather than after, mirrors this module's pre-unification
+ * ordering (stop the reactor, then the sweep) for the case where this
+ * release is what brings the shared engine down; when it isn't (chttpserver
+ * still has references), _cfio_engine_wait_for_quiescence() returns
+ * immediately and the sweep is stopped right away regardless -- safe either
+ * way, since by the time g_client_async_users has reached 0 there are no
+ * ctxs left registered with the sweep for it to act on (see
+ * _client_deadline_register's own comment for why a registered ctx always
+ * implies a live async-user reference is held for it).
  */
 static void *_client_engine_reaper_fn(void *arg) {
   (void)arg;
-  fio_stop();
-  pthread_join(g_client_engine_thread, NULL);
-  /* Stopped after the reactor thread, not before: the deadline sweep calls
-   * fio_force_close on expired connections, which is only meaningful while
-   * the reactor is still alive to act on it. By this point every registered
-   * ctx is guaranteed already gone anyway -- see _client_deadline_register's
-   * own comment for why a ctx being registered always implies a live engine
-   * reference is held for it, so the registry is empty once ref_count (and
-   * therefore this reaper) is reached. */
+  _cfio_engine_release();
+  _cfio_engine_wait_for_quiescence();
   _client_deadline_sweep_stop_and_join();
-  pthread_mutex_lock(&g_client_engine_mutex);
-  g_client_engine_thread_started = false;
+  pthread_mutex_lock(&g_client_async_mutex);
   ctpool_destroy(g_client_dns_pool); /* implicit drain shutdown; see
-                                       * __ctpool_destroy */
-  g_client_engine_stopping = false;
-  pthread_cond_broadcast(&g_client_engine_stopped_cv);
-  pthread_mutex_unlock(&g_client_engine_mutex);
-  /* fio_lib_destroy (registered via atexit in _client_fio_global_init) fires
-   * after all other cleanup, at process exit. Nothing further to clear here
-   * (unlike chttpserver.c, this module installs no facio logger). */
+                                      * __ctpool_destroy */
+  g_client_dns_pool = NULL;
+  g_client_async_stopping = false;
+  pthread_cond_broadcast(&g_client_async_stopped_cv);
+  pthread_mutex_unlock(&g_client_async_mutex);
   return NULL;
 }
 
 /*
- * Acquires a reference to the shared async engine, starting it (and its
- * companion DNS/connect worker pool -- see g_client_dns_pool) on the first
- * call, blocking until the reactor's event loop is confirmed running.
- * Subsequent calls just bump the ref count. Must be paired with exactly one
- * _client_engine_release() call.
+ * Joins the previous reaper thread if one is still outstanding. Must be
+ * called with g_client_async_mutex already held, and is safe to block while
+ * holding it: by the time g_client_reaper_joinable is observed true here,
+ * the reaper has already broadcast g_client_async_stopped_cv and is on its
+ * way to returning -- it never touches g_client_async_mutex again after that
+ * broadcast, so this pthread_join cannot deadlock against it, and it returns
+ * in practice almost immediately.
+ *
+ * Holding the mutex across the join also correctly serialises concurrent
+ * callers: pthread_join-ing the same target from more than one thread
+ * simultaneously is undefined behavior per POSIX, so only the first caller
+ * to observe g_client_reaper_joinable may actually join -- every other
+ * concurrent caller simply blocks on the mutex itself until that join (and
+ * the flag clear) is done.
+ *
+ * Without this, a caller relying on _client_engine_wait_for_quiescence to
+ * mean "this module's own resources are now fully gone at the OS level"
+ * could proceed (e.g. straight into process exit) microseconds before the
+ * reaper thread had actually finished its own glibc-internal thread-exit
+ * bookkeeping -- observed in practice as an intermittent valgrind "possibly
+ * lost" report for that thread's TLS/stack allocation. Mirrors
+ * src/cfio_engine.c's _cfio_engine_join_reaper_if_needed_locked exactly.
+ */
+static void _client_engine_join_reaper_if_needed_locked(void) {
+  if (g_client_reaper_joinable) {
+    pthread_join(g_client_reaper_thread, NULL);
+    g_client_reaper_joinable = false;
+  }
+}
+
+/*
+ * Acquires a reference to this module's async resources, bringing up
+ * g_client_dns_pool and the deadline sweep and acquiring this module's one
+ * shared-engine reference on the first call (blocking until the shared
+ * reactor's event loop is confirmed running -- see cfio_engine.h).
+ * Subsequent calls just bump g_client_async_users. Must be paired with
+ * exactly one _client_engine_release() call.
  */
 static ccol_retval_t _client_engine_acquire(void) {
-  pthread_mutex_lock(&g_client_engine_mutex);
+  pthread_mutex_lock(&g_client_async_mutex);
 
-  /* A previous engine instance may still be mid-teardown on the reaper
-   * thread (see _client_engine_release). Reusing g_client_dns_pool or
-   * g_client_engine_thread while that's in flight would be a use-after-free,
-   * so wait for it to fully finish before deciding whether to start fresh. */
-  while (g_client_engine_stopping) {
-    pthread_cond_wait(&g_client_engine_stopped_cv, &g_client_engine_mutex);
+  /* A previous instance may still be mid-teardown on this module's own
+   * reaper thread (see _client_engine_release). Reusing g_client_dns_pool
+   * while that's in flight would be a use-after-free, so wait for it to
+   * fully finish before deciding whether to start fresh. */
+  while (g_client_async_stopping) {
+    pthread_cond_wait(&g_client_async_stopped_cv, &g_client_async_mutex);
   }
+  _client_engine_join_reaper_if_needed_locked();
 
-  if (!g_client_engine_running) {
-    pthread_once(&_client_fio_init_once, _client_fio_global_init);
-
+  if (!g_client_async_running) {
     long raw = sysconf(_SC_NPROCESSORS_ONLN);
     if (raw < 1) raw = 1;
-    g_client_engine_threads = (raw > INT16_MAX) ? INT16_MAX : (int16_t)raw;
+    int16_t nthreads = (raw > INT16_MAX) ? INT16_MAX : (int16_t)raw;
 
     /* fio_socket() resolves DNS synchronously (see fio_tcp_socket in
      * fio.c) -- offloaded here so chttpclient_do_async's caller thread never
-     * blocks on it. Created before the reactor thread so a failure here
-     * needs no rollback of anything else. */
+     * blocks on it. Created before acquiring the shared engine reference so
+     * a failure here needs no rollback of anything else. */
     char *dns_err = NULL;
-    g_client_dns_pool = create_cthread_pool((size_t)g_client_engine_threads,
-                                            0, &dns_err);
+    g_client_dns_pool = create_cthread_pool((size_t)nthreads, 0, &dns_err);
     if (!g_client_dns_pool) {
-      pthread_mutex_unlock(&g_client_engine_mutex);
+      pthread_mutex_unlock(&g_client_async_mutex);
       return ccol_not_enough_memory;
     }
 
-    /* Started before the reactor thread: if the reactor thread then fails to
-     * start, the rollback below needs the sweep thread already running so it
-     * can be torn down uniformly via _client_deadline_sweep_stop_and_join. */
+    /* Started before acquiring the shared reactor reference: if that
+     * acquire then fails, the rollback below needs the sweep thread already
+     * running so it can be torn down uniformly via
+     * _client_deadline_sweep_stop_and_join. */
     if (_client_deadline_sweep_start() != ccol_success) {
       ctpool_destroy(g_client_dns_pool);
-      pthread_mutex_unlock(&g_client_engine_mutex);
+      g_client_dns_pool = NULL;
+      pthread_mutex_unlock(&g_client_async_mutex);
       return ccol_unexpected_failure;
     }
 
-    g_client_engine_ready = false;
-    fio_state_callback_add(FIO_CALL_ON_START, _client_engine_ready_cb, NULL);
-
-    int rc = pthread_create(&g_client_engine_thread, NULL,
-                            _client_fio_thread_fn, NULL);
-    if (rc != 0) {
-      fio_state_callback_remove(FIO_CALL_ON_START, _client_engine_ready_cb,
-                                NULL);
+    ccol_retval_t engine_rc = _cfio_engine_acquire();
+    if (engine_rc != ccol_success) {
       _client_deadline_sweep_stop_and_join();
       ctpool_destroy(g_client_dns_pool);
-      pthread_mutex_unlock(&g_client_engine_mutex);
-      return ccol_unexpected_failure;
+      g_client_dns_pool = NULL;
+      pthread_mutex_unlock(&g_client_async_mutex);
+      return engine_rc;
     }
 
-    g_client_engine_thread_started = true;
-    g_client_engine_running = true;
+    /* Registered only once, ever, per process -- and only after this
+     * module's own first successful _cfio_engine_acquire() call, which
+     * itself guarantees (via cfio_engine.c's own pthread_once) that the
+     * shared module's atexit(fio_lib_destroy) and
+     * atexit(_cfio_engine_atexit_safety_net) registrations have ALREADY
+     * happened by this point, regardless of whether chttpclient or
+     * chttpserver was the first caller into the shared engine process-wide.
+     * atexit runs handlers in reverse registration order, so registering
+     * ours strictly after those two guarantees this module's own cleanup
+     * (which gracefully releases its shared reference and tears down its
+     * own DNS pool/deadline sweep) always runs BEFORE the shared module's
+     * forced stop-everything safety net -- which matters when this process
+     * exits with genuine in-flight chttpclient async work still open: this
+     * module's atexit handler gets first refusal to wind things down on its
+     * own terms, rather than having the shared reactor rippped out from
+     * under a still-registered deadline-sweep ctx by the shared module's own
+     * safety net running first. */
+    pthread_once(&_client_atexit_once, _client_register_atexit_safety_net);
 
-    /* Block until the engine fires FIO_CALL_ON_START: the reactor is now in
-     * its event loop. Mirrors chttpsvr_start's own synchronisation. */
-    while (!g_client_engine_ready) {
-      pthread_cond_wait(&g_client_engine_ready_cv, &g_client_engine_mutex);
-    }
+    g_client_async_running = true;
   }
 
-  g_client_engine_ref_count++;
-  pthread_mutex_unlock(&g_client_engine_mutex);
+  g_client_async_users++;
+  pthread_mutex_unlock(&g_client_async_mutex);
   return ccol_success;
 }
 
 /*
- * Releases a reference acquired via _client_engine_acquire(). Once the ref
- * count returns to zero, hands the actual engine teardown off to a freshly
- * spawned, detached reaper thread rather than performing it inline.
+ * Releases a reference acquired via _client_engine_acquire(). Once
+ * g_client_async_users returns to zero, hands the actual teardown off to a
+ * freshly spawned, detached reaper thread rather than performing it inline.
  *
  * This is essential, not just a style choice: _client_engine_release() is
  * routinely called from inside a facio protocol callback (_async_on_close),
  * i.e. from a thread that facio itself owns as part of the very reactor
- * being stopped. Tearing the engine down inline would mean fio_stop()
- * followed by pthread_join(g_client_engine_thread, ...) -- but
- * g_client_engine_thread is blocked inside fio_start(), which (for
- * g_client_engine_threads > 1, the common case) itself blocks in
- * fio_defer_thread_pool_join() waiting for every one of its own worker
- * threads -- including whichever one is currently running this exact
- * on_close callback -- to finish. A worker thread can never "finish" while
- * it is still inside this call, so joining the engine thread from here would
- * deadlock permanently, and since this is called under g_client_engine_mutex,
- * that deadlock would also wedge every subsequent acquire/release forever
- * (this was caught by async_step_a.post_echoes_body hanging in testing).
- * The reaper thread is a genuinely separate thread with no membership in
- * facio's own worker pool, so it can join it without any such cycle.
+ * this module holds a reference to. Even though _cfio_engine_release() itself
+ * is safe to call from such a context (see cfio_engine.h), this module's OWN
+ * teardown work (_client_deadline_sweep_stop_and_join joins a real thread;
+ * ctpool_destroy drains and joins ctpool workers) must not block a facio
+ * callback thread either -- so all of it is pushed onto the same kind of
+ * detached reaper thread cfio_engine.c itself uses (this was caught by
+ * async_step_a.post_echoes_body hanging in testing, in the single-owner
+ * predecessor of this exact design).
  *
- * g_client_engine_running is cleared here (synchronously, before spawning
- * the reaper) so no concurrent acquire can be satisfied by the now-dying
- * engine; g_client_engine_stopping is set alongside it so a concurrent
- * acquire waits for the reaper to fully finish (join done, g_client_dns_pool
- * destroyed) rather than possibly touching either mid-teardown.
+ * g_client_async_running is cleared here (synchronously, before spawning the
+ * reaper) so no concurrent acquire can be satisfied by the now-dying
+ * instance; g_client_async_stopping is set alongside it so a concurrent
+ * acquire waits for the reaper to fully finish rather than possibly
+ * touching g_client_dns_pool mid-teardown.
  */
-/* Spawns the detached reaper thread (see _client_engine_reaper_fn's own
- * comment for why it must be detached rather than run inline). Shared by
- * _client_engine_release and _client_engine_atexit_safety_net -- both reach
- * the same "something must stop the engine now" decision, just via
- * different triggers (ref count hitting 0 vs. process exit). */
+/* Spawns the reaper thread (see _client_engine_reaper_fn's own comment).
+ * Shared by _client_engine_release and _client_engine_atexit_safety_net --
+ * both reach the same "something must tear this module's resources down
+ * now" decision, just via different triggers (ref count hitting 0 vs.
+ * process exit). */
 static void _client_engine_spawn_reaper(void) {
   pthread_t reaper;
-  pthread_attr_t attr;
-  pthread_attr_init(&attr);
-  pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-  if (pthread_create(&reaper, &attr, _client_engine_reaper_fn, NULL) != 0) {
+  if (pthread_create(&reaper, NULL, _client_engine_reaper_fn, NULL) != 0) {
     /* Could not spawn the reaper (OOM-class failure). No safer fallback
-     * exists than doing it inline; this reintroduces the deadlock risk
-     * documented on _client_engine_reaper_fn only in this already-degenerate
-     * case. */
+     * exists than doing it inline; this reintroduces the deadlock/blocking
+     * risk documented on _client_engine_release only in this already-
+     * degenerate case. Nothing to join afterward since it already ran to
+     * completion synchronously. */
     _client_engine_reaper_fn(NULL);
+    return;
   }
-  pthread_attr_destroy(&attr);
+  pthread_mutex_lock(&g_client_async_mutex);
+  g_client_reaper_thread = reaper;
+  g_client_reaper_joinable = true;
+  pthread_mutex_unlock(&g_client_async_mutex);
 }
 
 static void _client_engine_release(void) {
   bool should_reap = false;
-  pthread_mutex_lock(&g_client_engine_mutex);
-  if (g_client_engine_ref_count > 0) g_client_engine_ref_count--;
-  if (g_client_engine_ref_count == 0 && g_client_engine_running) {
-    g_client_engine_running = false;
-    g_client_engine_stopping = true;
+  pthread_mutex_lock(&g_client_async_mutex);
+  if (g_client_async_users > 0) g_client_async_users--;
+  if (g_client_async_users == 0 && g_client_async_running) {
+    g_client_async_running = false;
+    g_client_async_stopping = true;
     should_reap = true;
   }
-  pthread_mutex_unlock(&g_client_engine_mutex);
+  pthread_mutex_unlock(&g_client_async_mutex);
 
   if (should_reap) _client_engine_spawn_reaper();
 }
 
 /*
  * Blocks until any in-flight reaper thread (see _client_engine_release) has
- * fully finished tearing the engine down. A no-op if the engine is not
- * currently stopping (including if it's not running at all, or running and
- * staying up because other references remain).
+ * fully finished tearing this module's own resources down. A no-op if not
+ * currently stopping (including if not running at all, or running and
+ * staying up because other user references remain).
  *
  * _client_engine_release() deliberately does not block the calling thread
  * itself -- it is routinely called from inside a facio callback (on_close),
- * where blocking would risk the self-join deadlock documented on that
- * function. That makes engine teardown asynchronous from every caller's
- * point of view, including this module's own atexit-registered
- * fio_lib_destroy: without a way to wait for a just-triggered teardown to
- * actually finish, process exit can race a still-running reaper thread,
- * with fio_lib_destroy unmapping fio_data's backing memory while one of
- * facio's own worker threads is still reading it (a crash caught by
- * valgrind during testing, since each test tears its engine fully down
- * after a single request rather than keeping it warm the way a real
- * long-lived application would). Callers that need a guaranteed-quiescent
- * engine -- this test suite between requests, or eventually a real
- * application at shutdown -- must call this explicitly, mirroring
- * chttpserver.c's own chttpsvr_engine_wait() for the identical class of
- * problem on the server side.
+ * where blocking would be unsafe/undesirable for the reasons documented on
+ * that function. That makes teardown asynchronous from every caller's point
+ * of view, including this module's own atexit-registered safety net: without
+ * a way to wait for a just-triggered teardown to actually finish, process
+ * exit can race a still-running reaper thread (a crash caught by valgrind
+ * during testing, since each test tears its engine fully down after a
+ * single request rather than keeping it warm the way a real long-lived
+ * application would). Callers that need a guaranteed-quiescent state --
+ * this test suite between requests, or eventually a real application at
+ * shutdown -- must call this explicitly, mirroring chttpserver.c's own
+ * chttpsvr_engine_wait() for the identical class of problem on the server
+ * side.
  */
 static void _client_engine_wait_for_quiescence(void) {
-  pthread_mutex_lock(&g_client_engine_mutex);
-  while (g_client_engine_stopping) {
-    pthread_cond_wait(&g_client_engine_stopped_cv, &g_client_engine_mutex);
+  pthread_mutex_lock(&g_client_async_mutex);
+  while (g_client_async_stopping) {
+    pthread_cond_wait(&g_client_async_stopped_cv, &g_client_async_mutex);
   }
-  pthread_mutex_unlock(&g_client_engine_mutex);
+  _client_engine_join_reaper_if_needed_locked();
+  pthread_mutex_unlock(&g_client_async_mutex);
 }
 
 /*
- * Process-exit safety net: registered via atexit() immediately after
- * atexit(fio_lib_destroy) inside _client_fio_global_init, so -- atexit runs
- * handlers in reverse registration order -- this always runs *before*
- * fio_lib_destroy, exactly mirroring the ordering tests/chttpserver_tls's
- * own _teardown relies on for the identical reason.
+ * Process-exit safety net: registered (once, via _client_atexit_once) only
+ * after this module's own first successful _cfio_engine_acquire() call --
+ * see _client_engine_acquire's own comment on the pthread_once call site for
+ * why that exact ordering is what guarantees this always runs *before* the
+ * shared module's own forced-stop safety net and fio_lib_destroy, regardless
+ * of which module (chttpclient or chttpserver) happened to bring the shared
+ * engine up first in this process.
  *
  * _client_engine_wait_for_quiescence alone only protects a caller who
- * *knows* to call it once no more async work is outstanding. Nothing
- * forces that discipline: an application can exit (or, as happened
- * developing this module's own tests, a test can abort via a failed
- * assertion) while requests are still genuinely in flight -- ref count
- * still nonzero, no release ever triggered a reaper. Without this
- * function, fio_lib_destroy would then unmap fio_data's backing memory
- * while a facio worker thread from this engine is potentially still
- * running, a use-after-free/segfault.
+ * *knows* to call it once no more async work is outstanding. Nothing forces
+ * that discipline: an application can exit (or, as happened developing this
+ * module's own tests, a test can abort via a failed assertion) while
+ * requests are still genuinely in flight -- user count still nonzero, no
+ * release ever triggered a reaper. Without this function, the shared
+ * engine's own atexit safety net would force the reactor down while this
+ * module's deadline-sweep thread and DNS pool are potentially still
+ * registered against it, and neither would ever be cleanly torn down
+ * (a leak at best, a use-after-free at worst).
  *
- * If the engine is still running at process-exit time, forces the ref
- * count to 0 (there is no meaningful outstanding caller left to wait for)
- * and triggers the same stop-and-reap path _client_engine_release uses,
- * then waits for it -- covering both "we just triggered a stop" and "a
- * concurrent ordinary release already triggered one that hadn't finished
- * yet".
+ * If still running at process-exit time, forces g_client_async_users to 0
+ * (there is no meaningful outstanding caller left to wait for) and triggers
+ * the same stop-and-reap path _client_engine_release uses, then waits for
+ * it -- covering both "we just triggered a stop" and "a concurrent ordinary
+ * release already triggered one that hadn't finished yet".
  */
 static void _client_engine_atexit_safety_net(void) {
   bool should_reap = false;
-  pthread_mutex_lock(&g_client_engine_mutex);
-  if (g_client_engine_running) {
-    g_client_engine_ref_count = 0;
-    g_client_engine_running = false;
-    g_client_engine_stopping = true;
+  pthread_mutex_lock(&g_client_async_mutex);
+  if (g_client_async_running) {
+    g_client_async_users = 0;
+    g_client_async_running = false;
+    g_client_async_stopping = true;
     should_reap = true;
   }
-  pthread_mutex_unlock(&g_client_engine_mutex);
+  pthread_mutex_unlock(&g_client_async_mutex);
 
   if (should_reap) _client_engine_spawn_reaper();
   _client_engine_wait_for_quiescence();
@@ -1690,10 +1714,10 @@ typedef struct {
                             * reach the async idle pool (cli->idle_pools_async)
                             * for both taking a reusable connection and
                             * offering one back */
-  ctpool_future *future; /* the caller's own reference is separate -- see
-                          * _chttp_do_async_internal's return value; this
-                          * module only ever calls ctpool_future_fulfill on
-                          * it (the producer-side reference) */
+  ctpool_future *future;   /* the caller's own reference is separate -- see
+                            * _chttp_do_async_internal's return value; this
+                            * module only ever calls ctpool_future_fulfill on
+                            * it (the producer-side reference) */
 
   chttpcli_write_fn write_fn; /* NULL for a buffered (chttpclient_do_async)
                                * request; non-NULL for a streaming
@@ -1721,12 +1745,12 @@ typedef struct {
   size_t body_len;
   char *body_content_type; /* owned copy; NULL if none */
 
-  fio_tls_s *tls_ctx;    /* pinned once (fio_tls_dup'd from cli->tls_ctx) for
-                          * the whole chain, exactly like Tier 1's tls_ctx
-                          * local -- a redirect can hop between http and
-                          * https, so this must survive every hop regardless
-                          * of which scheme the chain started with. Released
-                          * once via fio_tls_destroy when the chain is freed. */
+  fio_tls_s *tls_ctx; /* pinned once (fio_tls_dup'd from cli->tls_ctx) for
+                       * the whole chain, exactly like Tier 1's tls_ctx
+                       * local -- a redirect can hop between http and
+                       * https, so this must survive every hop regardless
+                       * of which scheme the chain started with. Released
+                       * once via fio_tls_destroy when the chain is freed. */
   bool tls_ctx_usable;
   bool verify_host;
 
@@ -1741,15 +1765,15 @@ typedef struct {
                                       * hop loop rather than reset per hop. */
 
   mutex_t lock; /* guards fulfilled and refcount, both mutated from
-                * potentially concurrent hops' reactor callbacks (see the
-                * file-level comment: an old hop's on_close can fire
-                * concurrently with a new hop's on_data/on_ready once the
-                * redirect handoff has queued the next connection) */
+                 * potentially concurrent hops' reactor callbacks (see the
+                 * file-level comment: an old hop's on_close can fire
+                 * concurrently with a new hop's on_data/on_ready once the
+                 * redirect handoff has queued the next connection) */
   bool fulfilled;
   int refcount; /* number of currently-live per-hop ctx referencing this
-                * chain; reaches zero exactly once, when the last hop's
-                * teardown runs with no further hop having been queued to
-                * take over */
+                 * chain; reaches zero exactly once, when the last hop's
+                 * teardown runs with no further hop having been queued to
+                 * take over */
 } chttp_async_chain_t;
 
 /* Tagged (not anonymous) specifically so deadline_prev/deadline_next below
@@ -1760,44 +1784,45 @@ typedef struct chttp_async_ctx_s {
                             * on_close receive a fio_protocol_s* that is cast
                             * straight back to chttp_async_ctx_t*. */
   ccol_memmgmt_procs_t *mp;
-  struct chttpclient *cli;    /* owning client -- needed while idle
-                               * (chain == NULL then) to reach
-                               * cli->idle_pools_async, and while active to
-                               * offer this connection back to the pool on a
-                               * reusable completion */
-  chttp_async_chain_t *_Atomic chain; /* shared, whole-redirect-chain state;
-                               * not owned by ctx -- see _async_ctx_teardown.
-                               * NULL while ctx is idle-pooled. _Atomic (like
-                               * state/uuid below) so the deadline sweep can
-                               * read it without idle_lock -- see that lock's
-                               * own comment and the "ASYNC DEADLINE SWEEP"
-                               * section for why individual atomic loads are
-                               * sufficient there even though idle_lock's
-                               * stronger *compound* (state+chain together)
-                               * consistency guarantee remains necessary, and
-                               * is left completely undisturbed, for every
-                               * pre-existing idle_lock call site. */
-  int hop;                    /* 0-based hop index of THIS connection */
-  chttp_method_t cur_method;  /* method used to build THIS hop's wire; the
-                               * basis for deciding the next hop's method on
-                               * redirect, exactly like Tier 1's cur_method
-                               * loop variable */
+  struct chttpclient *cli; /* owning client -- needed while idle
+                            * (chain == NULL then) to reach
+                            * cli->idle_pools_async, and while active to
+                            * offer this connection back to the pool on a
+                            * reusable completion */
+  chttp_async_chain_t
+      *_Atomic chain;        /* shared, whole-redirect-chain state;
+                              * not owned by ctx -- see _async_ctx_teardown.
+                              * NULL while ctx is idle-pooled. _Atomic (like
+                              * state/uuid below) so the deadline sweep can
+                              * read it without idle_lock -- see that lock's
+                              * own comment and the "ASYNC DEADLINE SWEEP"
+                              * section for why individual atomic loads are
+                              * sufficient there even though idle_lock's
+                              * stronger *compound* (state+chain together)
+                              * consistency guarantee remains necessary, and
+                              * is left completely undisturbed, for every
+                              * pre-existing idle_lock call site. */
+  int hop;                   /* 0-based hop index of THIS connection */
+  chttp_method_t cur_method; /* method used to build THIS hop's wire; the
+                              * basis for deciding the next hop's method on
+                              * redirect, exactly like Tier 1's cur_method
+                              * loop variable */
   _Atomic chttp_async_state_t state;
   _Atomic intptr_t uuid;
 
   char *host; /* owned copy; port is passed separately */
   uint16_t port;
-  char *origin_key; /* owned copy, "scheme://host:port" -- matches Tier 1's
-                     * chttp_conn_t.origin_key; used to place/remove this
-                     * ctx in cli->idle_pools_async */
-  bool reused;          /* true if this hop's connection came from the idle
-                         * pool rather than a fresh connect, for THIS
-                         * attempt (a retry always resets this to false --
-                         * see _async_retry_hop) */
-  bool any_bytes_read;  /* true once >=1 response byte has been read for the
-                         * CURRENT attempt; gates the reused-connection
-                         * dead-connection retry, exactly like Tier 1's
-                         * identically-named any_bytes_read output param */
+  char *origin_key;    /* owned copy, "scheme://host:port" -- matches Tier 1's
+                        * chttp_conn_t.origin_key; used to place/remove this
+                        * ctx in cli->idle_pools_async */
+  bool reused;         /* true if this hop's connection came from the idle
+                        * pool rather than a fresh connect, for THIS
+                        * attempt (a retry always resets this to false --
+                        * see _async_retry_hop) */
+  bool any_bytes_read; /* true once >=1 response byte has been read for the
+                        * CURRENT attempt; gates the reused-connection
+                        * dead-connection retry, exactly like Tier 1's
+                        * identically-named any_bytes_read output param */
   struct timespec last_used; /* set when offered to the idle pool; used by
                               * _async_idle_pool_take's staleness check */
   char *wire; /* owned serialized request bytes. Plain HTTP: ownership
@@ -1820,25 +1845,25 @@ typedef struct chttp_async_ctx_s {
                        * _async_handle_redirect, non-idempotent) logic on a
                        * spurious extra on_data call; see that check's own
                        * comment for why this can happen. */
-  fio_tls_connection_s *tls;   /* NULL until the TCP connect succeeds and the
-                                * handshake begins; NULL for plain HTTP */
-  mutex_t tls_lock; /* Guards every access to tls: facio's on_data and
-                     * on_ready callbacks for the SAME connection are only
-                     * mutually exclusive with themselves (they take
-                     * different internal lock types -- FIO_PR_LOCK_TASK vs
-                     * FIO_PR_LOCK_WRITE -- see deferred_on_data/
-                     * deferred_on_ready_usr in fio.c), NOT with each other.
-                     * Both _async_on_data and _async_on_ready can call into
-                     * _async_tls_advance for the same ctx, so two reactor
-                     * threads can end up calling
-                     * fio_tls_client_handshake_step/fio_tls_connection_read/
-                     * fio_tls_connection_write on the same underlying SSL*
-                     * concurrently without this lock -- a real data race on
-                     * OpenSSL's internal BIO state (use-after-free, caught
-                     * by valgrind: BIO_free from one thread racing
-                     * BIO_copy_next_retry from another on the same freed
-                     * block). Unused (left zero-initialised) for plain HTTP
-                     * connections, which never touch tls at all. */
+  fio_tls_connection_s *tls; /* NULL until the TCP connect succeeds and the
+                              * handshake begins; NULL for plain HTTP */
+  mutex_t tls_lock;          /* Guards every access to tls: facio's on_data and
+                              * on_ready callbacks for the SAME connection are only
+                              * mutually exclusive with themselves (they take
+                              * different internal lock types -- FIO_PR_LOCK_TASK vs
+                              * FIO_PR_LOCK_WRITE -- see deferred_on_data/
+                              * deferred_on_ready_usr in fio.c), NOT with each other.
+                              * Both _async_on_data and _async_on_ready can call into
+                              * _async_tls_advance for the same ctx, so two reactor
+                              * threads can end up calling
+                              * fio_tls_client_handshake_step/fio_tls_connection_read/
+                              * fio_tls_connection_write on the same underlying SSL*
+                              * concurrently without this lock -- a real data race on
+                              * OpenSSL's internal BIO state (use-after-free, caught
+                              * by valgrind: BIO_free from one thread racing
+                              * BIO_copy_next_retry from another on the same freed
+                              * block). Unused (left zero-initialised) for plain HTTP
+                              * connections, which never touch tls at all. */
 
   mutex_t idle_lock; /* Guards the state/chain pair specifically across the
                       * idle<->active transition. A connection popped out of
@@ -1907,24 +1932,26 @@ typedef struct chttp_async_ctx_s {
                                       * fully-initialised value with no
                                       * separate synchronisation needed. See
                                       * the "ASYNC DEADLINE SWEEP" section. */
-  _Atomic bool timed_out; /* Set by the deadline sweep, lock-free, right
-                           * before it force-closes this connection -- lets
-                           * _async_on_close report ccol_timed_out and skip
-                           * the ordinary dead-connection retry (retrying
-                           * past an already-blown deadline would only
-                           * extend the overrun for no benefit). _Atomic for
-                           * the same reason state/chain/uuid are, above. */
+  _Atomic bool timed_out;   /* Set by the deadline sweep, lock-free, right
+                             * before it force-closes this connection -- lets
+                             * _async_on_close report ccol_timed_out and skip
+                             * the ordinary dead-connection retry (retrying
+                             * past an already-blown deadline would only
+                             * extend the overrun for no benefit). _Atomic for
+                             * the same reason state/chain/uuid are, above. */
   bool deadline_registered; /* True once this ctx has been linked into
                              * g_client_deadline_head at least once.
                              * Registration is idempotent and, once made,
                              * persists for ctx's whole lifetime (including
                              * every idle-pool cycle) -- see
                              * _client_deadline_register's own comment. */
-  struct chttp_async_ctx_s *deadline_prev, *deadline_next; /* Intrusive
-      * doubly-linked membership in the process-wide deadline registry,
-      * guarded by g_client_deadline_lock (a different lock than idle_lock
-      * above -- see that global's own comment for the lock-ordering
-      * contract between the two). */
+  struct chttp_async_ctx_s *deadline_prev,
+      *deadline_next; /* Intrusive
+                       * doubly-linked membership in the process-wide deadline
+                       * registry, guarded by g_client_deadline_lock (a
+                       * different lock than idle_lock above -- see that
+                       * global's own comment for the lock-ordering contract
+                       * between the two). */
 
   llhttp_t parser;
   chttp_parse_ctx_t pctx;
@@ -2018,7 +2045,8 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
     } else {
       g_client_deadline_head = ctx->deadline_next;
     }
-    if (ctx->deadline_next) ctx->deadline_next->deadline_prev = ctx->deadline_prev;
+    if (ctx->deadline_next)
+      ctx->deadline_next->deadline_prev = ctx->deadline_prev;
     ctx->deadline_prev = ctx->deadline_next = NULL;
     ctx->deadline_registered = false;
   }
@@ -2555,8 +2583,7 @@ static bool _async_idle_pool_take(struct chttpclient *cli,
       cmap_pair kp = {.ptr = (void *)origin_key,
                       .size = strlen(origin_key) + 1};
       cmap_pair *vp = NULL;
-      if (chmap_get_elem_ref(cli->idle_pools_async, &kp, &vp) ==
-              ccol_success &&
+      if (chmap_get_elem_ref(cli->idle_pools_async, &kp, &vp) == ccol_success &&
           vp) {
         cvec list = _read_cvec(vp->ptr);
         if (list && cvector_elem_count(list) > 0 &&
@@ -3012,10 +3039,11 @@ static void _async_on_data(intptr_t uuid, fio_protocol_s *pr) {
                          * identical precaution */
     mutex_unlock(ctx->tls_lock);
     if (n < 0) {
-      if (rerrno == EWOULDBLOCK || rerrno == EAGAIN) return; /* wait; read
-                                                               * interest is
-                                                               * auto-rearmed
-                                                               */
+      if (rerrno == EWOULDBLOCK || rerrno == EAGAIN)
+        return; /* wait; read
+                 * interest is
+                 * auto-rearmed
+                 */
       eof = true;
     } else {
       eof = (n == 0);
@@ -3023,8 +3051,8 @@ static void _async_on_data(intptr_t uuid, fio_protocol_s *pr) {
   } else {
     n = fio_read(uuid, buf, sizeof(buf));
     if (n == 0) return; /* nothing available right now; wait for next on_data */
-    eof = (n < 0); /* facio has already force-closed the connection itself
-                    * (fatal error or EOF) when fio_read returns -1. */
+    eof = (n < 0);      /* facio has already force-closed the connection itself
+                         * (fatal error or EOF) when fio_read returns -1. */
   }
   if (!eof) ctx->any_bytes_read = true;
 
@@ -3107,7 +3135,8 @@ static void _async_on_data(intptr_t uuid, fio_protocol_s *pr) {
   if (err == HPE_USER) {
     ctx->hop_completed = true;
     _async_fulfill(
-        ctx, ctx->pctx.error ? ccol_not_enough_memory : ccol_http_transfer_aborted,
+        ctx,
+        ctx->pctx.error ? ccol_not_enough_memory : ccol_http_transfer_aborted,
         NULL);
     fio_force_close(uuid);
     return;
@@ -3286,7 +3315,8 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
   /* Streaming (chain->write_fn set) delivers body bytes straight to the
    * caller's callback; buffered uses ctx->bb -- see _async_build_response's
    * own comment for why this must be consistent with what it later does. */
-  ctx->pctx.requested_sink_fn = chain->write_fn ? chain->write_fn : _sink_buffered;
+  ctx->pctx.requested_sink_fn =
+      chain->write_fn ? chain->write_fn : _sink_buffered;
   ctx->pctx.requested_sink_ctx = chain->write_fn ? chain->write_ctx : &ctx->bb;
   ctx->pctx.headers = old_ctx->pctx.headers; /* empty -- nothing was ever
                                               * parsed into it, since retry
@@ -3434,14 +3464,15 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
   /* Streaming (chain->write_fn set) delivers body bytes straight to the
    * caller's callback; buffered uses ctx->bb -- see _async_build_response's
    * own comment for why this must be consistent with what it later does. */
-  ctx->pctx.requested_sink_fn = chain->write_fn ? chain->write_fn : _sink_buffered;
+  ctx->pctx.requested_sink_fn =
+      chain->write_fn ? chain->write_fn : _sink_buffered;
   ctx->pctx.requested_sink_ctx = chain->write_fn ? chain->write_ctx : &ctx->bb;
   ctx->bb.mp = chain->mp;
 
   char *herr = NULL;
-  ctx->pctx.headers = chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
-                                        ccol_string, ccol_string, chain->mp,
-                                        NULL, &herr);
+  ctx->pctx.headers =
+      chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
+                        ccol_string, chain->mp, NULL, &herr);
   if (!ctx->pctx.headers) {
     _url_free(chain->mp, &url);
     _async_submit_hop_fail(ctx, ccol_not_enough_memory);
@@ -3456,8 +3487,8 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
   hop_req.body.len = body_len;
   hop_req.body.content_type = body_content_type;
 
-  prv = _serialize_request(chain->mp, &hop_req, &url, &ctx->wire,
-                           &ctx->wire_len);
+  prv =
+      _serialize_request(chain->mp, &hop_req, &url, &ctx->wire, &ctx->wire_len);
   if (prv != ccol_success) {
     _url_free(chain->mp, &url);
     _async_submit_hop_fail(ctx, prv);
@@ -3631,7 +3662,8 @@ static void _async_handle_redirect(chttp_async_ctx_t *ctx, intptr_t uuid,
   base.port = ctx->port;
 
   char *next_url = _resolve_redirect_url(chain->mp, &base, ctx->pctx.location);
-  bool preserve = (ctx->pctx.status_code == 307 || ctx->pctx.status_code == 308);
+  bool preserve =
+      (ctx->pctx.status_code == 307 || ctx->pctx.status_code == 308);
   chttp_method_t next_method = ctx->cur_method;
   const void *next_body_data = chain->body_data;
   size_t next_body_len = chain->body_len;
@@ -3689,8 +3721,8 @@ static void _async_handle_redirect(chttp_async_ctx_t *ctx, intptr_t uuid,
  * ever queued.
  */
 static ccol_retval_t _chttp_async_preflight_check(chttpcli cli,
-                                                   const chttp_request_t *req,
-                                                   chttp_url_t *url_out) {
+                                                  const chttp_request_t *req,
+                                                  chttp_url_t *url_out) {
   if (!cli || !req) return ccol_invalid_args;
 
   ccol_retval_t prv = _parse_chttp_url(cli->m_procs, req->url, url_out);
@@ -3793,8 +3825,8 @@ static ctpool_future *_chttp_do_async_internal(chttpcli cli,
     return f;
   }
 
-  _async_submit_hop(chain, req->url, req->method, req->body.data,
-                    req->body.len, req->body.content_type, 0);
+  _async_submit_hop(chain, req->url, req->method, req->body.data, req->body.len,
+                    req->body.content_type, 0);
   return f;
 }
 
@@ -3805,16 +3837,16 @@ static ctpool_future *_chttp_do_async_internal(chttpcli cli,
  * but these five functions exist purely for test instrumentation). */
 #ifdef RUNNING_UNIT_TESTS
 int _chttpclient_engine_ref_count_for_tests(void) {
-  pthread_mutex_lock(&g_client_engine_mutex);
-  int n = g_client_engine_ref_count;
-  pthread_mutex_unlock(&g_client_engine_mutex);
+  pthread_mutex_lock(&g_client_async_mutex);
+  int n = g_client_async_users;
+  pthread_mutex_unlock(&g_client_async_mutex);
   return n;
 }
 
 bool _chttpclient_engine_running_for_tests(void) {
-  pthread_mutex_lock(&g_client_engine_mutex);
-  bool running = g_client_engine_running;
-  pthread_mutex_unlock(&g_client_engine_mutex);
+  pthread_mutex_lock(&g_client_async_mutex);
+  bool running = g_client_async_running;
+  pthread_mutex_unlock(&g_client_async_mutex);
   return running;
 }
 
@@ -3822,9 +3854,7 @@ ccol_retval_t _chttpclient_engine_acquire_for_tests(void) {
   return _client_engine_acquire();
 }
 
-void _chttpclient_engine_release_for_tests(void) {
-  _client_engine_release();
-}
+void _chttpclient_engine_release_for_tests(void) { _client_engine_release(); }
 
 void _chttpclient_engine_wait_for_quiescence_for_tests(void) {
   _client_engine_wait_for_quiescence();
@@ -3908,7 +3938,8 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
   if (prv != ccol_success) return prv;
   _url_free(cli->m_procs, &url);
 
-  ctpool_future *f = chttpclient_do_async_streaming(cli, req, write_fn, write_ctx);
+  ctpool_future *f =
+      chttpclient_do_async_streaming(cli, req, write_fn, write_ctx);
   if (!f) return ccol_unexpected_failure;
 
   chttpcli_async_result_t *result = chttpclient_async_result_get(f);

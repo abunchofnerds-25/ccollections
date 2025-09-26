@@ -6243,11 +6243,14 @@ DESCRIPTION
        anywhere in the process and stops automatically once no request is
        in flight and no connection remains in any chttpcli's async idle
        pool.  It is entirely separate from chttpclient_do's synchronous
-       connection handling and from chttpserver's own engine -- a process
-       may freely use chttpclient_do and chttpclient_do_async together, but
-       must not run chttpserver in the same process as
-       chttpclient_do_async/_streaming (both would independently believe
-       they own the one process-wide facio reactor).
+       connection handling.  It shares its underlying reactor with
+       chttpserver's own engine (both acquire/release references to the
+       same lazily-started, process-wide facio reactor), so a process may
+       freely run chttpserver and chttpclient_do_async/_streaming at the
+       same time.  One consequence of that sharing: chttpsvr_engine_stop()
+       tears down the shared reactor for both modules at once, aborting
+       any in-flight chttpclient async work along with every chttpsvr
+       listener.
 
        Unlike chttpclient_do, req need not remain valid after this call
        returns -- everything needed is copied or serialised internally
@@ -6737,11 +6740,19 @@ SYNOPSIS
        void __chttpsvr_destroy(chttpsvr srv);
 
 DESCRIPTION
-       Drains all in-flight requests for this server (up to 30 seconds), then
-       frees all routers, routes, middleware nodes, the server's owned ctpool,
-       and the server struct itself.  If this is the last active server, also
-       stops the shared facil.io engine and joins the engine thread before
-       freeing.
+       Releases this server's reference to the shared facil.io engine (shared
+       with chttpclient's async engine), then drains all in-flight requests
+       for this server (up to 30 seconds), then frees all routers, routes,
+       middleware nodes, the server's owned ctpool, and the server struct
+       itself.
+
+       If this was the last reference to the shared engine (from either this
+       server or any other chttpsvr instance, or from chttpclient's async
+       engine), the engine's actual teardown happens asynchronously on a
+       separate thread and is NOT guaranteed complete by the time this
+       function returns.  Call chttpsvr_engine_wait() afterward for a
+       synchronous guarantee (e.g. before reusing the port this server was
+       listening on, or before process exit).
 
        Also calls clog_close on the server's own logger (the internal
        stderr/FATAL-only logger, or the logger derived from the cl passed to
@@ -6849,6 +6860,15 @@ DESCRIPTION
        begin draining in-flight requests.  Returns immediately; use
        chttpsvr_engine_wait() to block until the drain completes.
 
+       Forces the engine down even if other references are still
+       outstanding (from other chttpsvr instances, or from chttpclient's
+       async engine, in the same process) -- the engine is shared, so this
+       also aborts any in-flight chttpclient async work
+       (chttpclient_do_async/_streaming, chttpclient_do_pooled/_streaming)
+       along with every chttpsvr listener.  This is an inherent consequence
+       of sharing one process-wide reactor for what is meant to be
+       process-shutdown-driven use, not a defect.
+
        Non-blocking and async-signal-safe: it is safe to call this function
        directly from a POSIX signal handler (e.g. SIGINT, SIGTERM).
 
@@ -6871,13 +6891,25 @@ SYNOPSIS
        void chttpsvr_engine_wait(void);
 
 DESCRIPTION
-       Blocks the calling thread until the shared facil.io engine background
-       thread exits.  The engine stops automatically when the last server is
-       destroyed (__chttpsvr_destroy); this function is an escape hatch for
-       programs that need to synchronise with that shutdown explicitly.
+       Blocks the calling thread until the shared facil.io engine has fully
+       stopped -- whether a stop was already triggered before this call, is
+       triggered concurrently, or is not triggered until sometime after this
+       call (this blocks indefinitely if nothing ever stops the engine, e.g.
+       an external SIGTERM handler calling chttpsvr_engine_stop() at some
+       later, unknown time).
 
-       Exactly one caller performs the pthread join; subsequent calls are
-       no-ops.
+       The engine is shared with chttpclient's async engine
+       (chttpclient_do_async/_streaming); dropping the last reference from
+       either module (e.g. destroying the last chttpsvr via
+       __chttpsvr_destroy, or the last chttpclient async request completing)
+       triggers an asynchronous teardown that does not itself block the
+       caller that triggered it -- this function is the explicit escape
+       hatch for programs that need to synchronise with that shutdown, or
+       with an externally signalled chttpsvr_engine_stop() call.
+
+       Safe to call concurrently from multiple threads; each blocks until
+       the engine is confirmed fully stopped, regardless of which caller's
+       release or chttpsvr_engine_stop() call was the one that triggered it.
 
        After this function returns, the engine logger is cleared so that any
        remaining facil.io atexit callbacks do not access a freed clog handle.
@@ -6902,21 +6934,20 @@ DESCRIPTION
        Starts the server on the port and host specified in cfg.  cfg may be
        NULL, in which case the defaults from CHTTPSVR_CONFIG_DEFAULT are used.
 
-       If the shared facil.io engine is not yet running it is started
-       implicitly on this call.  In this case the listener socket is bound
-       and registered BEFORE the engine thread is spawned, so that the port
-       is accepting connections by the time the reactor enters its event loop.
-       chttpsvr_start blocks until the engine has signalled readiness (the
-       FIO_CALL_ON_START callbacks have fired and the reactor is running).
-       The function does NOT return until the server is fully ready to accept
-       connections.
+       If the shared facil.io engine is not yet running -- including if
+       chttpclient's async engine (chttpclient_do_async/_streaming) already
+       started it in this process -- it is started implicitly on this call
+       and this call blocks until it is confirmed running (the
+       FIO_CALL_ON_START callbacks have fired and the reactor is in its
+       event loop) before proceeding.  Either way, the listener socket is
+       then bound synchronously via http_listen and the function returns as
+       soon as the socket is in LISTEN state.  The function does NOT return
+       until the server is fully ready to accept connections.
 
-       For subsequent chttpsvr_start calls (engine already running), the
-       listener socket is bound synchronously on the calling thread via
-       http_listen and the function returns as soon as the socket is in
-       LISTEN state.  No additional wait is needed in either case.
-
-       The engine is kept running until the last server is destroyed.
+       The engine is shared with chttpclient's async engine; it stays
+       running as long as any reference from either module is outstanding,
+       and its teardown once the last reference is released is asynchronous
+       -- see chttpsvr_engine_wait and __chttpsvr_destroy.
 
        Multiple chttpsvr handles may be started on different ports
        simultaneously, all sharing the same engine.

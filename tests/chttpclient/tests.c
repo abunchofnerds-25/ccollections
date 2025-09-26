@@ -80,17 +80,16 @@ static void srv_respond(int fd, int status, const char *status_text,
                         const char *content_type, const char *extra_hdrs,
                         const char *body, size_t body_len, bool keep_alive) {
   char header[2048];
-  int hlen =
-      snprintf(header, sizeof(header),
-               "HTTP/1.1 %d %s\r\n"
-               "Content-Type: %s\r\n"
-               "Content-Length: %zu\r\n"
-               "%s"
-               "%s"
-               "\r\n",
-               status, status_text, content_type ? content_type : "text/plain",
-               body_len, keep_alive ? "" : "Connection: close\r\n",
-               extra_hdrs ? extra_hdrs : "");
+  int hlen = snprintf(
+      header, sizeof(header),
+      "HTTP/1.1 %d %s\r\n"
+      "Content-Type: %s\r\n"
+      "Content-Length: %zu\r\n"
+      "%s"
+      "%s"
+      "\r\n",
+      status, status_text, content_type ? content_type : "text/plain", body_len,
+      keep_alive ? "" : "Connection: close\r\n", extra_hdrs ? extra_hdrs : "");
   if (hlen > 0) {
     size_t to_send =
         ((size_t)hlen < sizeof(header)) ? (size_t)hlen : sizeof(header) - 1;
@@ -216,8 +215,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   }
 
   if (strcmp(method, "DELETE") == 0 && strcmp(path, "/delete") == 0) {
-    srv_respond(conn_fd, 204, "No Content", "text/plain", NULL, NULL, 0,
-                false);
+    srv_respond(conn_fd, 204, "No Content", "text/plain", NULL, NULL, 0, false);
     return true;
   }
 
@@ -245,8 +243,8 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
                   false);
     } else {
       const char *b = "bad code";
-      srv_respond(conn_fd, 400, "Bad Request", "text/plain", NULL, b,
-                  strlen(b), false);
+      srv_respond(conn_fd, 400, "Bad Request", "text/plain", NULL, b, strlen(b),
+                  false);
     }
     return true;
   }
@@ -307,8 +305,8 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
     int count = srv_count_header(raw, "content-type");
     char body_buf[8];
     int blen = snprintf(body_buf, sizeof(body_buf), "%d", count);
-    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, body_buf,
-                (size_t)blen, false);
+    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, body_buf, (size_t)blen,
+                false);
     return true;
   }
 
@@ -328,7 +326,8 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
     return false;
   }
 
-  if (strcmp(method, "GET") == 0 && strcmp(path, "/keepalive-then-close") == 0) {
+  if (strcmp(method, "GET") == 0 &&
+      strcmp(path, "/keepalive-then-close") == 0) {
     /* Responds as keep-alive-eligible (no Connection: close) but the server
      * closes its end immediately after -- exercises the client's
      * dead-idle-connection detection (liveness probe on reuse). */
@@ -344,16 +343,14 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * method and body preserved). */
     char b[64];
     int blen = snprintf(b, sizeof(b), "%s:%zu", method, body_len);
-    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, b, (size_t)blen,
-                false);
+    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, b, (size_t)blen, false);
     return true;
   }
 
   if (strcmp(path, "/redirect-301-to-echo") == 0) {
     char loc_hdr[128];
     snprintf(loc_hdr, sizeof(loc_hdr),
-             "Location: http://127.0.0.1:%d/echo-method-body\r\n",
-             g_srv.port);
+             "Location: http://127.0.0.1:%d/echo-method-body\r\n", g_srv.port);
     srv_respond(conn_fd, 301, "Moved Permanently", "text/plain", loc_hdr, NULL,
                 0, false);
     return true;
@@ -362,26 +359,24 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   if (strcmp(path, "/redirect-307-to-echo") == 0) {
     char loc_hdr[128];
     snprintf(loc_hdr, sizeof(loc_hdr),
-             "Location: http://127.0.0.1:%d/echo-method-body\r\n",
-             g_srv.port);
-    srv_respond(conn_fd, 307, "Temporary Redirect", "text/plain", loc_hdr,
-                NULL, 0, false);
+             "Location: http://127.0.0.1:%d/echo-method-body\r\n", g_srv.port);
+    srv_respond(conn_fd, 307, "Temporary Redirect", "text/plain", loc_hdr, NULL,
+                0, false);
     return true;
   }
 
   if (strcmp(path, "/redirect-relative") == 0) {
     /* Root-relative Location (no scheme/host) -- exercises
      * _resolve_redirect_url's root-relative branch. */
-    srv_respond(conn_fd, 302, "Found", "text/plain", "Location: /get\r\n",
-                NULL, 0, false);
+    srv_respond(conn_fd, 302, "Found", "text/plain", "Location: /get\r\n", NULL,
+                0, false);
     return true;
   }
 
   if (strcmp(path, "/redirect-chain-1") == 0) {
     char loc_hdr[128];
     snprintf(loc_hdr, sizeof(loc_hdr),
-             "Location: http://127.0.0.1:%d/redirect-chain-2\r\n",
-             g_srv.port);
+             "Location: http://127.0.0.1:%d/redirect-chain-2\r\n", g_srv.port);
     srv_respond(conn_fd, 302, "Found", "text/plain", loc_hdr, NULL, 0, false);
     return true;
   }
@@ -400,8 +395,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * deliver the last 302 response as-is rather than looping forever. */
     char loc_hdr[128];
     snprintf(loc_hdr, sizeof(loc_hdr),
-             "Location: http://127.0.0.1:%d/redirect-infinite\r\n",
-             g_srv.port);
+             "Location: http://127.0.0.1:%d/redirect-infinite\r\n", g_srv.port);
     srv_respond(conn_fd, 302, "Found", "text/plain", loc_hdr, NULL, 0, false);
     return true;
   }
@@ -450,7 +444,8 @@ static void *srv_conn_thread(void *arg) {
       }
     }
 
-    bool close_after = srv_handle_route(conn_fd, method, path, buf, body, body_len);
+    bool close_after =
+        srv_handle_route(conn_fd, method, path, buf, body, body_len);
     if (close_after) break;
   }
   free(buf);
@@ -2546,12 +2541,12 @@ TEST(http, delete_body_not_transmitted) {
 
 /*
  * White-box tests for chttpclient's lazy, ref-counted, process-wide async
- * engine (chttpclient.c's g_client_engine_* -- the facio reactor pool that
- * will back chttpclient_do_async/pooled-sync once those land). The engine
- * has no public API of its own yet; these helpers are compiled only under
- * RUNNING_UNIT_TESTS (see the TEMPORARY SCAFFOLDING NOTE in chttpclient.c),
- * matching the same white-box pattern tests/cvector uses for
- * cvector_get_capacity.
+ * engine (chttpclient.c's g_client_async_* -- this module's own DNS/connect
+ * pool + deadline sweep, layered on top of the shared facio reactor
+ * reference it acquires from src/cfio_engine.c, which backs
+ * chttpclient_do_async/pooled-sync). These helpers are compiled only under
+ * RUNNING_UNIT_TESTS, matching the same white-box pattern tests/cvector uses
+ * for cvector_get_capacity.
  *
  * These tests deliberately run the engine through full start/stop cycles
  * (not just a single acquire/release pair) to prove the lazy-restart path
@@ -2561,17 +2556,17 @@ extern int _chttpclient_engine_ref_count_for_tests(void);
 extern bool _chttpclient_engine_running_for_tests(void);
 extern ccol_retval_t _chttpclient_engine_acquire_for_tests(void);
 extern void _chttpclient_engine_release_for_tests(void);
-/* _client_engine_release() hands the actual teardown (stop + join the
- * reactor thread + destroy the DNS pool) off to a detached reaper thread
- * rather than blocking the caller -- necessary since release is routinely
- * called from inside a facio callback (on_close), where blocking would risk
- * a self-join deadlock (see chttpclient.c). That makes g_client_engine_running
- * go false immediately but the actual teardown asynchronous; every test
- * below that triggers a stop calls this afterward so the engine is
- * guaranteed fully quiescent before the test returns -- otherwise a reaper
- * thread could still be running when the process exits, racing
- * fio_lib_destroy's atexit-time teardown of fio_data itself (a crash caught
- * by valgrind during development of this suite). */
+/* _client_engine_release() hands the actual teardown (releasing the shared
+ * cfio_engine reference, stopping the deadline sweep, destroying the DNS
+ * pool) off to a detached reaper thread rather than blocking the caller --
+ * necessary since release is routinely called from inside a facio callback
+ * (on_close), where blocking would be unsafe (see chttpclient.c). That makes
+ * g_client_async_running go false immediately but the actual teardown
+ * asynchronous; every test below that triggers a stop calls this afterward
+ * so the engine is guaranteed fully quiescent before the test returns --
+ * otherwise a reaper thread could still be running when the process exits,
+ * racing fio_lib_destroy's atexit-time teardown of fio_data itself (a crash
+ * caught by valgrind during development of this suite). */
 extern void _chttpclient_engine_wait_for_quiescence_for_tests(void);
 
 TEST(async_engine, starts_on_first_acquire_and_stops_at_zero_refcount) {
@@ -2647,9 +2642,9 @@ TEST(async_engine, concurrent_acquire_release_no_corruption) {
   engine_thread_arg_t arg = {.acquired_ok = &acquired_ok};
 
   for (int i = 0; i < N; i++) {
-    REQUIRE_EQ(pthread_create(&threads[i], NULL, engine_acquire_release_thread,
-                              &arg),
-               0);
+    REQUIRE_EQ(
+        pthread_create(&threads[i], NULL, engine_acquire_release_thread, &arg),
+        0);
   }
   for (int i = 0; i < N; i++) {
     pthread_join(threads[i], NULL);
@@ -2888,8 +2883,8 @@ TEST(async_step_a, https_handshake_fails_against_plain_http_server) {
   REQUIRE_NE((void *)raw, NULL);
   ccol_retval_t rv = raw->rv;
   REQUIRE_TRUE(rv == ccol_http_tls_handshake_failed ||
-              rv == ccol_http_tls_cert_verification_failed ||
-              rv == ccol_http_transfer_aborted);
+               rv == ccol_http_tls_cert_verification_failed ||
+               rv == ccol_http_transfer_aborted);
   REQUIRE_EQ((void *)raw->resp, NULL);
 
   chttpclient_async_result_free(raw);
@@ -2953,9 +2948,9 @@ TEST(async_step_a, concurrent_requests_all_succeed) {
     make_url(args[i].url, sizeof(args[i].url), "/get");
     args[i].expected_status = 200;
     args[i].ok = false;
-    REQUIRE_EQ(pthread_create(&threads[i], NULL, async_concurrent_thread,
-                              &args[i]),
-               0);
+    REQUIRE_EQ(
+        pthread_create(&threads[i], NULL, async_concurrent_thread, &args[i]),
+        0);
   }
   for (int i = 0; i < N; i++) pthread_join(threads[i], NULL);
   for (int i = 0; i < N; i++) REQUIRE_TRUE(args[i].ok);
@@ -3317,7 +3312,8 @@ TEST(async_idle_pool, concurrent_requests_exceeding_idle_cap_no_crash) {
 
 TEST(async_deadline, request_timeout_fires_against_slow_endpoint) {
   char url[160];
-  make_url(url, sizeof(url), "/slow"); /* server sleeps 100ms before responding */
+  make_url(url, sizeof(url),
+           "/slow"); /* server sleeps 100ms before responding */
 
   chttpcli_construct(cli);
   /* Comfortably shorter than /slow's 100ms sleep, comfortably longer than a
@@ -3412,7 +3408,8 @@ static ctpool_future *async_get_streaming(chttpcli cli, const char *url,
                                           void *write_ctx) {
   chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
   if (!req) return NULL;
-  ctpool_future *f = chttpclient_do_async_streaming(cli, req, write_fn, write_ctx);
+  ctpool_future *f =
+      chttpclient_do_async_streaming(cli, req, write_fn, write_ctx);
   chttp_request_free(req);
   return f;
 }
@@ -3502,8 +3499,8 @@ TEST(async_streaming, null_write_fn_returns_null) {
   chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
 
-  REQUIRE_EQ(
-      (void *)chttpclient_do_async_streaming(cli, req, NULL, NULL), NULL);
+  REQUIRE_EQ((void *)chttpclient_do_async_streaming(cli, req, NULL, NULL),
+             NULL);
 
   chttp_request_free(req);
   chttpclient_destroy(cli);
@@ -3589,7 +3586,8 @@ TEST(pooled, bad_url_returns_specific_error_not_generic) {
    * still surface as the exact same specific code chttpclient_do returns
    * for the identical URL -- see _chttp_async_preflight_check. */
   chttpcli_construct(cli);
-  chttp_request_t *req = chttp_request_new(CHTTP_GET, "http:///get", NULL, NULL);
+  chttp_request_t *req =
+      chttp_request_new(CHTTP_GET, "http:///get", NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
 
   chttpcli_response *resp = NULL;
@@ -3651,9 +3649,9 @@ TEST(pooled, concurrent_callers_all_succeed) {
     args[i].cli = cli;
     snprintf(args[i].url, sizeof(args[i].url), "%s", url);
     args[i].ok = false;
-    REQUIRE_EQ(pthread_create(&threads[i], NULL, pooled_concurrent_thread,
-                              &args[i]),
-               0);
+    REQUIRE_EQ(
+        pthread_create(&threads[i], NULL, pooled_concurrent_thread, &args[i]),
+        0);
   }
   for (int i = 0; i < N; i++) pthread_join(threads[i], NULL);
   for (int i = 0; i < N; i++) REQUIRE_TRUE(args[i].ok);
@@ -3673,8 +3671,8 @@ TEST(pooled_streaming, basic_get_delivers_body_via_callback) {
   stream_sink_t sink;
   memset(&sink, 0, sizeof(sink));
   int status = 0;
-  ccol_retval_t rv = chttpclient_do_pooled_streaming(cli, req, stream_sink_write,
-                                                      &sink, &status);
+  ccol_retval_t rv = chttpclient_do_pooled_streaming(
+      cli, req, stream_sink_write, &sink, &status);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ(status, 200);
   REQUIRE_GT(sink.len, (size_t)0);
@@ -3707,8 +3705,8 @@ TEST(pooled_streaming, write_fn_returning_less_aborts_transfer) {
   chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
 
-  ccol_retval_t rv = chttpclient_do_pooled_streaming(cli, req, abort_write_fn,
-                                                      NULL, NULL);
+  ccol_retval_t rv =
+      chttpclient_do_pooled_streaming(cli, req, abort_write_fn, NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_transfer_aborted);
 
   chttp_request_free(req);
@@ -3718,13 +3716,14 @@ TEST(pooled_streaming, write_fn_returning_less_aborts_transfer) {
 
 TEST(pooled_streaming, bad_url_returns_specific_error_not_generic) {
   chttpcli_construct(cli);
-  chttp_request_t *req = chttp_request_new(CHTTP_GET, "http:///get", NULL, NULL);
+  chttp_request_t *req =
+      chttp_request_new(CHTTP_GET, "http:///get", NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
 
   stream_sink_t sink;
   memset(&sink, 0, sizeof(sink));
-  ccol_retval_t rv = chttpclient_do_pooled_streaming(cli, req, stream_sink_write,
-                                                      &sink, NULL);
+  ccol_retval_t rv =
+      chttpclient_do_pooled_streaming(cli, req, stream_sink_write, &sink, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 
   chttp_request_free(req);

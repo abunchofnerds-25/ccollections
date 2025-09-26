@@ -240,8 +240,8 @@ static void *_tls_accept_loop(void *arg) {
       continue;
     }
     pthread_t tid;
-    if (pthread_create(&tid, NULL, _tls_conn_thread,
-                       (void *)(intptr_t)fd) != 0) {
+    if (pthread_create(&tid, NULL, _tls_conn_thread, (void *)(intptr_t)fd) !=
+        0) {
       close(fd);
       continue;
     }
@@ -356,7 +356,8 @@ static void make_tls_url(char *buf, size_t buf_size, const char *path) {
 
 TEST(async_tls, handshake_succeeds_when_ca_is_trusted) {
   if (!g_cert_ready) {
-    fprintf(stderr, "SKIP: no self-signed cert available in this environment\n");
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
     return;
   }
 
@@ -395,7 +396,8 @@ TEST(async_tls, large_body_response_over_tls) {
   /* Exercises multiple on_data invocations against a single TLS response
    * (fio_tls_connection_read called repeatedly), not just a one-shot read. */
   if (!g_cert_ready) {
-    fprintf(stderr, "SKIP: no self-signed cert available in this environment\n");
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
     return;
   }
 
@@ -433,7 +435,8 @@ TEST(async_tls, untrusted_cert_fails_verification) {
    * cert. A real, negative proof that certificate verification is actually
    * being enforced, not silently skipped. */
   if (!g_cert_ready) {
-    fprintf(stderr, "SKIP: no self-signed cert available in this environment\n");
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
     return;
   }
 
@@ -464,7 +467,8 @@ TEST(async_tls, concurrent_https_requests_all_succeed) {
    * proves the reactor multiplexes several simultaneous TLS handshakes and
    * encrypted data streams correctly, not just one at a time. */
   if (!g_cert_ready) {
-    fprintf(stderr, "SKIP: no self-signed cert available in this environment\n");
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
     return;
   }
 

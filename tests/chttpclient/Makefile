@@ -6,22 +6,36 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 # Our source files (compiled with strict flags + -Werror). clogger.c is a
 # transitive dependency: facio's fio.c resolves its FIO_LOG_* macros there.
 # cthreadpool.c is a transitive dependency of the async engine's DNS/connect
-# worker pool (g_client_dns_pool).
+# worker pool (g_client_dns_pool). cfio_engine.c is the shared facio reactor
+# lifecycle module chttpclient's async engine (Tier 2/3) now acquires/
+# releases references to, instead of owning its own private reactor --
+# see cfio_engine.h.
 SRC_FILE_PREFIX = chttpclient
 OUR_SRC_FILES = tests.c \
 	../../src/$(SRC_FILE_PREFIX).c \
+	../../src/cfio_engine.c \
 	../../src/clogger.c \
 	../../src/chashmap.c \
 	../../src/cthreadpool.c \
 	../../src/cvector.c \
 	../../src/common.c
 
-# Minimal facio subset needed for client-mode TLS: fio.c (core types/uuid
-# table symbols referenced by fio_tls_openssl.c) + fio_tls_openssl.c itself.
-# The fiobj_*/http*/http_internal.c files are exclusively for chttpserver's
-# own HTTP/1.1 server engine and are NOT needed here.
+# cfio_engine.c's one-time global init unconditionally calls
+# http_lib_constructor() (see cfio_engine.h for why), so this suite now
+# transitively needs the same fiobj_*/http*/http_internal.c vendor files
+# chttpserver's own suites need, not just fio.c + fio_tls_openssl.c.
 FACIO_DIR = ../../third_party/facio
-FACIO_SRC_FILES = $(FACIO_DIR)/fio.c $(FACIO_DIR)/fio_tls_openssl.c
+FACIO_SRC_FILES = $(FACIO_DIR)/fio.c \
+	$(FACIO_DIR)/fiobject.c \
+	$(FACIO_DIR)/fiobj_str.c \
+	$(FACIO_DIR)/fiobj_hash.c \
+	$(FACIO_DIR)/fiobj_ary.c \
+	$(FACIO_DIR)/fiobj_numbers.c \
+	$(FACIO_DIR)/fiobj_data.c \
+	$(FACIO_DIR)/http.c \
+	$(FACIO_DIR)/http1.c \
+	$(FACIO_DIR)/http_internal.c \
+	$(FACIO_DIR)/fio_tls_openssl.c
 FACIO_HEADER_FILES = $(wildcard $(FACIO_DIR)/*.h)
 FACIO_OBJS = $(FACIO_SRC_FILES:$(FACIO_DIR)/%.c=third_party_obj/facio/%.o)
 

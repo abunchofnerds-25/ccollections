@@ -24,6 +24,7 @@ SOFTWARE.
 
 #pragma once
 
+#include <citerators.h>
 #include <common.h>
 #include <csort.h>
 
@@ -393,6 +394,28 @@ static inline void ___cvector_destroy(cvec *cv) {
 /* ========================================================================== */
 
 /**
+ * @brief Find the index of the first occurrence of an element
+ *
+ * Performs a linear scan and returns the zero-based index of the first element
+ * that compares equal to *elem. When cmp is NULL the comparison is done with
+ * memcmp over the element size (byte-wise equality).
+ *
+ * @param v    Vector to search (must not be NULL)
+ * @param elem Pointer to the value to search for (must not be NULL)
+ * @param cmp  Comparison function, or NULL to use memcmp
+ *
+ * @return Zero-based index of the first match, or ccol_invalid_size if not
+ * found or elem is NULL
+ *
+ * @note O(n) complexity
+ * @note Asserts if v is NULL
+ * @note Structs with padding bytes may not compare correctly when cmp is NULL
+ *
+ * @see cvec_find
+ */
+size_t cvector_find(cvec v, const void *elem, ccol_comparison_proc_t cmp);
+
+/**
  * @brief Create an iterator positioned at the first element.
  *
  * Returns a @c cmap_iterator* whose @c key_pair->ptr points to the internal
@@ -445,15 +468,17 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * cvec_destroy(my_vec);
  * @endcode
  */
-#define cvec_declare(v, type)                                    \
-  size_t *v##__ccol_key_type_var __attribute__((unused)) = NULL; \
-  type *v##__ccol_val_type_var;                                  \
-  cvec v
+#define cvec_declare(v, type)                                             \
+  size_t *v##__ccol_key_type_var                                          \
+      __attribute__((unused)); /* deliberately not initialized to NULL */ \
+  type *v##__ccol_val_type_var                                            \
+      __attribute__((unused)); /* deliberately not initialized to NULL */ \
+  cvec v                       /* deliberately not initialized to NULL */
 
 #define cvec_declare_scoped(v, type)                             \
   size_t *v##__ccol_key_type_var __attribute__((unused)) = NULL; \
-  type *v##__ccol_val_type_var;                                  \
-  cvec v _ccol_destructor(___cvector_destroy)
+  type *v##__ccol_val_type_var __attribute__((unused)) = NULL;   \
+  cvec v _ccol_destructor(___cvector_destroy) = NULL
 
 /**
  * @brief Enable type-safe macros for a vector in local scope
@@ -914,4 +939,34 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
     cvector_sort_with_comparison_proc(v, comparison_proc);            \
   } while (0)
 
-#include <citerators.h>
+/**
+ * @brief Find the first occurrence of an element by value (type-safe)
+ *
+ * Type-safe wrapper for cvector_find() that accepts a value (including
+ * rvalues and literals) and compares using memcmp (byte-wise equality).
+ * Use cvector_find() directly when a custom comparator is needed.
+ *
+ * @param v    Vector to search
+ * @param elem Element value to search for
+ *
+ * @return Zero-based index of the first match, or ccol_invalid_size if not
+ * found
+ *
+ * @note O(n) complexity
+ * @note Uses memcmp for comparison (byte-wise equality)
+ * @note Structs with padding bytes may not compare correctly
+ *
+ * @see cvector_find
+ *
+ * Example:
+ * @code
+ * cvec_construct(vec, int);
+ * cvec_push_rvalue(vec, 10);
+ * cvec_push_rvalue(vec, 20);
+ * cvec_push_rvalue(vec, 30);
+ * size_t idx = cvec_find(vec, 20);  // idx == 1
+ * size_t nf  = cvec_find(vec, 99);  // nf == ccol_invalid_size
+ * @endcode
+ */
+#define cvec_find(v, elem) \
+  cvector_find((v), &(typeof(*(v##__ccol_val_type_var))){(elem)}, NULL)

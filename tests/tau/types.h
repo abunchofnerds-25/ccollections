@@ -17,9 +17,9 @@ Copyright (c) 2021 Jason Dsouza <@jasmcaus>
 #include <tau/compilers.h>
 
 // Simple assertion checks (that don't require a message to STDOUT).
-// Condition failure raises a compilation error (negative index) --> 0*2 == 0 + (-1) == -1!
-// This macro is intended only for this file (tau/types.h)
-#define TAU_STAT_ASSERT1__(cond, line)                                                             \
+// Condition failure raises a compilation error (negative index) --> 0*2 == 0 +
+// (-1) == -1! This macro is intended only for this file (tau/types.h)
+#define TAU_STAT_ASSERT1__(cond, line) \
   typedef char static_assertion_at_line_##line[(!!(cond)) * 2 - 1]
 #define TAU_STATIC_ASSERT(cond) TAU_STAT_ASSERT1__(cond, __LINE__)
 
@@ -49,7 +49,7 @@ typedef signed __int64 tau_i64;
 #include <cstdint>
 #else
 #include <stdint.h>
-#endif // __cplusplus
+#endif  // __cplusplus
 
 typedef uint8_t tau_u8;
 typedef int8_t tau_i8;
@@ -59,7 +59,7 @@ typedef uint32_t tau_u32;
 typedef int32_t tau_i32;
 typedef uint64_t tau_u64;
 typedef int64_t tau_i64;
-#endif // Tau Basic types/
+#endif  // Tau Basic types/
 
 typedef float tau_f32;
 typedef double tau_f64;
@@ -67,7 +67,7 @@ typedef double tau_f64;
 // Bool-sy
 typedef tau_i8 tau_bool8;
 typedef tau_i16 tau_bool16;
-typedef tau_i32 tau_bool32; // Prefer this!
+typedef tau_i32 tau_bool32;  // Prefer this!
 
 // The same thing as size_t
 // tau_ull --> size_t
@@ -79,14 +79,15 @@ typedef int tau_ll;
 #else
 typedef tau_u64 tau_ull;
 typedef tau_i64 tau_ll;
-#endif // _WIN64
+#endif  // _WIN64
 #else
 typedef tau_u64 tau_ull;
 typedef tau_i64 tau_ll;
-#endif // _MSC_VER
+#endif  // _MSC_VER
 
-// (U)Intptr is only here for semantic reasons really as this library will only support 32/64 bit
-// OSes. Are there any modern OSes (not 16 bit) where tau_iptr != ptrdiff_t/tau_ll ?
+// (U)Intptr is only here for semantic reasons really as this library will only
+// support 32/64 bit OSes. Are there any modern OSes (not 16 bit) where tau_iptr
+// != ptrdiff_t/tau_ll ?
 #if defined(_WIN64)
 typedef signed __int64 tau_iptr;
 typedef unsigned __int64 tau_uptr;
@@ -119,7 +120,7 @@ typedef intptr_t tau_iptr;
 #endif
 #else
 #define TAU_NULL ((void *)0)
-#endif // __cplusplus
+#endif  // __cplusplus
 #endif
 
 // bool is a basic type in C++ and not C
@@ -133,10 +134,10 @@ typedef intptr_t tau_iptr;
 typedef tau_bool32 tau_bool;
 static const tau_bool tau_false = 0;
 static const tau_bool tau_true = 1;
-#endif // __cplusplus
-#endif // TAU_BOOL_TYPES_DEFINED
+#endif  // __cplusplus
+#endif  // TAU_BOOL_TYPES_DEFINED
 
-TAU_STATIC_ASSERT(sizeof(tau_u8) == 1); // integers
+TAU_STATIC_ASSERT(sizeof(tau_u8) == 1);  // integers
 TAU_STATIC_ASSERT(sizeof(tau_i8) == 1);
 TAU_STATIC_ASSERT(sizeof(tau_u16) == 2);
 TAU_STATIC_ASSERT(sizeof(tau_i16) == 2);
@@ -144,13 +145,14 @@ TAU_STATIC_ASSERT(sizeof(tau_u32) == 4);
 TAU_STATIC_ASSERT(sizeof(tau_i32) == 4);
 TAU_STATIC_ASSERT(sizeof(tau_u64) == 8);
 TAU_STATIC_ASSERT(sizeof(tau_i64) == 8);
-TAU_STATIC_ASSERT(sizeof(tau_f32) == 4); // floats
+TAU_STATIC_ASSERT(sizeof(tau_f32) == 4);  // floats
 TAU_STATIC_ASSERT(sizeof(tau_f64) == 8);
-TAU_STATIC_ASSERT(sizeof(tau_bool8) == 1); // bools
+TAU_STATIC_ASSERT(sizeof(tau_bool8) == 1);  // bools
 TAU_STATIC_ASSERT(sizeof(tau_bool16) == 2);
 TAU_STATIC_ASSERT(sizeof(tau_bool32) == 4);
 // pointer sizes (differs on architectures like CHERI)
 TAU_STATIC_ASSERT(sizeof(tau_iptr) == sizeof(tau_ll));  // tau_ull --> size_t
-TAU_STATIC_ASSERT(sizeof(tau_uptr) == sizeof(tau_ull)); // tau_ll  --> ptrdiff_t
+TAU_STATIC_ASSERT(sizeof(tau_uptr) ==
+                  sizeof(tau_ull));  // tau_ll  --> ptrdiff_t
 
-#endif // TAU_TYPES_H
+#endif  // TAU_TYPES_H

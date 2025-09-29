@@ -479,7 +479,7 @@ cjson cjson_clone(cjson node);
  * @endcode
  */
 #define cjson_declare_scoped(var_name) \
-  cjson var_name _ccol_destructor(___cjson_destroy)
+  cjson var_name _ccol_destructor(___cjson_destroy) = NULL
 
 /* ========================================================================== */
 /*                         DESTRUCTION                                        */

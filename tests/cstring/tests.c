@@ -1509,12 +1509,11 @@ TEST(cstrings, get_mprocs_returns_custom) {
 
 TEST(cstrings, construct_mp_scoped_macro) {
   {
-    cstr_construct_mp_scoped(
-        s, "scoped",
-        (&(ccol_memmgmt_procs_t){.malloc = malloc,
-                                  .free = free,
-                                  .calloc = calloc,
-                                  .realloc = realloc}));
+    cstr_construct_mp_scoped(s, "scoped",
+                             (&(ccol_memmgmt_procs_t){.malloc = malloc,
+                                                      .free = free,
+                                                      .calloc = calloc,
+                                                      .realloc = realloc}));
     REQUIRE_STREQ(cstring_c_str(s), "scoped");
   }
   // s is destroyed automatically when the scope above exits

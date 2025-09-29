@@ -2110,8 +2110,9 @@ static void *thr_circq_write_wait(void *arg) {
   int sentinel = 0xDEAD;
   c_message_t buf = {.data = &sentinel, .size = sizeof(int)};
   size_t idx = 0;
-  a->result = ccol_select_timed_va(&buf, &idx, 500 /* ms */,
-                                   selectable_from_circq(a->cq, ccol_select_write));
+  a->result =
+      ccol_select_timed_va(&buf, &idx, 500 /* ms */,
+                           selectable_from_circq(a->cq, ccol_select_write));
   return NULL;
 }
 
@@ -2134,7 +2135,7 @@ TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
   pthread_create(&t1, NULL, thr_circq_write_wait, &a1);
   pthread_create(&t2, NULL, thr_circq_write_wait, &a2);
 
-  usleep(30000);  /* let both threads register as write-waiters */
+  usleep(30000); /* let both threads register as write-waiters */
 
   c_message_t drain = {.data = NULL, .size = 0};
   REQUIRE_EQ(circq_recv_zc(cq, &drain), ccol_success);
@@ -2163,11 +2164,10 @@ TEST(ccol_select, fd_limited_accepts_data_within_limit) {
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
   /* limit is 2*sizeof(int); data is sizeof(int) -- within limit */
-  REQUIRE_EQ(
-      ccol_select_va(&buf, &idx,
-                     selectable_from_fd_limited(pfd[0], ccol_select_read,
-                                               sizeof(int) * 2)),
-      ccol_success);
+  REQUIRE_EQ(ccol_select_va(&buf, &idx,
+                            selectable_from_fd_limited(pfd[0], ccol_select_read,
+                                                       sizeof(int) * 2)),
+             ccol_success);
   REQUIRE_EQ(idx, (size_t)0);
   REQUIRE_NE((void *)buf.data, NULL);
   REQUIRE_EQ(buf.size, sizeof(val));
@@ -2212,16 +2212,15 @@ TEST(ccol_select, fd_limited_blocking_reads_up_to_max_bytes) {
   const size_t nbytes = 8192;
   unsigned char *src = malloc(nbytes);
   REQUIRE_NE((void *)src, NULL);
-  for (size_t i = 0; i < nbytes; ++i)
-    src[i] = (unsigned char)(i & 0xFF);
+  for (size_t i = 0; i < nbytes; ++i) src[i] = (unsigned char)(i & 0xFF);
   REQUIRE_EQ((ssize_t)nbytes, write(pfd[1], src, nbytes));
 
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  REQUIRE_EQ(
-      ccol_select_va(&buf, &idx,
-                     selectable_from_fd_limited(pfd[0], ccol_select_read, nbytes)),
-      ccol_success);
+  REQUIRE_EQ(ccol_select_va(
+                 &buf, &idx,
+                 selectable_from_fd_limited(pfd[0], ccol_select_read, nbytes)),
+             ccol_success);
   REQUIRE_EQ(idx, (size_t)0);
   REQUIRE_NE((void *)buf.data, NULL);
   REQUIRE_EQ(buf.size, nbytes);

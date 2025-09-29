@@ -24,6 +24,7 @@ SOFTWARE.
 
 #pragma once
 
+#include <citerators.h>
 #include <common.h>
 
 /**
@@ -423,16 +424,17 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @see cbmap_init
  * @see cbmap_construct
  */
-#define cbmap_declare(hm_name, key_t, val_t)                                  \
-  typeof(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) = NULL; \
-  typeof(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name /* deliberately not initialized to NULL */
+#define cbmap_declare(hm_name, key_t, val_t)                              \
+  typeof(key_t) *hm_name##__ccol_key_type_var                             \
+      __attribute__((unused)); /* deliberately not initialized to NULL */ \
+  typeof(val_t) *hm_name##__ccol_val_type_var                             \
+      __attribute__((unused)); /* deliberately not initialized to NULL */ \
+  cbmap hm_name                /* deliberately not initialized to NULL */
 
 #define cbmap_declare_scoped(hm_name, key_t, val_t)                           \
   typeof(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name _ccol_destructor(                                             \
-      ___cbmap_destroy) /* deliberately not initialized to NULL */
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL
 
 /**
  * @brief Initialize a BST map with defaults
@@ -878,5 +880,3 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
     }                                                                         \
     val;                                                                      \
   })
-
-#include <citerators.h>

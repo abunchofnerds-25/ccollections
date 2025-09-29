@@ -145,12 +145,12 @@ cmap_iterator *cmap_real_iter_next(cbmap_cmap_iterator *real_iter) {
 static cmap_iterator *cbmap_iter_next(cmap_iterator *iter);
 
 cmap_iterator *cbmap_begin_iter(cbmap cbm, char **err) {
-  if (!cbm) {
-    ccol_assert(false);
-  }
-
   if (err) {
     *err = NULL;
+  }
+
+  if (!cbm) {
+    return NULL;
   }
 
   if (!cbm->root) {

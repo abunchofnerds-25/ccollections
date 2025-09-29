@@ -1486,7 +1486,7 @@ static void *controlled_realloc(void *ptr, size_t size) {
 // Regression: oa_insert returned ccol_container_full when the probe wrapped
 // all the way around without finding a truly-empty slot, even though tombstone
 // (deleted) slots were available for reuse. The post-loop tombstone reuse path
-// is only reachable when all 64 slots are either live or tombstoned, which
+// is only reachable when all 16 slots are either live or tombstoned, which
 // requires the rehash calloc to fail (OOM). We simulate that here.
 TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
@@ -1494,7 +1494,7 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
                              .calloc = controlled_calloc,
                              .realloc = realloc};
 
-  // Use the minimum capacity (64) so that oa_delete's shrink guard
+  // Use the minimum capacity (16) so that oa_delete's shrink guard
   // (capacity > minimum_allowed_bucket_array_size) never fires and tombstones
   // accumulate without a rehash clearing them.
   char *err = NULL;
@@ -1502,19 +1502,19 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
   REQUIRE_NE((void *)hm, NULL);
 
   // Make all subsequent calloc calls fail so rehash can never enlarge the map.
-  // Inserts k0..k63 still succeed because, even though the load-factor check
-  // (count+deleted)/64 > 0.70 fires from key 45 onwards, the failed rehash
-  // leaves the original 64-slot array in place and there are still empty slots
+  // Inserts k0..k15 still succeed because, even though the load-factor check
+  // (count+deleted)/16 > 0.70 fires from key 12 onwards, the failed rehash
+  // leaves the original 16-slot array in place and there are still empty slots
   // for the probe to find.
   g_calloc_fail = true;
-  for (int i = 0; i < 64; i++) {
+  for (int i = 0; i < 16; i++) {
     int val = i * 10;
     REQUIRE_EQ(
         chmap_insert_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)},
                           &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
         ccol_success);
   }
-  REQUIRE_EQ(chmap_elem_count(hm), 64);
+  REQUIRE_EQ(chmap_elem_count(hm), 16);
 
   // Delete 10 keys — no calloc involved, and at capacity == minimum the shrink
   // check in oa_delete is suppressed, so these become tombstones in place.
@@ -1523,26 +1523,26 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
         chmap_delete_elem(hm, &(cmap_pair){.ptr = &i, .size = sizeof(i)}),
         ccol_success);
   }
-  REQUIRE_EQ(chmap_elem_count(hm), 54);
+  REQUIRE_EQ(chmap_elem_count(hm), 6);
 
-  // All 64 slots are now either live (54) or tombstoned (10). Inserting key 64
-  // triggers the load check ((54+10)/64 == 1.0 > 0.70), which tries to rehash,
+  // All 16 slots are now either live (6) or tombstoned (10). Inserting key 16
+  // triggers the load check ((6+10)/16 == 1.0 > 0.70), which tries to rehash,
   // which calloc-fails, leaving the map unchanged. The probe then visits every
   // slot without finding an empty one. The post-loop fix reuses the first
   // tombstone slot it recorded instead of returning ccol_container_full.
-  int new_key = 64, new_val = 640;
+  int new_key = 16, new_val = 160;
   REQUIRE_EQ(chmap_insert_elem(
                  hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
                  &(cmap_pair){.ptr = &new_val, .size = sizeof(new_val)}),
              ccol_success);
-  REQUIRE_EQ(chmap_elem_count(hm), 55);
+  REQUIRE_EQ(chmap_elem_count(hm), 7);
 
   int retrieved = 0;
   REQUIRE_EQ(chmap_get_elem_copy(
                  hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
                  &retrieved, sizeof(retrieved)),
              ccol_success);
-  REQUIRE_EQ(retrieved, 640);
+  REQUIRE_EQ(retrieved, 160);
 
   g_calloc_fail = false;
   chmap_destroy(hm);
@@ -1817,22 +1817,29 @@ TEST(chash_maps, get_elem_copy_partial_buffer) {
   chashmap *hm = chmap_create(1, ccol_string, ccol_other_types, NULL);
   REQUIRE_NE((void *)hm, NULL);
 
-  typedef struct { int a; int b; int c; int d; } big_val;
+  typedef struct {
+    int a;
+    int b;
+    int c;
+    int d;
+  } big_val;
   big_val v = {10, 20, 30, 40};
   const char *key = "bigkey";
 
-  REQUIRE_EQ(
-      chmap_insert_elem(hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                        &(cmap_pair){.ptr = &v, .size = sizeof(v)}),
-      ccol_success);
+  REQUIRE_EQ(chmap_insert_elem(
+                 hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
+                 &(cmap_pair){.ptr = &v, .size = sizeof(v)}),
+             ccol_success);
 
   // Buffer for only the first two fields.
-  struct { int a; int b; } partial = {0xFF, 0xFF};
-  REQUIRE_EQ(
-      chmap_get_elem_copy(hm,
-                          &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                          &partial, sizeof(partial)),
-      ccol_success);
+  struct {
+    int a;
+    int b;
+  } partial = {0xFF, 0xFF};
+  REQUIRE_EQ(chmap_get_elem_copy(
+                 hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
+                 &partial, sizeof(partial)),
+             ccol_success);
 
   REQUIRE_EQ(partial.a, 10);
   REQUIRE_EQ(partial.b, 20);
@@ -1848,9 +1855,9 @@ TEST(chash_maps, get_elem_copy_partial_buffer) {
 // inline-to-heap update the original inline value is intact.
 TEST(chash_maps, sc_value_update_inline_to_heap_oom_resilience) {
   ccol_memmgmt_procs_t mp = {.malloc = controlled_malloc,
-                              .free = free,
-                              .calloc = calloc,
-                              .realloc = realloc};
+                             .free = free,
+                             .calloc = calloc,
+                             .realloc = realloc};
   chashmap *hm = chmap_create_mp(1, ccol_string, ccol_other_types, &mp, NULL);
   REQUIRE_NE((void *)hm, NULL);
 
@@ -1858,16 +1865,16 @@ TEST(chash_maps, sc_value_update_inline_to_heap_oom_resilience) {
 
   // Insert with a 4-byte inline value.
   unsigned char small_val[4] = {0xAA, 0xBB, 0xCC, 0xDD};
-  REQUIRE_EQ(
-      chmap_insert_elem(hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                        &(cmap_pair){.ptr = small_val, .size = sizeof(small_val)}),
-      ccol_success);
+  REQUIRE_EQ(chmap_insert_elem(
+                 hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
+                 &(cmap_pair){.ptr = small_val, .size = sizeof(small_val)}),
+             ccol_success);
 
   // Confirm the inline value is readable.
   cmap_pair *vp = NULL;
   REQUIRE_EQ(
-      chmap_get_elem_ref(hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                         &vp),
+      chmap_get_elem_ref(
+          hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
   REQUIRE_EQ(vp->size, (size_t)4);
   REQUIRE_EQ(memcmp(vp->ptr, small_val, 4), 0);
@@ -1877,17 +1884,17 @@ TEST(chash_maps, sc_value_update_inline_to_heap_oom_resilience) {
   unsigned char large_val[30];
   memset(large_val, 0xAB, sizeof(large_val));
   g_malloc_fail = true;
-  REQUIRE_EQ(
-      chmap_insert_elem(hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                        &(cmap_pair){.ptr = large_val, .size = sizeof(large_val)}),
-      ccol_not_enough_memory);
+  REQUIRE_EQ(chmap_insert_elem(
+                 hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
+                 &(cmap_pair){.ptr = large_val, .size = sizeof(large_val)}),
+             ccol_not_enough_memory);
   g_malloc_fail = false;
 
   // The original 4-byte inline value must be intact.
   vp = NULL;
   REQUIRE_EQ(
-      chmap_get_elem_ref(hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                         &vp),
+      chmap_get_elem_ref(
+          hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
   REQUIRE_EQ(vp->size, (size_t)4);
   REQUIRE_EQ(memcmp(vp->ptr, small_val, 4), 0);
@@ -1955,24 +1962,21 @@ TEST(chash_maps, sc_value_update_heap_to_inline) {
 
   unsigned char large_val[30];
   memset(large_val, 0xAA, sizeof(large_val));
-  REQUIRE_EQ(
-      chmap_insert_elem(hm,
-                        &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                        &(cmap_pair){.ptr = large_val, .size = sizeof(large_val)}),
-      ccol_success);
+  REQUIRE_EQ(chmap_insert_elem(
+                 hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
+                 &(cmap_pair){.ptr = large_val, .size = sizeof(large_val)}),
+             ccol_success);
 
   unsigned char small_val[4] = {0x11, 0x22, 0x33, 0x44};
-  REQUIRE_EQ(
-      chmap_insert_elem(hm,
-                        &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                        &(cmap_pair){.ptr = small_val, .size = sizeof(small_val)}),
-      ccol_key_already_present);
+  REQUIRE_EQ(chmap_insert_elem(
+                 hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
+                 &(cmap_pair){.ptr = small_val, .size = sizeof(small_val)}),
+             ccol_key_already_present);
 
   cmap_pair *vp = NULL;
   REQUIRE_EQ(
-      chmap_get_elem_ref(hm,
-                         &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                         &vp),
+      chmap_get_elem_ref(
+          hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
   REQUIRE_EQ(vp->size, (size_t)4);
   REQUIRE_EQ(memcmp(vp->ptr, small_val, 4), 0);
@@ -1985,9 +1989,9 @@ TEST(chash_maps, sc_value_update_heap_to_inline) {
 // restore the original pointer and leave the old value fully intact.
 TEST(chash_maps, sc_value_update_heap_to_heap_oom) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
-                              .free = free,
-                              .calloc = calloc,
-                              .realloc = controlled_realloc};
+                             .free = free,
+                             .calloc = calloc,
+                             .realloc = controlled_realloc};
   chashmap *hm = chmap_create_mp(1, ccol_string, ccol_other_types, &mp, NULL);
   REQUIRE_NE((void *)hm, NULL);
 
@@ -1995,27 +1999,24 @@ TEST(chash_maps, sc_value_update_heap_to_heap_oom) {
 
   unsigned char large_val1[30];
   memset(large_val1, 0xAA, sizeof(large_val1));
-  REQUIRE_EQ(
-      chmap_insert_elem(hm,
-                        &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                        &(cmap_pair){.ptr = large_val1, .size = sizeof(large_val1)}),
-      ccol_success);
+  REQUIRE_EQ(chmap_insert_elem(
+                 hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
+                 &(cmap_pair){.ptr = large_val1, .size = sizeof(large_val1)}),
+             ccol_success);
 
   unsigned char large_val2[40];
   memset(large_val2, 0xBB, sizeof(large_val2));
   g_realloc_fail = true;
-  REQUIRE_EQ(
-      chmap_insert_elem(hm,
-                        &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                        &(cmap_pair){.ptr = large_val2, .size = sizeof(large_val2)}),
-      ccol_not_enough_memory);
+  REQUIRE_EQ(chmap_insert_elem(
+                 hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
+                 &(cmap_pair){.ptr = large_val2, .size = sizeof(large_val2)}),
+             ccol_not_enough_memory);
   g_realloc_fail = false;
 
   cmap_pair *vp = NULL;
   REQUIRE_EQ(
-      chmap_get_elem_ref(hm,
-                         &(cmap_pair){.ptr = (void *)key, .size = strlen(key)},
-                         &vp),
+      chmap_get_elem_ref(
+          hm, &(cmap_pair){.ptr = (void *)key, .size = strlen(key)}, &vp),
       ccol_success);
   REQUIRE_EQ(vp->size, (size_t)30);
   REQUIRE_EQ(memcmp(vp->ptr, large_val1, 30), 0);
@@ -2069,29 +2070,33 @@ TEST(chash_maps, insert_and_ref_invalid_args) {
 
   const char *s = "hello";
   int v = 42;
-  cmap_pair key_null_ptr   = {.ptr = NULL,      .size = 5};
-  cmap_pair key_zero_size  = {.ptr = (void *)s,  .size = 0};
-  cmap_pair valid_key      = {.ptr = (void *)s,  .size = 5};
-  cmap_pair val_null_ptr   = {.ptr = NULL,       .size = 4};
-  cmap_pair val_zero_size  = {.ptr = &v,         .size = 0};
-  cmap_pair valid_val      = {.ptr = &v,         .size = sizeof(v)};
+  cmap_pair key_null_ptr = {.ptr = NULL, .size = 5};
+  cmap_pair key_zero_size = {.ptr = (void *)s, .size = 0};
+  cmap_pair valid_key = {.ptr = (void *)s, .size = 5};
+  cmap_pair val_null_ptr = {.ptr = NULL, .size = 4};
+  cmap_pair val_zero_size = {.ptr = &v, .size = 0};
+  cmap_pair valid_val = {.ptr = &v, .size = sizeof(v)};
 
-  REQUIRE_EQ(chmap_insert_elem(hm, &key_null_ptr,  &valid_val),    ccol_invalid_args);
-  REQUIRE_EQ(chmap_insert_elem(hm, &key_zero_size, &valid_val),    ccol_invalid_args);
-  REQUIRE_EQ(chmap_insert_elem(hm, NULL,            &valid_val),    ccol_invalid_args);
-  REQUIRE_EQ(chmap_insert_elem(hm, &valid_key,     &val_null_ptr), ccol_invalid_args);
-  REQUIRE_EQ(chmap_insert_elem(hm, &valid_key,     &val_zero_size), ccol_invalid_args);
-  REQUIRE_EQ(chmap_insert_elem(hm, &valid_key,     NULL),           ccol_invalid_args);
+  REQUIRE_EQ(chmap_insert_elem(hm, &key_null_ptr, &valid_val),
+             ccol_invalid_args);
+  REQUIRE_EQ(chmap_insert_elem(hm, &key_zero_size, &valid_val),
+             ccol_invalid_args);
+  REQUIRE_EQ(chmap_insert_elem(hm, NULL, &valid_val), ccol_invalid_args);
+  REQUIRE_EQ(chmap_insert_elem(hm, &valid_key, &val_null_ptr),
+             ccol_invalid_args);
+  REQUIRE_EQ(chmap_insert_elem(hm, &valid_key, &val_zero_size),
+             ccol_invalid_args);
+  REQUIRE_EQ(chmap_insert_elem(hm, &valid_key, NULL), ccol_invalid_args);
 
   cmap_pair *out = NULL;
-  REQUIRE_EQ(chmap_get_elem_ref(hm, &key_null_ptr,  &out), ccol_invalid_args);
+  REQUIRE_EQ(chmap_get_elem_ref(hm, &key_null_ptr, &out), ccol_invalid_args);
   REQUIRE_EQ(chmap_get_elem_ref(hm, &key_zero_size, &out), ccol_invalid_args);
-  REQUIRE_EQ(chmap_get_elem_ref(hm, NULL,            &out), ccol_invalid_args);
-  REQUIRE_EQ(chmap_get_elem_ref(hm, &valid_key,     NULL),  ccol_invalid_args);
+  REQUIRE_EQ(chmap_get_elem_ref(hm, NULL, &out), ccol_invalid_args);
+  REQUIRE_EQ(chmap_get_elem_ref(hm, &valid_key, NULL), ccol_invalid_args);
 
-  REQUIRE_EQ(chmap_delete_elem(hm, &key_null_ptr),  ccol_invalid_args);
+  REQUIRE_EQ(chmap_delete_elem(hm, &key_null_ptr), ccol_invalid_args);
   REQUIRE_EQ(chmap_delete_elem(hm, &key_zero_size), ccol_invalid_args);
-  REQUIRE_EQ(chmap_delete_elem(hm, NULL),            ccol_invalid_args);
+  REQUIRE_EQ(chmap_delete_elem(hm, NULL), ccol_invalid_args);
 
   REQUIRE_EQ(chmap_elem_count(hm), 0);
   chmap_destroy(hm);
@@ -2186,24 +2191,24 @@ TEST(chash_maps, oa_get_elem_copy) {
   chmap_insert(hm, k2, v2);
 
   int result = 0;
-  REQUIRE_EQ(chmap_get_elem_copy(hm,
-                                  &(cmap_pair){.ptr = &k1, .size = sizeof(k1)},
-                                  &result, sizeof(result)),
-             ccol_success);
+  REQUIRE_EQ(
+      chmap_get_elem_copy(hm, &(cmap_pair){.ptr = &k1, .size = sizeof(k1)},
+                          &result, sizeof(result)),
+      ccol_success);
   REQUIRE_EQ(result, 100);
 
   result = 0;
-  REQUIRE_EQ(chmap_get_elem_copy(hm,
-                                  &(cmap_pair){.ptr = &k2, .size = sizeof(k2)},
-                                  &result, sizeof(result)),
-             ccol_success);
+  REQUIRE_EQ(
+      chmap_get_elem_copy(hm, &(cmap_pair){.ptr = &k2, .size = sizeof(k2)},
+                          &result, sizeof(result)),
+      ccol_success);
   REQUIRE_EQ(result, 200);
 
   int k3 = 30;
-  REQUIRE_EQ(chmap_get_elem_copy(hm,
-                                  &(cmap_pair){.ptr = &k3, .size = sizeof(k3)},
-                                  &result, sizeof(result)),
-             ccol_key_not_found);
+  REQUIRE_EQ(
+      chmap_get_elem_copy(hm, &(cmap_pair){.ptr = &k3, .size = sizeof(k3)},
+                          &result, sizeof(result)),
+      ccol_key_not_found);
 
   chmap_destroy(hm);
 }
@@ -2230,7 +2235,8 @@ TEST(chash_maps, oa_iterator_skips_tombstones) {
   REQUIRE_EQ(r, ccol_success);
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)3);
 
-  // chmap_remove on a key that was never inserted must return ccol_key_not_found.
+  // chmap_remove on a key that was never inserted must return
+  // ccol_key_not_found.
   r = chmap_remove(hm, absent);
   REQUIRE_EQ(r, ccol_key_not_found);
 
@@ -2567,6 +2573,183 @@ TEST(chash_maps, void_ptr_keys_oa_backend) {
   }
   REQUIRE_EQ(count, 2);
   REQUIRE_EQ(sum, 999 + 777);
+
+  chmap_destroy(hm);
+}
+
+TEST(chash_maps, chmap_as_a_struct_field) {
+  // Use chmap_declare to declare hm as a member of a struct
+  typedef struct {
+    int a;
+    long double b;
+    char c[8];
+    chmap_declare(hm, int, int);
+  } tmp_struct;
+
+  tmp_struct s;
+  chmap_init(s.hm);
+
+  for (int key = 0; key < 10; ++key) {
+    int val = key + 1;
+    chmap_insert(s.hm, key, val);
+  }
+
+  for (int key = 0; key < 10; ++key) {
+    int val = chmap_get(s.hm, key);
+    REQUIRE_EQ(val, key + 1);
+  }
+
+  chmap_destroy(s.hm);
+}
+
+TEST(chash_maps, chmap_as_a_struct_field_two_levels) {
+  // Use chmap_declare to declare hm as a member of a struct
+  typedef struct {
+    int a;
+    long double b;
+    char c[8];
+    chmap_declare(hm, int, int);
+  } inner_struct;
+
+  typedef struct {
+    int d;
+    inner_struct s;
+  } tmp_struct;
+
+  tmp_struct tmp;
+  chmap_init(tmp.s.hm);
+
+  for (int key = 0; key < 10; ++key) {
+    int val = key + 1;
+    chmap_insert(tmp.s.hm, key, val);
+  }
+
+  for (int key = 0; key < 10; ++key) {
+    int val = chmap_get(tmp.s.hm, key);
+    REQUIRE_EQ(val, key + 1);
+  }
+
+  chmap_destroy(tmp.s.hm);
+}
+
+TEST(chash_maps, chmap_as_a_struct_field_access_via_ptr) {
+  // Use chmap_declare to declare hm as a member of a struct
+  typedef struct {
+    int a;
+    long double b;
+    char c[8];
+    chmap_declare(hm, int, int);
+  } tmp_struct;
+
+  tmp_struct s_obj;
+  tmp_struct *s = &s_obj;
+  chmap_init(s->hm);
+
+  for (int key = 0; key < 10; ++key) {
+    int val = key + 1;
+    chmap_insert(s->hm, key, val);
+  }
+
+  for (int key = 0; key < 10; ++key) {
+    int val = chmap_get(s->hm, key);
+    REQUIRE_EQ(val, key + 1);
+  }
+
+  chmap_destroy(s->hm);
+}
+
+TEST(chash_maps, chmap_as_a_struct_field_two_levels_access_via_ptr) {
+  // Use chmap_declare to declare hm as a member of a struct
+  typedef struct {
+    int a;
+    long double b;
+    char c[8];
+    chmap_declare(hm, int, int);
+  } inner_struct;
+
+  typedef struct {
+    int d;
+    inner_struct *s;
+  } tmp_struct;
+
+  inner_struct s_obj;
+  tmp_struct tmp_obj;
+  tmp_obj.s = &s_obj;
+  tmp_struct *tmp = &tmp_obj;
+
+  chmap_init(tmp->s->hm);
+
+  for (int key = 0; key < 10; ++key) {
+    int val = key + 1;
+    chmap_insert(tmp->s->hm, key, val);
+  }
+
+  for (int key = 0; key < 10; ++key) {
+    int val = chmap_get(tmp->s->hm, key);
+    REQUIRE_EQ(val, key + 1);
+  }
+
+  chmap_destroy(tmp->s->hm);
+}
+
+// Forces every key into the same bucket with the exact same stored hash_val,
+// so the sc_find_in_llist/sc_delete_from_llist hash_val pre-check can never
+// short-circuit: every lookup must fall through to the full memcmp on every
+// candidate in the chain to land on the right one.
+static unsigned long constant_struct_key_hasher(const void *ptr) {
+  (void)ptr;
+  return 42;
+}
+
+TEST(chash_maps, sc_struct_key_full_hash_collision_still_resolves_correctly) {
+  ccol_hashing_proc_t ch = &constant_struct_key_hasher;
+  chmap_construct_ch(hm, helper_struct, int, ch);
+
+  // helper_struct has 2 bytes of padding after b. memset first, then set
+  // fields individually (a whole-struct assignment from a compound literal
+  // would just copy its own uninitialised padding back in) so
+  // sc_compare_keys' memcmp never reads uninitialised padding bytes.
+  helper_struct k1, k2, k3, k4;
+  memset(&k1, 0, sizeof(k1));
+  memset(&k2, 0, sizeof(k2));
+  memset(&k3, 0, sizeof(k3));
+  memset(&k4, 0, sizeof(k4));
+  k1.a = 1;
+  k1.b = 10;
+  k2.a = 2;
+  k2.b = 20;
+  k3.a = 3;
+  k3.b = 30;
+  k4.a = 4;
+  k4.b = 40;
+
+  int v1 = 100, v2 = 200, v3 = 300, v4 = 400;
+  chmap_insert(hm, k1, v1);
+  chmap_insert(hm, k2, v2);
+  chmap_insert(hm, k3, v3);
+  chmap_insert(hm, k4, v4);
+
+  REQUIRE_EQ(chmap_elem_count(hm), (size_t)4);
+
+  REQUIRE_EQ(chmap_get(hm, k1), 100);
+  REQUIRE_EQ(chmap_get(hm, k2), 200);
+  REQUIRE_EQ(chmap_get(hm, k3), 300);
+  REQUIRE_EQ(chmap_get(hm, k4), 400);
+
+  int v999 = 999;
+  chmap_insert(hm, k2, v999);
+  REQUIRE_EQ(chmap_get(hm, k2), 999);
+
+  ccol_retval_t r = chmap_remove(hm, k3);
+  REQUIRE_EQ(r, ccol_success);
+  REQUIRE_EQ(chmap_elem_count(hm), (size_t)3);
+  REQUIRE_EQ((void *)chmap_get_ptr(hm, k3), (void *)NULL);
+
+  // The rest of the (still fully-colliding) chain must resolve correctly
+  // after a deletion from the middle of it.
+  REQUIRE_EQ(chmap_get(hm, k1), 100);
+  REQUIRE_EQ(chmap_get(hm, k2), 999);
+  REQUIRE_EQ(chmap_get(hm, k4), 400);
 
   chmap_destroy(hm);
 }

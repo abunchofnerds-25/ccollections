@@ -381,7 +381,8 @@ TEST(cvectors, scaling_shrink_threshold) {
   // Capacity should remain unchanged
   REQUIRE_EQ(cvector_get_capacity(cvec), 32);
 
-  // Pop 13 more times to reach 3 elements (shrinks 32->16 at count<8, 16->8 at count<4)
+  // Pop 13 more times to reach 3 elements (shrinks 32->16 at count<8, 16->8 at
+  // count<4)
   for (int i = 0; i < 13; ++i) {
     cvector_pop_back(cvec, &tmp);
   }
@@ -627,11 +628,23 @@ TEST(cvectors, append_array_large) {
   cvector_destroy(cvec);
 }
 
+TEST(cvectors, append_array_null_ptr) {
+  cvector *cvec = cvector_create(sizeof(int), NULL);
+
+  int result = (int)cvector_append_array(cvec, NULL, 3);
+  REQUIRE_EQ(result, false);
+  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+
+  cvector_destroy(cvec);
+}
+
 TEST(cvectors, append_array_overflow_detection) {
   cvector *cvec = cvector_create(sizeof(int), NULL);
 
-  // Try to append SIZE_MAX elements (should fail)
-  int result = (int)cvector_append_array(cvec, NULL, SIZE_MAX);
+  // Try to append SIZE_MAX elements with a valid pointer (should fail due to
+  // overflow)
+  int dummy[1] = {0};
+  int result = (int)cvector_append_array(cvec, dummy, SIZE_MAX);
   REQUIRE_EQ(result, false);
 
   cvector_destroy(cvec);
@@ -1448,6 +1461,226 @@ TEST(cvectors, sort_stable) {
   REQUIRE_EQ(cvec_at(vec, 4).seq, 1);
   REQUIRE_EQ(cvec_at(vec, 5).key, 2);
   REQUIRE_EQ(cvec_at(vec, 5).seq, 2);
+
+  cvec_destroy(vec);
+}
+
+// C_VECTOR FIND TESTS
+
+TEST(cvectors, find_empty_vector) {
+  cvec_construct(vec, int);
+  REQUIRE_EQ(cvec_find(vec, 42), ccol_invalid_size);
+  REQUIRE_EQ(cvector_find(vec, &(int){42}, NULL), ccol_invalid_size);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_null_elem) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 1);
+  REQUIRE_EQ(cvector_find(vec, NULL, NULL), ccol_invalid_size);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_single_element_match) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 7);
+  REQUIRE_EQ(cvec_find(vec, 7), (size_t)0);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_single_element_no_match) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 7);
+  REQUIRE_EQ(cvec_find(vec, 99), ccol_invalid_size);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_first_element) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 10);
+  cvec_push_rvalue(vec, 20);
+  cvec_push_rvalue(vec, 30);
+  REQUIRE_EQ(cvec_find(vec, 10), (size_t)0);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_middle_element) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 10);
+  cvec_push_rvalue(vec, 20);
+  cvec_push_rvalue(vec, 30);
+  REQUIRE_EQ(cvec_find(vec, 20), (size_t)1);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_last_element) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 10);
+  cvec_push_rvalue(vec, 20);
+  cvec_push_rvalue(vec, 30);
+  REQUIRE_EQ(cvec_find(vec, 30), (size_t)2);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_not_found) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 10);
+  cvec_push_rvalue(vec, 20);
+  cvec_push_rvalue(vec, 30);
+  REQUIRE_EQ(cvec_find(vec, 99), ccol_invalid_size);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_returns_first_occurrence) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 5);
+  cvec_push_rvalue(vec, 10);
+  cvec_push_rvalue(vec, 5);
+  cvec_push_rvalue(vec, 10);
+  // Both 5 and 10 appear twice; must return the first index
+  REQUIRE_EQ(cvec_find(vec, 5), (size_t)0);
+  REQUIRE_EQ(cvec_find(vec, 10), (size_t)1);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_with_custom_comparator) {
+  int cmp_int(const void *a, const void *b) {
+    return *(const int *)a - *(const int *)b;
+  }
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 100);
+  cvec_push_rvalue(vec, 200);
+  cvec_push_rvalue(vec, 300);
+  REQUIRE_EQ(cvector_find(vec, &(int){200}, cmp_int), (size_t)1);
+  REQUIRE_EQ(cvector_find(vec, &(int){999}, cmp_int), ccol_invalid_size);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_with_double_type) {
+  cvec_construct(vec, double);
+  cvec_push_rvalue(vec, 1.5);
+  cvec_push_rvalue(vec, 2.5);
+  cvec_push_rvalue(vec, 3.5);
+  REQUIRE_EQ(cvec_find(vec, 2.5), (size_t)1);
+  REQUIRE_EQ(cvec_find(vec, 9.9), ccol_invalid_size);
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, find_with_struct_type) {
+  typedef struct {
+    int x;
+    int y;
+  } point_t;
+  int cmp_point(const void *a, const void *b) {
+    const point_t *pa = (const point_t *)a;
+    const point_t *pb = (const point_t *)b;
+    if (pa->x != pb->x) return pa->x - pb->x;
+    return pa->y - pb->y;
+  }
+  cvec_construct(vec, point_t);
+  cvec_push(vec, ((point_t){1, 2}));
+  cvec_push(vec, ((point_t){3, 4}));
+  cvec_push(vec, ((point_t){5, 6}));
+  REQUIRE_EQ(cvector_find(vec, &(point_t){3, 4}, cmp_point), (size_t)1);
+  REQUIRE_EQ(cvector_find(vec, &(point_t){9, 9}, cmp_point), ccol_invalid_size);
+  cvec_destroy(vec);
+}
+
+// ========================================================================
+// MACRO VARIANT TESTS
+// ========================================================================
+
+TEST(cvectors, redeclare_macro) {
+  cvec_construct(vec, int);
+  cvec_push_rvalue(vec, 10);
+  cvec_push_rvalue(vec, 20);
+  cvec_push_rvalue(vec, 30);
+
+  {
+    cvec_redeclare(vec, int);
+    REQUIRE_EQ(cvec_size(vec), (size_t)3);
+    REQUIRE_EQ(cvec_at(vec, 0), 10);
+    REQUIRE_EQ(cvec_at(vec, 1), 20);
+    REQUIRE_EQ(cvec_at(vec, 2), 30);
+
+    cvec_push_rvalue(vec, 40);
+    REQUIRE_EQ(cvec_size(vec), (size_t)4);
+    REQUIRE_EQ(cvec_at(vec, 3), 40);
+  }
+
+  cvec_destroy(vec);
+}
+
+TEST(cvectors, declare_scoped_lifecycle) {
+  {
+    cvec_declare_scoped(v, int);
+    cvec_init(v);
+    REQUIRE_NE((void *)v, NULL);
+
+    for (int i = 1; i <= 5; ++i) {
+      cvec_push_rvalue(v, i);
+    }
+    REQUIRE_EQ(cvector_elem_count(v), 5);
+    for (int i = 0; i < 5; ++i) {
+      REQUIRE_EQ(cvec_at(v, i), i + 1);
+    }
+    // v is automatically destroyed at end of block (no cvec_destroy needed)
+  }
+}
+
+TEST(cvectors, construct_mp_scoped_lifecycle) {
+  {
+    cvec_construct_mp_scoped(v, int,
+                             (&(ccol_memmgmt_procs_t){.malloc = malloc,
+                                                      .free = free,
+                                                      .calloc = calloc,
+                                                      .realloc = realloc}));
+    REQUIRE_NE((void *)v, NULL);
+
+    for (int i = 1; i <= 5; ++i) {
+      cvec_push_rvalue(v, i);
+    }
+    REQUIRE_EQ(cvector_elem_count(v), 5);
+    for (int i = 0; i < 5; ++i) {
+      REQUIRE_EQ(cvec_at(v, i), i + 1);
+    }
+    // v is automatically destroyed at end of block (no cvec_destroy needed)
+  }
+}
+
+TEST(cvectors, data_ptr_empty_vector) {
+  cvector *cvec = cvector_create(sizeof(int), NULL);
+
+  void *ptr = cvector_data_ptr(cvec);
+  REQUIRE_NE(ptr, NULL);
+  REQUIRE_EQ(cvector_elem_count(cvec), 0);
+
+  cvector_destroy(cvec);
+}
+
+// ========================================================================
+// ITERATOR RAII TESTS
+// ========================================================================
+
+TEST(cvectors, iterator_raii_scope_exit) {
+  cvec_construct(vec, int);
+  for (int i = 0; i < 5; ++i) {
+    cvec_push_rvalue(vec, i);
+  }
+
+  int count = 0;
+  {
+    ccol_iter_declare(vec, it);
+    for (it = ccol_begin(vec); it != NULL; it = ccol_iter_next(it)) {
+      ++count;
+      if (count == 2) {
+        break;  // exit without explicit ccol_iter_destroy — RAII must clean up
+      }
+    }
+    // 'it' is still live here; the RAII destructor on 'it' fires at '}'
+  }
+  REQUIRE_EQ(count, 2);
+  REQUIRE_EQ(cvector_elem_count(vec), 5);  // vector is unchanged
 
   cvec_destroy(vec);
 }

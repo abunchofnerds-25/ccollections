@@ -2413,7 +2413,8 @@ TEST(serialize, empty_sequence_as_sequence_element_round_trip) {
 TEST(lifecycle, scoped_destroy) {
   cyaml out = NULL;
   {
-    cyaml_declare_scoped(doc) = cyaml_parse("key: 42\n", NULL);
+    cyaml_declare_scoped(doc);
+    doc = cyaml_parse("key: 42\n", NULL);
     REQUIRE_NE((void *)doc, NULL);
     out = cyaml_clone(doc);
     /* doc destroyed automatically here */

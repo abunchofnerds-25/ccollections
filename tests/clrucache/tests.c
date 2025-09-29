@@ -110,10 +110,12 @@ TEST(basic, invalid_args_get) {
   REQUIRE_EQ(clrucache_get_full(cache, &kp, NULL), ccol_invalid_args);
 
   cmap_pair null_ptr_kp = {.ptr = NULL, .size = sizeof(int)};
-  REQUIRE_EQ(clrucache_get_full(cache, &null_ptr_kp, &val_out), ccol_invalid_args);
+  REQUIRE_EQ(clrucache_get_full(cache, &null_ptr_kp, &val_out),
+             ccol_invalid_args);
 
   cmap_pair zero_size_kp = {.ptr = &k, .size = 0};
-  REQUIRE_EQ(clrucache_get_full(cache, &zero_size_kp, &val_out), ccol_invalid_args);
+  REQUIRE_EQ(clrucache_get_full(cache, &zero_size_kp, &val_out),
+             ccol_invalid_args);
 
   clru_destroy(cache);
 }
@@ -174,8 +176,8 @@ TEST(basic, destroy_sets_handle_null) {
 
 TEST(basic, create_full_null_err_on_failure) {
   /* Passing NULL for err must not crash when creation fails */
-  clru_cache cache =
-      clrucache_create_full(0, ccol_int, ccol_int, NULL, NULL, NULL, NULL, NULL);
+  clru_cache cache = clrucache_create_full(0, ccol_int, ccol_int, NULL, NULL,
+                                           NULL, NULL, NULL);
   REQUIRE_NULL(cache);
 }
 
@@ -302,7 +304,8 @@ TEST(eviction, set_promotes_existing_entry_to_mru) {
   for (int i = 0; i < 3; i++) clru_set(cache, i, i * 10);
   REQUIRE_EQ(clrucache_size(cache), (size_t)3);
 
-  /* Overwrite key 0 -> should move it to MRU; order becomes 1 (LRU) -> 2 -> 0 */
+  /* Overwrite key 0 -> should move it to MRU; order becomes 1 (LRU) -> 2 -> 0
+   */
   clru_set(cache, 0, 99);
   REQUIRE_EQ(eviction_count, 0);
   REQUIRE_EQ(clrucache_size(cache), (size_t)3);
@@ -439,7 +442,8 @@ static int getter_eviction_count = 0;
 static int double_key_getter_calls = 0;
 
 /* Returns key * 2 (same formula as simple_remote_getter below, defined here
- * to avoid a forward-reference from the eviction section into remote_getter). */
+ * to avoid a forward-reference from the eviction section into remote_getter).
+ */
 static bool double_key_getter(const cmap_pair *key, cmap_pair *val) {
   double_key_getter_calls++;
   int k = *(const int *)key->ptr;
@@ -459,12 +463,14 @@ static void record_getter_eviction(const cmap_pair *key, const cmap_pair *val) {
 
 /*
  * Verify that when a getter-populated entry is evicted the eviction callback
- * receives the exact value the getter produced, not the original key or garbage.
- * This exercises the path where entry->value was heap-allocated by the remote
- * getter (not via clru_set) and the LRU list then selects that entry as victim.
+ * receives the exact value the getter produced, not the original key or
+ * garbage. This exercises the path where entry->value was heap-allocated by the
+ * remote getter (not via clru_set) and the LRU list then selects that entry as
+ * victim.
  *
- * Capacity 3 is used so that inserting key 4 forces exactly one eviction (key 1,
- * the LRU) without cascading evictions when we later read the surviving keys.
+ * Capacity 3 is used so that inserting key 4 forces exactly one eviction (key
+ * 1, the LRU) without cascading evictions when we later read the surviving
+ * keys.
  */
 TEST(eviction, eviction_callback_fires_for_getter_populated_entry) {
   getter_eviction_key_seen = -1;
@@ -601,7 +607,8 @@ TEST(remote_getter, retry_after_failure_triggers_new_fetch) {
   REQUIRE_EQ(retry_getter_call_count, 1);
   REQUIRE_EQ(clrucache_size(cache), (size_t)0);
 
-  /* Second attempt: getter succeeds; must reach the remote (no stale placeholder) */
+  /* Second attempt: getter succeeds; must reach the remote (no stale
+   * placeholder) */
   REQUIRE_EQ(clru_get(cache, 5, &out), ccol_success);
   REQUIRE_EQ(retry_getter_call_count, 2);
   REQUIRE_EQ(out, 5);
@@ -717,7 +724,8 @@ TEST(remote_getter, char_ptr_returns_not_found_on_getter_failure) {
  * clru_get routes through clrucache_get_full (not __clrucache_get_into), so
  * this exercises a distinct code path.
  */
-TEST(remote_getter, char_ptr_getter_returns_true_with_null_ptr_treated_as_miss) {
+TEST(remote_getter,
+     char_ptr_getter_returns_true_with_null_ptr_treated_as_miss) {
   clru_construct(cache, int, char *, 10, null_ptr_remote_getter, NULL, NULL);
 
   char *out = NULL;
@@ -728,7 +736,8 @@ TEST(remote_getter, char_ptr_getter_returns_true_with_null_ptr_treated_as_miss) 
   clru_destroy(cache);
 }
 
-TEST(remote_getter, char_ptr_getter_returns_true_with_zero_size_treated_as_miss) {
+TEST(remote_getter,
+     char_ptr_getter_returns_true_with_zero_size_treated_as_miss) {
   clru_construct(cache, int, char *, 10, zero_size_remote_getter, NULL, NULL);
 
   char *out = NULL;
@@ -1740,7 +1749,7 @@ static bool slow_failing_getter(const cmap_pair *key, cmap_pair *val) {
   (void)val;
   __atomic_fetch_add(&fail_getter_call_count, 1, __ATOMIC_SEQ_CST);
   usleep(100000); /* 100 ms — gives all threads time to block on the placeholder
-                  */
+                   */
   return false;
 }
 
@@ -1786,8 +1795,8 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
   remote_set_call_count = 0;
 
   /* Cache has both a slow getter (100 ms) and a recording setter. */
-  clru_construct(cache, int, int, 16, slow_remote_getter, recording_remote_setter,
-                 NULL);
+  clru_construct(cache, int, int, 16, slow_remote_getter,
+                 recording_remote_setter, NULL);
 
   /* Thread A: get key=7 -- triggers a 100 ms remote fetch */
   getter_arg_t garg = {cache, 7, 0, ccol_unexpected_failure};
@@ -1826,8 +1835,8 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
 /*
  * Same coalescing guarantee as multiple_getters_coalesce_to_single_remote_fetch
  * but for char* value caches, which route through clrucache_get_full instead of
- * __clrucache_get_into. Each thread must receive an independent heap copy of the
- * fetched string.
+ * __clrucache_get_into. Each thread must receive an independent heap copy of
+ * the fetched string.
  */
 static volatile int char_ptr_coalesce_calls = 0;
 
@@ -1904,13 +1913,15 @@ static bool slow_failing_char_ptr_getter(const cmap_pair *key, cmap_pair *val) {
   (void)key;
   (void)val;
   __atomic_fetch_add(&slow_fail_char_ptr_getter_calls, 1, __ATOMIC_SEQ_CST);
-  usleep(100000); /* 100 ms -- gives all threads time to block on the placeholder */
+  usleep(100000); /* 100 ms -- gives all threads time to block on the
+                     placeholder */
   return false;
 }
 
 TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
   slow_fail_char_ptr_getter_calls = 0;
-  clru_construct(cache, int, char *, 16, slow_failing_char_ptr_getter, NULL, NULL);
+  clru_construct(cache, int, char *, 16, slow_failing_char_ptr_getter, NULL,
+                 NULL);
 
 #define N_FAIL_STR_THREADS 6
   str_getter_arg_t args[N_FAIL_STR_THREADS];
@@ -2127,7 +2138,8 @@ static bool str_val_remote_getter(const cmap_pair *key, cmap_pair *val) {
   return true;
 }
 
-/* --- non-char* get miss: output buffer must not be modified ---------------- */
+/* --- non-char* get miss: output buffer must not be modified ----------------
+ */
 
 /*
  * For non-char* value types clru_get routes through __clrucache_get_into,
@@ -2387,7 +2399,8 @@ TEST(get_val_types, get_into_rejects_live_value_too_large_for_buffer) {
   int k = 1;
   long long v = 12345LL;
   cmap_pair kp = {.ptr = &k, .size = sizeof(k)};
-  cmap_pair vp = {.ptr = &v, .size = sizeof(v)}; /* sizeof(long long) > sizeof(int) */
+  cmap_pair vp = {.ptr = &v,
+                  .size = sizeof(v)}; /* sizeof(long long) > sizeof(int) */
 
   REQUIRE_EQ(clrucache_set_full(cache, &kp, &vp), ccol_success);
   REQUIRE_EQ(clrucache_size(cache), (size_t)1);

@@ -592,9 +592,8 @@ TEST(cmempools, create_from_preallocated_fails_elem_count_zero) {
   // NULL with the "calculated elem_count is zero" error.
   uint8_t buf[sizeof(__internal_entry_header)];
   char *err;
-  mempool *mp =
-      mempool_create_from_preallocated_buffer(buf, sizeof(buf), 64, false,
-                                              false, NULL, &err);
+  mempool *mp = mempool_create_from_preallocated_buffer(
+      buf, sizeof(buf), 64, false, false, NULL, &err);
   REQUIRE_EQ((void *)mp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
@@ -1976,7 +1975,8 @@ TEST(r_mempools, realloc_returns_null_for_invalid_size) {
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-TEST(r_mempools, realloc_returns_null_when_full_no_fallback_preserves_original) {
+TEST(r_mempools,
+     realloc_returns_null_when_full_no_fallback_preserves_original) {
   // SS=4, LS=5, SC=4: pool[0] = 16x16-byte, pool[1] = 8x32-byte.
   // When all pools are exhausted and there is no fallback, realloc must
   // return NULL without freeing or modifying the original pointer.
@@ -2028,29 +2028,28 @@ TEST(r_mempools, create_preallocated_buffer_fails) {
   char *err;
 
   r_mempool *rmp = r_mempool_create_from_preallocated_buffer(
-      NULL, sizeof(correct_buf), 4, 5, 4, fallback_disabled, false, NULL,
-      &err);
+      NULL, sizeof(correct_buf), 4, 5, 4, fallback_disabled, false, NULL, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   uint8_t small_buf[sizeof(correct_buf) - 1];
-  rmp = r_mempool_create_from_preallocated_buffer(
-      small_buf, sizeof(small_buf), 4, 5, 4, fallback_disabled, false, NULL,
-      &err);
+  rmp = r_mempool_create_from_preallocated_buffer(small_buf, sizeof(small_buf),
+                                                  4, 5, 4, fallback_disabled,
+                                                  false, NULL, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   uint8_t large_buf[sizeof(correct_buf) + 1];
-  rmp = r_mempool_create_from_preallocated_buffer(
-      large_buf, sizeof(large_buf), 4, 5, 4, fallback_disabled, false, NULL,
-      &err);
+  rmp = r_mempool_create_from_preallocated_buffer(large_buf, sizeof(large_buf),
+                                                  4, 5, 4, fallback_disabled,
+                                                  false, NULL, &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 
   // Invalid params: SS >= LS.
   rmp = r_mempool_create_from_preallocated_buffer(
-      correct_buf, sizeof(correct_buf), 5, 4, 4, fallback_disabled, false,
-      NULL, &err);
+      correct_buf, sizeof(correct_buf), 5, 4, 4, fallback_disabled, false, NULL,
+      &err);
   REQUIRE_EQ((void *)rmp, NULL);
   REQUIRE_NE((void *)err, NULL);
 }
@@ -2208,7 +2207,8 @@ TEST(r_mempools, dynamic_allocs_count_always_zero_when_fallback_disabled) {
 
 TEST(r_mempools, calloc_entry_zeroes_fallback_at_first_exhaustion) {
   // r_mempool_calloc_entry must zero exactly the requested number of bytes
-  // when the allocation comes from the heap fallback (fallback_at_first_exhaustion).
+  // when the allocation comes from the heap fallback
+  // (fallback_at_first_exhaustion).
   r_mempool *rmp = r_mempool_create(4, 6, 7, fallback_at_first_exhaustion,
                                     false, NULL, NULL);
   REQUIRE_NE((void *)rmp, NULL);
@@ -2245,7 +2245,8 @@ TEST(r_mempools, calloc_entry_zeroes_fallback_at_first_exhaustion) {
 
 TEST(r_mempools, calloc_entry_zeroes_fallback_at_last_exhaustion) {
   // r_mempool_calloc_entry must zero exactly the requested number of bytes
-  // when the allocation comes from the pseudo_pool (fallback_at_last_exhaustion).
+  // when the allocation comes from the pseudo_pool
+  // (fallback_at_last_exhaustion).
   r_mempool *rmp =
       r_mempool_create(4, 6, 7, fallback_at_last_exhaustion, false, NULL, NULL);
   REQUIRE_NE((void *)rmp, NULL);
@@ -2255,10 +2256,8 @@ TEST(r_mempools, calloc_entry_zeroes_fallback_at_last_exhaustion) {
   size_t iter = 0;
   for (size_t i = 0; i < 128; ++i)
     fill[iter++] = r_mempool_alloc_entry(rmp, 16);
-  for (size_t i = 0; i < 64; ++i)
-    fill[iter++] = r_mempool_alloc_entry(rmp, 32);
-  for (size_t i = 0; i < 32; ++i)
-    fill[iter++] = r_mempool_alloc_entry(rmp, 64);
+  for (size_t i = 0; i < 64; ++i) fill[iter++] = r_mempool_alloc_entry(rmp, 32);
+  for (size_t i = 0; i < 32; ++i) fill[iter++] = r_mempool_alloc_entry(rmp, 64);
   REQUIRE_EQ(r_mempool_dynamic_allocs_count(rmp, 32), 0);
 
   // The next calloc must come from the pseudo_pool and be fully zeroed.
@@ -2433,7 +2432,8 @@ TEST(preallocated_r_mempools, custom_allocator_propagated) {
   REQUIRE_EQ((void *)rmp, NULL);
 }
 
-TEST(r_mempools, fallback_at_last_exhaustion_escalation_not_counted_as_fallback) {
+TEST(r_mempools,
+     fallback_at_last_exhaustion_escalation_not_counted_as_fallback) {
   // SS=4, LS=6, SC=7: pool[0]=128x16-byte, pool[1]=64x32-byte.
   // Under fallback_at_last_exhaustion, escalation from pool[0] to pool[1]
   // must NOT increment the pseudo_pool counter — it is only a reallocation

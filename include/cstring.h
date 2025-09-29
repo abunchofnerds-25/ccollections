@@ -494,7 +494,8 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
  *
  * @param s  Name of the variable to declare
  */
-#define cstr_declare_scoped(s) cstr s _ccol_destructor(___cstring_destroy)
+#define cstr_declare_scoped(s) \
+  cstr s _ccol_destructor(___cstring_destroy) = NULL
 
 /**
  * @brief Initialise a declared cstr using default allocators

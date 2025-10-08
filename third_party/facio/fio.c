@@ -2413,7 +2413,26 @@ socket_okay:
   fio_lock(&fd_data(fd).protocol_lock);
   fio_clear_fd(fd, 1);
   fio_unlock(&fd_data(fd).protocol_lock);
-  fio_tcp_addr_cpy(fd, addrinfo->ai_family, (void *)addrinfo);
+  /* fio_tcp_addr_cpy expects a `struct sockaddr *` (it reads sin_addr/
+   * sin6_addr straight out of it) but this line was instead handing it
+   * `addrinfo` itself -- a `struct addrinfo *`, an unrelated wrapper struct
+   * with a completely different layout (ai_flags/ai_family/ai_socktype/...
+   * before its ai_addr field, which is the actual `struct sockaddr *`).
+   * Reinterpreting a struct addrinfo's bytes as a struct sockaddr_in6 reads
+   * whatever ai_addrlen/ai_addr/ai_canonname/ai_next happen to hold as if
+   * they were address octets -- for AF_INET the (smaller) sockaddr_in
+   * layout happened to overlap only with always-initialized int fields, so
+   * this was silently wrong instead of crashing; for AF_INET6 it read past
+   * into padding/uninitialized bytes, caught by valgrind
+   * ("Conditional jump or move depends on uninitialised value(s)" inside
+   * inet_ntop6) the first time any code path in this codebase actually
+   * connected out over IPv6 via fio_socket. This corrupted the human-
+   * readable peer-address string (fd_data(fd).addr, exposed publicly via
+   * fio_peer_addr()) for every TCP socket -- server or client -- opened
+   * through fio_tcp_socket, not just IPv6 ones. Fixed by passing
+   * addrinfo->ai_addr, the actual struct sockaddr, exactly like fio_accept's
+   * own (correct) call to fio_tcp_addr_cpy a few dozen lines above. */
+  fio_tcp_addr_cpy(fd, addrinfo->ai_family, addrinfo->ai_addr);
   freeaddrinfo(addrinfo);
   return fd2uuid(fd);
 }

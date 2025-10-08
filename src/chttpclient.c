@@ -61,11 +61,17 @@ SOFTWARE.
 /* Parsed request-target. All fields are owned copies (mp-allocated). */
 typedef struct {
   bool is_https;
+  bool is_ipv6; /* host is a raw (unbracketed) IPv6 literal -- connect()/TLS
+                 * need it unbracketed, but the Host header, origin_key, and
+                 * redirect-URL reconstruction all need it re-bracketed. */
   char *host;
   uint16_t port;
   char *path_and_query;
   char
       *origin_key; /* "scheme://host:port"; used for SNI and idle-pool keying */
+  char *userinfo_authorization; /* owned "Basic <b64>" derived from THIS
+                                 * URL's own "user:pass@" component, or NULL
+                                 * if the URL had none. */
 } chttp_url_t;
 
 /* Absolute-time deadline helper; `active == false` means "no limit". */
@@ -184,15 +190,118 @@ static void _url_free(ccol_memmgmt_procs_t *mp, chttp_url_t *u) {
   _mem_free(mp, u->host);
   _mem_free(mp, u->path_and_query);
   _mem_free(mp, u->origin_key);
+  _mem_free(mp, u->userinfo_authorization);
   memset(u, 0, sizeof(*u));
 }
 
+/* Percent-decodes [start, start+len) into a newly allocated NUL-terminated
+ * string. Used only for userinfo components -- path/query bytes are never
+ * decoded, since they must be forwarded to the server exactly as received.
+ * Rejects a malformed escape ('%' not followed by 2 hex digits) and a
+ * decoded embedded NUL byte: silently truncating a password at a NUL would
+ * produce a subtly wrong Authorization header instead of a clear error. */
+static ccol_retval_t _percent_decode_component(ccol_memmgmt_procs_t *mp,
+                                               const char *start, size_t len,
+                                               char **out) {
+  char *buf = (char *)_mem_alloc(mp, len + 1);
+  if (!buf) return ccol_not_enough_memory;
+  size_t w = 0;
+  for (size_t i = 0; i < len; i++) {
+    char c = start[i];
+    if (c == '%') {
+      if (i + 2 >= len || !isxdigit((unsigned char)start[i + 1]) ||
+          !isxdigit((unsigned char)start[i + 2])) {
+        _mem_free(mp, buf);
+        return ccol_http_invalid_url;
+      }
+      char hex[3] = {start[i + 1], start[i + 2], '\0'};
+      int v = (int)strtol(hex, NULL, 16);
+      if (v == 0) {
+        _mem_free(mp, buf);
+        return ccol_http_invalid_url;
+      }
+      buf[w++] = (char)v;
+      i += 2;
+    } else {
+      buf[w++] = c;
+    }
+  }
+  buf[w] = '\0';
+  *out = buf;
+  return ccol_success;
+}
+
+static const char g_chttp_base64_alphabet[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/* Standard RFC 4648 base64 (not URL-safe) with '=' padding -- RFC 7617
+ * Basic auth requires exactly this alphabet. */
+static char *_base64_encode(ccol_memmgmt_procs_t *mp, const void *data,
+                            size_t len) {
+  const unsigned char *p = (const unsigned char *)data;
+  size_t out_len = ((len + 2) / 3) * 4;
+  char *out = (char *)_mem_alloc(mp, out_len + 1);
+  if (!out) return NULL;
+  size_t oi = 0, i = 0;
+  for (; i + 3 <= len; i += 3) {
+    uint32_t n = ((uint32_t)p[i] << 16) | ((uint32_t)p[i + 1] << 8) |
+                (uint32_t)p[i + 2];
+    out[oi++] = g_chttp_base64_alphabet[(n >> 18) & 0x3F];
+    out[oi++] = g_chttp_base64_alphabet[(n >> 12) & 0x3F];
+    out[oi++] = g_chttp_base64_alphabet[(n >> 6) & 0x3F];
+    out[oi++] = g_chttp_base64_alphabet[n & 0x3F];
+  }
+  size_t rem = len - i;
+  if (rem == 1) {
+    uint32_t n = (uint32_t)p[i] << 16;
+    out[oi++] = g_chttp_base64_alphabet[(n >> 18) & 0x3F];
+    out[oi++] = g_chttp_base64_alphabet[(n >> 12) & 0x3F];
+    out[oi++] = '=';
+    out[oi++] = '=';
+  } else if (rem == 2) {
+    uint32_t n = ((uint32_t)p[i] << 16) | ((uint32_t)p[i + 1] << 8);
+    out[oi++] = g_chttp_base64_alphabet[(n >> 18) & 0x3F];
+    out[oi++] = g_chttp_base64_alphabet[(n >> 12) & 0x3F];
+    out[oi++] = g_chttp_base64_alphabet[(n >> 6) & 0x3F];
+    out[oi++] = '=';
+  }
+  out[oi] = '\0';
+  return out;
+}
+
+/* Returns an owned "[host]" for an IPv6 literal, or a plain strdup
+ * otherwise. Used wherever a host needs to round-trip through a URL string
+ * (origin_key, a reconstructed redirect URL) -- connect()/TLS always use
+ * chttp_url_t.host directly, which stays unbracketed. */
+static char *_format_bracketed_host(ccol_memmgmt_procs_t *mp, const char *host,
+                                    bool is_ipv6) {
+  if (!is_ipv6) return ccol_strdup(mp, host);
+  size_t hlen = strlen(host);
+  char *out = (char *)_mem_alloc(mp, hlen + 3);
+  if (!out) return NULL;
+  out[0] = '[';
+  memcpy(out + 1, host, hlen);
+  out[hlen + 1] = ']';
+  out[hlen + 2] = '\0';
+  return out;
+}
+
 /*
- * Deliberately scoped-down URL parser: recognises "http://"/"https://" only,
- * no userinfo ("user:pass@host"), no fragment handling (fragments are never
- * sent to a server so they are simply left attached to the query if present).
- * This mirrors the surface this module has ever actually needed -- it is not
- * meant to be a general-purpose URL parser.
+ * URL parser: recognises "http://"/"https://", an optional "user:pass@"
+ * userinfo prefix (also "user@" or ":pass@" -- both syntactically valid RFC
+ * 3986 forms) that is turned into a ready-to-send "Basic <base64>"
+ * Authorization value, a plain reg-name/IPv4 host or a bracketed IPv6
+ * literal ("[::1]"), an optional ":port", and a path/query with any
+ * trailing "#fragment" discarded -- fragments are never sent to a server
+ * (RFC 3986 SS3.5), so silently forwarding one in the request line (the
+ * previous behavior) was a real correctness bug, not a documented scope
+ * choice.
+ *
+ * Not attempted: userinfo/hostname are not validated beyond basic syntax --
+ * an implausible bracketed literal or reg-name is simply handed to
+ * getaddrinfo()/inet_pton() at connect time and surfaces there as
+ * ccol_http_host_resolution_failed, exactly like today's unvalidated
+ * hostnames.
  */
 static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
                                       chttp_url_t *out) {
@@ -211,11 +320,105 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
     return ccol_http_invalid_url;
   }
 
-  const char *host_start = p;
-  const char *q = p;
-  while (*q && *q != ':' && *q != '/' && *q != '?') q++;
+  /* Authority = [ userinfo "@" ] host [ ":" port ], terminated by the first
+   * '/', '?', '#', or end of string. */
+  const char *authority_end = p;
+  while (*authority_end && *authority_end != '/' && *authority_end != '?' &&
+        *authority_end != '#')
+    authority_end++;
+
+  /* Last unescaped '@' in the authority: tolerates an unescaped '@' inside a
+   * lazily-encoded password, matching common real-world parser leniency. */
+  const char *last_at = NULL;
+  for (const char *s = p; s < authority_end; s++)
+    if (*s == '@') last_at = s;
+
+  char *userinfo_authorization = NULL;
+  const char *host_scan_start = p;
+  if (last_at) {
+    /* Delimiters ('@', ':') are located in the RAW (still percent-encoded)
+     * string, then each half is decoded independently -- decoding first and
+     * searching second would incorrectly split on a decoded '@'/':' that
+     * was meant to be literal password content. */
+    const char *colon = NULL;
+    for (const char *s = p; s < last_at; s++)
+      if (*s == ':') {
+        colon = s;
+        break;
+      }
+    const char *user_start = p;
+    size_t user_len = colon ? (size_t)(colon - p) : (size_t)(last_at - p);
+    const char *pass_start = colon ? colon + 1 : last_at;
+    size_t pass_len = colon ? (size_t)(last_at - colon - 1) : 0;
+
+    char *user_dec = NULL, *pass_dec = NULL;
+    ccol_retval_t drv =
+        _percent_decode_component(mp, user_start, user_len, &user_dec);
+    if (drv == ccol_success)
+      drv = _percent_decode_component(mp, pass_start, pass_len, &pass_dec);
+    if (drv != ccol_success) {
+      _mem_free(mp, user_dec);
+      _mem_free(mp, pass_dec);
+      return drv;
+    }
+
+    size_t up_len = strlen(user_dec) + 1 + strlen(pass_dec);
+    char *up = (char *)_mem_alloc(mp, up_len + 1);
+    if (!up) {
+      _mem_free(mp, user_dec);
+      _mem_free(mp, pass_dec);
+      return ccol_not_enough_memory;
+    }
+    snprintf(up, up_len + 1, "%s:%s", user_dec, pass_dec);
+    _mem_free(mp, user_dec);
+    _mem_free(mp, pass_dec);
+
+    char *b64 = _base64_encode(mp, up, up_len);
+    _mem_free(mp, up);
+    if (!b64) return ccol_not_enough_memory;
+
+    size_t auth_len = 6 + strlen(b64); /* strlen("Basic ") == 6 */
+    userinfo_authorization = (char *)_mem_alloc(mp, auth_len + 1);
+    if (!userinfo_authorization) {
+      _mem_free(mp, b64);
+      return ccol_not_enough_memory;
+    }
+    snprintf(userinfo_authorization, auth_len + 1, "Basic %s", b64);
+    _mem_free(mp, b64);
+
+    host_scan_start = last_at + 1;
+  }
+
+  bool is_ipv6 = false;
+  const char *host_start;
+  const char *q;
+  if (*host_scan_start == '[') {
+    const char *close = host_scan_start + 1;
+    while (*close && *close != ']') close++;
+    if (*close != ']') {
+      _mem_free(mp, userinfo_authorization);
+      return ccol_http_invalid_url;
+    }
+    char after = close[1];
+    if (after != '\0' && after != ':' && after != '/' && after != '?' &&
+        after != '#') {
+      _mem_free(mp, userinfo_authorization);
+      return ccol_http_invalid_url;
+    }
+    host_start = host_scan_start + 1;
+    q = close; /* points at ']' */
+    is_ipv6 = true;
+  } else {
+    host_start = host_scan_start;
+    q = host_scan_start;
+    while (*q && *q != ':' && *q != '/' && *q != '?' && *q != '#') q++;
+  }
   size_t host_len = (size_t)(q - host_start);
-  if (host_len == 0) return ccol_http_invalid_url;
+  if (host_len == 0) {
+    _mem_free(mp, userinfo_authorization);
+    return ccol_http_invalid_url;
+  }
+  if (is_ipv6) q++; /* skip past ']' */
 
   uint16_t port = https ? 443 : 80;
   if (*q == ':') {
@@ -224,73 +427,189 @@ static ccol_retval_t _parse_chttp_url(ccol_memmgmt_procs_t *mp, const char *url,
     size_t pd = 0;
     while (*q && isdigit((unsigned char)*q)) {
       pv = pv * 10 + (unsigned long)(*q - '0');
-      if (pv > 65535) return ccol_http_invalid_url;
+      if (pv > 65535) {
+        _mem_free(mp, userinfo_authorization);
+        return ccol_http_invalid_url;
+      }
       q++;
       pd++;
     }
-    if (pd == 0 || pv == 0) return ccol_http_invalid_url;
+    if (pd == 0 || pv == 0) {
+      _mem_free(mp, userinfo_authorization);
+      return ccol_http_invalid_url;
+    }
     port = (uint16_t)pv;
   }
 
-  const char *pq = *q ? q : "/";
+  /* A fragment is a hard, unconditional delimiter -- no escaping semantics
+   * apply to '#' itself, since a fragment start is never quoted. */
+  const char *pq = (*q && *q != '#') ? q : "/";
+  size_t pq_raw_len = strlen(pq);
+  const char *frag = memchr(pq, '#', pq_raw_len);
+  size_t pq_len = frag ? (size_t)(frag - pq) : pq_raw_len;
 
   char *host = (char *)_mem_alloc(mp, host_len + 1);
-  if (!host) return ccol_not_enough_memory;
+  if (!host) {
+    _mem_free(mp, userinfo_authorization);
+    return ccol_not_enough_memory;
+  }
   memcpy(host, host_start, host_len);
   host[host_len] = '\0';
 
   char *path_and_query;
-  if (*pq == '/') {
-    size_t pq_len = strlen(pq);
+  if (pq_len > 0 && pq[0] == '/') {
     path_and_query = (char *)_mem_alloc(mp, pq_len + 1);
     if (!path_and_query) {
       _mem_free(mp, host);
+      _mem_free(mp, userinfo_authorization);
       return ccol_not_enough_memory;
     }
-    memcpy(path_and_query, pq, pq_len + 1);
+    memcpy(path_and_query, pq, pq_len);
+    path_and_query[pq_len] = '\0';
   } else {
-    /* pq starts with '?' (query with no path component); synthesise '/'. */
-    size_t pq_len = strlen(pq);
+    /* pq is empty, or starts with '?' (query with no path component);
+     * synthesise a leading '/'. */
     path_and_query = (char *)_mem_alloc(mp, pq_len + 2);
     if (!path_and_query) {
       _mem_free(mp, host);
+      _mem_free(mp, userinfo_authorization);
       return ccol_not_enough_memory;
     }
     path_and_query[0] = '/';
-    memcpy(path_and_query + 1, pq, pq_len + 1);
+    memcpy(path_and_query + 1, pq, pq_len);
+    path_and_query[pq_len + 1] = '\0';
   }
 
-  int needed = snprintf(NULL, 0, "%s://%s:%u", https ? "https" : "http", host,
-                        (unsigned)port);
+  char *bracketed_host = _format_bracketed_host(mp, host, is_ipv6);
+  if (!bracketed_host) {
+    _mem_free(mp, host);
+    _mem_free(mp, path_and_query);
+    _mem_free(mp, userinfo_authorization);
+    return ccol_not_enough_memory;
+  }
+
+  int needed = snprintf(NULL, 0, "%s://%s:%u", https ? "https" : "http",
+                        bracketed_host, (unsigned)port);
   if (needed < 0) {
     _mem_free(mp, host);
     _mem_free(mp, path_and_query);
+    _mem_free(mp, bracketed_host);
+    _mem_free(mp, userinfo_authorization);
     return ccol_unexpected_failure;
   }
   char *origin_key = (char *)_mem_alloc(mp, (size_t)needed + 1);
   if (!origin_key) {
     _mem_free(mp, host);
     _mem_free(mp, path_and_query);
+    _mem_free(mp, bracketed_host);
+    _mem_free(mp, userinfo_authorization);
     return ccol_not_enough_memory;
   }
   snprintf(origin_key, (size_t)needed + 1, "%s://%s:%u",
-           https ? "https" : "http", host, (unsigned)port);
+           https ? "https" : "http", bracketed_host, (unsigned)port);
+  _mem_free(mp, bracketed_host);
 
   out->is_https = https;
+  out->is_ipv6 = is_ipv6;
   out->host = host;
   out->port = port;
   out->path_and_query = path_and_query;
   out->origin_key = origin_key;
+  out->userinfo_authorization = userinfo_authorization;
   return ccol_success;
 }
 
+/* RFC 3986 SS5.2.4 "Remove Dot Segments". Operates on a path only -- never
+ * on a query string, since a literal ".."/"." inside query bytes must never
+ * be reinterpreted as path navigation; callers strip/re-append any
+ * "?query" before/after calling this. */
+static char *_remove_dot_segments(ccol_memmgmt_procs_t *mp, const char *path) {
+  size_t len = strlen(path);
+  char *in = (char *)_mem_alloc(mp, len + 1);
+  if (!in) return NULL;
+  memcpy(in, path, len + 1);
+  char *out = (char *)_mem_alloc(mp, len + 1);
+  if (!out) {
+    _mem_free(mp, in);
+    return NULL;
+  }
+  size_t out_len = 0;
+  char *p = in;
+  while (*p) {
+    if (strncmp(p, "../", 3) == 0) {
+      p += 3;
+    } else if (strncmp(p, "./", 2) == 0) {
+      p += 2;
+    } else if (strncmp(p, "/./", 3) == 0) {
+      p += 2;
+    } else if (strcmp(p, "/.") == 0) {
+      p[1] = '\0';
+    } else if (strncmp(p, "/../", 4) == 0) {
+      p += 3;
+      while (out_len > 0 && out[out_len - 1] != '/') out_len--;
+      if (out_len > 0) out_len--;
+    } else if (strcmp(p, "/..") == 0) {
+      p[1] = '\0';
+      while (out_len > 0 && out[out_len - 1] != '/') out_len--;
+      if (out_len > 0) out_len--;
+    } else if (strcmp(p, ".") == 0 || strcmp(p, "..") == 0) {
+      p += strlen(p);
+    } else {
+      const char *seg_start = p;
+      if (*p == '/') p++;
+      while (*p && *p != '/') p++;
+      size_t seg_len = (size_t)(p - seg_start);
+      memcpy(out + out_len, seg_start, seg_len);
+      out_len += seg_len;
+    }
+  }
+  out[out_len] = '\0';
+  _mem_free(mp, in);
+  return out;
+}
+
+/* RFC 3986 SS5.3 "merge" (path component only -- the caller splices the
+ * reference's own query string back on afterward, once dot-segment removal
+ * has run; see _remove_dot_segments' own comment for why). */
+static char *_merge_ref_path(ccol_memmgmt_procs_t *mp,
+                             const char *base_path_and_query,
+                             const char *ref_path, size_t ref_path_len) {
+  const char *base_query = strchr(base_path_and_query, '?');
+  size_t base_path_len = base_query
+                             ? (size_t)(base_query - base_path_and_query)
+                             : strlen(base_path_and_query);
+
+  size_t dir_len;
+  if (ref_path_len == 0) {
+    /* A query-only reference ("?x") reuses the base path verbatim. */
+    dir_len = base_path_len;
+  } else {
+    const char *last_slash = NULL;
+    for (size_t i = 0; i < base_path_len; i++)
+      if (base_path_and_query[i] == '/') last_slash = &base_path_and_query[i];
+    dir_len = last_slash ? (size_t)(last_slash - base_path_and_query) + 1 : 0;
+  }
+
+  char *out = (char *)_mem_alloc(mp, dir_len + ref_path_len + 1);
+  if (!out) return NULL;
+  memcpy(out, base_path_and_query, dir_len);
+  memcpy(out + dir_len, ref_path, ref_path_len);
+  out[dir_len + ref_path_len] = '\0';
+  return out;
+}
+
 /*
- * Resolves a Location header against the current hop's URL. Supports
- * absolute URLs and root-relative paths ("/foo") only -- general relative
- * resolution (e.g. "../x") is a deliberate, documented scope reduction; no
- * test or known caller requires it, and it is a large surface to replicate
- * faithfully. Returns NULL (caller treats as ccol_http_transfer_aborted) for
- * anything else.
+ * Resolves a Location header against the current hop's URL per RFC 3986
+ * SS5.2-5.3: absolute URLs, protocol-relative references ("//host/path"),
+ * absolute-path references ("/foo"), and general relative-path references
+ * ("foo", "../foo", "./foo", "?query") are all supported. Returns NULL
+ * (caller treats as ccol_http_transfer_aborted) only for a NULL/empty
+ * location -- every other syntactically plausible Location value resolves
+ * to *some* absolute URL, exactly like a real browser or curl.
+ *
+ * The result is always re-parsed by _parse_chttp_url on the next hop, so
+ * this function does not need to know anything about userinfo/credential
+ * carry-forward -- that is handled by each tier's own hop loop.
  */
 static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
                                    const chttp_url_t *base,
@@ -300,28 +619,143 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
       strncasecmp(location, "https://", 8) == 0) {
     return ccol_strdup(mp, location);
   }
-  if (location[0] != '/') return NULL;
+
+  const char *scheme = base->is_https ? "https" : "http";
+
+  if (location[0] == '/' && location[1] == '/') {
+    /* Protocol-relative reference: borrows the base's scheme; the rest is
+     * already a well-formed authority+path for the next _parse_chttp_url
+     * call. Not dot-segment-normalised here, exactly like the fully
+     * absolute-URL case above isn't either. */
+    int needed = snprintf(NULL, 0, "%s:%s", scheme, location);
+    if (needed < 0) return NULL;
+    char *out = (char *)_mem_alloc(mp, (size_t)needed + 1);
+    if (!out) return NULL;
+    snprintf(out, (size_t)needed + 1, "%s:%s", scheme, location);
+    return out;
+  }
+
+  char *authority = _format_bracketed_host(mp, base->host, base->is_ipv6);
+  if (!authority) return NULL;
 
   bool default_port = (base->is_https && base->port == 443) ||
                       (!base->is_https && base->port == 80);
-  const char *scheme = base->is_https ? "https" : "http";
+
+  char *new_path = NULL;
+  if (location[0] == '/') {
+    /* Absolute-path reference: T.path = remove_dot_segments(R.path)
+     * directly, no merge against the base path needed. */
+    new_path = _remove_dot_segments(mp, location);
+  } else {
+    const char *ref_query = strchr(location, '?');
+    size_t ref_path_len =
+        ref_query ? (size_t)(ref_query - location) : strlen(location);
+    char *merged =
+        _merge_ref_path(mp, base->path_and_query, location, ref_path_len);
+    if (merged) {
+      new_path = _remove_dot_segments(mp, merged);
+      _mem_free(mp, merged);
+    }
+    if (new_path && ref_query) {
+      size_t path_len = strlen(new_path);
+      size_t query_len = strlen(ref_query);
+      char *with_query = (char *)_mem_alloc(mp, path_len + query_len + 1);
+      if (!with_query) {
+        _mem_free(mp, new_path);
+        new_path = NULL;
+      } else {
+        memcpy(with_query, new_path, path_len);
+        memcpy(with_query + path_len, ref_query, query_len);
+        with_query[path_len + query_len] = '\0';
+        _mem_free(mp, new_path);
+        new_path = with_query;
+      }
+    }
+  }
+  if (!new_path) {
+    _mem_free(mp, authority);
+    return NULL;
+  }
+
   int needed =
       default_port
-          ? snprintf(NULL, 0, "%s://%s%s", scheme, base->host, location)
-          : snprintf(NULL, 0, "%s://%s:%u%s", scheme, base->host,
-                     (unsigned)base->port, location);
-  if (needed < 0) return NULL;
-  char *out = (char *)_mem_alloc(mp, (size_t)needed + 1);
-  if (!out) return NULL;
-  if (default_port) {
-    snprintf(out, (size_t)needed + 1, "%s://%s%s", scheme, base->host,
-             location);
-  } else {
-    snprintf(out, (size_t)needed + 1, "%s://%s:%u%s", scheme, base->host,
-             (unsigned)base->port, location);
+          ? snprintf(NULL, 0, "%s://%s%s", scheme, authority, new_path)
+          : snprintf(NULL, 0, "%s://%s:%u%s", scheme, authority,
+                     (unsigned)base->port, new_path);
+  if (needed < 0) {
+    _mem_free(mp, authority);
+    _mem_free(mp, new_path);
+    return NULL;
   }
+  char *out = (char *)_mem_alloc(mp, (size_t)needed + 1);
+  if (!out) {
+    _mem_free(mp, authority);
+    _mem_free(mp, new_path);
+    return NULL;
+  }
+  if (default_port) {
+    snprintf(out, (size_t)needed + 1, "%s://%s%s", scheme, authority,
+             new_path);
+  } else {
+    snprintf(out, (size_t)needed + 1, "%s://%s:%u%s", scheme, authority,
+             (unsigned)base->port, new_path);
+  }
+  _mem_free(mp, authority);
+  _mem_free(mp, new_path);
   return out;
 }
+
+/* White-box test helpers exposing _parse_chttp_url/_resolve_redirect_url --
+ * chttp_url_t is a file-local type, so these flatten the result into out
+ * params/a plain string. NULL mp means every result is plain-malloc'd (see
+ * _mem_alloc); test code frees them with plain free(). Not part of the
+ * public API -- gated so these symbols do not leak into a production build
+ * of libccollections.so, matching every other white-box helper in this
+ * file. */
+#ifdef RUNNING_UNIT_TESTS
+ccol_retval_t _chttp_parse_url_for_tests(const char *url, bool *is_https_out,
+                                         bool *is_ipv6_out, char **host_out,
+                                         uint16_t *port_out,
+                                         char **path_and_query_out,
+                                         char **origin_key_out,
+                                         char **userinfo_authorization_out) {
+  ccol_memmgmt_procs_t *mp = NULL;
+  chttp_url_t parsed;
+  ccol_retval_t rv = _parse_chttp_url(mp, url, &parsed);
+  if (rv != ccol_success) return rv;
+  if (is_https_out) *is_https_out = parsed.is_https;
+  if (is_ipv6_out) *is_ipv6_out = parsed.is_ipv6;
+  if (port_out) *port_out = parsed.port;
+  if (host_out)
+    *host_out = parsed.host;
+  else
+    _mem_free(mp, parsed.host);
+  if (path_and_query_out)
+    *path_and_query_out = parsed.path_and_query;
+  else
+    _mem_free(mp, parsed.path_and_query);
+  if (origin_key_out)
+    *origin_key_out = parsed.origin_key;
+  else
+    _mem_free(mp, parsed.origin_key);
+  if (userinfo_authorization_out)
+    *userinfo_authorization_out = parsed.userinfo_authorization;
+  else
+    _mem_free(mp, parsed.userinfo_authorization);
+  return ccol_success;
+}
+
+char *_chttp_resolve_redirect_url_for_tests(const char *base_url,
+                                            const char *location) {
+  ccol_memmgmt_procs_t *mp = NULL;
+  chttp_url_t base;
+  ccol_retval_t rv = _parse_chttp_url(mp, base_url, &base);
+  if (rv != ccol_success) return NULL;
+  char *result = _resolve_redirect_url(mp, &base, location);
+  _url_free(mp, &base);
+  return result;
+}
+#endif /* RUNNING_UNIT_TESTS */
 
 /* ========================================================================== */
 /*                         REQUEST LIFECYCLE                                  */
@@ -929,8 +1363,9 @@ static void _ob_append_cstr(chttp_outbuf_t *b, const char *s) {
  */
 static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
                                         const chttp_request_t *req,
-                                        const chttp_url_t *url, char **out_buf,
-                                        size_t *out_len) {
+                                        const chttp_url_t *url,
+                                        const char *auto_authorization,
+                                        char **out_buf, size_t *out_len) {
   chttp_outbuf_t ob = {.mp = mp};
 
   _ob_append_cstr(&ob, chttp_method_str(req->method));
@@ -943,12 +1378,15 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
   bool has_ua = chttp_request_get_header(req, "user-agent") != NULL;
   bool has_cl = chttp_request_get_header(req, "content-length") != NULL;
   bool has_ct = _map_has_content_type((chmap)req->headers);
+  bool has_auth = chttp_request_get_header(req, "authorization") != NULL;
 
   if (!has_host) {
     bool default_port = (url->is_https && url->port == 443) ||
                         (!url->is_https && url->port == 80);
     _ob_append_cstr(&ob, "host: ");
+    if (url->is_ipv6) _ob_append(&ob, "[", 1);
     _ob_append_cstr(&ob, url->host);
+    if (url->is_ipv6) _ob_append(&ob, "]", 1);
     if (!default_port) {
       char portbuf[16];
       int pn = snprintf(portbuf, sizeof(portbuf), ":%u", (unsigned)url->port);
@@ -959,6 +1397,11 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
   if (!has_accept) _ob_append_cstr(&ob, "accept: */*\r\n");
   if (!has_ua)
     _ob_append_cstr(&ob, "user-agent: c_collections-chttpclient/1.0\r\n");
+  if (!has_auth && auto_authorization) {
+    _ob_append_cstr(&ob, "authorization: ");
+    _ob_append_cstr(&ob, auto_authorization);
+    _ob_append(&ob, "\r\n", 2);
+  }
 
   if (req->headers) {
     cmap_iterator *it = chashmap_begin_iter((chmap)req->headers, NULL);
@@ -1745,6 +2188,21 @@ typedef struct {
   size_t body_len;
   char *body_content_type; /* owned copy; NULL if none */
 
+  char *carried_auth;        /* auto-injected-from-userinfo Authorization
+                              * value carried forward across hops, mirroring
+                              * Tier 1's identical carried_auth local in
+                              * chttp_do_internal -- see that function's own
+                              * comment for the full same-origin-carry /
+                              * cross-origin-drop-permanently contract. NULL
+                              * if no userinfo has been seen on this chain
+                              * (yet, or ever). Mutated only from
+                              * _async_submit_hop, at the same point the
+                              * method/body downgrade decision already
+                              * mutates this chain unguarded -- see that
+                              * function's own comment on why no additional
+                              * locking is needed. */
+  char *carried_auth_origin; /* origin_key the above was derived for */
+
   fio_tls_s *tls_ctx; /* pinned once (fio_tls_dup'd from cli->tls_ctx) for
                        * the whole chain, exactly like Tier 1's tls_ctx
                        * local -- a redirect can hop between http and
@@ -2299,6 +2757,8 @@ static void _async_chain_release(chttp_async_chain_t *chain) {
   if (chain->req_headers) __chmap_destroy(chain->req_headers);
   _mem_free(chain->mp, chain->body_data);
   _mem_free(chain->mp, chain->body_content_type);
+  _mem_free(chain->mp, chain->carried_auth);
+  _mem_free(chain->mp, chain->carried_auth_origin);
   mutex_destroy(chain->lock);
   _mem_free(chain->mp, chain);
   _client_engine_release();
@@ -3425,6 +3885,46 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
     return false;
   }
 
+  /* Auto-injected-from-userinfo Authorization carry-forward -- mirrors Tier
+   * 1's identical carried_auth/carried_auth_origin locals in
+   * chttp_do_internal exactly (same-origin carry, permanent cross-origin
+   * drop). Safe to mutate chain->carried_auth* here without any additional
+   * locking: _async_submit_hop runs strictly sequentially per chain (one
+   * hop's setup always completes -- including this mutation -- before the
+   * next hop is ever submitted), the same invariant every other unguarded
+   * chain-field mutation in this file's redirect machinery already relies
+   * on (e.g. the method/body downgrade decision in _async_handle_redirect).
+   */
+  const char *effective_auth = NULL;
+  if (url.userinfo_authorization) {
+    effective_auth = url.userinfo_authorization;
+  } else if (chain->carried_auth &&
+            strcmp(chain->carried_auth_origin, url.origin_key) == 0) {
+    effective_auth = chain->carried_auth;
+  }
+  if (url.userinfo_authorization) {
+    char *na = ccol_strdup(chain->mp, url.userinfo_authorization);
+    char *no = ccol_strdup(chain->mp, url.origin_key);
+    if (!na || !no) {
+      _mem_free(chain->mp, na);
+      _mem_free(chain->mp, no);
+      _url_free(chain->mp, &url);
+      _async_fulfill_chain(chain, ccol_not_enough_memory, NULL);
+      _async_chain_release(chain);
+      return false;
+    }
+    _mem_free(chain->mp, chain->carried_auth);
+    _mem_free(chain->mp, chain->carried_auth_origin);
+    chain->carried_auth = na;
+    chain->carried_auth_origin = no;
+  } else if (chain->carried_auth &&
+            strcmp(chain->carried_auth_origin, url.origin_key) != 0) {
+    _mem_free(chain->mp, chain->carried_auth);
+    _mem_free(chain->mp, chain->carried_auth_origin);
+    chain->carried_auth = NULL;
+    chain->carried_auth_origin = NULL;
+  }
+
   chttp_async_ctx_t *ctx = NULL;
   bool reused = _async_idle_pool_take(chain->cli, url.origin_key, chain, &ctx);
   if (!reused) {
@@ -3487,8 +3987,8 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
   hop_req.body.len = body_len;
   hop_req.body.content_type = body_content_type;
 
-  prv =
-      _serialize_request(chain->mp, &hop_req, &url, &ctx->wire, &ctx->wire_len);
+  prv = _serialize_request(chain->mp, &hop_req, &url, effective_auth,
+                           &ctx->wire, &ctx->wire_len);
   if (prv != ccol_success) {
     _url_free(chain->mp, &url);
     _async_submit_hop_fail(ctx, prv);
@@ -4244,6 +4744,15 @@ static ccol_retval_t chttp_do_internal(chttpcli cli, const chttp_request_t *req,
   chttp_method_t cur_method = req->method;
   chttp_request_body_t cur_body = req->body;
 
+  /* Auto-injected-from-userinfo Authorization, carried across hops as long
+   * as the origin (scheme+host+port) doesn't change -- dropped permanently
+   * (curl's default, non "--location-trusted" behavior) the first time it
+   * does, and never re-acquired even if a later hop circles back to the
+   * original origin. A caller-supplied Authorization header is completely
+   * unaffected by any of this -- see _serialize_request's has_auth check. */
+  char *carried_auth = NULL;
+  char *carried_auth_origin = NULL;
+
   ccol_retval_t result = ccol_http_too_many_redirects;
 
   for (int hop = 0; hop <= CHTTP_MAX_REDIRECTS; hop++) {
@@ -4263,13 +4772,43 @@ static ccol_retval_t chttp_do_internal(chttpcli cli, const chttp_request_t *req,
       break;
     }
 
+    const char *effective_auth = NULL;
+    if (url.userinfo_authorization) {
+      effective_auth = url.userinfo_authorization;
+    } else if (carried_auth &&
+              strcmp(carried_auth_origin, url.origin_key) == 0) {
+      effective_auth = carried_auth;
+    }
+    if (url.userinfo_authorization) {
+      char *na = ccol_strdup(mp, url.userinfo_authorization);
+      char *no = ccol_strdup(mp, url.origin_key);
+      if (!na || !no) {
+        _mem_free(mp, na);
+        _mem_free(mp, no);
+        _url_free(mp, &url);
+        result = ccol_not_enough_memory;
+        break;
+      }
+      _mem_free(mp, carried_auth);
+      _mem_free(mp, carried_auth_origin);
+      carried_auth = na;
+      carried_auth_origin = no;
+    } else if (carried_auth &&
+              strcmp(carried_auth_origin, url.origin_key) != 0) {
+      _mem_free(mp, carried_auth);
+      _mem_free(mp, carried_auth_origin);
+      carried_auth = NULL;
+      carried_auth_origin = NULL;
+    }
+
     chttp_request_t hop_req = *req;
     hop_req.method = cur_method;
     hop_req.body = cur_body;
 
     char *wire = NULL;
     size_t wire_len = 0;
-    prv = _serialize_request(mp, &hop_req, &url, &wire, &wire_len);
+    prv = _serialize_request(mp, &hop_req, &url, effective_auth, &wire,
+                             &wire_len);
     if (prv != ccol_success) {
       _url_free(mp, &url);
       result = prv;
@@ -4409,6 +4948,8 @@ static ccol_retval_t chttp_do_internal(chttpcli cli, const chttp_request_t *req,
   }
 
   _mem_free(mp, cur_url);
+  _mem_free(mp, carried_auth);
+  _mem_free(mp, carried_auth_origin);
   if (tls_ctx) fio_tls_destroy(tls_ctx);
   _slot_release(cli);
   return result;

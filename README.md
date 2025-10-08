@@ -2843,6 +2843,8 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 
 `chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: a vendored `llhttp` parser drives request/response framing over raw sockets, TLS is provided by the same vendored facil.io ("facio") OpenSSL layer that backs `chttpserver`, and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library.
 
+**Supported URL forms:** `http://`/`https://` only. Both a plain hostname/IPv4 literal and a bracketed IPv6 literal (`https://[::1]:8443/path`) are accepted. A URL may embed credentials (`http://user:pass@host/path`); they are turned into an `Authorization: Basic ...` header automatically unless the request already sets its own `Authorization` header. A trailing `#fragment` is recognized and discarded (fragments are a client-side-only concept and are never sent to a server). See "Redirect Following" below for how embedded credentials interact with redirects to a different origin.
+
 The module is split across two headers: `chttp.h` declares shared types (`chttp_method_t`, `chttp_tls_config_t`, `chttp_request_body_t`, and status-code constants), and `chttpclient.h` declares the client API. Including `chttpclient.h` pulls in `chttp.h` automatically.
 
 **Header:** `#include <chttpclient.h>`
@@ -3035,7 +3037,11 @@ Each `chttpcli` handle has two independent layers:
 - **Concurrency limiter** -- bounds the number of simultaneous in-flight requests. The limit defaults to the CPU count (`chttpclient_set_pool_size`); when the limit is reached, `chttpclient_do` blocks until a slot frees up, providing natural backpressure with no external semaphore required.
 - **Keep-alive idle pool** -- after a request completes on an HTTP/1.1 keep-alive connection, the connection (and, for HTTPS, its already-established TLS session) is kept open and cached per origin (scheme + host + port) so a later request to the same origin can skip DNS resolution, the TCP handshake, and the TLS handshake entirely. A cheap liveness probe runs before reuse; a connection the peer has since closed is transparently discarded and replaced with a fresh one. Because the probe and the actual request are not atomic, the peer can still close the connection in between; if that happens, the request is transparently retried exactly once against a brand-new connection -- this covers both a failed write and a failed (or empty) read, as long as no response bytes have been parsed or handed back to the caller yet, so nothing is ever silently duplicated. Idle connections are bounded per origin and in total, and expire after a short idle period -- once the caps are hit, a completed connection is simply closed instead of cached, which only forfeits the reuse optimisation and never affects correctness.
 
+### Redirect Following
+
 Redirects (`chttpclient_do` and `chttpclient_do_streaming` both follow up to 50 hops) apply an explicit method/body policy on each hop: 301, 302, and 303 rewrite the method to a bodyless GET (HEAD is left as HEAD), while 307 and 308 preserve the original method and resend the original body.
+
+A `Location` header may be an absolute URL, a protocol-relative reference (`//host/path`), an absolute-path reference (`/foo`), or a general relative reference (`foo`, `../foo`, `./foo`, `?query`) -- all are resolved per RFC 3986. If the original request URL embedded credentials, the resulting `Authorization: Basic ...` header is resent on every subsequent hop as long as the redirect stays on the same origin (scheme + host + port); it is dropped permanently -- and never re-acquired even if a later hop redirects back to the original origin -- the first time a hop changes origin. This matches curl's default (non `--location-trusted`) behavior and prevents credentials from leaking to an unexpected host via a redirect. A caller-supplied `Authorization` header set explicitly on the request is unaffected by any of this.
 
 ### Scoped Variant
 

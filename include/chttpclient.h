@@ -423,7 +423,21 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * Redirects (301, 302, 303, 307, 308) are followed automatically, up to 50
  * hops. 301/302/303 rewrite the method to a bodyless GET (HEAD is left as
  * HEAD, per RFC semantics); 307/308 preserve the original method and resend
- * the original body unchanged.
+ * the original body unchanged. The Location header may be an absolute URL,
+ * a protocol-relative reference ("//host/path"), an absolute-path reference
+ * ("/foo"), or a general relative reference ("foo", "../foo", "./foo",
+ * "?query") -- all are resolved per RFC 3986.
+ *
+ * The request URL accepts http:// and https:// only. Both a plain
+ * hostname/IPv4 literal and a bracketed IPv6 literal
+ * ("https://[::1]:8443/path") are accepted. A URL may embed credentials
+ * ("http://user:pass@host/path"); they are turned into an
+ * "Authorization: Basic ..." header automatically unless the request
+ * already sets its own Authorization header. That auto-injected header is
+ * resent on every redirect hop that stays on the same origin (scheme,
+ * host, and port) and is dropped permanently the first time a hop changes
+ * origin. A trailing "#fragment" is recognized and discarded (fragments
+ * are never sent to a server).
  *
  * @param cli       Client handle.
  * @param req       Request to execute.
@@ -440,7 +454,8 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *             Client is being destroyed.
  *         ccol_http_invalid_url
  *             URL is malformed, uses an unsupported scheme (only http:// and
- *             https:// are supported), or has a missing/invalid host or port.
+ *             https:// are supported), or has a missing/invalid host,
+ *             port, or userinfo component.
  *         ccol_http_host_resolution_failed
  *             DNS resolution failed for the target host.
  *         ccol_http_connection_failed

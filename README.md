@@ -1,8 +1,8 @@
 # C Collections
 
-`c_collections` is a library of generic data structures and utilities for C. It provides what the C standard library leaves out: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, inter-thread communication primitives, a thread pool, a structured logger, a JSON parser, a YAML parser, an HTTP client, and an HTTP server -- all under one consistent API.
+`c_collections` is a library of generic data structures and utilities for C. It provides what the C standard library leaves out: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, inter-thread communication primitives, a thread pool, a structured logger, a JSON parser, a YAML parser, an HTTP client, and an HTTP server; all under one consistent API.
 
-If you have used Python's `list` and `dict`, Java's `ArrayList` and `HashMap`, or C++'s `vector` and `map`, the containers here will feel familiar. The difference is that this library is plain C11 -- no code generators, no external build tools, no hidden runtime.
+If you have used Python's `list` and `dict`, Java's `ArrayList` and `HashMap`, or C++'s `vector` and `map`, the containers here will feel familiar. The difference is that this library is plain C11; no code generators, no external build tools, no hidden runtime.
 
 Every module follows the same naming conventions (`*_construct`, `*_destroy`, and optional `*_scoped` variants for automatic cleanup), so once you have learned how one container works, the others follow naturally. The library compiles cleanly under GCC and Clang at `-Wall -Wextra -Werror`, and each module ships with a test suite that runs under Valgrind.
 
@@ -45,7 +45,7 @@ C gives you direct control over memory, near-zero runtime overhead, and programs
 
 In Python, `scores = []` gives you a resizable list that grows on demand. In Java, `new ArrayList<Integer>()` gives you a typed dynamic array. In C, the closest built-in equivalent is a fixed-size array whose size you must know at compile time. Growing it means calling `realloc` yourself. A hash map means implementing one from scratch or tracking down a library. This is a valuable learning exercise, but in a real program you usually want to spend your energy on the problem you are actually solving, not on reimplementing containers you have already studied.
 
-The challenge with generic containers in C is catching type mistakes at compile time. The classic approach passes everything as `void *` -- a pointer to untyped memory -- which works with any element type but means the compiler cannot warn you about a mismatch. A `double *` silently passed where an `int *` is expected compiles without a warning and produces garbage at runtime. This library uses a C11 feature called `_Generic` that lets a macro inspect the static type of its argument at compile time and dispatch to different code accordingly. The result is that accidental type mismatches -- the kind you make by mistake rather than by deliberate cast -- are caught at the call site before the program runs.
+The challenge with generic containers in C is catching type mistakes at compile time. The classic approach passes everything as `void *` (a pointer to untyped memory) which works with any element type but means the compiler cannot warn you about a mismatch. A `double *` silently passed where an `int *` is expected compiles without a warning and produces garbage at runtime. This library uses a C11 feature called `_Generic` that lets a macro inspect the static type of its argument at compile time and dispatch to different code accordingly. The result is that accidental type mismatches (the kind you make by mistake rather than by deliberate cast) are caught at the call site before the program runs.
 
 ---
 
@@ -59,7 +59,7 @@ A second approach uses preprocessor token-pasting to generate a new family of ty
 
 A third approach generates C source code from a higher-level description using an external tool. This is clean at the API level but adds a step to the build process and breaks the direct edit-compile-run cycle.
 
-This library uses C11's built-in `_Generic` expression instead. A `_Generic` expression dispatches to different code branches at compile time based on the type of its argument, with no extra tools and no generated files. The macros look like typed containers, behave like typed containers, and produce a compiler error if you use them with the wrong type. The cost is a requirement for a C11-capable compiler with GNU extensions -- a reasonable constraint on any modern development machine.
+This library uses C11's built-in `_Generic` expression instead. A `_Generic` expression dispatches to different code branches at compile time based on the type of its argument, with no extra tools and no generated files. The macros look like typed containers, behave like typed containers, and produce a compiler error if you use them with the wrong type. The cost is a requirement for a C11-capable compiler with GNU extensions; a reasonable constraint on any modern development machine.
 
 ---
 
@@ -67,14 +67,14 @@ This library uses C11's built-in `_Generic` expression instead. A `_Generic` exp
 
 ### 3.1 Compile-Time Type Dispatch
 
-C11 introduced a built-in expression called `_Generic` that selects different code branches at compile time based on the static type of a sub-expression. Every container macro in this library uses `_Generic` to inspect the type of its argument at the call site and dispatch to the correct internal path. This catches *accidental* type mismatches -- the kind you make without thinking -- at compile time, before the program runs.
+C11 introduced a built-in expression called `_Generic` that selects different code branches at compile time based on the static type of a sub-expression. Every container macro in this library uses `_Generic` to inspect the type of its argument at the call site and dispatch to the correct internal path. This catches *accidental* type mismatches (the kind you make without thinking) at compile time, before the program runs.
 
 It is worth being precise about what this provides and what it does not. If you write:
 
 ```c
 cvec_construct(scores, int);
 double d = 3.14;
-cvec_push(scores, *(int *)&d);   /* explicit cast -- compiles, stores garbage */
+cvec_push(scores, *(int *)&d);   /* explicit cast; compiles, stores garbage */
 ```
 
 the cast fools the `_Generic` check and nothing stops you. The library provides compile-time type *dispatch*, not type *safety* in the strict sense: it catches mistakes at the call site as long as you are not actively subverting the type system with a cast. That is enough to eliminate the most common class of bugs while adding zero runtime overhead.
@@ -139,7 +139,7 @@ Omitting `*_redeclare` before using a type-dispatching macro in a new scope is t
 
 ### 3.4 Error Handling
 
-Errors in this library fall into two broad categories. Programming mistakes -- passing `NULL` where a valid pointer is required, or requesting an element at an out-of-bounds index -- are handled by calling `fatal_err()`, which prints a diagnostic message and terminates the program. This is intentional: a programming mistake should be loud and obvious rather than silently propagated and discovered much later. When you need to handle an expected failure gracefully (for example, a key that might or might not be in a map), use the underlying raw functions, which return a `ccol_retval_t` value you can inspect.
+Errors in this library fall into two broad categories. Programming mistakes (passing `NULL` where a valid pointer is required, or requesting an element at an out-of-bounds index) are handled by calling `fatal_err()`, which prints a diagnostic message and terminates the program. This is intentional: a programming mistake should be loud and obvious rather than silently propagated and discovered much later. When you need to handle an expected failure gracefully (for example, a key that might or might not be in a map), use the underlying raw functions, which return a `ccol_retval_t` value you can inspect.
 
 Functions return `ccol_retval_t`, an enum whose value zero indicates success and whose negative values indicate specific failure conditions:
 
@@ -279,7 +279,7 @@ Each module is fully independent: include only the headers your code needs. The 
 
 ## 5. Dynamic Array - `cvector`
 
-`cvector` is a resizable array. Unlike a plain C array (`int arr[100]`), a vector grows automatically when you push more elements than it can currently hold -- you do not need to know the final size in advance. Indexed access is O(1) (constant time regardless of the array's size). Insertion at the end is amortised O(1): the array occasionally doubles its capacity, but the average cost per insertion, spread over many insertions, stays constant. Sorting is O(n log n) and stable (equal elements keep their original relative order). The internal capacity is always at least four elements, doubles when the array is full, and halves when occupancy drops below one quarter.
+`cvector` is a resizable array. Unlike a plain C array (`int arr[100]`), a vector grows automatically when you push more elements than it can currently hold; you do not need to know the final size in advance. Indexed access is O(1) (constant time regardless of the array's size). Insertion at the end is amortised O(1): the array occasionally doubles its capacity, but the average cost per insertion, spread over many insertions, stays constant. Sorting is O(n log n) and stable (equal elements keep their original relative order). The internal capacity is always at least four elements, doubles when the array is full, and halves when occupancy drops below one quarter.
 
 **Header:** `#include <cvector.h>`
 
@@ -352,35 +352,38 @@ void compute(void) {
 }
 ```
 
-### Real-World Use Case: Paginated Query Results
+### Real-World Use Case: Viewing Exam Scores One Page at a Time
 
-A common pattern in API servers is to accumulate rows from a database cursor into a vector, sort them by a field, and return a page window. The vector handles growth automatically, and the scoped variant ensures cleanup even on early return:
+A simple grading program collects every student's score into a vector, sorts the scores from highest to lowest, and prints only one "page" of results at a time; handy when a class roster is too long to fit on one screen. The vector handles growth automatically, and the scoped variant ensures cleanup even on early return:
 
 ```c
+typedef struct { char name[32]; int score; } Student;
+
 int cmp_score_desc(const void *a, const void *b) {
-    const Row *ra = (const Row *)a;
-    const Row *rb = (const Row *)b;
-    return (rb->score > ra->score) - (rb->score < ra->score);
+    const Student *sa = (const Student *)a;
+    const Student *sb = (const Student *)b;
+    return (sb->score > sa->score) - (sb->score < sa->score);
 }
 
-void render_page(DbCursor *cursor, JsonResponse *resp,
-                 size_t page, size_t page_size) {
-    cvec_construct_scoped(rows, Row);
+void print_page(Student *all_students, size_t count,
+                size_t page, size_t page_size) {
+    cvec_construct_scoped(students, Student);
 
-    Row row;
-    while (db_cursor_next(cursor, &row) == DB_OK)
-        cvec_push(rows, row);
+    for (size_t i = 0; i < count; i++)
+        cvec_push(students, all_students[i]);
 
-    cvector_sort_with_comparison_proc(rows, cmp_score_desc);
+    cvector_sort_with_comparison_proc(students, cmp_score_desc);
 
     size_t start = page * page_size;
     size_t end   = start + page_size;
-    if (end > cvec_size(rows)) end = cvec_size(rows);
+    if (end > cvec_size(students)) end = cvec_size(students);
 
-    for (size_t i = start; i < end; i++)
-        json_append_row(resp, &cvec_at(rows, i));
+    for (size_t i = start; i < end; i++) {
+        Student s = cvec_at(students, i);
+        printf("%-12s %d\n", s.name, s.score);
+    }
 
-    /* rows is destroyed automatically here regardless of which path was taken */
+    /* students is destroyed automatically here regardless of which path was taken */
 }
 ```
 
@@ -515,9 +518,9 @@ cstr_destroy(key);
 chmap_destroy(map);
 ```
 
-### Real-World Use Case: Parsing Configuration Files
+### Real-World Use Case: Reading a Simple Settings File
 
-A configuration reader that accepts `key = value` lines from a file illustrates the string manipulation API. Trimming handles inconsistent whitespace, splitting tokenises the line by delimiter, and `cstr_starts_with` skips comment lines cheaply:
+Many small programs (games included) keep their settings in a plain text file with one `key = value` pair per line, plus the occasional `#` comment. Reading a file like this is a good illustration of the string manipulation API: trimming handles inconsistent whitespace, splitting tokenises the line by delimiter, and `cstr_starts_with` skips comment lines cheaply:
 
 ```c
 void load_config(const char *path, chmap config) {
@@ -740,35 +743,38 @@ ccol_for_each(coords, it, {
 chmap_destroy(coords);
 ```
 
-### Real-World Use Case: HTTP Request Router
+### Real-World Use Case: Command Dispatcher for a Text Adventure Game
 
-An HTTP router maps `"METHOD /path"` strings to handler function pointers. `chmap_get_ptr` provides O(1) dispatch and returns `NULL` for unregistered routes without triggering a fatal error:
+A small text adventure game reads a word typed by the player ("look", "inventory", "quit") and needs to run the matching function. Storing each command as a string key mapped to a function pointer turns this into a single O(1) map lookup instead of a long chain of `if (strcmp(...))` comparisons. `chmap_get_ptr` returns `NULL` for a command the game does not recognise, without triggering a fatal error:
 
 ```c
-typedef void (*handler_fn)(HttpRequest *, HttpResponse *);
+typedef void (*command_fn)(void);
 
-void router_init(chmap router) {
-    chmap_redeclare(router, char*, handler_fn);
+void cmd_look(void)      { printf("You see a dusty room and a locked door.\n"); }
+void cmd_inventory(void) { printf("You are carrying: a torch, a rusty key.\n"); }
+void cmd_quit(void)      { printf("Goodbye!\n"); }
 
-    handler_fn h;
-    h = list_users_handler;   chmap_insert(router, "GET /users",       h);
-    h = create_user_handler;  chmap_insert(router, "POST /users",      h);
-    h = get_user_handler;     chmap_insert(router, "GET /users/:id",   h);
-    h = delete_user_handler;  chmap_insert(router, "DELETE /users/:id", h);
+void commands_init(chmap commands) {
+    chmap_redeclare(commands, char*, command_fn);
+
+    command_fn f;
+    f = cmd_look;      chmap_insert(commands, "look",      f);
+    f = cmd_inventory; chmap_insert(commands, "inventory", f);
+    f = cmd_quit;      chmap_insert(commands, "quit",      f);
 }
 
-void router_dispatch(chmap router, HttpRequest *req, HttpResponse *resp) {
-    chmap_redeclare(router, char*, handler_fn);
+void run_command(chmap commands, const char *typed_word) {
+    chmap_redeclare(commands, char*, command_fn);
 
-    char key[128];
-    snprintf(key, sizeof(key), "%s %s", req->method, req->path);
+    char key[64];
+    snprintf(key, sizeof(key), "%s", typed_word);
 
-    handler_fn *fn = chmap_get_ptr(router, key);
+    command_fn *fn = chmap_get_ptr(commands, key);
     if (!fn) {
-        resp->status = 404;
+        printf("I don't understand \"%s\".\n", typed_word);
         return;
     }
-    (*fn)(req, resp);
+    (*fn)();
 }
 ```
 
@@ -826,7 +832,7 @@ These macros come from `citerators.h`, which `chashmap.h` includes automatically
 
 ## 8. Ordered Map - `cbstmap`
 
-An ordered map works like a hash map -- you look up values by key -- but it always keeps its keys in sorted order. Iterating over it visits entries from smallest key to largest. This makes it the right choice when you need both fast lookup and ordered traversal.
+An ordered map works like a hash map (you look up values by key) but it always keeps its keys in sorted order. Iterating over it visits entries from smallest key to largest. This makes it the right choice when you need both fast lookup and ordered traversal.
 
 `cbstmap` is implemented as a self-balancing AVL tree, which guarantees O(log n) worst-case performance for insertion, deletion, and lookup regardless of the order in which keys are inserted. (A naive binary search tree degrades to O(n) on sorted input; the AVL rebalancing prevents that.)
 
@@ -923,7 +929,7 @@ cbmap_destroy(env);
 
 ### Real-World Use Case: Live Leaderboard
 
-A game server maintains a leaderboard where players are ranked by score. Storing negated scores as keys causes the AVL tree's ascending in-order traversal to visit entries from highest to lowest score. Insertion and lookup are both O(log n); the tree rebalances automatically:
+A simple game keeps a leaderboard where players are ranked by score. Storing negated scores as keys causes the AVL tree's ascending in-order traversal to visit entries from highest to lowest score. Insertion and lookup are both O(log n); the tree rebalances automatically:
 
 ```c
 void leaderboard_upsert(cbmap board, const char *player, int score) {
@@ -1065,16 +1071,16 @@ Output:
 [2] = 78
 ```
 
-### Real-World Use Case: Unified Audit Log Serializer
+### Real-World Use Case: Printing Any Product's Details
 
-A function that serializes any `chmap` of string fields to a structured log line works without knowing the concrete field names at compile time. `chmap_redeclare` restores the companion type variables in the new scope, and `ccol_for_each` handles the rest:
+A small shop-inventory program wants one function that can print the details of any product, whether it is a shirt with a color and a size or a mug with a color and a material. Since every product's fields are stored in a `chmap`, the same printing function works for all of them without knowing the field names in advance. `chmap_redeclare` restores the companion type variables in the new scope, and `ccol_for_each` handles the rest:
 
 ```c
-void audit_log_event(clog lg, const char *event, chmap fields) {
+void print_product(const char *name, chmap fields) {
     chmap_redeclare(fields, char*, char*);
 
-    cstr_construct_scoped(line, event);
-    cstr_append(line, " ");
+    cstr_construct_scoped(line, name);
+    cstr_append(line, ": ");
 
     ccol_for_each(fields, it, {
         cstr_append(line, *ccol_iter_key_ptr(it));
@@ -1083,7 +1089,24 @@ void audit_log_event(clog lg, const char *event, chmap fields) {
         cstr_append(line, " ");
     });
 
-    log_info(lg, "%s", cstr_c_str(line));
+    printf("%s\n", cstr_c_str(line));
+}
+
+int main(void) {
+    chmap_construct(shirt, char*, char*);
+    chmap_insert(shirt, "color", "blue");
+    chmap_insert(shirt, "size",  "L");
+
+    chmap_construct(mug, char*, char*);
+    chmap_insert(mug, "color",    "white");
+    chmap_insert(mug, "material", "ceramic");
+
+    print_product("shirt", shirt);   /* shirt: color=blue size=L */
+    print_product("mug",   mug);     /* mug: color=white material=ceramic */
+
+    chmap_destroy(shirt);
+    chmap_destroy(mug);
+    return 0;
 }
 ```
 
@@ -1163,38 +1186,37 @@ csort_sort(people, 3, sizeof(Person), person_getter, compare_by_age, NULL);
 
 **Complexity guarantees:** O(n log n) in all cases; O(n) auxiliary space; stable (equal elements preserve their original order); iterative (no recursion, no stack overflow risk for large inputs).
 
-### Real-World Use Case: Priority Job Queue
+### Real-World Use Case: Sorting a Printer Queue by Priority
 
-A background worker processes jobs in priority order while preserving submission order for jobs at the same priority level. The stable sort guarantee means equal-priority jobs are always dispatched in the order they arrived, without any secondary sort key:
+A simple print spooler wants urgent documents to print before ordinary ones, while documents of the same priority still print in the order they were sent. The stable sort guarantee means two same-priority documents are always printed in their original order, without needing a separate tiebreaker field:
 
 ```c
 typedef struct {
-    int      priority;    /* higher value = higher priority */
-    uint64_t submit_ts;
-    char     payload[128];
-} Job;
+    int      priority;    /* higher value = prints sooner */
+    uint64_t submitted_at;
+    char     filename[128];
+} PrintJob;
 
-int cmp_job_desc(const void *a, const void *b) {
-    const Job *ja = (const Job *)a;
-    const Job *jb = (const Job *)b;
+int cmp_priority_desc(const void *a, const void *b) {
+    const PrintJob *ja = (const PrintJob *)a;
+    const PrintJob *jb = (const PrintJob *)b;
     /* Descending: higher priority first */
     return (jb->priority > ja->priority) - (jb->priority < ja->priority);
 }
 
 void *job_getter(void *collection, size_t index) {
-    return &((Job *)collection)[index];
+    return &((PrintJob *)collection)[index];
 }
 
-void dispatch_next_batch(Job *queue, size_t count, size_t batch_size) {
-    csort_sort(queue, count, sizeof(Job), job_getter, cmp_job_desc, NULL);
+void send_to_printer(PrintJob *queue, size_t count) {
+    csort_sort(queue, count, sizeof(PrintJob), job_getter, cmp_priority_desc, NULL);
 
-    size_t n = count < batch_size ? count : batch_size;
-    for (size_t i = 0; i < n; i++)
-        submit_to_thread_pool(&queue[i]);
+    for (size_t i = 0; i < count; i++)
+        printf("printing: %s (priority %d)\n", queue[i].filename, queue[i].priority);
 }
 ```
 
-Because `csort` is a stable sort, two jobs submitted at times `t1 < t2` with identical priority are always ordered `t1, t2` after sorting, regardless of how many sort passes have occurred.
+Because `csort` is a stable sort, two documents submitted at times `t1 < t2` with identical priority are always printed in the order `t1, t2`, regardless of how many times the queue has been re-sorted.
 
 ---
 
@@ -1304,44 +1326,42 @@ r_mempool_free_entry(slot);
 r_mempool_destroy(pool);  /* The buffer itself is not freed */
 ```
 
-### Real-World Use Case: Per-Connection Context Pool
+### Real-World Use Case: A Fixed Pool of Bullets for a Game
 
-A TCP server that handles thousands of short-lived connections benefits from a fixed-size pool for connection context structs. Allocation and deallocation are O(1) free-list operations with no heap fragmentation, and the fixed capacity bounds peak memory usage at startup:
+A simple arcade-style game can spawn dozens of bullets on screen at once, each one living for only a second or two. Allocating and freeing each bullet with `malloc`/`free` works, but a fixed-size pool is faster (an O(1) free-list operation, no heap fragmentation) and bounds peak memory usage up front, which matters during a hectic "bullet hell" moment:
 
 ```c
 typedef struct {
-    int      fd;
-    char     peer_addr[46];
-    uint64_t connect_ts;
-} ConnCtx;
+    float x, y;
+    float vx, vy;
+    int   lifetime_frames;
+} Bullet;
 
-static mempool *conn_pool;
+static mempool *bullet_pool;
 
-void server_init(int max_connections) {
-    conn_pool = mempool_create(
-        (size_t)max_connections,
-        sizeof(ConnCtx),
+void game_init(int max_bullets_on_screen) {
+    bullet_pool = mempool_create(
+        (size_t)max_bullets_on_screen,
+        sizeof(Bullet),
         /*fallback=*/false,      /* return NULL instead of calling malloc */
-        /*single_threaded=*/false,
+        /*single_threaded=*/true,
         NULL, NULL);
 }
 
-ConnCtx *conn_accept(int fd, const char *peer) {
-    ConnCtx *ctx = mempool_calloc_entry(conn_pool);   /* zero-initialised */
-    if (!ctx) return NULL;                             /* pool exhausted */
-    ctx->fd = fd;
-    strncpy(ctx->peer_addr, peer, sizeof(ctx->peer_addr) - 1);
-    ctx->connect_ts = now_us();
-    return ctx;
+Bullet *fire_bullet(float x, float y, float vx, float vy) {
+    Bullet *b = mempool_calloc_entry(bullet_pool);   /* zero-initialised */
+    if (!b) return NULL;                              /* too many bullets already on screen */
+    b->x = x; b->y = y; b->vx = vx; b->vy = vy;
+    b->lifetime_frames = 120;
+    return b;
 }
 
-void conn_close(ConnCtx *ctx) {
-    close(ctx->fd);
-    mempool_free_entry(ctx);   /* O(1) - returned to the free list */
+void bullet_expire(Bullet *b) {
+    mempool_free_entry(b);   /* O(1) - returned to the free list */
 }
 ```
 
-Because every slot is the same size as `ConnCtx`, there is no fragmentation within the pool. Peak memory is fully determined by `max_connections * sizeof(ConnCtx)` - no surprises under load.
+Because every slot is the same size as `Bullet`, there is no fragmentation within the pool. Peak memory is fully determined by `max_bullets_on_screen * sizeof(Bullet)` - no surprises even when the screen is full of bullets.
 
 ### Driving Other Containers from a Pool
 
@@ -1351,7 +1371,7 @@ Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocat
 
 ## 12. Thread Communication - `cthreadcomm`
 
-When two threads need to share data, you need a safe handoff mechanism. Simply reading and writing the same variable from two threads without coordination is a data race -- the result is undefined behaviour that can corrupt data or crash unpredictably.
+When two threads need to share data, you need a safe handoff mechanism. Simply reading and writing the same variable from two threads without coordination is a data race; the result is undefined behaviour that can corrupt data or crash unpredictably.
 
 The thread communication module provides three primitives for passing data between threads safely. All three use a zero-copy ownership transfer model: on a successful send, the sender's pointer is set to `NULL` and the receiver becomes the sole owner of the data. This ensures that only one thread holds a reference to any given payload at a time, eliminating an entire class of concurrency bugs.
 
@@ -1494,54 +1514,54 @@ int main(void) {
 }
 ```
 
-### Real-World Use Case: Async Image Processing Pipeline
+### Real-World Use Case: Generating Photo Thumbnails in the Background
 
-A web server offloads image resizing to a pool of worker threads. The zero-copy ownership model means the heap-allocated job struct is never duplicated: `chan_send_zc` nulls the sender's pointer on success, and the worker becomes the sole owner:
+A simple photo album application generates a small thumbnail for each photo the user imports. Doing this resizing work on a background thread keeps the main program (and its UI) responsive while the thumbnail is being created. The zero-copy ownership model means the heap-allocated job struct is never duplicated: `chan_send_zc` nulls the sender's pointer on success, and the worker becomes the sole owner:
 
 ```c
 typedef struct {
-    char path[256];
-    int  target_width;
-    int  target_height;
-    char output_path[256];
-} ImageJob;
+    char photo_path[256];
+    int  thumb_width;
+    int  thumb_height;
+    char thumb_path[256];
+} ThumbnailJob;
 
-void *image_worker(void *arg) {
+void *thumbnail_worker(void *arg) {
     channel *ch = (channel *)arg;
     for (;;) {
         c_message_t msg;
         chan_recv_zc(ch, &msg);
         if (!msg.data) break;   /* NULL sentinel signals shutdown */
 
-        ImageJob *job = (ImageJob *)msg.data;
-        resize_image(job->path, job->target_width, job->target_height,
-                     job->output_path);
+        ThumbnailJob *job = (ThumbnailJob *)msg.data;
+        make_thumbnail(job->photo_path, job->thumb_width, job->thumb_height,
+                       job->thumb_path);
 
-        c_message_t ack = {
-            .data = strdup(job->output_path),
-            .size = strlen(job->output_path) + 1
+        c_message_t done = {
+            .data = strdup(job->thumb_path),
+            .size = strlen(job->thumb_path) + 1
         };
         free(job);
-        chan_send_zc(ch, &ack);   /* transfer result back to dispatcher */
+        chan_send_zc(ch, &done);   /* hand the result back to the main thread */
     }
     return NULL;
 }
 
-void dispatch_resize(channel *ch, const char *src, int w, int h,
-                     const char *dst) {
-    ImageJob *job = malloc(sizeof(ImageJob));
-    snprintf(job->path,        sizeof(job->path),        "%s", src);
-    snprintf(job->output_path, sizeof(job->output_path), "%s", dst);
-    job->target_width  = w;
-    job->target_height = h;
+void make_thumbnail_async(channel *ch, const char *photo, int w, int h,
+                          const char *thumb_out) {
+    ThumbnailJob *job = malloc(sizeof(ThumbnailJob));
+    snprintf(job->photo_path, sizeof(job->photo_path), "%s", photo);
+    snprintf(job->thumb_path, sizeof(job->thumb_path), "%s", thumb_out);
+    job->thumb_width  = w;
+    job->thumb_height = h;
 
     c_message_t msg = { .data = job, .size = sizeof(*job) };
-    chan_send_zc(ch, &msg);   /* job is now NULL - worker owns it */
+    chan_send_zc(ch, &msg);   /* job is now NULL - the worker owns it */
 
-    c_message_t ack;
-    chan_recv_zc(ch, &ack);
-    printf("done: %s\n", (char *)ack.data);
-    free(ack.data);
+    c_message_t done;
+    chan_recv_zc(ch, &done);
+    printf("thumbnail ready: %s\n", (char *)done.data);
+    free(done.data);
 }
 ```
 
@@ -1598,7 +1618,7 @@ ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
 **Key properties:**
 
 - A queue win is zero-copy: the message is dequeued atomically and ownership transferred.
-- A file descriptor read win: `msg.data` is heap-allocated by `ccol_select` (caller must `free`). `msg.size` is the byte count. EOF yields `msg.data = NULL`. The amount of data read per call depends on the fd type: datagram fds (SOCK_DGRAM / SOCK_SEQPACKET) receive one full datagram captured in a 66 KiB buffer; O_NONBLOCK stream / non-socket fds are fully drained until EAGAIN; blocking stream / non-socket fds receive exactly one read per call using a buffer of max(4096, max_bytes) bytes -- pass `max_bytes > 4096` via `selectable_from_fd_limited` to read more per call; remaining data is returned on the next `ccol_select` call (epoll is level-triggered -- use O_NONBLOCK if full-drain behaviour is required).
+- A file descriptor read win: `msg.data` is heap-allocated by `ccol_select` (caller must `free`). `msg.size` is the byte count. EOF yields `msg.data = NULL`. The amount of data read per call depends on the fd type: datagram fds (SOCK_DGRAM / SOCK_SEQPACKET) receive one full datagram captured in a 66 KiB buffer; O_NONBLOCK stream / non-socket fds are fully drained until EAGAIN; blocking stream / non-socket fds receive exactly one read per call using a buffer of max(4096, max_bytes) bytes; pass `max_bytes > 4096` via `selectable_from_fd_limited` to read more per call; remaining data is returned on the next `ccol_select` call (epoll is level-triggered; use O_NONBLOCK if full-drain behaviour is required).
 - A file descriptor write win: readiness is reported only; the caller then calls `write(2)`.
 - Queue-only selectable sets use a condition variable path with no `epoll` overhead. Any file descriptor in the set switches the implementation to `epoll(7)` automatically.
 
@@ -1701,45 +1721,44 @@ clru_construct(cache, int, double, 4, NULL, NULL, on_evict);
 clru_destroy(cache);
 ```
 
-### Real-World Use Case: Session Token Validation Cache
+### Real-World Use Case: Caching Dictionary Word Lookups
 
-An authentication middleware validates bearer tokens on every request. Token validation involves a database round-trip on the first occurrence; subsequent requests for the same token are served from the cache in O(1). The remote getter coalesces concurrent misses for the same token, so only one database query executes even under a burst of parallel requests for an uncached token:
+A simple dictionary application looks up word definitions from a large word list on disk. Reading the file and scanning for a match takes a noticeable moment; looking up a word that was already searched for recently should feel instant. The remote getter coalesces concurrent misses for the same word, so even if several parts of the program ask for the same not-yet-cached word at the same time, only one slow lookup actually happens:
 
 ```c
 /* Called automatically by the cache on a miss.
-   Returns the user ID for the token, or 0 if the token is invalid. */
-bool load_user_id(const cmap_pair *key_pair, cmap_pair *val_pair) {
-    const char *token = (const char *)key_pair->ptr;
+   Looks up a word's definition from the (slow) dictionary file. */
+bool load_definition(const cmap_pair *key_pair, cmap_pair *val_pair) {
+    const char *word = (const char *)key_pair->ptr;
 
-    long *uid = malloc(sizeof(long));
-    if (!uid) return false;
+    char *definition = slow_dictionary_lookup(word);   /* e.g. scans a large file */
+    if (!definition) return false;                       /* word not found */
 
-    *uid = db_validate_token(token);
-    if (*uid == 0) { free(uid); return false; }
-
-    val_pair->ptr  = uid;
-    val_pair->size = sizeof(long);
+    val_pair->ptr  = definition;
+    val_pair->size = strlen(definition) + 1;
     return true;
 }
 
-/* Module-level cache: hold the 8192 most recently validated tokens */
-clru_construct(token_cache, char*, long, 8192, load_user_id, NULL, NULL);
+/* Module-level cache: remember the 500 most recently looked-up words */
+clru_construct(dictionary_cache, char*, char*, 500, load_definition, NULL, NULL);
 
-/* Called from multiple threads on every inbound request */
-int auth_middleware(const char *bearer_token) {
-    clru_redeclare(token_cache, char*, long);
+/* Called every time the user looks up a word */
+void lookup_word(const char *word) {
+    clru_redeclare(dictionary_cache, char*, char*);
 
-    char *tok = (char *)bearer_token;
-    long uid  = 0;
-    if (clru_get(token_cache, tok, &uid) != ccol_success)
-        return 401;
+    char *w = (char *)word;
+    char *definition = NULL;
+    if (clru_get(dictionary_cache, w, &definition) != ccol_success) {
+        printf("No definition found for \"%s\".\n", word);
+        return;
+    }
 
-    attach_user_context(uid);
-    return 200;
+    printf("%s: %s\n", word, definition);
+    free(definition);   /* clru_get transferred ownership of this string to us */
 }
 ```
 
-The LRU eviction policy bounds memory usage: the 8192 most recently validated tokens stay hot in memory; older ones are evicted silently. The coalescing property means that a sudden spike of requests for an uncached token causes exactly one database query rather than a thundering herd.
+The LRU eviction policy bounds memory usage: the 500 most recently looked-up words stay hot in memory; older ones are quietly forgotten. The coalescing property means that looking up the same not-yet-cached word from several places at once causes exactly one slow file scan rather than several redundant ones.
 
 ### Memory Ownership for Retrieved Values
 
@@ -2001,7 +2020,7 @@ All four function pointers must be set; passing a partially-populated struct ret
 | `CLOG_WARN`  | 3 | |
 | `CLOG_ERROR` | 4 | Appends a backtrace |
 | `CLOG_ALERT` | 5 | Action required immediately; maps to RFC 5424 severity 1; appends a backtrace |
-| `CLOG_FATAL` | 6 | Appends a backtrace and terminates the process via `exit(EXIT_FAILURE)`; bypasses `min_level` -- the message is always written |
+| `CLOG_FATAL` | 6 | Appends a backtrace and terminates the process via `exit(EXIT_FAILURE)`; bypasses `min_level`; the message is always written |
 | `CLOG_OFF`   | 7 | Disables all output (except a fatal termination) when used as `min_level` |
 
 The minimum level can be changed at any time with `clog_set_level`. Messages below the current minimum are dropped silently, with the sole exception of `CLOG_FATAL` which is always written regardless of `min_level`.
@@ -2024,54 +2043,50 @@ clog_clear_fields(lg);   /* remove all fields */
 
 Field values that contain spaces, `=`, `"`, `\`, or control characters are automatically double-quoted and backslash-escaped in the output.
 
-### Real-World Use Case: Per-Request Structured Logging
+### Real-World Use Case: Per-Order Logging for a Small Shop
 
-A service logs every inbound request with a unique request ID and the authenticated user. Using `clog_derive`, each request handler gets a private logger that shares the underlying file and mutex with the root logger but carries its own request-scoped fields. The derived handle is released when the request completes without affecting the root or any other derived loggers:
+A small order-processing script logs what happens to every customer order, tagged with that order's ID and customer name. Using `clog_derive`, each order gets a private logger that shares the underlying file and mutex with the root logger but carries its own order-scoped fields. The derived handle is released once the order is done, without affecting the root or any other derived loggers:
 
 ```c
 clog g_logger;   /* root logger, initialised at startup */
 
-void handle_request(const char *req_id, long uid, const char *path) {
-    clog req_log = clog_derive(g_logger);
+void process_order(const char *order_id, const char *customer, const char *item) {
+    clog order_log = clog_derive(g_logger);
 
-    char uid_buf[32];
-    snprintf(uid_buf, sizeof(uid_buf), "%ld", uid);
+    clog_set_field(order_log, "order_id", order_id);
+    clog_set_field(order_log, "customer", customer);
 
-    clog_set_field(req_log, "request_id", req_id);
-    clog_set_field(req_log, "user_id",    uid_buf);
-    clog_set_field(req_log, "path",       path);
+    log_info(order_log, "order received: %s", item);
 
-    log_info(req_log, "request received");
-
-    int rc = process_request(path);
+    int rc = ship_item(item);
     if (rc != 0)
-        log_error(req_log, "request failed with code %d", rc);
+        log_error(order_log, "shipping failed with code %d", rc);
     else
-        log_info(req_log, "request completed");
+        log_info(order_log, "order shipped");
 
-    clog_close(req_log);   /* this handle is released; root logger is unaffected */
+    clog_close(order_log);   /* this handle is released; root logger is unaffected */
 }
 
 int main(void) {
     clog_rotation_cfg_t rot = {
         .size_rotation_enabled  = true,
-        .max_file_size          = 100L * 1024L * 1024L,   /* 100 MiB */
+        .max_file_size          = 10L * 1024L * 1024L,   /* 10 MiB */
         .time_rotation_enabled  = true,
-        .rotation_interval_secs = 86400,                   /* daily */
-        .max_rotated_files      = 30,
+        .rotation_interval_secs = 86400,                  /* daily */
+        .max_rotated_files      = 14,
     };
-    g_logger = clog_open_file_mp("/var/log/myservice.log", CLOG_INFO, &rot, NULL);
-    clog_set_field(g_logger, "service", "myservice");
-    clog_set_field(g_logger, "env",     "prod");
+    g_logger = clog_open_file_mp("/var/log/orders.log", CLOG_INFO, &rot, NULL);
+    clog_set_field(g_logger, "app", "order-processor");
 
-    /* ... accept and dispatch requests ... */
+    process_order("ORD-1001", "Alice", "coffee mug");
+    process_order("ORD-1002", "Bob",   "desk lamp");
 
     clog_close(g_logger);
     return 0;
 }
 ```
 
-Request-scoped fields (`request_id`, `user_id`, `path`) appear in every line emitted by `req_log` but are absent from lines emitted by the root logger or any other derived logger. All writes share a single mutex, so output from concurrent requests is never interleaved.
+Order-scoped fields (`order_id`, `customer`) appear in every line emitted by `order_log` but are absent from lines emitted by the root logger or any other derived logger. All writes share a single mutex, so output from orders processed concurrently is never interleaved.
 
 ### Reference: Core Operations
 
@@ -2124,7 +2139,7 @@ Request-scoped fields (`request_id`, `user_id`, `path`) appear in every line emi
 
 ## 15. JSON Parser / Serializer / DOM - `cjson`
 
-JSON (JavaScript Object Notation) is a text format for structured data, widely used in web APIs and configuration files. `cjson` parses a JSON string into a tree of nodes held in memory (a DOM -- Document Object Model), lets you read and modify any node in the tree, and serialises the result back to a JSON string when you are done.
+JSON (JavaScript Object Notation) is a text format for structured data, widely used in web APIs and configuration files. `cjson` parses a JSON string into a tree of nodes held in memory (a DOM; Document Object Model), lets you read and modify any node in the tree, and serialises the result back to a JSON string when you are done.
 
 Two path macros, `cjson_get` and `cjson_set`, let you navigate the tree using a dot-separated path string like `"users.#0.name"` instead of chaining individual lookup calls by hand.
 
@@ -2226,14 +2241,14 @@ cjson_set(doc, "users.#0.name", 42);  /* name is now an integer */
 
 Duplicate object keys set within the JSON object use **last-value-wins** semantics; the final occurrence of a key is retained and prior occurrences are deep-freed.
 
-### Real-World Use Case: Webhook Payload Normalization
+### Real-World Use Case: Marking a To-Do Item as Done
 
-A webhook receiver must validate an incoming JSON payload, normalize a status field, inject a server-assigned timestamp, and forward the updated document downstream. The `cjson_get` and `cjson_set` path macros allow targeted updates deep in the tree without rebuilding the whole document:
+A small to-do list application stores each task as a JSON file. When the user checks a task off, the program needs to validate that the file has the field it expects, flip the task's status, and stamp it with the time it was completed. The `cjson_get` and `cjson_set` path macros allow targeted updates deep in the tree without rebuilding the whole document:
 
 ```c
-char *normalize_webhook(const char *raw_payload) {
+char *mark_task_done(const char *raw_json) {
     char *err = NULL;
-    cjson doc = cjson_parse(raw_payload, &err);
+    cjson doc = cjson_parse(raw_json, &err);
     if (!doc) {
         fprintf(stderr, "parse error: %s\n", err);
         free(err);
@@ -2241,18 +2256,17 @@ char *normalize_webhook(const char *raw_payload) {
     }
 
     /* Validate a required field */
-    cjson event_type = cjson_get(doc, "event.type");
-    if (!event_type || cjson_type(event_type) != CJSON_STRING) {
+    cjson title = cjson_get(doc, "task.title");
+    if (!title || cjson_type(title) != CJSON_STRING) {
         cjson_destroy(doc);
         return NULL;
     }
 
     /* Overwrite the status field in place - old node is deep-freed automatically */
-    cjson_set(doc, "event.status", "received");
+    cjson_set(doc, "task.status", "done");
 
-    /* Inject server-side metadata */
-    cjson_set(doc, "meta.processed_at", (long long)time(NULL));
-    cjson_set(doc, "meta.processor",    "gateway-v2");
+    /* Stamp when the task was completed */
+    cjson_set(doc, "task.completed_at", (long long)time(NULL));
 
     char *out = cjson_serialize(doc);
     cjson_destroy(doc);
@@ -2352,8 +2366,8 @@ cjson_destroy(root);
 | Plain scalars | Unquoted values |
 | Single-quoted scalars | No escape processing; `''` encodes a literal `'` |
 | Double-quoted scalars | Full YAML escape sequences including `\uXXXX` |
-| Literal block scalars | `|` -- newlines preserved |
-| Folded block scalars | `>` -- newlines folded to spaces except blank lines |
+| Literal block scalars | `|`; newlines preserved |
+| Folded block scalars | `>`; newlines folded to spaces except blank lines |
 | Block scalar chomping | `|+` keep, `|-` strip, `|` clip (default) |
 | Anchors and aliases | `&name` / `*name`; aliases resolve to deep clones; scoped per document |
 | YAML 1.2 core schema | Implicit type resolution for null/bool/int/float |
@@ -2366,7 +2380,7 @@ cjson_destroy(root);
 
 ### Multi-document streams
 
-When the input contains multiple `---`-delimited documents, `cyaml_parse` (and its variants) returns a single `CYAML_LIST` node whose elements are the individual document roots in order.  A single-document input is always returned as its root node directly -- no wrapping list.
+When the input contains multiple `---`-delimited documents, `cyaml_parse` (and its variants) returns a single `CYAML_LIST` node whose elements are the individual document roots in order.  A single-document input is always returned as its root node directly; no wrapping list.
 
 ```c
 /* Kubernetes-style multi-document YAML */
@@ -2401,7 +2415,7 @@ Every YAML value is represented by an opaque `cyaml` handle.  The type tag is a 
 
 | Constant | Internal storage | YAML kind |
 |---|---|---|
-| `CYAML_NULL` | -- | `null`, `~`, or empty value |
+| `CYAML_NULL` | none | `null`, `~`, or empty value |
 | `CYAML_BOOL` | `bool` | `true` / `false` and case variants |
 | `CYAML_INTEGER` | `long long` | Decimal, `0x` hex, `0o` octal |
 | `CYAML_FLOAT` | `double` | Decimal, exponent, `.inf`, `-.inf`, `.nan` |
@@ -2466,10 +2480,10 @@ To force a value to be treated as a string regardless of its content, use single
 ### Serialization
 
 ```c
-/* Block style -- human-readable YAML */
+/* Block style; human-readable YAML */
 char *block = cyaml_serialize(doc);
 
-/* Flow style -- compact single-line YAML */
+/* Flow style; compact single-line YAML */
 char *flow = cyaml_serialize_flow(doc);
 
 /* Both return heap-allocated strings that must be freed. */
@@ -2482,7 +2496,7 @@ char *block2 = cyaml_serialize(doc);
 cyaml_serialize_free_mp(block2, mp);
 ```
 
-### Path navigation -- `cyaml_get` and `cyaml_set`
+### Path navigation (`cyaml_get` and `cyaml_set`)
 
 Paths are dot-separated component strings.  A component that begins with `#` followed by one or more decimal digits addresses a sequence element by index when the current node is a sequence; otherwise it is treated as a literal mapping key.
 
@@ -2513,7 +2527,7 @@ cyaml_set(doc, "users.#0.active", (bool)true);
 cyaml_set(doc, "users.#0.score",  99);
 ```
 
-### Deleting nodes -- `cyaml_delete`
+### Deleting nodes (`cyaml_delete`)
 
 `cyaml_delete(root, path)` removes the node addressed by the path and recursively frees its entire subtree.  For dictionary parents the leaf is addressed by key; for list parents the leaf must be a `#N` component.
 
@@ -2676,7 +2690,7 @@ Multiple threads may each hold a pointer to the same future and call `ctpool_fut
 
 ### Detached Futures
 
-A detached future is the same `ctpool_future` handle, but created and fulfilled without any `cthread_pool` involved at all -- useful when some other kind of external, event-driven producer (not a ctpool worker thread) needs to hand a `void *` result back to a waiting caller using the same wait/poll/free API as a pool-backed future:
+A detached future is the same `ctpool_future` handle, but created and fulfilled without any `cthread_pool` involved at all; useful when some other kind of external, event-driven producer (not a ctpool worker thread) needs to hand a `void *` result back to a waiting caller using the same wait/poll/free API as a pool-backed future:
 
 ```c
 char *err = NULL;
@@ -2691,7 +2705,7 @@ void *result = ctpool_future_get(f);   /* blocks until fulfilled */
 ctpool_future_free(f);                 /* release the caller's reference */
 ```
 
-Like a pool-backed future, a detached future starts with a reference count of 2 (caller + producer) and is freed once both sides have released their reference, in either order -- `ctpool_future_free` may be called before `ctpool_future_fulfill`, giving the same fire-and-forget semantics as the pool-backed case. `ctpool_future_fulfill` returns `ccol_not_permitted` if called a second time on the same future -- it is a one-shot handoff, not a mutable slot. Do not call `ctpool_future_fulfill` on a future returned by `ctpool_submit_future`/`ctpool_try_submit_future`/`ctpool_timed_submit_future`; those are fulfilled internally by the worker thread that runs their task.
+Like a pool-backed future, a detached future starts with a reference count of 2 (caller + producer) and is freed once both sides have released their reference, in either order; `ctpool_future_free` may be called before `ctpool_future_fulfill`, giving the same fire-and-forget semantics as the pool-backed case. `ctpool_future_fulfill` returns `ccol_not_permitted` if called a second time on the same future; it is a one-shot handoff, not a mutable slot. Do not call `ctpool_future_fulfill` on a future returned by `ctpool_submit_future`/`ctpool_try_submit_future`/`ctpool_timed_submit_future`; those are fulfilled internally by the worker thread that runs their task.
 
 ### Phase Synchronization
 
@@ -2754,44 +2768,42 @@ void process_batch(void) {
 }
 ```
 
-### Real-World Use Case: Parallel File Processing Pipeline
+### Real-World Use Case: Counting Words Across a Book's Chapters in Parallel
 
-A log analysis tool scans a large directory, parsing each file on a worker thread and accumulating results via atomic counters. `ctpool_wait` acts as a barrier between the parallel parsing phase and the single-threaded reporting phase:
+A small writing tool counts the total number of words in a book, where each chapter is stored in its own text file. Counting each chapter is independent work, so it can run on a worker thread while a shared atomic counter accumulates the total. `ctpool_wait` acts as a barrier between the parallel counting phase and printing the final total:
 
 ```c
-typedef struct { const char *path; atomic_int *error_count; } ParseJob;
+typedef struct { const char *path; atomic_int *word_count; } ChapterJob;
 
-void parse_log_file(void *arg) {
-    ParseJob *job = (ParseJob *)arg;
+void count_words_in_chapter(void *arg) {
+    ChapterJob *job = (ChapterJob *)arg;
     FILE *f = fopen(job->path, "r");
-    if (!f) { atomic_fetch_add(job->error_count, 1); return; }
-    char line[4096];
-    while (fgets(line, sizeof(line), f))
-        process_line(line);
+    if (!f) return;
+    char word[64];
+    while (fscanf(f, "%63s", word) == 1)
+        atomic_fetch_add(job->word_count, 1);
     fclose(f);
 }
 
-void run_analysis(const char **paths, size_t count) {
+void count_book_words(const char **chapter_paths, size_t count) {
     ctpool_construct_scoped(pool, 4, ccol_invalid_size);
 
-    atomic_int errors = 0;
-    ParseJob jobs[count];
+    atomic_int total_words = 0;
+    ChapterJob jobs[count];
     for (size_t i = 0; i < count; i++) {
-        jobs[i] = (ParseJob){ .path = paths[i], .error_count = &errors };
-        ctpool_submit(pool, parse_log_file, &jobs[i], NULL);
+        jobs[i] = (ChapterJob){ .path = chapter_paths[i], .word_count = &total_words };
+        ctpool_submit(pool, count_words_in_chapter, &jobs[i], NULL);
     }
 
-    ctpool_wait(pool);   /* all files have been parsed */
+    ctpool_wait(pool);   /* every chapter has been counted */
 
-    if (atomic_load(&errors))
-        fprintf(stderr, "%d files failed to open\n", atomic_load(&errors));
-    report_results();
+    printf("total words in book: %d\n", atomic_load(&total_words));
 
     ctpool_shutdown_drain(pool);
 }
 ```
 
-The pool is created with `ccol_invalid_size` (unbounded queue) so that submitting all `count` jobs in the loop never blocks. `ctpool_wait` then acts as a join point before the single-threaded reporting phase.
+The pool is created with `ccol_invalid_size` (unbounded queue) so that submitting all `count` jobs in the loop never blocks. `ctpool_wait` then acts as a join point before printing the final total.
 
 ### Reference: Core Operations
 
@@ -2961,7 +2973,7 @@ Response headers are not accessible via the streaming path. Returning a value le
 
 ### Asynchronous Requests (Tier 2)
 
-`chttpclient_do` and `chttpclient_do_streaming` are synchronous -- each call blocks the calling thread for the duration of the request. `chttpclient_do_async` and `chttpclient_do_async_streaming` submit a request to a shared, lazily-started reactor engine and return immediately with a `ctpool_future *`:
+`chttpclient_do` and `chttpclient_do_streaming` are synchronous; each call blocks the calling thread for the duration of the request. `chttpclient_do_async` and `chttpclient_do_async_streaming` submit a request to a shared, lazily-started reactor engine and return immediately with a `ctpool_future *`:
 
 ```c
 chttpcli_construct(cli);
@@ -2984,7 +2996,7 @@ ctpool_future_free(f);
 chttpclient_destroy(cli);
 ```
 
-The engine (a small pool of reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. It shares its underlying reactor with `chttpserver`'s own engine (both acquire/release references to the same lazily-started, process-wide facio reactor), so a process may freely run `chttpserver` and `chttpclient_do_async`/`_streaming` at the same time -- e.g. a service that both serves HTTP and calls out to other HTTP services asynchronously. One consequence of that sharing: `chttpsvr_engine_stop()` (see the `chttpserver` section below) tears down the shared reactor for both modules at once, aborting any in-flight `chttpclient` async work along with every `chttpsvr` listener. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so -- unlike `chttpclient_do` -- it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`.
+The engine (a small pool of reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. It shares its underlying reactor with `chttpserver`'s own engine (both acquire/release references to the same lazily-started, process-wide facio reactor), so a process may freely run `chttpserver` and `chttpclient_do_async`/`_streaming` at the same time; e.g. a service that both serves HTTP and calls out to other HTTP services asynchronously. One consequence of that sharing: `chttpsvr_engine_stop()` (see the `chttpserver` section below) tears down the shared reactor for both modules at once, aborting any in-flight `chttpclient` async work along with every `chttpsvr` listener. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`.
 
 `chttpclient_do_async_streaming` delivers the response body via a `chttpcli_write_fn` callback, exactly like `chttpclient_do_streaming`:
 
@@ -2992,13 +3004,13 @@ The engine (a small pool of reactor threads plus a companion DNS/connect worker 
 ctpool_future *f = chttpclient_do_async_streaming(cli, req, write_to_file, out);
 ```
 
-The callback runs on one of the engine's own reactor threads -- **not** the calling thread. It must not block (no blocking I/O, no long-held locks) and must not call back into `chttpclient_do_async`/`_streaming` for any client sharing the engine, since doing so risks deadlocking against the very reactor thread it runs on. As with the synchronous streaming path, a return value less than `len` aborts the transfer (`ccol_http_transfer_aborted`), and response headers are not accessible.
+The callback runs on one of the engine's own reactor threads; **not** the calling thread. It must not block (no blocking I/O, no long-held locks) and must not call back into `chttpclient_do_async`/`_streaming` for any client sharing the engine, since doing so risks deadlocking against the very reactor thread it runs on. As with the synchronous streaming path, a return value less than `len` aborts the transfer (`ccol_http_transfer_aborted`), and response headers are not accessible.
 
-`chttpcli_async_result_t` (`rv`, `resp`) is obtained via `chttpclient_async_result_get` (a typed wrapper over `ctpool_future_get`) and released via `chttpclient_async_result_free` -- do this before `ctpool_future_free`. `resp` is non-NULL only when `rv == ccol_success`; for the streaming variant, `resp` is still populated (so `status_code` is available) but `resp->body` stays NULL, matching `chttpclient_do_streaming`'s own convention.
+`chttpcli_async_result_t` (`rv`, `resp`) is obtained via `chttpclient_async_result_get` (a typed wrapper over `ctpool_future_get`) and released via `chttpclient_async_result_free`; do this before `ctpool_future_free`. `resp` is non-NULL only when `rv == ccol_success`; for the streaming variant, `resp` is still populated (so `status_code` is available) but `resp->body` stays NULL, matching `chttpclient_do_streaming`'s own convention.
 
 ### Pooled-Sync Requests (Tier 3)
 
-`chttpclient_do_pooled` and `chttpclient_do_pooled_streaming` are thin blocking wrappers over Tier 2: they submit the request to the shared reactor engine and block until it completes, but return the exact same `ccol_retval_t`/`resp_out` (or `status_code_out`) call shape `chttpclient_do`/`chttpclient_do_streaming` use -- no future, no result struct to manage:
+`chttpclient_do_pooled` and `chttpclient_do_pooled_streaming` are thin blocking wrappers over Tier 2: they submit the request to the shared reactor engine and block until it completes, but return the exact same `ccol_retval_t`/`resp_out` (or `status_code_out`) call shape `chttpclient_do`/`chttpclient_do_streaming` use; no future, no result struct to manage:
 
 ```c
 chttpcli_response *resp = NULL;
@@ -3034,14 +3046,14 @@ Pass `NULL` to restore the defaults.
 
 Each `chttpcli` handle has two independent layers:
 
-- **Concurrency limiter** -- bounds the number of simultaneous in-flight requests. The limit defaults to the CPU count (`chttpclient_set_pool_size`); when the limit is reached, `chttpclient_do` blocks until a slot frees up, providing natural backpressure with no external semaphore required.
-- **Keep-alive idle pool** -- after a request completes on an HTTP/1.1 keep-alive connection, the connection (and, for HTTPS, its already-established TLS session) is kept open and cached per origin (scheme + host + port) so a later request to the same origin can skip DNS resolution, the TCP handshake, and the TLS handshake entirely. A cheap liveness probe runs before reuse; a connection the peer has since closed is transparently discarded and replaced with a fresh one. Because the probe and the actual request are not atomic, the peer can still close the connection in between; if that happens, the request is transparently retried exactly once against a brand-new connection -- this covers both a failed write and a failed (or empty) read, as long as no response bytes have been parsed or handed back to the caller yet, so nothing is ever silently duplicated. Idle connections are bounded per origin and in total, and expire after a short idle period -- once the caps are hit, a completed connection is simply closed instead of cached, which only forfeits the reuse optimisation and never affects correctness.
+- **Concurrency limiter**; bounds the number of simultaneous in-flight requests. The limit defaults to the CPU count (`chttpclient_set_pool_size`); when the limit is reached, `chttpclient_do` blocks until a slot frees up, providing natural backpressure with no external semaphore required.
+- **Keep-alive idle pool**; after a request completes on an HTTP/1.1 keep-alive connection, the connection (and, for HTTPS, its already-established TLS session) is kept open and cached per origin (scheme + host + port) so a later request to the same origin can skip DNS resolution, the TCP handshake, and the TLS handshake entirely. A cheap liveness probe runs before reuse; a connection the peer has since closed is transparently discarded and replaced with a fresh one. Because the probe and the actual request are not atomic, the peer can still close the connection in between; if that happens, the request is transparently retried exactly once against a brand-new connection; this covers both a failed write and a failed (or empty) read, as long as no response bytes have been parsed or handed back to the caller yet, so nothing is ever silently duplicated. Idle connections are bounded per origin and in total, and expire after a short idle period; once the caps are hit, a completed connection is simply closed instead of cached, which only forfeits the reuse optimisation and never affects correctness.
 
 ### Redirect Following
 
 Redirects (`chttpclient_do` and `chttpclient_do_streaming` both follow up to 50 hops) apply an explicit method/body policy on each hop: 301, 302, and 303 rewrite the method to a bodyless GET (HEAD is left as HEAD), while 307 and 308 preserve the original method and resend the original body.
 
-A `Location` header may be an absolute URL, a protocol-relative reference (`//host/path`), an absolute-path reference (`/foo`), or a general relative reference (`foo`, `../foo`, `./foo`, `?query`) -- all are resolved per RFC 3986. If the original request URL embedded credentials, the resulting `Authorization: Basic ...` header is resent on every subsequent hop as long as the redirect stays on the same origin (scheme + host + port); it is dropped permanently -- and never re-acquired even if a later hop redirects back to the original origin -- the first time a hop changes origin. This matches curl's default (non `--location-trusted`) behavior and prevents credentials from leaking to an unexpected host via a redirect. A caller-supplied `Authorization` header set explicitly on the request is unaffected by any of this.
+A `Location` header may be an absolute URL, a protocol-relative reference (`//host/path`), an absolute-path reference (`/foo`), or a general relative reference (`foo`, `../foo`, `./foo`, `?query`); all are resolved per RFC 3986. If the original request URL embedded credentials, the resulting `Authorization: Basic ...` header is resent on every subsequent hop as long as the redirect stays on the same origin (scheme + host + port); it is dropped permanently (and never re-acquired even if a later hop redirects back to the original origin) the first time a hop changes origin. This matches curl's default (non `--location-trusted`) behavior and prevents credentials from leaking to an unexpected host via a redirect. A caller-supplied `Authorization` header set explicitly on the request is unaffected by any of this.
 
 ### Scoped Variant
 
@@ -3060,9 +3072,9 @@ void fetch_data(void) {
 }
 ```
 
-### Real-World Use Case: Parallel API Fan-Out
+### Real-World Use Case: Checking If Your Favorite Websites Are Up
 
-A gateway handler fans out a single inbound request to three upstream services concurrently on a shared `chttpcli`. Each worker thread acquires a separate pool slot so the calls execute in parallel. The pool capacity acts as the concurrency cap:
+A small "is it down?" utility checks whether a handful of favorite websites are currently reachable, all at once instead of one after another, on a shared `chttpcli`. Each worker thread acquires a separate pool slot so the checks execute in parallel. The pool capacity acts as the concurrency cap:
 
 ```c
 typedef struct {
@@ -3070,33 +3082,35 @@ typedef struct {
     const char *url;
     chttpcli_response *resp;
     ccol_retval_t rc;
-} FetchArg;
+} CheckArg;
 
-void *fetch_worker(void *arg) {
-    FetchArg *fa = (FetchArg *)arg;
-    chttp_request_t *req = chttp_request_new(CHTTP_GET, fa->url, NULL, NULL);
-    fa->rc = chttpclient_do(fa->cli, req, &fa->resp);
+void *check_site(void *arg) {
+    CheckArg *ca = (CheckArg *)arg;
+    chttp_request_t *req = chttp_request_new(CHTTP_GET, ca->url, NULL, NULL);
+    ca->rc = chttpclient_do(ca->cli, req, &ca->resp);
     chttp_request_free(req);
     return NULL;
 }
 
-void handle_gateway_request(chttpcli cli) {
-    FetchArg args[3] = {
-        { cli, "https://svc-a.internal/status", NULL, ccol_success },
-        { cli, "https://svc-b.internal/status", NULL, ccol_success },
-        { cli, "https://svc-c.internal/status", NULL, ccol_success },
+void check_favorite_sites(chttpcli cli) {
+    CheckArg sites[3] = {
+        { cli, "https://www.example.com", NULL, ccol_success },
+        { cli, "https://www.example.org", NULL, ccol_success },
+        { cli, "https://www.example.net", NULL, ccol_success },
     };
 
     pthread_t threads[3];
     for (int i = 0; i < 3; i++)
-        pthread_create(&threads[i], NULL, fetch_worker, &args[i]);
+        pthread_create(&threads[i], NULL, check_site, &sites[i]);
     for (int i = 0; i < 3; i++)
         pthread_join(threads[i], NULL);
 
     for (int i = 0; i < 3; i++) {
-        if (args[i].rc == ccol_success)
-            printf("svc %d: %d\n", i, args[i].resp->status_code);
-        chttpclient_resp_free(args[i].resp);
+        if (sites[i].rc == ccol_success)
+            printf("%s -> %d\n", sites[i].url, sites[i].resp->status_code);
+        else
+            printf("%s -> unreachable\n", sites[i].url);
+        chttpclient_resp_free(sites[i].resp);
     }
 }
 ```
@@ -3139,6 +3153,33 @@ If the pool size is smaller than the number of concurrent callers, excess thread
 | `CHTTP_STATUS_SERVICE_UNAVAILABLE` | 503 |
 
 See `chttp.h` for the complete list.
+
+### Base64 and Basic Auth Helpers
+
+`chttp.h`/`chttp.c` expose standalone base64 and HTTP Basic auth (RFC 7617) helpers, usable independently of `chttpclient`/`chttpserver`:
+
+```c
+#include <chttp.h>
+
+/* Build a ready-to-send Authorization header VALUE (no "Authorization: " key part). */
+char *auth = chttp_basic_auth("Aladdin", "open sesame");
+/* auth == "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==" */
+chttp_request_set_header(req, "authorization", auth);
+free(auth);
+
+/* Standalone base64 encode/decode of arbitrary binary data. */
+size_t enc_len = 0;
+char *enc = chttp_base64_encode(data, data_len, &enc_len);
+
+size_t dec_len = 0;
+void *dec = chttp_base64_decode(enc, &dec_len); /* dec_len, not strlen(), is authoritative */
+free(enc);
+free(dec);
+```
+
+`chttp_base64_decode`'s output is NUL-terminated as a convenience for text payloads, but the decoded bytes may legitimately contain embedded NULs; always trust the `out_len` out-parameter, never `strlen()`, to determine the real decoded size. Each function has an `_mp`-suffixed variant taking an explicit `ccol_memmgmt_procs_t *` for a custom allocator; the plain names shown above use the default `malloc`/`free`.
+
+Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn a `user:pass@host` URL userinfo component into the `Authorization` header it auto-injects; these are not a separate, parallel implementation.
 
 ### Reference: Core Operations
 
@@ -3215,6 +3256,17 @@ See `chttp.h` for the complete list.
 | `CHTTP_TEXT_BODY(data, len)` | Inline plain-text body; sets Content-Type to `text/plain` |
 | `CHTTP_FORM_BODY(data, len)` | Inline URL-encoded form body; sets Content-Type to `application/x-www-form-urlencoded` |
 
+**Base64 and Basic Auth (`chttp.h`)**
+
+| Function | Description |
+|---|---|
+| `chttp_base64_encode(data, len, out_len)` | Base64-encode a buffer using the default allocator; `out_len` (optional) receives the encoded length |
+| `chttp_base64_encode_mp(mp, data, len, out_len)` | Same, with a custom allocator |
+| `chttp_base64_decode(b64_input, out_len)` | Base64-decode a NUL-terminated string using the default allocator; `out_len` (optional) receives the decoded byte length |
+| `chttp_base64_decode_mp(mp, b64_input, out_len)` | Same, with a custom allocator |
+| `chttp_basic_auth(username, password)` | Build a `"Basic <base64(username:password)>"` header value using the default allocator |
+| `chttp_basic_auth_mp(mp, username, password)` | Same, with a custom allocator |
+
 ---
 
 ## 19. HTTP Server - `chttpserver`
@@ -3229,7 +3281,7 @@ The module is split across two headers: `chttp.h` declares shared types (`chttp_
 
 ### Engine Lifecycle
 
-facil.io uses a single shared event loop ("engine") per process, shared with `chttpclient`'s async engine (`chttpclient_do_async`/`_streaming`/`chttpclient_do_pooled`/`_streaming`) as well -- a process may run both at once. The engine starts automatically on the first `chttpsvr_start` call (or the first `chttpclient` async call, if that happens first) and stops automatically once the last reference from either module is released -- no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the engine has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
+facil.io uses a single shared event loop ("engine") per process, shared with `chttpclient`'s async engine (`chttpclient_do_async`/`_streaming`/`chttpclient_do_pooled`/`_streaming`) as well; a process may run both at once. The engine starts automatically on the first `chttpsvr_start` call (or the first `chttpclient` async call, if that happens first) and stops automatically once the last reference from either module is released; no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the engine has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
 
 The library does not install any signal handlers. Applications are responsible for wiring shutdown into whatever signal or lifecycle mechanism they use. `chttpsvr_engine_stop()` is async-signal-safe and is the intended shutdown hook:
 
@@ -3324,7 +3376,7 @@ separate from any handle the caller passes in: passing `NULL` for `cl`
 creates an internal logger that writes only FATAL messages to stderr;
 passing a logger derives a new one from it (tagged `component=http-server`)
 that the server owns from then on. The server's own logger is closed
-automatically by `chttpsvr_destroy` / `__chttpsvr_destroy` -- the caller's
+automatically by `chttpsvr_destroy` / `__chttpsvr_destroy`; the caller's
 original `cl` handle (when non-NULL) is never touched and remains the
 caller's responsibility to close.
 
@@ -3337,7 +3389,7 @@ chttpsvr srv2 = create_chttpsvr(NULL, NULL);           /* internal stderr/FATAL-
 chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
 cfg.host                 = "0.0.0.0";          /* listen address */
 cfg.port                 = 8080;
-cfg.max_body_size        = 4*1024*1024;         /* 4 MiB body limit -- exceeding it
+cfg.max_body_size        = 4*1024*1024;         /* 4 MiB body limit; exceeding it
                                                     is a 413 (buffered) or a stream
                                                     error the handler observes via
                                                     chttpsvr_req_stream_error()
@@ -3403,11 +3455,11 @@ chttpsvr_register_handler(srv, CHTTP_DELETE, "/users/{id}",    delete_user,   NU
 chttpsvr_register_handler(srv, CHTTP_PUT,    "/items/{id}/{sub}", update_item, NULL);
 ```
 
-`{name}` segments are named path parameters. Multiple parameters per pattern are supported. Literal segments are URL-decoded before comparison using path-segment decoding rules (RFC 3986): percent-encoded sequences such as `%20` are decoded, but `+` is left as a literal `+` (not converted to a space -- that is a query-string convention). Named-parameter values follow the same decoding, so a URL like `/users/hello+world` delivers `"hello+world"` to `chttpsvr_req_param`, not `"hello world"`.
+`{name}` segments are named path parameters. Multiple parameters per pattern are supported. Literal segments are URL-decoded before comparison using path-segment decoding rules (RFC 3986): percent-encoded sequences such as `%20` are decoded, but `+` is left as a literal `+` (not converted to a space; that is a query-string convention). Named-parameter values follow the same decoding, so a URL like `/users/hello+world` delivers `"hello+world"` to `chttpsvr_req_param`, not `"hello world"`.
 
 **Parameter name restrictions:** the name inside `{...}` must consist entirely of characters from `[A-Za-z0-9_]`. Patterns with names containing any other character (spaces, hyphens, dots, etc.) are rejected at registration time with `ccol_invalid_args`.
 
-Routes are matched in registration order across all registered routers. The server scans every route looking for a path-and-method match. If at least one route matches the path but none of those match the method, the server responds with 405 Method Not Allowed. If no route matches the path at all, it responds with 404. Path matching includes validation of percent-encoded sequences: a request with invalid encoding in any path segment -- whether a literal segment (e.g. `/bad%ZZusers/{id}` against `/users/{id}`) or a captured `{name}` parameter (e.g. `/users/bad%ZZvalue` against `/users/{id}`) -- does not match the route and returns 404 regardless of which methods are registered for that pattern. This means multiple methods can be registered for the same path and all will work correctly regardless of registration order:
+Routes are matched in registration order across all registered routers. The server scans every route looking for a path-and-method match. If at least one route matches the path but none of those match the method, the server responds with 405 Method Not Allowed. If no route matches the path at all, it responds with 404. Path matching includes validation of percent-encoded sequences: a request with invalid encoding in any path segment (whether a literal segment (e.g. `/bad%ZZusers/{id}` against `/users/{id}`) or a captured `{name}` parameter (e.g. `/users/bad%ZZvalue` against `/users/{id}`)) does not match the route and returns 404 regardless of which methods are registered for that pattern. This means multiple methods can be registered for the same path and all will work correctly regardless of registration order:
 
 ```c
 chttpsvr_register_handler(srv, CHTTP_GET,  "/users",      list_users,   NULL);
@@ -3418,9 +3470,9 @@ chttpsvr_register_handler(srv, CHTTP_PUT,  "/users/{id}", update_user,  NULL);
 
 **Trailing slashes:** A request path with a trailing slash does NOT match a pattern without one. For example, `GET /users/42/` returns 404 if only `/users/{id}` is registered. Register a separate pattern if you want to accept the trailing-slash form.
 
-**Invalid patterns:** Route patterns must begin with `/`. Patterns that do not start with `/` (including the empty string) are rejected with `ccol_invalid_args`. Patterns containing consecutive slashes (e.g. `/foo//bar`) or a trailing slash (e.g. `/foo/`) are also rejected. Patterns whose `{name}` parameter segment contains characters outside `[A-Za-z0-9_]` are likewise rejected. All of these cases would produce unreachable or misleading routes because incoming paths are never normalised -- only an exact segment-by-segment match succeeds.
+**Invalid patterns:** Route patterns must begin with `/`. Patterns that do not start with `/` (including the empty string) are rejected with `ccol_invalid_args`. Patterns containing consecutive slashes (e.g. `/foo//bar`) or a trailing slash (e.g. `/foo/`) are also rejected. Patterns whose `{name}` parameter segment contains characters outside `[A-Za-z0-9_]` are likewise rejected. All of these cases would produce unreachable or misleading routes because incoming paths are never normalised; only an exact segment-by-segment match succeeds.
 
-**Thread safety:** Route and middleware registration (`chttpsvr_register_handler`, `chttpsvr_use`, `chttpsvr_router_on`, `chttpsvr_router_use`, `chttpsvr_subrouter`) is thread-safe and may be called at any time -- before or after `chttpsvr_start`. A reader-writer lock protects the routing tables so concurrent requests are never blocked by rare registration writes.
+**Thread safety:** Route and middleware registration (`chttpsvr_register_handler`, `chttpsvr_use`, `chttpsvr_router_on`, `chttpsvr_router_use`, `chttpsvr_subrouter`) is thread-safe and may be called at any time; before or after `chttpsvr_start`. A reader-writer lock protects the routing tables so concurrent requests are never blocked by rare registration writes.
 
 `chttpsvr_register_handler` and `chttpsvr_router_on` return `ccol_invalid_args` if `fn` is NULL, `pattern` is NULL, `pattern` does not start with `/`, `pattern` contains consecutive or trailing slashes, or a `{name}` segment contains characters outside `[A-Za-z0-9_]`. `chttpsvr_register_streaming_handler` and `chttpsvr_router_on_stream` apply the same guards. `chttpsvr_use` and `chttpsvr_router_use` likewise return `ccol_invalid_args` for a NULL `fn`. `chttpsvr_subrouter` returns NULL if `srv` is NULL, `prefix` is NULL, `prefix` does not start with `/`, or `prefix` contains consecutive slashes (e.g. `"//api"` or `"/a//b"`).
 
@@ -3436,13 +3488,13 @@ chttpsvr_register_handler(srv, CHTTP_ANY,  "/users/{id}", any_user,  NULL);
 
 **Duplicate routes:** Registering the same method and pattern more than once is permitted and succeeds each time, but only the first registered handler is ever invoked (first-wins policy). There is no error or warning for duplicate registrations.
 
-**Middleware limit:** Each router (the root router for global middleware, and each sub-router) caps its own middleware chain at 32 entries, enforced at registration time -- `chttpsvr_use` / `chttpsvr_router_use` return `ccol_not_permitted` (without adding the entry) on the call that would exceed the cap for that router. Separately, dispatch time also enforces a combined cap of 32 for the effective chain of a given request (global middleware + the matched router's own middleware); since each side of that sum can independently reach 32, the combined count can still exceed 32 even when neither router hit its own registration-time cap, in which case the server responds with `500 Internal Server Error` on the affected request. In practice the limit is generous and is not expected to be reached.
+**Middleware limit:** Each router (the root router for global middleware, and each sub-router) caps its own middleware chain at 32 entries, enforced at registration time; `chttpsvr_use` / `chttpsvr_router_use` return `ccol_not_permitted` (without adding the entry) on the call that would exceed the cap for that router. Separately, dispatch time also enforces a combined cap of 32 for the effective chain of a given request (global middleware + the matched router's own middleware); since each side of that sum can independently reach 32, the combined count can still exceed 32 even when neither router hit its own registration-time cap, in which case the server responds with `500 Internal Server Error` on the affected request. In practice the limit is generous and is not expected to be reached.
 
 **Root-router shadowing:** Routes registered directly on the server (via `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler`) are part of the root router, which is always evaluated before any sub-router. A root-level route whose path conflicts with a sub-router pattern will always win, regardless of registration order. Avoid registering root-level routes whose paths overlap with a sub-router's prefix and pattern combination.
 
 ### Streaming Handlers
 
-Routing happens as soon as headers are parsed, before any body byte is read -- an unmatched route is rejected immediately without ever reading the body it's about to discard, and a matched route (buffered or streaming) is handed to the server's `ctpool` right away, regardless of body size. The reactor thread's job is therefore O(1) per request: it never blocks reading a large or slow body. The worker thread that picks up the request reads the body itself, batch by batch, directly off the socket via the same Content-Length/chunked framing logic the reactor would otherwise use -- there is no temp file and no whole-body pre-buffering anywhere in the path.
+Routing happens as soon as headers are parsed, before any body byte is read; an unmatched route is rejected immediately without ever reading the body it's about to discard, and a matched route (buffered or streaming) is handed to the server's `ctpool` right away, regardless of body size. The reactor thread's job is therefore O(1) per request: it never blocks reading a large or slow body. The worker thread that picks up the request reads the body itself, batch by batch, directly off the socket via the same Content-Length/chunked framing logic the reactor would otherwise use; there is no temp file and no whole-body pre-buffering anywhere in the path.
 
 For a **buffered** handler, the worker reads the entire body into one growable buffer before invoking the handler, so `chttpsvr_req_body` still returns the complete body in one call. For a **streaming** handler, the worker hands each batch to `chttpsvr_req_read` as it arrives, so the handler can act on data before the rest of the body has even reached the server:
 
@@ -3455,21 +3507,21 @@ static void upload_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
     char buf[4096];
     ssize_t n;
     while ((n = chttpsvr_req_read(req, buf, sizeof(buf))) > 0) {
-        /* process chunk as it arrives -- no need to wait for the rest */
+        /* process chunk as it arrives; no need to wait for the rest */
     }
     if (n < 0) {
-        /* connection dropped, timed out, or the body exceeded max_body_size --
+        /* connection dropped, timed out, or the body exceeded max_body_size;
            chttpsvr_req_stream_error(req) reports which. */
     }
     chttpsvr_resp_write_str(resp, "received");
 }
 ```
 
-`chttpsvr_req_read` blocks the calling worker thread (never the reactor) until at least one byte is available, the body ends, an error occurs, `chttpsvr_config_t.stream_read_timeout_ms` elapses with no new data, or (if set) `max_body_read_duration_ms` elapses. It returns `>0` bytes read, `0` at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics), or `-1` on error -- call `chttpsvr_req_stream_error(req)` immediately afterward to distinguish a timeout (`ccol_timed_out`), an oversized body (`ccol_msg_too_large`), or a dropped connection (`ccol_http_transfer_aborted`). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1, and `chttpsvr_req_body` on a streaming handler returns `NULL`/0 (its body is never pre-extracted).
+`chttpsvr_req_read` blocks the calling worker thread (never the reactor) until at least one byte is available, the body ends, an error occurs, `chttpsvr_config_t.stream_read_timeout_ms` elapses with no new data, or (if set) `max_body_read_duration_ms` elapses. It returns `>0` bytes read, `0` at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics), or `-1` on error; call `chttpsvr_req_stream_error(req)` immediately afterward to distinguish a timeout (`ccol_timed_out`), an oversized body (`ccol_msg_too_large`), or a dropped connection (`ccol_http_transfer_aborted`). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1, and `chttpsvr_req_body` on a streaming handler returns `NULL`/0 (its body is never pre-extracted).
 
-`stream_read_timeout_ms` (default 30000ms) bounds how long a worker will wait for the *next* batch while reading a body, for both buffered and streaming routes -- it exists because `read_timeout_ms`/`idle_timeout_ms` reset on any connection activity and so do not protect against a client that trickles bytes just fast enough to never trip them, tying up a worker thread indefinitely. Note that `stream_read_timeout_ms` itself resets on *any* new byte too, so a client that sends a byte or two just before each gap expires defeats it the same way -- `max_body_read_duration_ms` (default 0, disabled) closes that loophole by capping the *total* time spent reading one request's body regardless of per-gap progress, independent of how many individual gaps it took to get there.
+`stream_read_timeout_ms` (default 30000ms) bounds how long a worker will wait for the *next* batch while reading a body, for both buffered and streaming routes; it exists because `read_timeout_ms`/`idle_timeout_ms` reset on any connection activity and so do not protect against a client that trickles bytes just fast enough to never trip them, tying up a worker thread indefinitely. Note that `stream_read_timeout_ms` itself resets on *any* new byte too, so a client that sends a byte or two just before each gap expires defeats it the same way; `max_body_read_duration_ms` (default 0, disabled) closes that loophole by capping the *total* time spent reading one request's body regardless of per-gap progress, independent of how many individual gaps it took to get there.
 
-The server's `ctpool` is created at `chttpsvr_start` time. Its capacity is controlled by `chttpsvr_config_t.worker_thread_count` and `worker_queue_capacity`. If the queue is full when a request arrives, the server responds immediately with `503 Service Unavailable` -- it never stalls the reactor thread.
+The server's `ctpool` is created at `chttpsvr_start` time. Its capacity is controlled by `chttpsvr_config_t.worker_thread_count` and `worker_queue_capacity`. If the queue is full when a request arrives, the server responds immediately with `503 Service Unavailable`; it never stalls the reactor thread.
 
 ### Middleware
 
@@ -3482,7 +3534,7 @@ static void auth_mw(chttpsvr_req *req, chttpsvr_resp *resp,
     if (!token) {
         chttpsvr_resp_set_status(resp, CHTTP_STATUS_UNAUTHORIZED);
         chttpsvr_resp_write_str(resp, "missing token");
-        return;  /* do not call next -- chain is terminated */
+        return;  /* do not call next; chain is terminated */
     }
     next(req, resp);  /* continue to the next middleware or handler */
 }
@@ -3526,7 +3578,7 @@ size_t n;
 const char **vals = chttpsvr_req_query(req, "q", &n);
 /* vals is NULL-terminated; the string values are valid for the handler
    lifetime, but the array pointer is a scratch buffer recycled on each call
-   to chttpsvr_req_query -- copy any pointers before the next call.
+   to chttpsvr_req_query; copy any pointers before the next call.
    NOTE: chttpsvr_req_query cannot distinguish OOM from key-absent; both
    return (NULL, count=0).  Call chttpsvr_req_query_oom(req) after a NULL
    return to tell them apart, or use chttpsvr_req_query_one for single-valued
@@ -3720,7 +3772,7 @@ The following components include their own internal synchronisation and are safe
 
 **`clrucache` eviction callback.** The callback passed to `clru_construct` is invoked **while the cache mutex is held**. It must not call back into the same cache handle, doing so will deadlock. It may allocate memory or write to a logger, but must not call `clru_get` or `clru_set` on the cache that triggered the eviction.
 
-**`cthreadpool` shutdown and destroy.** `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy` must each be called at most once and must not be called concurrently with each other. All other public functions (`ctpool_submit`, `ctpool_try_submit`, `ctpool_timed_submit`, `ctpool_submit_future`, `ctpool_wait`, `ctpool_pending_count`, `ctpool_active_count`) are safe to call from multiple threads concurrently. The future functions (`ctpool_future_get`, `ctpool_future_done`, `ctpool_future_cancelled`, `ctpool_future_free`) are likewise safe to call concurrently on the same future object. `ctpool_future_create_detached` and `ctpool_future_fulfill` have no pool to serialise against at all -- a detached future's only ordering requirement is that `ctpool_future_fulfill` is called exactly once.
+**`cthreadpool` shutdown and destroy.** `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy` must each be called at most once and must not be called concurrently with each other. All other public functions (`ctpool_submit`, `ctpool_try_submit`, `ctpool_timed_submit`, `ctpool_submit_future`, `ctpool_wait`, `ctpool_pending_count`, `ctpool_active_count`) are safe to call from multiple threads concurrently. The future functions (`ctpool_future_get`, `ctpool_future_done`, `ctpool_future_cancelled`, `ctpool_future_free`) are likewise safe to call concurrently on the same future object. `ctpool_future_create_detached` and `ctpool_future_fulfill` have no pool to serialise against at all; a detached future's only ordering requirement is that `ctpool_future_fulfill` is called exactly once.
 
 **`clogger` derived loggers.** `clog_derive` creates a sibling logger that shares the same fd, rotation state, and mutex as the root logger via the shared backing store. Writes from the root and all of its siblings are fully serialised with no additional locking required at the call site. The minimum-level check (`log_info`, `log_warn`, and similar macros) reads the per-logger level field without holding the mutex as a deliberate performance optimisation; a concurrent `clog_set_level` may therefore cause a single message near the boundary level to be inconsistently logged or dropped. This is intentional: the optimisation avoids mutex acquisition for every suppressed message, and the inconsistency window is not a data-corruption hazard.
 

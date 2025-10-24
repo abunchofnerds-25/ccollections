@@ -127,7 +127,7 @@ Client-mode TLS connections over a raw file descriptor
 These entry points are for synchronous, thread-per-connection clients (e.g.
 c_collections' chttpclient) that drive their own read/write/poll loop and do
 NOT run facil.io's reactor (`fio_start`). Unlike `fio_tls_accept`, they never
-touch facil.io's uuid/fd table or its reactor primitives -- they operate
+touch facil.io's uuid/fd table or its reactor primitives; they operate
 directly on a connection object the caller owns and passes back in.
 ***************************************************************************** */
 
@@ -143,7 +143,7 @@ typedef enum {
 
 /**
  * Creates a client-mode TLS connection object bound to an already-connected
- * file descriptor `fd`. Does NOT take ownership of `fd` -- the caller must
+ * file descriptor `fd`. Does NOT take ownership of `fd`; the caller must
  * close it only after calling `fio_tls_connection_destroy`.
  *
  * `hostname` (may be NULL) is used for SNI and, if `verify_host` is nonzero,
@@ -182,7 +182,7 @@ ssize_t fio_tls_connection_write(fio_tls_connection_s *c, const void *buf,
 
 /**
  * Shuts down and frees the SSL object and the connection handle. Does NOT
- * close the underlying fd -- the caller owns the socket's lifecycle.
+ * close the underlying fd; the caller owns the socket's lifecycle.
  */
 void fio_tls_connection_destroy(fio_tls_connection_s *c);
 

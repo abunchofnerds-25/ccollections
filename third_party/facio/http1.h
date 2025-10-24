@@ -31,7 +31,7 @@ Worker-driven body ingestion
 
 These let a caller (chttpserver's ctpool workers) read a request's body
 directly off the socket, batch by batch, from a thread other than the
-reactor thread -- used only after `http_settings_s.on_headers_complete` has
+reactor thread; used only after `http_settings_s.on_headers_complete` has
 paused the request and taken ownership of it. Content-Length/chunked framing
 is decoded by reusing the same parser state machine the reactor uses for the
 non-diverted path; no data is buffered ahead of what the caller asks for.
@@ -67,7 +67,7 @@ http1_stream_err_t http1_stream_last_error(http_s *h);
 /**
  * Marks `h` as diverted to worker-driven body ingestion. MUST be called
  * synchronously, on the reactor thread, from inside an `on_headers_complete`
- * callback that intends to return non-zero -- and it MUST be called before
+ * callback that intends to return non-zero; and it MUST be called before
  * that callback calls `http_pause`. `http_pause` defers the actual handoff
  * via `fio_defer`, which can be picked up and run by a worker thread on
  * another core before the callback that called it even returns; any state
@@ -80,7 +80,7 @@ void http1_stream_prepare(http_s *h);
  * Must be called exactly once per diverted request, after the caller is done
  * calling `http1_stream_read` for it (whether because it reached end of body,
  * hit an error, or simply chose to stop reading early) and before calling
- * `http_resume`. Releases the connection back to normal teardown rules --
+ * `http_resume`. Releases the connection back to normal teardown rules;
  * if the connection died while ingestion was in progress, this is where the
  * deferred cleanup actually happens.
  */

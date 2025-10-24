@@ -39,7 +39,7 @@ TAU_MAIN()
 /*     chttpsvr_set_engine_mem_mgmt_procs COVERAGE (dedicated binary)         */
 /*                                                                            */
 /* chttpsvr_set_engine_mem_mgmt_procs() may only be called before the first  */
-/* chttpsvr_start() in the process -- a process-wide, set-once-ever          */
+/* chttpsvr_start() in the process; a process-wide, set-once-ever          */
 /* requirement, exactly like the shared facio engine it configures. The rest */
 /* of the chttpserver test suite (tests/chttpserver) already calls           */
 /* chttpsvr_start() during its own shared _setup(), so testing the "install  */
@@ -94,7 +94,7 @@ static void _teardown(void) {
   }
   /* __chttpsvr_destroy releases this server's shared-engine reference but no
    * longer synchronously waits for the shared facio reactor (shared with
-   * chttpclient's async engine -- see cfio_engine.h) to actually stop;
+   * chttpclient's async engine; see cfio_engine.h) to actually stop;
    * chttpsvr_engine_wait() blocks until it has, which is required here so
    * the engine-installed default logger is guaranteed reclaimed before this
    * atexit handler returns. See tests/chttpserver_tls/tests.c for the same
@@ -166,7 +166,7 @@ __attribute__((constructor)) static void _setup(void) {
   /* Must be registered AFTER chttpsvr_start, not before: the first
      chttpsvr_start call registers fio_lib_destroy via atexit. atexit handlers
      run in reverse registration order, so registering _teardown here (after)
-     guarantees it runs BEFORE fio_lib_destroy at process exit -- stopping and
+     guarantees it runs BEFORE fio_lib_destroy at process exit; stopping and
      joining the engine first. See tests/chttpserver_tls/tests.c for the same
      reasoning. */
   atexit(_teardown);
@@ -189,7 +189,7 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
 
 TEST(chttpserver_mem_mgmt, null_function_pointer_rejected) {
   /* One missing function pointer must be rejected regardless of engine
-   * state -- validated unconditionally before the "already running" check. */
+   * state; validated unconditionally before the "already running" check. */
   ccol_memmgmt_procs_t bad_procs = {
       .malloc = _counting_malloc,
       .free = NULL,
@@ -215,6 +215,6 @@ TEST(chttpserver_mem_mgmt, rejected_after_engine_already_running) {
 
 TEST(chttpserver_mem_mgmt, null_procs_reverts_rejected_while_running) {
   /* NULL (revert-to-default) is also subject to the "not while running"
-   * rule -- it is still a live allocator swap. */
+   * rule; it is still a live allocator swap. */
   REQUIRE_EQ(chttpsvr_set_engine_mem_mgmt_procs(NULL), ccol_not_permitted);
 }

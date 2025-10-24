@@ -405,9 +405,9 @@ static inline int fio_clear_fd(intptr_t fd, uint8_t is_open) {
   deferred = rw_busy != 0;
   if (deferred) {
     /* A fio_read / before_close call elsewhere already snapshotted this
-     * exact rw_hooks/rw_udata pair (outside of this lock, by design -- see
+     * exact rw_hooks/rw_udata pair (outside of this lock, by design; see
      * fio_read) and is still mid-call using it. Freeing it now (or letting
-     * the caller close(fd)) would race with that call -- e.g. fio_tls_
+     * the caller close(fd)) would race with that call; e.g. fio_tls_
      * cleanup's SSL_free landing under fio_tls_read's SSL_read. Restore
      * them so the busy call keeps a live target, and defer the actual
      * cleanup + fd close to fio_rw_busy_release, once rw_busy hits zero. */
@@ -1572,7 +1572,7 @@ static size_t fio_poll(void) {
       for (int i = 0; i < active_count; i++) {
         /* A peer that closes its end shortly after writing its final bytes
          * routinely produces a combined EPOLLIN|EPOLLRDHUP (or |EPOLLHUP)
-         * event -- data still sitting in the kernel receive buffer, reported
+         * event; data still sitting in the kernel receive buffer, reported
          * in the same epoll_wait() return as the hangup. Treating any
          * non-IN/OUT bit as an unconditional "discard as error" (the
          * previous behaviour here) silently drops that already-delivered
@@ -1586,7 +1586,7 @@ static size_t fio_poll(void) {
          * correctly discovers and force-closes the connection once the
          * already-buffered data has actually been drained. Only fall back to
          * closing immediately here when the event carries neither IN nor
-         * OUT -- a pure error/hangup with nothing to read or write, where
+         * OUT; a pure error/hangup with nothing to read or write, where
          * there is no buffered data this could discard. */
         if (events[i].events & (EPOLLIN | EPOLLOUT)) {
           if (events[i].events & EPOLLOUT) {
@@ -1968,13 +1968,13 @@ static void deferred_on_close(void *uuid_, void *pr_) {
   return;
 postpone:
   /* pr->rsv (one of the FIO_PR_LOCK_* bytes) is held by an in-flight task
-   * elsewhere -- most commonly a worker's deferred http_resume, still
+   * elsewhere; most commonly a worker's deferred http_resume, still
    * waiting its turn on this same shared queue. Re-pushing immediately with
    * no backoff keeps this task (and every other thread that happens to pop
    * it) spinning at the front of task_queue_normal: fio_defer_perform's
    * while-loop never sees the queue empty, so it never returns, and the
-   * owning fio_defer_cycle thread never reaches its fio_is_running() check
-   * -- under enough concurrent closes this starves the very task that would
+   * owning fio_defer_cycle thread never reaches its fio_is_running() check;
+   * under enough concurrent closes this starves the very task that would
    * clear pr->rsv, and also blocks that thread from ever noticing fio_stop().
    * fio_reschedule_thread() (already used the same way in fio_lock's own
    * spin-retry, just above) gives the real lock-holder a chance to run. */
@@ -2257,13 +2257,13 @@ intptr_t fio_accept(intptr_t srv_uuid) {
    * until a protocol is attached (fio_attach) or the first successful
    * fio_read/fio_write touches it. Until then, fio_review_timeout's idle
    * check (`fd_data(fd).active + timeout >= review`) treats `active == 0`
-   * as "idle since the epoch" -- true on its very first sweep, regardless
+   * as "idle since the epoch"; true on its very first sweep, regardless
    * of how recently the connection was actually accepted. For a connection
    * whose low-level rw_hooks have already been replaced (e.g. a TLS
    * handshake in progress or just completed) but which has no protocol
    * attached yet (attachment happens slightly later, e.g. after ALPN
    * negotiation), that first sweep's "no protocol, non-default rw_hooks"
-   * branch calls fio_close() on a connection that isn't idle at all -- it's
+   * branch calls fio_close() on a connection that isn't idle at all; it's
    * brand new. Touching it here starts the idle clock at accept time,
    * matching the invariant the review sweep is meant to enforce. */
   touchfd(client);
@@ -2415,12 +2415,12 @@ socket_okay:
   fio_unlock(&fd_data(fd).protocol_lock);
   /* fio_tcp_addr_cpy expects a `struct sockaddr *` (it reads sin_addr/
    * sin6_addr straight out of it) but this line was instead handing it
-   * `addrinfo` itself -- a `struct addrinfo *`, an unrelated wrapper struct
+   * `addrinfo` itself; a `struct addrinfo *`, an unrelated wrapper struct
    * with a completely different layout (ai_flags/ai_family/ai_socktype/...
    * before its ai_addr field, which is the actual `struct sockaddr *`).
    * Reinterpreting a struct addrinfo's bytes as a struct sockaddr_in6 reads
    * whatever ai_addrlen/ai_addr/ai_canonname/ai_next happen to hold as if
-   * they were address octets -- for AF_INET the (smaller) sockaddr_in
+   * they were address octets; for AF_INET the (smaller) sockaddr_in
    * layout happened to overlap only with always-initialized int fields, so
    * this was silently wrong instead of crashing; for AF_INET6 it read past
    * into padding/uninitialized bytes, caught by valgrind
@@ -2428,7 +2428,7 @@ socket_okay:
    * inet_ntop6) the first time any code path in this codebase actually
    * connected out over IPv6 via fio_socket. This corrupted the human-
    * readable peer-address string (fd_data(fd).addr, exposed publicly via
-   * fio_peer_addr()) for every TCP socket -- server or client -- opened
+   * fio_peer_addr()) for every TCP socket (server or client) opened
    * through fio_tcp_socket, not just IPv6 ones. Fixed by passing
    * addrinfo->ai_addr, the actual struct sockaddr, exactly like fio_accept's
    * own (correct) call to fio_tcp_addr_cpy a few dozen lines above. */
@@ -2805,7 +2805,7 @@ void fio_force_close(intptr_t uuid) {
    * rw_busy != 0 here means a read (e.g. a worker thread inside fio_read,
    * per chttpserver's worker-driven body ingestion) is already in flight
    * against this same rw_udata. before_close (e.g. SSL_shutdown) is not
-   * safe to run concurrently with that call -- unlike fio_clear_fd, which
+   * safe to run concurrently with that call; unlike fio_clear_fd, which
    * can safely defer freeing rw_udata until the busy count drains,
    * before_close needs to actually run its hook *now* to be useful, and
    * there is no safe way to defer just the hook call without blocking this
@@ -2813,7 +2813,7 @@ void fio_force_close(intptr_t uuid) {
    * stall every other connection on it for as long as the other read
    * blocks). Skip the graceful before_close entirely in that case: the
    * connection still gets torn down immediately below via fio_clear_fd, it
-   * just does so without sending a clean TLS close_notify -- the same
+   * just does so without sending a clean TLS close_notify; the same
    * outcome as any other abrupt disconnect (a crash, a network failure),
    * which every well-behaved peer already has to tolerate. */
   fio_rw_hook_s *hooks_for_before_close = NULL;
@@ -2957,11 +2957,11 @@ attacked:
    * exact moment. If some other call (e.g. a worker thread's fio_read) is
    * concurrently in flight against this same connection, fio_clear_fd
    * defers its cleanup, and fio_rw_busy_release *does* close(fd) once that
-   * deferred cleanup finally runs -- silently closing the fd anyway, purely
+   * deferred cleanup finally runs; silently closing the fd anyway, purely
    * as a function of unrelated thread timing rather than anything about
    * this Slowloris path itself. Narrow window, and the connection is being
    * torn down either way, so this doesn't change the outcome for the
-   * caller in practice -- noted here since it does contradict the comment
+   * caller in practice; noted here since it does contradict the comment
    * above under that specific race. */
   FIO_LOG_WARNING("(facil.io) possible Slowloris attack from %.*s",
                   (int)fio_peer_addr(uuid).len, fio_peer_addr(uuid).data);
@@ -3055,11 +3055,11 @@ int fio_rw_hook_set(intptr_t uuid, fio_rw_hook_s *rw_hooks, void *udata) {
   }
   if (fd_data(fd).rw_busy) {
     /* A fio_read / before_close call elsewhere already snapshotted the
-     * current rw_hooks/rw_udata (outside of this lock, by design -- see
+     * current rw_hooks/rw_udata (outside of this lock, by design; see
      * fio_read) and is still mid-call using them. Swapping hooks now would
      * be fine on its own (that in-flight call doesn't re-read this field),
      * but calling old_rw_hooks->cleanup(old_udata) below could free the
-     * very udata (e.g. a TLS SSL/BIO object) that call is still using --
+     * very udata (e.g. a TLS SSL/BIO object) that call is still using;
      * the same use-after-free fio_clear_fd's own rw_cleanup_pending defers
      * against. Unlike fio_clear_fd, there is no fd close happening here to
      * hang a deferred completion off of, so refuse the swap outright rather
@@ -3233,7 +3233,7 @@ void fio_state_callback_add(callback_type_e c_type, void (*func)(void *),
   /* Deliberately plain malloc, not fio_malloc/procs: this can run (via
    * FIO_CALL_ON_INITIALIZE) from http_lib_constructor, which is invoked
    * before fio_lib_init/fio_mem_init has initialized the arena and before
-   * chttpsvr_set_engine_mem_mgmt_procs could ever have been called -- see
+   * chttpsvr_set_engine_mem_mgmt_procs could ever have been called; see
    * _fio_global_init in chttpserver.c. Freed with plain free() below and in
    * fio_state_callback_clear(), matching this allocator. */
   callback_data_s *tmp = malloc(sizeof(*tmp));
@@ -4289,7 +4289,7 @@ static void fio_listen_cleanup_task(void *pr_) {
   fio_listen_protocol_s *pr = pr_;
   /* on_finish runs before fio_tls_destroy, not after: for a TLS listener,
    * on_finish's udata (http.c's http_settings_s) can be freed as a side
-   * effect of fio_tls_destroy itself -- it's registered as the "http/1.1"
+   * effect of fio_tls_destroy itself; it's registered as the "http/1.1"
    * ALPN entry's on_cleanup hook, which fio_tls_destroy fires synchronously
    * the moment it releases the last reference to this tls object. Calling
    * on_finish afterward would then read (and, for a non-TLS listener,
@@ -5125,12 +5125,12 @@ void *fio_malloc(size_t size) {
   /* Lazily initialize the arena on first real use, regardless of
    * FIO_OVERRIDE_MALLOC: fio_lib_init (which used to be the only caller of
    * fio_mem_init) is not guaranteed to have run yet by the time this is
-   * reached -- chttpsvr_start() creates its TLS context (which allocates via
+   * reached; chttpsvr_start() creates its TLS context (which allocates via
    * fio_tls_new -> fio_calloc/fio_malloc) before triggering the engine's own
    * lazy pthread_once init. fio_mem_init() is idempotent (returns
    * immediately if arenas is already set), so this costs nothing on the
    * common path. Not safe against a genuine concurrent race between two
-   * threads racing this same first call -- same as the pre-existing
+   * threads racing this same first call; same as the pre-existing
    * FIO_OVERRIDE_MALLOC code below ever was. */
   if (!arenas) fio_mem_init();
   if (!size) {
@@ -5216,7 +5216,7 @@ zero_size:
 void *fio_realloc(void *ptr, size_t new_size) {
   if (g_fio_mem_procs_set) {
     /* Unlike fio_realloc2, plain fio_realloc has no caller-supplied
-     * copy_length and must preserve all old data, like standard realloc --
+     * copy_length and must preserve all old data, like standard realloc;
      * delegate directly instead of going through fio_realloc2's zero-fill
      * logic (which would discard everything beyond copy_length). */
     if (!ptr || ptr == (void *)&on_malloc_zero) return fio_malloc(new_size);

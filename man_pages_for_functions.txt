@@ -1750,9 +1750,9 @@ DESCRIPTION
        Inspects the calling thread's ID and the requested direction to determine
        which of the channel's two underlying circular queues to wrap:
 
-         ccol_select_read  -- owner <- workers_to_owner_cq  (same as chan_recv_zc)
+         ccol_select_read; owner <- workers_to_owner_cq  (same as chan_recv_zc)
                            worker <- owner_to_workers_cq
-         ccol_select_write -- owner -> owner_to_workers_cq  (same as chan_send_zc)
+         ccol_select_write; owner -> owner_to_workers_cq  (same as chan_send_zc)
                            worker -> workers_to_owner_cq
 
        The resolution is performed at the call site so that ccol_select() itself
@@ -1878,7 +1878,7 @@ DESCRIPTION
        Node lifetime: producer notification happens while the producer holds the
        queue mutex.  Deregistration also requires the queue mutex.  A node
        therefore cannot be removed from the list while a producer is traversing
-       it -- the heap buffer backing the node array cannot be freed mid-traversal.
+       it; the heap buffer backing the node array cannot be freed mid-traversal.
 
 PARAMETERS
        buf           Buffer to receive the message.  On ccol_success the caller
@@ -2023,11 +2023,11 @@ EXAMPLES
                selectable_from_fd(pfd[0], ccol_select_read));
        if (r == ccol_success) {
            if (idx == 0) {
-               /* queue won -- buf has the dequeued message */
+               /* queue won; buf has the dequeued message */
                printf("queue message size: %zu\n", msg.size);
                free(msg.data);
            } else {
-               /* fd won -- ccol_select already read the data into buf */
+               /* fd won; ccol_select already read the data into buf */
                printf("read %zu bytes from fd\n", msg.size);
                free(msg.data);   /* msg.data may be NULL on EOF */
            }
@@ -2221,7 +2221,7 @@ PARAMETERS
        s   String to destroy
 
 WARNINGS
-       Does not NULL the caller's pointer -- use cstring_destroy() instead
+       Does not NULL the caller's pointer; use cstring_destroy() instead
 
 SEE ALSO
        cstring_destroy, ___cstring_destroy
@@ -2938,7 +2938,7 @@ RETURN VALUE
 NOTES
        Thread-safe: all operations on the returned handle are protected by
        an internal mutex and per-entry condition variables.
-       The eviction callback is invoked while the cache mutex is held -- it
+       The eviction callback is invoked while the cache mutex is held; it
        must not re-enter the cache.
        The destroy function must be called only after all other threads have
        finished using the cache.
@@ -3298,7 +3298,7 @@ NOTES
        log_* macros on the same handle. Callers are responsible for ensuring
        all logging threads have finished before calling clog_close().
        For fd-based loggers (clog_open_fd_mp), the file descriptor is NOT
-       closed -- it is the caller's responsibility.
+       closed; it is the caller's responsibility.
 
 SEE ALSO
        clog_open_fd_mp, clog_open_file_mp
@@ -3469,7 +3469,7 @@ DESCRIPTION
 
        Release a derived logger with clog_close() when it is no longer needed.
        The underlying file is kept open until all handles (root and every derived
-       logger) have been closed -- the shared backing store uses reference counting.
+       logger) have been closed; the shared backing store uses reference counting.
 
 PARAMETERS
        parent  Source logger to derive from.
@@ -3611,21 +3611,21 @@ DESCRIPTION
        CLOG_FMT_SYSLOG is selected).
 
        Available facility codes (RFC 5424 / RFC 3164):
-         CLOG_SYSLOG_KERN     (0)  -- Kernel messages
-         CLOG_SYSLOG_USER     (1)  -- User-level messages (default)
-         CLOG_SYSLOG_MAIL     (2)  -- Mail system
-         CLOG_SYSLOG_DAEMON   (3)  -- System daemons
-         CLOG_SYSLOG_AUTH     (4)  -- Security / authorization messages
-         CLOG_SYSLOG_SYSLOG   (5)  -- Internal syslogd messages
-         CLOG_SYSLOG_LPR      (6)  -- Line printer subsystem
-         CLOG_SYSLOG_NEWS     (7)  -- Network news subsystem
-         CLOG_SYSLOG_UUCP     (8)  -- UUCP subsystem
-         CLOG_SYSLOG_CRON     (9)  -- Clock daemon
-         CLOG_SYSLOG_AUTHPRIV (10) -- Security / authorization (private)
-         CLOG_SYSLOG_FTP      (11) -- FTP daemon
-         CLOG_SYSLOG_LOCAL0   (16) -- Local use 0
+         CLOG_SYSLOG_KERN     (0); Kernel messages
+         CLOG_SYSLOG_USER     (1); User-level messages (default)
+         CLOG_SYSLOG_MAIL     (2); Mail system
+         CLOG_SYSLOG_DAEMON   (3); System daemons
+         CLOG_SYSLOG_AUTH     (4); Security / authorization messages
+         CLOG_SYSLOG_SYSLOG   (5); Internal syslogd messages
+         CLOG_SYSLOG_LPR      (6); Line printer subsystem
+         CLOG_SYSLOG_NEWS     (7); Network news subsystem
+         CLOG_SYSLOG_UUCP     (8); UUCP subsystem
+         CLOG_SYSLOG_CRON     (9); Clock daemon
+         CLOG_SYSLOG_AUTHPRIV (10); Security / authorization (private)
+         CLOG_SYSLOG_FTP      (11); FTP daemon
+         CLOG_SYSLOG_LOCAL0   (16); Local use 0
          ...
-         CLOG_SYSLOG_LOCAL7   (23) -- Local use 7
+         CLOG_SYSLOG_LOCAL7   (23); Local use 7
 
 PARAMETERS
        logger    Logger handle.
@@ -3745,7 +3745,7 @@ SYNOPSIS
 
        cjson cjson_parse_mp(const char *json_str, char **err_str,
                             ccol_memmgmt_procs_t *mp);
-       /* convenience wrapper -- default allocator */
+       /* convenience wrapper; default allocator */
        static inline cjson cjson_parse(const char *json_str,
                                        char **err_str);
 
@@ -3816,7 +3816,7 @@ SYNOPSIS
 
        cjson cjson_parse_n_mp(const char *json_str, size_t len,
                               char **err_str, ccol_memmgmt_procs_t *mp);
-       /* convenience wrapper -- default allocator */
+       /* convenience wrapper; default allocator */
        static inline cjson cjson_parse_n(const char *json_str, size_t len,
                                          char **err_str);
 
@@ -3892,7 +3892,7 @@ SYNOPSIS
        #include <cjson.h>
 
        void cjson_serialize_free_mp(char *s, ccol_memmgmt_procs_t *mp);
-       /* convenience wrapper -- default allocator */
+       /* convenience wrapper; default allocator */
        static inline void cjson_serialize_free(char *s);
 
 DESCRIPTION
@@ -4131,7 +4131,7 @@ SYNOPSIS
        cjson cjson_create_list_mp(ccol_memmgmt_procs_t *mp);
        cjson cjson_create_dictionary_mp(ccol_memmgmt_procs_t *mp);
 
-       /* convenience wrappers -- default allocator (NULL mp) */
+       /* convenience wrappers; default allocator (NULL mp) */
        static inline cjson cjson_create_null(void);
        static inline cjson cjson_create_bool(bool val);
        static inline cjson cjson_create_int(long long val);
@@ -4175,7 +4175,7 @@ RETURN VALUE
 
 NOTES
        The caller owns the returned node and must free it with cjson_destroy().
-       cjson_destroy() uses each node's stored allocator -- no mp parameter needed.
+       cjson_destroy() uses each node's stored allocator; no mp parameter needed.
 
 SEE ALSO
        cjson_destroy, cjson_list_push, cjson_dictionary_set
@@ -5587,12 +5587,12 @@ DESCRIPTION
        ctpool_submit_future's convention: one reference held by the caller
        (released via ctpool_future_free), one held by the producer (released
        by ctpool_future_fulfill). The struct is freed once both sides have
-       released their reference, in either order -- ctpool_future_free may
+       released their reference, in either order; ctpool_future_free may
        be called before ctpool_future_fulfill, exactly as with pool-backed
        futures.
 
        Always uses standard malloc/free, independent of any custom allocator
-       -- matching ctpool_submit_future's existing futures, whose lifetime
+       ; matching ctpool_submit_future's existing futures, whose lifetime
        is deliberately decoupled from any single allocator.
 
 PARAMETERS
@@ -5624,7 +5624,7 @@ DESCRIPTION
 
        Must be called exactly once per detached future. Do not call this on
        a future returned by ctpool_submit_future, ctpool_try_submit_future,
-       or ctpool_timed_submit_future -- those are fulfilled internally by the
+       or ctpool_timed_submit_future; those are fulfilled internally by the
        worker thread that runs their task.
 
 PARAMETERS
@@ -5771,6 +5771,180 @@ RETURN VALUE
 
 SEE ALSO
        ctpool_pending_count
+
+------------------------------------------------------------------------------
+NAME
+       chttp_base64_encode_mp - base64-encode a buffer with a custom
+       allocator
+
+SYNOPSIS
+       #include <chttp.h>
+
+       char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp,
+                                    const void *data, size_t len,
+                                    size_t *out_len);
+
+DESCRIPTION
+       Encodes len bytes of data as standard RFC 4648 base64 (the '+'/'/'
+       alphabet, '=' padding); the variant required by RFC 7617 Basic auth
+       and used throughout HTTP.
+
+PARAMETERS
+       mp       Custom allocator, or NULL for malloc/free.
+       data     Buffer to encode. May be NULL only if len is 0.
+       len      Number of bytes in data.
+       out_len  Optional; receives the length of the returned string
+                (excluding the terminating NUL). Pass NULL to ignore.
+
+RETURN VALUE
+       Newly allocated, NUL-terminated base64 string on success.
+       NULL on allocation failure, or if data is NULL and len is nonzero.
+
+SEE ALSO
+       chttp_base64_encode, chttp_base64_decode_mp, chttp_basic_auth_mp
+
+------------------------------------------------------------------------------
+NAME
+       chttp_base64_encode - base64-encode a buffer (default allocator)
+
+SYNOPSIS
+       #include <chttp.h>
+
+       char *chttp_base64_encode(const void *data, size_t len,
+                                 size_t *out_len);
+
+DESCRIPTION
+       Static inline wrapper around chttp_base64_encode_mp() with NULL
+       memory management procedures (uses malloc/free).
+
+PARAMETERS
+       data     Buffer to encode. May be NULL only if len is 0.
+       len      Number of bytes in data.
+       out_len  Optional; receives the length of the returned string
+                (excluding the terminating NUL). Pass NULL to ignore.
+
+RETURN VALUE
+       Newly allocated, NUL-terminated base64 string on success.
+       NULL on allocation failure, or if data is NULL and len is nonzero.
+
+SEE ALSO
+       chttp_base64_encode_mp, chttp_base64_decode
+
+------------------------------------------------------------------------------
+NAME
+       chttp_base64_decode_mp - base64-decode a string with a custom
+       allocator
+
+SYNOPSIS
+       #include <chttp.h>
+
+       void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp,
+                                    const char *b64_input, size_t *out_len);
+
+DESCRIPTION
+       Decodes a NUL-terminated standard RFC 4648 base64 string (the '+'/'/'
+       alphabet, '=' padding). The input length is taken from
+       strlen(b64_input); it must be a multiple of 4 bytes, and any '='
+       padding must appear only as the final one or two characters. Any
+       other malformed input (invalid character, misplaced padding, wrong
+       length) is rejected.
+
+       The returned buffer is NUL-terminated as a convenience for decoding
+       text payloads, but the decoded data may legitimately contain embedded
+       NUL bytes; always use out_len, never strlen(), to determine its
+       real size.
+
+PARAMETERS
+       mp         Custom allocator, or NULL for malloc/free.
+       b64_input  NUL-terminated base64 string to decode. Must not be NULL.
+       out_len    Optional; receives the decoded byte length. Pass NULL to
+                  ignore.
+
+RETURN VALUE
+       Newly allocated decoded buffer on success.
+       NULL on allocation failure or malformed input.
+
+SEE ALSO
+       chttp_base64_decode, chttp_base64_encode_mp, chttp_basic_auth_mp
+
+------------------------------------------------------------------------------
+NAME
+       chttp_base64_decode - base64-decode a string (default allocator)
+
+SYNOPSIS
+       #include <chttp.h>
+
+       void *chttp_base64_decode(const char *b64_input, size_t *out_len);
+
+DESCRIPTION
+       Static inline wrapper around chttp_base64_decode_mp() with NULL
+       memory management procedures (uses malloc/free).
+
+PARAMETERS
+       b64_input  NUL-terminated base64 string to decode. Must not be NULL.
+       out_len    Optional; receives the decoded byte length. Pass NULL to
+                  ignore.
+
+RETURN VALUE
+       Newly allocated decoded buffer on success.
+       NULL on allocation failure or malformed input.
+
+SEE ALSO
+       chttp_base64_decode_mp, chttp_base64_encode
+
+------------------------------------------------------------------------------
+NAME
+       chttp_basic_auth_mp - build an HTTP Basic auth header value with a
+       custom allocator
+
+SYNOPSIS
+       #include <chttp.h>
+
+       char *chttp_basic_auth_mp(ccol_memmgmt_procs_t *mp,
+                                 const char *username, const char *password);
+
+DESCRIPTION
+       Builds a "Basic <base64(username:password)>" header value per RFC
+       7617. Produces only the header VALUE, not the "Authorization: " key
+       part; pass the result directly to chttp_request_set_header(req,
+       "authorization", ...) or the chttpsvr equivalent.
+
+PARAMETERS
+       mp        Custom allocator, or NULL for malloc/free.
+       username  Username. Must not be NULL; may be empty.
+       password  Password. Must not be NULL; may be empty.
+
+RETURN VALUE
+       Newly allocated "Basic <base64>" string on success.
+       NULL on allocation failure, or if username or password is NULL.
+
+SEE ALSO
+       chttp_basic_auth, chttp_base64_encode_mp, chttp_request_set_header
+
+------------------------------------------------------------------------------
+NAME
+       chttp_basic_auth - build an HTTP Basic auth header value (default
+       allocator)
+
+SYNOPSIS
+       #include <chttp.h>
+
+       char *chttp_basic_auth(const char *username, const char *password);
+
+DESCRIPTION
+       Static inline wrapper around chttp_basic_auth_mp() with NULL memory
+       management procedures (uses malloc/free).
+
+PARAMETERS
+       username  Username. Must not be NULL; may be empty.
+       password  Password. Must not be NULL; may be empty.
+
+RETURN VALUE
+       Newly allocated "Basic <base64>" string on success.
+       NULL on allocation failure, or if username or password is NULL.
+
+SEE ALSO
+       chttp_basic_auth_mp, chttp_base64_encode
 
 ------------------------------------------------------------------------------
 NAME
@@ -6068,7 +6242,7 @@ DESCRIPTION
 
        cert_path/key_path/ca_bundle_path are validated for readability
        lazily, at the time an HTTPS request actually needs them, rather than
-       here -- a path that does not currently exist is accepted here without
+       here; a path that does not currently exist is accepted here without
        error and only surfaces as ccol_http_tls_cert_verification_failed from
        chttpclient_do/chttpclient_do_streaming once a request needs it.
 
@@ -6128,7 +6302,7 @@ DESCRIPTION
        left as HEAD); 307/308 preserve the original method and body.  The
        Location header may be an absolute URL, a protocol-relative
        reference ("//host/path"), an absolute-path reference ("/foo"), or a
-       general relative reference ("foo", "../foo", "./foo", "?query") --
+       general relative reference ("foo", "../foo", "./foo", "?query");
        all are resolved per RFC 3986.  If the request URL embedded
        credentials (see below), the resulting Authorization header is
        resent on every hop that stays on the same origin (scheme, host,
@@ -6270,7 +6444,7 @@ DESCRIPTION
        listener.
 
        Unlike chttpclient_do, req need not remain valid after this call
-       returns -- everything needed is copied or serialised internally
+       returns; everything needed is copied or serialised internally
        before the call returns.
 
 PARAMETERS
@@ -6313,9 +6487,9 @@ DESCRIPTION
        calling thread and NOT on a dedicated thread for this request.  This
        has two hard requirements, unlike chttpclient_do_streaming's
        caller-thread callback: write_fn must not block (no blocking I/O, no
-       long-held locks, no waiting on another request's future) -- doing so
+       long-held locks, no waiting on another request's future) (doing so
        stalls every other connection the engine is currently multiplexing
-       on that reactor thread -- and write_fn must not call back into
+       on that reactor thread) and write_fn must not call back into
        chttpclient_do_async/_streaming (or anything that transitively waits
        on this same request's future) for the same or a different chttpcli
        sharing the engine, or it may deadlock against the very reactor
@@ -6351,7 +6525,7 @@ SYNOPSIS
 DESCRIPTION
        A thin wrapper over ctpool_future_get that casts its void* result to
        chttpcli_async_result_t*.  Safe to call more than once on the same
-       future (matching ctpool_future_get's own contract) -- every call
+       future (matching ctpool_future_get's own contract); every call
        after the first returns the same result pointer, still owned by the
        future until freed.
 
@@ -6378,9 +6552,9 @@ SYNOPSIS
 
 DESCRIPTION
        Releases a chttpcli_async_result_t obtained via
-       chttpclient_async_result_get.  Does NOT free result->resp -- free
+       chttpclient_async_result_get.  Does NOT free result->resp; free
        that separately with chttpclient_resp_free first if
-       result->rv == ccol_success.  Does NOT free the future itself -- pair
+       result->rv == ccol_success.  Does NOT free the future itself; pair
        with exactly one ctpool_future_free, called separately (before or
        after this call, order does not matter).
 
@@ -6409,7 +6583,7 @@ SYNOPSIS
 DESCRIPTION
        A thin wrapper over chttpclient_do_async: submits the request to the
        shared engine, blocks until it completes, and returns the exact same
-       ccol_retval_t / resp_out call shape chttpclient_do uses -- but the
+       ccol_retval_t / resp_out call shape chttpclient_do uses; but the
        connect/write/read work happens on the engine's own reactor threads
        rather than the calling thread, and concurrent callers across many
        chttpcli handles share one small, fixed-size reactor thread pool
@@ -6426,8 +6600,8 @@ RETURN VALUE
        to even submit the request to the engine (OOM, or the engine
        failing to start) is reported as ccol_unexpected_failure rather than
        a more specific code. Everything detected once the request is
-       actually in flight -- bad URL, TLS failure, connection failure,
-       transfer errors, timeouts, too many redirects -- is reported with
+       actually in flight (bad URL, TLS failure, connection failure,
+       transfer errors, timeouts, too many redirects) is reported with
        the exact same specific codes chttpclient_do uses.
 
 SEE ALSO
@@ -6451,9 +6625,9 @@ SYNOPSIS
 DESCRIPTION
        A thin wrapper over chttpclient_do_async_streaming with the exact
        same call shape as chttpclient_do_streaming. write_fn runs on one of
-       the engine's own reactor threads -- see chttpclient_do_async_
+       the engine's own reactor threads (see chttpclient_do_async_
        streaming's documentation for the resulting must-not-block, must-
-       not-call-back-into-the-engine contract -- rather than the calling
+       not-call-back-into-the-engine contract) rather than the calling
        thread; that is the only respect in which this function behaves
        differently from chttpclient_do_streaming's caller-thread callback.
 
@@ -6879,7 +7053,7 @@ DESCRIPTION
 
        Forces the engine down even if other references are still
        outstanding (from other chttpsvr instances, or from chttpclient's
-       async engine, in the same process) -- the engine is shared, so this
+       async engine, in the same process); the engine is shared, so this
        also aborts any in-flight chttpclient async work
        (chttpclient_do_async/_streaming, chttpclient_do_pooled/_streaming)
        along with every chttpsvr listener.  This is an inherent consequence
@@ -6909,7 +7083,7 @@ SYNOPSIS
 
 DESCRIPTION
        Blocks the calling thread until the shared facil.io engine has fully
-       stopped -- whether a stop was already triggered before this call, is
+       stopped; whether a stop was already triggered before this call, is
        triggered concurrently, or is not triggered until sometime after this
        call (this blocks indefinitely if nothing ever stops the engine, e.g.
        an external SIGTERM handler calling chttpsvr_engine_stop() at some
@@ -6920,7 +7094,7 @@ DESCRIPTION
        either module (e.g. destroying the last chttpsvr via
        __chttpsvr_destroy, or the last chttpclient async request completing)
        triggers an asynchronous teardown that does not itself block the
-       caller that triggered it -- this function is the explicit escape
+       caller that triggered it; this function is the explicit escape
        hatch for programs that need to synchronise with that shutdown, or
        with an externally signalled chttpsvr_engine_stop() call.
 
@@ -6951,9 +7125,9 @@ DESCRIPTION
        Starts the server on the port and host specified in cfg.  cfg may be
        NULL, in which case the defaults from CHTTPSVR_CONFIG_DEFAULT are used.
 
-       If the shared facil.io engine is not yet running -- including if
+       If the shared facil.io engine is not yet running (including if
        chttpclient's async engine (chttpclient_do_async/_streaming) already
-       started it in this process -- it is started implicitly on this call
+       started it in this process) it is started implicitly on this call
        and this call blocks until it is confirmed running (the
        FIO_CALL_ON_START callbacks have fired and the reactor is in its
        event loop) before proceeding.  Either way, the listener socket is
@@ -6964,7 +7138,7 @@ DESCRIPTION
        The engine is shared with chttpclient's async engine; it stays
        running as long as any reference from either module is outstanding,
        and its teardown once the last reference is released is asynchronous
-       -- see chttpsvr_engine_wait and __chttpsvr_destroy.
+       ; see chttpsvr_engine_wait and __chttpsvr_destroy.
 
        Multiple chttpsvr handles may be started on different ports
        simultaneously, all sharing the same engine.
@@ -6994,7 +7168,7 @@ DESCRIPTION
        a client that trickles data just fast enough never trips it, so
        cfg->max_body_read_duration_ms (0 = disabled, the default) separately
        bounds the *total* time spent reading one request's body regardless of
-       per-gap progress -- see chttpsvr_req_read.
+       per-gap progress; see chttpsvr_req_read.
 
        Connection timeout: both cfg->read_timeout_ms and cfg->idle_timeout_ms
        map to the single connection-timeout parameter exposed by the underlying
@@ -7088,9 +7262,9 @@ DESCRIPTION
        matches the path but none matches the method, the server responds 405.
        If no route matches the path, the server responds 404.  Path matching
        includes validation of percent-encoded sequences: a request with invalid
-       encoding in any path segment -- whether a literal segment (e.g.
+       encoding in any path segment (whether a literal segment (e.g.
        /bad%ZZusers/{id} against /users/{id}) or a captured {name} parameter
-       (e.g. /users/bad%ZZvalue against /users/{id}) -- does not match the
+       (e.g. /users/bad%ZZvalue against /users/{id})) does not match the
        route and returns 404 regardless of which methods are registered for
        that pattern.
 
@@ -7137,8 +7311,8 @@ DESCRIPTION
        Like chttpsvr_register_handler but marks the route as streaming, which
        makes chttpsvr_req_read available to the handler for sequential body
        consumption.  The handler runs on the server's owned ctpool worker
-       thread (not on the facil.io reactor thread) -- exactly as all handlers
-       do in this implementation -- but chttpsvr_req_read returns -1 on
+       thread (not on the facil.io reactor thread) (exactly as all handlers
+       do in this implementation) but chttpsvr_req_read returns -1 on
        non-streaming routes, so the streaming flag controls the API contract.
 
        CHTTP_ANY may be used for method to match every HTTP method on the
@@ -7152,7 +7326,7 @@ DESCRIPTION
        subsequent calls also return 0 (idempotent EOF). It returns -1 on a
        dropped connection, an exceeded max_body_size, or a stalled client
        (bounded by chttpsvr_config_t.stream_read_timeout_ms per gap and,
-       if set, chttpsvr_config_t.max_body_read_duration_ms overall) -- call
+       if set, chttpsvr_config_t.max_body_read_duration_ms overall); call
        chttpsvr_req_stream_error to distinguish these.
 
        When the server's ctpool queue is at capacity when a request arrives,
@@ -7470,7 +7644,7 @@ DESCRIPTION
        Returns a pointer to the buffered request body bytes.  If len_out is
        non-NULL, the body length in bytes is stored there.  Returns NULL and
        stores 0 if there is no body, or if req belongs to a streaming route
-       (chttpsvr_register_streaming_handler) -- a streaming route's body is
+       (chttpsvr_register_streaming_handler); a streaming route's body is
        never pre-extracted; use chttpsvr_req_read instead.
 
        The buffer is valid for the lifetime of the handler invocation.
@@ -7490,8 +7664,8 @@ SYNOPSIS
 DESCRIPTION
        Reads up to buflen bytes of the request body into buf, batch by batch,
        as they actually arrive on the connection.  This call reads the socket
-       itself -- on the worker thread executing the handler, never the
-       reactor thread -- and blocks the calling worker until at least one
+       itself (on the worker thread executing the handler, never the
+       reactor thread) and blocks the calling worker until at least one
        byte is available, the body ends, an error occurs,
        chttpsvr_config_t.stream_read_timeout_ms elapses without new data, or
        (if set) chttpsvr_config_t.max_body_read_duration_ms elapses.
@@ -7615,11 +7789,11 @@ DESCRIPTION
        from a missing key and avoids allocating a scratch result array.
 
 RETURN VALUE
-       ccol_success            -- exactly one value found; stored in *val_out.
-       ccol_key_not_found      -- key is absent.
-       ccol_not_permitted      -- key appears more than once.
-       ccol_not_enough_memory  -- query-string parse buffer could not be allocated.
-       ccol_invalid_args       -- req or key is NULL.
+       ccol_success; exactly one value found; stored in *val_out.
+       ccol_key_not_found; key is absent.
+       ccol_not_permitted; key appears more than once.
+       ccol_not_enough_memory; query-string parse buffer could not be allocated.
+       ccol_invalid_args; req or key is NULL.
 
 SEE ALSO
        chttpsvr_req_query, chttpsvr_req_query_oom
@@ -7647,8 +7821,8 @@ DESCRIPTION
        NULL.
 
 RETURN VALUE
-       true  -- chttpsvr_req_query failed with an allocation error.
-       false -- no allocation error occurred (or req is NULL).
+       true; chttpsvr_req_query failed with an allocation error.
+       false; no allocation error occurred (or req is NULL).
 
 SEE ALSO
        chttpsvr_req_query, chttpsvr_req_query_one

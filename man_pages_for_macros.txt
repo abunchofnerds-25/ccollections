@@ -1128,13 +1128,13 @@ DESCRIPTION
        Constructs a ccol_selectable tagged-union value of type ccol_selectable_circq
        wrapping the given circular_queue pointer with the specified direction.
 
-         ccol_select_read  -- wait for at least one message to arrive (read-wait)
-         ccol_select_write -- wait until the queue has room for a send (write-wait)
+         ccol_select_read; wait for at least one message to arrive (read-wait)
+         ccol_select_write; wait until the queue has room for a send (write-wait)
 
        This is a macro that expands to a compound literal; it has no run-time
        overhead beyond loading the pointer.
 
-       For write-direction wins, ccol_select() leaves buf untouched -- no message
+       For write-direction wins, ccol_select() leaves buf untouched; no message
        is consumed.  The caller must subsequently call circq_try_send_zc() since
        the available slot is not reserved (TOCTOU, same as POSIX select(2)).
 
@@ -1179,8 +1179,8 @@ DESCRIPTION
        Constructs a ccol_selectable tagged-union value of type ccol_selectable_dynq
        wrapping the given dynamic_queue pointer with the specified direction.
 
-         ccol_select_read  -- wait for at least one message to arrive (read-wait)
-         ccol_select_write -- wait until sending is enabled (!writing_disabled)
+         ccol_select_read; wait for at least one message to arrive (read-wait)
+         ccol_select_write; wait until sending is enabled (!writing_disabled)
 
        Because a dynamic_queue is unbounded, it is always considered writable as
        long as writing is not disabled.  ccol_select_write on a dynamic_queue is
@@ -1274,9 +1274,9 @@ DESCRIPTION
        Constructs a ccol_selectable tagged-union value of type ccol_selectable_fd
        wrapping the given file descriptor with the specified I/O direction.
 
-         ccol_select_read  -- wake when the fd becomes readable (data available or
+         ccol_select_read; wake when the fd becomes readable (data available or
                             EOF / error condition)
-         ccol_select_write -- wake when the fd becomes writable (send buffer has room)
+         ccol_select_write; wake when the fd becomes writable (send buffer has room)
 
        Both macros expand to compound literals; they have no run-time overhead.
 
@@ -1298,7 +1298,7 @@ DESCRIPTION
        of buf->data and must call free() on it.  EOF yields buf->data = NULL,
        buf->size = 0.  This is the same ownership model as queue read wins.
 
-       For ccol_select_write direction: buf is left untouched -- ccol_select() only
+       For ccol_select_write direction: buf is left untouched; ccol_select() only
        signals that the fd has room in its kernel send buffer.  The caller must
        subsequently call write(2) (symmetric with write-direction queue wins, where
        no queue slot is reserved).  max_bytes is ignored for write-direction fds.
@@ -1319,7 +1319,7 @@ DESCRIPTION
        one read(2) call is made using a buffer of max(4096, max_bytes) bytes;
        passing max_bytes > 4096 via selectable_from_fd_limited() therefore allows
        reading up to max_bytes bytes in a single blocking call.  Any data remaining
-       in the fd buffer after that single read is NOT drained in that call -- it
+       in the fd buffer after that single read is NOT drained in that call; it
        will be returned on the next ccol_select() call because epoll(7) is
        level-triggered.  Use O_NONBLOCK on the fd if full-drain behaviour per call
        is required.
@@ -1354,7 +1354,7 @@ EXAMPLES
            selectable_from_circq(q, ccol_select_read),
            selectable_from_fd(pfd[0], ccol_select_read));
        if (r == ccol_success && idx == 1) {
-           /* fd won -- data already read into msg.data */
+           /* fd won; data already read into msg.data */
            int val = *(int *)msg.data;
            free(msg.data);
        }
@@ -1567,7 +1567,7 @@ PARAMETERS
        initial  Initial content (C string or NULL for empty string)
 
 NOTES
-       Calls fatal_err() on allocation failure -- use cstring_create() directly
+       Calls fatal_err() on allocation failure; use cstring_create() directly
        if you need to handle errors gracefully
 
 EXAMPLES
@@ -2510,7 +2510,7 @@ PARAMETERS
        name     Cache variable (must have companion type variables in scope,
                 either from clru_construct / clru_declare or clru_redeclare).
                 When passing a cache across function boundaries, call
-                clru_redeclare() with a simple local alias first -- the
+                clru_redeclare() with a simple local alias first; the
                 val-type detection relies on the name##__clru_val_type_var
                 companion variable.
        key      Key expression. Must be an lvalue or a string literal; assign
@@ -2531,7 +2531,7 @@ RETURN VALUE
 
 EXAMPLES
        /* Non-string value type: val_ptr is double *, not cmap_pair *;
-          the value is copied directly into *val_ptr -- no heap allocation */
+          the value is copied directly into *val_ptr; no heap allocation */
        clru_construct(cache, int, double, 128, NULL, NULL, NULL);
 
        int k = 5;
@@ -2571,7 +2571,7 @@ WARNINGS
        copied directly into *val_ptr; the caller must NOT call free() on it.
 
 NOTES
-       Uses a GNU C statement expression ({...}) -- requires GCC or Clang.
+       Uses a GNU C statement expression ({...}); requires GCC or Clang.
        The cache never exposes a pointer into its internal storage; the value
        is always copied out before the mutex is released.
 
@@ -2616,7 +2616,7 @@ EXAMPLES
        clru_destroy(cache);
 
 NOTES
-       Uses a GNU C statement expression ({...}) -- requires GCC or Clang.
+       Uses a GNU C statement expression ({...}); requires GCC or Clang.
        Both key and val must be lvalues; the macro takes their addresses
        internally. Assign literals or expressions to named variables first.
 
@@ -2642,7 +2642,7 @@ SYNOPSIS
 DESCRIPTION
        Declares a cmap_iterator pointer named it bound to the type information
        of container.  The declaration attaches __attribute__((cleanup)) so the
-       iterator is destroyed automatically when it leaves scope -- no explicit
+       iterator is destroyed automatically when it leaves scope; no explicit
        ccol_iter_destroy() call is required.
 
        Also declares two hidden companion type variables that allow
@@ -2747,7 +2747,7 @@ PARAMETERS
                   argument; commas inside nested function calls are safe).
 
 NOTES
-       Do NOT modify the container inside the body -- insertions and deletions
+       Do NOT modify the container inside the body; insertions and deletions
        invalidate the iterator and produce undefined behaviour.
        Requires GCC or Clang (uses statement expressions and cleanup).
 
@@ -2871,7 +2871,7 @@ DESCRIPTION
        the iterator reaches NULL naturally.
 
        When using ccol_iter_declare(), RAII cleanup handles destruction
-       automatically on scope exit -- ccol_iter_destroy() is only necessary
+       automatically on scope exit; ccol_iter_destroy() is only necessary
        when you need to release resources before the end of the scope.
        Inside ccol_for_each(), the iterator is always destroyed on exit.
 
@@ -3075,7 +3075,7 @@ DESCRIPTION
          \t#0 ./myapp(handle+0x1a) [0x7f...]
          \t#1 ./myapp(main+0x42) [0x7f...]
 
-       ALERT maps to RFC 5424 syslog severity 1 ("alert -- action must be taken
+       ALERT maps to RFC 5424 syslog severity 1 ("alert; action must be taken
        immediately").  In CLOG_FMT_SYSLOG mode each backtrace frame is emitted
        as a separate syslog message using the same PRI and MSGID as the original
        record.
@@ -3305,10 +3305,10 @@ PARAMETERS
 
 RETURN VALUE
        ccol_retval_t: ccol_success on success.
-       ccol_invalid_args  -- empty path, parent type incompatible, array
+       ccol_invalid_args; empty path, parent type incompatible, array
                             index out of bounds, or bare '#' with no digits.
-       ccol_key_not_found -- a non-leaf component on the path does not exist.
-       ccol_not_enough_memory -- allocation failure.
+       ccol_key_not_found; a non-leaf component on the path does not exist.
+       ccol_not_enough_memory; allocation failure.
 
 NOTES
        Passing a bool literal requires an explicit cast: (bool)true.
@@ -3552,7 +3552,7 @@ DESCRIPTION
        cyaml_set on a cjson DOM).  They serialize as .inf, -.inf, .nan.
 
        Passing (bool)true / (bool)false is required to produce a CYAML_BOOL
-       node -- without the explicit cast, integer literal 1 or 0 produces a
+       node; without the explicit cast, integer literal 1 or 0 produces a
        CYAML_INTEGER node instead.
 
 PARAMETERS
@@ -3564,10 +3564,10 @@ PARAMETERS
 
 RETURN VALUE
        ccol_retval_t: ccol_success on success.
-       ccol_invalid_args  -- empty path, type incompatible at a path step, or
+       ccol_invalid_args; empty path, type incompatible at a path step, or
                              list index out of bounds.
-       ccol_key_not_found -- a non-leaf component of the path does not exist.
-       ccol_not_enough_memory -- allocation failure.
+       ccol_key_not_found; a non-leaf component of the path does not exist.
+       ccol_not_enough_memory; allocation failure.
 
 EXAMPLES
        cyaml_set(doc, "server.port",  8080);
@@ -4155,7 +4155,7 @@ DESCRIPTION
 
        stream_read_timeout_ms bounds how long a worker thread will wait for
        the *next* batch of body bytes while reading a request body (buffered
-       or streaming), independent of read_timeout_ms/idle_timeout_ms -- those
+       or streaming), independent of read_timeout_ms/idle_timeout_ms; those
        reset on any connection activity and so do not protect against a
        client that trickles bytes just fast enough to always beat them.  On
        expiry, chttpsvr_req_read returns -1 and chttpsvr_req_stream_error

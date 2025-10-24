@@ -79,7 +79,7 @@ static const int _SYSLOG_SEVERITY[] = {
     3, /* ERROR -> error         */
     1, /* ALERT -> alert         */
     0, /* FATAL -> emergency     */
-    7, /* OFF   -- sentinel; CLOG_OFF must never be used as a message level */
+    7, /* OFF; sentinel; CLOG_OFF must never be used as a message level */
 };
 
 /* ========================================================================== */
@@ -121,7 +121,7 @@ typedef struct {
 struct clogger {
   clog_shared_t *shared;  /* shared output backing store              */
   clog_level_t min_level; /* per-logger level filter                  */
-  chmap fields;           /* chmap(char* -> char*) -- per-logger fields */
+  chmap fields;           /* chmap(char* -> char*); per-logger fields */
   clog_buf_t buf;         /* per-logger reusable write buffer          */
 };
 
@@ -628,10 +628,10 @@ static int _rotate(clog_shared_t *sh) {
 
   /* Rename while the old fd is still open (POSIX allows renaming open files).
    * We only close the old fd once we have a replacement; this way a failed
-   * open() leaves the logger alive -- writes continue to the rotated file.
+   * open() leaves the logger alive; writes continue to the rotated file.
    * ENOENT means the file was deleted externally; treat it as a clean slate
    * (O_CREAT below will create a fresh file).  Any other rename error is a
-   * hard failure -- leave the logger writing to the still-open original fd. */
+   * hard failure; leave the logger writing to the still-open original fd. */
   if (rename(sh->file_path, rotated) != 0 && errno != ENOENT) return -1;
 
   if (sh->rotation.max_rotated_files > 0)
@@ -1361,7 +1361,7 @@ void _clog_write(clog lg, clog_level_t level, const char *file, int line,
   }
 
   /* ----------------------------------------------------------------------- */
-  /* Backtrace -- JSON embeds inline; logfmt and syslog write per-frame.      */
+  /* Backtrace; JSON embeds inline; logfmt and syslog write per-frame.      */
   /* ----------------------------------------------------------------------- */
   if (with_backtrace && lg->shared->fd >= 0) {
     if (log_fmt == CLOG_FMT_SYSLOG)

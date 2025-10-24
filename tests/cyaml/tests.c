@@ -251,7 +251,7 @@ TEST(implicit_types, null_NULL) {
 }
 
 TEST(implicit_types, null_empty_input) {
-  /* An empty document (zero bytes) is a null value -- an empty plain scalar
+  /* An empty document (zero bytes) is a null value; an empty plain scalar
    * resolves to null per the YAML 1.2 core schema. */
   char *err = NULL;
   cyaml n = cyaml_parse("", &err);

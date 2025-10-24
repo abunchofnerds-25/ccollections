@@ -64,7 +64,7 @@ typedef struct cthread_pool cthread_pool;
 /** @brief Handle type (pointer to opaque struct) */
 typedef cthread_pool *ctpool;
 
-/** @brief Future handle -- represents a pending void* result */
+/** @brief Future handle; represents a pending void* result */
 typedef struct ctpool_future ctpool_future;
 
 /* ========================================================================== */
@@ -99,7 +99,7 @@ create_cthread_pool(size_t num_threads, size_t queue_capacity, char **err_str) {
 /* ========================================================================== */
 
 /**
- * @brief Internal destroy -- use ctpool_destroy macro instead
+ * @brief Internal destroy; use ctpool_destroy macro instead
  *
  * If neither ctpool_shutdown_drain nor ctpool_shutdown_immediate was called
  * beforehand, performs a drain shutdown inline before freeing resources.
@@ -324,7 +324,7 @@ void ctpool_future_free(ctpool_future *f);
  * @brief Create a detached future with no associated pool or queued task
  *
  * Unlike ctpool_submit_future, a detached future is not backed by any
- * cthread_pool task queue -- it exists purely as a standalone
+ * cthread_pool task queue; it exists purely as a standalone
  * caller-waits/producer-fulfills handshake. An external producer (for
  * example an event-driven engine that is not itself a ctpool worker) is
  * responsible for calling ctpool_future_fulfill() exactly once to deliver the
@@ -333,12 +333,12 @@ void ctpool_future_free(ctpool_future *f);
  * Starts with a refcount of 2, mirroring ctpool_submit_future's convention:
  * one reference for the caller (released via ctpool_future_free) and one for
  * the producer (released by ctpool_future_fulfill). The struct is freed once
- * both sides have released their reference, in either order -- so
+ * both sides have released their reference, in either order; so
  * ctpool_future_free may be called before ctpool_future_fulfill, exactly as
  * with pool-backed futures.
  *
  * Always allocated with plain malloc/free, independent of any pool's or
- * caller's custom allocator -- matching ctpool_submit_future's existing
+ * caller's custom allocator; matching ctpool_submit_future's existing
  * futures, whose lifetime is deliberately decoupled from any single
  * allocator so producer and consumer do not need to agree on one.
  *
@@ -355,7 +355,7 @@ ctpool_future *ctpool_future_create_detached(char **err_str);
  * Must be called exactly once per future created via
  * ctpool_future_create_detached, by whichever code is producing the result.
  * Do not call this on a future returned by ctpool_submit_future /
- * ctpool_try_submit_future / ctpool_timed_submit_future -- those are
+ * ctpool_try_submit_future / ctpool_timed_submit_future; those are
  * fulfilled internally by the worker thread that runs their task.
  *
  * Wakes any callers currently blocked in ctpool_future_get(), then releases

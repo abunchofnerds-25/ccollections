@@ -48,12 +48,12 @@ SOFTWARE.
  *
  * ### Unsupported / explicitly out-of-scope
  *
- * - YAML tags (!!, custom tags) -- tags are silently ignored.
+ * - YAML tags (!!, custom tags); tags are silently ignored.
  * - Merge keys (<<:).
  * - Multi-line plain scalars: plain scalars are terminated at end-of-line.
  *   Use literal (|) or folded (>) block scalars for multiline string values.
  * - Tab characters for block indentation (forbidden by the YAML spec).
- * - %YAML and %TAG directives -- silently ignored.
+ * - %YAML and %TAG directives; silently ignored.
  * - Null bytes inside strings: the double-quoted escape "\0" is accepted by
  *   the parser but the resulting null byte terminates the stored C string,
  *   silently discarding everything after it.  String values must not contain
@@ -512,7 +512,7 @@ cyaml cyaml_clone(cyaml node);
 /*                         DESTRUCTION                                        */
 /* ========================================================================== */
 
-/** @brief Recursively free a DOM tree (internal -- prefer the macro). */
+/** @brief Recursively free a DOM tree (internal; prefer the macro). */
 void __cyaml_destroy(cyaml node);
 
 /** @brief RAII cleanup helper for use with _ccol_destructor. */
@@ -537,7 +537,7 @@ static inline void ___cyaml_destroy(cyaml *node) {
   } while (0)
 
 /* ========================================================================== */
-/*                         PATH NAVIGATION -- BACK-END                       */
+/*                         PATH NAVIGATION; BACK-END                       */
 /* ========================================================================== */
 
 /**

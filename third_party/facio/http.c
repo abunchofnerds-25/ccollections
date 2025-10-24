@@ -367,7 +367,7 @@ static void http_on_open(intptr_t uuid, void *set) {
  * defers the actual on_selected callback (here, http_on_server_protocol_http1)
  * via fio_defer, since it runs from within a TLS handshake r/w-hook context
  * where re-entering facio is unsafe. That deferred task reads this listener's
- * http_settings_s via its udata_connection argument -- before http1_new has
+ * http_settings_s via its udata_connection argument; before http1_new has
  * even run for that connection, so before it can hold its own reference (see
  * the reserved1 field's doc comment in http.h). If the listener closes while
  * such a task is still queued for an in-flight connection, releasing
@@ -378,17 +378,17 @@ static void http_on_open(intptr_t uuid, void *set) {
  * For TLS listeners, http_listen (below) registers this as the "http/1.1"
  * ALPN entry's on_cleanup hook instead of releasing the baseline hold in
  * http_on_finish. on_cleanup fires exactly when fio_tls_destroy releases the
- * LAST reference to settings->tls -- which fio_tls_attach2uuid/fio_tls_cleanup
+ * LAST reference to settings->tls; which fio_tls_attach2uuid/fio_tls_cleanup
  * already bump and drop correctly for every accepted connection (including
  * ones still only pending ALPN dispatch), plus the listener's own reference.
  * That covers the pre-http1_new window; releasing the baseline hold here
  * (rather than freeing unconditionally) additionally still requires every
  * connection that DID reach http1_new, and any worker thread still reading
- * its body, to have released its own hold first -- see http_settings_release.
+ * its body, to have released its own hold first; see http_settings_release.
  *
  * Note: on_cleanup also fires if a second, distinct fio_tls_s object's ALPN
  * table ever registers "http/1.1" again after this one's last connection
- * closes coincidentally -- not applicable here, since http_listen always
+ * closes coincidentally; not applicable here, since http_listen always
  * creates a fresh `tls` object per call (see src/chttpserver.c), never
  * shares one across two listeners.
  */
@@ -405,8 +405,8 @@ static void http_on_finish(intptr_t uuid, void *set) {
     /* No TLS/ALPN involved, so there is no pre-http1_new dispatch window to
      * worry about: release the listener's own baseline hold. Any connection
      * that reached http1_new still holds its own reference (released in
-     * http1_destroy once that connection -- and any worker thread still
-     * reading its body -- is fully done with it), so this does not free
+     * http1_destroy once that connection (and any worker thread still
+     * reading its body) is fully done with it), so this does not free
      * `settings` out from under them. */
     http_settings_release(settings);
   }

@@ -254,7 +254,7 @@ static void _stream_error_report_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Streaming handler that reads exactly one small batch of the body and then
-   returns without draining the rest -- used to prove that a connection
+   returns without draining the rest; used to prove that a connection
    whose body is left partially unread by the handler is still safely usable
    for a subsequent request (http1_stream_release must discard, not stash,
    the unread remainder). */
@@ -297,7 +297,7 @@ static void _query_one_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   }
 }
 
-/* Streaming handler that echoes a request header -- tests the pre-extracted
+/* Streaming handler that echoes a request header; tests the pre-extracted
    header array path used by chttpsvr_req_header on streaming routes. */
 static void _stream_header_handler(chttpsvr_req *req, chttpsvr_resp *resp,
                                    void *ctx) {
@@ -725,10 +725,10 @@ static void _teardown(void) {
   /* Destroy each server: drains in-flight requests and releases this
    * server's single shared-engine reference. The shared facio reactor is
    * now stopped asynchronously (a detached reaper thread, shared with
-   * chttpclient's async engine -- see cfio_engine.h) rather than being
+   * chttpclient's async engine; see cfio_engine.h) rather than being
    * joined inline by the last destroy, so chttpsvr_engine_wait() below is
    * required to deterministically block until it has actually finished
-   * before this function (an atexit handler) returns -- otherwise the
+   * before this function (an atexit handler) returns; otherwise the
    * engine-installed logger (g_test_logger, routed via
    * chttpsvr_set_engine_logger in _setup) would still be reachable from
    * fio's global logger slot when the process exits. */
@@ -808,13 +808,13 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/echo-path/{v}", _path_handler,
                             NULL);
 
-  /* Buffered route that exercises chttpsvr_req_read() -- must return -1. */
+  /* Buffered route that exercises chttpsvr_req_read(); must return -1. */
   chttpsvr_register_handler(g_srv, CHTTP_POST, "/req-read-buffered",
                             _read_on_buffered_handler, NULL);
 
   /* Multi-method routes: same path registered for both GET and POST to verify
      that both are routable independently (was broken before the _find_route
-     fix -- a POST would get 405 because the GET route matched the path first
+     fix; a POST would get 405 because the GET route matched the path first
      and the search stopped there). */
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/dual", _hello_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_POST, "/dual", _echo_body_handler,
@@ -852,7 +852,7 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_register_streaming_handler(g_srv, CHTTP_POST, "/stream-body-api",
                                       _stream_body_check_handler, NULL);
   /* Streaming GET route that calls chttpsvr_req_body() on a request with no
-   * body -- exercises the (body && len > 0) else branch and must return
+   * body; exercises the (body && len > 0) else branch and must return
    * "(empty)" rather than crashing or producing undefined output. */
   chttpsvr_register_streaming_handler(g_srv, CHTTP_GET,
                                       "/stream-body-get-no-body",
@@ -1084,7 +1084,7 @@ __attribute__((constructor)) static void _setup(void) {
   atexit(_teardown);
 }
 
-/* Forward declaration -- defined in the RAW SOCKET HELPER section below. */
+/* Forward declaration; defined in the RAW SOCKET HELPER section below. */
 static int _raw_request(const char *method, const char *path,
                         const char *extra_headers, char *buf, size_t buf_sz);
 
@@ -1300,7 +1300,7 @@ TEST(chttpserver, subrouter_with_param) {
 }
 
 TEST(chttpserver, subrouter_percent_encoded_prefix_segment_matches) {
-  /* "%61" decodes to 'a' -- the request path's prefix portion is
+  /* "%61" decodes to 'a'; the request path's prefix portion is
      percent-encoded but must still match the /api/v1 sub-router exactly
      like the unencoded request does, since a root-level registration of the
      same effective pattern would match it (route-pattern segments are
@@ -1315,7 +1315,7 @@ TEST(chttpserver, subrouter_percent_encoded_prefix_segment_matches) {
 
 TEST(chttpserver, subrouter_percent_encoded_prefix_root_matches) {
   /* Same as above but for the prefix-only path (no trailing route
-     segments) -- /api/v1/ vs /%61pi/v1/. */
+     segments); /api/v1/ vs /%61pi/v1/. */
   chttpcli_response *resp = _get("/%61pi/v1/");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -2035,7 +2035,7 @@ static int _raw_request_drip_body(int port, const char *method,
 
 /* Connects, sends headers declaring a Content-Length far larger than the
    bytes actually written, writes only `sent_len` of the body, then closes
-   the socket immediately without waiting for (or reading) any response --
+   the socket immediately without waiting for (or reading) any response;
    simulating a client that aborts mid-upload. Returns 0 on a successful
    connect+write, -1 on a socket-level failure; the caller has no response
    to inspect since the connection was torn down deliberately. */
@@ -2082,7 +2082,7 @@ static int _raw_request_abort_mid_body(const char *path,
 
 /* Reads exactly one HTTP/1.1 response (headers + Content-Length body) off
    an already-connected socket, leaving the connection open for a
-   subsequent request -- used to test keep-alive across two requests on one
+   subsequent request; used to test keep-alive across two requests on one
    connection. Assumes a short, non-chunked response (true for every
    fixture handler used with this helper). Returns the status code, or -1
    on failure. */
@@ -2149,7 +2149,7 @@ static char *_decode_raw_body(char *buf) {
   while (*p) {
     char *end = NULL;
     unsigned long chunk_size = strtoul(p, &end, 16);
-    if (end == p) break; /* malformed -- stop */
+    if (end == p) break; /* malformed; stop */
     if (*end == '\r') end++;
     if (*end == '\n') end++;
     if (chunk_size == 0) break;
@@ -2218,7 +2218,7 @@ TEST(chttpserver, streaming_repeated_header) {
 TEST(chttpserver, streaming_body_delivered_in_separate_batches) {
   /* A client that writes its body in several delayed chunks must cause the
      streaming handler's chttpsvr_req_read() to observe more than one batch
-     -- proving the body is read live off the socket by the worker thread
+     ; proving the body is read live off the socket by the worker thread
      as it arrives, not pre-buffered whole before the handler starts. */
   char buf[4096] = {0};
   int status = _raw_request_drip_body(TEST_PORT, "POST", "/stream-batch-count",
@@ -2240,7 +2240,7 @@ TEST(chttpserver, streaming_body_delivered_in_separate_batches) {
 
 TEST(chttpserver, unmatched_route_rejected_without_reading_body) {
   /* Routing now happens at headers-complete time, before any body byte is
-     read -- an unmatched route must be rejected immediately even though
+     read; an unmatched route must be rejected immediately even though
      the client claims (but never sends) a huge body. If the server tried
      to read the body before responding, this would hang instead of
      returning promptly. */
@@ -2252,7 +2252,7 @@ TEST(chttpserver, unmatched_route_rejected_without_reading_body) {
 
 TEST(chttpserver, keep_alive_across_two_requests_on_one_connection) {
   /* Two matched requests sent back to back on the same connection (no
-     Connection: close) must both succeed -- verifies that pausing at
+     Connection: close) must both succeed; verifies that pausing at
      headers-complete time (instead of after the full body, as before)
      does not break normal keep-alive/pipelining. */
   struct sockaddr_in sa;
@@ -2286,7 +2286,7 @@ TEST(chttpserver,
      single read call runs, so the worker's underlying ingestion loop (see
      http1_stream_read/http1_on_body_chunk) ends up parsing the ENTIRE
      declared body in that one internal pass regardless of how few bytes the
-     handler's own buffer captured -- content_length is fully consumed, so
+     handler's own buffer captured; content_length is fully consumed, so
      http1_on_request sets stream_body_done=1 before the handler even
      returns. http1_stream_release only forces Connection: close when
      stream_body_done is still false (see the paired
@@ -2339,7 +2339,7 @@ TEST(chttpserver,
 TEST(chttpserver,
      streaming_handler_early_stop_with_undrained_body_forces_close) {
   /* Unlike the fully-arrived-body case above, here the client only ever
-     sends the first 8 bytes of a declared 64-byte body -- the exact amount
+     sends the first 8 bytes of a declared 64-byte body; the exact amount
      /stream-read-once's single chttpsvr_req_read(req, buf, 8) call
      consumes. content_length(64) > read(8) when the handler returns, so
      the body is genuinely undrained: http1_stream_release's own safety net
@@ -2384,7 +2384,7 @@ TEST(chttpserver, stream_read_timeout_reports_ccol_timed_out) {
   /* A client that sends headers declaring more body than it ever delivers,
      then stalls, must eventually cause chttpsvr_req_read() to return -1
      with chttpsvr_req_stream_error() == ccol_timed_out (bounded by
-     stream_read_timeout_ms, set to 300ms for this server in test setup) --
+     stream_read_timeout_ms, set to 300ms for this server in test setup);
      rather than blocking the worker thread forever. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
@@ -2728,7 +2728,7 @@ TEST(chttpserver, trailing_slash_pattern_rejected) {
    * ccol_invalid_args.  Such patterns would be permanently unreachable:
    * _match_segments strips trailing slashes from incoming paths, so they
    * would silently match the same requests as the no-trailing-slash variant
-   * -- a misleading API contract.  Rejection is the only honest behaviour.
+   * ; a misleading API contract.  Rejection is the only honest behaviour.
    *
    * "/"  (the root) is a special case that is always accepted.
    *
@@ -3187,7 +3187,7 @@ TEST(chttpserver, serve_port_zero_rejected) {
 /*                    NEW COVERAGE GAP TESTS                                  */
 /* ========================================================================== */
 
-/* -- 1. on_stream with NULL server returns ccol_invalid_args -- */
+/* 1. on_stream with NULL server returns ccol_invalid_args */
 
 TEST(chttpserver, on_stream_null_srv_returns_invalid_args) {
   /* chttpsvr_register_streaming_handler must validate srv != NULL before doing
@@ -3198,7 +3198,7 @@ TEST(chttpserver, on_stream_null_srv_returns_invalid_args) {
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
-/* -- 2. Empty query key (?=value) is accessible via chttpsvr_req_query -- */
+/* 2. Empty query key (?=value) is accessible via chttpsvr_req_query */
 
 TEST(chttpserver, query_empty_key) {
   /* A query string like "?=hello" has an empty key.  The server must parse it
@@ -3211,7 +3211,7 @@ TEST(chttpserver, query_empty_key) {
   chttpclient_resp_free(resp);
 }
 
-/* -- 3. chttpsvr_req_read after EOF keeps returning 0 -- */
+/* 3. chttpsvr_req_read after EOF keeps returning 0 */
 
 TEST(chttpserver, req_read_eof_is_idempotent) {
   /* After chttpsvr_req_read returns 0 (EOF), calling it again must continue
@@ -3223,7 +3223,7 @@ TEST(chttpserver, req_read_eof_is_idempotent) {
   chttpclient_resp_free(resp);
 }
 
-/* -- 4. chttpsvr_subrouter("/") edge case -- */
+/* 4. chttpsvr_subrouter("/") edge case */
 
 TEST(chttpserver, subrouter_slash_prefix_matches_only_root) {
   /* A sub-router created with prefix "/" retains prefix_len = 1 (the
@@ -3251,7 +3251,7 @@ TEST(chttpserver, subrouter_slash_prefix_matches_only_root) {
 /*                    INPUT VALIDATION TESTS */
 /* ========================================================================== */
 
-/* -- 1. Pattern without leading slash rejected -- */
+/* 1. Pattern without leading slash rejected */
 
 TEST(chttpserver, pattern_no_leading_slash_rejected) {
   /* _compile_pattern must reject any pattern that does not begin with '/'.
@@ -3280,7 +3280,7 @@ TEST(chttpserver, pattern_no_leading_slash_rejected) {
   REQUIRE_EQ((int)rv, (int)ccol_success);
 }
 
-/* -- 2. Engine logger null arg rejected -- */
+/* 2. Engine logger null arg rejected */
 
 TEST(chttpserver, set_engine_logger_null_rejected) {
   /* chttpsvr_set_engine_logger(NULL) must return ccol_invalid_args rather than
@@ -3290,7 +3290,7 @@ TEST(chttpserver, set_engine_logger_null_rejected) {
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
-/* -- 3. Server handle valid after stop -- */
+/* 3. Server handle valid after stop */
 
 TEST(chttpserver, serve_stopped_server_state_valid) {
   /* chttpsvr_stop on a server that was not started is a no-op.  The handle
@@ -3305,7 +3305,7 @@ TEST(chttpserver, serve_stopped_server_state_valid) {
   REQUIRE_EQ((int)rv, (int)ccol_success);
 }
 
-/* -- 4. TLS configuration arg-guard coverage -- */
+/* 4. TLS configuration arg-guard coverage */
 
 TEST(chttpserver, serve_tls_zero_port_rejected_before_tls_init) {
   /* chttpsvr_start validates cfg->port == 0 BEFORE attempting TLS setup.
@@ -3321,7 +3321,7 @@ TEST(chttpserver, serve_tls_zero_port_rejected_before_tls_init) {
   tls.cert_path = "/nonexistent/cert.pem";
   tls.key_path = "/nonexistent/key.pem";
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
-  cfg.port = 0; /* invalid port -- fires before TLS init */
+  cfg.port = 0; /* invalid port; fires before TLS init */
   cfg.host = "127.0.0.1";
   cfg.tls = &tls;
   ccol_retval_t rv = chttpsvr_start(g_srv2, &cfg);
@@ -3431,7 +3431,7 @@ TEST(chttpserver, middleware_overflow_produces_500) {
 
 TEST(chttpserver, middleware_overflow_streaming_produces_500) {
   /* The middleware-overflow check in _on_request fires before the
-   * is_streaming branch -- both buffered and streaming routes share the same
+   * is_streaming branch; both buffered and streaming routes share the same
    * overflow detection code path.  This test exercises the streaming variant
    * so that any future code-path divergence is caught by the test suite.
    *
@@ -3576,7 +3576,7 @@ TEST(chttpserver, router_on_stream_null_router_returns_invalid_args) {
 TEST(chttpserver, serve_null_cfg_uses_default) {
   /* chttpsvr_start(srv, NULL) must fall back to CHTTPSVR_CONFIG_DEFAULT rather
    * than crashing on a NULL cfg dereference.  Uses g_srv (already started) so
-   * the double-start guard returns ccol_not_permitted -- NOT ccol_invalid_args,
+   * the double-start guard returns ccol_not_permitted; NOT ccol_invalid_args,
    * which would incorrectly signal that NULL is an invalid argument rather than
    * a handled default. */
   REQUIRE_TRUE(g_srv != NULL);
@@ -3745,7 +3745,7 @@ static int _raw_post_fixed_body(int port, const char *path, size_t body_len,
 
 TEST(chttpserver, buffered_max_body_size_at_limit_succeeds) {
   /* A body of exactly max_body_size (64) bytes must be accepted and echoed
-     back in full -- the enforcement check inside http1_on_body_chunk is
+     back in full; the enforcement check inside http1_on_body_chunk is
      strictly-greater-than, so the boundary value itself must succeed. */
   char buf[4096] = {0};
   int status = _raw_post_fixed_body(TEST_PORT + 3, "/small-body-echo",
@@ -3758,7 +3758,7 @@ TEST(chttpserver, buffered_max_body_size_at_limit_succeeds) {
 
 TEST(chttpserver, buffered_max_body_size_exceeded_rejected) {
   /* A body one byte over max_body_size must be rejected with a real
-     413 Payload Too Large response -- not a bare connection reset -- and the
+     413 Payload Too Large response (not a bare connection reset) and the
      connection must close afterward (Connection: close) rather than stay
      alive for a corrupted next request, since excess body bytes beyond the
      limit were left unread on the wire. */
@@ -3782,7 +3782,7 @@ TEST(chttpserver, streaming_max_body_size_at_limit_succeeds) {
 TEST(chttpserver, streaming_max_body_size_exceeded_reported) {
   /* Unlike the buffered path (which the framework itself turns into a 413
      before ever calling the handler), a streaming route's handler is always
-     invoked and decides its own response -- chttpsvr_req_read() simply
+     invoked and decides its own response; chttpsvr_req_read() simply
      returns -1 and chttpsvr_req_stream_error() reports ccol_msg_too_large,
      exactly like the existing stream_read_timeout_reports_ccol_timed_out
      test's ccol_timed_out case. The connection must still carry a real,
@@ -3858,7 +3858,7 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
    * then dereference settings fields (max_body_size, udata) through freed
    * memory. The fix ties settings' lifetime to a connection-count refcount
    * (http.h's http_settings_s.reserved1) instead of the listener socket
-   * alone. This test doesn't assert on a return value -- the bug is a
+   * alone. This test doesn't assert on a return value; the bug is a
    * use-after-free, so the real verification is `make memtest` (valgrind)
    * running this test clean; a debug build would also abort/crash outright
    * under the old code once the race actually landed. Uses its own
@@ -3896,7 +3896,7 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
 
 TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
   /* stream_read_timeout_ms only bounds each individual gap between batches
-   * of body bytes -- a client that sends a little data and then stalls
+   * of body bytes; a client that sends a little data and then stalls
    * *within* that gap never trips it. max_body_read_duration_ms bounds the
    * *total* time spent reading one request's body regardless of per-gap
    * progress, closing that loophole. Configure a generous per-gap timeout
@@ -3956,7 +3956,7 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
 }
 
 TEST(chttpserver, max_body_read_duration_default_disabled_allows_slow_drip) {
-  /* max_body_read_duration_ms defaults to 0 (disabled) -- a slow-but-steady
+  /* max_body_read_duration_ms defaults to 0 (disabled); a slow-but-steady
    * drip that would trip a short overall cap must still succeed when the
    * cap is left unset, on a server whose stream_read_timeout_ms is generous
    * enough that the per-gap timeout doesn't fire either. Guards against the

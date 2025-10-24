@@ -2163,7 +2163,7 @@ TEST(ccol_select, fd_limited_accepts_data_within_limit) {
 
   c_message_t buf = {.data = NULL, .size = 0};
   size_t idx = 99;
-  /* limit is 2*sizeof(int); data is sizeof(int) -- within limit */
+  /* limit is 2*sizeof(int); data is sizeof(int); within limit */
   REQUIRE_EQ(ccol_select_va(&buf, &idx,
                             selectable_from_fd_limited(pfd[0], ccol_select_read,
                                                        sizeof(int) * 2)),

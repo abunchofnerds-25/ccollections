@@ -11,6 +11,7 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 # to -- see cfio_engine.h.
 OUR_SRC_FILES = tests.c \
 	../../src/chttpclient.c \
+	../../src/chttp.c \
 	../../src/cfio_engine.c \
 	../../src/clogger.c \
 	../../src/chashmap.c \

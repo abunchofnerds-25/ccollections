@@ -9,6 +9,7 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 OUR_SRC_FILES = tests.c \
 	../../src/chttpserver.c \
 	../../src/chttpclient.c \
+	../../src/chttp.c \
 	../../src/cfio_engine.c \
 	../../src/cthreadpool.c \
 	../../src/clogger.c \

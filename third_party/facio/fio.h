@@ -381,7 +381,7 @@ void fio_malloc_after_fork(void);
  * to the supplied malloc/free/calloc/realloc instead, bypassing the arena
  * entirely.  Passing NULL reverts to the default arena behavior.
  *
- * fio.h intentionally does NOT include common.h -- struct ccol_memmgmt_procs_t
+ * fio.h intentionally does NOT include common.h; struct ccol_memmgmt_procs_t
  * is forward-declared so the prototypes compile without pulling in the full
  * ccol API.
  * =========================================================================*/
@@ -451,7 +451,7 @@ Logging and testing helpers
  *
  * The __fio_log_* functions are implemented in fio.c; they forward each
  * log call to the registered clog handle.  fio.h intentionally does NOT
- * include clogger.h -- struct clogger is forward-declared so that the
+ * include clogger.h; struct clogger is forward-declared so that the
  * function prototypes compile without pulling in the full clogger API.
  * =========================================================================*/
 struct clogger;
@@ -658,7 +658,7 @@ void fio_force_event(intptr_t uuid, enum fio_io_event);
  * completes), that side effect wins a race against the *current*
  * invocation's own post-callback re-arm check in `deferred_on_data`,
  * causing it to skip re-arming the (edge-triggered, one-shot) poll
- * interest entirely -- on the assumption that the scheduled follow-up will
+ * interest entirely; on the assumption that the scheduled follow-up will
  * handle it. If that follow-up's own read attempt finds no data yet
  * available, nothing is left to ever re-arm the socket, even once data
  * later arrives: the reactor was never told to watch for it again. Call
@@ -669,7 +669,7 @@ void fio_force_read_rearm(intptr_t uuid);
 
 /**
  * Unconditionally re-arms the reactor's write interest for `uuid` (an
- * idempotent `epoll_ctl`-equivalent MOD/ADD) -- the write-side mirror of
+ * idempotent `epoll_ctl`-equivalent MOD/ADD); the write-side mirror of
  * `fio_force_read_rearm`.
  *
  * `on_ready` is normally only re-armed as a side effect of `fio_write2()`
@@ -677,9 +677,9 @@ void fio_force_read_rearm(intptr_t uuid);
  * (`fio_poll_add_write`) only runs when there is still packet data pending,
  * never merely because a caller wants to be notified once more. Code that
  * drives its own raw writes directly on the fd instead of going through
- * `fio_write2` -- e.g. client-mode TLS via `fio_tls_connection_write`/
+ * `fio_write2` (e.g. client-mode TLS via `fio_tls_connection_write`/
  * `fio_tls_client_handshake_step`, which write straight through OpenSSL's
- * BIO layer -- therefore has no other way to ask for a follow-up `on_ready`
+ * BIO layer) therefore has no other way to ask for a follow-up `on_ready`
  * once `WANT_WRITE`/a partial write is hit. Call this to arrange one.
  */
 void fio_force_write_rearm(intptr_t uuid);

@@ -676,14 +676,14 @@ TEST(fields, invalid_key_is_rejected) {
 
   /* These keys must be silently ignored (empty, space, '=', control char, DEL,
    * ']', '\', '"'). */
-  clog_set_field(lg, "", "v"); /* empty -- violates RFC 5424 1*32PRINTUSASCII */
+  clog_set_field(lg, "", "v"); /* empty; violates RFC 5424 1*32PRINTUSASCII */
   clog_set_field(lg, "bad key", "v");
   clog_set_field(lg, "bad=key", "v");
   clog_set_field(lg, "bad\x01key", "v"); /* C0 control character */
   clog_set_field(lg,
                  "bad\x7f"
                  "key",
-                 "v");                 /* DEL (0x7f) -- not PRINTUSASCII */
+                 "v");                 /* DEL (0x7f); not PRINTUSASCII */
   clog_set_field(lg, "bad]key", "v");  /* ']' breaks RFC 5424 SD elements */
   clog_set_field(lg, "bad\\key", "v"); /* '\' corrupts logfmt quoting */
   clog_set_field(lg, "bad\"key", "v"); /* '"' corrupts logfmt quoting */
@@ -804,7 +804,7 @@ TEST(fields, newline_and_cr_in_value_are_escaped) {
   clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
   REQUIRE_NE((void *)lg, (void *)NULL);
 
-  /* Value contains raw LF, CR, and HT -- all must be escaped in logfmt
+  /* Value contains raw LF, CR, and HT; all must be escaped in logfmt
    * output so the record remains a single line. */
   clog_set_field(lg, "payload", "line1\nline2\rend\ttab");
   log_info(lg, "escape test");
@@ -881,14 +881,14 @@ TEST(fields, backslash_in_value_is_quoted_and_escaped_in_logfmt) {
   char buf[4096];
   read_file(path, buf, sizeof buf);
 
-  /* Value must appear as win_path="C:\\Users\\foo" -- each \ escaped to \\. */
+  /* Value must appear as win_path="C:\\Users\\foo"; each \ escaped to \\. */
   REQUIRE_NE(strstr(buf, "win_path=\"C:\\\\Users\\\\foo\""), NULL);
 
   cleanup_dir(dir, "app.log");
 }
 
 /* ========================================================================== */
-/*                         OUTPUT -- LONG MESSAGES                            */
+/*                         OUTPUT; LONG MESSAGES                            */
 /* ========================================================================== */
 
 TEST(output, long_message_uses_heap_and_is_not_truncated) {
@@ -1022,7 +1022,7 @@ TEST(rotation, logger_recovers_after_file_externally_deleted) {
   log_info(lg, "triggers rotation");
 
   /* Second write: bytes_written reset to 0 after rotation; line_len < 10000.
-   * No further rotation -- this line lands in the recreated file at `path`. */
+   * No further rotation; this line lands in the recreated file at `path`. */
   log_info(lg, "after recovery");
 
   clog_close(lg);
@@ -1305,7 +1305,7 @@ TEST(derive, independent_level) {
   clog child = clog_derive(parent);
   REQUIRE_NE((void *)child, (void *)NULL);
 
-  /* Lower child's level below parent's -- child sees DEBUG, parent does not */
+  /* Lower child's level below parent's; child sees DEBUG, parent does not */
   clog_set_level(child, CLOG_DEBUG);
 
   log_debug(parent, "parent debug - dropped");
@@ -1513,7 +1513,7 @@ TEST(threading, concurrent_writes_produce_no_garbled_lines) {
 
   clog_close(lg);
 
-  /* Every line must start with "ts=" -- no interleaved partial writes */
+  /* Every line must start with "ts="; no interleaved partial writes */
   char buf[131072];
   size_t len = read_file(path, buf, sizeof buf);
   REQUIRE_NE(len, (size_t)0);
@@ -1651,7 +1651,7 @@ TEST(custom_alloc, derived_logger_uses_parent_allocator) {
 TEST(custom_alloc, invalid_mprocs_returns_null) {
   ccol_memmgmt_procs_t bad_procs = {
       .malloc = _custom_malloc,
-      .free = NULL, /* missing free -- must be rejected */
+      .free = NULL, /* missing free; must be rejected */
       .calloc = _custom_calloc,
       .realloc = _custom_realloc,
   };
@@ -2100,7 +2100,7 @@ TEST(json, tab_and_cr_in_field_value_are_escaped) {
   REQUIRE_NE((void *)lg, (void *)NULL);
   clog_set_format(lg, CLOG_FMT_JSON);
 
-  /* Field value with embedded HT and CR -- both must be JSON-escaped */
+  /* Field value with embedded HT and CR; both must be JSON-escaped */
   clog_set_field(lg, "data", "col1\tcol2\r\n");
 
   log_info(lg, "tab and cr test");
@@ -2247,7 +2247,7 @@ TEST(syslog, sd_param_name_truncated_to_32_chars) {
   REQUIRE_NE((void *)lg, (void *)NULL);
   clog_set_format(lg, CLOG_FMT_SYSLOG);
 
-  /* 40-char key -- exceeds RFC 5424 SD-PARAM-NAME limit of 32. */
+  /* 40-char key; exceeds RFC 5424 SD-PARAM-NAME limit of 32. */
   clog_set_field(lg, "abcdefghijklmnopqrstuvwxyz_123456789", "val");
 
   log_info(lg, "truncation");
@@ -2401,7 +2401,7 @@ TEST(lifecycle, open_file_appends_to_existing) {
   log_info(lg1, "first open");
   clog_close(lg1);
 
-  /* Open the same path again -- must append, not truncate. */
+  /* Open the same path again; must append, not truncate. */
   clog lg2 = clog_open_file_mp(path, CLOG_INFO, NULL, NULL);
   REQUIRE_NE((void *)lg2, (void *)NULL);
   log_info(lg2, "second open");
@@ -2670,7 +2670,7 @@ TEST(compression, rotated_file_is_valid_gzip) {
   /* At least one .gz file must exist. */
   REQUIRE_GT(count_files_with_suffix(dir, ".gz"), 0);
 
-  /* All rotated files should be .gz -- no raw uncompressed rotated files. */
+  /* All rotated files should be .gz; no raw uncompressed rotated files. */
   REQUIRE_EQ(count_files_with_suffix(dir, ".gz"),
              count_files_with_prefix(dir, "app.log."));
 
@@ -2836,7 +2836,7 @@ TEST(compression, empty_file_compresses_cleanly) {
     /* If a .gz was produced it must be valid. */
     REQUIRE_EQ(gunzip_test(gz_path), 0);
   }
-  /* If no .gz exists the file was too small to trigger rotation -- that is
+  /* If no .gz exists the file was too small to trigger rotation; that is
    * also acceptable; the test verifies there is no crash. */
 
   cleanup_dir(dir, "app.log");

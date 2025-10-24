@@ -1282,7 +1282,7 @@ TEST(cbst_maps, update_value_with_different_size) {
       ccol_success);
   REQUIRE_EQ(readback, 42);
 
-  // Re-insert same key with long value (8 bytes) -- triggers realloc path
+  // Re-insert same key with long value (8 bytes); triggers realloc path
   long big_val = 1234567890123L;
   REQUIRE_EQ(
       cbmap_insert_elem(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
@@ -1297,7 +1297,7 @@ TEST(cbst_maps, update_value_with_different_size) {
       ccol_success);
   REQUIRE_EQ(big_readback, 1234567890123L);
 
-  // Re-insert again back to int size -- triggers realloc in the other direction
+  // Re-insert again back to int size; triggers realloc in the other direction
   small_val = 99;
   REQUIRE_EQ(cbmap_insert_elem(
                  cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},

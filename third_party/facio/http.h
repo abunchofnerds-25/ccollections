@@ -219,7 +219,7 @@ struct http_settings_s {
   /**
    * (optional) Called once, right after headers are parsed and before any
    * body byte is read, for HTTP/1.1 requests. Return non-zero to take over
-   * the request -- in that case `on_request` will NOT be called for it, and
+   * the request; in that case `on_request` will NOT be called for it, and
    * the caller becomes responsible for reading the body itself via
    * `http1_stream_read` and for eventually calling `http_resume`. Return 0
    * to let normal parsing and `on_request` dispatch proceed unchanged (the
@@ -229,7 +229,7 @@ struct http_settings_s {
    * `http1_stream_prepare(request)` (declared in http1.h) BEFORE calling
    * `http_pause`, not after. `http_pause` defers the actual handoff via
    * `fio_defer`, and a worker thread may start running `http1_stream_read`
-   * on another core as soon as that deferred task is queued -- possibly
+   * on another core as soon as that deferred task is queued; possibly
    * before this callback even returns. Any state a worker depends on must
    * therefore already be established before `http_pause` runs.
    */
@@ -289,7 +289,7 @@ struct http_settings_s {
   /** SSL/TLS support. */
   void *tls;
   /**
-   * Internal use only -- do not set. Reference count gating when this
+   * Internal use only; do not set. Reference count gating when this
    * settings object is actually freed: initialized to 1 (representing the
    * listener's own baseline hold) by `http_listen`, incremented once per
    * accepted connection (`http1_new`) and decremented once that connection

@@ -1798,7 +1798,7 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
   clru_construct(cache, int, int, 16, slow_remote_getter,
                  recording_remote_setter, NULL);
 
-  /* Thread A: get key=7 -- triggers a 100 ms remote fetch */
+  /* Thread A: get key=7; triggers a 100 ms remote fetch */
   getter_arg_t garg = {cache, 7, 0, ccol_unexpected_failure};
   pthread_t gtid;
   pthread_create(&gtid, NULL, getter_thread, &garg);
@@ -1807,7 +1807,7 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
    * released, slow getter running). */
   while (coalesce_getter_calls == 0) usleep(1000);
 
-  /* Thread B: set key=7 -- must find fetch_in_progress=true and block */
+  /* Thread B: set key=7; must find fetch_in_progress=true and block */
   sync_setter_arg_t sarg = {cache, 7, 999};
   pthread_t stid;
   pthread_create(&stid, NULL, sync_setter_thread, &sarg);
@@ -1913,7 +1913,7 @@ static bool slow_failing_char_ptr_getter(const cmap_pair *key, cmap_pair *val) {
   (void)key;
   (void)val;
   __atomic_fetch_add(&slow_fail_char_ptr_getter_calls, 1, __ATOMIC_SEQ_CST);
-  usleep(100000); /* 100 ms -- gives all threads time to block on the
+  usleep(100000); /* 100 ms; gives all threads time to block on the
                      placeholder */
   return false;
 }
@@ -1930,7 +1930,7 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
     args[i].cache = cache;
     args[i].key = 22;
     args[i].result = NULL;
-    args[i].retval = ccol_success; /* sentinel -- must be overwritten */
+    args[i].retval = ccol_success; /* sentinel; must be overwritten */
     pthread_create(&tids[i], NULL, str_getter_thread, &args[i]);
   }
   for (int i = 0; i < N_FAIL_STR_THREADS; i++) {

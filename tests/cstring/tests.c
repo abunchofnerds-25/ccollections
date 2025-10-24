@@ -383,7 +383,7 @@ TEST(cstrings, set_self_alias_no_realloc) {
 
 TEST(cstrings, set_self_alias_full_length_no_realloc) {
   // A 16-char string gets init_cap = next_pow2(17) = 32, so setting it to
-  // itself requests capacity 17 which is already satisfied -- no realloc.
+  // itself requests capacity 17 which is already satisfied; no realloc.
   // Exercises the no-realloc self-alias path with a longer string than
   // set_self_alias_no_realloc.
   cstr s = cstring_create("1234567890123456", NULL);
@@ -1378,7 +1378,7 @@ TEST(cstrings, append_self_alias_no_realloc) {
   // "hello" (5 chars, capacity 16): appending itself gives "hellohello"
   // (10 chars), grow_to(11) <= 16 is a no-op.  Exercises the alias_off==0
   // no-realloc path; memcpy is safe because dst starts at s->length while
-  // src ends at s->length-1 -- no overlap.
+  // src ends at s->length-1; no overlap.
   cstr_construct(s, "hello");
   REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
   ccol_retval_t rv = cstring_append(s, cstring_c_str(s));
@@ -1462,7 +1462,7 @@ TEST(cstrings, insert_self_alias_at_nonzero_pos_no_realloc) {
   // "hello" (5 chars, capacity 16): inserting itself at pos 2 gives
   // "he" + "hello" + "llo" = "hehellollo" (10 chars), grow_to(11) <= 16.
   // Exercises alias_off==0 with pos>0 without reallocation; the final
-  // memmove(s->data+2, s->data, 5) has dst > src with overlap -- memmove
+  // memmove(s->data+2, s->data, 5) has dst > src with overlap; memmove
   // handles it correctly.
   cstr_construct(s, "hello");
   REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);

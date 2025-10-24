@@ -57,7 +57,7 @@ typedef struct {
   pthread_t accept_tid;
   atomic_int running;
 
-  /* IPv6 loopback listener, mirroring the fields above -- best-effort: not
+  /* IPv6 loopback listener, mirroring the fields above; best-effort: not
    * every sandbox/CI environment has an IPv6 stack, so server_fd6 stays -1
    * (and port6 stays 0) when the bind fails, rather than treating that as a
    * hard test-server-setup failure. */
@@ -79,7 +79,7 @@ static pthread_mutex_t g_conn_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * Send a complete HTTP response. keep_alive controls whether "Connection:
- * close" is sent -- when true, the response relies on HTTP/1.1's implicit
+ * close" is sent; when true, the response relies on HTTP/1.1's implicit
  * keep-alive default instead. All pre-existing routes pass false, preserving
  * their exact original behavior; only the new keep-alive-specific routes
  * (added for real connection-reuse test coverage) pass true.
@@ -243,7 +243,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   }
 
   if (strcmp(method, "GET") == 0 && strcmp(path, "/echo-auth") == 0) {
-    /* Echoes the Authorization header (or "" if none) -- used to verify
+    /* Echoes the Authorization header (or "" if none); used to verify
      * userinfo-derived Basic auth injection, that an explicit caller header
      * is never overridden, and the cross-origin credential-stripping
      * behavior on redirect. */
@@ -338,7 +338,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   }
 
   if (strcmp(method, "GET") == 0 && strcmp(path, "/keepalive") == 0) {
-    /* No "Connection: close" -- relies on HTTP/1.1's implicit keep-alive
+    /* No "Connection: close"; relies on HTTP/1.1's implicit keep-alive
      * default so the client's idle-pool reuse logic can be exercised. */
     const char *b = "{\"status\":\"ok\"}";
     srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
@@ -349,7 +349,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   if (strcmp(method, "GET") == 0 &&
       strcmp(path, "/keepalive-then-close") == 0) {
     /* Responds as keep-alive-eligible (no Connection: close) but the server
-     * closes its end immediately after -- exercises the client's
+     * closes its end immediately after; exercises the client's
      * dead-idle-connection detection (liveness probe on reuse). */
     const char *b = "{\"status\":\"ok\"}";
     srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
@@ -358,7 +358,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   }
 
   if (strcmp(path, "/echo-method-body") == 0) {
-    /* Echoes "<METHOD>:<body_len>" -- used to verify the redirect-following
+    /* Echoes "<METHOD>:<body_len>"; used to verify the redirect-following
      * method/body policy (301/302/303 -> bodyless GET except HEAD; 307/308 ->
      * method and body preserved). */
     char b[64];
@@ -386,7 +386,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   }
 
   if (strcmp(path, "/redirect-relative") == 0) {
-    /* Root-relative Location (no scheme/host) -- exercises
+    /* Root-relative Location (no scheme/host); exercises
      * _resolve_redirect_url's root-relative branch. */
     srv_respond(conn_fd, 302, "Found", "text/plain", "Location: /get\r\n", NULL,
                 0, false);
@@ -394,7 +394,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   }
 
   if (strcmp(path, "/nested/dir/redirect-relative-dotted") == 0) {
-    /* Multi-level relative Location ("../../get") -- exercises RFC 3986
+    /* Multi-level relative Location ("../../get"); exercises RFC 3986
      * SS5.3 merge + remove_dot_segments end-to-end (not just at the unit
      * level): base path "/nested/dir/redirect-relative-dotted" merges with
      * "../../get" to "/nested/dir/../../get", which must normalise to
@@ -413,13 +413,13 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   }
 
   if (strcmp(path, "/redirect-to-echo-auth-cross-origin") == 0) {
-    /* Redirects to the IPv6 loopback listener -- used purely as a
+    /* Redirects to the IPv6 loopback listener; used purely as a
      * conveniently-different origin (different host) for the same server
      * process, not to test IPv6 itself. Dependent tests skip themselves if
      * the IPv6 listener never bound (see get_test_port6). */
     char loc_hdr[160];
-    snprintf(loc_hdr, sizeof(loc_hdr), "Location: http://[::1]:%d/echo-auth\r\n",
-             g_srv.port6);
+    snprintf(loc_hdr, sizeof(loc_hdr),
+             "Location: http://[::1]:%d/echo-auth\r\n", g_srv.port6);
     srv_respond(conn_fd, 302, "Found", "text/plain", loc_hdr, NULL, 0, false);
     return true;
   }
@@ -441,7 +441,7 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
   }
 
   if (strcmp(path, "/redirect-infinite") == 0) {
-    /* Always redirects to itself -- exercises the CHTTP_MAX_REDIRECTS cap:
+    /* Always redirects to itself; exercises the CHTTP_MAX_REDIRECTS cap:
      * both Tier 1 and the async engine must stop following after the cap and
      * deliver the last 302 response as-is rather than looping forever. */
     char loc_hdr[128];
@@ -528,7 +528,7 @@ static void *srv_accept_loop(void *arg) {
   return NULL;
 }
 
-/* IPv6-loopback counterpart of srv_accept_loop -- shares g_srv.running (both
+/* IPv6-loopback counterpart of srv_accept_loop; shares g_srv.running (both
  * loops stop together) and the same connection-thread registry/handler, only
  * the listening fd differs. */
 static void *srv_accept_loop6(void *arg) {
@@ -589,7 +589,7 @@ static void start_test_server(void) {
     return;
   }
 
-  /* Best-effort IPv6 loopback listener -- some sandboxes/CI environments
+  /* Best-effort IPv6 loopback listener; some sandboxes/CI environments
    * have no IPv6 stack at all, in which case this whole block just leaves
    * server_fd6 at -1 and port6 at 0; dependent tests check for that and
    * skip themselves rather than hard-failing. */
@@ -651,14 +651,14 @@ static int get_test_port(void) {
   return g_srv.port;
 }
 
-/* 0 if no IPv6 loopback listener could be bound in this environment --
+/* 0 if no IPv6 loopback listener could be bound in this environment;
  * dependent tests must check for that and skip themselves. */
 static int get_test_port6(void) {
   pthread_once(&g_srv_once, start_test_server);
   return g_srv.port6;
 }
 
-/* Number of TCP connections accepted so far by the test server -- used to
+/* Number of TCP connections accepted so far by the test server; used to
  * assert that keep-alive reuse actually skipped the handshake/TCP setup for
  * a given request, rather than opening a fresh connection. */
 static int test_server_accept_count(void) {
@@ -1609,7 +1609,7 @@ TEST(pool, shrink_while_in_flight_exiles_slots) {
   /* Verify the exiled-slot path in _pool_release_slot: start POOL_LARGE
    * concurrent requests, shrink the pool to POOL_SMALL while all requests are
    * in-flight, then wait for completion.  Slots [POOL_SMALL, POOL_LARGE) become
-   * exiled -- _pool_release_slot must call curl_easy_cleanup on them and must
+   * exiled; _pool_release_slot must call curl_easy_cleanup on them and must
    * not corrupt any state.  Valgrind verifies that no handles are leaked. */
   enum { POOL_LARGE = 4, POOL_SMALL = 2 };
   char url[128];
@@ -2100,7 +2100,7 @@ TEST(http, run_query_headers_forwarded_and_not_consumed) {
   REQUIRE_STREQ(resp->body, "hello-from-run-query");
   chttpclient_resp_free(resp);
 
-  /* hdrs must survive the call -- chttp_run_query must not take ownership. */
+  /* hdrs must survive the call; chttp_run_query must not take ownership. */
   const char *stored = chmap_get(hdrs, "x-echo");
   REQUIRE_NE((void *)stored, NULL);
   REQUIRE_STREQ(stored, "hello-from-run-query");
@@ -2125,7 +2125,7 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
    * Once both slots are confirmed in-flight we start a probe thread (which
    * blocks on the full pool) and only then start the destroy thread.  The
    * destroy sets destroying=true and broadcasts, waking the probe which sees
-   * the flag and returns ccol_not_permitted -- no arbitrary sleep required. */
+   * the flag and returns ccol_not_permitted; no arbitrary sleep required. */
   char slow_url[128], url[128];
   make_url(slow_url, sizeof(slow_url), "/slow");
   make_url(url, sizeof(url), "/get");
@@ -2399,7 +2399,7 @@ TEST(url_parsing, explicit_non_default_port_succeeds) {
   chttpclient_resp_free(resp);
 }
 
-/* White-box helpers for _parse_chttp_url/_resolve_redirect_url -- see
+/* White-box helpers for _parse_chttp_url/_resolve_redirect_url; see
  * src/chttpclient.c's own RUNNING_UNIT_TESTS block for the exact ownership
  * contract (NULL mp -> every out string is plain-malloc'd; free() it). */
 extern ccol_retval_t _chttp_parse_url_for_tests(
@@ -2413,9 +2413,9 @@ TEST(url_parsing, ipv6_literal_no_port) {
   bool is_https = false, is_ipv6 = false;
   char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
   uint16_t port = 0;
-  ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "https://[::1]/path", &is_https, &is_ipv6, &host, &port, &pq,
-      &origin_key, &auth);
+  ccol_retval_t rv =
+      _chttp_parse_url_for_tests("https://[::1]/path", &is_https, &is_ipv6,
+                                 &host, &port, &pq, &origin_key, &auth);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(is_https);
   REQUIRE_TRUE(is_ipv6);
@@ -2433,9 +2433,9 @@ TEST(url_parsing, ipv6_literal_with_port) {
   bool is_https = false, is_ipv6 = false;
   char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
   uint16_t port = 0;
-  ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http://[::1]:8443/", &is_https, &is_ipv6, &host, &port, &pq,
-      &origin_key, &auth);
+  ccol_retval_t rv =
+      _chttp_parse_url_for_tests("http://[::1]:8443/", &is_https, &is_ipv6,
+                                 &host, &port, &pq, &origin_key, &auth);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(is_ipv6);
   REQUIRE_STREQ(host, "::1");
@@ -2447,9 +2447,8 @@ TEST(url_parsing, ipv6_literal_with_port) {
 }
 
 TEST(url_parsing, ipv6_missing_closing_bracket_is_invalid) {
-  ccol_retval_t rv =
-      _chttp_parse_url_for_tests("http://[::1/path", NULL, NULL, NULL, NULL,
-                                 NULL, NULL, NULL);
+  ccol_retval_t rv = _chttp_parse_url_for_tests("http://[::1/path", NULL, NULL,
+                                                NULL, NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }
 
@@ -2487,8 +2486,8 @@ TEST(url_parsing, userinfo_user_and_pass) {
   char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
   uint16_t port = 0;
   ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http://alice:s3cr3t@host/path", &dummy_https, &dummy_ipv6, &host,
-      &port, &pq, &origin_key, &auth);
+      "http://alice:s3cr3t@host/path", &dummy_https, &dummy_ipv6, &host, &port,
+      &pq, &origin_key, &auth);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)auth, NULL);
   /* base64("alice:s3cr3t") == "YWxpY2U6czNjcjN0" */
@@ -2520,8 +2519,8 @@ TEST(url_parsing, userinfo_pass_only) {
   char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
   uint16_t port = 0;
   ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http://:s3cr3t@host/path", &dummy_https, &dummy_ipv6, &host, &port,
-      &pq, &origin_key, &auth);
+      "http://:s3cr3t@host/path", &dummy_https, &dummy_ipv6, &host, &port, &pq,
+      &origin_key, &auth);
   REQUIRE_EQ(rv, ccol_success);
   /* base64(":s3cr3t") == "OnMzY3IzdA==" */
   REQUIRE_STREQ(auth, "Basic OnMzY3IzdA==");
@@ -2535,7 +2534,7 @@ TEST(url_parsing, userinfo_percent_encoded_components) {
   bool dummy_https = false, dummy_ipv6 = false;
   char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
   uint16_t port = 0;
-  /* "%40"->'@', "%3A"->':' inside the raw components -- delimiters must be
+  /* "%40"->'@', "%3A"->':' inside the raw components; delimiters must be
    * located before decoding, not after. */
   ccol_retval_t rv = _chttp_parse_url_for_tests(
       "http://user%40x:pa%3Ass@host/path", &dummy_https, &dummy_ipv6, &host,
@@ -2551,8 +2550,7 @@ TEST(url_parsing, userinfo_percent_encoded_components) {
 
 TEST(url_parsing, userinfo_malformed_percent_escape_is_invalid) {
   ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http://user%zzpass@host/path", NULL, NULL, NULL, NULL, NULL, NULL,
-      NULL);
+      "http://user%zzpass@host/path", NULL, NULL, NULL, NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }
 
@@ -2560,9 +2558,9 @@ TEST(url_parsing, no_userinfo_means_no_auto_authorization) {
   bool dummy_https = false, dummy_ipv6 = false;
   char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
   uint16_t port = 0;
-  ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http://host/path", &dummy_https, &dummy_ipv6, &host, &port, &pq,
-      &origin_key, &auth);
+  ccol_retval_t rv =
+      _chttp_parse_url_for_tests("http://host/path", &dummy_https, &dummy_ipv6,
+                                 &host, &port, &pq, &origin_key, &auth);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ((void *)auth, NULL);
   free(host);
@@ -2617,40 +2615,25 @@ TEST(relative_redirects, rfc3986_5_4_reference_table) {
     const char *location;
     const char *expected;
   } cases[] = {
-      {"g", "http://a/b/c/g"},
-      {"./g", "http://a/b/c/g"},
-      {"g/", "http://a/b/c/g/"},
-      {"/g", "http://a/g"},
-      {"//g", "http://g"},
-      {"?y", "http://a/b/c/d;p?y"},
-      {"g?y", "http://a/b/c/g?y"},
-      {"g;x", "http://a/b/c/g;x"},
-      {".", "http://a/b/c/"},
-      {"./", "http://a/b/c/"},
-      {"..", "http://a/b/"},
-      {"../", "http://a/b/"},
-      {"../g", "http://a/b/g"},
-      {"../..", "http://a/"},
-      {"../../", "http://a/"},
-      {"../../g", "http://a/g"},
-      {"../../../g", "http://a/g"},
-      {"../../../../g", "http://a/g"},
-      {"/./g", "http://a/g"},
-      {"/../g", "http://a/g"},
-      {"g.", "http://a/b/c/g."},
-      {".g", "http://a/b/c/.g"},
-      {"g..", "http://a/b/c/g.."},
-      {"..g", "http://a/b/c/..g"},
-      {"./../g", "http://a/b/g"},
-      {"./g/.", "http://a/b/c/g/"},
-      {"g/./h", "http://a/b/c/g/h"},
-      {"g/../h", "http://a/b/c/h"},
+      {"g", "http://a/b/c/g"},       {"./g", "http://a/b/c/g"},
+      {"g/", "http://a/b/c/g/"},     {"/g", "http://a/g"},
+      {"//g", "http://g"},           {"?y", "http://a/b/c/d;p?y"},
+      {"g?y", "http://a/b/c/g?y"},   {"g;x", "http://a/b/c/g;x"},
+      {".", "http://a/b/c/"},        {"./", "http://a/b/c/"},
+      {"..", "http://a/b/"},         {"../", "http://a/b/"},
+      {"../g", "http://a/b/g"},      {"../..", "http://a/"},
+      {"../../", "http://a/"},       {"../../g", "http://a/g"},
+      {"../../../g", "http://a/g"},  {"../../../../g", "http://a/g"},
+      {"/./g", "http://a/g"},        {"/../g", "http://a/g"},
+      {"g.", "http://a/b/c/g."},     {".g", "http://a/b/c/.g"},
+      {"g..", "http://a/b/c/g.."},   {"..g", "http://a/b/c/..g"},
+      {"./../g", "http://a/b/g"},    {"./g/.", "http://a/b/c/g/"},
+      {"g/./h", "http://a/b/c/g/h"}, {"g/../h", "http://a/b/c/h"},
   };
 
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-    char *result =
-        _chttp_resolve_redirect_url_for_tests("http://a/b/c/d;p?q",
-                                              cases[i].location);
+    char *result = _chttp_resolve_redirect_url_for_tests("http://a/b/c/d;p?q",
+                                                         cases[i].location);
     REQUIRE_NE((void *)result, NULL);
     REQUIRE_STREQ(result, cases[i].expected);
     free(result);
@@ -2698,7 +2681,7 @@ TEST(credentials, explicit_authorization_header_wins) {
   chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
   REQUIRE_NE((void *)req, NULL);
   REQUIRE_EQ(chttp_request_set_header(req, "Authorization", "Bearer mytoken"),
-            ccol_success);
+             ccol_success);
 
   chttpcli_response *resp = NULL;
   REQUIRE_EQ(chttp_do(req, &resp), ccol_success);
@@ -2741,9 +2724,9 @@ TEST(credentials, cross_origin_redirect_drops_authorization) {
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  /* The redirect target never saw the userinfo -- the auto-injected
+  /* The redirect target never saw the userinfo; the auto-injected
    * Authorization from the original (different) origin must not follow.
-   * A zero-length body is represented as resp->body == NULL, not "" -- see
+   * A zero-length body is represented as resp->body == NULL, not ""; see
    * every other zero-body assertion in this file. */
   REQUIRE_EQ(resp->body_len, (size_t)0);
   chttpclient_resp_free(resp);
@@ -2895,7 +2878,7 @@ TEST(http, run_query_borrowed_map_mixed_case_ct_no_duplication) {
 }
 
 TEST(http, run_query_borrowed_map_lowercase_ct_no_duplication) {
-  /* Same scenario as above but with a lowercase key -- verifies the common
+  /* Same scenario as above but with a lowercase key; verifies the common
    * (non-borrowed) path still works correctly. */
   char url[128];
   make_url(url, sizeof(url), "/count-content-type");
@@ -3021,7 +3004,7 @@ TEST(http, delete_body_not_transmitted) {
 
 /*
  * White-box tests for chttpclient's lazy, ref-counted, process-wide async
- * engine (chttpclient.c's g_client_async_* -- this module's own DNS/connect
+ * engine (chttpclient.c's g_client_async_*; this module's own DNS/connect
  * pool + deadline sweep, layered on top of the shared facio reactor
  * reference it acquires from src/cfio_engine.c, which backs
  * chttpclient_do_async/pooled-sync). These helpers are compiled only under
@@ -3038,12 +3021,12 @@ extern ccol_retval_t _chttpclient_engine_acquire_for_tests(void);
 extern void _chttpclient_engine_release_for_tests(void);
 /* _client_engine_release() hands the actual teardown (releasing the shared
  * cfio_engine reference, stopping the deadline sweep, destroying the DNS
- * pool) off to a detached reaper thread rather than blocking the caller --
+ * pool) off to a detached reaper thread rather than blocking the caller;
  * necessary since release is routinely called from inside a facio callback
  * (on_close), where blocking would be unsafe (see chttpclient.c). That makes
  * g_client_async_running go false immediately but the actual teardown
  * asynchronous; every test below that triggers a stop calls this afterward
- * so the engine is guaranteed fully quiescent before the test returns --
+ * so the engine is guaranteed fully quiescent before the test returns;
  * otherwise a reaper thread could still be running when the process exits,
  * racing fio_lib_destroy's atexit-time teardown of fio_data itself (a crash
  * caught by valgrind during development of this suite). */
@@ -3059,7 +3042,7 @@ TEST(async_engine, starts_on_first_acquire_and_stops_at_zero_refcount) {
 
   _chttpclient_engine_release_for_tests();
   /* g_client_engine_running flips false synchronously inside release, so
-   * this is deterministic without waiting -- but the actual teardown (reaper
+   * this is deterministic without waiting; but the actual teardown (reaper
    * thread) is still asynchronous; wait for it before the test returns. */
   REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
   REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 0);
@@ -3088,7 +3071,7 @@ TEST(async_engine, refcount_tracks_multiple_acquirers) {
 }
 
 TEST(async_engine, restart_after_full_stop_works) {
-  /* Prove the engine can be stopped and lazily restarted more than once --
+  /* Prove the engine can be stopped and lazily restarted more than once;
    * not just started once for the lifetime of the process. */
   for (int i = 0; i < 3; i++) {
     REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
@@ -3138,12 +3121,12 @@ TEST(async_engine, concurrent_acquire_release_no_corruption) {
 }
 
 /* ========================================================================== */
-/*              ASYNC STATE MACHINE -- STEP A (WHITE-BOX, HTTP ONLY)          */
+/*              ASYNC STATE MACHINE; STEP A (WHITE-BOX, HTTP ONLY)          */
 /* ========================================================================== */
 
 /*
  * Functional tests for the Tier 2 async engine (chttpclient_do_async):
- * plain HTTP only (no TLS yet), no redirect-following, no idle-pool reuse --
+ * plain HTTP only (no TLS yet), no redirect-following, no idle-pool reuse;
  * every request opens and then closes a fresh connection. These exercise the
  * real facio reactor end to end against the same mock test server the
  * synchronous (Tier 1) tests use.
@@ -3154,7 +3137,7 @@ TEST(async_engine, concurrent_acquire_release_no_corruption) {
  * The request's future is fulfilled by _async_fulfill *before* on_data goes
  * on to call fio_close()/fio_force_close(), and on_close (which is what
  * actually calls _client_engine_release()) only runs later, asynchronously
- * -- so ctpool_future_get() returning is not sufficient evidence that
+ * ; so ctpool_future_get() returning is not sufficient evidence that
  * release (and the quiescence it can be waited for) has even been triggered
  * yet. Poll for the ref count to reach 0 first, then wait for the reaper
  * that drop triggers to actually finish, so each test leaves the engine
@@ -3227,7 +3210,7 @@ TEST(async_step_a, post_echoes_body) {
 }
 
 TEST(async_step_a, large_body_response) {
-  /* /large returns 8192 bytes -- exercises multiple on_data invocations
+  /* /large returns 8192 bytes; exercises multiple on_data invocations
    * against a single response, not just a one-shot read. */
   chttpcli_construct(cli);
   char url[160];
@@ -3305,13 +3288,13 @@ TEST(async_step_a, connection_refused_reports_error) {
 
 TEST(async_step_a, https_connection_refused_reports_error) {
   /* HTTPS requests are now actually attempted (a future is returned, not
-   * NULL) -- this exercises the is_https flag flowing correctly through ctx
+   * NULL); this exercises the is_https flag flowing correctly through ctx
    * creation into the connect stage. Nothing listens on this port, so the
    * failure surfaces before any TLS handshake is even attempted, keeping
    * this test fast; a full end-to-end successful-handshake test lives in
    * the dedicated tests/chttpclient_tls suite (mirroring how
    * tests/chttpserver_tls is kept isolated for its own real cert/handshake
-   * needs -- see that suite's own top-of-file comment). */
+   * needs; see that suite's own top-of-file comment). */
   chttpcli_construct(cli);
   chttp_request_t *req =
       chttp_request_new(CHTTP_GET, "https://127.0.0.1:1/", NULL, NULL);
@@ -3335,12 +3318,12 @@ TEST(async_step_a, https_connection_refused_reports_error) {
 
 TEST(async_step_a, https_handshake_fails_against_plain_http_server) {
   /* Connects via https:// to the suite's own plain-HTTP mock server (which
-   * never speaks TLS) -- a real exercise of
+   * never speaks TLS); a real exercise of
    * fio_tls_client_handshake_step's FIO_TLS_HANDSHAKE_ERROR path, without
    * needing a live TLS-capable fixture. Slow (~5s): the mock server's
    * srv_read_request has a fixed 5-second SO_RCVTIMEO and a raw TLS
    * ClientHello never contains the "\r\n\r\n" it's waiting for, so the
-   * server sits silent until its own timeout closes the connection --
+   * server sits silent until its own timeout closes the connection;
    * there is no per-request timeout enforcement in the async engine yet
    * (see the "reactor-owned timer/cancellation" roadmap item) to cut this
    * shorter client-side. */
@@ -3415,7 +3398,7 @@ static void *async_concurrent_thread(void *arg) {
 }
 
 TEST(async_step_a, concurrent_requests_all_succeed) {
-  /* Fires several concurrent async requests against one shared engine --
+  /* Fires several concurrent async requests against one shared engine;
    * proving the reactor genuinely multiplexes multiple live connections
    * rather than only ever handling one at a time. */
   enum { N = 12 };
@@ -3440,7 +3423,7 @@ TEST(async_step_a, concurrent_requests_all_succeed) {
 }
 
 /* ========================================================================== */
-/*              ASYNC STATE MACHINE -- STEP B (REDIRECT FOLLOWING)            */
+/*              ASYNC STATE MACHINE; STEP B (REDIRECT FOLLOWING)            */
 /* ========================================================================== */
 
 /*
@@ -3518,7 +3501,7 @@ TEST(async_redirects, post_307_preserves_method_and_body) {
   REQUIRE_NE((void *)req, NULL);
 
   /* The original request is freed right after the call returns, before the
-   * redirect hop (which needs the body again) ever runs -- proving the
+   * redirect hop (which needs the body again) ever runs; proving the
    * chain's own deep copy (chttp_async_chain_t.body_data), not a reference
    * into req, is what the second hop actually resends. */
   ctpool_future *f = chttpclient_do_async(cli, req);
@@ -3569,7 +3552,7 @@ TEST(async_redirects, relative_location_resolved_against_current_host) {
 }
 
 TEST(async_redirects, userinfo_credentials_carried_same_origin) {
-  /* Tier 2's own carried_auth/carried_auth_origin on chttp_async_chain_t --
+  /* Tier 2's own carried_auth/carried_auth_origin on chttp_async_chain_t;
    * a separate code path from Tier 1's, mirrored in _async_submit_hop. */
   chttpcli_construct(cli);
   char base[128];
@@ -3666,7 +3649,7 @@ TEST(async_redirects, exceeding_max_redirects_returns_last_hop_as_is) {
   /* /redirect-infinite always redirects to itself. Once
    * CHTTP_MAX_REDIRECTS hops have been exhausted, both Tier 1 and the async
    * engine stop following and deliver the last 302 response as a normal,
-   * successful (non-error) result instead of looping forever -- this is the
+   * successful (non-error) result instead of looping forever; this is the
    * one test in this suite that walks the actual cap, so it also doubles as
    * a stress test of the chain refcount/hop-chaining machinery across 51
    * real connections. */
@@ -3695,7 +3678,7 @@ TEST(async_redirects, exceeding_max_redirects_returns_last_hop_as_is) {
 }
 
 /* ========================================================================== */
-/*              ASYNC STATE MACHINE -- IDLE CONNECTION POOL (TIER 2)          */
+/*              ASYNC STATE MACHINE; IDLE CONNECTION POOL (TIER 2)          */
 /* ========================================================================== */
 
 /*
@@ -3708,7 +3691,7 @@ TEST(async_redirects, exceeding_max_redirects_returns_last_hop_as_is) {
  * Unlike the non-pooling async_step_a/async_redirects tests above, a
  * successfully pooled connection holds its OWN engine reference until it is
  * either reused or the client is destroyed (which synchronously drains its
- * pool) -- so these tests call chttpclient_destroy(cli) BEFORE
+ * pool); so these tests call chttpclient_destroy(cli) BEFORE
  * wait_for_async_engine_idle(), the reverse of the order used elsewhere in
  * this file, since otherwise the still-pooled connection's held reference
  * would keep the engine's ref count above zero indefinitely.
@@ -3743,7 +3726,7 @@ TEST(async_idle_pool, sequential_requests_reuse_connection) {
   }
 
   /* Give the reactor a brief moment to finish offering the last response's
-   * connection to the idle pool -- that happens just before the future is
+   * connection to the idle pool; that happens just before the future is
    * fulfilled (see _async_on_data's HPE_PAUSED handling), but the server's
    * own accept-count increment happens independently, on its own
    * accept()-side thread. */
@@ -3776,7 +3759,7 @@ TEST(async_idle_pool, dead_connection_detected_and_retried) {
 
   /* The server closed its end after that response; the pooled connection's
    * own IDLE-state on_data/on_close should detect this asynchronously and
-   * evict it -- but even if that hasn't happened yet by the time the next
+   * evict it; but even if that hasn't happened yet by the time the next
    * request pops it, the reused/any_bytes_read retry-once mechanism must
    * transparently recover by opening a fresh connection. */
   ctpool_future *f2 = async_get(cli, url2);
@@ -3849,7 +3832,7 @@ TEST(async_idle_pool, concurrent_requests_exceeding_idle_cap_no_crash) {
 
 /*
  * ASYNC DEADLINE SWEEP (Tier 2 connect_timeout_ms/request_timeout_ms
- * enforcement) -- exercises the reactor-owned periodic sweep that force-
+ * enforcement); exercises the reactor-owned periodic sweep that force-
  * closes connections whose absolute wall-clock deadline has passed, mirrors
  * Tier 1's own timeout semantics (ccol_timed_out), and verifies a generous
  * timeout never interferes with an otherwise-successful request.
@@ -3862,7 +3845,7 @@ TEST(async_deadline, request_timeout_fires_against_slow_endpoint) {
 
   chttpcli_construct(cli);
   /* Comfortably shorter than /slow's 100ms sleep, comfortably longer than a
-   * loopback connect -- isolates the request (not connect) deadline. */
+   * loopback connect; isolates the request (not connect) deadline. */
   REQUIRE_EQ(chttpclient_set_request_timeout(cli, 20), ccol_success);
 
   ctpool_future *f = async_get(cli, url);
@@ -3903,13 +3886,13 @@ TEST(async_deadline, connect_timeout_fires_against_unroutable_address) {
   chttpcli_construct(cli);
   /* Short enough to fire quickly; TEST-NET-1 (RFC 5737) is guaranteed
    * non-routable on a normal network, so the connect (never the request)
-   * deadline is expected to trip here -- but some sandboxed/virtualized
+   * deadline is expected to trip here; but some sandboxed/virtualized
    * network environments respond to it with an immediate rejection
    * (ENETUNREACH or similar) instead of the packet silently vanishing.
    * Confirmed to happen intermittently in this exact CI/sandbox: a raw
    * `bash -c 'exec 3<>/dev/tcp/192.0.2.1/9'` connect attempt, entirely
    * outside this library, sometimes hangs for the full probe duration and
-   * sometimes fails immediately with "Network is unreachable" -- i.e. this
+   * sometimes fails immediately with "Network is unreachable"; i.e. this
    * is the underlying network's own inconsistent behavior toward that
    * address, not something chttpclient's connect-timeout logic controls or
    * should be expected to paper over. An immediate connection failure
@@ -3957,7 +3940,7 @@ TEST(async_deadline, generous_connect_timeout_does_not_interfere) {
 }
 
 /*
- * ASYNC STREAMING (Tier 2 chttpclient_do_async_streaming) -- reuses
+ * ASYNC STREAMING (Tier 2 chttpclient_do_async_streaming); reuses
  * stream_sink_t/stream_sink_write and abort_write_fn (defined earlier in
  * this file for the Tier 1 streaming tests) against the same async engine
  * exercised by the async_step_a/async_redirects/async_idle_pool/
@@ -3990,7 +3973,7 @@ TEST(async_streaming, basic_get_delivers_body_via_callback) {
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
-  /* Body was delivered via the callback, not buffered -- mirrors Tier 1's
+  /* Body was delivered via the callback, not buffered; mirrors Tier 1's
    * chttpclient_do_streaming leaving chttpcli_response.body NULL. */
   REQUIRE_EQ((void *)resp->body, NULL);
   REQUIRE_GT(sink.len, (size_t)0);
@@ -4022,7 +4005,7 @@ TEST(async_streaming, large_body_streamed_in_chunks) {
   /* /large serves 8192 'x' bytes; stream_sink_t's buffer caps at 4095
    * captured bytes, but every chunk must still have been offered to the
    * callback (partial capture is the sink's own choice, not a transfer
-   * failure) -- rv == ccol_success above already proves that. */
+   * failure); rv == ccol_success above already proves that. */
   REQUIRE_EQ(sink.len, sizeof(sink.buf) - 1);
 
   chttpclient_resp_free(resp);
@@ -4082,7 +4065,7 @@ TEST(async_streaming, redirect_final_body_delivered_not_intermediate) {
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
-  /* Final resource's status, not the 301 -- and the sink must only have
+  /* Final resource's status, not the 301; and the sink must only have
    * captured the FINAL hop's body (redirect hops route through
    * _sink_discard internally, matching Tier 1's identical behaviour). */
   REQUIRE_EQ(resp->status_code, 200);
@@ -4097,7 +4080,7 @@ TEST(async_streaming, redirect_final_body_delivered_not_intermediate) {
 }
 
 /*
- * POOLED-SYNC API (Tier 3, chttpclient_do_pooled/_streaming) -- thin
+ * POOLED-SYNC API (Tier 3, chttpclient_do_pooled/_streaming); thin
  * blocking wrappers over Tier 2. Reuses stream_sink_t/stream_sink_write and
  * abort_write_fn (defined earlier for the Tier 1 streaming tests).
  */
@@ -4145,7 +4128,7 @@ TEST(pooled, bad_url_returns_specific_error_not_generic) {
    * collapses into a plain NULL (chttpclient_do_async would return NULL
    * here, indistinguishable from OOM or an engine-start failure) must
    * still surface as the exact same specific code chttpclient_do returns
-   * for the identical URL -- see _chttp_async_preflight_check. */
+   * for the identical URL; see _chttp_async_preflight_check. */
   chttpcli_construct(cli);
   chttp_request_t *req =
       chttp_request_new(CHTTP_GET, "http:///get", NULL, NULL);

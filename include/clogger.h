@@ -100,9 +100,9 @@ typedef enum {
  *
  * Zero values for max_file_size and rotation_interval_secs each fall back to
  * their respective CLOG_DEFAULT_* constant.  A zero max_rotated_files means
- * "no limit" -- old rotated files are never pruned.
+ * "no limit"; old rotated files are never pruned.
  *
- * Example -- rotate at 50 MiB, keep 14 files, gzip each rotated file:
+ * Example; rotate at 50 MiB, keep 14 files, gzip each rotated file:
  * @code
  * clog_rotation_cfg_t cfg = {
  *     .size_rotation_enabled  = true,
@@ -231,8 +231,8 @@ void clog_close(clog logger);
  * @brief Derive a new logger from an existing one.
  *
  * The derived logger shares the parent's logging target (file descriptor) and
- * synchronisation mutex, so all writes -- from the parent and every derived
- * logger -- are serialised by the same lock and go to the same destination.
+ * synchronisation mutex, so all writes (from the parent and every derived
+ * logger) are serialised by the same lock and go to the same destination.
  *
  * The derived logger starts with a snapshot of the parent's fields and
  * minimum log level at the time of the call.  After that, the two loggers
@@ -281,7 +281,7 @@ clog_level_t clog_get_level(clog logger);
  */
 typedef enum {
   CLOG_FMT_LOGFMT = 0, /**< key=value logfmt (default) */
-  CLOG_FMT_JSON,       /**< NDJSON -- one JSON object per line */
+  CLOG_FMT_JSON,       /**< NDJSON; one JSON object per line */
   CLOG_FMT_SYSLOG, /**< RFC 5424 syslog; fd-based loggers only (see above) */
 } clog_format_t;
 
@@ -409,7 +409,7 @@ void clog_remove_field(clog logger, const char *key);
 void clog_clear_fields(clog logger);
 
 /* ========================================================================== */
-/*                         INTERNAL -- DO NOT CALL DIRECTLY */
+/*                         INTERNAL; DO NOT CALL DIRECTLY */
 /* ========================================================================== */
 
 /**

@@ -448,8 +448,7 @@ TEST(timed_submit, unbounded_queue_never_blocks_on_capacity) {
   atomic_int counter = 0;
   ctpool_construct(pool, 2, 0);
 
-  struct timespec ts = {.tv_sec = 0,
-                        .tv_nsec = 1}; /* 1 ns -- effectively zero */
+  struct timespec ts = {.tv_sec = 0, .tv_nsec = 1}; /* 1 ns; effectively zero */
   for (int i = 0; i < 20; i++) {
     ccol_retval_t r =
         ctpool_timed_submit(pool, inc_counter, &counter, NULL, &ts);
@@ -530,7 +529,7 @@ TEST(futures, free_before_get_no_leak) {
   ctpool_future *f = ctpool_submit_future(pool, slow_identity, &value);
   REQUIRE_NE((void *)f, NULL);
 
-  ctpool_future_free(f); /* caller drops reference -- no future_get call */
+  ctpool_future_free(f); /* caller drops reference; no future_get call */
 
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);
@@ -801,7 +800,7 @@ static void *detached_producer_fn(void *arg) {
 }
 
 TEST(detached_futures, create_and_fulfill_no_pool) {
-  /* No cthread_pool involved at all -- proves the future is genuinely
+  /* No cthread_pool involved at all; proves the future is genuinely
    * standalone. */
   char *err = NULL;
   ctpool_future *f = ctpool_future_create_detached(&err);
@@ -840,7 +839,7 @@ TEST(detached_futures, get_blocks_until_external_fulfill) {
 TEST(detached_futures, free_before_fulfill_no_leak) {
   /* Caller drops its reference before the producer fulfills; the future must
    * stay alive (producer still holds a reference) and be freed once fulfill
-   * runs. Verified by valgrind -- no leak, no use-after-free. */
+   * runs. Verified by valgrind; no leak, no use-after-free. */
   char *err = NULL;
   ctpool_future *f = ctpool_future_create_detached(&err);
   REQUIRE_NE((void *)f, NULL);
@@ -977,7 +976,7 @@ TEST(wait, concurrent_shutdown_immediate_unblocks_wait) {
    *
    * Setup: one worker executes a gate-blocked task (active_count=1) while
    * five tasks queue up.  A waiter thread enters ctpool_wait.  Then the gate
-   * is released so the worker exits blocker_fn -- active_count drops to zero
+   * is released so the worker exits blocker_fn; active_count drops to zero
    * for a brief window before the worker picks up the next queued task.  The
    * subsequent ctpool_shutdown_immediate observes this window (active_count==0,
    * queue non-empty), discards the queue, and must broadcast idle_cv so the
@@ -1004,7 +1003,7 @@ TEST(wait, concurrent_shutdown_immediate_unblocks_wait) {
    * we observe 0, the worker has finished blocker_fn but has not yet
    * re-incremented active_count for the next queued task.  Calling
    * ctpool_shutdown_immediate immediately after maximises the chance that
-   * it observes active_count==0 with a non-empty queue -- the condition
+   * it observes active_count==0 with a non-empty queue; the condition
    * that would deadlock ctpool_wait without the idle_cv broadcast fix. */
   atomic_store(&gate, 1);
   while (ctpool_active_count(pool) > 0) sleep_ms(1);

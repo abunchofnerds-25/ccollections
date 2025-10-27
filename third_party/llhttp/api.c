@@ -153,7 +153,7 @@ const char* llhttp_get_error_pos(const llhttp_t* parser) {
  * caller-supplied data. If a future caller starts passing in a value from a
  * different enum (e.g. this project's own chttp_method_t) instead of one
  * llhttp produced itself, a mismatch there would abort() the whole process,
- * not just the one connection/request -- verify any such call site maps
+ * not just the one connection/request; verify any such call site maps
  * values correctly before relying on it. */
 const char* llhttp_errno_name(llhttp_errno_t err) {
 #define HTTP_ERRNO_GEN(CODE, NAME, _) \

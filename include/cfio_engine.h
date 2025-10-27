@@ -38,7 +38,7 @@ SOFTWARE.
  * or any other public header. src/chttpserver.c and src/chttpclient.c are
  * the only two files that #include this header.
  *
- * facio's fio_data (third_party/facio/fio.c) is a process-wide singleton --
+ * facio's fio_data (third_party/facio/fio.c) is a process-wide singleton;
  * there can only be one fio_start()/fio_stop() pair alive per process. Prior
  * to this module, chttpserver.c and chttpclient.c each owned an independent
  * copy of the lazy-start/ref-counted-stop lifecycle pattern around that one
@@ -54,13 +54,13 @@ SOFTWARE.
  *
  * Always calls http_lib_constructor() (declared in the vendored
  * third_party/facio/http_internal.h) as part of its one-time global init,
- * regardless of which module triggers the very first acquire -- required so
+ * regardless of which module triggers the very first acquire; required so
  * facio's HTTP-layer FIO_CALL_ON_INITIALIZE callback is queued before
  * fio_lib_init() fires initialisation callbacks, a hard ordering constraint
  * chttpserver's listeners need even if chttpclient happens to start the
  * shared engine first. This means chttpclient.c now transitively depends on
  * the same vendored HTTP-layer object files chttpserver.c already needed
- * (http.c, http1.c, http_internal.c, fiobj_*.c) -- see
+ * (http.c, http1.c, http_internal.c, fiobj_*.c); see
  * tests/chttpclient/Makefile and tests/chttpclient_tls/Makefile, both
  * updated accordingly. The root Makefile already links every vendor file
  * unconditionally into the one shared library, so production builds are
@@ -72,7 +72,7 @@ SOFTWARE.
  *        running the one-time http_lib_constructor()+fio_lib_init() global
  *        init) on the very first call from EITHER module, anywhere in the
  *        process. Blocks until the reactor's event loop is confirmed
- *        running (FIO_CALL_ON_START has fired) before returning -- callers
+ *        running (FIO_CALL_ON_START has fired) before returning; callers
  *        never need their own separate readiness callback or wait loop.
  *
  * Must be paired with exactly one _cfio_engine_release() call.
@@ -85,7 +85,7 @@ ccol_retval_t _cfio_engine_acquire(void);
 /**
  * @brief Releases a reference acquired via _cfio_engine_acquire(). Once the
  *        reference count returns to zero, hands the actual teardown off to
- *        a freshly spawned reaper thread rather than performing it inline --
+ *        a freshly spawned reaper thread rather than performing it inline;
  *        essential, not a style choice: this can be called from inside a
  *        facio-owned callback thread (chttpclient's _async_on_close, in
  *        particular), and joining the reactor's own thread from inside one
@@ -95,7 +95,7 @@ ccol_retval_t _cfio_engine_acquire(void);
  *        thread itself is joinable (not detached) so that
  *        _cfio_engine_wait_for_quiescence() / _cfio_engine_wait_until_
  *        stopped() can later wait for its own OS-level teardown to fully
- *        complete rather than just its work being logically done -- see
+ *        complete rather than just its work being logically done; see
  *        those functions' own comments.
  *
  * Does not block. Callers that need a guaranteed-quiescent engine before
@@ -116,7 +116,7 @@ void _cfio_engine_wait_for_quiescence(void);
 
 /**
  * @brief Blocks the calling thread until the shared reactor is fully
- *        stopped -- whether a stop was already triggered before this call,
+ *        stopped; whether a stop was already triggered before this call,
  *        is triggered concurrently, or is not triggered until sometime
  *        after this call returns control to no one, i.e. this blocks
  *        indefinitely if nothing ever stops the engine, exactly like
@@ -124,7 +124,7 @@ void _cfio_engine_wait_for_quiescence(void);
  *
  * Distinct from _cfio_engine_wait_for_quiescence(), which only blocks on an
  * *already in-flight* teardown and is a no-op otherwise (including while the
- * engine is running normally with references held) -- that is the right
+ * engine is running normally with references held); that is the right
  * primitive for "did the stop I just triggered finish yet", but wrong for
  * chttpsvr_engine_wait()'s documented contract of "block until the engine
  * exits", which must also cover the common pattern of calling it right
@@ -152,7 +152,7 @@ bool _cfio_engine_running(void);
  *        if references are still outstanding.
  *
  * Non-blocking and safe to call from a signal handler (does not touch heap
- * memory, does not block) -- used by chttpsvr_engine_stop(), which
+ * memory, does not block); used by chttpsvr_engine_stop(), which
  * documents this exact contract for its own callers. Once the shared
  * reactor is used by both modules, this also tears down any in-flight
  * chttpclient async work in the same process; that is an inherent, correct

@@ -37,7 +37,7 @@ SOFTWARE.
 /*
  * Full definition of the DOM node.  Unlike cjson's tagged_node_t, this struct
  * is also the public handle type (cyaml == cyaml_node_t *) so it is not
- * truly opaque -- but callers must never access fields directly; they must
+ * truly opaque; but callers must never access fields directly; they must
  * use the public API.
  *
  * Layout:
@@ -469,7 +469,7 @@ cyaml cyaml_create_dictionary_mp(ccol_memmgmt_procs_t *mp) {
 /* ========================================================================== */
 
 /* Recursively free a node and all its descendants.
- * Safe to call on NULL.  Does NOT null the caller's pointer -- use the
+ * Safe to call on NULL.  Does NOT null the caller's pointer; use the
  * cyaml_destroy() macro wrapper for that. */
 void __cyaml_destroy(cyaml node) {
   if (!node) return;
@@ -751,7 +751,7 @@ cyaml cyaml_clone(cyaml node) {
  * of anchored nodes.  NULL until the first & is encountered.  All entries are
  * freed (nodes destroyed, keys freed) at the end of parse_common.
  *
- * indent_stack: not needed -- indentation is passed as an integer argument
+ * indent_stack: not needed; indentation is passed as an integer argument
  * through the recursive descent.
  */
 typedef struct {
@@ -1256,7 +1256,7 @@ static bool parse_double_quoted(parse_ctx_t *ctx, char **out) {
           yb_append(&b, "\xE2\x80\xA9", 3);
           break;
         case 'x': {
-          /* \xXX -- 2-digit hex */
+          /* \xXX; 2-digit hex */
           if (ctx->pos + 2 > ctx->len) {
             parse_err(ctx, "incomplete \\xXX at position %zu", ctx->pos);
             goto fail;
@@ -3158,12 +3158,12 @@ cyaml _cyaml_get(cyaml root, const char *path) {
  * use-after-free when the leaf string is a suffix of the full path.
  *
  * String normalisation: raw_is_char_array handles string literals where
- * typeof("hi") == char[N] -- the raw pointer is normalised to const char **
+ * typeof("hi") == char[N]; the raw pointer is normalised to const char **
  * so node_reinit_scalar always receives one consistent form.
  *
  * Existing scalar nodes at the leaf are mutated in-place (node_reinit_scalar).
  * New keys are allocated and inserted.  Intermediate containers are never
- * created automatically -- the parent node must already exist.
+ * created automatically; the parent node must already exist.
  */
 ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
                                cyaml_node_type_t type, void *raw,

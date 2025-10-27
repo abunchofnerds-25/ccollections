@@ -13,6 +13,7 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 SRC_FILE_PREFIX = chttpclient
 OUR_SRC_FILES = tests.c \
 	../../src/$(SRC_FILE_PREFIX).c \
+	../../src/chttp.c \
 	../../src/cfio_engine.c \
 	../../src/clogger.c \
 	../../src/chashmap.c \

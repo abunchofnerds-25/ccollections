@@ -77,7 +77,7 @@ struct chttpsvr_router {
   chttpsvr_mw_node_t *mw_tail;
   int mw_count; /* number of registered middleware; capped at _CHTTPSVR_MAX_MW
                  */
-  chttpsvr_route_t **routes; /* pointer array -- each entry is a stable alloc */
+  chttpsvr_route_t **routes; /* pointer array; each entry is a stable alloc */
   size_t route_count;
   size_t route_cap;
   struct chttpserver *srv; /* back-pointer */
@@ -170,7 +170,7 @@ struct chttpsvr_req {
   dispatch_ctx_t *_dispatch;
   ccol_memmgmt_procs_t *m_procs;
 
-  /* max_body_read_duration_ms bookkeeping -- see _check_read_deadline. */
+  /* max_body_read_duration_ms bookkeeping; see _check_read_deadline. */
   struct timespec _read_deadline;
   bool _read_deadline_set;
   bool _deadline_exceeded;
@@ -178,7 +178,7 @@ struct chttpsvr_req {
 
 /** Streaming-dispatch context (heap-allocated before http_pause).
  *
- * Built at headers-complete time, before the body has arrived -- there is no
+ * Built at headers-complete time, before the body has arrived; there is no
  * body/body_len here. Buffered routes accumulate the body in _task_worker
  * (via http1_stream_read) directly into the stack-local chttpsvr_req; only
  * streaming routes pull it lazily through chttpsvr_req_read. */
@@ -246,21 +246,21 @@ struct chttpserver {
 /*
  * The raw facil.io reactor lifecycle (start/stop/one-time global init) is
  * owned by the shared cfio_engine module (src/cfio_engine.c), not by this
- * file -- see cfio_engine.h for why: chttpclient.c's async engine (Tier 2/3)
+ * file; see cfio_engine.h for why: chttpclient.c's async engine (Tier 2/3)
  * acquires/releases references to the exact same underlying reactor, so both
  * modules can run simultaneously in the same process. What remains here is
  * purely chttpserver-local bookkeeping: each chttpsvr instance acquires
  * exactly one shared-engine reference for its whole lifetime (across any
  * number of start/stop/restart cycles), tracked by
  * chttpserver::contributed_to_engine and released exactly once, in
- * __chttpsvr_destroy -- guarded by the instance's own srv->mutex, so no
+ * __chttpsvr_destroy; guarded by the instance's own srv->mutex, so no
  * dedicated global mutex is needed for it any more.
  */
 /* Installs a minimal default engine logger if the caller has not already set
  * one via chttpsvr_set_engine_logger(). Deliberately NOT a pthread_once: a
  * fully-stopped-then-restarted engine (chttpsvr_engine_wait() having already
  * nulled the logger via fio_set_logger(NULL), followed by a fresh
- * chttpsvr_start() well after that -- an explicitly supported restart
+ * chttpsvr_start() well after that; an explicitly supported restart
  * pattern) must still get a fresh default logger, exactly like the
  * pre-unification code's per-engine-start check did; a one-shot guard would
  * silently leave the engine loggerless forever after the first stop. Instead
@@ -268,7 +268,7 @@ struct chttpserver {
  * need_acquire check at its call site in chttpsvr_start), and is idempotent
  * in effect regardless of how many times or from how many concurrent callers
  * it runs, since it only ever installs a default when fio_has_logger() is
- * still false at the moment it runs -- also deliberately decoupled from "is
+ * still false at the moment it runs; also deliberately decoupled from "is
  * this the very first chttpsvr_start() call to bring the shared engine up":
  * with a shared engine, chttpclient's async engine may already have started
  * it before chttpserver ever calls chttpsvr_start(), so this cannot be tied
@@ -319,7 +319,7 @@ static ccol_retval_t _compile_pattern(const char *pattern, char ***segs_out,
    * callers receive an immediate error rather than a silently-registered route
    * that happens to work (both the pattern and request path have the leading
    * '/' stripped before comparison, so "health" and "/health" would match the
-   * same requests -- but the API contract is unambiguous about the leading
+   * same requests; but the API contract is unambiguous about the leading
    * slash being required).  Empty string is also rejected by this check. */
   if (pattern[0] != '/') return ccol_invalid_args;
 
@@ -329,7 +329,7 @@ static ccol_retval_t _compile_pattern(const char *pattern, char ***segs_out,
   /* Reject a trailing slash.  _match_segments always rejects trailing slashes
    * in request paths, so a pattern ending with '/' would match nothing with a
    * trailing slash and silently behave like the no-trailing-slash pattern for
-   * everything else -- the opposite of what the registration implies. */
+   * everything else; the opposite of what the registration implies. */
   {
     size_t plen = strlen(p);
     if (plen > 0 && p[plen - 1] == '/') return ccol_invalid_args;
@@ -461,8 +461,8 @@ static void _free_route_data(chttpsvr_route_t *r, ccol_memmgmt_procs_t *mp) {
  *
  * Returns the decoded string on success.  Returns NULL on failure; when NULL
  * is returned *oom_out (if non-NULL) distinguishes the two failure modes:
- *   true  -- allocation failure; caller should propagate as OOM (500)
- *   false -- bad percent-encoding; caller may treat as no-match (404) */
+ *   true; allocation failure; caller should propagate as OOM (500)
+ *   false; bad percent-encoding; caller may treat as no-match (404) */
 static char *_decode_seg_alloc(const char *seg, size_t len,
                                ccol_memmgmt_procs_t *mp, bool *oom_out) {
   if (oom_out) *oom_out = false;
@@ -495,7 +495,7 @@ static char *_decode_seg_alloc(const char *seg, size_t len,
   if (src_heap) _mem_free(mp, src);
   if (dlen < 0) {
     _mem_free(mp, dest);
-    return NULL; /* bad encoding -- *oom_out stays false */
+    return NULL; /* bad encoding; *oom_out stays false */
   }
   dest[(size_t)dlen] = '\0';
   return dest;
@@ -597,7 +597,7 @@ static int _match_segments(const char *sub_path, chttpsvr_route_t *route,
         if (!pv) {
           pv = (char **)_mem_calloc(mp, (size_t)route->param_count,
                                     sizeof(char *));
-          if (!pv) return -1; /* OOM -- propagate to caller */
+          if (!pv) return -1; /* OOM; propagate to caller */
         }
         bool seg_oom = false;
         char *val = _decode_seg_alloc(p, tok_len, mp, &seg_oom);
@@ -633,7 +633,7 @@ static int _match_segments(const char *sub_path, chttpsvr_route_t *route,
         _vp[tok_len] = '\0';
         ssize_t _vl = http_decode_path_unsafe(_vp, _vp);
         if (_vheap) _mem_free(mp, _vp);
-        if (_vl < 0) goto no_match; /* bad encoding -- mirrors capture mode */
+        if (_vl < 0) goto no_match; /* bad encoding; mirrors capture mode */
       }
     } else {
       /* Literal: compare decoded path token against the pattern literal.
@@ -652,7 +652,7 @@ static int _match_segments(const char *sub_path, chttpsvr_route_t *route,
 
     if (i == route->seg_count - 1) {
       /* Last segment: a trailing '/' means the path has one too many
-       * components -- /items/1/ must NOT match /items/{id}. */
+       * components; /items/1/ must NOT match /items/{id}. */
       if (next_sep != NULL) goto no_match;
       p += tok_len;
     } else {
@@ -674,7 +674,7 @@ no_match:
 
 /* Matches `path` (raw, not yet percent-decoded) against `router`'s prefix,
  * segment by segment, decoding each raw path segment before comparing it to
- * the corresponding literal prefix segment -- exactly what _seg_matches_literal
+ * the corresponding literal prefix segment; exactly what _seg_matches_literal
  * already does for route-pattern segments. A byte-for-byte strncmp against
  * the raw path (the previous approach) would fail to match a request whose
  * prefix portion happens to be percent-encoded (e.g. "/%61pi/v1/x" for a
@@ -686,7 +686,7 @@ no_match:
  * was exactly the prefix), 0 on no-match, -1 on OOM.
  *
  * router->prefix is always non-NULL, starts with '/', and contains no "//"
- * (validated in chttpsvr_subrouter at registration time) -- this function is
+ * (validated in chttpsvr_subrouter at registration time); this function is
  * only ever called for a router with prefix_len > 0 (the caller handles the
  * prefix_len == 0 root-router case directly). */
 static int _prefix_matches(const char *path, chttpsvr_router *router,
@@ -697,7 +697,7 @@ static int _prefix_matches(const char *path, chttpsvr_router *router,
   if (*rp == '/') rp++;
 
   if (*pp == '\0') {
-    /* Degenerate "/" prefix: matches only the exact root path "/" -- see the
+    /* Degenerate "/" prefix: matches only the exact root path "/"; see the
      * "/" prefix edge case documented on chttpsvr_subrouter in
      * include/chttpserver.h. */
     if (*rp != '\0') return 0;
@@ -777,7 +777,7 @@ static match_result_t _find_route(struct chttpserver *srv, const char *path,
 
       /* Path matched. */
       if (!method_ok) {
-        /* Record the mismatch and keep searching -- a later route or router
+        /* Record the mismatch and keep searching; a later route or router
          * may still produce a full match. */
         method_mismatch_seen = true;
         continue;
@@ -913,7 +913,7 @@ static int _extract_hdr_cb(FIOBJ val, void *arg) {
   if (FIOBJ_TYPE_IS(val, FIOBJ_T_ARRAY)) {
     FIOBJ last = fiobj_ary_index(val, -1);
     if (!last)
-      return 0; /* empty multi-value array -- skip, matching _find_hdr_cb */
+      return 0; /* empty multi-value array; skip, matching _find_hdr_cb */
     val_info = fiobj_obj2cstr(last);
   } else {
     val_info = fiobj_obj2cstr(val);
@@ -983,7 +983,7 @@ static void _task_pause_cb(http_pause_handle_s *ph) {
   sctx->ph = ph;
 
   /* in_flight_requests was already incremented in _on_headers_complete,
-   * before http_pause was called -- see the comment there. Both the success
+   * before http_pause was called; see the comment there. Both the success
    * and failure paths below end with exactly one http_resume call,
    * guaranteeing that either _task_send_response or _task_cleanup fires;
    * both decrement in_flight_requests under the mutex. */
@@ -993,7 +993,7 @@ static void _task_pause_cb(http_pause_handle_s *ph) {
 
   if (ctpool_try_submit(pool, _task_worker, sctx, NULL) != ccol_success) {
     /* No worker will ever call http1_stream_read/http1_stream_release for
-     * this message now -- release it here so http1_destroy doesn't defer
+     * this message now; release it here so http1_destroy doesn't defer
      * forever waiting for a release that will never come. */
     http1_stream_release((http_s *)sctx->h);
     sctx->resp.status_code = CHTTP_STATUS_SERVICE_UNAVAILABLE;
@@ -1023,14 +1023,14 @@ static ccol_retval_t _stream_err_to_retval(http_s *h) {
 /* Caps *timeout_ms_inout so a single http1_stream_read call cannot block
  * past req's overall max_body_read_duration_ms deadline (lazily computed on
  * the first call), and returns false once that deadline has already passed
- * -- in which case req->_deadline_exceeded is set and the caller must not
+ * ; in which case req->_deadline_exceeded is set and the caller must not
  * call http1_stream_read again (chttpsvr_req_stream_error /
  * _ingest_buffered_body's caller report ccol_timed_out from that flag
  * directly, without ever consulting http1_stream_last_error).
  *
  * stream_read_timeout_ms alone only bounds each individual gap between
  * batches of bytes, so a client that trickles a byte or two just before
- * every such gap expires can otherwise pin a worker thread indefinitely --
+ * every such gap expires can otherwise pin a worker thread indefinitely;
  * this closes that loophole. A max_body_read_duration_ms of 0 disables the
  * check entirely (the default), leaving existing behavior unchanged. */
 static bool _check_read_deadline(chttpsvr_req *req,
@@ -1066,7 +1066,7 @@ static bool _check_read_deadline(chttpsvr_req *req,
 /* Reads the entire request body into one growable heap buffer before a
  * buffered handler is invoked. max_body_size is already enforced by the
  * same parser logic that would enforce it for a streaming route (see
- * http1_on_body_chunk) -- http1_stream_read simply reports the failure. */
+ * http1_on_body_chunk); http1_stream_read simply reports the failure. */
 static ccol_retval_t _ingest_buffered_body(streaming_ctx_t *sctx,
                                            chttpsvr_req *req) {
   http_s *h = (http_s *)sctx->h;
@@ -1192,7 +1192,7 @@ static void _task_cleanup(void *udata) {
 
 /**
  * http_listen() hard-requires .on_request to be set (it calls exit() at
- * startup otherwise) -- but _on_headers_complete below always returns 1
+ * startup otherwise); but _on_headers_complete below always returns 1
  * (handled) for every request that reaches it, which stops http1.c from
  * ever calling on_request. This is therefore unreachable in practice and
  * exists only to satisfy that startup check.
@@ -1202,7 +1202,7 @@ static void _on_request_unreachable(http_s *h) { http_send_error(h, 500); }
 /**
  * Called by http1.c right after headers are parsed, before any body byte is
  * read (see http_settings_s.on_headers_complete). Routing happens here now
- * -- not after the body arrives -- so an unmatched route is rejected without
+ * (not after the body arrives) so an unmatched route is rejected without
  * ever reading a body it's about to discard, and a matched route is hand
  * off to a worker immediately regardless of body size, freeing the reactor
  * thread. The worker (see _task_worker) reads the body itself via
@@ -1211,7 +1211,7 @@ static void _on_request_unreachable(http_s *h) { http_send_error(h, 500); }
  *
  * Returns 1 if the request was paused and handed to the worker pool (the
  * only outcome for a matched route), or 0 if an error response was already
- * sent synchronously (no match, wrong method, or OOM) -- in the 0 case
+ * sent synchronously (no match, wrong method, or OOM); in the 0 case
  * http1.c forces the connection closed afterward, since the client's
  * still-arriving body would otherwise be misread as the start of a new
  * pipelined request.
@@ -1288,7 +1288,7 @@ static int _on_headers_complete(http_s *h) {
     return 0;
   }
   /* Build a snapshot of the middleware chain while the read lock is still
-   * held.  Walking the list here -- rather than after releasing the lock --
+   * held.  Walking the list here (rather than after releasing the lock)
    * guarantees the snapshot is consistent with the route found by _find_route
    * and cannot include middleware appended by a concurrent writer after the
    * lock is released.  Global middleware is snapshotted first, then any
@@ -1410,7 +1410,7 @@ static int _on_headers_complete(http_s *h) {
 
   /* Increment in_flight_requests BEFORE calling http_pause, not inside the
    * deferred _task_pause_cb. http_pause() only queues _task_pause_cb via
-   * fio_defer -- it does not run it synchronously -- so incrementing inside
+   * fio_defer (it does not run it synchronously) so incrementing inside
    * _task_pause_cb would leave a window, between this call returning and the
    * deferred callback actually running, where __chttpsvr_destroy could
    * observe in_flight_requests == 0 and free the server while this request
@@ -1422,7 +1422,7 @@ static int _on_headers_complete(http_s *h) {
 
   /* Must run before http_pause: http_pause defers the actual handoff via
    * fio_defer, and a worker thread may start running http1_stream_read on
-   * another core the moment that deferred task is queued -- possibly before
+   * another core the moment that deferred task is queued; possibly before
    * this function even returns. http1_stream_prepare establishes every
    * piece of state that worker depends on (diversion flags, the zero-body
    * short-circuit) synchronously, right here, so none of it is still being
@@ -1671,7 +1671,7 @@ static ccol_retval_t _parse_qparams(const char *raw_query,
          * keys-array capacity but remains consistent with the values-array
          * capacity.  The oom cleanup path iterates by qp->count (not
          * qp->cap) for individual string entries, then frees each array
-         * pointer once -- both arrays are released correctly. */
+         * pointer once; both arrays are released correctly. */
         _mem_free(mp, key_decoded);
         _mem_free(mp, val_decoded);
         goto oom;
@@ -1726,7 +1726,7 @@ static chttpsvr_qparams_t *_ensure_qparams(chttpsvr_req *req) {
     req->_qparams_parse_oom = true;
     /* Install an empty sentinel so that subsequent calls take the fast path
      * (_qparams non-NULL) and _destroy_req_qparams has a valid struct to
-     * clean up.  If the sentinel allocation also fails, return NULL -- the
+     * clean up.  If the sentinel allocation also fails, return NULL; the
      * OOM flag is already set regardless. */
     chttpsvr_qparams_t *qp = (chttpsvr_qparams_t *)_mem_calloc(
         req->m_procs, 1, sizeof(chttpsvr_qparams_t));
@@ -1769,7 +1769,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
   /* Set up the server-owned logger.  cl == NULL: create a minimal internal
    * logger that writes only FATAL messages to stderr.  cl != NULL: derive a
    * new logger from it (tagged component=http-server) that this server will
-   * manage -- the caller's handle is never stored directly and is left
+   * manage; the caller's handle is never stored directly and is left
    * untouched (and still owned by the caller). */
   clog logger = cl ? clog_derive(cl) : clog_open_fd_mp(2, CLOG_FATAL, mprocs);
   if (logger && cl) clog_set_field(logger, "component", "http-server");
@@ -1869,13 +1869,13 @@ void __chttpsvr_destroy(chttpsvr srv) {
 
   /* Release this server's single shared-engine reference (acquired once, in
    * chttpsvr_start, for this server's entire lifetime) exactly once, only if
-   * it was ever actually acquired. Guarded by srv->mutex, not a global lock
-   * -- contributed_to_engine is purely this server's own state now that the
+   * it was ever actually acquired. Guarded by srv->mutex, not a global lock;
+   * contributed_to_engine is purely this server's own state now that the
    * shared reference count itself lives in cfio_engine.c.
    *
    * _cfio_engine_release() hands the actual reactor stop-and-join off to a
    * detached reaper thread rather than performing it inline when this is the
-   * last reference (see cfio_engine.h) -- so, unlike the old per-module
+   * last reference (see cfio_engine.h); so, unlike the old per-module
    * engine, dropping the last reference here does NOT guarantee the shared
    * reactor has fully stopped by the time this function returns. A caller
    * that needs that guarantee (e.g. before reusing the just-freed port, or
@@ -1899,7 +1899,7 @@ void __chttpsvr_destroy(chttpsvr srv) {
    * For non-last references: the reactor keeps running for other servers (or
    * for chttpclient's async engine), so http_resume callbacks fire
    * naturally regardless. Either way this wait does not depend on the exact
-   * timing of the reaper's fio_stop() call -- a worker thread calls
+   * timing of the reaper's fio_stop() call; a worker thread calls
    * http_resume when it finishes regardless of engine-stop state.
    *
    * 30-second timeout as a safety net: a permanent hang is worse than a
@@ -2046,7 +2046,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   }
 
   /* Acquire this server's single shared-engine reference, once for its
-   * entire lifetime (across any number of start/stop/restart cycles) --
+   * entire lifetime (across any number of start/stop/restart cycles);
    * guarded by srv->mutex, atomically claiming the "first start of this
    * server" slot before actually acquiring, and rolling the claim back if
    * the acquire itself fails. On a restart (stop + start again on the same
@@ -2060,7 +2060,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
 
   if (need_acquire) {
     /* Install a minimal default engine logger if the caller has not already
-     * set one via chttpsvr_set_engine_logger() -- see
+     * set one via chttpsvr_set_engine_logger(); see
      * _install_default_engine_logger's own comment for why this runs on
      * every server's first start rather than being a one-shot,
      * process-lifetime guard. */
@@ -2081,12 +2081,12 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
 
   /* The shared reactor is now confirmed running (per _cfio_engine_acquire's
    * contract: it always blocks until the reactor has entered its event
-   * loop before returning success) -- http_listen always takes its
+   * loop before returning success); http_listen always takes its
    * fio_attach-immediately path (fio_is_running() is true), never the
    * FIO_CALL_ON_START-deferred path. Verified via direct read of
    * fio_listen() in fio.c: the socket bind itself (fio_socket()) is
    * unconditional; only attachment timing depends on fio_is_running(), so
-   * there is no first-vs-subsequent-start branching left to do here -- this
+   * there is no first-vs-subsequent-start branching left to do here; this
    * single call covers both cases. */
   intptr_t uuid = http_listen(
       port_str, cfg->host, .on_request = _on_request_unreachable,
@@ -2114,7 +2114,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
    * and `listen_uuid` under the same lock, and without it a stop racing the
    * tail end of a start could see the pre-start state (started == false)
    * and silently no-op, even though this call is about to (or just did)
-   * mark the server started -- the caller's stop would then be lost. */
+   * mark the server started; the caller's stop would then be lost. */
   mutex_lock(srv->mutex);
   srv->tls = tls;
   srv->listen_uuid = uuid;
@@ -2163,7 +2163,7 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp) {
 /*
  * Now that the reactor is shared with chttpclient's async engine, forcing it
  * down also tears down any in-flight chttpclient async work in the same
- * process -- an inherent, correct consequence of sharing one process-wide
+ * process; an inherent, correct consequence of sharing one process-wide
  * reactor for what is meant to be process-shutdown-driven use (this
  * function's documented contract, unchanged: async-signal-safe, non-blocking,
  * safe to call from a SIGINT/SIGTERM handler), not a defect.
@@ -2444,7 +2444,7 @@ ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
     }
   }
 
-  /* New header -- grow the flat array if needed. */
+  /* New header; grow the flat array if needed. */
   if (resp->header_count >= resp->header_cap) {
     if (resp->header_cap > (SIZE_MAX - 8) / 2) return ccol_not_enough_memory;
     size_t new_cap = resp->header_cap * 2 + 8;
@@ -2551,7 +2551,7 @@ ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp, const char *json,
    * (no header is set, no bytes are appended).  The header string is tiny and
    * far less likely to fail, so if the body succeeds and the header then fails
    * the caller receives ccol_not_enough_memory with the body bytes already
-   * buffered -- an unlikely but documented partial-state scenario. */
+   * buffered; an unlikely but documented partial-state scenario. */
   ccol_retval_t rv = chttpsvr_resp_write(resp, json, len);
   if (rv != ccol_success) return rv;
   return chttpsvr_resp_set_header(resp, "content-type", "application/json");

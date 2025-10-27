@@ -1738,7 +1738,7 @@ TEST(chash_maps, sc_reverse_insertion_order_iteration) {
   REQUIRE_NE((void *)hm, NULL);
 
   // chmap_insert requires lvalue arguments; string literals are lvalues in C
-  // but integer literals are not -- use variables.
+  // but integer literals are not; use variables.
   int v1 = 1, v2 = 2, v3 = 3, v100 = 100;
   chmap_insert(hm, "alpha", v1);
   chmap_insert(hm, "beta", v2);

@@ -18,8 +18,8 @@ The HTTP/1.1 Protocol Object
 
 /* Size of the on-stack scratch buffer used by http1_stream_read for each raw
  * fio_read call. Must stay well under HTTP_MAX_HEADER_LENGTH, since any
- * unconsumed tail -- whether pipelined bytes belonging to the next request,
- * or an incomplete framing token to be retried with more data -- gets
+ * unconsumed tail (whether pipelined bytes belonging to the next request,
+ * or an incomplete framing token to be retried with more data) gets
  * stashed into the connection's own `buf[]`, which is HTTP_MAX_HEADER_LENGTH
  * bytes. */
 #define HTTP1_STREAM_SCRATCH_SIZE 4096
@@ -364,12 +364,12 @@ static int http1_on_body_chunk(http1_parser_s *parser, char *data,
           (ssize_t)parser2http(parser)->p.settings->max_body_size) {
     http1pr_s *pr = parser2http(parser);
     if (pr->stream_diverted) {
-      /* `h` is paused and owned by a worker thread at this point -- calling
+      /* `h` is paused and owned by a worker thread at this point; calling
        * http_send_error (a normal http_* API call) on it here would be
        * unsafe. Just flag the reason; http1_stream_read's caller reports it,
        * and http1_on_error (invoked below like any other parse error) defers
        * the actual close until after the worker's own error response has
-       * been sent -- see http1_on_error for why. */
+       * been sent; see http1_on_error for why. */
       pr->stream_err = HTTP1_STREAM_ERR_TOO_LARGE;
     } else {
       http_send_error(&http1_pr2handle(pr), 413);
@@ -414,14 +414,14 @@ static int http1_on_body_chunk(http1_parser_s *parser, char *data,
 }
 
 /** called once, right after headers are parsed and before any body byte is
- * consumed -- see the declaration in http1_parser.h for the return-value
+ * consumed; see the declaration in http1_parser.h for the return-value
  * contract. */
 static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
                                      size_t leftover_len) {
   http1pr_s *p = parser2http(parser);
   if (!p->p.settings->on_headers_complete) return 0;
 
-  /* `p` is reused across every request on a keep-alive connection -- reset
+  /* `p` is reused across every request on a keep-alive connection; reset
    * all per-message ingestion state left over from a previous message
    * before deciding anything about this one. */
   fio_free(p->stream_primed);
@@ -444,7 +444,7 @@ static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
   /* Default to closing the connection after this response. http_send_error
    * (called synchronously by the settings hook below, or right here on an
    * OOM) sends its response through the normal headers2str path *before*
-   * this function returns -- so close must already be set by the time
+   * this function returns; so close must already be set by the time
    * either of those runs, not after. It's cleared by http1_stream_prepare
    * only once dispatch is confirmed, restoring normal keep-alive behavior
    * for a matched route; headers2str can still independently force it back
@@ -462,8 +462,8 @@ static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
        * bottom-of-http1_parse reset (that reset is skipped for any message
        * handled via this "hc>0" return path, diverted or not). Since
        * p->close is already 1, this connection is not stopped
-       * (http1_consume_data's loop only stops on stream_diverted -- never
-       * set here -- or on p->stop, which only http_pause sets), so if a
+       * (http1_consume_data's loop only stops on stream_diverted (never
+       * set here) or on p->stop, which only http_pause sets), so if a
        * pipelined next request's bytes are already sitting in the same
        * read buffer, the do-while loop's next iteration would otherwise
        * re-enter case (HEADER_COMPLETE|STATUS_LINE) and misparse those
@@ -480,9 +480,9 @@ static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
   }
   if (p->p.settings->on_headers_complete(&http1_pr2handle(p))) {
     /* The callback is required (see http1_stream_prepare's declaration in
-     * http1.h) to have already called http1_stream_prepare() -- which sets
+     * http1.h) to have already called http1_stream_prepare() (which sets
      * stream_diverted/stream_owned/close and runs the zero-body
-     * short-circuit -- before it called http_pause. http_pause defers the
+     * short-circuit) before it called http_pause. http_pause defers the
      * actual handoff via fio_defer, so by the time control returns here a
      * worker may already be running on another thread; nothing may be set
      * up for it from this point on. */
@@ -493,7 +493,7 @@ static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
     /* not diverted: either the callback rejected the request synchronously
      * (e.g. no matching route) or chose not to take it over. Either way the
      * primed bytes were never consumed by anyone, and `close` is already 1
-     * from above -- the client's still-arriving body would otherwise be
+     * from above; the client's still-arriving body would otherwise be
      * misread as the start of a new pipelined request. */
     fio_free(p->stream_primed);
     p->stream_primed = NULL;
@@ -505,7 +505,7 @@ static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
 
 /**
  * See declaration in http1.h. Establishes every piece of state a worker
- * thread depends on -- including the zero-body short-circuit -- entirely on
+ * thread depends on (including the zero-body short-circuit) entirely on
  * the calling (reactor) thread, before the caller is allowed to invoke
  * http_pause. Once http_pause defers the handoff via fio_defer, a worker may
  * start running http1_stream_read on another thread at any moment; nothing
@@ -521,7 +521,7 @@ void http1_stream_prepare(http_s *h) {
   p->close = 0;
   /* A request with no body at all (no Content-Length/Transfer-Encoding, or
    * Content-Length: 0) is already "complete" per http1_consume_body's own
-   * rules -- but that function is never reached for a diverted message
+   * rules; but that function is never reached for a diverted message
    * (http1_parse returns immediately, without running the body-consumption
    * switch case, once http1_on_headers_complete reports the message as
    * handled). Run the same check here with a zero-length span so
@@ -537,7 +537,7 @@ void http1_stream_prepare(http_s *h) {
     p->stream_body_done = 1;
     /* http1_stream_read will never call http1_parse for this message now
      * (there's nothing to read), so it will never reach the reset that
-     * normally happens right after http1_on_request runs. Do it here --
+     * normally happens right after http1_on_request runs. Do it here;
      * otherwise the next request parsed on this (kept-alive) connection
      * inherits stale reserved/content_length bits and gets misparsed.
      * h1_reset(p) (zeroing p->header_size) belongs to that same "normally
@@ -561,13 +561,13 @@ static int http1_on_error(http1_parser_s *parser) {
   http1pr_s *p = parser2http(parser);
   if (p->close) return -1;
   if (p->stream_diverted) {
-    /* `h` is paused and owned by a worker thread at this point -- do not
+    /* `h` is paused and owned by a worker thread at this point; do not
      * force-close the socket synchronously here, or any error response the
      * worker later computes (e.g. 413 for a too-large body, via
      * http1_on_body_chunk's HTTP1_STREAM_ERR_TOO_LARGE) would have nowhere
      * to go: fio_close's immediate/no-pending-packet branch would tear down
      * the connection before http_resume ever runs, making that response
-     * silently unreachable (a real bug this fixes -- verified by a raw
+     * silently unreachable (a real bug this fixes; verified by a raw
      * socket test that observed a bare connection reset with zero response
      * bytes before this change). Record a reason if one hasn't already been
      * set more specifically, force the response that follows to carry
@@ -575,7 +575,7 @@ static int http1_on_error(http1_parser_s *parser) {
      * http1_on_headers_complete, and matching headers2str's existing
      * once-set-never-cleared handling of this flag), and let
      * http1_after_finish's existing `if (p->close) fio_close(...)` close the
-     * connection gracefully -- discarding any excess unread bytes -- once
+     * connection gracefully (discarding any excess unread bytes) once
      * that response has actually been sent. */
     if (p->stream_err == HTTP1_STREAM_ERR_NONE)
       p->stream_err = HTTP1_STREAM_ERR_PROTOCOL;
@@ -603,13 +603,13 @@ static inline void http1_consume_data(intptr_t uuid, http1pr_s *p) {
     i = http1_parse(&p->parser, p->buf + (org_len - p->buf_len), p->buf_len);
     if (p->stream_diverted) {
       /* http_pause, called synchronously inside the settings hook that
-       * http1_parse just invoked, defers the actual handoff via fio_defer --
+       * http1_parse just invoked, defers the actual handoff via fio_defer;
        * a worker may already be running http1_stream_read's one-time setup
        * on another thread by the time this line runs, and that setup
        * unconditionally zeroes p->buf_len (see the comment there: the true
        * leftover bytes are captured in stream_primed once diverted, not
        * here). Whichever of the two critical sections below runs second
-       * must defer to whatever the first one already decided -- subtracting
+       * must defer to whatever the first one already decided; subtracting
        * `i` from a buf_len the worker has already reset to 0 would underflow
        * the (unsigned) field to a huge garbage value, which previously went
        * on to corrupt this same struct's other fields and crash the process
@@ -621,7 +621,7 @@ static inline void http1_consume_data(intptr_t uuid, http1pr_s *p) {
        * must be left alone; otherwise it is still safe to apply our own
        * leftover-byte accounting here (and harmless if the worker's reset
        * then runs afterward and overwrites it with 0 anyway, which is what
-       * it wants regardless). Skip the p->buf compaction below entirely --
+       * it wants regardless). Skip the p->buf compaction below entirely;
        * touching p->buf itself is never needed here (the same bytes are
        * already captured in stream_primed) and would race unprotected. */
       fio_lock(&p->stream_lock);
@@ -740,7 +740,7 @@ fio_protocol_s *http1_new(uintptr_t uuid, http_settings_s *settings,
       .max_header_size = settings->max_header_size,
       .is_client = settings->is_client,
   };
-  /* This connection now holds its own reference on `settings` -- released in
+  /* This connection now holds its own reference on `settings`; released in
    * http1_destroy once this connection (and any worker thread still reading
    * its body via http1_stream_read) is fully done with it. See the
    * reserved1 field's doc comment in http.h. */
@@ -763,7 +763,7 @@ void http1_destroy(fio_protocol_s *pr) {
   fio_lock(&p->stream_lock);
   if (p->stream_owned) {
     /* a worker thread still owns this request's body ingestion (it may be
-     * blocked inside http1_stream_read, or between calls to it) -- freeing
+     * blocked inside http1_stream_read, or between calls to it); freeing
      * `p` here would race with its use of `p->parser`/`p->buf`/`p->stream_*`.
      * Defer: http1_stream_release will notice `stream_aborted` and finish
      * the teardown once the worker is done touching `p`. */
@@ -778,7 +778,7 @@ void http1_destroy(fio_protocol_s *pr) {
   http_s_destroy(&http1_pr2handle(p), 0);
   {
     /* This connection is done with `settings` for good (no worker will ever
-     * call http1_stream_read for it again) -- release the hold http1_new
+     * call http1_stream_read for it again); release the hold http1_new
      * took. Capture the pointer before freeing `p`, which is what stores
      * it. */
     http_settings_s *settings = p->p.settings;
@@ -804,7 +804,7 @@ static void http1_stash_pipelined(http1pr_s *p, const void *data, size_t len) {
 }
 
 /**
- * Reads and decodes up to `buflen` bytes of the request body -- see the
+ * Reads and decodes up to `buflen` bytes of the request body; see the
  * declaration in http1.h for the full contract.
  */
 ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
@@ -822,7 +822,7 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
   if (!p->stream_prepared) {
     /* One-time setup. http1_consume_data may still be mid-way through its
      * own p->buf_len bookkeeping for this same connection on the reactor
-     * thread at this exact moment -- the deferred ctpool dispatch that
+     * thread at this exact moment; the deferred ctpool dispatch that
      * started this worker does not guarantee that call has finished. Take
      * the same lock http1_consume_data uses around its own p->buf_len write
      * so the two cannot interleave; p->buf's leftover bytes were already
@@ -852,7 +852,7 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
   p->stream_out_cap = buflen;
   p->stream_out_len = 0;
 
-  /* hand out leftover decoded bytes from a previous call first -- a single
+  /* hand out leftover decoded bytes from a previous call first; a single
    * raw read can decode into more bytes than one caller-supplied buffer can
    * hold. */
   if (p->stream_carry_len > p->stream_carry_pos) {
@@ -883,7 +883,7 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
     } else {
       /* p->buf_len may hold a framing fragment (e.g. an incomplete
        * chunk-size line or inter-chunk CRLF) that a previous iteration of
-       * this same loop could not finish parsing -- see the from_primed and
+       * this same loop could not finish parsing; see the from_primed and
        * consumed < raw_len handling below. Prepend it so http1_parse sees it
        * joined with fresh data, instead of being discarded here (silently
        * dropped, corrupting the chunked decode) or handed the same
@@ -891,7 +891,7 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
       size_t carry_over = p->buf_len;
       if (carry_over >= sizeof(scratch)) {
         /* A single framing token can't legitimately exceed the scratch size
-         * (see the HTTP1_STREAM_SCRATCH_SIZE comment above) -- treat this as
+         * (see the HTTP1_STREAM_SCRATCH_SIZE comment above); treat this as
          * a protocol violation rather than loop forever with no room left to
          * read fresh bytes into. */
         p->stream_err = HTTP1_STREAM_ERR_PROTOCOL;
@@ -914,7 +914,7 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
           p->stream_err = HTTP1_STREAM_ERR_TIMEOUT;
           return -1;
         }
-        /* poll()'s readiness is only a wake-up hint -- always re-validate by
+        /* poll()'s readiness is only a wake-up hint; always re-validate by
          * calling fio_read again rather than trusting revents, since the fd
          * number could in principle have been recycled for an unrelated
          * connection by the time we wake. carry_over (if any) is untouched
@@ -940,7 +940,7 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
         /* Primed data alone couldn't complete this framing token (e.g. the
          * connection's very first read contained headers plus a partial
          * chunk-size line). The unconsumed remainder was just moved into
-         * p->buf above -- mark primed fully drained so the next iteration
+         * p->buf above; mark primed fully drained so the next iteration
          * falls through to the buf-carry + fresh-read path instead of
          * re-presenting these same insufficient bytes forever. */
         p->stream_primed_pos = p->stream_primed_len;
@@ -956,7 +956,7 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
     }
     /* else: this raw read only produced framing overhead (e.g. a chunk-size
      * line, possibly still incomplete) with no payload bytes yet, and the
-     * body isn't done -- loop for more raw input. Any incomplete fragment
+     * body isn't done; loop for more raw input. Any incomplete fragment
      * was just stashed into p->buf above and will be prepended to the next
      * raw read at the top of this loop. */
   }
@@ -973,7 +973,7 @@ void http1_stream_release(http_s *h) {
     /* The body was never fully drained (a streaming handler stopped early,
      * or ingestion hit an error/timeout/abort before EOF). Whatever bytes
      * the client still has in flight for this body would otherwise be
-     * misread as the start of the next request on this connection -- force
+     * misread as the start of the next request on this connection; force
      * it closed after the response instead of attempting keep-alive. */
     p->close = 1;
   }

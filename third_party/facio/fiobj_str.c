@@ -110,7 +110,7 @@ FIOBJ fiobj_str_buf(size_t capa) {
   fiobj_str_s *s = fio_malloc(sizeof(*s));
   if (!s) {
     /* WARNING: terminates the entire process on OOM, taking down every
-     * other in-flight connection with it -- not just the one request that
+     * other in-flight connection with it; not just the one request that
      * happened to trigger the allocation. This is this vendor library's
      * allocation philosophy throughout (see also fiobj_ary.c, fiobj_hash.c),
      * not something specific to this call site or fixable in isolation. */
@@ -157,7 +157,7 @@ FIOBJ fiobj_str_new(const char *str, size_t len) {
  * Returns a thread-static temporary string. Avoid calling `fiobj_dup` or
  * `fiobj_free`.
  *
- * WARNING: backed by a single shared per-thread instance -- a second
+ * WARNING: backed by a single shared per-thread instance; a second
  * fiobj_str_tmp call on this thread overwrites/resizes the very same
  * object returned by the first. Never hold two live fiobj_str_tmp results
  * on the same thread at once.

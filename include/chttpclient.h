@@ -42,7 +42,7 @@ SOFTWARE.
  * bounds the number of simultaneous in-flight requests (chttpclient_do
  * blocks once the limit is reached); it defaults to the CPU count and is
  * overridden via chttpclient_set_pool_size. Separately, a keep-alive idle
- * connection cache -- keyed by origin (scheme + host + port) -- lets a
+ * connection cache (keyed by origin (scheme + host + port)) lets a
  * request reuse an already-open (and, for HTTPS, already-handshaked)
  * connection from a prior request instead of paying for DNS resolution and
  * the TCP/TLS handshakes again. A cheap liveness probe runs before reuse;
@@ -313,7 +313,7 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, long ms);
  * system CA bundle, no client certificate).
  *
  * cert_path/key_path/ca_bundle_path are validated for readability lazily, at
- * the time an HTTPS request actually needs them, rather than here -- a path
+ * the time an HTTPS request actually needs them, rather than here; a path
  * that does not currently exist is accepted here without error and only
  * surfaces as ccol_http_tls_cert_verification_failed from chttpclient_do /
  * chttpclient_do_streaming once a request needs it.
@@ -329,7 +329,7 @@ ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
 /* ========================================================================== */
 
 /**
- * @brief Internal destroy -- use chttpclient_destroy macro instead.
+ * @brief Internal destroy; use chttpclient_destroy macro instead.
  *
  * Waits for all in-flight requests to complete before freeing resources.
  */
@@ -423,7 +423,21 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * Redirects (301, 302, 303, 307, 308) are followed automatically, up to 50
  * hops. 301/302/303 rewrite the method to a bodyless GET (HEAD is left as
  * HEAD, per RFC semantics); 307/308 preserve the original method and resend
- * the original body unchanged.
+ * the original body unchanged. The Location header may be an absolute URL,
+ * a protocol-relative reference ("//host/path"), an absolute-path reference
+ * ("/foo"), or a general relative reference ("foo", "../foo", "./foo",
+ * "?query"); all are resolved per RFC 3986.
+ *
+ * The request URL accepts http:// and https:// only. Both a plain
+ * hostname/IPv4 literal and a bracketed IPv6 literal
+ * ("https://[::1]:8443/path") are accepted. A URL may embed credentials
+ * ("http://user:pass@host/path"); they are turned into an
+ * "Authorization: Basic ..." header automatically unless the request
+ * already sets its own Authorization header. That auto-injected header is
+ * resent on every redirect hop that stays on the same origin (scheme,
+ * host, and port) and is dropped permanently the first time a hop changes
+ * origin. A trailing "#fragment" is recognized and discarded (fragments
+ * are never sent to a server).
  *
  * @param cli       Client handle.
  * @param req       Request to execute.
@@ -440,7 +454,8 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *             Client is being destroyed.
  *         ccol_http_invalid_url
  *             URL is malformed, uses an unsupported scheme (only http:// and
- *             https:// are supported), or has a missing/invalid host or port.
+ *             https:// are supported), or has a missing/invalid host,
+ *             port, or userinfo component.
  *         ccol_http_host_resolution_failed
  *             DNS resolution failed for the target host.
  *         ccol_http_connection_failed
@@ -497,12 +512,12 @@ ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
  * chttpclient_do's resp_out. For a request submitted via
  * chttpclient_do_async_streaming, resp is still populated on success (so
  * status_code and headers presence can be checked uniformly), but its body
- * is NULL -- the body was already delivered via the write callback as it
+ * is NULL; the body was already delivered via the write callback as it
  * arrived, exactly mirroring chttpclient_do_streaming's own
  * chttpcli_response.body == NULL convention for the streaming path.
  *
  * Obtained via chttpclient_async_result_get (a thin, typed wrapper over
- * ctpool_future_get) and released via chttpclient_async_result_free -- do
+ * ctpool_future_get) and released via chttpclient_async_result_free; do
  * this before calling ctpool_future_free on the future itself.
  */
 typedef struct chttpcli_async_result {
@@ -516,13 +531,13 @@ typedef struct chttpcli_async_result {
  *
  * Non-blocking: queues the request onto chttpclient's shared, lazily-started
  * reactor engine (independent of chttpclient_do's synchronous connection
- * handling, and independent of chttpserver's own engine -- see "Async engine"
+ * handling, and independent of chttpserver's own engine; see "Async engine"
  * below) and returns immediately. The whole request/response cycle,
  * including any redirect hops, runs on the engine's own threads.
  *
  * @param cli Client handle.
  * @param req Request to execute. Unlike chttpclient_do, req need not remain
- *            valid after this call returns -- everything needed is copied
+ *            valid after this call returns; everything needed is copied
  *            or serialised internally before the call returns.
  * @return A future, or NULL if the request could not even be queued (NULL
  *         cli/req, malformed URL, TLS unusable, OOM, or the engine failing
@@ -541,7 +556,7 @@ typedef struct chttpcli_async_result {
  * and no connection remains in any chttpcli's async idle pool; it restarts
  * transparently on the next call. This engine is entirely separate from
  * chttpserver's own facil.io-based engine and from chttpclient_do's
- * synchronous connection handling -- a process may freely use
+ * synchronous connection handling; a process may freely use
  * chttpclient_do and chttpclient_do_async/_streaming together, but must not
  * run chttpserver in the same process as chttpclient_do_async/_streaming
  * (both would independently believe they own the one process-wide facio
@@ -561,8 +576,8 @@ ctpool_future *chttpclient_do_async(chttpcli cli, const chttp_request_t *req);
  * calling thread and NOT on a dedicated thread for this request. This has
  * two hard requirements, unlike chttpclient_do_streaming's caller-thread
  * callback: write_fn must not block (no blocking I/O, no long-held locks,
- * no waiting on another request's future) -- doing so stalls every other
- * connection the engine is currently multiplexing on that reactor thread --
+ * no waiting on another request's future) (doing so stalls every other
+ * connection the engine is currently multiplexing on that reactor thread)
  * and write_fn must not call back into chttpclient_do_async/_streaming (or
  * anything that transitively waits on this same request's future) for the
  * same or a different chttpcli sharing the engine, or it may deadlock
@@ -588,7 +603,7 @@ ctpool_future *chttpclient_do_async_streaming(chttpcli cli,
  *
  * A thin wrapper over ctpool_future_get that casts its void* result to
  * chttpcli_async_result_t*. Safe to call more than once on the same future
- * (matching ctpool_future_get's own contract) -- every call after the first
+ * (matching ctpool_future_get's own contract); every call after the first
  * returns the same result pointer, still owned by the future until freed.
  *
  * @param f Future returned by chttpclient_do_async or
@@ -602,9 +617,9 @@ chttpcli_async_result_t *chttpclient_async_result_get(ctpool_future *f);
  * @brief Release a chttpcli_async_result_t obtained via
  *        chttpclient_async_result_get.
  *
- * Does NOT free result->resp -- free that separately with
+ * Does NOT free result->resp; free that separately with
  * chttpclient_resp_free first if rv == ccol_success. Does NOT free the
- * future itself -- pair with exactly one ctpool_future_free, called
+ * future itself; pair with exactly one ctpool_future_free, called
  * separately (before or after this call, order does not matter).
  *
  * @param result Result to free; NULL is a safe no-op.
@@ -621,7 +636,7 @@ void chttpclient_async_result_free(chttpcli_async_result_t *result);
  *
  * A thin wrapper over chttpclient_do_async: submits the request to the
  * shared engine, blocks until it completes, and returns the exact same
- * ccol_retval_t / resp_out call shape chttpclient_do uses -- but the
+ * ccol_retval_t / resp_out call shape chttpclient_do uses; but the
  * connect/write/read work happens on the engine's own reactor threads
  * rather than the calling thread, and concurrent callers across many
  * chttpcli handles share one small, fixed-size reactor thread pool instead
@@ -634,8 +649,8 @@ void chttpclient_async_result_free(chttpcli_async_result_t *result);
  *         failure to even submit the request to the engine (OOM, or the
  *         engine failing to start) is reported as ccol_unexpected_failure
  *         rather than a more specific code. Everything detected once the
- *         request is actually in flight -- bad URL, TLS failure, connection
- *         failure, transfer errors, timeouts, too many redirects -- is
+ *         request is actually in flight (bad URL, TLS failure, connection
+ *         failure, transfer errors, timeouts, too many redirects) is
  *         reported with the exact same specific codes chttpclient_do uses.
  */
 ccol_retval_t chttpclient_do_pooled(chttpcli cli, const chttp_request_t *req,
@@ -647,9 +662,9 @@ ccol_retval_t chttpclient_do_pooled(chttpcli cli, const chttp_request_t *req,
  *
  * A thin wrapper over chttpclient_do_async_streaming with the exact same
  * call shape as chttpclient_do_streaming. write_fn runs on one of the
- * engine's own reactor threads -- see chttpclient_do_async_streaming's
+ * engine's own reactor threads (see chttpclient_do_async_streaming's
  * documentation for the resulting must-not-block, must-not-call-back-into-
- * the-engine contract -- rather than the calling thread; that is the only
+ * the-engine contract) rather than the calling thread; that is the only
  * respect in which this function behaves differently from
  * chttpclient_do_streaming's caller-thread callback.
  *

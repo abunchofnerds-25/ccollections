@@ -55,7 +55,7 @@ typedef enum chttp_method {
    * chttpsvr_register_streaming_handler, chttpsvr_router_on, or
    * chttpsvr_router_on_stream.  Not a valid method for client requests; passing
    * it to chttp_request_new / chttp_run_query produces undefined behaviour.
-   * chttpsvr_req_method never returns CHTTP_ANY -- it always returns the actual
+   * chttpsvr_req_method never returns CHTTP_ANY; it always returns the actual
    * method of the incoming request.
    */
   CHTTP_ANY
@@ -193,3 +193,90 @@ typedef struct chttp_request_body {
 /** @brief Inline URL-encoded form request body. */
 #define CHTTP_FORM_BODY(d, n) \
   CHTTP_BODY((d), (n), "application/x-www-form-urlencoded")
+
+/* ========================================================================== */
+/*                         BASE64 AND BASIC AUTH                              */
+/* ========================================================================== */
+
+/**
+ * @brief Base64-encode a buffer (custom allocator).
+ *
+ * Standard RFC 4648 base64 (the '+'/'/' alphabet, '=' padding); the
+ * variant required by RFC 7617 Basic auth and used throughout HTTP.
+ *
+ * @param mp       Custom allocator, or NULL for malloc/free.
+ * @param data     Buffer to encode. May be NULL only if len == 0.
+ * @param len      Number of bytes in data.
+ * @param out_len  Optional: receives the length of the returned string
+ *                 (excluding the terminating NUL). May be NULL.
+ * @return Newly allocated, NUL-terminated base64 string, or NULL on
+ *         allocation failure (or if data is NULL and len > 0).
+ */
+char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp, const void *data,
+                             size_t len, size_t *out_len);
+
+/**
+ * @brief Base64-encode a buffer (default allocator).
+ */
+static inline __attribute__((always_inline)) char *chttp_base64_encode(
+    const void *data, size_t len, size_t *out_len) {
+  return chttp_base64_encode_mp(NULL, data, len, out_len);
+}
+
+/**
+ * @brief Base64-decode a NUL-terminated base64 string (custom allocator).
+ *
+ * Accepts standard RFC 4648 base64 (the '+'/'/' alphabet) with '=' padding.
+ * The input length is taken from strlen(b64_input); it must be a multiple
+ * of 4 bytes, and any '=' padding must appear only as the final one or two
+ * characters. Any other malformed input (invalid character, misplaced
+ * padding, wrong length) is rejected.
+ *
+ * The returned buffer is NUL-terminated as a convenience for decoding text
+ * payloads, but the decoded data may legitimately contain embedded NUL
+ * bytes; always use out_len, never strlen(), to determine its real size.
+ *
+ * @param mp         Custom allocator, or NULL for malloc/free.
+ * @param b64_input  NUL-terminated base64 string to decode. Must not be
+ *                   NULL.
+ * @param out_len    Optional: receives the decoded byte length. May be
+ *                   NULL.
+ * @return Newly allocated decoded buffer, or NULL on allocation failure or
+ *         malformed input.
+ */
+void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
+                             size_t *out_len);
+
+/**
+ * @brief Base64-decode a NUL-terminated base64 string (default allocator).
+ */
+static inline __attribute__((always_inline)) void *chttp_base64_decode(
+    const char *b64_input, size_t *out_len) {
+  return chttp_base64_decode_mp(NULL, b64_input, out_len);
+}
+
+/**
+ * @brief Build a "Basic <base64(username:password)>" header value (custom
+ * allocator).
+ *
+ * Produces only the header VALUE (RFC 7617) (not the "Authorization: "
+ * key part) ready to be passed to chttp_request_set_header(req,
+ * "authorization", ...) or chttpsvr equivalent.
+ *
+ * @param mp        Custom allocator, or NULL for malloc/free.
+ * @param username  Username. Must not be NULL; may be empty.
+ * @param password  Password. Must not be NULL; may be empty.
+ * @return Newly allocated "Basic <base64>" string, or NULL on allocation
+ *         failure or if username/password is NULL.
+ */
+char *chttp_basic_auth_mp(ccol_memmgmt_procs_t *mp, const char *username,
+                          const char *password);
+
+/**
+ * @brief Build a "Basic <base64(username:password)>" header value (default
+ * allocator).
+ */
+static inline __attribute__((always_inline)) char *chttp_basic_auth(
+    const char *username, const char *password) {
+  return chttp_basic_auth_mp(NULL, username, password);
+}

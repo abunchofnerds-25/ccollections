@@ -31,15 +31,15 @@ SOFTWARE.
  * facio's fio_data is a process-wide singleton, so at most one of the two
  * could ever actually be running. cfio_engine.c unifies them into one
  * shared, ref-counted, lazily-started reactor both modules acquire/release
- * references to -- this suite is the regression coverage for that.
+ * references to; this suite is the regression coverage for that.
  *
  * Test order matters here (tau registers/runs TEST() cases in file
- * declaration order -- see tests/chttpserver/tests.c and others for the same
+ * declaration order; see tests/chttpserver/tests.c and others for the same
  * assumption already relied on throughout this codebase's test suites): the
  * first few tests deliberately exercise the shared engine from a fully-cold
  * state, in a specific sequence, to pin down exactly which module starts it
  * first. Unlike every other chttp* suite, _setup() here does NOT pre-start
- * any server or touch chttpclient's async engine -- doing so would make
+ * any server or touch chttpclient's async engine; doing so would make
  * "who starts the shared engine first" untestable.
  */
 
@@ -60,7 +60,7 @@ TAU_MAIN()
 static clog g_test_logger = NULL;
 
 /* Kept alive across most of this file's tests once started (see
- * engine_startup_order.server_starts_after_client_already_used_engine) --
+ * engine_startup_order.server_starts_after_client_already_used_engine);
  * mirrors the shared-fixture pattern tests/chttpserver/tests.c uses, except
  * here the very first test intentionally runs before this exists. */
 static chttpsvr g_srv = NULL;
@@ -71,7 +71,7 @@ static void _hello_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
   chttpsvr_resp_write_str(resp, "hello");
 }
 
-/* Blocks until released -- mirrors tests/chttpserver/tests.c's
+/* Blocks until released; mirrors tests/chttpserver/tests.c's
  * _bounded_blk_handler pattern exactly, for the "destroy one server while
  * another has genuinely in-flight chttpclient work" test below. */
 static pthread_mutex_t g_slow_mtx = PTHREAD_MUTEX_INITIALIZER;
@@ -106,7 +106,7 @@ static void _make_srv_url(chttpsvr srv_unused, uint16_t port, const char *path,
   snprintf(buf, buf_size, "http://127.0.0.1:%u%s", (unsigned)port, path);
 }
 
-/* White-box helpers exposing chttpclient's own async-engine-user refcount --
+/* White-box helpers exposing chttpclient's own async-engine-user refcount;
  * compiled into chttpclient.c under RUNNING_UNIT_TESTS (same gate this
  * suite's Makefile passes), reused here exactly as tests/chttpclient/tests.c
  * does, to deterministically settle chttpclient's side between tests without
@@ -129,7 +129,7 @@ static void _teardown(void) {
     g_srv = NULL;
   }
   /* Blocks until the shared reactor (if anything is still holding a
-   * reference at this point) has actually stopped -- required so the
+   * reference at this point) has actually stopped; required so the
    * engine-installed default logger is reclaimed before this atexit
    * handler returns, mirroring every other chttp* suite's teardown. A no-op
    * if the engine already fully stopped earlier (e.g. the last test already
@@ -148,7 +148,7 @@ __attribute__((constructor)) static void _setup(void) {
     exit(1);
   }
   /* _teardown is deliberately NOT registered here (unlike every other
-   * chttp* suite's _setup()) -- see _register_teardown_once's own comment
+   * chttp* suite's _setup()); see _register_teardown_once's own comment
    * for why. */
 }
 
@@ -156,13 +156,13 @@ __attribute__((constructor)) static void _setup(void) {
  * atexit(fio_lib_destroy) and atexit(_cfio_engine_atexit_safety_net) are
  * only registered once something actually calls _cfio_engine_acquire() for
  * the first time in this process (see cfio_engine.c's own pthread_once-
- * guarded global init) -- and, uniquely in this suite, that first call could
+ * guarded global init); and, uniquely in this suite, that first call could
  * come from either chttpclient (test 1) or chttpserver (test 2), by design.
  * atexit runs handlers in reverse registration order, so _teardown must be
  * registered strictly AFTER whichever of those two calls happens first, or
  * fio_lib_destroy would run before it at process exit and _teardown's own
  * chttpsvr_stop()/fio_close() call would dereference fio_data after it was
- * already unmapped -- a real SIGSEGV, caught during development of this
+ * already unmapped; a real SIGSEGV, caught during development of this
  * suite (registering atexit(_teardown) in _setup(), before either engine had
  * ever been touched, put it first in registration order and therefore LAST
  * at exit, exactly backwards). Guarded by pthread_once and invoked from both
@@ -186,7 +186,7 @@ TEST(engine_startup_order, client_starts_shared_engine_first) {
   REQUIRE_NE((void *)cli, NULL);
   chttpclient_set_connect_timeout(cli, 500);
 
-  /* 127.0.0.1:1 -- no listener there; expected to fail fast (connection
+  /* 127.0.0.1:1; no listener there; expected to fail fast (connection
    * refused) rather than hang, proving chttpclient's async engine can start
    * the shared reactor entirely unassisted (no chttpsvr has ever run in
    * this process) and drive a real connection attempt through it. */
@@ -199,7 +199,7 @@ TEST(engine_startup_order, client_starts_shared_engine_first) {
   chttp_request_free(req);
   /* _cfio_engine_acquire() has already been called synchronously by this
    * point (chttpclient_do_async only returns a non-NULL future after it
-   * succeeds) -- see _register_teardown's own comment for why registration
+   * succeeds); see _register_teardown's own comment for why registration
    * must happen here, not in _setup(). */
   pthread_once(&_teardown_atexit_once, _register_teardown);
 
@@ -215,7 +215,7 @@ TEST(engine_startup_order, client_starts_shared_engine_first) {
   /* The engine must still be usable (query, not just "started once"). */
   _wait_for_chttpclient_idle();
   /* chttpclient was the only user; the shared reactor should now be fully
-   * torn down again -- proving a clean start-then-stop cycle driven purely
+   * torn down again; proving a clean start-then-stop cycle driven purely
    * by chttpclient, with no chttpserver involvement at all. */
   REQUIRE_FALSE(_cfio_engine_running());
 }
@@ -240,12 +240,12 @@ TEST(engine_startup_order, server_starts_after_client_already_used_engine) {
   cfg.port = BASE_PORT;
   cfg.worker_thread_count = 4;
 
-  /* This is chttpserver's very first chttpsvr_start() call in the process --
+  /* This is chttpserver's very first chttpsvr_start() call in the process;
    * exercises the http_lib_constructor-ordering fix (cfio_engine.c always
    * calls it, regardless of who acquired the shared engine first) and the
    * http_listen simplification (chttpsvr_start no longer branches on
    * first-vs-subsequent start; it always takes the engine-already-running
-   * path once _cfio_engine_acquire confirms the reactor is up -- true here
+   * path once _cfio_engine_acquire confirms the reactor is up; true here
    * even though this really is chttpserver's first call, since
    * _cfio_engine_acquire() fully (re)started the reactor from cold before
    * returning). */
@@ -253,7 +253,7 @@ TEST(engine_startup_order, server_starts_after_client_already_used_engine) {
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(_cfio_engine_running());
   /* A no-op here in practice (test 1 already registered it), but kept as a
-   * defensive second call site -- see _register_teardown's own comment --
+   * defensive second call site (see _register_teardown's own comment)
    * in case this suite is ever reordered so chttpserver becomes the first
    * module to touch the shared engine. */
   pthread_once(&_teardown_atexit_once, _register_teardown);
@@ -322,7 +322,7 @@ TEST(simultaneous_engines, server_and_client_serve_concurrently) {
   chttpclient_resp_free(resp);
 
   _wait_for_chttpclient_idle();
-  /* g_srv still holds its own reference -- the shared reactor must still be
+  /* g_srv still holds its own reference; the shared reactor must still be
    * running purely because of chttpserver's side now, chttpclient having
    * fully quiesced. */
   REQUIRE_TRUE(_cfio_engine_running());
@@ -361,7 +361,7 @@ TEST(simultaneous_engines,
 
   /* While that request is blocked server-side (srv2's handler is parked on
    * g_slow_cv), fully create, start, and destroy a THIRD, unrelated server
-   * -- this drops and re-acquires shared-engine references while srv2's
+   * ; this drops and re-acquires shared-engine references while srv2's
    * in-flight request is still outstanding, which must not disturb it. */
   chttpsvr srv3 = create_chttpsvr(g_test_logger, NULL);
   REQUIRE_NE((void *)srv3, NULL);
@@ -409,7 +409,7 @@ TEST(engine_wide_shutdown,
      destroy_last_reference_then_restart_on_same_port_after_explicit_wait) {
   REQUIRE_NE((void *)g_srv, NULL);
   /* By this point chttpclient holds no references (drained at the end of
-   * every prior TEST()) and g_srv is the only chttpsvr ever left running --
+   * every prior TEST()) and g_srv is the only chttpsvr ever left running;
    * so destroying it really does drop the shared reactor's reference count
    * to zero, unlike a destroy earlier in this file where other references
    * were still outstanding. */
@@ -418,7 +418,7 @@ TEST(engine_wide_shutdown,
   g_srv = NULL;
 
   /* Per cfio_engine.h: __chttpsvr_destroy no longer synchronously guarantees
-   * the shared reactor has fully stopped by the time it returns -- callers
+   * the shared reactor has fully stopped by the time it returns; callers
    * needing that guarantee must call chttpsvr_engine_wait() explicitly. This
    * is the regression test for that exact behavioral change: without this
    * call, immediately restarting on the same port below could race a
@@ -465,8 +465,8 @@ static void *_engine_stop_get_thread(void *arg) {
   ctpool_future *f = chttpclient_do_async(cli, req);
   chttp_request_free(req);
   /* Guaranteed to eventually be fulfilled exactly once regardless of how
-   * the connection dies -- see chttp_async_chain_t's fulfilled-once-guard
-   * backstop, documented in guidelines.txt's chttpclient section -- so blocking
+   * the connection dies; see chttp_async_chain_t's fulfilled-once-guard
+   * backstop, documented in guidelines.txt's chttpclient section; so blocking
    * here cannot hang even if chttpsvr_engine_stop() tears the connection
    * down mid-flight. */
   job->raw = chttpclient_async_result_get(f);
@@ -498,18 +498,18 @@ TEST(engine_wide_shutdown, engine_stop_tears_down_both_sides_together) {
 
   pthread_join(stop_thread, NULL);
   /* chttpsvr_engine_stop() is documented as non-blocking; chttpsvr_engine_
-   * wait() blocks the calling thread until the shared reactor -- and, since
-   * it is shared, any in-flight chttpclient async work along with it -- has
+   * wait() blocks the calling thread until the shared reactor (and, since
+   * it is shared, any in-flight chttpclient async work along with it) has
    * actually finished tearing down THIS particular forced stop. */
   chttpsvr_engine_wait();
   pthread_join(req_thread, NULL);
 
   /* Either the request had already completed successfully before the stop
-   * landed, or it was aborted by the shared reactor going down -- both are
+   * landed, or it was aborted by the shared reactor going down; both are
    * acceptable outcomes; a hang or crash is not. Note this may itself have
    * triggered chttpclient's dead-connection retry-once logic (_async_retry_
-   * hop, the Tier 2 mirror of Tier 1's identical mechanism), which -- like
-   * any ordinary new acquire -- is entirely free to bring the shared engine
+   * hop, the Tier 2 mirror of Tier 1's identical mechanism), which (like
+   * any ordinary new acquire) is entirely free to bring the shared engine
    * back up again after this forced stop finishes; that is correct,
    * expected behavior of a shared, reference-counted engine, not something
    * chttpsvr_engine_stop() prevents for future callers. */
@@ -520,13 +520,13 @@ TEST(engine_wide_shutdown, engine_stop_tears_down_both_sides_together) {
   chttpclient_async_result_free(job.raw);
 
   /* Drain chttpclient's side fully (including any retry the forced stop
-   * triggered) before asserting the shared engine is down -- otherwise the
+   * triggered) before asserting the shared engine is down; otherwise the
    * assertion below can race a legitimate, still-in-flight retry attempt
    * that hasn't released its own engine reference yet. */
   _wait_for_chttpclient_idle();
   REQUIRE_FALSE(_cfio_engine_running());
 
-  /* The listener is gone along with the rest of the reactor -- a fresh
+  /* The listener is gone along with the rest of the reactor; a fresh
    * request must now fail rather than silently succeed against a socket
    * that should no longer be accepting connections. */
   char url[128];

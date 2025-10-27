@@ -485,7 +485,7 @@ static void fio_tls_build_context(fio_tls_s *tls) {
         /* Fails closed: SSL_VERIFY_PEER is already set above against a
          * store that may now be missing its system-default lookup path, so
          * handshakes will fail their chain check rather than silently skip
-         * verification -- but without this warning, "unable to get local
+         * verification; but without this warning, "unable to get local
          * issuer certificate" at handshake time would be the only clue,
          * with nothing pointing at the real cause (e.g. a minimal/container
          * image lacking the OS default CA bundle). */
@@ -550,7 +550,7 @@ static ssize_t fio_tls_read(intptr_t uuid, void *udata, void *buf,
       return 0; /* EOF: peer sent a clean TLS close_notify */
     case SSL_ERROR_SSL:
       /* A fatal record-layer problem (corrupted/injected record, bad MAC,
-       * protocol violation) -- NOT a clean close. Conflating this with
+       * protocol violation); NOT a clean close. Conflating this with
        * SSL_ERROR_ZERO_RETURN above would let a truncated or tampered TLS
        * stream look like an ordinary closed connection instead of the hard
        * error it actually is; this matters most for the client-mode
@@ -780,7 +780,7 @@ static size_t fio_tls_handshake(intptr_t uuid, void *udata) {
    * fio_trylock on the connection's `scheduled` flag always wins the race
    * against that invocation's own post-callback re-arm check in
    * deferred_on_data, causing the latter to skip re-arming the
-   * edge-triggered, one-shot poll interest -- on the assumption that the
+   * edge-triggered, one-shot poll interest; on the assumption that the
    * event fio_force_event just scheduled will handle it. If that follow-up's
    * own read attempt finds no application data yet available (a real
    * possibility: the peer's next flight may simply not have reached the
@@ -1073,8 +1073,8 @@ fio_tls_connection_s *FIO_TLS_WEAK fio_tls_connect_create(fio_tls_s *tls,
      * different verification call than a DNS name: X509_check_host (which
      * set1_host configures) only ever inspects dNSName SAN entries, never
      * iPAddress ones, so a certificate correctly secured for that literal IP
-     * via an iPAddress SAN -- the RFC-correct way to do it, with no CN and
-     * no dNSName SAN -- would otherwise always fail verification even
+     * via an iPAddress SAN (the RFC-correct way to do it, with no CN and
+     * no dNSName SAN) would otherwise always fail verification even
      * though it's valid. set1_ip_asc is the call that actually matches
      * iPAddress SAN entries. SNI (RFC 6066) also must never carry a literal
      * IP address, only a DNS name, so it's skipped entirely for one. */

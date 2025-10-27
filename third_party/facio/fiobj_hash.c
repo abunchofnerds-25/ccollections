@@ -150,7 +150,7 @@ Hash API
 FIOBJ fiobj_hash_new(void) {
   fiobj_hash_s *h = fio_malloc(sizeof(*h));
   /* WARNING: FIO_ASSERT_ALLOC aborts the entire process on OOM, taking down
-   * every other in-flight connection with it -- not just the one request
+   * every other in-flight connection with it; not just the one request
    * that happened to trigger the allocation. This is this vendor library's
    * allocation philosophy throughout (see also fiobj_ary.c, fiobj_str.c),
    * not something specific to this call site or fixable in isolation. */

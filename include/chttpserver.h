@@ -55,11 +55,11 @@ SOFTWARE.
  *
  * ### Threading model
  *
- * Routing happens as soon as a request's headers are parsed -- before any
+ * Routing happens as soon as a request's headers are parsed; before any
  * body byte is read.  An unmatched route is rejected immediately, without
- * ever reading the body it's about to discard.  A matched route -- whether
+ * ever reading the body it's about to discard.  A matched route (whether
  * registered with chttpsvr_register_handler (buffered body) or
- * chttpsvr_register_streaming_handler (streaming body) -- is handed to the
+ * chttpsvr_register_streaming_handler (streaming body)) is handed to the
  * server's own ctpool worker thread pool right away, regardless of body
  * size.  The worker thread reads the request body itself, batch by batch,
  * directly off the socket; the facil.io reactor thread's job on any request
@@ -95,7 +95,7 @@ SOFTWARE.
  * shutdown signal such as SIGTERM handled by fio_stop()), call
  * chttpsvr_engine_wait().
  *
- * Multiple servers may run concurrently -- each listens on its own port and
+ * Multiple servers may run concurrently; each listens on its own port and
  * has its own routes, middleware, worker pool, and clog handle.
  *
  * Typical single-server pattern:
@@ -265,7 +265,7 @@ typedef struct chttpsvr_config {
    *  Unlike stream_read_timeout_ms (which only bounds each individual gap
    *  between batches, and so never fires against a client that trickles a
    *  byte or two just before every gap expires), this caps the sum of all
-   *  such waits for a single request -- closing that trickle-forever loophole,
+   *  such waits for a single request; closing that trickle-forever loophole,
    *  which would otherwise let a handful of slow connections pin the entire
    *  worker pool indefinitely. On expiry, chttpsvr_req_read() returns -1 and
    *  chttpsvr_req_stream_error() reports ccol_timed_out (the same outcome as
@@ -343,8 +343,8 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
  *
  * By default, the facil.io engine shared by every chttpsvr instance in this
  * process (see the module notes on the shared engine) allocates all of its
- * own memory -- the connection-state table, protocol/listener structs, TLS
- * connection objects, request-body streaming buffers, and so on -- using its
+ * own memory (the connection-state table, protocol/listener structs, TLS
+ * connection objects, request-body streaming buffers, and so on) using its
  * own internal allocator (falling back to libc malloc/free/calloc/realloc for
  * a handful of auxiliary structures). Calling this function with a non-NULL
  * *mp* redirects all of that to the supplied procs instead, exactly like the
@@ -447,7 +447,7 @@ create_chttpsvr(clog cl, char **err_str) {
 /* ========================================================================== */
 
 /**
- * @brief Internal destroy -- use chttpsvr_destroy macro instead.
+ * @brief Internal destroy; use chttpsvr_destroy macro instead.
  *
  * Stops the server if it is running, drains the server's worker pool, and
  * if this is the last running server, stops the facil.io engine and waits
@@ -622,7 +622,7 @@ ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
  * are parsed, before any body byte is read, and the handler is dispatched to
  * the server's ctpool right away regardless of body size.  Inside the
  * handler use chttpsvr_req_read() to pull each body batch as it actually
- * arrives on the socket -- read live by the worker thread, not pre-buffered.
+ * arrives on the socket; read live by the worker thread, not pre-buffered.
  *
  * If the server's task queue is full when a request arrives, the server
  * returns 503 Service Unavailable immediately.
@@ -673,7 +673,7 @@ ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx);
  *
  * Sub-router lifetime is tied to the server; do not free the returned pointer.
  *
- * IMPORTANT -- the "/" prefix edge case:
+ * IMPORTANT; the "/" prefix edge case:
  *   A prefix of "/" undergoes no trailing-slash removal (the strip loop only
  *   runs when the prefix length exceeds one character), so it is stored as-is
  *   with prefix_len = 1.  The matcher checks path[prefix_len], i.e. path[1],
@@ -783,7 +783,7 @@ const char *chttpsvr_req_path(const chttpsvr_req *req);
  * @return Pointer to the value string, or NULL if not present.
  *
  * Lifetime note: the returned pointer is valid for the duration of the handler
- * call only.  Do NOT store it beyond the handler's return -- it points into
+ * call only.  Do NOT store it beyond the handler's return; it points into
  * the pre-copied header array owned by the request context, which is released
  * when the request is torn down.
  */
@@ -803,7 +803,7 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
  * @brief Read body bytes for streaming routes (pull-reader model).
  *
  * Reads up to buflen bytes of the request body into buf, batch by batch, as
- * they actually arrive on the connection -- this call reads the socket
+ * they actually arrive on the connection; this call reads the socket
  * itself (via the worker thread executing the handler, never the reactor
  * thread) and blocks the calling worker until at least one byte is
  * available, the body ends, an error occurs, stream_read_timeout_ms
@@ -817,7 +817,7 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
  * the handler was registered with chttpsvr_register_handler rather than
  * chttpsvr_register_streaming_handler) as well as for a broken connection,
  * an exceeded stream_read_timeout_ms or max_body_read_duration_ms, or a body
- * that exceeds max_body_size mid-stream -- call chttpsvr_req_stream_error()
+ * that exceeds max_body_size mid-stream; call chttpsvr_req_stream_error()
  * immediately afterward to distinguish these.
  *
  * @param req     Request handle (must be from a

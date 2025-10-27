@@ -32,7 +32,7 @@ Numbers VTable
 ***************************************************************************** */
 
 /* WARNING: shared per-thread scratch buffer backing fio_i2str/fio_f2str/
- * fio_ltocstr below -- every Number/Float-to-string conversion on a given
+ * fio_ltocstr below; every Number/Float-to-string conversion on a given
  * thread writes through this same buffer. The fio_str_info_s returned by
  * any of those functions is only valid until the *next* call to any of
  * them on the same thread; converting a second Number/Float and using both
@@ -40,7 +40,7 @@ Numbers VTable
  * line or header) silently corrupts the first one. Not currently triggered
  * by this project's own call sites (header names/values are always
  * fiobj_str_new strings, never Number/Float, so they never reach
- * fio_i2str/fio_f2str) -- but any future caller that does convert two
+ * fio_i2str/fio_f2str); but any future caller that does convert two
  * Number/Float objects and holds both results at once must copy the first
  * one out before converting the second. */
 static __thread char num_buffer[512];
@@ -124,7 +124,7 @@ FIOBJ fiobj_num_new_bignum(intptr_t num) {
 
 /** Creates a temporary Number object. This ignores `fiobj_free`.
  *
- * WARNING: backed by a single shared per-thread instance -- a second
+ * WARNING: backed by a single shared per-thread instance; a second
  * fiobj_num_tmp call on this thread overwrites the object returned by the
  * first, even if the caller still holds a reference to it (including via
  * fiobj_dup, which only bumps a refcount on this same shared instance).

@@ -35,6 +35,7 @@ SOFTWARE.
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #pragma GCC diagnostic push
@@ -48,26 +49,26 @@ TAU_MAIN()
 /*   REAL TLS HANDSHAKE COVERAGE FOR THE ASYNC ENGINE (dedicated binary)      */
 /*                                                                            */
 /* tests/chttpclient's own async_step_a TLS tests only cover failure paths   */
-/* (connection refused, handshake against a non-TLS server) -- a real        */
+/* (connection refused, handshake against a non-TLS server); a real        */
 /* successful handshake needs a valid certificate/key pair and a peer that   */
 /* actually speaks TLS. This suite generates a real, throwaway self-signed   */
 /* cert/key pair via the `openssl` CLI at startup and runs a minimal,        */
-/* hand-rolled raw-OpenSSL mock TLS server (SSL_accept/SSL_read/SSL_write --*/
+/* hand-rolled raw-OpenSSL mock TLS server (SSL_accept/SSL_read/SSL_write;*/
 /* NOT chttpserver.c) to drive chttpclient's async engine through a genuine  */
 /* end-to-end HTTPS request. It cannot reuse tests/chttpserver_tls's fixture:*/
 /* that suite runs chttpserver's own facio engine, which cannot share a      */
 /* process with chttpclient's independent async engine (see chttpclient.c's */
-/* g_client_engine_* comments) -- both are process-wide facio reactors, and  */
+/* g_client_engine_* comments); both are process-wide facio reactors, and  */
 /* only one can be started per process. Kept in its own binary (mirroring   */
 /* tests/chttpserver_tls) so a missing/broken openssl CLI or an invalid cert */
-/* file -- either of which makes the vendored facio TLS layer call          */
-/* FIO_LOG_FATAL and abort the whole process -- cannot take the rest of the  */
+/* file; either of which makes the vendored facio TLS layer call          */
+/* FIO_LOG_FATAL and abort the whole process; cannot take the rest of the  */
 /* chttpclient test suite down with it.                                     */
 /* ========================================================================== */
 
 /* White-box entry points into chttpclient's async engine internals (the
  * engine lifecycle itself has no public equivalent). chttpclient_do_async
- * and friends -- used below -- are the real, public Tier 2 API. */
+ * and friends (used below) are the real, public Tier 2 API. */
 extern int _chttpclient_engine_ref_count_for_tests(void);
 extern void _chttpclient_engine_wait_for_quiescence_for_tests(void);
 
@@ -105,7 +106,7 @@ static pthread_mutex_t g_conn_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Generates a throwaway self-signed cert/key pair into a fresh mkdtemp()
  * directory via the openssl CLI (same approach as tests/chttpserver_tls).
- * Returns 0 on success, -1 on any failure -- callers must treat -1 as "TLS
+ * Returns 0 on success, -1 on any failure; callers must treat -1 as "TLS
  * integration could not be verified in this environment" rather than crash,
  * since fio_tls_cert_add's FIO_LOG_FATAL on a missing/invalid cert file
  * would abort the whole process. */
@@ -146,7 +147,7 @@ static int _generate_self_signed_cert(void) {
   /* subjectAltName=IP:127.0.0.1: a real IP-address certificate, matching
    * fio_tls_openssl.c's connect-side X509_check_ip verification path
    * (reached via X509_VERIFY_PARAM_set1_ip_asc for an IP-literal target),
-   * not the legacy CN-matching fallback -- see fio.c's own historical notes
+   * not the legacy CN-matching fallback; see fio.c's own historical notes
    * on this exact distinction. */
   return _openssl_selfsigned(g_key_path, g_cert_path, "127.0.0.1",
                              "IP:127.0.0.1");
@@ -160,7 +161,7 @@ static void _remove_generated_cert(void) {
 
 /* Reads one HTTP/1.1 request off ssl (headers only; this suite's requests
  * never send a body) up to the terminating blank line, ignoring the actual
- * content -- every route below responds identically regardless of what was
+ * content; every route below responds identically regardless of what was
  * requested, except path-based routing for /large. */
 static void _tls_read_request(SSL *ssl, char *buf, size_t max, char *path,
                               size_t path_max) {
@@ -223,6 +224,25 @@ static void *_tls_conn_thread(void *arg) {
     _tls_send_response(ssl, 200, "OK", large_body, sizeof(large_body));
   } else {
     _tls_send_response(ssl, 200, "OK", TLS_TEST_BODY, strlen(TLS_TEST_BODY));
+  }
+
+  /* Give the peer a bounded chance to finish reading (and close/send its own
+   * close_notify) before we tear down our end. SSL_write() returning the
+   * full byte count only means the bytes were handed to the kernel's send
+   * buffer, not that the peer has actually received them; immediately
+   * closing right after can occasionally race the peer's read and abort the
+   * transfer with the response body never fully delivered; rare at native
+   * speed, but reproducible under valgrind's much heavier scheduling
+   * perturbation. A receive timeout bounds the wait so a peer that never
+   * closes (a bug, or a client that keeps the connection open) can never
+   * hang this thread indefinitely; which would otherwise also hang
+   * _teardown()'s join of every connection thread. */
+  struct timeval rcvto = {.tv_sec = 2, .tv_usec = 0};
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvto, sizeof(rcvto));
+  char drain[64];
+  while (SSL_read(ssl, drain, sizeof(drain)) > 0) {
+    /* Keep draining until the peer closes, errors, or the timeout above
+     * fires. */
   }
 
   SSL_shutdown(ssl);
@@ -318,7 +338,7 @@ __attribute__((constructor)) static void _setup(void) {
   if (_generate_self_signed_cert() != 0) {
     fprintf(stderr,
             "WARNING: could not generate a self-signed cert via the openssl "
-            "CLI -- real TLS handshake tests will be skipped in this "
+            "CLI; real TLS handshake tests will be skipped in this "
             "environment.\n");
     g_cert_ready = false;
     atexit(_teardown);
@@ -430,7 +450,7 @@ TEST(async_tls, large_body_response_over_tls) {
 }
 
 TEST(async_tls, untrusted_cert_fails_verification) {
-  /* No ca_bundle_path configured -- the default system trust store, which
+  /* No ca_bundle_path configured; the default system trust store, which
    * does not (and cannot) trust a freshly generated throwaway self-signed
    * cert. A real, negative proof that certificate verification is actually
    * being enforced, not silently skipped. */
@@ -463,7 +483,7 @@ TEST(async_tls, untrusted_cert_fails_verification) {
 }
 
 TEST(async_tls, concurrent_https_requests_all_succeed) {
-  /* Multiple concurrent HTTPS requests through the shared async engine --
+  /* Multiple concurrent HTTPS requests through the shared async engine;
    * proves the reactor multiplexes several simultaneous TLS handshakes and
    * encrypted data streams correctly, not just one at a time. */
   if (!g_cert_ready) {

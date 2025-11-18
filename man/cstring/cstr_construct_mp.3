@@ -1,0 +1,26 @@
+.TH CSTR_CONSTRUCT_MP 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_construct_mp \- declare and initialise a cstr with custom memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_construct_mp(s, initial, mprocs);
+.fi
+.SH DESCRIPTION
+.nf
+Combines cstr_declare() and cstr_init_mp() into a single statement. Creates
+a cstr using the supplied custom memory management procedures.
+.fi
+.SH PARAMETERS
+.nf
+s        Variable name to create
+initial  Initial content (C string or NULL for empty string)
+mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
+.fi
+.SH "SEE ALSO"
+.BR cstr_construct (3),
+.BR cstr_construct_mp_scoped (3),
+.BR cstr_init_mp (3)

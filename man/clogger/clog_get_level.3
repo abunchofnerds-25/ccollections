@@ -1,0 +1,29 @@
+.TH CLOG_GET_LEVEL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_get_level \- return the current minimum log level
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+clog_level_t clog_get_level(clog logger);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the current minimum severity level of the logger.
+.fi
+.SH PARAMETERS
+.nf
+logger  Logger handle.
+.fi
+.SH RETURN VALUE
+.nf
+Current minimum level.
+.fi
+.SH NOTES
+.nf
+Thread-safe: protected by the per-logger mutex.
+.fi
+.SH "SEE ALSO"
+.BR clog_set_level (3)

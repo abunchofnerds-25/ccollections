@@ -1,0 +1,30 @@
+.TH CSTR_DECLARE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_declare \- declare an uninitialised cstr variable
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_declare(s);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a bare cstr declaration. The variable is uninitialized and
+must be initialised before use.
+.fi
+.SH PARAMETERS
+.nf
+s   Name of the variable to declare
+.fi
+.SH EXAMPLES
+.nf
+cstr_declare(greeting);
+cstr_init(greeting, "Hello");
+cstr_destroy(greeting);
+.fi
+.SH "SEE ALSO"
+.BR cstr_declare_scoped (3),
+.BR cstr_init (3),
+.BR cstr_construct (3)

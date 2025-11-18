@@ -165,8 +165,18 @@ clean:
 		tests/*/tests tests/*/coverage tests/*/third_party_obj \
 		tests/*/*.gcno tests/*/*.gcda tests/*/*.gcov tests/*/*.c.info
 
-HEADER_INSTALL_DIR = /usr/include
-LIBRARY_INSTALL_DIR = /usr/lib
+HEADER_INSTALL_DIR = /usr/local/include
+LIBRARY_INSTALL_DIR = /usr/local/lib
+MAN_INSTALL_DIR = /usr/local/share/man
+
+# man/<module>/*.3 (functions and their companion type-safe macros, side by
+# side -- see man/README) install flat into one man3 dir; real symbol names
+# never collide across the two, so nothing is lost by flattening. man/<module>/*.7
+# are the module overview pages. Alias pages contain a ".so <module>/<symbol>.3"
+# redirect that is relative to the source tree layout, so it is rewritten to
+# ".so man3/<symbol>.3" (relative to the installed MANPATH root) as part of install.
+MAN3_SRC_FILES = $(wildcard man/*/*.3)
+MAN7_SRC_FILES = $(wildcard man/*/*.7)
 
 SUDO := $(shell [ "$$(id -u)" -eq 0 ] && echo "" || echo "sudo")
 
@@ -175,10 +185,18 @@ install: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME)
 	$(SUDO) install -m 644 $(HEADER_FILES) $(HEADER_INSTALL_DIR)
 	$(SUDO) install -m 755 $(SHARED_LIBRARY_NAME) $(LIBRARY_INSTALL_DIR)
 	$(SUDO) install -m 644 $(STATIC_LIBRARY_NAME) $(LIBRARY_INSTALL_DIR)
+	$(SUDO) install -d $(MAN_INSTALL_DIR)/man3 $(MAN_INSTALL_DIR)/man7
+	if [ -n "$(MAN3_SRC_FILES)" ]; then $(SUDO) install -m 644 $(MAN3_SRC_FILES) $(MAN_INSTALL_DIR)/man3; fi
+	if [ -n "$(MAN7_SRC_FILES)" ]; then $(SUDO) install -m 644 $(MAN7_SRC_FILES) $(MAN_INSTALL_DIR)/man7; fi
+	$(SUDO) sed -i -E 's#^\.so [A-Za-z0-9_]+/#.so man3/#' $(addprefix $(MAN_INSTALL_DIR)/man3/,$(notdir $(MAN3_SRC_FILES)))
 	$(SUDO) ldconfig
+	-$(SUDO) mandb -q
 
 uninstall:
 	$(SUDO) rm -f $(addprefix $(HEADER_INSTALL_DIR)/,$(notdir $(HEADER_FILES)))
 	$(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(SHARED_LIBRARY_NAME)
 	$(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(STATIC_LIBRARY_NAME)
+	$(SUDO) rm -f $(addprefix $(MAN_INSTALL_DIR)/man3/,$(notdir $(MAN3_SRC_FILES)))
+	$(SUDO) rm -f $(addprefix $(MAN_INSTALL_DIR)/man7/,$(notdir $(MAN7_SRC_FILES)))
 	$(SUDO) ldconfig
+	-$(SUDO) mandb -q

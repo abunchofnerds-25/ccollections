@@ -1,0 +1,30 @@
+.TH MEMPOOL_FREE_ENTRY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+mempool_free_entry \- free an entry back to the pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+mempool_free_entry(entry);
+.fi
+.SH DESCRIPTION
+.nf
+Returns an allocated entry to the pool's free list. Macro wrapper around
+_mempool_free_entry() that sets pointer to NULL.
+.fi
+.SH PARAMETERS
+.nf
+entry  Entry to free (will be set to NULL after freeing)
+.fi
+.SH NOTES
+.nf
+O(1) complexity
+Safe to call with NULL
+Thread-safe if pool created with single_threaded=false
+Performs corruption detection via assertions
+.fi
+.SH "SEE ALSO"
+.BR mempool_alloc_entry (3),
+.BR _mempool_free_entry (3)

@@ -1,0 +1,27 @@
+.TH CSTR_FIND 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_find \- find the first occurrence of a substring
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_find(s, needle);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_find().
+.fi
+.SH PARAMETERS
+.nf
+s        cstr to search
+needle   Substring to find
+.fi
+.SH RETURN VALUE
+.nf
+Zero-based index of first occurrence, or ccol_invalid_size if not found
+.fi
+.SH "SEE ALSO"
+.BR cstring_find (3),
+.BR cstr_rfind (3)

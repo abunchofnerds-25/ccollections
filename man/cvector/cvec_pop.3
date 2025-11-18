@@ -1,0 +1,39 @@
+.TH CVEC_POP 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_pop \- pop an element from the vector (type-safe)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+value = cvec_pop(v);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cvector_pop_back() that returns the popped element
+as a value. Calls fatal_err() on failure.
+.fi
+.SH PARAMETERS
+.nf
+v    Vector to pop from
+.fi
+.SH RETURN VALUE
+.nf
+Returns the popped element value
+.fi
+.SH NOTES
+.nf
+Terminates program on failure
+Returns value, not pointer
+Uses GNU C statement expression extension
+.fi
+.SH EXAMPLES
+.nf
+cvec_construct(vec, int);
+cvec_push_rvalue(vec, 42);
+int val = cvec_pop(vec);  // val == 42
+.fi
+.SH "SEE ALSO"
+.BR cvector_pop_back (3),
+.BR cvec_push (3)

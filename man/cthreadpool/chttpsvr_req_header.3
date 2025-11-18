@@ -1,0 +1,24 @@
+.TH CHTTPSVR_REQ_HEADER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_header \- look up a request header
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+const char *chttpsvr_req_header(const chttpsvr_req *req,
+                                 const char *name);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the value of the request header named name, or NULL if the
+header is absent.  The lookup is case-insensitive.  When a header
+appears multiple times, the last value is returned.
+
+The returned pointer is valid for the lifetime of the handler
+invocation.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_method (3),
+.BR chttpsvr_req_path (3)

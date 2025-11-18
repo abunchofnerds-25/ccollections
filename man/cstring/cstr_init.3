@@ -1,0 +1,36 @@
+.TH CSTR_INIT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_init \- initialise a declared cstr using default allocators
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_init(s, initial);
+.fi
+.SH DESCRIPTION
+.nf
+Calls cstring_create() to initialise the already-declared cstr variable s
+with the given initial content. Calls fatal_err() if creation fails.
+.fi
+.SH PARAMETERS
+.nf
+s        cstr variable to initialise (must have been declared)
+initial  Initial content (C string or NULL for empty string)
+.fi
+.SH NOTES
+.nf
+Calls fatal_err() on allocation failure; use cstring_create() directly
+if you need to handle errors gracefully
+.fi
+.SH EXAMPLES
+.nf
+cstr_declare(s);
+cstr_init(s, "hello");
+cstr_destroy(s);
+.fi
+.SH "SEE ALSO"
+.BR cstr_init_mp (3),
+.BR cstr_construct (3),
+.BR cstring_create (3)

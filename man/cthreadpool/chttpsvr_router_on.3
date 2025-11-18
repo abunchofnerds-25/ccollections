@@ -1,0 +1,34 @@
+.TH CHTTPSVR_ROUTER_ON 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_router_on \- register a buffered handler on a sub-router
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_router_on(chttpsvr_router *router,
+                                  chttp_method_t method,
+                                  const char *pattern,
+                                  chttpsvr_handler_fn fn, void *ctx);
+.fi
+.SH DESCRIPTION
+.nf
+Same as chttpsvr_register_handler but registers the route on a sub-router.  All
+routing, leading-slash, trailing-slash, double-slash, param-name
+character, and thread-safety rules described for chttpsvr_register_handler apply
+here as well, including support for CHTTP_ANY as the method argument.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if router, pattern, or fn is NULL; if pattern does
+                  not begin with '/'; if pattern contains consecutive
+                  slashes or a trailing slash; or if a {name} segment
+                  contains characters outside [A-Za-z0-9_].
+ccol_not_enough_memory if allocation fails.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_register_handler (3),
+.BR chttpsvr_subrouter (3),
+.BR chttpsvr_router_use (3)

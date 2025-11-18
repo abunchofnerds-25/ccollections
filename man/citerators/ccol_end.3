@@ -1,0 +1,19 @@
+.TH CCOL_END 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_end \- end sentinel for iteration
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <citerators.h>   /* or any container header */
+
+ccol_end
+.fi
+.SH DESCRIPTION
+.nf
+Expands to NULL.  All container iterators compare equal to NULL when
+the end of the sequence has been reached.
+.fi
+.SH "SEE ALSO"
+.BR ccol_begin (3),
+.BR ccol_iter_next (3)

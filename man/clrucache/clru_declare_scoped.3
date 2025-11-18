@@ -1,0 +1,30 @@
+.TH CLRU_DECLARE_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clru_declare_scoped \- declare an LRU cache with automatic RAII destruction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+clru_declare_scoped(name, KeyT, ValT);
+.fi
+.SH DESCRIPTION
+.nf
+Like clru_declare() but attaches __attribute__((cleanup(___clrucache_destroy)))
+so that the cache is destroyed automatically when the variable leaves
+scope. Must be followed by clru_init() before use.
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name for the cache handle
+KeyT  Key type
+ValT  Value type
+.fi
+.SH NOTES
+.nf
+Requires GCC or Clang (uses __attribute__((cleanup))).
+.fi
+.SH "SEE ALSO"
+.BR clru_declare (3),
+.BR clru_construct_scoped (3)

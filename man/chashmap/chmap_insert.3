@@ -1,0 +1,40 @@
+.TH CHMAP_INSERT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_insert \- insert a key-value pair (type-safe)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+chmap_insert(hm_name, key, val);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for chmap_insert_elem() that automatically handles
+type conversion and cmap_pair creation. If the key already exists the
+value is updated silently. Calls fatal_err() only on a true failure
+(i.e. ccol_not_enough_memory or ccol_container_full).
+.fi
+.SH PARAMETERS
+.nf
+hm_name  Hash map to insert into
+key      Key to insert
+val      Value to associate with key
+.fi
+.SH NOTES
+.nf
+Terminates program only on true failure, not on existing-key update
+Automatically takes address of key and value
+Handles both value types and string types correctly
+.fi
+.SH EXAMPLES
+.nf
+chmap_construct(map, int, char*);
+chmap_insert(map, 42, "hello");
+chmap_insert(map, 100, "world");
+.fi
+.SH "SEE ALSO"
+.BR chmap_insert_elem (3),
+.BR chmap_get (3),
+.BR chmap_remove (3)

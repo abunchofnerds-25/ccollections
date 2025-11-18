@@ -1,0 +1,41 @@
+.TH CHAN_TIMED_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chan_timed_send_zc \- send with timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t chan_timed_send_zc(channel *ch,
+                                  c_message_t *msg,
+                                  struct timespec *timeout);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks up to the specified timeout waiting for space in the automatically-
+selected queue.
+.fi
+.SH PARAMETERS
+.nf
+ch       Channel to send through
+msg      Message to send (data ownership transfers on success)
+timeout  Relative timeout duration
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - Message sent successfully
+ccol_invalid_args         - ch or msg is NULL, or msg validation fails
+ccol_not_permitted        - Sending disabled on selected direction
+ccol_timed_out            - Timeout expired
+ccol_unexpected_failure   - System error (check errno)
+.fi
+.SH NOTES
+.nf
+Blocks up to timeout duration
+Direction is automatically determined by thread ID
+Uses CLOCK_REALTIME for timeout calculations
+.fi
+.SH "SEE ALSO"
+.BR chan_send_zc (3),
+.BR chan_try_send_zc (3)

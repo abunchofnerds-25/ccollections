@@ -1,0 +1,45 @@
+.TH CSTRING_SPLIT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_split \- split the string by a delimiter
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cvec cstring_split(cstr s, const char *delimiter, char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Splits s on every non-overlapping occurrence of delimiter and returns the
+resulting tokens as a cvec of cstr (elem_size == sizeof(cstr)). Empty tokens
+are preserved when the string begins or ends with the delimiter, or when two
+consecutive delimiters appear. If delimiter is not found the vector contains
+a single token equal to the original string.
+.fi
+.SH PARAMETERS
+.nf
+s            String to split
+delimiter    Separator string (must not be NULL or empty)
+err          Optional pointer to receive an error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+cvec containing the tokens as individually heap-allocated cstr values
+NULL on failure (details written to *err if err is non-NULL)
+.fi
+.SH NOTES
+.nf
+The caller is responsible for destroying every cstr inside the vector
+as well as the vector itself:
+  cvec parts = cstring_split(s, ",", NULL);
+  for (size_t i = 0; i < cvector_elem_count(parts); i++) {
+    cstr *p = (cstr *)cvector_at(parts, i);
+    cstring_destroy(*p);
+  }
+  cvector_destroy(parts);
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_find (3),
+.BR cstring_substring (3)

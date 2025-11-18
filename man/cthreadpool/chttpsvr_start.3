@@ -1,0 +1,90 @@
+.TH CHTTPSVR_START 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_start \- register a listener with the running engine
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_start(chttpsvr srv,
+                             const chttpsvr_config_t *cfg);
+.fi
+.SH DESCRIPTION
+.nf
+Starts the server on the port and host specified in cfg.  cfg may be
+NULL, in which case the defaults from CHTTPSVR_CONFIG_DEFAULT are used.
+
+If the shared facil.io engine is not yet running (including if
+chttpclient's async engine (chttpclient_do_async/_streaming) already
+started it in this process) it is started implicitly on this call
+and this call blocks until it is confirmed running (the
+FIO_CALL_ON_START callbacks have fired and the reactor is in its
+event loop) before proceeding.  Either way, the listener socket is
+then bound synchronously via http_listen and the function returns as
+soon as the socket is in LISTEN state.  The function does NOT return
+until the server is fully ready to accept connections.
+
+The engine is shared with chttpclient's async engine; it stays
+running as long as any reference from either module is outstanding,
+and its teardown once the last reference is released is asynchronous
+; see chttpsvr_engine_wait and __chttpsvr_destroy.
+
+Multiple chttpsvr handles may be started on different ports
+simultaneously, all sharing the same engine.
+
+Port 0 is rejected with ccol_invalid_args.  The OS-assigned ephemeral
+port that would result from binding port 0 cannot be discovered through
+this API, making the server unreachable by clients.
+
+A ctpool for dispatching all handlers (buffered and streaming) is
+created at start time using cfg->worker_thread_count threads and a
+queue whose capacity is cfg->worker_queue_capacity (0 = 1024 * threads;
+CHTTPSVR_QUEUE_UNBOUNDED = no capacity limit).  The pool is owned by
+the server and destroyed in __chttpsvr_destroy.
+
+Body size limit: cfg->max_body_size caps the request body.  A buffered
+route whose body exceeds this is rejected with 413 before the handler
+ever runs; a streaming route's handler is always invoked, and
+chttpsvr_req_read() returns -1 with chttpsvr_req_stream_error() ==
+ccol_msg_too_large once the limit is crossed.  Either way the
+connection is closed after the resulting response (Connection: close)
+rather than kept alive, since the excess body bytes beyond the limit
+are discarded, not drained.
+
+Body read timeouts: cfg->stream_read_timeout_ms bounds how long a
+worker will wait for the next batch of body bytes (buffered or
+streaming); 0 waits indefinitely.  Because it resets on any new byte,
+a client that trickles data just fast enough never trips it, so
+cfg->max_body_read_duration_ms (0 = disabled, the default) separately
+bounds the *total* time spent reading one request's body regardless of
+per-gap progress; see chttpsvr_req_read.
+
+Connection timeout: both cfg->read_timeout_ms and cfg->idle_timeout_ms
+map to the single connection-timeout parameter exposed by the underlying
+facil.io http_listen call.  When idle_timeout_ms is non-zero it takes
+precedence over read_timeout_ms; otherwise read_timeout_ms is used.
+Both values are converted to whole seconds (rounded up from 1 ms,
+clamped to 255 s).  A value of 0 for both fields uses the facil.io
+default of approximately 40 seconds.
+
+Restart: after chttpsvr_stop is called, chttpsvr_start may be called
+again on the same handle to register a new listener.  The old ctpool is
+drained and replaced with a fresh one.  Any TLS context from the
+previous cycle is freed automatically before the new one is installed.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if srv is NULL or cfg->port is 0.
+ccol_not_permitted if this server is already started.
+ccol_not_enough_memory if memory allocation fails.
+ccol_unexpected_failure on http_listen errors.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_stop (3),
+.BR chttpsvr_engine_stop (3),
+.BR chttpsvr_set_engine_logger (3),
+.BR chttpsvr_set_engine_mem_mgmt_procs (3),
+.BR chttpsvr_engine_wait (3),
+.BR __chttpsvr_destroy (3)

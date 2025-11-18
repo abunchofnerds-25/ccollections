@@ -1,0 +1,31 @@
+.TH CHTTPCLIENT_RESP_HEADER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_resp_header \- look up a response header by name
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+const char *chttpclient_resp_header(const chttpcli_response *resp,
+                                    const char *name);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the value of the named response header, or NULL if not present.
+The lookup is case-insensitive.  Response headers are stored in
+lowercase; the supplied name is lowercased internally before lookup.
+
+The returned pointer is valid until chttpclient_resp_free is called.
+.fi
+.SH PARAMETERS
+.nf
+resp  Response to query; may be NULL (returns NULL).
+name  Header name; may be NULL (returns NULL).
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to the header value string, or NULL if not found.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_resp_free (3)

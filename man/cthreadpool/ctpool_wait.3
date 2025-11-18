@@ -1,0 +1,28 @@
+.TH CTPOOL_WAIT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_wait \- block until the pool is idle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+void ctpool_wait(ctpool pool);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks until the task queue is empty and all active tasks have
+finished executing. Does not shut down the pool; worker threads
+remain alive and new tasks may be submitted after this call returns.
+
+Contract: no other thread should be submitting tasks concurrently
+when ctpool_wait is called. With an unbounded queue, concurrent
+submissions can cause indefinite blocking.
+.fi
+.SH PARAMETERS
+.nf
+pool   Thread pool handle (NULL is a no-op)
+.fi
+.SH "SEE ALSO"
+.BR ctpool_shutdown_drain (3),
+.BR ctpool_shutdown_immediate (3)

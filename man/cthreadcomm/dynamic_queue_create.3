@@ -1,0 +1,36 @@
+.TH DYNAMIC_QUEUE_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+dynamic_queue_create \- create a dynamic (unbounded) queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+dynamic_queue_create(err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates an unbounded queue implemented as a linked list. Send operations
+never block (queue can grow indefinitely). Uses standard malloc/free.
+
+This is a convenience macro for dynamic_queue_create_with_mprocs() with
+NULL memory management procedures.
+.fi
+.SH PARAMETERS
+.nf
+err_str  Optional pointer to receive error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created dynamic queue on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+All operations on this queue are thread-safe
+Queue must be destroyed with dynamic_queue_destroy() when done
+.fi
+.SH "SEE ALSO"
+.BR dynamic_queue_create_with_mprocs (3),
+.BR dynamic_queue_destroy (3)

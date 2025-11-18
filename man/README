@@ -1,0 +1,51 @@
+C COLLECTIONS LIBRARY - MAN PAGE TREE
+======================================
+
+This directory holds real troff/groff manual pages for the library, one
+file per documented symbol, replacing the old man_pages_for_functions.txt
+and man_pages_for_macros.txt bundles.
+
+Layout
+------
+
+    man/
+      <module>/<symbol>.3   one page per raw C function or type-safe macro
+      <module>/<module>.7   module overview page, where present
+
+<module> matches the header name without the .h suffix (e.g. cvector,
+chashmap, cjson); raw functions and their companion type-safe macros live
+side by side in the same module directory (their names never collide, so
+there is nothing to disambiguate at the filesystem level). Each page's
+".TH" line still records whether it documents a function or a macro (the
+fourth field reads "C Collections Library - Functions" or "... - Macros"),
+and its SYNOPSIS shows the real declaration either way. A symbol that is
+documented once but known by more than one name (for example
+cjson_parse_mp and its cjson_parse wrapper) gets one content-bearing page
+plus one or more small ".so" redirect pages, exactly like glibc/BSD man
+pages handle aliases.
+
+Viewing a page
+--------------
+
+`make install` (see the root Makefile) installs every page from here into
+a real man3/man7 tree, after which plain `man cvector_create` works from
+anywhere, aliases included.
+
+Without installing, run man from inside this directory so that a page's
+".so <module>/<symbol>.3" alias redirects (see above) resolve correctly;
+"man -l" resolves ".so" targets relative to the current working
+directory, not relative to the page's own location:
+
+    cd man && man -l cvector/cvector_create.3
+    cd man && man -l cjson/cjson_parse.3   # an alias page, .so and all
+
+Regenerating
+------------
+
+These pages are hand-authored text, not auto-generated from source
+comments; edit the relevant .3 file directly when a function's or macro's
+documented behavior changes, following the surrounding pages' section
+order (NAME, LIBRARY, SYNOPSIS, DESCRIPTION, PARAMETERS, RETURN VALUE,
+NOTES, WARNINGS, THREAD SAFETY, EXAMPLES, SEE ALSO). Keep new pages ASCII
+only, and never use a double hyphen as punctuation, per the conventions
+documented in guidelines.txt.

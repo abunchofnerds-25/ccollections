@@ -1,0 +1,31 @@
+.TH CREATE_CTHREAD_POOL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+create_cthread_pool \- create a thread pool with default memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ctpool create_cthread_pool(size_t num_threads,
+                           size_t queue_capacity,
+                           char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Convenience wrapper around create_cthread_pool_mp with mprocs = NULL.
+Uses standard malloc/free for all pool-internal allocations.
+.fi
+.SH PARAMETERS
+.nf
+num_threads    Number of worker threads (must be >= 1)
+queue_capacity 0 or ccol_invalid_size for unbounded; N > 0 for bounded
+err_str        Optional: receives a static error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new ctpool handle on success, or NULL on failure.
+.fi
+.SH "SEE ALSO"
+.BR create_cthread_pool_mp (3),
+.BR ctpool_construct (3)

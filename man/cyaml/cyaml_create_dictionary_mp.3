@@ -1,0 +1,32 @@
+.TH CYAML_CREATE_DICTIONARY_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_create_dictionary_mp, cyaml_create_dictionary \- allocate an empty YAML dictionary node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_create_dictionary_mp(ccol_memmgmt_procs_t *mp);
+cyaml cyaml_create_dictionary(void);
+.fi
+.SH DESCRIPTION
+.nf
+Allocate a DOM node of type CYAML_DICTIONARY backed by a chashmap
+(separate chaining, string->pointer).  The dictionary is initially empty.
+Children are added with cyaml_dictionary_set().  cyaml_create_dictionary()
+passes NULL for mp.
+.fi
+.SH PARAMETERS
+.nf
+mp   Custom allocator, or NULL for default.
+.fi
+.SH RETURN VALUE
+.nf
+New cyaml node on success, NULL on allocation failure.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_dictionary_set (3),
+.BR cyaml_dictionary_get (3),
+.BR cyaml_dictionary_size (3),
+.BR cyaml_destroy (3)

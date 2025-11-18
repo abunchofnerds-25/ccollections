@@ -1,0 +1,28 @@
+.TH CYAML_LIST_REMOVE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_list_remove \- remove and free a list element by index
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+ccol_retval_t cyaml_list_remove(cyaml seq, size_t index);
+.fi
+.SH DESCRIPTION
+.nf
+Removes the element at position index from the list node seq and
+recursively frees it together with all of its descendants.  All
+elements after index are shifted left by one position (O(n) in the
+number of elements after index).
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        - element removed and freed.
+ccol_invalid_args   - seq is NULL, seq is not CYAML_LIST, or index is
+                      out of bounds.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_list_push (3),
+.BR cyaml_list_get (3),
+.BR cyaml_dictionary_remove (3)

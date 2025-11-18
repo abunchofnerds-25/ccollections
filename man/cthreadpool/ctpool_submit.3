@@ -1,0 +1,44 @@
+.TH CTPOOL_SUBMIT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_submit \- submit a task (blocking when bounded queue is full)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ccol_retval_t ctpool_submit(ctpool pool,
+                            void (*fn)(void *),
+                            void *arg,
+                            void (*on_complete)(void *));
+.fi
+.SH DESCRIPTION
+.nf
+Allocates a task struct and appends it to the pool's task queue. For
+unbounded queues the call returns as soon as the task is enqueued and
+never blocks on capacity. For bounded queues the call blocks until a
+slot is available in the queue.
+
+The worker thread that picks up the task calls fn(arg). If on_complete
+is non-NULL the worker calls on_complete(arg) immediately after fn
+returns. The pool never frees arg; ownership remains with the caller.
+.fi
+.SH PARAMETERS
+.nf
+pool         Thread pool handle
+fn           Task function (must not be NULL)
+arg          Passed verbatim to fn and on_complete (may be NULL)
+on_complete  Called by the worker after fn returns (may be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success           - task enqueued successfully.
+ccol_invalid_args      - pool or fn is NULL.
+ccol_not_enough_memory - task struct allocation failed.
+ccol_not_permitted     - pool is shutting down.
+.fi
+.SH "SEE ALSO"
+.BR ctpool_try_submit (3),
+.BR ctpool_timed_submit (3),
+.BR ctpool_submit_future (3),
+.BR ctpool_wait (3)

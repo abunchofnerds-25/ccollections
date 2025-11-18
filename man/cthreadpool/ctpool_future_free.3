@@ -1,0 +1,36 @@
+.TH CTPOOL_FUTURE_FREE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_future_free \- release the caller's reference to a future
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+void ctpool_future_free(ctpool_future *f);
+.fi
+.SH DESCRIPTION
+.nf
+Decrements the future's reference count. When the count reaches zero
+(both the caller and the worker have released their references) the
+future object is freed with standard free().
+
+Must be called exactly once per successful ctpool_submit_future,
+ctpool_try_submit_future, or ctpool_timed_submit_future call. May be
+called before or after ctpool_future_get. Calling before
+ctpool_future_get is safe: the task still runs and the future is freed
+automatically when the worker finishes.
+
+Calling ctpool_future_free on a NULL pointer is a no-op.
+.fi
+.SH PARAMETERS
+.nf
+f   Future handle
+.fi
+.SH "SEE ALSO"
+.BR ctpool_submit_future (3),
+.BR ctpool_try_submit_future (3),
+.BR ctpool_timed_submit_future (3),
+.BR ctpool_future_get (3),
+.BR ctpool_future_create_detached (3),
+.BR ctpool_future_fulfill (3)

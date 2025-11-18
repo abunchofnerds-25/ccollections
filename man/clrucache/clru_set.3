@@ -1,0 +1,52 @@
+.TH CLRU_SET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clru_set \- store a value by key (type-safe convenience wrapper)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+ccol_retval_t clru_set(name, key, val);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe GNU C statement expression that serialises key and val into
+cmap_pair values and calls clrucache_set_full().
+
+If a remote setter was configured at construction it is called
+synchronously before the cache is updated. On setter failure the
+function returns ccol_unexpected_failure and the cache is left unchanged.
+.fi
+.SH PARAMETERS
+.nf
+name  Cache variable
+key   Key expression. Must be an lvalue or a string literal.
+val   Value expression. Must be an lvalue or a string literal.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success             Value stored (remote setter succeeded, if any).
+ccol_unexpected_failure  Remote setter returned false; cache unchanged.
+ccol_invalid_args        Null pointer or zero-size argument.
+ccol_not_enough_memory   Memory allocation for the new value failed.
+.fi
+.SH EXAMPLES
+.nf
+clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+int k = 42;
+double v = 3.14;
+clru_set(cache, k, v);
+
+clru_destroy(cache);
+.fi
+.SH NOTES
+.nf
+Uses a GNU C statement expression ({...}); requires GCC or Clang.
+Both key and val must be lvalues; the macro takes their addresses
+internally. Assign literals or expressions to named variables first.
+.fi
+.SH "SEE ALSO"
+.BR clru_get (3),
+.BR clrucache_set_full (3)

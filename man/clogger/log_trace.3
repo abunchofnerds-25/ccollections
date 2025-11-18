@@ -1,0 +1,51 @@
+.TH LOG_TRACE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+log_trace \- emit a log line at TRACE level
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+log_trace(clog lg, const char *fmt, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a call to _clog_write() that captures __FILE__, __LINE__,
+and __func__ automatically and emits a log line at CLOG_TRACE level.
+No backtrace is appended.
+
+The output format is:
+  ts=<ISO-8601-UTC> level=TRACE proc=<name>(<pid>):<tname>(<tid>) src=<file>:<line> func=<fn> [fields] msg=<text>
+
+The call is a no-op when the logger's current minimum level is above
+CLOG_TRACE.
+.fi
+.SH PARAMETERS
+.nf
+lg     Logger handle (clog).
+fmt    printf-style format string.
+\&...    Format arguments (optional).
+.fi
+.SH NOTES
+.nf
+TRACE is the finest-grained level. Enable it only when diagnosing
+low-level behaviour; it generates high-volume output.
+All log_* macros share the same thread-safety guarantee: the entire
+format-and-write cycle is protected by the per-logger mutex, ensuring
+no partial lines are interleaved between threads.
+.fi
+.SH EXAMPLES
+.nf
+log_trace(lg, "entered function, x=%d", x);
+.fi
+.SH "SEE ALSO"
+.BR log_debug (3),
+.BR log_info (3),
+.BR log_warn (3),
+.BR log_error (3),
+.BR log_alert (3),
+.BR log_fatal (3),
+.BR _clog_write (3),
+.BR clog_open_fd_mp (3),
+.BR clog_set_level (3)

@@ -1,0 +1,40 @@
+.TH CSTRING_REPLACE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_replace \- replace every non-overlapping occurrence of needle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+ccol_retval_t cstring_replace(cstr s, const char *needle,
+                              const char *replacement);
+.fi
+.SH DESCRIPTION
+.nf
+Replaces every non-overlapping occurrence of needle in s with replacement.
+The result is built into a fresh buffer and then swapped in, so replacement
+may safely contain needle without causing infinite loops. When needle is not
+found the function succeeds without modifying s.
+.fi
+.SH PARAMETERS
+.nf
+s              String to modify
+needle         Substring to search for (must not be NULL or empty)
+replacement    Substitute string (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - Replace succeeded (including when needle not found)
+ccol_invalid_args         - needle is NULL/empty, or replacement is NULL
+ccol_container_full       - Result would overflow size_t
+ccol_not_enough_memory    - Buffer allocation failed
+.fi
+.SH NOTES
+.nf
+Matching is non-overlapping and proceeds left-to-right
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_find (3),
+.BR cstring_set (3)

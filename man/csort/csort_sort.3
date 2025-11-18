@@ -1,0 +1,49 @@
+.TH CSORT_SORT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+csort_sort \- sort any collection with custom getter and comparison
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <csort.h>
+
+csort_sort(collection, length, elem_size, getter_proc,
+           comparison_proc, mprocs);
+.fi
+.SH DESCRIPTION
+.nf
+Generic sorting macro that sorts any collection using an iterative
+mergesort algorithm. Works with any collection type (arrays, vectors,
+custom containers) as long as getter and comparison functions are provided.
+
+This is a wrapper macro around ___csort_merge_sort().
+.fi
+.SH PARAMETERS
+.nf
+collection       Pointer to collection to sort
+length          Number of elements in collection
+elem_size       Size of each element in bytes
+getter_proc     Function to get element at index
+comparison_proc Function to compare two elements
+mprocs          Memory management procedures, or NULL for default
+.fi
+.SH NOTES
+.nf
+Stable sort (preserves relative order of equal elements)
+O(n log n) time complexity in all cases
+O(n) space complexity for temporary merge buffer
+Iterative implementation (no recursion)
+.fi
+.SH EXAMPLES
+.nf
+// Sort a plain array
+int arr[] = {3, 1, 2};
+void *getter(void *col, size_t i) { return &((int*)col)[i]; }
+int cmp(const void *a, const void *b) {
+  return *(int*)a - *(int*)b;
+}
+csort_sort(arr, 3, sizeof(int), getter, cmp, NULL);
+.fi
+.SH "SEE ALSO"
+.BR csort_get_default_comparison_proc (3),
+.BR cvec_sort (3)

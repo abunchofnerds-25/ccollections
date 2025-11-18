@@ -1,0 +1,36 @@
+.TH CHTTP_BASE64_ENCODE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_base64_encode_mp \- base64-encode a buffer with a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttp.h>
+
+char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp,
+                             const void *data, size_t len,
+                             size_t *out_len);
+.fi
+.SH DESCRIPTION
+.nf
+Encodes len bytes of data as standard RFC 4648 base64 (the '+'/'/'
+alphabet, '=' padding); the variant required by RFC 7617 Basic auth
+and used throughout HTTP.
+.fi
+.SH PARAMETERS
+.nf
+mp       Custom allocator, or NULL for malloc/free.
+data     Buffer to encode. May be NULL only if len is 0.
+len      Number of bytes in data.
+out_len  Optional; receives the length of the returned string
+         (excluding the terminating NUL). Pass NULL to ignore.
+.fi
+.SH RETURN VALUE
+.nf
+Newly allocated, NUL-terminated base64 string on success.
+NULL on allocation failure, or if data is NULL and len is nonzero.
+.fi
+.SH "SEE ALSO"
+.BR chttp_base64_encode (3),
+.BR chttp_base64_decode_mp (3),
+.BR chttp_basic_auth_mp (3)

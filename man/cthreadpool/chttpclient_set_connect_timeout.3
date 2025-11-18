@@ -1,0 +1,28 @@
+.TH CHTTPCLIENT_SET_CONNECT_TIMEOUT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_set_connect_timeout \- set the TCP connect timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, long ms);
+.fi
+.SH DESCRIPTION
+.nf
+Sets the maximum time allowed for the TCP connection phase (and, for
+HTTPS, the TLS handshake).  Pass 0 to disable the timeout (default).
+.fi
+.SH PARAMETERS
+.nf
+cli   Client handle; must not be NULL.
+ms    Timeout in milliseconds.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success      Timeout updated.
+ccol_invalid_args cli is NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_set_request_timeout (3)

@@ -1,0 +1,29 @@
+.TH CLOG_REMOVE_FIELD 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_remove_field \- remove a previously attached structured field
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+void clog_remove_field(clog logger, const char *key);
+.fi
+.SH DESCRIPTION
+.nf
+Removes the field with the given key from the logger's field list.
+The field will no longer appear in subsequent log lines. If the key
+is not present the call is a no-op.
+.fi
+.SH PARAMETERS
+.nf
+logger  Logger handle.
+key     Field name to remove. The match is case-sensitive and exact.
+.fi
+.SH NOTES
+.nf
+Thread-safe: protected by the per-logger mutex.
+.fi
+.SH "SEE ALSO"
+.BR clog_set_field (3),
+.BR clog_clear_fields (3)

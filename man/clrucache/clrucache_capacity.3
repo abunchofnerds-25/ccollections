@@ -1,0 +1,33 @@
+.TH CLRUCACHE_CAPACITY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clrucache_capacity \- return the maximum capacity of the cache
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+size_t clrucache_capacity(clru_cache cache);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the maximum number of live entries the cache can hold before
+eviction begins. This is the value supplied as capacity to
+clrucache_create_full() at construction time.
+.fi
+.SH PARAMETERS
+.nf
+cache  Cache handle.
+.fi
+.SH RETURN VALUE
+.nf
+Capacity (always >= 1 for a valid handle), or 0 if cache is NULL.
+.fi
+.SH NOTES
+.nf
+Does not acquire the mutex; capacity is immutable after construction.
+O(1) complexity.
+.fi
+.SH "SEE ALSO"
+.BR clrucache_size (3),
+.BR clrucache_create_full (3)

@@ -1,0 +1,32 @@
+.TH CSTRING_RFIND 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_rfind \- find the last occurrence of a substring
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+size_t cstring_rfind(cstr s, const char *needle);
+.fi
+.SH DESCRIPTION
+.nf
+Searches the string for the last occurrence of needle and returns its
+zero-based starting index.
+.fi
+.SH PARAMETERS
+.nf
+s        String to search
+needle   Substring to find (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Zero-based index of the last occurrence
+ccol_invalid_size ((size_t)-1) if needle is not found
+.fi
+.SH NOTES
+.nf
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_find (3)

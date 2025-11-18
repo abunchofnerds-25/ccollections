@@ -1,0 +1,53 @@
+.TH CYAML_GET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cyaml_get \- navigate to a DOM node via a dot-separated path
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_get(cyaml root, const char *path);
+.fi
+.SH DESCRIPTION
+.nf
+Thin wrapper around _cyaml_get().  Navigate from root through a
+dot-separated path and return the node at the destination.
+
+Path syntax:
+  - Components are separated by dots ('.').
+  - A component beginning with '#' followed by one or more decimal
+    digits indexes into a CYAML_LIST by position (e.g. "#0" is
+    the first element).
+  - All other components are treated as literal CYAML_DICTIONARY keys.
+  - A bare '#' with no trailing digits is always treated as a literal
+    key (unlike cjson which returns an error).
+  - Escape sequences: '\e.' -> literal '.' in the key (not a
+    separator); '\e\e' -> literal '\e' in the key.  A '\e' before any
+    other character is left unchanged.
+
+The returned reference is NON-OWNING.  It becomes invalid if the
+containing node is mutated or destroyed.
+.fi
+.SH PARAMETERS
+.nf
+root  Root cyaml handle (typically CYAML_DICTIONARY or CYAML_LIST).
+path  Dot-separated path string literal or char *.
+.fi
+.SH RETURN VALUE
+.nf
+Non-owning cyaml handle at the target, or NULL if any component along
+the path is missing or the node type is incompatible.
+.fi
+.SH EXAMPLES
+.nf
+cyaml port = cyaml_get(doc, "server.ports.#0");
+if (cyaml_type(port) == CYAML_INTEGER)
+    printf("%lld\en", cyaml_int_val(port));
+
+/* Top-level access with empty path returns root itself */
+cyaml same = cyaml_get(doc, "");
+.fi
+.SH "SEE ALSO"
+.BR cyaml_set (3),
+.BR _cyaml_get (3)

@@ -1,0 +1,39 @@
+.TH DYNMQ_RECV_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+dynmq_recv_zc \- receive a message from a dynamic queue (blocking)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t dynmq_recv_zc(dynamic_queue *dq, c_message_t *target_buf);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks until a message is available in the dynamic queue, then removes
+the head message and transfers ownership of its data pointer to the
+caller via target_buf. The caller must free target_buf->data when done.
+.fi
+.SH PARAMETERS
+.nf
+dq          Dynamic queue to receive from
+target_buf  Buffer to receive the message (receives ownership of data)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        - Message received (caller must free target_buf->data)
+ccol_invalid_args   - dq or target_buf is NULL
+.fi
+.SH NOTES
+.nf
+Blocks indefinitely until a message arrives
+Remains blocked even when sending is temporarily disabled; unblocks
+  when sending is re-enabled and a message arrives
+Caller receives ownership of target_buf->data and must free it
+Thread-safe
+.fi
+.SH "SEE ALSO"
+.BR dynmq_try_recv_zc (3),
+.BR dynmq_timed_recv_zc (3),
+.BR dynmq_send_zc (3)

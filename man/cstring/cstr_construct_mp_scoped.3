@@ -1,0 +1,30 @@
+.TH CSTR_CONSTRUCT_MP_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_construct_mp_scoped \- declare and initialise a cstr with custom mprocs and RAII
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_construct_mp_scoped(s, initial, mprocs);
+.fi
+.SH DESCRIPTION
+.nf
+Combines cstr_declare_scoped() and cstr_init_mp() into a single statement.
+The string is automatically destroyed when the variable leaves scope, using
+the custom memory management procedures.
+.fi
+.SH PARAMETERS
+.nf
+s        Variable name to create
+initial  Initial content (C string or NULL for empty string)
+mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
+.fi
+.SH NOTES
+.nf
+Requires GCC or Clang (uses __attribute__((cleanup)))
+.fi
+.SH "SEE ALSO"
+.BR cstr_construct_scoped (3),
+.BR cstr_construct_mp (3)

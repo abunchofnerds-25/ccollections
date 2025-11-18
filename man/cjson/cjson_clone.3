@@ -1,0 +1,24 @@
+.TH CJSON_CLONE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_clone \- deep-copy a DOM subtree
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+cjson cjson_clone(cjson node);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a fully independent copy of the subtree rooted at node.
+All strings are duplicated, all arrays and objects are recursively
+cloned.  The clone uses the same allocator as the source (taken from
+the root node's stored m_procs).
+.fi
+.SH RETURN VALUE
+.nf
+New root node on success (caller owns it), or NULL on allocation failure.
+.fi
+.SH "SEE ALSO"
+.BR cjson_destroy (3)

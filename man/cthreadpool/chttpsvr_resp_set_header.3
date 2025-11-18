@@ -1,0 +1,37 @@
+.TH CHTTPSVR_RESP_SET_HEADER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_resp_set_header \- set a response header
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp,
+                                        const char *name,
+                                        const char *value);
+.fi
+.SH DESCRIPTION
+.nf
+Sets or replaces a response header.  If a header with the same name
+already exists (case-insensitive comparison per RFC 7230), the stored
+value is replaced in-place and the function returns immediately.
+
+Name casing: when a duplicate is detected the stored header name retains
+the casing supplied by the FIRST call; the casing of subsequent calls is
+ignored.  HTTP/1.1 header names are case-insensitive on the wire, so
+this does not affect correctness, but callers who read back stored header
+names directly should account for this behaviour.
+
+All three arguments must be non-NULL; passing NULL for any of them
+returns ccol_invalid_args without modifying the response.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if resp, name, or value is NULL.
+ccol_not_enough_memory if the underlying allocation fails.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_resp_set_status (3),
+.BR chttpsvr_resp_write (3)

@@ -1,0 +1,28 @@
+.TH CHTTP_TLS_DEFAULT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+CHTTP_TLS_DEFAULT \- default TLS configuration initialiser
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttp.h>
+
+CHTTP_TLS_DEFAULT
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a chttp_tls_config_t initialiser with:
+  verify_peer    = true
+  verify_host    = true
+  ca_bundle_path = NULL  (use system CA bundle)
+  cert_path      = NULL  (no client certificate)
+  key_path       = NULL  (no client key)
+.fi
+.SH EXAMPLES
+.nf
+chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+tls.verify_peer = false;
+chttpclient_set_tls(cli, &tls);
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_set_tls (3)

@@ -1,0 +1,40 @@
+.TH CSTRING_SUBSTRING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_substring \- create a new string from a sub-range
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr cstring_substring(cstr s, size_t start, size_t length, char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates a new cstring containing characters in the range
+[start, start + length). If start + length extends beyond the end of the
+string the range is clamped to the actual end. If start is at or beyond
+the string length an empty cstring is returned.
+.fi
+.SH PARAMETERS
+.nf
+s        Source string
+start    Zero-based start index
+length   Number of characters to include
+err      Optional pointer to receive an error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+New cstring on success
+NULL on allocation failure (details written to *err if err is non-NULL)
+.fi
+.SH NOTES
+.nf
+Caller must destroy the returned cstring when done
+The range is clamped rather than rejected when it extends past the end
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_copy (3),
+.BR cstring_split (3),
+.BR cstring_find (3)

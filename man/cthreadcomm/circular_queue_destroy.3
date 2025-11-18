@@ -1,0 +1,32 @@
+.TH CIRCULAR_QUEUE_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+circular_queue_destroy \- destroy a circular queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+circular_queue_destroy(cq);
+.fi
+.SH DESCRIPTION
+.nf
+Frees all resources associated with the queue. The queue pointer is
+automatically set to NULL after destruction.
+.fi
+.SH PARAMETERS
+.nf
+cq   Circular queue to destroy (will be set to NULL)
+.fi
+.SH WARNINGS
+.nf
+Messages remaining in the queue cause assertion failure
+Drain the queue before destroying
+.fi
+.SH NOTES
+.nf
+Safe to call with NULL pointer
+.fi
+.SH "SEE ALSO"
+.BR circular_queue_create (3),
+.BR __circular_queue_destroy (3)

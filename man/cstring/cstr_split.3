@@ -1,0 +1,34 @@
+.TH CSTR_SPLIT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_split \- split the string by a delimiter
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_split(s, delim, err);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_split(). Returns a cvec of individually
+heap-allocated cstr tokens.
+.fi
+.SH PARAMETERS
+.nf
+s      cstr to split
+delim  Delimiter string (must not be NULL or empty)
+err    Optional pointer to receive an error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+cvec of cstr tokens on success, NULL on failure
+.fi
+.SH NOTES
+.nf
+Caller must destroy every cstr in the vector and then the vector itself
+.fi
+.SH "SEE ALSO"
+.BR cstring_split (3),
+.BR cstr_find (3),
+.BR cstr_substring (3)

@@ -1,0 +1,29 @@
+.TH CJSON_SERIALIZE_FREE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_serialize_free_mp, cjson_serialize_free \- free a string returned by the serializer
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+void cjson_serialize_free_mp(char *s, ccol_memmgmt_procs_t *mp);
+/* convenience wrapper; default allocator */
+static inline void cjson_serialize_free(char *s);
+.fi
+.SH DESCRIPTION
+.nf
+Frees a string returned by cjson_serialize() or cjson_serialize_pretty().
+mp must be the same allocator that was passed to cjson_parse_mp() /
+cjson_create_*_mp() when the serialized tree was built.  Pass NULL when
+the default allocator was used.  cjson_serialize_free() is a static
+inline wrapper that calls cjson_serialize_free_mp(s, NULL).
+.fi
+.SH PARAMETERS
+.nf
+s   String to free (may be NULL).
+mp  Allocator to use for the free, or NULL for the default allocator.
+.fi
+.SH "SEE ALSO"
+.BR cjson_serialize (3),
+.BR cjson_serialize_pretty (3)

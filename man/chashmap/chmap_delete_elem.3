@@ -1,0 +1,38 @@
+.TH CHMAP_DELETE_ELEM 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chmap_delete_elem \- remove a key-value pair from the hash map
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
+.fi
+.SH DESCRIPTION
+.nf
+Removes the key-value pair with the specified key from the hash map.
+Frees memory for both key and value. Automatically shrinks the map when
+load factor falls below threshold.
+.fi
+.SH PARAMETERS
+.nf
+chm        Hash map to remove from
+key_pair   Key to remove
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        - Key removed successfully
+ccol_invalid_args   - chm or key_pair is NULL or key size is 0
+ccol_key_not_found  - Key does not exist in map
+.fi
+.SH NOTES
+.nf
+Average O(1) complexity
+Frees memory for key and value
+Open-addressing: shrinks when load factor < 0.25 (scale 0.5x)
+Separate chaining: shrinks when elem_count < (bucket_count + 1) / 8 (scale 0.25x)
+.fi
+.SH "SEE ALSO"
+.BR chmap_remove (3),
+.BR chmap_insert_elem (3)

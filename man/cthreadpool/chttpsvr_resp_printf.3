@@ -1,0 +1,37 @@
+.TH CHTTPSVR_RESP_PRINTF 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_resp_printf \- format and append a printf-style string to the response body
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp,
+                                    const char *format, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Formats format and the variadic arguments using printf semantics and
+appends the result to the response body, equivalent to formatting into
+a temporary string and passing it to chttpsvr_resp_write_str.  A small
+internal stack buffer is used for short output; longer output falls
+back to a temporary heap allocation (freed before the function
+returns) sized exactly to the formatted length.  Multiple calls
+accumulate into the response body just like chttpsvr_resp_write_str.
+
+The format string is checked at compile time with GCC's
+__attribute__((format(printf, 2, 3))).
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success           - Formatted output appended to the body.
+ccol_invalid_args      - resp or format is NULL, or the underlying
+                          vsnprintf call reports an encoding error.
+ccol_not_enough_memory - The body buffer or the temporary heap
+                          fallback buffer could not be allocated.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_resp_write (3),
+.BR chttpsvr_resp_write_str (3),
+.BR chttpsvr_resp_write_json (3)

@@ -1,0 +1,24 @@
+.TH CHTTP_REQUEST_NEW 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_request_new \- allocate and initialise an HTTP request (default allocator)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+chttp_request_t *chttp_request_new(chttp_method_t method,
+                                   const char *url,
+                                   const chttp_request_body_t *body,
+                                   char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Inline wrapper for chttp_request_new_mp with mprocs = NULL.
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to the new request, or NULL on failure.
+.fi
+.SH "SEE ALSO"
+.BR chttp_request_new_mp (3)

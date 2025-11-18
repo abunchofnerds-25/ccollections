@@ -1,0 +1,20 @@
+.TH CHTTPSVR_REQ_RAW_QUERY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_raw_query \- return the raw query string of a request
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+const char *chttpsvr_req_raw_query(const chttpsvr_req *req);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a NUL-terminated string containing the raw (un-decoded) query
+string, without the leading '?'.  Returns NULL if no query string is
+present.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_query (3),
+.BR chttpsvr_req_query_one (3)

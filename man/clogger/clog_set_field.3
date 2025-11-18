@@ -1,0 +1,49 @@
+.TH CLOG_SET_FIELD 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_set_field \- attach or update a persistent structured field
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+void clog_set_field(clog logger, const char *key, const char *value);
+.fi
+.SH DESCRIPTION
+.nf
+Associates key with value as a persistent field. The field appears in
+every subsequent log line emitted by this logger, inserted between the
+func= and msg= tokens:
+
+  ts=... level=INFO proc=prog(pid):tname(tid) src=... func=... key=value msg=...
+
+Both key and value are copied internally; the caller may free or
+modify them after this call without affecting the logger.
+
+If key already exists its value is replaced. Otherwise a new field is
+prepended to the field list.
+
+Values that contain spaces, '=', '"', '\e\e', or ASCII control
+characters are automatically double-quoted and backslash-escaped in
+the output:
+  - '"' -> \e"
+  - '\e\e' -> \e\e
+  - control chars -> \exNN
+.fi
+.SH PARAMETERS
+.nf
+logger  Logger handle.
+key     Field name. Copied internally. Should not contain '=' or
+        whitespace (no enforcement, but the resulting logfmt line
+        would be malformed).
+value   Field value. Copied internally. May be arbitrary text.
+.fi
+.SH NOTES
+.nf
+Thread-safe: protected by the per-logger mutex.
+The field list is a linked list. For large field sets, iteration is
+O(n) per write; prefer a small number of long-lived fields.
+.fi
+.SH "SEE ALSO"
+.BR clog_remove_field (3),
+.BR clog_clear_fields (3)

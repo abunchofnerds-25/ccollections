@@ -1,0 +1,33 @@
+.TH __CLRUCACHE_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+__clrucache_destroy \- destroy an LRU cache (internal)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+void __clrucache_destroy(clru_cache cache);
+.fi
+.SH DESCRIPTION
+.nf
+Evicts all remaining live entries (invoking the eviction callback for
+each while the mutex is held), destroys the internal hash map, frees
+the mutex, and releases all memory.
+
+This is the low-level destructor. In application code use the
+clru_destroy() macro, which also sets the pointer to NULL.
+.fi
+.SH PARAMETERS
+.nf
+cache  Cache handle to destroy. Passing NULL is a no-op.
+.fi
+.SH WARNINGS
+.nf
+Must be called only after all other threads have stopped using the
+cache. Outstanding blocked get or set calls will corrupt memory if
+__clrucache_destroy is called while they are in progress.
+.fi
+.SH "SEE ALSO"
+.BR clru_destroy (3),
+.BR clrucache_create_full (3)

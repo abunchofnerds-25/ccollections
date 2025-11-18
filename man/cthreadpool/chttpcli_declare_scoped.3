@@ -1,0 +1,24 @@
+.TH CHTTPCLI_DECLARE_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chttpcli_declare_scoped \- declare a scoped chttpcli handle variable
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+chttpcli_declare_scoped(name)
+.fi
+.SH DESCRIPTION
+.nf
+Declares a chttpcli variable named name with automatic destruction via
+GCC cleanup attribute.  ___chttpclient_destroy is called when name goes
+out of scope regardless of how the scope is exited.
+
+The variable is initialised to NULL.  Assigning NULL before scope exit
+suppresses the cleanup call.
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_construct_scoped (3),
+.BR chttpcli_declare (3),
+.BR ___chttpclient_destroy (3)

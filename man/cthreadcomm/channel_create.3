@@ -1,0 +1,39 @@
+.TH CHANNEL_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+channel_create \- create a bidirectional communication channel
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+channel_create(max_size, err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a bidirectional channel with two internal circular queues for
+communication between an owner thread and worker threads. Both directions
+share the same capacity. Uses standard malloc/free for memory management.
+
+This is a convenience macro for channel_create_with_mprocs() with NULL
+memory management procedures.
+.fi
+.SH PARAMETERS
+.nf
+max_size   Maximum number of messages each direction can hold
+err_str    Optional error string pointer
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created channel on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+All operations are thread-safe
+Channel must be destroyed with channel_destroy() when done
+Direction is automatically selected based on calling thread ID
+.fi
+.SH "SEE ALSO"
+.BR channel_create_with_mprocs (3),
+.BR channel_destroy (3)

@@ -1,0 +1,36 @@
+.TH LOG_WARN 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+log_warn \- emit a log line at WARN level
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+log_warn(clog lg, const char *fmt, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a call to _clog_write() at CLOG_WARN level with automatic
+source location capture. No backtrace is appended.
+
+Use WARN for recoverable abnormalities that do not interrupt normal
+operation but merit attention.
+.fi
+.SH PARAMETERS
+.nf
+lg     Logger handle (clog).
+fmt    printf-style format string.
+\&...    Format arguments (optional).
+.fi
+.SH EXAMPLES
+.nf
+log_warn(lg, "retry %d/%d connecting to %s", attempt, max, host);
+log_warn(lg, "config key %s missing, using default", key);
+.fi
+.SH "SEE ALSO"
+.BR log_info (3),
+.BR log_error (3),
+.BR log_alert (3),
+.BR log_fatal (3),
+.BR _clog_write (3)

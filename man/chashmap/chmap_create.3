@@ -1,0 +1,48 @@
+.TH CHMAP_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chmap_create \- create a hash map with default settings
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+chmap chmap_create(size_t initial_bucket_array_size,
+                   ccol_data_type key_type,
+                   ccol_data_type val_type,
+                   char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a hash map with default memory management and default hashing.
+The implementation strategy (open-addressing vs separate chaining) is
+automatically selected based on the key and value types.
+
+Open-addressing is used when both key and value are integral types <=8
+bytes (excluding long double). Separate chaining is used for non-integral
+types or types >8 bytes.
+.fi
+.SH PARAMETERS
+.nf
+initial_bucket_array_size  Initial number of buckets (minimum 16)
+key_type                   Type of keys (determines implementation)
+val_type                   Type of values (determines implementation)
+err                        Optional pointer to receive error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created hash map on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Minimum bucket count is 16 (always power-of-2)
+Open-addressing: Fibonacci hashing for integers, XXHash64 for buffers
+Separate chaining: XXHash64 for all types
+Map must be destroyed with chmap_destroy() when done
+.fi
+.SH "SEE ALSO"
+.BR chmap_create_full (3),
+.BR chmap_create_mp (3),
+.BR chmap_create_ch (3),
+.BR chmap_destroy (3)

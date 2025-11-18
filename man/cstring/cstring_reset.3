@@ -1,0 +1,29 @@
+.TH CSTRING_RESET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_reset \- clear all characters and shrink capacity to minimum
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+void cstring_reset(cstr s);
+.fi
+.SH DESCRIPTION
+.nf
+Sets the length to zero and attempts to shrink the buffer back to the
+minimum capacity (16 bytes). If the reallocation to shrink fails the
+capacity is left unchanged; the length is always reset to zero regardless.
+.fi
+.SH PARAMETERS
+.nf
+s   String to reset
+.fi
+.SH NOTES
+.nf
+Always sets length to 0, even if the shrink reallocation fails
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_set (3),
+.BR cstring_is_empty (3)

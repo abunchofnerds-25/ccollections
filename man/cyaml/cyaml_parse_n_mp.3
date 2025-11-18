@@ -1,0 +1,35 @@
+.TH CYAML_PARSE_N_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_parse_n_mp, cyaml_parse_n \- parse a bounded YAML buffer
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_parse_n_mp(const char *yaml_str, size_t len,
+                       char **err_str, ccol_memmgmt_procs_t *mp);
+cyaml cyaml_parse_n(const char *yaml_str, size_t len, char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Identical to cyaml_parse_mp() but reads at most len bytes from
+yaml_str, which need not be null-terminated.  Useful when parsing a
+sub-range of a larger buffer.  Multi-document stream semantics are
+identical to those described for cyaml_parse_mp().
+.fi
+.SH PARAMETERS
+.nf
+yaml_str   Input buffer (need not be null-terminated).
+len        Number of bytes to parse.
+err_str    Out-parameter for the error string, or NULL to ignore.
+mp         Custom allocator, or NULL for default.
+.fi
+.SH RETURN VALUE
+.nf
+Root cyaml node on success (see cyaml_parse_mp() for multi-document
+behaviour), NULL on failure.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_parse_mp (3),
+.BR cyaml_destroy (3)

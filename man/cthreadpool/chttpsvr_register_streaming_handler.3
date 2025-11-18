@@ -1,0 +1,59 @@
+.TH CHTTPSVR_REGISTER_STREAMING_HANDLER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_register_streaming_handler \- register a streaming handler on the root router
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
+                                  chttp_method_t method,
+                                  const char *pattern,
+                                  chttpsvr_handler_fn fn, void *ctx);
+.fi
+.SH DESCRIPTION
+.nf
+Like chttpsvr_register_handler but marks the route as streaming, which
+makes chttpsvr_req_read available to the handler for sequential body
+consumption.  The handler runs on the server's owned ctpool worker
+thread (not on the facil.io reactor thread) (exactly as all handlers
+do in this implementation) but chttpsvr_req_read returns -1 on
+non-streaming routes, so the streaming flag controls the API contract.
+
+CHTTP_ANY may be used for method to match every HTTP method on the
+pattern.  See chttpsvr_register_handler for the full CHTTP_ANY
+semantics.
+
+Routing happens as soon as headers are parsed, before any body byte is
+read, so the worker (never the reactor thread) reads the body itself,
+batch by batch, directly off the socket. chttpsvr_req_read hands each
+batch to the handler as it arrives and returns 0 once the body ends;
+subsequent calls also return 0 (idempotent EOF). It returns -1 on a
+dropped connection, an exceeded max_body_size, or a stalled client
+(bounded by chttpsvr_config_t.stream_read_timeout_ms per gap and,
+if set, chttpsvr_config_t.max_body_read_duration_ms overall); call
+chttpsvr_req_stream_error to distinguish these.
+
+When the server's ctpool queue is at capacity when a request arrives,
+the server responds with 503 Service Unavailable immediately rather
+than blocking the reactor thread.
+
+The same pattern rules apply as for chttpsvr_register_handler: pattern
+must begin with '/'; patterns with consecutive slashes or a trailing
+slash are rejected; and {name} segments must contain only [A-Za-z0-9_].
+See chttpsvr_register_handler for full details on pattern validation and
+path-segment decoding semantics.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if srv, pattern, or fn is NULL; if pattern does not
+                  begin with '/'; if pattern contains consecutive
+                  slashes or a trailing slash; or if a {name} segment
+                  contains characters outside [A-Za-z0-9_].
+ccol_not_enough_memory if allocation fails.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_register_handler (3),
+.BR chttpsvr_req_read (3)

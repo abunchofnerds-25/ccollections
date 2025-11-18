@@ -1,0 +1,20 @@
+.TH CHTTPSVR_REQ_PARAM 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_param \- look up a named path parameter
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+const char *chttpsvr_req_param(const chttpsvr_req *req,
+                                const char *name);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the URL-decoded value of the named path parameter, or NULL if
+the parameter is not part of the matched route pattern.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_path (3),
+.BR chttpsvr_req_query (3)

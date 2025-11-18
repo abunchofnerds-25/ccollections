@@ -1,0 +1,32 @@
+.TH CHTTPSVR_REQ_STREAM_ERROR 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_stream_error \- report why the last chttpsvr_req_read call failed
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req);
+.fi
+.SH DESCRIPTION
+.nf
+Reports the reason the most recent chttpsvr_req_read call on req
+returned -1.  Meaningful only immediately after such a -1 return;
+otherwise the result is unspecified.
+
+Return values:
+  ccol_timed_out             stream_read_timeout_ms elapsed while
+                              waiting for the next batch, or the
+                              request's total body read time exceeded
+                              max_body_read_duration_ms (if set).
+  ccol_msg_too_large         The body exceeded max_body_size
+                              mid-stream.
+  ccol_http_transfer_aborted The connection was closed or reset, or
+                              the body's framing was malformed.
+  ccol_success               No error is on record for req.
+  ccol_unexpected_failure    req is NULL or its handle is invalid.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_read (3),
+.BR chttpsvr_register_streaming_handler (3)

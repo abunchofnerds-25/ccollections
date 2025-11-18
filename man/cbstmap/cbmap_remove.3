@@ -1,0 +1,35 @@
+.TH CBMAP_REMOVE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_remove \- remove a key-value pair (type-safe)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+ccol_retval_t cbmap_remove(hm_name, key);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cbmap_delete_elem() that returns the result code.
+Tree is automatically rebalanced after deletion.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  BST map to remove from
+key      Key to remove
+.fi
+.SH RETURN VALUE
+.nf
+Returns ccol_success if removed
+Returns ccol_key_not_found if not found
+.fi
+.SH NOTES
+.nf
+Does not terminate on key_not_found
+Frees memory for key and value
+Tree is automatically rebalanced after deletion
+.fi
+.SH "SEE ALSO"
+.BR cbmap_delete_elem (3),
+.BR cbmap_insert (3)

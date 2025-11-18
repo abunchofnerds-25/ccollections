@@ -1,0 +1,23 @@
+.TH __CYAML_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+__cyaml_destroy \- recursively free a DOM tree (internal)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+void __cyaml_destroy(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Recursively frees node and all of its descendants using each node's
+stored allocator.  Does NOT null the caller's handle.  Prefer the
+cyaml_destroy() macro, which nulls the handle after freeing.
+
+This function is also used as the RAII cleanup target registered by
+cyaml_declare_scoped() via the GCC cleanup attribute.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_destroy (macro) (3),
+.BR ___cyaml_destroy (3)

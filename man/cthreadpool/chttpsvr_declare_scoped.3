@@ -1,0 +1,19 @@
+.TH CHTTPSVR_DECLARE_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chttpsvr_declare_scoped \- declare an uninitialised chttpsvr variable with automatic destruction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttpsvr_declare_scoped(name);
+.fi
+.SH DESCRIPTION
+.nf
+Like chttpsvr_declare but attaches a GCC cleanup attribute so that
+__chttpsvr_destroy is called automatically when name leaves scope.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_construct_scoped (3),
+.BR chttpsvr_declare (3)

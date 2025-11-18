@@ -1,0 +1,39 @@
+.TH CBMAP_GET_PTR 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_get_ptr \- get pointer to value by key (type-safe)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+value_ptr = cbmap_get_ptr(hm_name, key);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cbmap_get_elem_ref() that returns a pointer to the
+value, or NULL if key not found. Unlike cbmap_get(), does not terminate
+on key_not_found.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  BST map to search
+key      Key to look up
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to value if key found
+Returns NULL if key not found
+.fi
+.SH NOTES
+.nf
+Returns NULL if key not found (does not terminate)
+Terminates program if value size doesn't match type size
+Returns pointer to value for in-place modification
+Pointer invalidated by insert/delete operations
+For strings, returns pointer to the char* itself
+O(log n) search time
+.fi
+.SH "SEE ALSO"
+.BR cbmap_get (3),
+.BR cbmap_get_elem_ref (3)

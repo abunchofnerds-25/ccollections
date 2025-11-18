@@ -1,0 +1,30 @@
+.TH CJSON_SERIALIZE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_serialize \- serialize a DOM tree to a compact JSON string
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+char *cjson_serialize(cjson node);
+.fi
+.SH DESCRIPTION
+.nf
+Walks the DOM tree rooted at node and produces a compact (no whitespace)
+JSON string.  A NULL node produces the string "null".
+
+Doubles are serialized with the shortest round-trip decimal
+representation (up to 17 significant digits).  Integers use %lld.
+Non-finite doubles (Inf, NaN) are serialized as "null".
+.fi
+.SH RETURN VALUE
+.nf
+Heap-allocated null-terminated string on success.
+NULL on allocation failure.
+The caller must free the string with cjson_serialize_free().
+.fi
+.SH "SEE ALSO"
+.BR cjson_serialize_pretty (3),
+.BR cjson_serialize_free (3),
+.BR cjson_parse (3)

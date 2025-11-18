@@ -1,0 +1,37 @@
+.TH CVEC_PUSH_RVALUE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_push_rvalue \- push an rvalue onto the vector (type-safe)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+cvec_push_rvalue(v, new_elem);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cvector_push_back() that accepts rvalues (literals,
+expressions). Creates a temporary variable and takes its address. Calls
+fatal_err() on failure.
+.fi
+.SH PARAMETERS
+.nf
+v         Vector to push onto
+new_elem  Expression or literal to push
+.fi
+.SH NOTES
+.nf
+Terminates program on failure
+Accepts expressions and literals
+Uses GNU C statement expression extension
+.fi
+.SH EXAMPLES
+.nf
+cvec_construct(vec, int);
+cvec_push_rvalue(vec, 42);
+cvec_push_rvalue(vec, x + y);
+.fi
+.SH "SEE ALSO"
+.BR cvec_push (3),
+.BR cvector_push_back (3)

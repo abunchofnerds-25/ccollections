@@ -1,0 +1,35 @@
+.TH CSTRING_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstring_destroy \- destroy a string and set its pointer to NULL
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstring_destroy(s);
+.fi
+.SH DESCRIPTION
+.nf
+Destroys the cstring by freeing its internal buffer and the container
+itself. The pointer variable s is set to NULL after destruction, making
+repeated calls safe.
+.fi
+.SH PARAMETERS
+.nf
+s   cstr variable to destroy (set to NULL on return)
+.fi
+.SH NOTES
+.nf
+Safe to call with a NULL pointer (no-op)
+Prefer this macro over calling __cstring_destroy() directly
+.fi
+.SH EXAMPLES
+.nf
+cstr s = cstring_create("hello", NULL);
+cstring_destroy(s);   /* s is now NULL */
+.fi
+.SH "SEE ALSO"
+.BR cstr_destroy (3),
+.BR __cstring_destroy (3),
+.BR ___cstring_destroy (3)

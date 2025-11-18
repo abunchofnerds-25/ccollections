@@ -1,0 +1,40 @@
+.TH CHAN_TIMED_RECV_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chan_timed_recv_zc \- receive with timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t chan_timed_recv_zc(channel *ch,
+                                  c_message_t *target_buf,
+                                  struct timespec *timeout);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks up to the specified timeout waiting for a message in the
+automatically-selected queue.
+.fi
+.SH PARAMETERS
+.nf
+ch          Channel to receive from
+target_buf  Buffer to receive the message
+timeout     Relative timeout duration
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - Message received
+ccol_invalid_args         - ch or target_buf is NULL
+ccol_timed_out            - Timeout expired
+ccol_unexpected_failure   - System error (check errno)
+.fi
+.SH NOTES
+.nf
+Blocks up to timeout duration
+Direction is automatically determined by thread ID
+Uses CLOCK_REALTIME for timeout calculations
+.fi
+.SH "SEE ALSO"
+.BR chan_recv_zc (3),
+.BR chan_try_recv_zc (3)

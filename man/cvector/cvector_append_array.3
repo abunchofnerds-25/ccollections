@@ -1,0 +1,39 @@
+.TH CVECTOR_APPEND_ARRAY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_append_array \- append array of elements to vector
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+bool cvector_append_array(cvec v, void *arr_ptr, size_t elem_count);
+.fi
+.SH DESCRIPTION
+.nf
+Appends an array of elements to the end of the vector. Automatically
+reserves capacity if needed to hold all elements.
+.fi
+.SH PARAMETERS
+.nf
+v           Vector to append to
+arr_ptr     Pointer to array of elements
+elem_count  Number of elements in array
+.fi
+.SH RETURN VALUE
+.nf
+Returns true on success
+Returns false if:
+  - new total count would overflow or exceed max_elem_count
+  - memory allocation fails
+.fi
+.SH NOTES
+.nf
+All elements are appended or none (atomic operation)
+Automatically reserves capacity if needed
+Elements are copied into the vector
+Asserts if v is NULL
+.fi
+.SH "SEE ALSO"
+.BR cvec_append_array (3),
+.BR cvector_append_cvector (3)

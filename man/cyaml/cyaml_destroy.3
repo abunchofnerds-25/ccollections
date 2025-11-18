@@ -1,0 +1,36 @@
+.TH CYAML_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cyaml_destroy \- recursively free a DOM tree and null the handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml_destroy(node);
+.fi
+.SH DESCRIPTION
+.nf
+If node is non-NULL, recursively frees the entire DOM subtree rooted at
+node using each node's stored allocator, then sets node to NULL.
+
+List children, dictionary values, and string copies are all freed
+recursively.  Double-freeing a destroyed handle is safe because the
+macro nulls the variable first.
+
+To destroy a tree without nulling the pointer, call __cyaml_destroy()
+directly.
+.fi
+.SH PARAMETERS
+.nf
+node  cyaml variable to destroy.  The variable itself is set to NULL.
+.fi
+.SH EXAMPLES
+.nf
+cyaml root = cyaml_parse("a: 1\en", NULL);
+/* ... use root ... */
+cyaml_destroy(root);   /* root is now NULL */
+.fi
+.SH "SEE ALSO"
+.BR cyaml_declare_scoped (3),
+.BR __cyaml_destroy (3)

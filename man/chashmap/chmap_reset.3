@@ -1,0 +1,38 @@
+.TH CHMAP_RESET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chmap_reset \- clear all elements from the hash map
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
+.fi
+.SH DESCRIPTION
+.nf
+Removes all key-value pairs from the hash map and destroys all internal
+data. Optionally resizes the bucket/slot array. The map remains usable
+after reset regardless of whether the resize succeeds.
+.fi
+.SH PARAMETERS
+.nf
+chm                      Hash map to reset
+new_bucket_array_size    New bucket count (0 = keep current size;
+                         values < 16 are raised to 16; otherwise
+                         rounded to the nearest power of two)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success           - All elements cleared (and resize succeeded if requested)
+ccol_not_enough_memory - Resize failed; elements are still cleared
+.fi
+.SH NOTES
+.nf
+O(n) complexity where n is number of elements
+All elements are destroyed regardless of return value
+Asserts if chm is NULL
+.fi
+.SH "SEE ALSO"
+.BR chmap_destroy (3),
+.BR chmap_delete_elem (3)

@@ -1,0 +1,36 @@
+.TH MEMPOOL_ALLOC_ENTRY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+mempool_alloc_entry \- allocate an entry from the pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+void *mempool_alloc_entry(mempool *mp);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a pointer to an available entry from the pool. If the pool is
+exhausted and fallback is enabled, allocates from the heap. Contents are
+uninitialized.
+.fi
+.SH PARAMETERS
+.nf
+mp   Memory pool to allocate from
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to allocated entry on success
+Returns NULL if pool exhausted and no fallback enabled
+.fi
+.SH NOTES
+.nf
+O(1) complexity
+Returned memory is uninitialized
+Thread-safe if pool created with single_threaded=false
+Entry must be freed with mempool_free_entry()
+.fi
+.SH "SEE ALSO"
+.BR mempool_calloc_entry (3),
+.BR mempool_free_entry (3)

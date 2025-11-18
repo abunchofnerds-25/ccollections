@@ -1,0 +1,27 @@
+.TH CSTRING_GET_MPROCS 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_get_mprocs \- get the memory management procedures for a string
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+ccol_memmgmt_procs_t *cstring_get_mprocs(cstr s);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the custom memory management procedures that were supplied when the
+string was created. Returns NULL if the string is using the default
+malloc/free allocators.
+.fi
+.SH PARAMETERS
+.nf
+s   String to query
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to memory management procedures, or NULL if using defaults
+.fi
+.SH "SEE ALSO"
+.BR cstring_create_full (3)

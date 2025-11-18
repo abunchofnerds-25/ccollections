@@ -1,0 +1,32 @@
+.TH CLOG_SET_LEVEL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_set_level \- change the minimum log level at runtime
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+void clog_set_level(clog logger, clog_level_t level);
+.fi
+.SH DESCRIPTION
+.nf
+Updates the minimum severity level. Messages with a level strictly
+below the new minimum are silently discarded on subsequent calls.
+The change takes effect immediately and is visible to all threads
+sharing the logger.
+.fi
+.SH PARAMETERS
+.nf
+logger  Logger handle.
+level   New minimum level (CLOG_TRACE through CLOG_OFF).
+        Use CLOG_OFF to suppress all output.
+.fi
+.SH NOTES
+.nf
+Thread-safe: protected by the per-logger mutex.
+.fi
+.SH "SEE ALSO"
+.BR clog_get_level (3),
+.BR clog_open_fd_mp (3),
+.BR clog_open_file_mp (3)

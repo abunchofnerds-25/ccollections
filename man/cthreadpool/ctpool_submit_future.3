@@ -1,0 +1,49 @@
+.TH CTPOOL_SUBMIT_FUTURE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_submit_future \- submit a task that returns a void* result (blocking)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ctpool_future *ctpool_submit_future(ctpool pool,
+                                    void *(*fn)(void *),
+                                    void *arg);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates a future object and submits a task to the pool. The task
+calls fn(arg) on a worker thread and stores the returned void* pointer
+in the future for later retrieval by ctpool_future_get.
+
+The returned future has a reference count of 2 on success: one
+reference held by the caller, one held internally by the queued task.
+The caller must call ctpool_future_free exactly once when done.
+
+For bounded queues this function blocks until a slot is available.
+Use ctpool_try_submit_future or ctpool_timed_submit_future to avoid
+blocking.
+
+Futures always use standard malloc/free regardless of any custom
+allocator configured at pool creation.
+.fi
+.SH PARAMETERS
+.nf
+pool  Thread pool handle
+fn    Task function returning void* (must not be NULL)
+arg   Passed to fn (may be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new ctpool_future handle on success.
+Returns NULL if pool or fn is NULL, if the pool is shutting down, or
+if memory allocation fails.
+.fi
+.SH "SEE ALSO"
+.BR ctpool_try_submit_future (3),
+.BR ctpool_timed_submit_future (3),
+.BR ctpool_future_get (3),
+.BR ctpool_future_done (3),
+.BR ctpool_future_cancelled (3),
+.BR ctpool_future_free (3)

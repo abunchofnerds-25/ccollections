@@ -1,0 +1,42 @@
+.TH CHTTPCLIENT_DO_STREAMING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_do_streaming \- perform an HTTP request with a streaming response body
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpclient_do_streaming(chttpcli cli,
+                                       const chttp_request_t *req,
+                                       chttpcli_write_fn write_fn,
+                                       void *write_ctx,
+                                       int *status_code_out);
+.fi
+.SH DESCRIPTION
+.nf
+Like chttpclient_do, but delivers the response body to write_fn in
+chunks as data arrives instead of buffering it.  No chttpcli_response
+struct is allocated; response headers are not accessible.
+
+write_fn must return the number of bytes consumed.  Returning less
+than len aborts the transfer with a failure.
+.fi
+.SH PARAMETERS
+.nf
+cli             Client handle; must not be NULL.
+req             Request to execute; must not be NULL.
+write_fn        Callback invoked with each body chunk; must not be NULL.
+write_ctx       Opaque context pointer passed verbatim to write_fn.
+status_code_out Receives the HTTP status code on success; may be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+Same codes as chttpclient_do.  Additionally,
+ccol_http_transfer_aborted is returned when write_fn returns fewer
+bytes than len, aborting the transfer.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_do (3),
+.BR chttpclient_do_async_streaming (3),
+.BR chttpcli_write_fn (3)

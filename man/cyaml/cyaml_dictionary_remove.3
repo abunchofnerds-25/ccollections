@@ -1,0 +1,26 @@
+.TH CYAML_DICTIONARY_REMOVE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_dictionary_remove \- remove and free a key from a dictionary node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+ccol_retval_t cyaml_dictionary_remove(cyaml map, const char *key);
+.fi
+.SH DESCRIPTION
+.nf
+Removes the entry identified by key from the dictionary node map and
+recursively frees the associated value subtree.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        - entry removed and freed.
+ccol_invalid_args   - map is NULL or not CYAML_DICTIONARY.
+ccol_key_not_found  - key does not exist in the dictionary.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_dictionary_set (3),
+.BR cyaml_dictionary_get (3),
+.BR cyaml_list_remove (3)

@@ -1,0 +1,34 @@
+.TH R_MEMPOOL_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+r_mempool_destroy \- destroy a ranged memory pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+r_mempool_destroy(rmp);
+.fi
+.SH DESCRIPTION
+.nf
+Frees all resources associated with the ranged memory pool including all
+sub-pools. For pools created from preallocated buffers, the buffer itself
+is not freed.
+.fi
+.SH PARAMETERS
+.nf
+rmp  Ranged memory pool to destroy (will be set to NULL)
+.fi
+.SH WARNINGS
+.nf
+Unfreed dynamically allocated pointers via fallback will cause assertion
+failure. All allocated entries should be freed before destroying.
+.fi
+.SH NOTES
+.nf
+Safe to call with NULL pointer
+For preallocated pools, user must manage buffer lifetime
+.fi
+.SH "SEE ALSO"
+.BR r_mempool_create (3),
+.BR _r_mempool_destroy (3)

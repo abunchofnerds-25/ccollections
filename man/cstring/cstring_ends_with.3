@@ -1,0 +1,33 @@
+.TH CSTRING_ENDS_WITH 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_ends_with \- check whether the string ends with a suffix
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+bool cstring_ends_with(cstr s, const char *suffix);
+.fi
+.SH DESCRIPTION
+.nf
+Returns true if the content of s ends with suffix. An empty suffix
+always matches.
+.fi
+.SH PARAMETERS
+.nf
+s        String to test
+suffix   Suffix to look for (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+true if the string ends with suffix, false otherwise
+.fi
+.SH NOTES
+.nf
+An empty suffix always returns true
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_starts_with (3),
+.BR cstring_rfind (3)

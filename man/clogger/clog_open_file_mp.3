@@ -1,0 +1,90 @@
+.TH CLOG_OPEN_FILE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_open_file_mp \- create a file-backed logger with optional log rotation
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+clog clog_open_file_mp(const char *path, clog_level_t min_level,
+                    const clog_rotation_cfg_t *cfg,
+                    ccol_memmgmt_procs_t *mprocs);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a new logger that writes to the file at path. The file is
+created if it does not exist (mode 0644) and opened for appending if
+it does. When the file already exists its current size is read via
+fstat(2) so that size-based rotation thresholds are applied correctly
+even when appending to a pre-existing log.
+
+Log rotation is enabled only when cfg is non-NULL. Both size-based
+and time-based rotation may be enabled independently:
+
+Size rotation: triggers after the write that causes the cumulative
+bytes written to reach or exceed cfg->max_file_size. Checked after
+each write.
+
+Time rotation: triggers on the first write after
+cfg->rotation_interval_secs seconds have elapsed since the last
+rotation (or since the logger was created). Checked before each write.
+
+When a rotation fires, the current file is atomically renamed to
+<path>.<YYYYMMDDHHMMSS>. If a file with that name already exists a
+collision suffix _1, _2, ... (up to _9999) is appended. A new empty
+log file is then opened. When cfg->max_rotated_files > 0, the oldest
+rotated files beyond the limit are deleted automatically.
+
+When cfg->compress_rotated is true, each rotated file is gzip-
+compressed via zlib immediately after rotation. The compressed file
+is written to <rotated-name>.gz and the original uncompressed file
+is removed on success. Compression runs outside the logger mutex so
+log writers are never stalled while the I/O completes. The resulting
+\&.gz files are compatible with standard gunzip(1) and zcat(1) tools.
+Requires linking the application with -lz.
+.fi
+.SH PARAMETERS
+.nf
+path       Destination log file path. Copied internally.
+min_level  Messages below this level are silently dropped.
+cfg        Rotation configuration, or NULL to disable rotation.
+           Fields with value 0 fall back to their respective
+           CLOG_DEFAULT_* constant:
+             size_rotation_enabled  - enable size-based rotation
+             max_file_size          - bytes threshold (0 = 10 MiB)
+             time_rotation_enabled  - enable time-based rotation
+             rotation_interval_secs - seconds (0 = 86400 = 1 day)
+             max_rotated_files      - files kept; 0 = no limit
+             compress_rotated       - gzip-compress each rotated file
+mprocs     Custom allocator (malloc/free/calloc/realloc function
+           pointers), or NULL to use the default system allocator.
+           All four pointers must be set when mprocs is non-NULL;
+           a partially-populated struct causes the call to return
+           NULL without creating a logger. The struct is copied
+           internally; the caller may free it after this call.
+           The allocator is inherited by all loggers derived from
+           this one via clog_derive().
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new logger handle on success.
+Returns NULL on failure (bad path, permission error, invalid mprocs,
+allocation failure, etc.).
+.fi
+.SH NOTES
+.nf
+The logger owns the file descriptor and closes it on clog_close().
+O_CLOEXEC is set on the file descriptor.
+The rename and new-fd open are performed within the locked section
+so no log lines are lost or interleaved across the rotation boundary.
+When compress_rotated is true, the gzip compression step runs after
+the new fd is already in use, outside the mutex, to avoid stalling
+concurrent log writers during the compression I/O.
+.fi
+.SH "SEE ALSO"
+.BR clog_open_fd_mp (3),
+.BR clog_close (3),
+.BR CLOG_DEFAULT_MAX_FILE_SIZE (3),
+.BR CLOG_DEFAULT_ROTATION_INTERVAL (3),
+.BR CLOG_DEFAULT_MAX_ROTATED_FILES (3)

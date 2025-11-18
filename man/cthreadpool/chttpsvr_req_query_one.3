@@ -1,0 +1,30 @@
+.TH CHTTPSVR_REQ_QUERY_ONE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_query_one \- look up a single-valued query parameter
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req,
+                                      const char *key,
+                                      const char **val_out);
+.fi
+.SH DESCRIPTION
+.nf
+Looks up a query parameter that is expected to appear exactly once.
+Unlike chttpsvr_req_query, this function distinguishes an OOM failure
+from a missing key and avoids allocating a scratch result array.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success; exactly one value found; stored in *val_out.
+ccol_key_not_found; key is absent.
+ccol_not_permitted; key appears more than once.
+ccol_not_enough_memory; query-string parse buffer could not be allocated.
+ccol_invalid_args; req or key is NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_query (3),
+.BR chttpsvr_req_query_oom (3)

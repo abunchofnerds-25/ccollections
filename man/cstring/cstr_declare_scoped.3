@@ -1,0 +1,36 @@
+.TH CSTR_DECLARE_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_declare_scoped \- declare a cstr variable with automatic RAII destruction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_declare_scoped(s);
+.fi
+.SH DESCRIPTION
+.nf
+Like cstr_declare() but attaches __attribute__((cleanup(___cstring_destroy)))
+so that __cstring_destroy is called automatically when the variable leaves
+scope.
+.fi
+.SH PARAMETERS
+.nf
+s   Name of the variable to declare
+.fi
+.SH NOTES
+.nf
+Requires GCC or Clang (uses __attribute__((cleanup)))
+.fi
+.SH EXAMPLES
+.nf
+{
+  cstr_declare_scoped(s);
+  cstr_init(s, "auto-freed");
+  /* s is destroyed automatically at end of this block */
+}
+.fi
+.SH "SEE ALSO"
+.BR cstr_declare (3),
+.BR cstr_construct_scoped (3)

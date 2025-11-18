@@ -1,0 +1,21 @@
+.TH CHTTP_FORM_BODY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+CHTTP_FORM_BODY \- construct a chttp_request_body_t for URL-encoded form content
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttp.h>
+
+CHTTP_FORM_BODY(d, n)
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a chttp_request_body_t initialiser with Content-Type set to
+"application/x-www-form-urlencoded", data pointer d, and byte length n.
+The caller is responsible for percent-encoding the key/value pairs
+before passing them to this macro.
+.fi
+.SH "SEE ALSO"
+.BR CHTTP_JSON_BODY (3),
+.BR CHTTP_BODY (3)

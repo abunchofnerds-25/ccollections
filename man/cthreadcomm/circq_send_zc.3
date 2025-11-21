@@ -1,0 +1,40 @@
+.TH CIRCQ_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+circq_send_zc \- send a message to the queue (blocking)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t circq_send_zc(circular_queue *cq, c_message_t *msg);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks until space is available in the queue, then transfers ownership of
+the message data to the queue. The msg->data pointer is set to NULL on
+success (zero-copy semantics).
+.fi
+.SH PARAMETERS
+.nf
+cq   Circular queue to send to
+msg  Message to send (data ownership transfers on success)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - Message sent successfully
+ccol_invalid_args  - cq or msg is NULL, or msg validation fails
+ccol_not_permitted - Sending has been disabled
+.fi
+.SH NOTES
+.nf
+Blocks indefinitely until space is available or sending is disabled
+After waking from blocking, rechecks if sending is still enabled
+On failure, caller retains ownership of msg->data
+msg->data == NULL with msg->size == 0 is valid (sentinel message)
+msg->data == NULL with msg->size > 0 is invalid
+.fi
+.SH "SEE ALSO"
+.BR circq_try_send_zc (3),
+.BR circq_timed_send_zc (3),
+.BR circq_recv_zc (3)

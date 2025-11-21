@@ -1,0 +1,25 @@
+.TH CVEC_SIZE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_size \- get the number of elements (type-safe wrapper)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+size_t cvec_size(v);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cvector_elem_count().
+.fi
+.SH PARAMETERS
+.nf
+v    Vector to query
+.fi
+.SH RETURN VALUE
+.nf
+Returns number of elements in the vector
+.fi
+.SH "SEE ALSO"
+.BR cvector_elem_count (3)

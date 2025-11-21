@@ -1,0 +1,32 @@
+.TH CSTRING_AT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_at \- return the character at a given index
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+char cstring_at(cstr s, size_t idx);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the character at the specified zero-based index. Returns '\e0' if
+idx is out of bounds rather than asserting.
+.fi
+.SH PARAMETERS
+.nf
+s     String to query
+idx   Zero-based character index
+.fi
+.SH RETURN VALUE
+.nf
+Character at idx, or '\e0' if idx >= length
+.fi
+.SH NOTES
+.nf
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_c_str (3),
+.BR cstring_length (3)

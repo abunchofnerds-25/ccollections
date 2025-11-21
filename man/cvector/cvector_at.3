@@ -1,0 +1,35 @@
+.TH CVECTOR_AT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_at \- access an element at a specific index
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+void *cvector_at(cvec v, size_t index);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a pointer to the element at the specified index. The pointer can
+be used to read or modify the element in-place.
+.fi
+.SH PARAMETERS
+.nf
+v      Vector to access
+index  Zero-based index of element to access
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to element at index on success
+Returns NULL if index >= elem_count or vector is empty
+.fi
+.SH NOTES
+.nf
+O(1) complexity
+Returned pointer is only valid until vector is resized
+Asserts if v is NULL
+.fi
+.SH "SEE ALSO"
+.BR cvec_at (3),
+.BR cvector_elem_count (3)

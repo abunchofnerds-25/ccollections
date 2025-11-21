@@ -1,0 +1,51 @@
+.TH CLOG_DERIVE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_derive \- create a derived logger sharing the same output target
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+clog clog_derive(clog parent);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a new derived logger that writes to the same file descriptor as
+parent and shares the same synchronisation mutex and log-rotation state.
+All writes from parent and every derived logger are therefore serialised
+by the same lock and land in the same destination.
+
+At the moment of the call, the derived logger receives a snapshot of
+parent's structured fields and minimum log level.  After creation the
+two loggers maintain fully independent field maps and level settings:
+adding, removing, or changing fields or the level on one logger has no
+effect on the other.
+
+Log rotation (if configured on the original file-backed logger) continues
+to be managed by the root logger; derived loggers benefit transparently.
+
+Release a derived logger with clog_close() when it is no longer needed.
+The underlying file is kept open until all handles (root and every derived
+logger) have been closed; the shared backing store uses reference counting.
+.fi
+.SH PARAMETERS
+.nf
+parent  Source logger to derive from.
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new derived logger handle on success.
+Returns NULL if memory allocation fails.
+.fi
+.SH NOTES
+.nf
+Derived loggers inherit the output format and syslog facility from the
+shared backing store; changes to those settings via any handle are
+immediately visible to all handles writing to the same fd.
+Thread-safe: the field snapshot is taken under the shared mutex.
+.fi
+.SH "SEE ALSO"
+.BR clog_open_fd_mp (3),
+.BR clog_open_file_mp (3),
+.BR clog_close (3)

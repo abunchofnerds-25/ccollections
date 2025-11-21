@@ -1,0 +1,48 @@
+.TH CLRU_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clru_construct \- declare and initialise an LRU cache in one step
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb);
+.fi
+.SH DESCRIPTION
+.nf
+Combines clru_declare() and clru_init() into a single statement. This
+is the most common way to create an LRU cache. Calls fatal_err() if
+creation fails.
+.fi
+.SH PARAMETERS
+.nf
+name      Variable name for the cache handle
+KeyT      Key type
+ValT      Value type
+capacity  Maximum number of live entries before eviction
+getter    Remote getter callback, or NULL
+setter    Remote setter callback, or NULL
+evict_cb  Eviction callback, or NULL
+.fi
+.SH EXAMPLES
+.nf
+clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+int k = 42;
+double v = 3.14;
+clru_set(cache, k, v);
+
+/* val_ptr is a pointer to the value type (double *), not cmap_pair * */
+double out = 0.0;
+if (clru_get(cache, k, &out) == ccol_success) {
+    printf("%.2f\en", out);
+}
+
+clru_destroy(cache);
+.fi
+.SH "SEE ALSO"
+.BR clru_construct_scoped (3),
+.BR clru_declare (3),
+.BR clru_init (3),
+.BR clru_destroy (3)

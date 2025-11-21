@@ -1,0 +1,48 @@
+.TH CHTTPSVR_SET_ENGINE_MEM_MGMT_PROCS 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_set_engine_mem_mgmt_procs \- set custom memory management for engine-level allocations
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
+.fi
+.SH DESCRIPTION
+.nf
+Redirects every allocation made by the shared facil.io engine itself
+(the connection-state table, protocol/listener structs, TLS connection
+objects, request-body streaming buffers, and the engine's own internal
+memory arena) to the malloc/free/calloc/realloc supplied in mp, exactly
+like the memory management procs accepted by every other module in this
+library.  Passing NULL reverts to the default behavior (facio's own
+arena, falling back to libc for a handful of auxiliary allocations).
+
+Unlike chttpsvr_set_engine_logger, this function may only be called
+before the first chttpsvr_start call in the process: once the engine
+has allocated memory with one set of procs, swapping to a different
+malloc/free pairing would corrupt the heap.  It may be called again
+after the engine has fully stopped (chttpsvr_engine_wait has returned),
+before the next chttpsvr_start.
+
+If mp is non-NULL, all four function pointers (malloc, free, calloc,
+realloc) must be set.
+
+A small, fixed amount of memory is always allocated once via mmap at
+library load time, before any call to this function is possible; this
+is harmless and freed normally at process exit, but it means a custom
+allocator can never observe every single byte ever mapped by the
+process.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if mp is non-NULL but has a NULL function pointer.
+ccol_not_permitted if the engine is already running; stop it first.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_set_engine_logger (3),
+.BR chttpsvr_start (3),
+.BR chttpsvr_engine_stop (3),
+.BR chttpsvr_engine_wait (3)

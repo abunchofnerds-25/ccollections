@@ -1,0 +1,27 @@
+.TH CTPOOL_ACTIVE_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_active_count \- number of tasks currently executing
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+size_t ctpool_active_count(ctpool pool);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a snapshot of the number of tasks currently being executed
+by worker threads (dequeued but not yet finished). The value may
+change immediately after the call returns.
+.fi
+.SH PARAMETERS
+.nf
+pool   Thread pool handle (NULL returns 0)
+.fi
+.SH RETURN VALUE
+.nf
+Number of actively executing tasks, or 0 if pool is NULL.
+.fi
+.SH "SEE ALSO"
+.BR ctpool_pending_count (3)

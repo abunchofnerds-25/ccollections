@@ -1,0 +1,31 @@
+.TH CHTTPCLIENT_SET_REQUEST_TIMEOUT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_set_request_timeout \- set the total request timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, long ms);
+.fi
+.SH DESCRIPTION
+.nf
+Sets the maximum time from when chttpclient_do is called to when the
+last byte of the response body is received.  Pass 0 to disable.
+
+When a request times out chttpclient_do returns ccol_timed_out.
+.fi
+.SH PARAMETERS
+.nf
+cli   Client handle; must not be NULL.
+ms    Timeout in milliseconds.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success      Timeout updated.
+ccol_invalid_args cli is NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_set_connect_timeout (3),
+.BR chttpclient_do (3)

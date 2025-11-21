@@ -1,0 +1,21 @@
+.TH CHTTP_REQUEST_FREE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_request_free \- free an HTTP request and all owned resources
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+void chttp_request_free(chttp_request_t *req);
+.fi
+.SH DESCRIPTION
+.nf
+Frees the URL copy, body data copy, content_type copy, headers map,
+and the request struct itself.  Also frees the private mprocs copy if
+one was allocated.
+
+Safe to call with NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttp_request_new_mp (3)

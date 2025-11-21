@@ -1,0 +1,36 @@
+.TH CHAN_TRY_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chan_try_send_zc \- try to send without blocking
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t chan_try_send_zc(channel *ch, c_message_t *msg);
+.fi
+.SH DESCRIPTION
+.nf
+Attempts to send immediately through the automatically-selected queue.
+Returns immediately if the queue is full.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to send through
+msg  Message to send (data ownership transfers on success)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success         - Message sent successfully
+ccol_invalid_args    - ch or msg is NULL, or msg validation fails
+ccol_not_permitted   - Sending disabled on selected direction
+ccol_container_full  - Selected queue is full
+.fi
+.SH NOTES
+.nf
+Never blocks
+Direction is automatically determined by thread ID
+.fi
+.SH "SEE ALSO"
+.BR chan_send_zc (3),
+.BR chan_timed_send_zc (3)

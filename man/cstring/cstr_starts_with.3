@@ -1,0 +1,27 @@
+.TH CSTR_STARTS_WITH 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_starts_with \- check whether the string begins with a prefix
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_starts_with(s, pfx);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_starts_with().
+.fi
+.SH PARAMETERS
+.nf
+s     cstr to test
+pfx   Prefix string
+.fi
+.SH RETURN VALUE
+.nf
+true if the string starts with pfx, false otherwise
+.fi
+.SH "SEE ALSO"
+.BR cstring_starts_with (3),
+.BR cstr_ends_with (3)

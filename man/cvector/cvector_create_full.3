@@ -1,0 +1,40 @@
+.TH CVECTOR_CREATE_FULL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_create_full \- create a vector with custom memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+cvec cvector_create_full(size_t elem_size,
+                         ccol_memmgmt_procs_t *mmgmt_procs,
+                         char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a new vector container with full customization of memory
+management. The vector stores elements of the specified size and
+automatically manages capacity.
+.fi
+.SH PARAMETERS
+.nf
+elem_size     Size of each element in bytes (must be > 0)
+mmgmt_procs   Custom memory management procedures, or NULL for
+              default malloc/free
+err           Optional pointer to receive error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created vector on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Initial capacity is 4 elements
+Capacity scaling: 2x when full, 0.5x when < 1/4 filled
+Minimum capacity: 4 elements
+.fi
+.SH "SEE ALSO"
+.BR cvector_create (3),
+.BR cvector_destroy (3)

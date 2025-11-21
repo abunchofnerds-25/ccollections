@@ -1,0 +1,63 @@
+.TH CHTTPSVR_SUBROUTER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_subrouter \- create a sub-router with a path prefix
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a new router under the given path prefix (which must begin with
+\&'/') and attaches it to the server.  Routes registered on the sub-router
+are matched against the portion of the path following the prefix.
+
+The prefix must not contain consecutive slashes (e.g. "//api" or
+"/a//b").  Such prefixes can never match a valid HTTP path and would
+silently create an unreachable router; chttpsvr_subrouter rejects them
+by returning NULL.
+
+A trailing slash in prefix is stripped automatically: "/api/v1/" and
+"/api/v1" are therefore equivalent and produce identical routing
+behaviour.
+
+The returned pointer is owned by the server and must not be freed by
+the caller.
+
+This function is thread-safe and may be called before or after
+chttpsvr_start is running.
+.fi
+.SH NOTES
+.nf
+The "/" prefix is a special case.  The trailing-slash strip loop runs
+only when the prefix length exceeds one character, so "/" is retained
+as-is with prefix_len = 1.  The match rule checks path[prefix_len],
+i.e. path[1], which must be '/' or '\e0'.  For the exact path "/" the
+character at index 1 is '\e0' (matches).  For any other path beginning
+with '/' (e.g. "/foo"), path[1] is a letter, which fails the check:
+those paths do NOT match and receive 404.
+
+Use prefix "/" only when you intend to match only the exact root path
+"/".  To catch all requests regardless of path, register routes directly
+on the server with chttpsvr_register_handler or chttpsvr_register_streaming_handler instead.
+
+Root-router shadowing: routes registered directly on the server via
+chttpsvr_register_handler or chttpsvr_register_streaming_handler (i.e. on the root router) are always
+evaluated before any sub-router.  A root-level route whose path
+conflicts with a sub-router pattern will always win, regardless of
+registration order.  To avoid unintentional shadowing, do not register
+root-level routes whose paths overlap with a sub-router's prefix and
+pattern.
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to the new chttpsvr_router on success, or NULL when srv is NULL,
+prefix is NULL, prefix does not start with '/', prefix contains
+consecutive slashes, or on OOM.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_router_on (3),
+.BR chttpsvr_router_use (3)

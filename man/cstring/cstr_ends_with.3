@@ -1,0 +1,27 @@
+.TH CSTR_ENDS_WITH 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_ends_with \- check whether the string ends with a suffix
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_ends_with(s, sfx);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_ends_with().
+.fi
+.SH PARAMETERS
+.nf
+s     cstr to test
+sfx   Suffix string
+.fi
+.SH RETURN VALUE
+.nf
+true if the string ends with sfx, false otherwise
+.fi
+.SH "SEE ALSO"
+.BR cstring_ends_with (3),
+.BR cstr_starts_with (3)

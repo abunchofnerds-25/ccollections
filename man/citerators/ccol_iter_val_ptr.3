@@ -1,0 +1,35 @@
+.TH CCOL_ITER_VAL_PTR 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_iter_val_ptr \- get a typed pointer to the current value
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <citerators.h>   /* or any container header */
+
+ValT *ccol_iter_val_ptr(it);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a typed pointer to the value of the element currently pointed
+to by it.  Mutations through this pointer are reflected in the
+underlying container.
+.fi
+.SH PARAMETERS
+.nf
+it   Iterator variable declared with ccol_iter_declare() or inside
+     ccol_for_each().
+.fi
+.SH RETURN VALUE
+.nf
+ValT* to the current element.
+.fi
+.SH NOTES
+.nf
+The returned pointer is valid only while the iterator is alive and
+the container has not been modified.
+Uses a GNU C statement expression; requires GCC or Clang.
+.fi
+.SH "SEE ALSO"
+.BR ccol_iter_key_ptr (3),
+.BR ccol_iter_declare (3)

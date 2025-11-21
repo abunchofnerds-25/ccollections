@@ -1,0 +1,48 @@
+.TH CHTTP_REQUEST_NEW_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_request_new_mp \- allocate and initialise an HTTP request with a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+chttp_request_t *chttp_request_new_mp(chttp_method_t method,
+                                      const char *url,
+                                      const chttp_request_body_t *body,
+                                      ccol_memmgmt_procs_t *mprocs,
+                                      char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates a new chttp_request_t and copies the URL and, if non-NULL,
+the body data and content_type string into privately owned buffers.
+The caller may free its originals immediately after this call returns.
+
+Pass NULL for body or use the CHTTP_NO_BODY macro when no request body
+is needed (e.g. GET, DELETE).
+.fi
+.SH PARAMETERS
+.nf
+method    HTTP method (CHTTP_GET, CHTTP_POST, ...).
+url       Target URL; must not be NULL (copied into the request).
+body      Pointer to a chttp_request_body_t, or NULL for no body.
+mprocs    Custom allocator, or NULL for malloc/free.
+err_str   Optional; receives a static error string on failure.
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to the new request, or NULL on failure.
+.fi
+.SH NOTES
+.nf
+All allocations use mprocs when non-NULL.
+The request must remain alive until any chttpclient_do call using it
+returns: the request's method/body/headers are read directly during
+that synchronous call.
+.fi
+.SH "SEE ALSO"
+.BR chttp_request_new (3),
+.BR chttp_request_set_header (3),
+.BR chttp_request_free (3),
+.BR chttpclient_do (3)

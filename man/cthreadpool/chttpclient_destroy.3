@@ -1,0 +1,24 @@
+.TH CHTTPCLIENT_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chttpclient_destroy \- destroy an HTTP client and NULL the handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+chttpclient_destroy(cli)
+.fi
+.SH DESCRIPTION
+.nf
+Macro wrapper around __chttpclient_destroy.  Waits for all in-flight
+requests to complete, frees all resources, then sets cli to NULL.
+.fi
+.SH PARAMETERS
+.nf
+cli   An lvalue of type chttpcli.
+.fi
+.SH "SEE ALSO"
+.BR __chttpclient_destroy (3),
+.BR ___chttpclient_destroy (3),
+.BR create_chttpclient (3)

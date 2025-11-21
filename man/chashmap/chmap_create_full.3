@@ -1,0 +1,48 @@
+.TH CHMAP_CREATE_FULL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chmap_create_full \- create a hash map with full customization
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+chmap chmap_create_full(size_t initial_bucket_array_size,
+                        ccol_data_type key_type,
+                        ccol_data_type val_type,
+                        ccol_memmgmt_procs_t *mmgmt_procs,
+                        ccol_hashing_proc_t custom_hashing_proc,
+                        char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a hash map with full control over initial size, types, memory
+management, and hashing function. The implementation strategy is
+automatically selected based on key and value types.
+.fi
+.SH PARAMETERS
+.nf
+initial_bucket_array_size  Initial number of buckets
+key_type                   Type of keys
+val_type                   Type of values
+mmgmt_procs                Custom memory management, or NULL
+custom_hashing_proc        Custom hash function, or NULL
+err                        Optional pointer to receive error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created hash map on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Implementation selection:
+  - Open-addressing: Both key and value are integral types <=8 bytes
+  - Separate chaining: Either key or value is non-integral or >8 bytes
+Integral types: char, short, int, long, long long (signed/unsigned),
+               float, double
+Excludes long double from open-addressing (can be 10-16 bytes)
+.fi
+.SH "SEE ALSO"
+.BR chmap_create (3),
+.BR chmap_destroy (3)

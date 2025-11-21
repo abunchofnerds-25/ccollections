@@ -1,0 +1,29 @@
+.TH __CSTRING_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+__cstring_destroy \- destroy a string (internal)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+void __cstring_destroy(cstr s);
+.fi
+.SH DESCRIPTION
+.nf
+Frees the internal data buffer and the container struct itself. Does not
+NULL the caller's pointer variable. This is the low-level internal function;
+use the cstring_destroy() macro or cstr_destroy() wrapper in application
+code.
+.fi
+.SH PARAMETERS
+.nf
+s   String to destroy
+.fi
+.SH WARNINGS
+.nf
+Does not NULL the caller's pointer; use cstring_destroy() instead
+.fi
+.SH "SEE ALSO"
+.BR cstring_destroy (3),
+.BR ___cstring_destroy (3)

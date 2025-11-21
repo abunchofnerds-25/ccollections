@@ -1,0 +1,20 @@
+.TH CHTTPSVR_REQ_PATH 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_path \- return the URL path of a request
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+const char *chttpsvr_req_path(const chttpsvr_req *req);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a NUL-terminated string containing the URL path of the request,
+without the query string.  The string is valid for the lifetime of the
+handler invocation.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_raw_query (3),
+.BR chttpsvr_req_param (3)

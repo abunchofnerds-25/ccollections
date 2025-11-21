@@ -1,0 +1,27 @@
+.TH CJSON_DICTIONARY_SET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_dictionary_set \- set or replace a key in an object node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+ccol_retval_t cjson_dictionary_set(cjson obj, const char *key, cjson child);
+.fi
+.SH DESCRIPTION
+.nf
+Inserts or replaces the value for key in obj.  Ownership of child
+transfers to obj unconditionally: on success the object owns child;
+on failure child is deep-freed by cjson_dictionary_set.  Do not free
+child after calling this function regardless of the return value.
+If a previous child existed under key it is deep-freed before the
+new one is stored.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+.fi
+.SH "SEE ALSO"
+.BR cjson_dictionary_get (3),
+.BR cjson_create_dictionary (3)

@@ -1,0 +1,34 @@
+.TH CHTTP_BASIC_AUTH_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_basic_auth_mp \- build an HTTP Basic auth header value with a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttp.h>
+
+char *chttp_basic_auth_mp(ccol_memmgmt_procs_t *mp,
+                          const char *username, const char *password);
+.fi
+.SH DESCRIPTION
+.nf
+Builds a "Basic <base64(username:password)>" header value per RFC
+7617. Produces only the header VALUE, not the "Authorization: " key
+part; pass the result directly to chttp_request_set_header(req,
+"authorization", ...) or the chttpsvr equivalent.
+.fi
+.SH PARAMETERS
+.nf
+mp        Custom allocator, or NULL for malloc/free.
+username  Username. Must not be NULL; may be empty.
+password  Password. Must not be NULL; may be empty.
+.fi
+.SH RETURN VALUE
+.nf
+Newly allocated "Basic <base64>" string on success.
+NULL on allocation failure, or if username or password is NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttp_basic_auth (3),
+.BR chttp_base64_encode_mp (3),
+.BR chttp_request_set_header (3)

@@ -1,0 +1,34 @@
+.TH CSTRING_COPY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_copy \- create an independent copy of a string
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr cstring_copy(cstr s, char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates a new cstring with the same content as s. The two strings are
+fully independent after the call.
+.fi
+.SH PARAMETERS
+.nf
+s     String to copy
+err   Optional pointer to receive an error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+New cstring on success
+NULL on allocation failure (details written to *err if err is non-NULL)
+.fi
+.SH NOTES
+.nf
+Caller must destroy the returned cstring when done
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_substring (3),
+.BR cstring_create (3)

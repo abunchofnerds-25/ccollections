@@ -1,0 +1,54 @@
+.TH CLOG_SET_FACILITY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_set_facility \- change the syslog facility
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+void clog_set_facility(clog logger, clog_syslog_facility_t facility);
+.fi
+.SH DESCRIPTION
+.nf
+Updates the syslog facility stored on the shared backing store.  The
+facility is encoded into the PRI field of every RFC 5424 message as
+(facility * 8) + severity.  Because the value lives on the shared store
+the change is visible to every logger handle that writes to the same file
+descriptor (the root logger and all derived loggers).
+
+This function is only meaningful when the output format is
+CLOG_FMT_SYSLOG; calling it with any other format is harmless (the
+stored value is updated but has no effect on the output until
+CLOG_FMT_SYSLOG is selected).
+
+Available facility codes (RFC 5424 / RFC 3164):
+  CLOG_SYSLOG_KERN     (0); Kernel messages
+  CLOG_SYSLOG_USER     (1); User-level messages (default)
+  CLOG_SYSLOG_MAIL     (2); Mail system
+  CLOG_SYSLOG_DAEMON   (3); System daemons
+  CLOG_SYSLOG_AUTH     (4); Security / authorization messages
+  CLOG_SYSLOG_SYSLOG   (5); Internal syslogd messages
+  CLOG_SYSLOG_LPR      (6); Line printer subsystem
+  CLOG_SYSLOG_NEWS     (7); Network news subsystem
+  CLOG_SYSLOG_UUCP     (8); UUCP subsystem
+  CLOG_SYSLOG_CRON     (9); Clock daemon
+  CLOG_SYSLOG_AUTHPRIV (10); Security / authorization (private)
+  CLOG_SYSLOG_FTP      (11); FTP daemon
+  CLOG_SYSLOG_LOCAL0   (16); Local use 0
+  ...
+  CLOG_SYSLOG_LOCAL7   (23); Local use 7
+.fi
+.SH PARAMETERS
+.nf
+logger    Logger handle.
+facility  Desired facility code (clog_syslog_facility_t).
+.fi
+.SH NOTES
+.nf
+Thread-safe: protected by the shared backing-store mutex.
+The default facility is CLOG_SYSLOG_USER.
+.fi
+.SH "SEE ALSO"
+.BR clog_get_facility (3),
+.BR clog_set_format (3)

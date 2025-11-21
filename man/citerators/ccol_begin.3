@@ -1,0 +1,47 @@
+.TH CCOL_BEGIN 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_begin \- begin iteration over any supported container
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <citerators.h>   /* or any container header */
+
+cmap_iterator *ccol_begin(container);
+.fi
+.SH DESCRIPTION
+.nf
+Returns an iterator positioned at the first element of container.
+The correct begin_iter function is selected at compile time via
+_Generic on the type of container.  Supported types: cvec, chmap,
+cbmap.
+
+Returns NULL without error when the container is empty.
+Calls fatal_err() on allocation failure.
+.fi
+.SH PARAMETERS
+.nf
+container  A cvec, chmap, or cbmap variable.
+.fi
+.SH RETURN VALUE
+.nf
+cmap_iterator* positioned at the first element, or NULL if empty.
+.fi
+.SH NOTES
+.nf
+Use ccol_iter_declare(container, it) before calling ccol_begin in a
+for loop to obtain typed accessors for the iterator.
+.fi
+.SH EXAMPLES
+.nf
+ccol_iter_declare(vec, it);
+for (it = ccol_begin(vec); it != NULL; it = ccol_iter_next(it)) {
+    printf("[%zu] = %d\en", *ccol_iter_key_ptr(it),
+                            *ccol_iter_val_ptr(it));
+}
+.fi
+.SH "SEE ALSO"
+.BR ccol_iter_declare (3),
+.BR ccol_iter_next (3),
+.BR ccol_for_each (3),
+.BR ccol_end (3)

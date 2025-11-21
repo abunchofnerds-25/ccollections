@@ -1,0 +1,50 @@
+.TH MEMPOOL_CREATE_FROM_PREALLOCATED_BUFFER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+mempool_create_from_preallocated_buffer \- create pool from user buffer
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+mempool *mempool_create_from_preallocated_buffer(
+    void *buffer,
+    size_t buf_size,
+    size_t elem_size,
+    bool fallback_to_dynamic_memory,
+    bool single_threaded,
+    ccol_memmgmt_procs_t *mmgmt_procs,
+    char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a memory pool using a user-provided buffer instead of allocating
+from the heap. Useful for embedded systems or when heap allocation is
+undesirable.
+.fi
+.SH PARAMETERS
+.nf
+buffer                     Pointer to preallocated buffer
+buf_size                   Size of buffer in bytes
+elem_size                  Size of each element in bytes
+fallback_to_dynamic_memory If true, allocate from heap when pool exhausted
+single_threaded           If true, omit locking
+mmgmt_procs               Custom memory management, or NULL
+err                       Optional pointer to receive error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created memory pool on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Element count is calculated as buf_size / (elem_size + header_overhead)
+Buffer is not freed by mempool_destroy() (user manages buffer lifetime)
+Pool struct itself is still allocated via mmgmt_procs
+If elem_size < sizeof(uintptr_t), it is adjusted
+.fi
+.SH "SEE ALSO"
+.BR DECLARE_PREALLOCATED_MEMPOOL_BUFFER (3),
+.BR mempool_create (3),
+.BR mempool_destroy (3)

@@ -1,0 +1,23 @@
+.TH CYAML_LIST_LEN 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_list_len \- return the number of elements in a list
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+size_t cyaml_list_len(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Return the number of child nodes in the CYAML_LIST node.  Calls
+fatal_err() if node is NULL or its type is not CYAML_LIST.
+.fi
+.SH RETURN VALUE
+.nf
+Element count (0 for empty lists).
+.fi
+.SH "SEE ALSO"
+.BR cyaml_list_get (3),
+.BR cyaml_list_push (3)

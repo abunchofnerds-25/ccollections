@@ -1,0 +1,32 @@
+.TH CSTR_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_construct \- declare and initialise a cstr in one step
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_construct(s, initial);
+.fi
+.SH DESCRIPTION
+.nf
+Combines cstr_declare() and cstr_init() into a single statement. Creates a
+new cstr variable named s and initialises it with the given content.
+.fi
+.SH PARAMETERS
+.nf
+s        Variable name to create
+initial  Initial content (C string or NULL for empty string)
+.fi
+.SH EXAMPLES
+.nf
+cstr_construct(greeting, "Hello");
+cstr_append(greeting, ", world!");
+cstr_destroy(greeting);
+.fi
+.SH "SEE ALSO"
+.BR cstr_construct_scoped (3),
+.BR cstr_construct_mp (3),
+.BR cstr_declare (3),
+.BR cstr_init (3)

@@ -1,0 +1,36 @@
+.TH CLRU_DECLARE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clru_declare \- declare an uninitialised LRU cache variable with type tracking
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+clru_declare(name, KeyT, ValT);
+.fi
+.SH DESCRIPTION
+.nf
+Declares the clru_cache pointer variable name plus two hidden companion
+type variables that carry KeyT and ValT type information into subsequent
+clru_init(), clru_get(), and clru_set() macro calls.
+
+Must be followed by clru_init() before the cache is used.
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name for the cache handle
+KeyT  Key type (e.g., int, char *, struct MyKey)
+ValT  Value type (e.g., double, struct MyVal)
+.fi
+.SH EXAMPLES
+.nf
+clru_declare(cache, int, double);
+clru_init(cache, 128, NULL, NULL, NULL);
+/* ... use cache ... */
+clru_destroy(cache);
+.fi
+.SH "SEE ALSO"
+.BR clru_declare_scoped (3),
+.BR clru_init (3),
+.BR clru_construct (3)

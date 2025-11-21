@@ -1,0 +1,102 @@
+.TH CHTTPCLIENT_DO 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_do \- perform an HTTP request and buffer the full response
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpclient_do(chttpcli cli,
+                             const chttp_request_t *req,
+                             chttpcli_response **resp_out);
+.fi
+.SH DESCRIPTION
+.nf
+Acquires a pool slot (blocking if all slots are in use), executes the
+HTTP request synchronously, buffers the entire response body, and
+stores a heap-allocated chttpcli_response in *resp_out.
+
+The caller owns *resp_out on success and must call
+chttpclient_resp_free when done.
+
+Redirects (301, 302, 303, 307, 308) are followed automatically, up to
+50 hops.  301/302/303 rewrite the method to a bodyless GET (HEAD is
+left as HEAD); 307/308 preserve the original method and body.  The
+Location header may be an absolute URL, a protocol-relative
+reference ("//host/path"), an absolute-path reference ("/foo"), or a
+general relative reference ("foo", "../foo", "./foo", "?query");
+all are resolved per RFC 3986.  If the request URL embedded
+credentials (see below), the resulting Authorization header is
+resent on every hop that stays on the same origin (scheme, host,
+and port) and is dropped permanently the first time a hop changes
+origin.
+
+The request URL accepts http:// and https:// only.  Both a plain
+hostname/IPv4 literal and a bracketed IPv6 literal
+("https://[::1]:8443/path") are accepted.  A URL may embed
+credentials ("http://user:pass@host/path"); they are turned into an
+Authorization: Basic ... header automatically unless the request
+already sets its own Authorization header.  A trailing "#fragment"
+is recognized and discarded (fragments are never sent to a server).
+.fi
+.SH PARAMETERS
+.nf
+cli       Client handle; must not be NULL.
+req       Request to execute; must not be NULL.
+resp_out  Output parameter; must not be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success
+       Request completed; *resp_out is valid.
+
+ccol_invalid_args
+       Any argument is NULL.
+
+ccol_not_enough_memory
+       Memory allocation failed.
+
+ccol_timed_out
+       Request or connect timeout triggered.
+
+ccol_not_permitted
+       Client is being destroyed; no new requests are accepted.
+
+ccol_http_invalid_url
+       URL is malformed, uses an unsupported scheme (only http:// and
+       https:// are supported), or has a missing/invalid host,
+       port, or userinfo component.
+
+ccol_http_host_resolution_failed
+       DNS resolution failed for the target host.
+
+ccol_http_connection_failed
+       The TCP connection could not be established (e.g. connection
+       refused).
+
+ccol_http_too_many_redirects
+       The redirect chain exceeded 50 hops.
+
+ccol_http_tls_handshake_failed
+       The TLS handshake failed for a reason other than certificate
+       verification.
+
+ccol_http_tls_cert_verification_failed
+       The peer certificate or hostname could not be verified, or the
+       configured client certificate/key/CA bundle path was not
+       readable.
+
+ccol_http_transfer_aborted
+       The connection failed mid-transfer, the server sent a
+       malformed HTTP/1.1 response, or a streaming chttpcli_write_fn
+       returned fewer bytes than it was given.
+
+ccol_unexpected_failure
+       Any other internal failure not covered by the above codes.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_do_streaming (3),
+.BR chttpclient_do_async (3),
+.BR chttp_do (3),
+.BR chttpclient_resp_free (3)

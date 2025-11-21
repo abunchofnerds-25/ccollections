@@ -1,0 +1,34 @@
+.TH CHAN_ENABLE_SENDING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chan_enable_sending \- enable sending on a channel direction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t chan_enable_sending(channel *ch, channel_direction d);
+.fi
+.SH DESCRIPTION
+.nf
+Re-enables send operations on the specified direction that were previously
+disabled and wakes all threads currently blocked waiting to send.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to modify
+d    Direction to enable (owner_to_workers or workers_to_owner)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - Sending enabled successfully
+ccol_invalid_args  - ch is NULL or d is invalid
+.fi
+.SH NOTES
+.nf
+Wakes all blocked senders via broadcast
+Threads can immediately attempt to send if space is available
+Does not affect the opposite direction
+.fi
+.SH "SEE ALSO"
+.BR chan_disable_sending (3)

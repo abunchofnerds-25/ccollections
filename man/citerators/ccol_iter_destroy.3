@@ -1,0 +1,35 @@
+.TH CCOL_ITER_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_iter_destroy \- destroy a unified iterator before the end
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <citerators.h>   /* or any container header */
+
+ccol_iter_destroy(it);
+.fi
+.SH DESCRIPTION
+.nf
+Destroys the iterator by calling its own _free_fn callback and sets it
+to NULL.  Must be called when breaking out of a manual for loop before
+the iterator reaches NULL naturally.
+
+When using ccol_iter_declare(), RAII cleanup handles destruction
+automatically on scope exit; ccol_iter_destroy() is only necessary
+when you need to release resources before the end of the scope.
+Inside ccol_for_each(), the iterator is always destroyed on exit.
+.fi
+.SH PARAMETERS
+.nf
+it   Iterator variable declared with ccol_iter_declare().
+.fi
+.SH NOTES
+.nf
+Safe to call when it is already NULL (no-op).
+After this call, it is NULL and must not be used again.
+.fi
+.SH "SEE ALSO"
+.BR ccol_iter_declare (3),
+.BR ccol_iter_next (3),
+.BR ccol_for_each (3)

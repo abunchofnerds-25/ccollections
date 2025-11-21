@@ -1,0 +1,36 @@
+.TH CVEC_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_construct \- type-safe vector construction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+cvec_construct(vec_name, type);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe macro for creating a vector. Automatically determines element
+size from the type and creates type marker variables for compile-time
+type checking in other macros.
+.fi
+.SH PARAMETERS
+.nf
+vec_name  Name of the vector variable to create
+type      Element type (e.g., int, double, struct foo)
+.fi
+.SH NOTES
+.nf
+Terminates program on allocation failure
+Creates hidden type marker variable for type safety
+Equivalent to cvector_create(sizeof(type), &err) with error handling
+.fi
+.SH EXAMPLES
+.nf
+cvec_construct(my_vec, int);
+cvec_push_rvalue(my_vec, 42);
+.fi
+.SH "SEE ALSO"
+.BR cvec_construct_scoped (3),
+.BR cvector_create (3)

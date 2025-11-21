@@ -1,0 +1,31 @@
+.TH CYAML_STR_VAL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_str_val \- extract a string value from a CYAML_STRING node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+const char *cyaml_str_val(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Return a read-only pointer to the null-terminated string stored in
+node.  Calls fatal_err() if node is NULL or its type is not
+CYAML_STRING.
+
+The returned pointer is owned by the node; it is invalidated when the
+node is destroyed or its value is changed via cyaml_set().
+.fi
+.SH PARAMETERS
+.nf
+node  CYAML_STRING node.
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to the internal string buffer.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_type (3),
+.BR cyaml_create_string (3)

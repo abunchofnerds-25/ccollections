@@ -1,0 +1,33 @@
+.TH MEMPOOL_CALLOC_ENTRY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+mempool_calloc_entry \- allocate zero-initialized entry from pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+void *mempool_calloc_entry(mempool *mp);
+.fi
+.SH DESCRIPTION
+.nf
+Like mempool_alloc_entry(), but zeros the entry before returning.
+.fi
+.SH PARAMETERS
+.nf
+mp   Memory pool to allocate from
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to zero-initialized entry on success
+Returns NULL if pool exhausted and no fallback enabled
+.fi
+.SH NOTES
+.nf
+O(1) complexity
+Zeros only the user-visible portion (not the internal entry header)
+Thread-safe if pool created with single_threaded=false
+.fi
+.SH "SEE ALSO"
+.BR mempool_alloc_entry (3),
+.BR mempool_free_entry (3)

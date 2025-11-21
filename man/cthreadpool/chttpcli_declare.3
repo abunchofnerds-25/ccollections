@@ -1,0 +1,19 @@
+.TH CHTTPCLI_DECLARE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chttpcli_declare \- declare a chttpcli handle variable
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+chttpcli_declare(name)
+.fi
+.SH DESCRIPTION
+.nf
+Declares a chttpcli variable named name, initialised to NULL.  Equivalent
+to writing "chttpcli name = NULL;".
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_construct (3),
+.BR chttpcli_declare_scoped (3)

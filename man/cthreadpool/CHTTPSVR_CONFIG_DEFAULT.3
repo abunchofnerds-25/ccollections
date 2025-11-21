@@ -1,0 +1,57 @@
+.TH CHTTPSVR_CONFIG_DEFAULT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+CHTTPSVR_CONFIG_DEFAULT \- zero-initialiser for chttpsvr_config_t with sensible defaults
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a compound literal that initialises a chttpsvr_config_t
+with the following defaults:
+
+  host                  = "0.0.0.0"
+  port                  = 8080
+  max_body_size         = 4 MiB
+  read_timeout_ms       = 0   (no timeout; use facil.io default ~40 s)
+  idle_timeout_ms       = 0   (0 = fall back to read_timeout_ms)
+  stream_read_timeout_ms = 30000   (30 s; 0 = wait indefinitely)
+  max_body_read_duration_ms = 0   (disabled; no cap on total read time)
+  tls                   = NULL
+  worker_thread_count   = 0   (0 = CPU core count)
+  worker_queue_capacity = 0   (0 = 1024 * worker_thread_count)
+
+stream_read_timeout_ms bounds how long a worker thread will wait for
+the *next* batch of body bytes while reading a request body (buffered
+or streaming), independent of read_timeout_ms/idle_timeout_ms; those
+reset on any connection activity and so do not protect against a
+client that trickles bytes just fast enough to always beat them.  On
+expiry, chttpsvr_req_read returns -1 and chttpsvr_req_stream_error
+reports ccol_timed_out; buffered routes respond 408 automatically.
+
+Note that stream_read_timeout_ms itself resets on any new byte too, so
+a client that trickles a byte or two just before each gap expires
+defeats it the same way it defeats read_timeout_ms/idle_timeout_ms.
+max_body_read_duration_ms closes that loophole by separately capping
+the *total* wall-clock time spent reading one request's body,
+regardless of how many individual gaps it took to get there.  It is
+disabled (0) by default so existing deployments are unaffected unless
+they opt in.  On expiry it reports the same ccol_timed_out outcome as
+a stream_read_timeout_ms expiry.
+
+Use CHTTPSVR_QUEUE_UNBOUNDED for worker_queue_capacity to create a pool
+with no capacity limit.
+
+Override individual fields after applying the macro:
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.port = 9090;
+  cfg.worker_thread_count = 8;
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_start (3),
+.BR CHTTPSVR_QUEUE_UNBOUNDED (3)

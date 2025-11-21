@@ -1,0 +1,26 @@
+.TH CHTTPSVR_STOP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_stop \- close this server's listener
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+void chttpsvr_stop(chttpsvr srv);
+.fi
+.SH DESCRIPTION
+.nf
+Schedules the listener socket registered by chttpsvr_start for close
+on the facil.io reactor.  Returns immediately.  The shared engine and
+all other registered listeners continue running unaffected.
+
+Idempotent: calling chttpsvr_stop on a server that was never started,
+or that was already stopped, is a no-op.
+
+Safe to call with NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_start (3),
+.BR chttpsvr_engine_stop (3),
+.BR chttpsvr_engine_wait (3)

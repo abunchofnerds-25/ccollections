@@ -1,0 +1,69 @@
+.TH CYAML_SET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cyaml_set \- write a C scalar to the DOM leaf addressed by a path
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+ccol_retval_t cyaml_set(cyaml root, const char *path, val);
+.fi
+.SH DESCRIPTION
+.nf
+Detect the compile-time type of val via _Generic and call
+_cyaml_set_typed() to write a scalar value to the leaf node addressed
+by path.
+
+Accepted C types for val and the resulting CYAML node type:
+  bool                      -> CYAML_BOOL
+  any integer type          -> CYAML_INTEGER (stored as long long)
+  float / double            -> CYAML_FLOAT (stored as double)
+  char * / const char *     -> CYAML_STRING (heap copy made)
+  string literal ("...")    -> CYAML_STRING
+  NULL or unrecognized ptr  -> CYAML_NULL
+
+The leaf is created when absent; its immediate parent must already
+exist.  If the leaf exists its type is replaced unconditionally:
+existing list or dictionary subtrees are deep-freed before the new
+value is written.
+
+Non-finite doubles (Inf, -Inf, NaN) are accepted and stored (unlike
+cyaml_set on a cjson DOM).  They serialize as .inf, -.inf, .nan.
+
+Passing (bool)true / (bool)false is required to produce a CYAML_BOOL
+node; without the explicit cast, integer literal 1 or 0 produces a
+CYAML_INTEGER node instead.
+.fi
+.SH PARAMETERS
+.nf
+root   Root cyaml handle.
+path   Dot-separated path string.
+       Escape sequences: '\e.' -> literal '.', '\e\e' -> literal '\e'.
+       A '\e' before any other character is left unchanged.
+val    C value; type is resolved at compile time.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_retval_t: ccol_success on success.
+ccol_invalid_args; empty path, type incompatible at a path step, or
+                      list index out of bounds.
+ccol_key_not_found; a non-leaf component of the path does not exist.
+ccol_not_enough_memory; allocation failure.
+.fi
+.SH EXAMPLES
+.nf
+cyaml_set(doc, "server.port",  8080);
+cyaml_set(doc, "server.name",  "prod");
+cyaml_set(doc, "server.tls",   (bool)true);
+cyaml_set(doc, "server.ratio", 0.95);
+
+/* Replace a dictionary subtree with a scalar */
+cyaml_set(doc, "server.options", 0);   /* deep-frees old subtree */
+
+/* Set to null */
+cyaml_set(doc, "server.deprecated", NULL);
+.fi
+.SH "SEE ALSO"
+.BR cyaml_get (3),
+.BR _cyaml_set_typed (3)

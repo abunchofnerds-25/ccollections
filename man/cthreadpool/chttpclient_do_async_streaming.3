@@ -1,0 +1,54 @@
+.TH CHTTPCLIENT_DO_ASYNC_STREAMING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_do_async_streaming \- submit an HTTP request for asynchronous execution with a streaming response body
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ctpool_future *chttpclient_do_async_streaming(chttpcli cli,
+                                               const chttp_request_t *req,
+                                               chttpcli_write_fn write_fn,
+                                               void *write_ctx);
+.fi
+.SH DESCRIPTION
+.nf
+Same non-blocking submission semantics as chttpclient_do_async, but
+write_fn is invoked one or more times with chunks of the response
+body as they arrive over the wire, exactly like
+chttpclient_do_streaming.
+
+write_fn runs on one of the engine's own reactor threads, NOT on the
+calling thread and NOT on a dedicated thread for this request.  This
+has two hard requirements, unlike chttpclient_do_streaming's
+caller-thread callback: write_fn must not block (no blocking I/O, no
+long-held locks, no waiting on another request's future) (doing so
+stalls every other connection the engine is currently multiplexing
+on that reactor thread) and write_fn must not call back into
+chttpclient_do_async/_streaming (or anything that transitively waits
+on this same request's future) for the same or a different chttpcli
+sharing the engine, or it may deadlock against the very reactor
+thread it is running on.
+.fi
+.SH PARAMETERS
+.nf
+cli       Client handle; must not be NULL.
+req       Request to execute; must not be NULL.
+write_fn  Chunk delivery callback; must not be NULL.
+write_ctx Opaque context pointer passed verbatim to write_fn.
+.fi
+.SH RETURN VALUE
+.nf
+A future, or NULL under the same conditions as chttpclient_do_async
+(including a NULL write_fn).  On success, the future's eventual
+result carries ccol_http_transfer_aborted if write_fn ever returns
+fewer bytes than len, aborting the transfer.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_do_async (3),
+.BR chttpclient_do_streaming (3),
+.BR chttpclient_do_pooled_streaming (3),
+.BR chttpclient_async_result_get (3),
+.BR chttpclient_async_result_free (3),
+.BR chttpcli_write_fn (3)

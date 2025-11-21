@@ -1,0 +1,33 @@
+.TH CSTRING_STARTS_WITH 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_starts_with \- check whether the string begins with a prefix
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+bool cstring_starts_with(cstr s, const char *prefix);
+.fi
+.SH DESCRIPTION
+.nf
+Returns true if the content of s begins with prefix. An empty prefix
+always matches.
+.fi
+.SH PARAMETERS
+.nf
+s        String to test
+prefix   Prefix to look for (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+true if the string starts with prefix, false otherwise
+.fi
+.SH NOTES
+.nf
+An empty prefix always returns true
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_ends_with (3),
+.BR cstring_find (3)

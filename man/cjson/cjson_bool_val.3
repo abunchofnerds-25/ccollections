@@ -1,0 +1,24 @@
+.TH CJSON_BOOL_VAL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_bool_val, cjson_int_val, cjson_double_val, cjson_str_val \- read a scalar value from a DOM node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+bool        cjson_bool_val(cjson node);
+long long   cjson_int_val(cjson node);
+double      cjson_double_val(cjson node);
+const char *cjson_str_val(cjson node);
+.fi
+.SH DESCRIPTION
+.nf
+Each function returns the value stored in node, asserting via fatal_err()
+if the node's type does not match.
+
+cjson_str_val() returns a pointer to the node's own internal copy of
+the string; the caller must not free it.
+.fi
+.SH "SEE ALSO"
+.BR cjson_type (3)

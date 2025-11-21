@@ -1,0 +1,32 @@
+.TH CYAML_SERIALIZE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_serialize \- serialize a DOM tree to block-style YAML
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+char *cyaml_serialize(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Produce a human-readable, block-style YAML document from the given DOM
+subtree.  Scalars are emitted as plain text when safe (i.e., when they
+would round-trip without implicit type ambiguity); otherwise they are
+double-quoted.  Lists use "- value" block notation.  Dictionaries use
+"key: value" block notation.  Nested structures are indented by two
+spaces per level.
+
+The returned buffer is allocated using the root node's stored allocator.
+It must be freed with cyaml_serialize_free() (or cyaml_serialize_free_mp()
+if a custom allocator was used).
+.fi
+.SH RETURN VALUE
+.nf
+Heap-allocated null-terminated YAML string on success, NULL on OOM.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_serialize_flow (3),
+.BR cyaml_serialize_free (3),
+.BR cyaml_serialize_free_mp (3)

@@ -1,0 +1,28 @@
+.TH CYAML_DOUBLE_VAL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_double_val \- extract a floating-point value from a CYAML_FLOAT node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+double cyaml_double_val(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Return the double stored in node.  Calls fatal_err() if node is NULL or
+if its type is not CYAML_FLOAT.  The returned value may be infinite or
+NaN (see cyaml_create_double_mp).
+.fi
+.SH PARAMETERS
+.nf
+node  CYAML_FLOAT node.
+.fi
+.SH RETURN VALUE
+.nf
+double value.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_type (3),
+.BR cyaml_create_double (3)

@@ -1,0 +1,74 @@
+.TH CLRUCACHE_CREATE_FULL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clrucache_create_full \- create an LRU cache with full control
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+clru_cache clrucache_create_full(size_t capacity,
+                                 ccol_data_type key_type,
+                                 ccol_data_type val_type,
+                                 clru_remote_getter_t getter,
+                                 clru_remote_setter_t setter,
+                                 clru_eviction_cb_t eviction_cb,
+                                 ccol_memmgmt_procs_t *mprocs,
+                                 char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a thread-safe LRU cache backed by a hash map (O(1) lookup) and
+a doubly-linked list (O(1) eviction). The cache holds up to capacity
+live entries; inserting beyond that limit evicts the least-recently-used
+entry first.
+
+This is the low-level constructor. Prefer the clru_construct() macro
+family in application code.
+.fi
+.SH PARAMETERS
+.nf
+capacity     Maximum number of live entries before eviction occurs.
+             Must be > 0.
+key_type     ccol_data_type of keys, as returned by
+             determine_ccol_data_type().
+val_type     ccol_data_type of values (used for type tracking only;
+             the internal map always stores heap pointers).
+getter       Remote getter callback, or NULL. Called on cache miss to
+             fetch the value from an external source. On success it
+             must heap-allocate the value data, assign it to val->ptr,
+             set val->size to the byte length, and return true. The
+             cache takes ownership of val->ptr and frees it. On
+             failure it must leave val->ptr as NULL and return false.
+setter       Remote setter callback, or NULL. Called synchronously
+             before each cache update. Receives the key and value as
+             const cmap_pair* pointers. If it returns false the cache
+             is not updated.
+eviction_cb  Eviction callback, or NULL. Called while the cache mutex
+             is held when an entry is evicted to make room. Receives
+             the evicted key and value as const cmap_pair* pointers.
+             Must not call back into the cache.
+mprocs       Custom memory management procedures, or NULL for default
+             malloc/free.
+err          Optional pointer to receive an error string on failure.
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new cache handle on success.
+Returns NULL on failure; *err is set if err is non-NULL.
+.fi
+.SH NOTES
+.nf
+Thread-safe: all operations on the returned handle are protected by
+an internal mutex and per-entry condition variables.
+The eviction callback is invoked while the cache mutex is held; it
+must not re-enter the cache.
+The destroy function must be called only after all other threads have
+finished using the cache.
+.fi
+.SH "SEE ALSO"
+.BR clru_construct (3),
+.BR clru_init (3),
+.BR __clrucache_destroy (3),
+.BR clrucache_get_full (3),
+.BR clrucache_set_full (3)

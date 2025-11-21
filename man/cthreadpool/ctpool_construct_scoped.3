@@ -1,0 +1,50 @@
+.TH CTPOOL_CONSTRUCT_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ctpool_construct_scoped \- declare, initialise, and auto-destroy a thread pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ctpool_construct_scoped(name, num_threads, queue_capacity);
+.fi
+.SH DESCRIPTION
+.nf
+Combines ctpool_declare_scoped() and the initialisation performed by
+ctpool_construct() into a single statement. The pool is automatically
+destroyed (with an implicit drain shutdown if one was not already
+called) when the variable leaves scope.
+.fi
+.SH PARAMETERS
+.nf
+name            Variable name for the pool handle.
+num_threads     Number of worker threads to spawn (must be >= 1).
+queue_capacity  Maximum pending tasks (0 or ccol_invalid_size for
+                unbounded).
+.fi
+.SH NOTES
+.nf
+Calls fatal_err() on failure; use create_cthread_pool() directly when
+graceful error handling is required.
+Requires GCC or Clang (uses __attribute__((cleanup))).
+The implicit drain inside the destructor may block for a long time if
+tasks are slow; call ctpool_shutdown_drain() or
+ctpool_shutdown_immediate() explicitly before the end of scope when
+bounded latency on exit matters.
+.fi
+.SH EXAMPLES
+.nf
+void process_batch(void) {
+    ctpool_construct_scoped(pool, 4, 0);
+    for (int i = 0; i < 1000; i++)
+        ctpool_submit(pool, work_fn, items[i], NULL);
+    ctpool_shutdown_drain(pool);
+}  /* pool destroyed automatically */
+.fi
+.SH "SEE ALSO"
+.BR ctpool_construct (3),
+.BR ctpool_declare_scoped (3),
+.BR ___ctpool_destroy (3),
+.BR ctpool_shutdown_drain (3),
+.BR ctpool_shutdown_immediate (3)

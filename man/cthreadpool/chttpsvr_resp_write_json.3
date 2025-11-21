@@ -1,0 +1,33 @@
+.TH CHTTPSVR_RESP_WRITE_JSON 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_resp_write_json \- append JSON to the response body
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp,
+                                        const char *json, size_t len);
+.fi
+.SH DESCRIPTION
+.nf
+Appends len bytes of json to the response body and then sets the
+Content-Type response header to "application/json".  The body is
+written first so that an OOM failure on body allocation leaves resp
+completely unchanged (no header is installed, no bytes are buffered).
+
+Returns ccol_invalid_args immediately (without modifying resp) when
+resp or json is NULL, or when len is 0.  A zero-length JSON body with
+Content-Type set is semantically invalid, so the function rejects it
+rather than silently setting the header with no body bytes.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success           - Body bytes appended and Content-Type header set.
+ccol_invalid_args      - resp or json is NULL, or len is 0.
+ccol_not_enough_memory - Body or header buffer allocation failed.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_resp_write (3),
+.BR chttpsvr_resp_set_header (3)

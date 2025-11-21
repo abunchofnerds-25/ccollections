@@ -1,0 +1,30 @@
+.TH CYAML_LIST_PUSH 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_list_push \- append a child to a list
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+ccol_retval_t cyaml_list_push(cyaml seq, cyaml child);
+.fi
+.SH DESCRIPTION
+.nf
+Append child to the CYAML_LIST node seq.  Ownership of child
+transfers to seq; do not free the child afterwards.
+.fi
+.SH PARAMETERS
+.nf
+seq    CYAML_LIST target node.
+child  Node to append.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success, ccol_invalid_args (if seq is not a list), or
+ccol_not_enough_memory.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_list_get (3),
+.BR cyaml_list_len (3),
+.BR cyaml_create_list (3)

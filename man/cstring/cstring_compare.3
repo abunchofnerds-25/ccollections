@@ -1,0 +1,35 @@
+.TH CSTRING_COMPARE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_compare \- compare the string to a C string
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+int cstring_compare(cstr s, const char *str);
+.fi
+.SH DESCRIPTION
+.nf
+Compares the content of s to the null-terminated C string str using
+strcmp() semantics.
+.fi
+.SH PARAMETERS
+.nf
+s     String to compare
+str   C string to compare against (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+Negative if s < str
+Zero if s == str
+Positive if s > str
+.fi
+.SH NOTES
+.nf
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_equals (3),
+.BR cstring_starts_with (3),
+.BR cstring_ends_with (3)

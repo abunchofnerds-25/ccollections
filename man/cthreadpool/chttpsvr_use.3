@@ -1,0 +1,55 @@
+.TH CHTTPSVR_USE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_use \- append global middleware to the root router
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_use(chttpsvr srv,
+                            chttpsvr_middleware_fn fn, void *ctx);
+.fi
+.SH DESCRIPTION
+.nf
+Appends a middleware function to the global middleware chain.  Global
+middleware runs before router-specific middleware and before the route
+handler for every request.
+
+fn receives a next callback; calling it continues the chain.  Omitting
+the call short-circuits the chain and sends the response as-is.
+
+This function is thread-safe and may be called before or after
+chttpsvr_start is running.
+.fi
+.SH NOTES
+.nf
+Each router (the root router for global middleware, and each
+sub-router) caps its own middleware chain at 32 entries.  This cap is
+enforced at REGISTRATION time: chttpsvr_use and chttpsvr_router_use
+return ccol_not_permitted, without adding the entry, on the call that
+would exceed the 32-entry cap for that specific router.
+
+Separately, dispatch time also enforces a combined cap of 32 for the
+effective chain of a given request (global middleware + the matched
+router's own middleware).  Because each side of that sum can
+independently hold up to 32 entries, the combined count can still
+exceed 32 even though neither router individually hit its own
+registration-time cap; when this happens the server responds with
+HTTP 500 on the affected request.
+
+Registering the same path and method more than once is permitted and
+returns ccol_success each time, but only the FIRST registered handler
+is ever invoked (first-wins policy).
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if srv or fn is NULL.
+ccol_not_enough_memory if allocation fails.
+ccol_not_permitted if the root router's middleware chain is already at
+the 32-entry cap.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_register_handler (3),
+.BR chttpsvr_router_use (3)

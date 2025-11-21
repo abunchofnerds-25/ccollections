@@ -1,0 +1,35 @@
+.TH CTPOOL_FUTURE_GET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_future_get \- block until the future has a result
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+void *ctpool_future_get(ctpool_future *f);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks until the associated task has finished executing, then returns
+the void* value returned by the task function. If the task was
+cancelled due to ctpool_shutdown_immediate the return value is NULL
+and ctpool_future_cancelled(f) will return true.
+
+Does not free the future. The caller must call ctpool_future_free
+after retrieving the result.
+.fi
+.SH PARAMETERS
+.nf
+f   Future handle (NULL is a no-op that returns NULL)
+.fi
+.SH RETURN VALUE
+.nf
+The void* value returned by the task function, or NULL if the future
+was cancelled or f is NULL.
+.fi
+.SH "SEE ALSO"
+.BR ctpool_submit_future (3),
+.BR ctpool_future_done (3),
+.BR ctpool_future_cancelled (3),
+.BR ctpool_future_free (3)

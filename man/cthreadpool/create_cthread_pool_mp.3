@@ -1,0 +1,56 @@
+.TH CREATE_CTHREAD_POOL_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+create_cthread_pool_mp \- create a thread pool with custom memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ctpool create_cthread_pool_mp(size_t num_threads,
+                              size_t queue_capacity,
+                              ccol_memmgmt_procs_t *mprocs,
+                              char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a new thread pool with the specified number of worker threads.
+The queue_capacity parameter controls the task queue mode:
+
+  0 or ccol_invalid_size -> unbounded task queue. ctpool_submit never
+    blocks on capacity; the only non-argument failure path is
+    ccol_not_enough_memory.
+
+  N > 0 -> bounded task queue of capacity N. ctpool_submit blocks when
+    the queue is full; ctpool_try_submit returns ccol_container_full
+    instead of blocking.
+
+All num_threads worker threads are started before the function returns.
+If any pthread_create call fails the already-started threads are joined
+cleanly before the function returns NULL.
+.fi
+.SH PARAMETERS
+.nf
+num_threads    Number of worker threads (must be >= 1)
+queue_capacity 0 or ccol_invalid_size for unbounded; N > 0 for bounded
+mprocs         Custom allocator, or NULL for malloc/free
+err_str        Optional: receives a static error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new ctpool handle on success.
+Returns NULL on failure and sets *err_str if err_str is non-NULL.
+.fi
+.SH NOTES
+.nf
+Futures always use standard malloc/free regardless of mprocs.
+The pool must be shut down with ctpool_shutdown_drain or
+ctpool_shutdown_immediate before calling ctpool_destroy, unless
+ctpool_destroy is used directly (which performs a drain shutdown).
+.fi
+.SH "SEE ALSO"
+.BR create_cthread_pool (3),
+.BR ctpool_construct (3),
+.BR __ctpool_destroy (3),
+.BR ctpool_shutdown_drain (3),
+.BR ctpool_shutdown_immediate (3)

@@ -1,0 +1,30 @@
+.TH CSTR_C_STR 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_c_str \- return a pointer to the null-terminated character data
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_c_str(s);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_c_str().
+.fi
+.SH PARAMETERS
+.nf
+s   cstr to query
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to null-terminated character data
+.fi
+.SH NOTES
+.nf
+Pointer is invalidated by any mutating operation
+.fi
+.SH "SEE ALSO"
+.BR cstring_c_str (3),
+.BR cstr_length (3)

@@ -1,0 +1,37 @@
+.TH CBMAP_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cbmap_create \- create a BST map with default settings
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+cbmap cbmap_create(bool keys_are_signed_ints, char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a self-balancing binary search tree map (AVL tree) with default
+memory management and default comparison based on key signedness.
+.fi
+.SH PARAMETERS
+.nf
+keys_are_signed_ints  If true, treat integer keys as signed for comparison
+err                   Optional pointer to receive error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created BST map on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Default comparison for unsigned: memcmp(key1, key2, size)
+Default comparison for signed: proper signed integer comparison
+Map maintains AVL balance: |height(left) - height(right)| <= 1
+All operations are O(log n) for balanced tree
+Map must be destroyed with cbmap_destroy() when done
+.fi
+.SH "SEE ALSO"
+.BR cbmap_create_full (3),
+.BR cbmap_destroy (3)

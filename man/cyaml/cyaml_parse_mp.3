@@ -1,0 +1,68 @@
+.TH CYAML_PARSE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_parse_mp, cyaml_parse \- parse a null-terminated YAML string into a DOM tree
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_parse_mp(const char *yaml_str, char **err_str,
+                     ccol_memmgmt_procs_t *mp);
+cyaml cyaml_parse(const char *yaml_str, char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Parse a null-terminated YAML string and return the root DOM node.
+Comments (#) are silently discarded.  Tags (!tag, !!tag) are silently
+ignored.  Anchors (&name) and aliases (*name) are resolved to
+independent deep clones.  Implicit YAML 1.2 core schema typing is
+applied to unquoted scalars.
+
+SINGLE-DOCUMENT STREAMS
+When the input contains exactly one document (with or without a leading
+"---" marker and an optional trailing "..." marker), the root node of
+that document is returned directly.
+
+MULTI-DOCUMENT STREAMS
+When the input contains multiple documents separated by "---" markers,
+all document roots are collected and returned as a single CYAML_LIST
+node whose elements are the individual document roots in order.  The
+anchor table is reset between documents so an anchor defined in one
+document cannot be referenced by a later document.  After the first
+document, each subsequent document must begin with a "---" marker;
+bare content following a document end ("...") is rejected as a parse
+error.
+
+cyaml_parse() is an inline wrapper that passes NULL for mp.
+
+On parse failure *err_str (if non-NULL) receives a heap-allocated,
+null-terminated error message that the caller must free().  On success
+*err_str is set to NULL.  Pass NULL for err_str to discard error
+details.
+.fi
+.SH PARAMETERS
+.nf
+yaml_str   Null-terminated YAML input.
+err_str    Out-parameter for the error string, or NULL to ignore.
+mp         Custom allocator for all nodes in the resulting tree, or
+           NULL for the default allocator.
+.fi
+.SH RETURN VALUE
+.nf
+For a single-document input: the root cyaml node.
+For a multi-document input: a CYAML_LIST node wrapping all document
+roots.
+NULL on parse failure or OOM.
+.fi
+.SH NOTES
+.nf
+The caller owns the returned tree and must free it with cyaml_destroy().
+
+To distinguish single- from multi-document results, check the type of
+the returned node with cyaml_type().
+.fi
+.SH "SEE ALSO"
+.BR cyaml_parse_n_mp (3),
+.BR cyaml_destroy (3),
+.BR cyaml_serialize (3)

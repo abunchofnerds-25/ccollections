@@ -1,0 +1,22 @@
+.TH CHTTPSVR_RESP_SET_STATUS 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_resp_set_status \- set the HTTP response status code
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
+.fi
+.SH DESCRIPTION
+.nf
+Sets the HTTP status code for the response.  The default is 200.
+
+status_code must be in the range 100-999 (inclusive).  Values outside
+this range are clamped to 500 Internal Server Error when the response
+is sent; the stored value itself is not altered.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_resp_set_header (3),
+.BR chttpsvr_resp_write (3)

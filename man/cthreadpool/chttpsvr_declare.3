@@ -1,0 +1,19 @@
+.TH CHTTPSVR_DECLARE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chttpsvr_declare \- declare an uninitialised chttpsvr variable
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttpsvr_declare(name);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a chttpsvr variable named name without initialising it.
+Use create_chttpsvr to initialise it later.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_construct (3),
+.BR create_chttpsvr (3)

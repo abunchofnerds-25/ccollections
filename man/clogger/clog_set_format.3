@@ -1,0 +1,85 @@
+.TH CLOG_SET_FORMAT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_set_format \- change the output format at runtime
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+void clog_set_format(clog logger, clog_format_t fmt);
+.fi
+.SH DESCRIPTION
+.nf
+Updates the output format of the shared backing store.  Because the
+format is stored on the shared store rather than the per-logger struct,
+the change is immediately visible to every logger handle that writes to
+the same file descriptor (the root logger and all derived loggers).
+
+Three formats are available:
+
+  CLOG_FMT_LOGFMT (0)
+    Default.  Every record is emitted as a single logfmt line:
+      ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>)
+      src=<file>:<line> func=<fn> [fields] msg=<text>
+    log_error, log_alert, and log_fatal append tab-indented backtrace
+    continuation lines after the main record.
+
+  CLOG_FMT_JSON (1)
+    Every record is emitted as a single NDJSON object followed by a
+    newline:
+      {"ts":"...","level":"...","proc":"name(pid):tname(tid)",
+       "src":"file:N","func":"...", [fields,] "msg":"..."}
+    Structured fields become top-level JSON keys.  For log_error,
+    log_alert, and log_fatal the backtrace is embedded as a "bt"
+    string array inside the same JSON object.
+
+  CLOG_FMT_SYSLOG (2)
+    RFC 5424 syslog format.  Available only for fd-based loggers
+    (clog_open_fd / clog_open_fd_mp).  Calling clog_set_format() with
+    CLOG_FMT_SYSLOG on a file-backed logger is a silent no-op; the
+    format remains unchanged.
+
+    Each record is emitted as a single line:
+      <PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol ...] MSG\en
+
+      PRI        = (facility * 8) + RFC 5424 severity (mapped from
+                   clog_level_t: TRACE=7, DEBUG=7, INFO=6, WARN=4,
+                   ERROR=3, ALERT=1, FATAL=0)
+      TIMESTAMP  = ISO 8601 UTC (same format as logfmt/JSON)
+      HOSTNAME   = result of gethostname(2), or "-" if unavailable
+      APP-NAME   = process name from /proc/self/comm or argv[0], or "-"
+      PID        = getpid(2)
+      MSGID      = level string ("INFO", "ERROR", etc.)
+      [ccol ...]  = RFC 5424 SD-ELEMENT with SD-ID "ccol" carrying
+                   proc="[<name>(<pid>):<tname>(<tid>)\e]",
+                   src="<file>:<line>", func="<fn>", and any fields
+                   attached via clog_set_field()
+      MSG        = the formatted message text
+
+    The facility is controlled by clog_set_facility() and defaults to
+    CLOG_SYSLOG_USER.  Backtraces (log_error, log_alert, log_fatal) are
+    emitted as separate syslog messages, one per frame, using the same
+    PRI and MSGID as the original record.
+
+    The fd must be connected to a syslog daemon before calling
+    clog_set_format().  On Linux this is typically a SOCK_DGRAM Unix
+    socket at /dev/log.  Keep individual messages under 2 KiB to
+    stay within typical syslogd datagram limits.
+.fi
+.SH PARAMETERS
+.nf
+logger  Logger handle.
+fmt     CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG.
+.fi
+.SH NOTES
+.nf
+Thread-safe: protected by the shared backing-store mutex.
+Passing CLOG_FMT_SYSLOG on a file-backed logger is a silent no-op.
+.fi
+.SH "SEE ALSO"
+.BR clog_get_format (3),
+.BR clog_set_facility (3),
+.BR clog_open_fd_mp (3),
+.BR clog_open_file_mp (3),
+.BR clog_derive (3)

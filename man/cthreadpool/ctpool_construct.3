@@ -1,0 +1,56 @@
+.TH CTPOOL_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ctpool_construct \- declare and initialise a thread pool in one step
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ctpool_construct(name, num_threads, queue_capacity);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a ctpool variable named name, calls create_cthread_pool() to
+initialise it, and calls fatal_err() if creation fails.
+
+queue_capacity controls the queue mode:
+  0 or ccol_invalid_size  ->  unbounded queue (submit never blocks on
+                               capacity; only failure is OOM)
+  N > 0                   ->  bounded queue of capacity N (submit blocks
+                               when full; try_submit returns
+                               ccol_container_full instead)
+.fi
+.SH PARAMETERS
+.nf
+name            Variable name for the pool handle.
+num_threads     Number of worker threads to spawn (must be >= 1).
+queue_capacity  Maximum pending tasks (0 or ccol_invalid_size for
+                unbounded).
+.fi
+.SH NOTES
+.nf
+Calls fatal_err() on failure; use create_cthread_pool() directly when
+graceful error handling is required.
+.fi
+.SH EXAMPLES
+.nf
+ctpool_construct(pool, 4, 256);
+ctpool_submit(pool, my_fn, my_arg, NULL);
+ctpool_wait(pool);
+ctpool_shutdown_drain(pool);
+ctpool_destroy(pool);
+
+/* Unbounded queue */
+ctpool_construct(pool2, 8, 0);
+ctpool_submit(pool2, heavy_fn, NULL, NULL);
+ctpool_shutdown_drain(pool2);
+ctpool_destroy(pool2);
+.fi
+.SH "SEE ALSO"
+.BR ctpool_construct_scoped (3),
+.BR ctpool_declare (3),
+.BR create_cthread_pool (3),
+.BR ctpool_submit (3),
+.BR ctpool_shutdown_drain (3),
+.BR ctpool_destroy (3)

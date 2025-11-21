@@ -1,0 +1,31 @@
+.TH CYAML_CREATE_DOUBLE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_create_double_mp, cyaml_create_double \- allocate a YAML floating-point node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_create_double_mp(double val, ccol_memmgmt_procs_t *mp);
+cyaml cyaml_create_double(double val);
+.fi
+.SH DESCRIPTION
+.nf
+Allocate a DOM node of type CYAML_FLOAT.  Unlike cjson, YAML
+explicitly supports non-finite values: +Inf serializes as .inf,
+-Inf as -.inf, and NaN as .nan.  All three are accepted and stored.
+cyaml_create_double() passes NULL for mp.
+.fi
+.SH PARAMETERS
+.nf
+val  Double value; finite, infinite, and NaN are all accepted.
+mp   Custom allocator, or NULL for default.
+.fi
+.SH RETURN VALUE
+.nf
+New cyaml node on success, NULL on allocation failure.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_double_val (3),
+.BR cyaml_destroy (3)

@@ -1,0 +1,36 @@
+.TH CBMAP_GET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_get \- get value by key (type-safe, returns value)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+value = cbmap_get(hm_name, key);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cbmap_get_elem_ref() that returns the actual value.
+Calls fatal_err() if key not found or size mismatch.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  BST map to search
+key      Key to look up
+.fi
+.SH RETURN VALUE
+.nf
+Returns value associated with key
+.fi
+.SH NOTES
+.nf
+Terminates program if key not found
+Terminates program if value size doesn't match type size
+Returns value, not pointer
+For strings, returns the char* itself
+O(log n) search time
+.fi
+.SH "SEE ALSO"
+.BR cbmap_get_ptr (3),
+.BR cbmap_insert (3)

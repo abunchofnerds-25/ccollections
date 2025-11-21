@@ -1,0 +1,36 @@
+.TH CBMAP_INSERT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_insert \- insert a key-value pair (type-safe)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+cbmap_insert(hm_name, key, val);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cbmap_insert_elem() that automatically handles
+type conversion and cmap_pair creation. If the key already exists the
+value is updated silently. Calls fatal_err() only on a true failure
+(i.e. ccol_not_enough_memory or ccol_container_full).
+Tree is automatically rebalanced after insertion.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  BST map to insert into
+key      Key to insert
+val      Value to associate with key
+.fi
+.SH NOTES
+.nf
+Terminates program only on true failure, not on existing-key update
+Automatically takes address of key and value
+Handles both value types and string types correctly
+Tree is automatically rebalanced after insertion
+.fi
+.SH "SEE ALSO"
+.BR cbmap_insert_elem (3),
+.BR cbmap_get (3),
+.BR cbmap_remove (3)

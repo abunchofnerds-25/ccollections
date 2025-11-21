@@ -1,0 +1,78 @@
+.TH _CLOG_WRITE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+_clog_write \- internal log-line writer (use the log_* macros instead)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+void _clog_write(clog logger, clog_level_t level,
+                 const char *file, int line, const char *func,
+                 bool with_backtrace, const char *fmt, ...)
+    __attribute__((format(printf, 7, 8)));
+.fi
+.SH DESCRIPTION
+.nf
+Formats and emits a single structured log line. This is the function
+that all log_* macros expand to; application code should call the
+macros rather than this function directly.
+
+The write sequence (all steps under the per-logger mutex) is:
+
+  1. Check level >= min_level. If filtered AND level != CLOG_FATAL,
+     return immediately (no output). CLOG_FATAL bypasses this check.
+  2. Format the user message with vsnprintf into a 1024-byte stack
+     buffer; spill to heap if the formatted text exceeds 1024 bytes.
+  3. If time rotation is enabled, check and fire if due.
+  4. Build the log record according to the shared backing-store format:
+
+     CLOG_FMT_LOGFMT:
+       ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>)
+       src=<file>:<line> func=<func> [key=value ...] msg=<message>
+
+     CLOG_FMT_JSON:
+       {"ts":"...","level":"...","proc":"name(pid):tname(tid)",
+        "src":"file:N","func":"...", [fields,] "msg":"..." [,"bt":[...]]}
+       The "bt" array is appended inline when with_backtrace is true.
+
+  5. Write the record atomically with write(2) via an EINTR-retry loop.
+  6. If with_backtrace is true, emit the backtrace:
+     CLOG_FMT_LOGFMT: call backtrace() + backtrace_symbols() and
+       write each frame as a tab-indented continuation line:
+         \et#N symbol\en
+     CLOG_FMT_SYSLOG: emit each frame as a separate RFC 5424 syslog
+       message (same PRI and MSGID as the original record).
+     CLOG_FMT_JSON: backtrace was already embedded as "bt" in step 4.
+  7. If size rotation is enabled, check and fire if due.
+  8. If level == CLOG_FATAL, call exit(EXIT_FAILURE).
+
+The write buffer is a per-logger dynamic buffer that starts at 4 KiB
+and grows (doubling) up to 16 MiB. It is reused across calls.
+.fi
+.SH PARAMETERS
+.nf
+logger          Logger handle.
+level           Severity level of this message.
+file            Source file name (__FILE__).
+line            Source line number (__LINE__).
+func            Function name (__func__).
+with_backtrace  If true, append a stack backtrace after the log line.
+fmt             printf-style format string.
+\&...             Format arguments.
+.fi
+.SH NOTES
+.nf
+Backtrace support requires a platform with execinfo.h (glibc, macOS,
+FreeBSD) and the binary linked with -rdynamic for symbol resolution.
+On other platforms the backtrace is silently omitted.
+The format attribute causes the compiler to type-check fmt and the
+variadic arguments at compile time.
+.fi
+.SH "SEE ALSO"
+.BR log_trace (3),
+.BR log_debug (3),
+.BR log_info (3),
+.BR log_warn (3),
+.BR log_error (3),
+.BR log_fatal (3)

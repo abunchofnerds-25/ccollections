@@ -1,0 +1,20 @@
+.TH CHTTPSVR_RESP_WRITE_STR 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_resp_write_str \- append a string to the response body
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp,
+                                       const char *str);
+.fi
+.SH DESCRIPTION
+.nf
+Equivalent to chttpsvr_resp_write(resp, str, strlen(str)).
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_resp_write (3),
+.BR chttpsvr_resp_printf (3),
+.BR chttpsvr_resp_write_json (3)

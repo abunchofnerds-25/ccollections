@@ -1,0 +1,40 @@
+.TH CTPOOL_FUTURE_FULFILL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_future_fulfill \- deliver a result to a detached future
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ccol_retval_t ctpool_future_fulfill(ctpool_future *f, void *result);
+.fi
+.SH DESCRIPTION
+.nf
+Delivers result to a future created via ctpool_future_create_detached,
+waking any callers currently blocked in ctpool_future_get, then
+releases the producer's reference (freeing the future here if the
+caller already released its own reference via ctpool_future_free).
+
+Must be called exactly once per detached future. Do not call this on
+a future returned by ctpool_submit_future, ctpool_try_submit_future,
+or ctpool_timed_submit_future; those are fulfilled internally by the
+worker thread that runs their task.
+.fi
+.SH PARAMETERS
+.nf
+f        Future handle; must have been created via
+         ctpool_future_create_detached and not already fulfilled
+result   Result value to deliver; retrievable via ctpool_future_get
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        result was delivered
+ccol_invalid_args   f is NULL
+ccol_not_permitted  f was already fulfilled
+.fi
+.SH "SEE ALSO"
+.BR ctpool_future_create_detached (3),
+.BR ctpool_future_get (3),
+.BR ctpool_future_done (3),
+.BR ctpool_future_free (3)

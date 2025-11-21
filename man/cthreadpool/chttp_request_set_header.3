@@ -1,0 +1,36 @@
+.TH CHTTP_REQUEST_SET_HEADER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_request_set_header \- set or replace a request header
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttp_request_set_header(chttp_request_t *req,
+                                       const char *name,
+                                       const char *value);
+.fi
+.SH DESCRIPTION
+.nf
+Inserts or replaces the named header in the request.  The header name
+is normalized to lowercase before storage so that all subsequent
+lookups are case-insensitive.  If a header with the same name (ignoring
+case) already exists it is overwritten with the new value.
+
+The headers map is lazily created on the first call.
+.fi
+.SH PARAMETERS
+.nf
+req     Request to modify; must not be NULL.
+name    Header name (e.g. "Authorization"); must not be NULL.
+value   Header value; must not be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success            Header was set.
+ccol_invalid_args       req, name, or value is NULL.
+ccol_not_enough_memory  Map allocation failed.
+.fi
+.SH "SEE ALSO"
+.BR chttp_request_get_header (3)

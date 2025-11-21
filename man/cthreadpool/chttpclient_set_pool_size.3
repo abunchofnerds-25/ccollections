@@ -1,0 +1,38 @@
+.TH CHTTPCLIENT_SET_POOL_SIZE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_set_pool_size \- set the connection pool size
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
+.fi
+.SH DESCRIPTION
+.nf
+Sets the maximum number of concurrent in-flight requests.  Callers
+that call chttpclient_do when the limit is reached will block until
+one becomes free.
+
+Passing 0 selects the CPU count (the default).
+
+May be called before or after the client has issued any requests, and
+takes effect immediately (broadcasting to wake any blocked callers if
+the limit grew).  This is purely a concurrency cap; it is unrelated to
+the separate keep-alive idle-connection cache, which has its own
+internal, fixed per-origin and total caps.
+.fi
+.SH PARAMETERS
+.nf
+cli   Client handle; must not be NULL.
+n     Pool size; 0 = CPU count.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success            Pool size updated.
+ccol_invalid_args       cli is NULL.
+.fi
+.SH "SEE ALSO"
+.BR create_chttpclient (3),
+.BR chttpclient_do (3)

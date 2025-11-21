@@ -1,0 +1,39 @@
+.TH _CJSON_SET_TYPED 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+_cjson_set_typed \- path-write back-end (prefer cjson_set macro)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+ccol_retval_t _cjson_set_typed(cjson root, const char *path,
+                                cjson_node_type_t type,
+                                void *raw, size_t raw_size,
+                                bool is_signed, bool raw_is_char_array);
+.fi
+.SH DESCRIPTION
+.nf
+Writes a scalar value to the leaf addressed by path.  The leaf is
+created if absent (its immediate parent must already exist).  If the
+leaf exists its type is changed unconditionally and any composite
+(array, object) resources it previously owned are deep-freed.
+
+raw is a void pointer to the C value; raw_size is sizeof the original
+C expression.  For string values, raw points to a const char * variable
+unless raw_is_char_array is true, in which case raw points directly at
+the char[] bytes of a string literal.
+
+Escape sequences in path components:
+  \e.   -> literal '.' in the key (not a path separator)
+  \e\e   -> literal '\e' in the key
+A '\e' before any other character is left unchanged.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success, ccol_invalid_args, ccol_key_not_found, or
+ccol_not_enough_memory.
+.fi
+.SH "SEE ALSO"
+.BR cjson_set (macro) (3),
+.BR _cjson_get (3)

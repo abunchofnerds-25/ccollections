@@ -1,0 +1,29 @@
+.TH CTPOOL_FUTURE_CANCELLED 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_future_cancelled \- check whether a future was cancelled
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+bool ctpool_future_cancelled(ctpool_future *f);
+.fi
+.SH DESCRIPTION
+.nf
+Returns true if the task associated with this future was discarded
+by ctpool_shutdown_immediate before it could execute. In that case
+ctpool_future_get returns NULL and ctpool_future_done returns true.
+.fi
+.SH PARAMETERS
+.nf
+f   Future handle (NULL returns false)
+.fi
+.SH RETURN VALUE
+.nf
+true if the future was cancelled, false otherwise.
+.fi
+.SH "SEE ALSO"
+.BR ctpool_future_get (3),
+.BR ctpool_future_done (3),
+.BR ctpool_shutdown_immediate (3)

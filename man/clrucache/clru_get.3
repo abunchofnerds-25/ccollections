@@ -1,0 +1,105 @@
+.TH CLRU_GET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clru_get \- retrieve a value by key (type-safe convenience wrapper)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+ccol_retval_t clru_get(name, key, val_ptr);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe GNU C statement expression that serialises key into a
+cmap_pair and retrieves the stored value. The behaviour on success
+depends on the value type declared at cache construction:
+
+Non-char* val types: the value is copied directly into *val_ptr with
+no heap allocation. val_ptr is a pointer to ValT (e.g. double * for a
+cache<int, double>), NOT a cmap_pair *.
+
+char* val types: ownership of the heap-allocated string is transferred
+directly to the caller via *(char **)val_ptr. The caller must free()
+that pointer when done.
+
+Use clrucache_get_full() directly only if you need the raw cmap_pair
+output; clru_get() hides that entirely.
+.fi
+.SH PARAMETERS
+.nf
+name     Cache variable (must have companion type variables in scope,
+         either from clru_construct / clru_declare or clru_redeclare).
+         When passing a cache across function boundaries, call
+         clru_redeclare() with a simple local alias first; the
+         val-type detection relies on the name##__clru_val_type_var
+         companion variable.
+key      Key expression. Must be an lvalue or a string literal; assign
+         computed values to a variable first.
+val_ptr  Pointer to the value type (ValT *), NOT cmap_pair *.
+         For non-char* val types: receives the value directly (e.g.
+         double * for a double-valued cache); no heap allocation
+         occurs.
+         For char* val types: pointer to a char* variable; on success
+         it is set to the heap-allocated string and the caller must
+         free() it.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success           Value delivered via val_ptr.
+ccol_key_not_found     Key absent and no getter, or getter failed.
+ccol_invalid_args      cache or key_pair is NULL.
+ccol_not_enough_memory Internal allocation failed.
+.fi
+.SH EXAMPLES
+.nf
+/* Non-string value type: val_ptr is double *, not cmap_pair *;
+   the value is copied directly into *val_ptr; no heap allocation */
+clru_construct(cache, int, double, 128, NULL, NULL, NULL);
+
+int k = 5;
+double v = 2.71;
+clru_set(cache, k, v);
+
+double out = 0.0;
+if (clru_get(cache, k, &out) == ccol_success) {
+    printf("%.2f\en", out);
+}
+
+clru_destroy(cache);
+
+/* String value type: caller must free the returned string */
+clru_construct(str_cache, int, char *, 64, NULL, NULL, NULL);
+
+char *greeting = "hello";
+clru_set(str_cache, 1, greeting);
+
+char *result = NULL;
+if (clru_get(str_cache, 1, &result) == ccol_success) {
+    printf("%s\en", result);
+    free(result);
+}
+
+clru_destroy(str_cache);
+.fi
+.SH WARNINGS
+.nf
+For char* val types: the string placed in *(char **)val_ptr is a
+heap-allocated copy whose ownership is transferred to the caller.
+The caller MUST call free() on it when done; failing to do so is a
+memory leak.  Each call to clru_get for a char* value produces an
+independent allocation, so two successive calls for the same key
+yield two independent pointers that must each be freed separately.
+
+For non-char* val types: no heap allocation occurs.  The value is
+copied directly into *val_ptr; the caller must NOT call free() on it.
+.fi
+.SH NOTES
+.nf
+Uses a GNU C statement expression ({...}); requires GCC or Clang.
+The cache never exposes a pointer into its internal storage; the value
+is always copied out before the mutex is released.
+.fi
+.SH "SEE ALSO"
+.BR clru_set (3),
+.BR clrucache_get_full (3)

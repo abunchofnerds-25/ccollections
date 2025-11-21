@@ -1,0 +1,44 @@
+.TH CHTTPCLIENT_DO_POOLED 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_do_pooled \- perform an HTTP request using the shared Tier 2 engine, blocking until it completes
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpclient_do_pooled(chttpcli cli,
+                                    const chttp_request_t *req,
+                                    chttpcli_response **resp_out);
+.fi
+.SH DESCRIPTION
+.nf
+A thin wrapper over chttpclient_do_async: submits the request to the
+shared engine, blocks until it completes, and returns the exact same
+ccol_retval_t / resp_out call shape chttpclient_do uses; but the
+connect/write/read work happens on the engine's own reactor threads
+rather than the calling thread, and concurrent callers across many
+chttpcli handles share one small, fixed-size reactor thread pool
+instead of each blocking its own OS thread for the duration of its
+request.
+.fi
+.SH PARAMETERS
+.nf
+cli      Client handle; must not be NULL.
+req      Request to execute; must not be NULL.
+resp_out Receives the response on success; must not be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+Same result codes as chttpclient_do, with one difference: a failure
+to even submit the request to the engine (OOM, or the engine
+failing to start) is reported as ccol_unexpected_failure rather than
+a more specific code. Everything detected once the request is
+actually in flight (bad URL, TLS failure, connection failure,
+transfer errors, timeouts, too many redirects) is reported with
+the exact same specific codes chttpclient_do uses.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_do (3),
+.BR chttpclient_do_async (3),
+.BR chttpclient_do_pooled_streaming (3)

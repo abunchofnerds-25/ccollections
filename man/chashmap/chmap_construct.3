@@ -1,0 +1,38 @@
+.TH CHMAP_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_construct \- type-safe hash map construction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+chmap_construct(hm_name, key_type, val_type);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe macro for creating a hash map with default settings.
+Automatically determines key and value types and creates type marker
+variables for compile-time type checking.
+.fi
+.SH PARAMETERS
+.nf
+hm_name   Name of the hash map variable to create
+key_type  Type of keys
+val_type  Type of values
+.fi
+.SH NOTES
+.nf
+Terminates program on allocation failure
+Creates hidden type marker variables for type safety
+Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+Uses default memory management and hashing
+.fi
+.SH EXAMPLES
+.nf
+chmap_construct(map, int, char*);
+chmap_insert(map, 42, "hello");
+.fi
+.SH "SEE ALSO"
+.BR chmap_construct_full (3),
+.BR chmap_create (3)

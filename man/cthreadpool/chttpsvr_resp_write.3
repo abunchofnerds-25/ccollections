@@ -1,0 +1,32 @@
+.TH CHTTPSVR_RESP_WRITE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_resp_write \- append bytes to the response body
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp,
+                                   const void *data, size_t len);
+.fi
+.SH DESCRIPTION
+.nf
+Appends len bytes of data to the internal response body buffer.  The
+buffer grows automatically using an overflow-safe doubling strategy:
+capacity is at least doubled on each reallocation and the computation
+is guarded against size_t wrap-around.  ccol_not_enough_memory is
+returned both when len would overflow size_t when added to the current
+body length and when the underlying allocator returns NULL.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if resp is NULL, or if data is NULL and len > 0.
+ccol_not_enough_memory if the body length would overflow size_t or if
+                       the allocator cannot satisfy the request.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_resp_write_str (3),
+.BR chttpsvr_resp_printf (3),
+.BR chttpsvr_resp_write_json (3)

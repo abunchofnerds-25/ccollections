@@ -1,0 +1,36 @@
+.TH CVEC_PUSH 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_push \- push an element onto the vector (type-safe)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+cvec_push(v, new_elem);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cvector_push_back() that automatically takes the
+address of the element. Calls fatal_err() on failure.
+.fi
+.SH PARAMETERS
+.nf
+v         Vector to push onto
+new_elem  Element to push (passed by reference automatically)
+.fi
+.SH NOTES
+.nf
+Terminates program on failure
+Automatically takes address of new_elem
+Type is verified at compile time
+.fi
+.SH EXAMPLES
+.nf
+cvec_construct(vec, int);
+int x = 42;
+cvec_push(vec, x);
+.fi
+.SH "SEE ALSO"
+.BR cvec_push_rvalue (3),
+.BR cvector_push_back (3)

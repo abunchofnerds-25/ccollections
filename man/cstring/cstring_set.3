@@ -1,0 +1,34 @@
+.TH CSTRING_SET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_set \- replace the entire content with a new C string
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+ccol_retval_t cstring_set(cstr s, const char *str);
+.fi
+.SH DESCRIPTION
+.nf
+Discards the current content of s and replaces it with a copy of str.
+The buffer is grown if necessary; it is never shrunk.
+.fi
+.SH PARAMETERS
+.nf
+s     String to modify
+str   New content (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - Set succeeded
+ccol_invalid_args         - str is NULL
+ccol_not_enough_memory    - Reallocation failed
+.fi
+.SH NOTES
+.nf
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_reset (3),
+.BR cstring_append (3)

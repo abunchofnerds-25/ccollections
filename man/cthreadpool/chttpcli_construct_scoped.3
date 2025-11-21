@@ -1,0 +1,26 @@
+.TH CHTTPCLI_CONSTRUCT_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chttpcli_construct_scoped \- declare, initialise, and auto-destroy a chttpcli handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+chttpcli_construct_scoped(name)
+.fi
+.SH DESCRIPTION
+.nf
+Combines chttpcli_declare_scoped and the create_chttpclient call:
+declares name with GCC cleanup attribute, calls create_chttpclient,
+and sets name.  The client is destroyed automatically when name leaves
+scope.  On failure, calls fatal_err() and does not return.
+.fi
+.SH PARAMETERS
+.nf
+name     Identifier for the new handle variable.
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_construct (3),
+.BR chttpcli_declare_scoped (3),
+.BR ___chttpclient_destroy (3)

@@ -1,0 +1,21 @@
+.TH ___CYAML_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+___cyaml_destroy \- RAII cleanup wrapper for cyaml handles
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+void ___cyaml_destroy(cyaml *node);
+.fi
+.SH DESCRIPTION
+.nf
+Called automatically by the GCC cleanup attribute when a scoped cyaml
+variable goes out of scope (registered by cyaml_declare_scoped()).
+Frees *node with __cyaml_destroy() and sets *node to NULL.  Safe to
+call when *node is already NULL.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_declare_scoped (macro) (3),
+.BR __cyaml_destroy (3)

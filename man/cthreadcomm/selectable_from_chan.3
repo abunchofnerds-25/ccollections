@@ -1,0 +1,58 @@
+.TH SELECTABLE_FROM_CHAN 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+selectable_from_chan \- build a ccol_selectable from a channel, resolving the queue for the calling thread and the requested direction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+selectable_from_chan(ch, dir);
+.fi
+.SH DESCRIPTION
+.nf
+Calls ccol_selectable_from_chan(ch, dir), which inspects the calling
+thread's ID and the requested direction to pick the correct internal
+circular queue:
+
+  ccol_select_read:  owner <- workers_to_owner_cq  (same as chan_recv_zc)
+                   worker <- owner_to_workers_cq
+  ccol_select_write: owner -> owner_to_workers_cq  (same as chan_send_zc)
+                   worker -> workers_to_owner_cq
+
+Direction is resolved once, at the point this macro is evaluated.  If
+the calling thread's role can change, reconstruct the selectable before
+each ccol_select() call.
+.fi
+.SH PARAMETERS
+.nf
+ch   channel pointer.  Passing NULL produces a selectable that ccol_select()
+     will reject with ccol_invalid_args.
+dir  ccol_select_read or ccol_select_write.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_selectable value of type ccol_selectable_circq (a channel always resolves
+to one of its internal circular queues).
+.fi
+.SH EXAMPLES
+.nf
+/* Owner reads from two channels: */
+c_message_t msg;
+size_t idx;
+ccol_select_va(&msg, &idx,
+    selectable_from_chan(ch0, ccol_select_read),
+    selectable_from_chan(ch1, ccol_select_read));
+
+/* Owner waits for room to send on one channel: */
+c_message_t dummy = {0};
+ccol_select_va(&dummy, &idx,
+    selectable_from_chan(ch, ccol_select_write));
+.fi
+.SH "SEE ALSO"
+.BR ccol_selectable_from_chan (3),
+.BR ccol_select (3),
+.BR ccol_select_va (3),
+.BR selectable_from_circq (3),
+.BR selectable_from_dynq (3),
+.BR selectable_from_fd (3)

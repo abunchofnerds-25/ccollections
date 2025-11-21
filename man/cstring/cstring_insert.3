@@ -1,0 +1,38 @@
+.TH CSTRING_INSERT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_insert \- insert a C string at a given position
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str);
+.fi
+.SH DESCRIPTION
+.nf
+Inserts the null-terminated C string str at position pos within s.
+Characters at positions >= pos are shifted right to make room. pos == 0
+is equivalent to cstring_prepend(); pos == length is equivalent to
+cstring_append().
+.fi
+.SH PARAMETERS
+.nf
+s     String to modify
+pos   Insertion position (0 ... length, inclusive)
+str   C string to insert (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - Insert succeeded
+ccol_invalid_args         - str is NULL, or pos > length
+ccol_container_full       - Result would overflow size_t
+ccol_not_enough_memory    - Reallocation failed
+.fi
+.SH NOTES
+.nf
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_append (3),
+.BR cstring_prepend (3)

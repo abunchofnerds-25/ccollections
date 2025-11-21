@@ -1,0 +1,41 @@
+.TH CVECTOR_SORT_WITH_COMPARISON_PROC 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvector_sort_with_comparison_proc \- sort vector with custom comparison
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+cvector_sort_with_comparison_proc(v, comparison_proc);
+.fi
+.SH DESCRIPTION
+.nf
+Sorts the vector in-place using the csort library with a custom comparison
+function. The comparison function should follow the standard comparator
+convention (return <0, 0, or >0).
+.fi
+.SH PARAMETERS
+.nf
+v                 Vector to sort
+comparison_proc   Comparison function for sorting
+.fi
+.SH NOTES
+.nf
+Sorts in-place using stable mergesort algorithm
+O(n log n) time complexity, O(n) space complexity
+Asserts if v is NULL
+Uses csort for sorting
+.fi
+.SH EXAMPLES
+.nf
+int compare_ints(const void *a, const void *b) {
+  return *(int*)a - *(int*)b;
+}
+cvec_construct(vec, int);
+// ... add elements ...
+cvector_sort_with_comparison_proc(vec, compare_ints);
+.fi
+.SH "SEE ALSO"
+.BR cvec_sort (3),
+.BR csort_sort (3)

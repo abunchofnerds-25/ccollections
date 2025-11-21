@@ -1,0 +1,57 @@
+.TH LOG_ERROR 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+log_error \- emit a log line at ERROR level with a backtrace
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+log_error(clog lg, const char *fmt, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a call to _clog_write() at CLOG_ERROR level with automatic
+source location capture. After writing the structured log line, a
+stack backtrace is appended as tab-indented continuation lines:
+
+  ts=... level=ERROR src=file.c:42 func=handle msg="db timeout"
+  \et#0 ./myapp(handle+0x1a) [0x7f...]
+  \et#1 ./myapp(main+0x42) [0x7f...]
+
+The continuation lines do not start with "ts=", allowing log
+aggregators to group them with the preceding ERROR record.
+
+Backtrace frames 0 and 1 (internal logger frames) are skipped so
+that frame #0 is the caller of log_error. Backtrace depth is capped
+at 64 frames.
+
+Backtrace requires the binary to be linked with -rdynamic for symbol
+resolution. On platforms without execinfo.h the backtrace lines are
+omitted silently and the log line is emitted normally.
+.fi
+.SH PARAMETERS
+.nf
+lg     Logger handle (clog).
+fmt    printf-style format string.
+\&...    Format arguments (optional).
+.fi
+.SH NOTES
+.nf
+log_error does NOT terminate the process. Use log_fatal if process
+termination is desired.
+The backtrace write is also protected by the per-logger mutex, so
+the backtrace and the preceding log line always appear contiguously
+even under concurrent logging from multiple threads.
+.fi
+.SH EXAMPLES
+.nf
+log_error(lg, "failed to open %s: %s", path, strerror(errno));
+log_error(lg, "unexpected state %d in FSM", state);
+.fi
+.SH "SEE ALSO"
+.BR log_alert (3),
+.BR log_fatal (3),
+.BR log_warn (3),
+.BR _clog_write (3),
+.BR clog_open_fd_mp (3)

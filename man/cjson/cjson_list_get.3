@@ -1,0 +1,22 @@
+.TH CJSON_LIST_GET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_list_get \- access an array element by index
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+cjson cjson_list_get(cjson arr, size_t index);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a non-owning reference to the element at index.
+.fi
+.SH RETURN VALUE
+.nf
+Child node, or NULL if index is out of bounds or arr is not CJSON_LIST.
+.fi
+.SH "SEE ALSO"
+.BR cjson_list_push (3),
+.BR cjson_list_len (3)

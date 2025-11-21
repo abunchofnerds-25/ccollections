@@ -1,0 +1,20 @@
+.TH CJSON_LIST_LEN 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_list_len, cjson_dictionary_size \- query composite node sizes
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+size_t cjson_list_len(cjson node);
+size_t cjson_dictionary_size(cjson node);
+.fi
+.SH DESCRIPTION
+.nf
+Return the element count of an array or object node respectively.
+Both call fatal_err() if the node's type does not match.
+.fi
+.SH "SEE ALSO"
+.BR cjson_list_get (3),
+.BR cjson_dictionary_get (3)

@@ -1,0 +1,43 @@
+.TH CHTTPSVR_ENGINE_WAIT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_engine_wait \- wait for the engine thread to exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+void chttpsvr_engine_wait(void);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks the calling thread until the shared facil.io engine has fully
+stopped; whether a stop was already triggered before this call, is
+triggered concurrently, or is not triggered until sometime after this
+call (this blocks indefinitely if nothing ever stops the engine, e.g.
+an external SIGTERM handler calling chttpsvr_engine_stop() at some
+later, unknown time).
+
+The engine is shared with chttpclient's async engine
+(chttpclient_do_async/_streaming); dropping the last reference from
+either module (e.g. destroying the last chttpsvr via
+__chttpsvr_destroy, or the last chttpclient async request completing)
+triggers an asynchronous teardown that does not itself block the
+caller that triggered it; this function is the explicit escape
+hatch for programs that need to synchronise with that shutdown, or
+with an externally signalled chttpsvr_engine_stop() call.
+
+Safe to call concurrently from multiple threads; each blocks until
+the engine is confirmed fully stopped, regardless of which caller's
+release or chttpsvr_engine_stop() call was the one that triggered it.
+
+After this function returns, the engine logger is cleared so that any
+remaining facil.io atexit callbacks do not access a freed clog handle.
+
+Safe to call before the engine has ever started (no-op).
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_engine_stop (3),
+.BR chttpsvr_start (3),
+.BR __chttpsvr_destroy (3),
+.BR chttpsvr_set_engine_logger (3)

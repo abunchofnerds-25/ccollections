@@ -1,0 +1,52 @@
+.TH CLRUCACHE_SET_FULL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clrucache_set_full \- store a value by key (write-through)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+ccol_retval_t clrucache_set_full(clru_cache cache,
+                                 const cmap_pair *key_pair,
+                                 const cmap_pair *val_pair);
+.fi
+.SH DESCRIPTION
+.nf
+Associates key_pair with val_pair in the cache.
+
+If a remote setter was provided at construction it is called
+synchronously outside the mutex before the cache is updated. On
+setter failure the function returns ccol_unexpected_failure and the
+cache is left unchanged for that key (an existing value is preserved).
+
+Multiple setters for the same key are serialised. Concurrent getters
+for the same key block until the set completes.
+
+If the cache is at capacity and the key is new, the least-recently-
+used live entry is evicted first.
+.fi
+.SH PARAMETERS
+.nf
+cache     Cache handle.
+key_pair  Key to store (ptr and size fields must be set).
+val_pair  Value to associate with the key (ptr and size must be set;
+          size must be > 0).
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success             Value stored (and remote setter succeeded if
+                         one was provided).
+ccol_unexpected_failure  Remote setter returned false; cache unchanged.
+ccol_invalid_args        cache, key_pair, or val_pair is NULL; or
+                         val_pair->size is 0.
+ccol_not_enough_memory   Memory allocation for the new value failed.
+.fi
+.SH NOTES
+.nf
+O(1) average-case complexity for the hash map operations.
+.fi
+.SH "SEE ALSO"
+.BR clru_set (3),
+.BR clrucache_get_full (3),
+.BR clrucache_create_full (3)

@@ -1,0 +1,32 @@
+.TH CSTR_COPY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_copy \- create an independent copy of a string
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_copy(s, err);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_copy(). Allocates a new cstring with the
+same content as s.
+.fi
+.SH PARAMETERS
+.nf
+s     cstr to copy
+err   Optional pointer to receive an error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+New cstr on success, NULL on failure
+.fi
+.SH NOTES
+.nf
+Caller must destroy the returned cstring when done
+.fi
+.SH "SEE ALSO"
+.BR cstring_copy (3),
+.BR cstr_substring (3)

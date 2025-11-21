@@ -1,0 +1,27 @@
+.TH CYAML_SERIALIZE_FLOW 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_serialize_flow \- serialize a DOM tree to flow-style YAML
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+char *cyaml_serialize_flow(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Produce a compact, flow-style YAML representation of the DOM subtree.
+Lists are rendered as [a, b, c].  dictionaries are rendered as
+{key: value, ...}.  Scalars follow the same quoting rules as
+cyaml_serialize().  The output is typically a single line.
+
+Free the returned string with cyaml_serialize_free().
+.fi
+.SH RETURN VALUE
+.nf
+Heap-allocated null-terminated string on success, NULL on OOM.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_serialize (3),
+.BR cyaml_serialize_free (3)

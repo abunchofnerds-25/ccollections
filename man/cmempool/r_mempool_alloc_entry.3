@@ -1,0 +1,40 @@
+.TH R_MEMPOOL_ALLOC_ENTRY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+r_mempool_alloc_entry \- allocate an entry from the ranged pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+void *r_mempool_alloc_entry(r_mempool *rmp, size_t size);
+.fi
+.SH DESCRIPTION
+.nf
+Allocates memory of the requested size from the most appropriate sub-pool.
+The size is rounded up to the nearest power-of-2 pool. If the optimal pool
+is exhausted, tries larger pools. Fallback behavior depends on policy.
+.fi
+.SH PARAMETERS
+.nf
+rmp   Ranged memory pool to allocate from
+size  Size in bytes to allocate (must be > 0 and <= largest_size)
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to allocated entry on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+O(1) in common case, O(number_of_pools) worst case
+Returned memory is uninitialized (use r_mempool_calloc_entry() for zeroed)
+Size is rounded up to next power-of-2 pool size
+Tries progressively larger pools if optimal pool is exhausted
+Thread-safe if pool created with single_threaded=false
+Entry must be freed with r_mempool_free_entry()
+.fi
+.SH "SEE ALSO"
+.BR r_mempool_calloc_entry (3),
+.BR r_mempool_realloc_entry (3),
+.BR r_mempool_free_entry (3)

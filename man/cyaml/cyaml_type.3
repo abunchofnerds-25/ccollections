@@ -1,0 +1,29 @@
+.TH CYAML_TYPE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_type \- return the type tag of a node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml_node_type_t cyaml_type(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Return the cyaml_node_type_t tag of node.  If node is NULL, returns
+CYAML_NULL.
+
+The enum values are: CYAML_NULL, CYAML_BOOL, CYAML_INTEGER,
+CYAML_FLOAT, CYAML_STRING, CYAML_LIST, CYAML_DICTIONARY.
+.fi
+.SH PARAMETERS
+.nf
+node  DOM node handle; may be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+cyaml_node_type_t constant.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_type_str (3)

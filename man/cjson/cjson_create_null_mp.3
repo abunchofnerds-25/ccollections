@@ -1,0 +1,71 @@
+.TH CJSON_CREATE_NULL_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_create_null_mp, cjson_create_bool_mp, cjson_create_int_mp, cjson_create_double_mp, cjson_create_string_mp, cjson_create_list_mp, cjson_create_dictionary_mp \- allocate DOM nodes with custom allocator cjson_create_null, cjson_create_bool, cjson_create_int, cjson_create_double, cjson_create_string, cjson_create_list, cjson_create_dictionary - allocate DOM nodes (default allocator wrappers)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+cjson cjson_create_null_mp(ccol_memmgmt_procs_t *mp);
+cjson cjson_create_bool_mp(bool val, ccol_memmgmt_procs_t *mp);
+cjson cjson_create_int_mp(long long val, ccol_memmgmt_procs_t *mp);
+cjson cjson_create_double_mp(double val, ccol_memmgmt_procs_t *mp);
+cjson cjson_create_string_mp(const char *val, ccol_memmgmt_procs_t *mp);
+cjson cjson_create_list_mp(ccol_memmgmt_procs_t *mp);
+cjson cjson_create_dictionary_mp(ccol_memmgmt_procs_t *mp);
+
+/* convenience wrappers; default allocator (NULL mp) */
+static inline cjson cjson_create_null(void);
+static inline cjson cjson_create_bool(bool val);
+static inline cjson cjson_create_int(long long val);
+static inline cjson cjson_create_double(double val);
+static inline cjson cjson_create_string(const char *val);
+static inline cjson cjson_create_list(void);
+static inline cjson cjson_create_dictionary(void);
+.fi
+.SH DESCRIPTION
+.nf
+Each _mp function allocates a new DOM node of the corresponding JSON
+type using mp as the allocator (NULL = default malloc/free/calloc/realloc).
+The allocator is stored per-node and used for all subsequent operations
+on that node, including destruction.
+
+The non-_mp variants are static inline wrappers that call the _mp
+function with NULL as the allocator.
+
+cjson_create_string_mp() makes a private heap copy of val.  Passing NULL
+for val produces a CJSON_NULL node (not a CJSON_STRING node with a null
+pointer), because a null C string pointer naturally maps to JSON null.
+cjson_create_list_mp() returns an empty array; children are added with
+cjson_list_push().
+cjson_create_dictionary_mp() returns an empty object; children are added with
+cjson_dictionary_set().
+
+cjson_create_double_mp() rejects non-finite values (Inf, -Inf, NaN) and
+returns NULL for them.  JSON has no representation for non-finite
+doubles; the parser likewise rejects numbers that overflow to infinity.
+Use cjson_set() to write a double field; it propagates the same
+validation and returns ccol_invalid_args on failure.
+.fi
+.SH PARAMETERS
+.nf
+mp   Custom memory management procedures for this node and its owned
+     resources, or NULL for the default allocator.
+.fi
+.SH RETURN VALUE
+.nf
+New cjson node on success, NULL on allocation failure or (for
+cjson_create_double_mp) if val is non-finite.
+cjson_create_string_mp(NULL, mp) returns a CJSON_NULL node (never NULL
+itself, unless OOM).
+.fi
+.SH NOTES
+.nf
+The caller owns the returned node and must free it with cjson_destroy().
+cjson_destroy() uses each node's stored allocator; no mp parameter needed.
+.fi
+.SH "SEE ALSO"
+.BR cjson_destroy (3),
+.BR cjson_list_push (3),
+.BR cjson_dictionary_set (3)

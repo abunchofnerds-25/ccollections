@@ -1,0 +1,38 @@
+.TH CTPOOL_DECLARE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ctpool_declare \- declare an uninitialised thread pool variable
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ctpool_declare(name);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to `ctpool name`. The variable is left uninitialized and must
+be assigned via create_cthread_pool() or create_cthread_pool_mp()
+before use.
+
+Provided for naming-convention symmetry with other c_collections
+modules.
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name to declare.
+.fi
+.SH EXAMPLES
+.nf
+ctpool_declare(pool);
+char *err = NULL;
+pool = create_cthread_pool(4, 128, &err);
+if (!pool) { fprintf(stderr, "%s\en", err); exit(1); }
+/* ... submit tasks ... */
+ctpool_shutdown_drain(pool);
+ctpool_destroy(pool);
+.fi
+.SH "SEE ALSO"
+.BR ctpool_declare_scoped (3),
+.BR ctpool_construct (3),
+.BR create_cthread_pool (3)

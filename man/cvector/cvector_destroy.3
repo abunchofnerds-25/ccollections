@@ -1,0 +1,30 @@
+.TH CVECTOR_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvector_destroy \- destroy a vector and set pointer to NULL
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+cvector_destroy(v)
+.fi
+.SH DESCRIPTION
+.nf
+Frees all resources associated with the vector including the data buffer.
+The vector pointer is automatically set to NULL after destruction. This
+is a macro wrapper around __cvector_destroy().
+.fi
+.SH PARAMETERS
+.nf
+v    Vector to destroy (will be set to NULL after destruction)
+.fi
+.SH NOTES
+.nf
+Safe to call with NULL pointer (no-op)
+Does not free individual elements when the vector contains pointers
+to heap-allocated buffers - caller must free element data first if needed
+.fi
+.SH "SEE ALSO"
+.BR cvector_create (3),
+.BR __cvector_destroy (3)

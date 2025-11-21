@@ -1,0 +1,55 @@
+.TH LOG_ALERT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+log_alert \- emit a log line at ALERT level with a backtrace
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+log_alert(clog lg, const char *fmt, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a call to _clog_write() at CLOG_ALERT level with automatic
+source location capture. After writing the structured log line, a stack
+backtrace is appended in the same way as log_error():
+
+  ts=... level=ALERT src=file.c:42 func=handle msg="disk full"
+  \et#0 ./myapp(handle+0x1a) [0x7f...]
+  \et#1 ./myapp(main+0x42) [0x7f...]
+
+ALERT maps to RFC 5424 syslog severity 1 ("alert; action must be taken
+immediately").  In CLOG_FMT_SYSLOG mode each backtrace frame is emitted
+as a separate syslog message using the same PRI and MSGID as the original
+record.
+
+ALERT sits between ERROR (severity 3) and FATAL (severity 0) in the
+clog_level_t ordering.  Use it for conditions that require immediate
+operator attention but do not necessarily terminate the process.
+.fi
+.SH PARAMETERS
+.nf
+lg     Logger handle (clog).
+fmt    printf-style format string.
+\&...    Format arguments (optional).
+.fi
+.SH NOTES
+.nf
+Like log_error, log_alert does NOT terminate the process. Use
+log_fatal if process termination is required.
+Backtrace requires the binary to be linked with -rdynamic.  On platforms
+without execinfo.h the backtrace lines are silently omitted.
+The backtrace write is protected by the per-logger mutex, so the
+backtrace and the preceding log line always appear contiguously.
+.fi
+.SH EXAMPLES
+.nf
+log_alert(lg, "primary database unreachable, failing over");
+log_alert(lg, "disk usage at %d%%, writes may fail soon", pct);
+.fi
+.SH "SEE ALSO"
+.BR log_error (3),
+.BR log_fatal (3),
+.BR _clog_write (3),
+.BR clog_open_fd_mp (3)

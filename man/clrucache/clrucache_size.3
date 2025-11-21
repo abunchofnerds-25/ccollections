@@ -1,0 +1,33 @@
+.TH CLRUCACHE_SIZE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clrucache_size \- return the number of live entries in the cache
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+size_t clrucache_size(clru_cache cache);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the current number of live (fully initialised, not evicted)
+entries in the cache. Placeholder entries created during an in-progress
+fetch or set are not counted.
+.fi
+.SH PARAMETERS
+.nf
+cache  Cache handle.
+.fi
+.SH RETURN VALUE
+.nf
+Number of live entries, or 0 if cache is NULL.
+.fi
+.SH NOTES
+.nf
+Acquires the cache mutex for the duration of the read.
+O(1) complexity.
+.fi
+.SH "SEE ALSO"
+.BR clrucache_capacity (3),
+.BR clrucache_create_full (3)

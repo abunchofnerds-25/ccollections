@@ -1,0 +1,22 @@
+.TH CSTR_TO_LOWER 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_to_lower \- convert all characters to lowercase in-place
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_to_lower(s);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_to_lower().
+.fi
+.SH PARAMETERS
+.nf
+s   cstr to modify
+.fi
+.SH "SEE ALSO"
+.BR cstring_to_lower (3),
+.BR cstr_to_upper (3)

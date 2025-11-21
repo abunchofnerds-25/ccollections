@@ -1,0 +1,33 @@
+.TH CHAN_MSG_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chan_msg_count \- get current message count for a direction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+size_t chan_msg_count(channel *ch, channel_direction d);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the number of messages currently stored in the specified direction's
+queue.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to query
+d    Direction to query (owner_to_workers or workers_to_owner)
+.fi
+.SH RETURN VALUE
+.nf
+Returns number of messages in the specified direction
+Returns (size_t)-1 on error (NULL channel or invalid direction)
+.fi
+.SH NOTES
+.nf
+Thread-safe snapshot of message count
+.fi
+.SH "SEE ALSO"
+.BR chan_send_zc (3),
+.BR chan_recv_zc (3)

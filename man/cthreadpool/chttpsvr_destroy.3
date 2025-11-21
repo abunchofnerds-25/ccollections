@@ -1,0 +1,23 @@
+.TH CHTTPSVR_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chttpsvr_destroy \- destroy a chttpsvr handle and NULL the pointer
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttpsvr_destroy(name);
+.fi
+.SH DESCRIPTION
+.nf
+Calls __chttpsvr_destroy on name and then sets name to NULL.
+
+__chttpsvr_destroy drains all in-flight requests, and if this is the
+last active server also stops the shared engine.  Call chttpsvr_stop
+first to close the listener before calling this macro.
+.fi
+.SH "SEE ALSO"
+.BR __chttpsvr_destroy (3),
+.BR chttpsvr_stop (3),
+.BR chttpsvr_engine_wait (3)

@@ -1,0 +1,37 @@
+.TH DECLARE_PREALLOCATED_MEMPOOL_BUFFER 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+DECLARE_PREALLOCATED_MEMPOOL_BUFFER \- declare buffer for memory pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+DECLARE_PREALLOCATED_MEMPOOL_BUFFER(name, elem_count, elem_size);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a uint8_t array sized correctly for a memory pool with the
+specified parameters. The buffer can then be passed to
+mempool_create_from_preallocated_buffer(). Automatically includes header
+overhead in size calculation.
+.fi
+.SH PARAMETERS
+.nf
+name        Variable name for the buffer
+elem_count  Number of elements the pool will hold
+elem_size   Size of each element in bytes
+.fi
+.SH NOTES
+.nf
+Buffer is allocated on stack or in static storage depending on context
+Useful for embedded systems or avoiding heap allocation
+.fi
+.SH EXAMPLES
+.nf
+DECLARE_PREALLOCATED_MEMPOOL_BUFFER(my_buffer, 100, 64);
+mempool *mp = mempool_create_from_preallocated_buffer(
+    my_buffer, sizeof(my_buffer), 64, false, false, NULL, NULL);
+.fi
+.SH "SEE ALSO"
+.BR mempool_create_from_preallocated_buffer (3)

@@ -1,0 +1,37 @@
+.TH R_MEMPOOL_DYNAMIC_ALLOCS_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+r_mempool_dynamic_allocs_count \- get number of dynamic allocations
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+size_t r_mempool_dynamic_allocs_count(r_mempool *rmp, size_t size);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the number of heap-allocated entries for the given size. Behavior
+depends on fallback policy.
+.fi
+.SH PARAMETERS
+.nf
+rmp   Ranged memory pool to query
+size  Size in bytes to query
+.fi
+.SH RETURN VALUE
+.nf
+Returns number of dynamic allocations
+Returns 0 on error or if disabled
+.fi
+.SH NOTES
+.nf
+Returns 0 if fallback_disabled
+With fallback_at_first_exhaustion, tracks per-pool dynamic allocations
+With fallback_at_last_exhaustion, tracks all dynamic allocations
+Returns 0 if size is invalid
+Thread-safe if pool created with single_threaded=false
+.fi
+.SH "SEE ALSO"
+.BR r_mempool_used_count (3),
+.BR r_mempool_total_capacity (3)

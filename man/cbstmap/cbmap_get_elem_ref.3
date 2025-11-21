@@ -1,0 +1,40 @@
+.TH CBMAP_GET_ELEM_REF 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cbmap_get_elem_ref \- get reference to value by key
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+ccol_retval_t cbmap_get_elem_ref(cbmap cbm,
+                                  const cmap_pair *key_pair,
+                                  cmap_pair **val_pair);
+.fi
+.SH DESCRIPTION
+.nf
+Retrieves a reference to the value associated with the given key. The
+returned reference points to internal storage and can be used to read
+or modify the value in-place.
+.fi
+.SH PARAMETERS
+.nf
+cbm        BST map to search
+key_pair   Key to look up
+val_pair   Pointer to receive reference to value
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        - Key found, *val_pair points to value
+ccol_key_not_found  - Key does not exist in map
+.fi
+.SH NOTES
+.nf
+O(log n) complexity
+Returned reference is valid until next insert/delete operation
+Reference can be used to modify value in-place
+.fi
+.SH "SEE ALSO"
+.BR cbmap_get (3),
+.BR cbmap_get_ptr (3),
+.BR cbmap_insert_elem (3)

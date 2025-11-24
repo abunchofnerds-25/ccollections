@@ -1,0 +1,30 @@
+.TH CLOG_GET_FACILITY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_get_facility \- return the current syslog facility
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+clog_syslog_facility_t clog_get_facility(clog logger);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the syslog facility currently stored on the shared backing store.
+.fi
+.SH PARAMETERS
+.nf
+logger  Logger handle.
+.fi
+.SH RETURN VALUE
+.nf
+Current facility code.
+.fi
+.SH NOTES
+.nf
+Thread-safe: protected by the shared backing-store mutex.
+.fi
+.SH "SEE ALSO"
+.BR clog_set_facility (3),
+.BR clog_set_format (3)

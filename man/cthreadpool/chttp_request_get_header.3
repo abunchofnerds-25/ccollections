@@ -1,0 +1,32 @@
+.TH CHTTP_REQUEST_GET_HEADER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_request_get_header \- look up a request header by name
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+const char *chttp_request_get_header(const chttp_request_t *req,
+                                     const char *name);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the stored value for the named header, or NULL if no such
+header exists.  The lookup is case-insensitive: the supplied name is
+lowercased internally before the lookup is performed.
+
+The returned pointer is valid until the next chttp_request_set_header
+call on this request or until the request is freed.
+.fi
+.SH PARAMETERS
+.nf
+req   Request to query; may be NULL (returns NULL).
+name  Header name; may be NULL (returns NULL).
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to the stored value string, or NULL if not found.
+.fi
+.SH "SEE ALSO"
+.BR chttp_request_set_header (3)

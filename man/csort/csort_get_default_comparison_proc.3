@@ -1,0 +1,50 @@
+.TH CSORT_GET_DEFAULT_COMPARISON_PROC 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+csort_get_default_comparison_proc \- get default comparison for a type
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <csort.h>
+
+ccol_comparison_proc_t csort_get_default_comparison_proc(dummy_var);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the default comparison function for a given type. Uses C11
+_Generic to select the appropriate comparison based on the type of the
+dummy variable.
+
+Supports all standard C integral types (char, short, int, long, long long,
+unsigned variants) and floating-point types (float, double, long double),
+as well as strings (char*).
+.fi
+.SH PARAMETERS
+.nf
+dummy_var  A variable of the type you want to compare (not evaluated)
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to appropriate comparison function
+Returns NULL if type is not supported
+.fi
+.SH NOTES
+.nf
+Variable is only used for type deduction, not evaluated
+For strings, returns csort_default_string_comparison_proc
+For integral types, uses three-way comparison: (a > b) - (a < b)
+.fi
+.SH EXAMPLES
+.nf
+// Get comparator for strings
+char* dummy_str;
+ccol_comparison_proc_t cmp = csort_get_default_comparison_proc(dummy_str);
+// cmp now points to csort_default_string_comparison_proc
+
+// Get comparator for doubles
+double dummy_double;
+cmp = csort_get_default_comparison_proc(dummy_double);
+.fi
+.SH "SEE ALSO"
+.BR csort_sort (3),
+.BR cvec_sort (3)

@@ -1,0 +1,28 @@
+.TH CHTTP_DEFAULT_CLIENT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_default_client \- return the process-level default HTTP client
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+chttpcli chttp_default_client(void);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the lazily-initialised process-level default client.  Thread-
+safe; only one client is ever created per process.
+
+The default client uses default settings (pool_size = CPU count, no
+timeouts, TLS verification enabled).  It can be configured via the
+same chttpclient_set_* functions as any other client.
+.fi
+.SH RETURN VALUE
+.nf
+Default client handle, or NULL if initialisation failed.
+.fi
+.SH "SEE ALSO"
+.BR create_chttpclient (3),
+.BR chttp_do (3),
+.BR chttp_get (3)

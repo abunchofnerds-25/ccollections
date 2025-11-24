@@ -1,0 +1,29 @@
+.TH CSTR_PREPEND 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_prepend \- prepend a C string; calls fatal_err() on failure
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_prepend(s, str);
+.fi
+.SH DESCRIPTION
+.nf
+Calls cstring_prepend() and calls fatal_err() if the return value is not
+ccol_success.
+.fi
+.SH PARAMETERS
+.nf
+s     cstr to modify
+str   C string to prepend (must not be NULL)
+.fi
+.SH NOTES
+.nf
+Use cstring_prepend() directly if you need to handle errors gracefully
+.fi
+.SH "SEE ALSO"
+.BR cstring_prepend (3),
+.BR cstr_append (3),
+.BR cstr_insert (3)

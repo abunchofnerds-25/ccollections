@@ -1,0 +1,46 @@
+.TH __CHTTPSVR_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+__chttpsvr_destroy \- free an HTTP server
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+void __chttpsvr_destroy(chttpsvr srv);
+.fi
+.SH DESCRIPTION
+.nf
+Releases this server's reference to the shared facil.io engine (shared
+with chttpclient's async engine), then drains all in-flight requests
+for this server (up to 30 seconds), then frees all routers, routes,
+middleware nodes, the server's owned ctpool, and the server struct
+itself.
+
+If this was the last reference to the shared engine (from either this
+server or any other chttpsvr instance, or from chttpclient's async
+engine), the engine's actual teardown happens asynchronously on a
+separate thread and is NOT guaranteed complete by the time this
+function returns.  Call chttpsvr_engine_wait() afterward for a
+synchronous guarantee (e.g. before reusing the port this server was
+listening on, or before process exit).
+
+Also calls clog_close on the server's own logger (the internal
+stderr/FATAL-only logger, or the logger derived from the cl passed to
+create_chttpsvr_mp / create_chttpsvr).  This never closes a
+caller-supplied cl directly, since the server only ever stores a
+derived copy of it.
+
+For clean multi-server teardown, call chttpsvr_stop on all servers
+first to close their listeners, then call __chttpsvr_destroy on each
+handle in any order.
+
+Does not set the caller's pointer to NULL; use the chttpsvr_destroy
+macro for that.
+
+Safe to call with NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_destroy (3),
+.BR chttpsvr_stop (3),
+.BR chttpsvr_engine_wait (3)

@@ -1,0 +1,27 @@
+.TH CSTRING_TO_LOWER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_to_lower \- convert all characters to lowercase in-place
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+void cstring_to_lower(cstr s);
+.fi
+.SH DESCRIPTION
+.nf
+Applies tolower() to every character in the string in-place.
+.fi
+.SH PARAMETERS
+.nf
+s   String to modify
+.fi
+.SH NOTES
+.nf
+Only ASCII characters are reliably transformed; behaviour for non-ASCII
+bytes depends on the current locale via tolower()
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_to_upper (3)

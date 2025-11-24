@@ -1,0 +1,40 @@
+.TH CHAN_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chan_send_zc \- send a message through the channel (blocking)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t chan_send_zc(channel *ch, c_message_t *msg);
+.fi
+.SH DESCRIPTION
+.nf
+Automatically selects the appropriate queue based on calling thread:
+- Owner thread sends to owner_to_workers queue
+- Worker threads send to workers_to_owner queue
+
+Blocks until space is available and transfers ownership.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to send through
+msg  Message to send (data ownership transfers on success)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success       - Message sent successfully
+ccol_invalid_args  - ch or msg is NULL, or msg validation fails
+ccol_not_permitted - Sending has been disabled on the selected direction
+.fi
+.SH NOTES
+.nf
+Blocks until space is available in the selected queue
+Direction is automatically determined by thread ID
+On failure, caller retains ownership of msg->data
+.fi
+.SH "SEE ALSO"
+.BR chan_try_send_zc (3),
+.BR chan_timed_send_zc (3),
+.BR chan_recv_zc (3)

@@ -1,0 +1,27 @@
+.TH CSTR_COMPARE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_compare \- compare the string to a C string
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_compare(s, str);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_compare().
+.fi
+.SH PARAMETERS
+.nf
+s     cstr to compare
+str   C string to compare against
+.fi
+.SH RETURN VALUE
+.nf
+Negative if s < str, zero if equal, positive if s > str
+.fi
+.SH "SEE ALSO"
+.BR cstring_compare (3),
+.BR cstr_equals (3)

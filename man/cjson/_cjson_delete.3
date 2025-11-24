@@ -1,0 +1,39 @@
+.TH _CJSON_DELETE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+_cjson_delete \- path-based delete back-end (prefer cjson_delete macro)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+ccol_retval_t _cjson_delete(cjson root, const char *path);
+.fi
+.SH DESCRIPTION
+.nf
+Navigates to the parent of the node addressed by the dot-separated path
+and removes and deep-frees that node.  The path uses the same syntax as
+_cjson_get: plain components address dictionary keys, '#N' components
+address list elements by zero-based index, and '\e.' / '\e\e' are escape
+sequences for a literal dot or backslash in a key name.
+
+The split is performed on the LAST unescaped dot, so "a.b.c" navigates
+to parent "a.b" and removes key "c".  When path has no dot, root itself
+is the parent.
+
+Prefer the cjson_delete() macro for all call sites.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success           - node removed and freed.
+ccol_invalid_args      - root or path is NULL, path is empty, or the
+                         leaf component is not valid for the parent type
+                         (e.g. a non-'#N' component on a list parent).
+ccol_key_not_found     - any path component, including the parent path,
+                         is absent.
+ccol_not_enough_memory - internal strdup failed.
+.fi
+.SH "SEE ALSO"
+.BR cjson_delete (macro) (3),
+.BR _cjson_get (3),
+.BR _cjson_set_typed (3)

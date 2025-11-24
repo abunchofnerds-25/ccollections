@@ -1,0 +1,58 @@
+.TH CJSON_GET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cjson_get \- navigate to a DOM node via a dot-separated path
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+cjson cjson_get(cjson root, const char *path);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a call to _cjson_get(root, path).
+
+path is a dot-separated sequence of component strings.  A component
+that begins with '#' followed by one or more decimal digits addresses
+an array element by zero-based index when the current node is
+CJSON_LIST; otherwise the component is used as a literal object key
+(including the '#' prefix).  A bare '#' with no trailing digits is
+always treated as an error and causes NULL to be returned.
+
+An empty path string returns root unchanged.
+
+Escape sequences in path components:
+  \e.   -> a literal '.' in the key (not treated as a path separator)
+  \e\e   -> a literal '\e' in the key
+A '\e' before any other character is left unchanged.
+.fi
+.SH PARAMETERS
+.nf
+root   Root cjson node (typically CJSON_DICTIONARY or CJSON_LIST).
+path   Dot-separated path string, e.g. "users.#0.address.city".
+.fi
+.SH RETURN VALUE
+.nf
+Non-owning cjson handle to the target node, or NULL if any component
+along the path is missing or the current node type does not support
+the requested traversal.
+.fi
+.SH NOTES
+.nf
+The returned handle becomes invalid if the tree is mutated or destroyed.
+Do not free the returned handle.
+.fi
+.SH EXAMPLES
+.nf
+cjson city = cjson_get(doc, "users.#0.address.city");
+if (cjson_type(city) == CJSON_STRING)
+    printf("%s\en", cjson_str_val(city));
+
+/* '#0' in an object context is a literal key, not an index */
+cjson v = cjson_get(doc, "#0");
+.fi
+.SH "SEE ALSO"
+.BR cjson_set (3),
+.BR _cjson_get (3),
+.BR cjson_type (3)

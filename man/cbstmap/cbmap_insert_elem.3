@@ -1,0 +1,43 @@
+.TH CBMAP_INSERT_ELEM 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cbmap_insert_elem \- insert a key-value pair into the BST map
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+ccol_retval_t cbmap_insert_elem(cbmap cbm,
+                                 const cmap_pair *key_pair,
+                                 const cmap_pair *val_pair);
+.fi
+.SH DESCRIPTION
+.nf
+Inserts a key-value pair into the BST map. If the key already exists,
+the old value is replaced. Tree is automatically rebalanced using AVL
+rotations after insertion.
+.fi
+.SH PARAMETERS
+.nf
+cbm        BST map to insert into
+key_pair   Key to insert (copied into map)
+val_pair   Value to associate with key (copied into map)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success               - New key inserted successfully
+ccol_key_already_present   - Key already existed; value updated successfully
+ccol_container_full        - Map has reached max_elem_count
+ccol_not_enough_memory     - Memory allocation failed
+.fi
+.SH NOTES
+.nf
+O(log n) complexity
+Key and value data are copied into the map
+If key exists, old value is freed and replaced
+Tree is rebalanced using single/double rotations
+.fi
+.SH "SEE ALSO"
+.BR cbmap_insert (3),
+.BR cbmap_delete_elem (3),
+.BR cbmap_get_elem_ref (3)

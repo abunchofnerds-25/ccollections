@@ -1,0 +1,41 @@
+.TH CCOL_ITER_KEY_PTR 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_iter_key_ptr \- get a typed const pointer to the current key
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <citerators.h>   /* or any container header */
+
+const KeyT *ccol_iter_key_ptr(it);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a typed const pointer to the key of the element currently
+pointed to by it.
+
+For cvec iterators the key is the element index (size_t).
+For chmap and cbmap iterators the key is the actual map key.
+Char-pointer keys are returned as (const char **) pointing into the
+map's internal storage; all other key types are returned as a direct
+typed pointer.
+.fi
+.SH PARAMETERS
+.nf
+it   Iterator variable declared with ccol_iter_declare() or inside
+     ccol_for_each().
+.fi
+.SH RETURN VALUE
+.nf
+const KeyT* to the current key.  Do not free or mutate the pointed-to
+value through this pointer.
+.fi
+.SH NOTES
+.nf
+The returned pointer is valid only while the iterator is alive and
+the container has not been modified.
+Uses a GNU C statement expression; requires GCC or Clang.
+.fi
+.SH "SEE ALSO"
+.BR ccol_iter_val_ptr (3),
+.BR ccol_iter_declare (3)

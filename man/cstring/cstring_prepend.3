@@ -1,0 +1,35 @@
+.TH CSTRING_PREPEND 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_prepend \- prepend a C string to the beginning
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+ccol_retval_t cstring_prepend(cstr s, const char *str);
+.fi
+.SH DESCRIPTION
+.nf
+Inserts the null-terminated C string str before all existing characters
+in s. Existing content is shifted right to make room.
+.fi
+.SH PARAMETERS
+.nf
+s     String to modify
+str   C string to prepend (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - Prepend succeeded
+ccol_invalid_args         - str is NULL
+ccol_container_full       - Result would overflow size_t
+ccol_not_enough_memory    - Reallocation failed
+.fi
+.SH NOTES
+.nf
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_append (3),
+.BR cstring_insert (3)

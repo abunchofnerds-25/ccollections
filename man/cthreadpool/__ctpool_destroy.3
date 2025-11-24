@@ -1,0 +1,36 @@
+.TH __CTPOOL_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+__ctpool_destroy \- destroy a thread pool (internal)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+void __ctpool_destroy(ctpool pool);
+.fi
+.SH DESCRIPTION
+.nf
+Frees all resources associated with the pool. If neither
+ctpool_shutdown_drain nor ctpool_shutdown_immediate was called
+beforehand, performs a drain shutdown inline (waits for all queued and
+active tasks to complete) before freeing.
+
+After this function returns the pool handle is invalid. Use the
+ctpool_destroy macro rather than calling this function directly, as the
+macro also sets the handle to NULL.
+.fi
+.SH PARAMETERS
+.nf
+pool   Thread pool handle (NULL is a no-op)
+.fi
+.SH NOTES
+.nf
+Must not be called concurrently with any other pool operation.
+Calling ctpool_destroy (the macro) is preferred over calling this
+function directly.
+.fi
+.SH "SEE ALSO"
+.BR ctpool_destroy (3),
+.BR ctpool_shutdown_drain (3),
+.BR ctpool_shutdown_immediate (3)

@@ -1,0 +1,31 @@
+.TH CYAML_CREATE_LIST_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_create_list_mp, cyaml_create_list \- allocate an empty YAML list node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_create_list_mp(ccol_memmgmt_procs_t *mp);
+cyaml cyaml_create_list(void);
+.fi
+.SH DESCRIPTION
+.nf
+Allocate a DOM node of type CYAML_LIST backed by a cvector.
+The list is initially empty.  Children are added with
+cyaml_list_push().  cyaml_create_list() passes NULL for mp.
+.fi
+.SH PARAMETERS
+.nf
+mp   Custom allocator, or NULL for default.
+.fi
+.SH RETURN VALUE
+.nf
+New cyaml node on success, NULL on allocation failure.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_list_push (3),
+.BR cyaml_list_get (3),
+.BR cyaml_list_len (3),
+.BR cyaml_destroy (3)

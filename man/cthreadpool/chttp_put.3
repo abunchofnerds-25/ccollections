@@ -1,0 +1,24 @@
+.TH CHTTP_PUT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_put \- perform a PUT request via the default client
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttp_put(const char *url,
+                        const chttp_request_body_t *body,
+                        chttpcli_response **resp_out);
+.fi
+.SH DESCRIPTION
+.nf
+Convenience wrapper for HTTP PUT.
+.fi
+.SH RETURN VALUE
+.nf
+Same codes as chttpclient_do.
+.fi
+.SH "SEE ALSO"
+.BR chttp_get (3),
+.BR chttp_do (3)

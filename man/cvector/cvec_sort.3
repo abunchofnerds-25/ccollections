@@ -1,0 +1,38 @@
+.TH CVEC_SORT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_sort \- sort vector using default comparison for type
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+cvec_sort(v);
+.fi
+.SH DESCRIPTION
+.nf
+Sorts the vector in-place using the default comparison function for the
+element type. The default comparator is obtained from the csort library
+based on the type.
+.fi
+.SH PARAMETERS
+.nf
+v    Vector to sort
+.fi
+.SH NOTES
+.nf
+Sorts in-place using stable mergesort algorithm
+O(n log n) time complexity, O(n) space complexity
+Uses default comparison for the element type
+Supported types depend on csort library defaults
+.fi
+.SH EXAMPLES
+.nf
+cvec_construct(vec, int);
+cvec_push_rvalue(vec, 3);
+cvec_push_rvalue(vec, 1);
+cvec_push_rvalue(vec, 2);
+cvec_sort(vec);  // vec is now [1, 2, 3]
+.fi
+.SH "SEE ALSO"
+.BR cvector_sort_with_comparison_proc (3)

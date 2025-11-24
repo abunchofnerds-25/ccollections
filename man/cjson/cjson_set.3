@@ -1,0 +1,78 @@
+.TH CJSON_SET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cjson_set \- write a C scalar to the DOM leaf at a dot-separated path
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+ccol_retval_t cjson_set(cjson root, const char *path, val);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a call to _cjson_set_typed() with the type and raw value
+of val derived at compile time via _Generic.
+
+Accepted C types for val:
+  bool                       -> CJSON_BOOL
+  any integer type           -> CJSON_INTEGER (stored as long long)
+  float / double             -> CJSON_FLOAT  (stored as double)
+  char * / const char *      -> CJSON_STRING  (strdup'd copy)
+  string literal ("...")     -> CJSON_STRING
+  NULL or other pointer      -> CJSON_NULL
+
+Signed integer types are sign-extended to long long correctly.
+Unsigned integers in the range [0, LLONG_MAX] round-trip faithfully.
+Unsigned values > LLONG_MAX are stored with their bit pattern
+reinterpreted as a signed long long.
+
+The leaf is created if it does not yet exist (its immediate parent
+must already exist).  If the leaf exists its type is changed
+unconditionally: existing array or object subtrees are deep-freed
+before the new value is written.
+.fi
+.SH PARAMETERS
+.nf
+root   Root cjson node.
+path   Dot-separated path string to the target leaf.
+       Escape sequences: '\e.' -> literal '.', '\e\e' -> literal '\e'.
+       A '\e' before any other character is left unchanged.
+val    C value; the type must be one of the accepted types listed above.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_retval_t: ccol_success on success.
+ccol_invalid_args; empty path, parent type incompatible, array
+                     index out of bounds, or bare '#' with no digits.
+ccol_key_not_found; a non-leaf component on the path does not exist.
+ccol_not_enough_memory; allocation failure.
+.fi
+.SH NOTES
+.nf
+Passing a bool literal requires an explicit cast: (bool)true.
+Without the cast, the integer value 1 is seen instead of _Bool,
+resulting in CJSON_INTEGER rather than CJSON_BOOL.
+
+Plain char inherits the platform's default signedness (signed on
+x86/x86-64 Linux, unsigned where -funsigned-char applies, e.g. ARM).
+Use signed char or unsigned char explicitly when portability matters.
+.fi
+.SH EXAMPLES
+.nf
+cjson_set(doc, "users.#0.active", (bool)true);
+cjson_set(doc, "users.#0.score",  99);
+cjson_set(doc, "users.#0.label",  "champion");
+cjson_set(doc, "users.#0.ratio",  0.75);
+
+/* Type change: replace an existing object subtree with a scalar */
+cjson_set(doc, "users.#0.metadata", 0);  /* deep-frees old subtree */
+
+/* Set to null */
+cjson_set(doc, "users.#0.deprecated", NULL);
+.fi
+.SH "SEE ALSO"
+.BR cjson_get (3),
+.BR _cjson_set_typed (3),
+.BR cjson_dictionary_set (3),
+.BR cjson_list_push (3)

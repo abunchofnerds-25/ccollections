@@ -1,0 +1,21 @@
+.TH CJSON_TYPE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_type \- return the type tag of a DOM node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+cjson_node_type_t cjson_type(cjson node);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the cjson_node_type_t tag of node.
+Returns CJSON_NULL safely when node is NULL.
+.fi
+.SH "SEE ALSO"
+.BR cjson_bool_val (3),
+.BR cjson_int_val (3),
+.BR cjson_double_val (3),
+.BR cjson_str_val (3)

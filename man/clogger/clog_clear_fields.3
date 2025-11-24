@@ -1,0 +1,27 @@
+.TH CLOG_CLEAR_FIELDS 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_clear_fields \- remove all attached structured fields
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+void clog_clear_fields(clog logger);
+.fi
+.SH DESCRIPTION
+.nf
+Removes and frees every field attached to the logger. Subsequent log
+lines will contain no key=value pairs between func= and msg=.
+.fi
+.SH PARAMETERS
+.nf
+logger  Logger handle.
+.fi
+.SH NOTES
+.nf
+Thread-safe: protected by the per-logger mutex.
+.fi
+.SH "SEE ALSO"
+.BR clog_set_field (3),
+.BR clog_remove_field (3)

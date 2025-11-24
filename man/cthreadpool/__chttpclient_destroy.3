@@ -1,0 +1,24 @@
+.TH __CHTTPCLIENT_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+__chttpclient_destroy \- internal destroy function
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+void __chttpclient_destroy(chttpcli cli);
+.fi
+.SH DESCRIPTION
+.nf
+Waits for all in-flight requests to complete, then closes all pooled
+connections (both idle and TLS), frees the idle-connection pool,
+destroys the client's TLS context, frees synchronisation primitives,
+and frees the client struct.
+
+Do not call directly; use the chttpclient_destroy macro, which also
+sets the handle to NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_destroy (3),
+.BR ___chttpclient_destroy (3)

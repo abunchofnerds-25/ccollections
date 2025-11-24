@@ -1,0 +1,26 @@
+.TH CJSON_DICTIONARY_REMOVE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_dictionary_remove \- remove and free a key from an object node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+ccol_retval_t cjson_dictionary_remove(cjson obj, const char *key);
+.fi
+.SH DESCRIPTION
+.nf
+Removes the entry identified by key from the object node obj and
+recursively frees the associated value subtree.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        - entry removed and freed.
+ccol_invalid_args   - obj is NULL or not CJSON_DICTIONARY.
+ccol_key_not_found  - key does not exist in the object.
+.fi
+.SH "SEE ALSO"
+.BR cjson_dictionary_set (3),
+.BR cjson_dictionary_get (3),
+.BR cjson_list_remove (3)

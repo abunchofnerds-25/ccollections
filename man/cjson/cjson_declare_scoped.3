@@ -1,0 +1,33 @@
+.TH CJSON_DECLARE_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cjson_declare_scoped \- declare a cjson variable with automatic destruction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+cjson_declare_scoped(var_name);
+.fi
+.SH DESCRIPTION
+.nf
+Expands to `cjson var_name` decorated with the GCC cleanup attribute so
+that cjson_destroy() is called automatically when the variable goes out
+of scope.  The variable must be initialized before use (set to NULL or
+to a valid node).
+.fi
+.SH PARAMETERS
+.nf
+var_name  Name of the variable to declare.
+.fi
+.SH EXAMPLES
+.nf
+{
+    cjson_declare_scoped(root) = cjson_parse("{\e"k\e":1}");
+    /* root is freed automatically at the closing brace */
+}
+.fi
+.SH "SEE ALSO"
+.BR cjson_declare (3),
+.BR cjson_destroy (3),
+.BR _ccol_destructor (3)

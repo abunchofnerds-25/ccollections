@@ -1,0 +1,26 @@
+.TH CSTR_RESERVE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_reserve \- reserve capacity; calls fatal_err() on failure
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_reserve(s, cap);
+.fi
+.SH DESCRIPTION
+.nf
+Calls cstring_reserve() and calls fatal_err() if it returns false.
+.fi
+.SH PARAMETERS
+.nf
+s     cstr to modify
+cap   Minimum number of bytes to reserve (including null terminator)
+.fi
+.SH NOTES
+.nf
+Use cstring_reserve() directly if you need to handle errors gracefully
+.fi
+.SH "SEE ALSO"
+.BR cstring_reserve (3)

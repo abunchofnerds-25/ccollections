@@ -1,0 +1,30 @@
+.TH CSTR_APPEND 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_append \- append a C string; calls fatal_err() on failure
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_append(s, str);
+.fi
+.SH DESCRIPTION
+.nf
+Calls cstring_append() and calls fatal_err() if the return value is not
+ccol_success.
+.fi
+.SH PARAMETERS
+.nf
+s     cstr to modify
+str   C string to append (must not be NULL)
+.fi
+.SH NOTES
+.nf
+Use cstring_append() directly if you need to handle errors gracefully
+.fi
+.SH "SEE ALSO"
+.BR cstring_append (3),
+.BR cstr_prepend (3),
+.BR cstr_insert (3),
+.BR cstr_set (3)

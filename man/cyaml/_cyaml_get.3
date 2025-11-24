@@ -1,0 +1,34 @@
+.TH _CYAML_GET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+_cyaml_get \- path-navigation back-end (prefer cyaml_get macro)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml _cyaml_get(cyaml root, const char *path);
+.fi
+.SH DESCRIPTION
+.nf
+Navigate from root through a dot-separated path and return the node at
+the destination.  Path components beginning with '#' followed by
+decimal digits index into a CYAML_LIST by position; all other
+components are treated as literal dictionary keys.
+
+Escape sequences in path components:
+  \e.   -> literal '.' in the key (not a path separator)
+  \e\e   -> literal '\e' in the key
+A '\e' before any other character is left unchanged.
+
+The cyaml_get() macro is the preferred public interface.  Call
+_cyaml_get() directly only when the macro wrapper is inconvenient.
+.fi
+.SH RETURN VALUE
+.nf
+Non-owning node reference, or NULL if any component is missing or the
+node type at that step is incompatible with the operation.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_get (macro) (3),
+.BR _cyaml_set_typed (3)

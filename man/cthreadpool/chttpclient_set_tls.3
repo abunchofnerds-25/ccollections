@@ -1,0 +1,41 @@
+.TH CHTTPCLIENT_SET_TLS 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_set_tls \- set TLS configuration for a client
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpclient_set_tls(chttpcli cli,
+                                  const chttp_tls_config_t *tls);
+.fi
+.SH DESCRIPTION
+.nf
+Copies the supplied TLS configuration into the client.  Passing NULL
+restores the default (verify_peer = true, verify_host = true, system
+CA bundle, no client certificate).
+
+The strings in chttp_tls_config_t (cert_path, key_path, ca_bundle_path)
+are deep-copied into client-owned buffers; the caller's originals may
+be freed or reused immediately after this call returns.
+
+cert_path/key_path/ca_bundle_path are validated for readability
+lazily, at the time an HTTPS request actually needs them, rather than
+here; a path that does not currently exist is accepted here without
+error and only surfaces as ccol_http_tls_cert_verification_failed from
+chttpclient_do/chttpclient_do_streaming once a request needs it.
+.fi
+.SH PARAMETERS
+.nf
+cli   Client handle; must not be NULL.
+tls   TLS configuration to copy, or NULL to restore defaults.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success      Configuration updated.
+ccol_invalid_args cli is NULL.
+.fi
+.SH "SEE ALSO"
+.BR CHTTP_TLS_DEFAULT (3),
+.BR create_chttpclient (3)

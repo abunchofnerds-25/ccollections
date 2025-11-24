@@ -1,0 +1,30 @@
+.TH CLRU_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clru_destroy \- destroy an LRU cache and set pointer to NULL
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+clru_destroy(name);
+.fi
+.SH DESCRIPTION
+.nf
+Calls __clrucache_destroy() to evict all remaining entries (invoking
+the eviction callback for each while the mutex is held), destroy the
+internal map, and free all memory. Then sets name to NULL.
+.fi
+.SH PARAMETERS
+.nf
+name  Cache variable to destroy (will be set to NULL after destruction)
+.fi
+.SH NOTES
+.nf
+Safe to call when name is NULL (no-op).
+Must be called only after all other threads have stopped using the cache.
+.fi
+.SH "SEE ALSO"
+.BR clru_construct (3),
+.BR __clrucache_destroy (3),
+.BR clrucache_create_full (3)

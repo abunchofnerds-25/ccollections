@@ -1,0 +1,53 @@
+.TH R_MEMPOOL_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+r_mempool_create \- create a ranged memory pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+r_mempool *r_mempool_create(
+    uint8_t smallest_size_power_of_two,
+    uint8_t largest_size_power_of_two,
+    uint8_t number_of_smallest_size_elems_power_of_two,
+    r_memory_fallback_policy_t fb_policy,
+    bool single_threaded,
+    ccol_memmgmt_procs_t *mmgmt_procs,
+    char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a ranged memory pool that manages multiple fixed-size pools
+organized by power-of-2 sizes. Automatically selects the appropriate
+sub-pool for each allocation request.
+.fi
+.SH PARAMETERS
+.nf
+smallest_size_power_of_two              Exponent for smallest pool size
+largest_size_power_of_two               Exponent for largest pool size
+number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
+fb_policy                               Fallback policy for exhausted pools
+single_threaded                         If true, omit locking
+mmgmt_procs                             Custom memory management, or NULL
+err                                     Optional pointer to receive error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created ranged memory pool on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Each sub-pool has half the elements of the previous size
+Minimum allowed smallest size is 16 bytes (power = 4)
+Example: smallest=4 (16 bytes), largest=6 (64 bytes), count=8 (256 elems)
+  Creates pools: 16 bytes (256 elems), 32 bytes (128), 64 bytes (64)
+Fallback policies:
+  - fallback_disabled: Returns NULL when pools exhausted
+  - fallback_at_first_exhaustion: Uses heap when first pool exhausted
+  - fallback_at_last_exhaustion: Uses heap only after all pools exhausted
+.fi
+.SH "SEE ALSO"
+.BR r_mempool_create_from_preallocated_buffer (3),
+.BR r_mempool_destroy (3)

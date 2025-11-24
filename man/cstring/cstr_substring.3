@@ -1,0 +1,47 @@
+.TH CSTR_SUBSTRING 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_substring \- create a new string from a sub-range; calls fatal_err() on failure
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr result = cstr_substring(s, start, len);
+.fi
+.SH DESCRIPTION
+.nf
+GNU C statement expression that calls cstring_substring() and calls
+fatal_err() if the result is NULL (allocation failure). Returns the new
+cstring as a value so it can be used directly in expressions.
+.fi
+.SH PARAMETERS
+.nf
+s      Source cstr
+start  Zero-based start index
+len    Number of characters to include
+.fi
+.SH RETURN VALUE
+.nf
+New cstr containing the requested sub-range
+.fi
+.SH NOTES
+.nf
+This macro uses a GNU C statement expression ({...}) and requires GCC or
+Clang
+The range is clamped at the string end rather than rejected
+Caller must destroy the returned cstring when done
+Use cstring_substring() directly if you need to handle errors gracefully
+.fi
+.SH EXAMPLES
+.nf
+cstr_construct(src, "Hello, world!");
+cstr sub = cstr_substring(src, 7, 5);   /* "world" */
+printf("%s\en", cstr_c_str(sub));
+cstr_destroy(sub);
+cstr_destroy(src);
+.fi
+.SH "SEE ALSO"
+.BR cstring_substring (3),
+.BR cstr_copy (3),
+.BR cstr_split (3)

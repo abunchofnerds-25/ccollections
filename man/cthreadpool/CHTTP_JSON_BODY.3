@@ -1,0 +1,19 @@
+.TH CHTTP_JSON_BODY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+CHTTP_JSON_BODY \- construct a chttp_request_body_t for JSON content
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttp.h>
+
+CHTTP_JSON_BODY(d, n)
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a chttp_request_body_t initialiser with Content-Type set to
+"application/json", data pointer d, and byte length n.
+.fi
+.SH "SEE ALSO"
+.BR CHTTP_TEXT_BODY (3),
+.BR CHTTP_BODY (3)

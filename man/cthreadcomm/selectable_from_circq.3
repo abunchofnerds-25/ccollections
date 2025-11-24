@@ -1,0 +1,59 @@
+.TH SELECTABLE_FROM_CIRCQ 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+selectable_from_circq \- build a ccol_selectable from a circular_queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+selectable_from_circq(q, dir);
+.fi
+.SH DESCRIPTION
+.nf
+Constructs a ccol_selectable tagged-union value of type ccol_selectable_circq
+wrapping the given circular_queue pointer with the specified direction.
+
+  ccol_select_read; wait for at least one message to arrive (read-wait)
+  ccol_select_write; wait until the queue has room for a send (write-wait)
+
+This is a macro that expands to a compound literal; it has no run-time
+overhead beyond loading the pointer.
+
+For write-direction wins, ccol_select() leaves buf untouched; no message
+is consumed.  The caller must subsequently call circq_try_send_zc() since
+the available slot is not reserved (TOCTOU, same as POSIX select(2)).
+.fi
+.SH PARAMETERS
+.nf
+q    circular_queue pointer to wrap.  Passing NULL produces a selectable
+     that ccol_select() will reject with ccol_invalid_args.
+dir  ccol_select_read or ccol_select_write.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_selectable value (not a pointer).
+.fi
+.SH EXAMPLES
+.nf
+circular_queue *q0 = circular_queue_create(8, NULL);
+circular_queue *q1 = circular_queue_create(8, NULL);
+
+c_message_t msg;
+size_t idx;
+/* Read-wait on two queues: */
+ccol_select_va(&msg, &idx,
+    selectable_from_circq(q0, ccol_select_read),
+    selectable_from_circq(q1, ccol_select_read));
+
+/* Mixed: wait until q0 has room to send or q1 has a message: */
+ccol_select_va(&msg, &idx,
+    selectable_from_circq(q0, ccol_select_write),
+    selectable_from_circq(q1, ccol_select_read));
+.fi
+.SH "SEE ALSO"
+.BR ccol_select (3),
+.BR ccol_select_va (3),
+.BR selectable_from_dynq (3),
+.BR selectable_from_chan (3),
+.BR selectable_from_fd (3)

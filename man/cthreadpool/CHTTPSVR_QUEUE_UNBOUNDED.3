@@ -1,0 +1,24 @@
+.TH CHTTPSVR_QUEUE_UNBOUNDED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+CHTTPSVR_QUEUE_UNBOUNDED \- sentinel for an unbounded server worker queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+cfg.worker_queue_capacity = CHTTPSVR_QUEUE_UNBOUNDED;
+.fi
+.SH DESCRIPTION
+.nf
+Expands to ((size_t)-1).  Assign to chttpsvr_config_t.worker_queue_capacity
+to create the server's ctpool with no queue capacity limit (equivalent
+to passing 0 to the ctpool API).
+
+The default value of 0 for worker_queue_capacity instead maps to a
+library-defined default of 1024 * worker_thread_count queue slots.
+.fi
+.SH "SEE ALSO"
+.BR CHTTPSVR_CONFIG_DEFAULT (3),
+.BR chttpsvr_start (3)

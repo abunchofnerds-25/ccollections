@@ -6,6 +6,8 @@ If you have used Python's `list` and `dict`, Java's `ArrayList` and `HashMap`, o
 
 Every module follows the same naming conventions (`*_construct`, `*_destroy`, and optional `*_scoped` variants for automatic cleanup), so once you have learned how one container works, the others follow naturally. The library compiles cleanly under GCC and Clang at `-Wall -Wextra -Werror`, and each module ships with a test suite that runs under Valgrind.
 
+Every public function and macro also has a real troff manual page under [`man/`](man/) (`man/<module>/`, one file per symbol); see [`man/README`](man/README) for how to browse them with `man -l`.
+
 ---
 
 ## Table of Contents

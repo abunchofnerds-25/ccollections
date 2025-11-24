@@ -1,0 +1,38 @@
+.TH CBMAP_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_construct \- type-safe BST map construction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+cbmap_construct(hm_name, key_type, val_type);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe macro for creating a BST map with default settings.
+Automatically determines if keys are signed integers and creates type
+marker variables for compile-time type checking.
+.fi
+.SH PARAMETERS
+.nf
+hm_name   Name of the BST map variable to create
+key_type  Type of keys
+val_type  Type of values
+.fi
+.SH NOTES
+.nf
+Terminates program on allocation failure
+Creates hidden type marker variables for type safety
+Automatically determines key signedness and string key type
+Uses default memory management and comparison
+.fi
+.SH EXAMPLES
+.nf
+cbmap_construct(map, int, char*);
+cbmap_insert(map, 42, "hello");
+.fi
+.SH "SEE ALSO"
+.BR cbmap_construct_full (3),
+.BR cbmap_create (3)

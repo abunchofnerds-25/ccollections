@@ -1,0 +1,39 @@
+.TH CHTTPSVR_ENGINE_STOP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_engine_stop \- signal the engine to stop
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+void chttpsvr_engine_stop(void);
+.fi
+.SH DESCRIPTION
+.nf
+Signals the shared facil.io engine to stop accepting new connections and
+begin draining in-flight requests.  Returns immediately; use
+chttpsvr_engine_wait() to block until the drain completes.
+
+Forces the engine down even if other references are still
+outstanding (from other chttpsvr instances, or from chttpclient's
+async engine, in the same process); the engine is shared, so this
+also aborts any in-flight chttpclient async work
+(chttpclient_do_async/_streaming, chttpclient_do_pooled/_streaming)
+along with every chttpsvr listener.  This is an inherent consequence
+of sharing one process-wide reactor for what is meant to be
+process-shutdown-driven use, not a defect.
+
+Non-blocking and async-signal-safe: it is safe to call this function
+directly from a POSIX signal handler (e.g. SIGINT, SIGTERM).
+
+The library does not install any signal handlers.  Applications are
+responsible for wiring this function into whatever signal or shutdown
+mechanism they use.
+
+Safe to call before the engine has ever started (no-op).
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_engine_wait (3),
+.BR chttpsvr_stop (3),
+.BR chttpsvr_start (3)

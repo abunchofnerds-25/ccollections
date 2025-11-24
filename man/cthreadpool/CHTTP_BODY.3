@@ -1,0 +1,28 @@
+.TH CHTTP_BODY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+CHTTP_BODY \- construct a chttp_request_body_t with an explicit content type
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttp.h>
+
+CHTTP_BODY(data_ptr, data_len, content_type_str)
+.fi
+.SH DESCRIPTION
+.nf
+Expands to a chttp_request_body_t initialiser with the given raw data
+pointer, length, and Content-Type string.
+
+data_ptr       Pointer to the body bytes (not copied by the macro).
+data_len       Length of the body in bytes.
+content_type_str  Content-Type header value string.
+.fi
+.SH EXAMPLES
+.nf
+chttp_request_body_t body = CHTTP_BODY(buf, len, "application/octet-stream");
+.fi
+.SH "SEE ALSO"
+.BR CHTTP_JSON_BODY (3),
+.BR CHTTP_TEXT_BODY (3),
+.BR CHTTP_NO_BODY (3)

@@ -1,0 +1,50 @@
+.TH CCOL_FOR_EACH 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_for_each \- iterate over all elements of any supported container
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <citerators.h>   /* or any container header */
+
+ccol_for_each(container, it, { body });
+.fi
+.SH DESCRIPTION
+.nf
+Declares a cmap_iterator* variable named it with RAII cleanup, then
+loops from ccol_begin(container) to NULL using ccol_iter_next().  The
+body is executed once for each element; it gives typed access via
+ccol_iter_key_ptr(it) and ccol_iter_val_ptr(it).
+
+The iterator is destroyed automatically when the loop exits, whether
+by reaching the end, by break, or by return.
+.fi
+.SH PARAMETERS
+.nf
+container  A cvec, chmap, or cbmap variable.
+it         Name for the iterator variable.
+body       Compound statement executed per element (passed as variadic
+           argument; commas inside nested function calls are safe).
+.fi
+.SH NOTES
+.nf
+Do NOT modify the container inside the body; insertions and deletions
+invalidate the iterator and produce undefined behaviour.
+Requires GCC or Clang (uses statement expressions and cleanup).
+.fi
+.SH EXAMPLES
+.nf
+chmap_construct(freq, char*, int);
+/* ... populate ... */
+ccol_for_each(freq, it, {
+    printf("%-12s %d\en", *ccol_iter_key_ptr(it),
+                         *ccol_iter_val_ptr(it));
+});
+chmap_destroy(freq);
+.fi
+.SH "SEE ALSO"
+.BR ccol_iter_declare (3),
+.BR ccol_begin (3),
+.BR ccol_iter_next (3),
+.BR ccol_iter_key_ptr (3),
+.BR ccol_iter_val_ptr (3)

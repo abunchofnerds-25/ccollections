@@ -1,0 +1,40 @@
+.TH CLOG_CLOSE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_close \- flush, close, and free a logger
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+void clog_close(clog logger);
+.fi
+.SH DESCRIPTION
+.nf
+Releases all resources owned by the logger:
+  - If the logger is file-backed and this is the last handle sharing
+    the underlying file (i.e. all derived loggers have also been
+    closed), the file descriptor is closed.  If derived loggers still
+    exist the fd remains open and the file's ref-count is decremented.
+  - All attached key=value fields are freed.
+  - The internal write buffer is freed.
+  - The per-handle state is freed; the shared backing store is freed
+    only when the last handle is released.
+
+After this call, the handle must not be used.
+.fi
+.SH PARAMETERS
+.nf
+logger  Logger handle to close.
+.fi
+.SH NOTES
+.nf
+clog_close() must not be called while other threads are still calling
+log_* macros on the same handle. Callers are responsible for ensuring
+all logging threads have finished before calling clog_close().
+For fd-based loggers (clog_open_fd_mp), the file descriptor is NOT
+closed; it is the caller's responsibility.
+.fi
+.SH "SEE ALSO"
+.BR clog_open_fd_mp (3),
+.BR clog_open_file_mp (3)

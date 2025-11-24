@@ -1,0 +1,30 @@
+.TH CYAML_CREATE_NULL_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_create_null_mp, cyaml_create_null \- allocate a YAML null node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_create_null_mp(ccol_memmgmt_procs_t *mp);
+cyaml cyaml_create_null(void);
+.fi
+.SH DESCRIPTION
+.nf
+Allocate a DOM node of type CYAML_NULL.  cyaml_create_null() is an
+inline wrapper that passes NULL (default allocator) to
+cyaml_create_null_mp().
+.fi
+.SH PARAMETERS
+.nf
+mp   Custom memory management procedures, or NULL for the default
+     allocator.
+.fi
+.SH RETURN VALUE
+.nf
+New cyaml node on success, NULL on allocation failure.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_destroy (3),
+.BR cyaml_type (3)

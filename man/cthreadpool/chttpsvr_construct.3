@@ -1,0 +1,28 @@
+.TH CHTTPSVR_CONSTRUCT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chttpsvr_construct \- declare and initialise a chttpsvr handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttpsvr_construct(name, cl);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a chttpsvr variable named name, calls create_chttpsvr(cl),
+and assigns the result.  Calls fatal_err() and does not return on
+failure.
+.fi
+.SH PARAMETERS
+.nf
+name     Identifier for the new handle variable.
+cl       Parent logger to derive this server's logger from, or NULL
+         to use an internal stderr/FATAL-only logger.  See
+         create_chttpsvr_mp for details.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_construct_scoped (3),
+.BR chttpsvr_declare (3),
+.BR create_chttpsvr (3)

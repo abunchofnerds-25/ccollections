@@ -1,0 +1,47 @@
+.TH CHMAP_GET_PTR 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_get_ptr \- get pointer to value by key (type-safe)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+value_ptr = chmap_get_ptr(hm_name, key);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for chmap_get_elem_ref() that returns a pointer to the
+value, or NULL if key not found. Unlike chmap_get(), does not terminate
+on key_not_found.
+.fi
+.SH PARAMETERS
+.nf
+hm_name  Hash map to search
+key      Key to look up
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to value if key found
+Returns NULL if key not found
+.fi
+.SH NOTES
+.nf
+Returns NULL if key not found (does not terminate)
+Terminates program if value size doesn't match type size
+Returns pointer to value for in-place modification
+Pointer invalidated by later insert/delete/resize operations
+For strings, returns pointer to the char* itself
+.fi
+.SH EXAMPLES
+.nf
+chmap_construct(map, int, int);
+chmap_insert(map, 42, 100);
+int* ptr = chmap_get_ptr(map, 42);
+if (ptr) {
+  *ptr = 200; // Modify in-place
+}
+.fi
+.SH "SEE ALSO"
+.BR chmap_get (3),
+.BR chmap_get_elem_ref (3)

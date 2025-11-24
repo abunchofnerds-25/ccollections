@@ -1,0 +1,37 @@
+.TH CTPOOL_SHUTDOWN_IMMEDIATE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_shutdown_immediate \- immediate shutdown
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+void ctpool_shutdown_immediate(ctpool pool);
+.fi
+.SH DESCRIPTION
+.nf
+Cancels all tasks currently in the queue, then signals worker threads
+to exit after their current task (if any) completes. Blocks until all
+worker threads have exited.
+
+Futures for cancelled tasks are marked done and cancelled; any thread
+blocked in ctpool_future_get for a cancelled future is unblocked and
+receives NULL. Calling ctpool_shutdown_immediate a second time is a
+no-op.
+.fi
+.SH PARAMETERS
+.nf
+pool   Thread pool handle (NULL is a no-op)
+.fi
+.SH NOTES
+.nf
+Tasks that are already executing when this is called are allowed to
+finish normally.
+ctpool_submit and ctpool_submit_future return ccol_not_permitted after
+this call.
+.fi
+.SH "SEE ALSO"
+.BR ctpool_shutdown_drain (3),
+.BR ctpool_future_cancelled (3),
+.BR ctpool_destroy (3)

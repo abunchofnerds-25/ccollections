@@ -1,0 +1,25 @@
+.TH CJSON_LIST_PUSH 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_list_push \- append a child to an array node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+ccol_retval_t cjson_list_push(cjson arr, cjson child);
+.fi
+.SH DESCRIPTION
+.nf
+Appends child to the end of arr.  Ownership of child transfers to arr
+unconditionally: on success the array owns child; on failure child is
+deep-freed by cjson_list_push.  Do not free child after calling this
+function regardless of the return value.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+.fi
+.SH "SEE ALSO"
+.BR cjson_list_get (3),
+.BR cjson_create_list (3)

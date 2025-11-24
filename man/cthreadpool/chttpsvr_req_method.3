@@ -1,0 +1,26 @@
+.TH CHTTPSVR_REQ_METHOD 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_method \- return the HTTP method of a request
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttp_method_t chttpsvr_req_method(const chttpsvr_req *req);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the HTTP method of req as a chttp_method_t enum value.  The
+return value is always a concrete method (CHTTP_GET, CHTTP_POST, etc.);
+CHTTP_ANY is never returned, even when the matched route was registered
+with CHTTP_ANY.
+
+When req is NULL the function returns CHTTP_GET.  Unlike most other
+request accessors (which return NULL for a NULL req), chttp_method_t is
+an integer enum with no sentinel value, so callers must guard against
+NULL before calling this function if req may be NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_path (3),
+.BR chttpsvr_req_header (3)

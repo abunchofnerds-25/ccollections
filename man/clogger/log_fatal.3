@@ -1,0 +1,58 @@
+.TH LOG_FATAL 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+log_fatal \- emit a log line at FATAL level with a backtrace, then terminate the process
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+log_fatal(clog lg, const char *fmt, ...);
+.fi
+.SH DESCRIPTION
+.nf
+Writes a structured log line at CLOG_FATAL severity, appends a full
+stack backtrace, then terminates the calling process by invoking
+exit(EXIT_FAILURE).  This macro never returns to the caller.
+
+Unlike all other log_* macros, log_fatal bypasses the logger's
+min_level filter.  The log line and backtrace are always written,
+regardless of the logger's current minimum level (including CLOG_OFF),
+so the cause of process termination is never silently suppressed.
+
+The log line and backtrace are written inside the per-logger mutex so
+they always appear contiguously in the output, even when other threads
+are logging concurrently.
+
+In CLOG_FMT_JSON mode the backtrace is embedded as an inline "bt"
+array inside the JSON object (same as log_error / log_alert).  In
+logfmt and syslog modes it is emitted as tab-indented continuation
+lines following the main record.
+.fi
+.SH PARAMETERS
+.nf
+lg     Logger handle (clog).
+fmt    printf-style format string.
+\&...    Format arguments (optional).
+.fi
+.SH NOTES
+.nf
+Backtrace requires the binary to be linked with -rdynamic.  On
+platforms without execinfo.h the backtrace lines are silently omitted
+but the process still terminates.
+
+Because log_fatal terminates the process immediately, any logger
+handles that have not been closed are not explicitly freed.  This is
+intentional: on program exit the OS reclaims all resources.
+.fi
+.SH EXAMPLES
+.nf
+log_fatal(lg, "unrecoverable state: %s", reason);
+
+log_fatal(lg, "assertion failed: invariant violated at step %d", step);
+.fi
+.SH "SEE ALSO"
+.BR log_alert (3),
+.BR log_error (3),
+.BR _clog_write (3),
+.BR clog_open_fd_mp (3)

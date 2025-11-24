@@ -1,0 +1,33 @@
+.TH CYAML_DECLARE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cyaml_declare \- declare an uninitialized cyaml variable
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml_declare(var_name);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a cyaml handle variable named var_name without initializing
+it.  Provided for naming-convention symmetry with other c_collections
+modules (which all expose a _declare variant).
+
+This macro simply expands to "cyaml var_name".
+.fi
+.SH PARAMETERS
+.nf
+var_name  Name of the variable to declare.
+.fi
+.SH EXAMPLES
+.nf
+cyaml_declare(root);
+root = cyaml_parse("key: value\en", NULL);
+/* ... use root ... */
+cyaml_destroy(root);
+.fi
+.SH "SEE ALSO"
+.BR cyaml_declare_scoped (3),
+.BR cyaml_destroy (3)

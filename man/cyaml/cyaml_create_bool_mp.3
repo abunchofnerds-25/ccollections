@@ -1,0 +1,29 @@
+.TH CYAML_CREATE_BOOL_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_create_bool_mp, cyaml_create_bool \- allocate a YAML boolean node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_create_bool_mp(bool val, ccol_memmgmt_procs_t *mp);
+cyaml cyaml_create_bool(bool val);
+.fi
+.SH DESCRIPTION
+.nf
+Allocate a DOM node of type CYAML_BOOL with the given value.
+cyaml_create_bool() passes NULL for mp.
+.fi
+.SH PARAMETERS
+.nf
+val  C boolean value.
+mp   Custom allocator, or NULL for default.
+.fi
+.SH RETURN VALUE
+.nf
+New cyaml node on success, NULL on allocation failure.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_bool_val (3),
+.BR cyaml_destroy (3)

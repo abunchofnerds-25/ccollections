@@ -1,0 +1,26 @@
+.TH CSTR_LENGTH 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_length \- return the number of characters in the string
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_length(s);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_length().
+.fi
+.SH PARAMETERS
+.nf
+s   cstr to query
+.fi
+.SH RETURN VALUE
+.nf
+Length in bytes (excluding null terminator)
+.fi
+.SH "SEE ALSO"
+.BR cstring_length (3),
+.BR cstr_is_empty (3)

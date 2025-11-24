@@ -1,0 +1,32 @@
+.TH CHANNEL_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+channel_destroy \- destroy a channel
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+channel_destroy(ch);
+.fi
+.SH DESCRIPTION
+.nf
+Frees all resources associated with the channel including both internal
+queues. The channel pointer is automatically set to NULL.
+.fi
+.SH PARAMETERS
+.nf
+ch   Channel to destroy (will be set to NULL)
+.fi
+.SH WARNINGS
+.nf
+Messages remaining in either direction cause assertion failure
+Drain both queues before destroying
+.fi
+.SH NOTES
+.nf
+Safe to call with NULL pointer
+.fi
+.SH "SEE ALSO"
+.BR channel_create (3),
+.BR __channel_destroy (3)

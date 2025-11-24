@@ -1,0 +1,40 @@
+.TH CTPOOL_TRY_SUBMIT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_try_submit \- submit a task without blocking
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ccol_retval_t ctpool_try_submit(ctpool pool,
+                                void (*fn)(void *),
+                                void *arg,
+                                void (*on_complete)(void *));
+.fi
+.SH DESCRIPTION
+.nf
+Identical to ctpool_submit except that for bounded queues it never
+blocks: if the queue is at capacity it returns ccol_container_full
+immediately. For unbounded queues the behaviour is identical to
+ctpool_submit.
+.fi
+.SH PARAMETERS
+.nf
+pool         Thread pool handle
+fn           Task function (must not be NULL)
+arg          Passed to fn and on_complete (may be NULL)
+on_complete  Called after fn returns (may be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success           - task enqueued.
+ccol_invalid_args      - pool or fn is NULL.
+ccol_not_enough_memory - task struct allocation failed.
+ccol_not_permitted     - pool is shutting down.
+ccol_container_full    - bounded queue is at capacity (not returned for
+                         unbounded queues).
+.fi
+.SH "SEE ALSO"
+.BR ctpool_submit (3),
+.BR ctpool_timed_submit (3)

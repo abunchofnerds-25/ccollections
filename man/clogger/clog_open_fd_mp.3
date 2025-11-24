@@ -1,0 +1,50 @@
+.TH CLOG_OPEN_FD_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_open_fd_mp \- create a logger writing to an existing file descriptor
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+clog clog_open_fd_mp(int fd, clog_level_t min_level,
+                  ccol_memmgmt_procs_t *mprocs);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a new logger that writes to an already-open file descriptor.
+The file descriptor is not owned by the logger and will NOT be closed
+when clog_close() is called. Log rotation is unavailable for fd-backed
+loggers.
+
+Use fd=1 for stdout, fd=2 for stderr, or any other open writable fd.
+.fi
+.SH PARAMETERS
+.nf
+fd         Open, writable file descriptor. Must be >= 0.
+min_level  Messages below this level are silently dropped. Use
+           CLOG_OFF to suppress all output.
+mprocs     Custom allocator (malloc/free/calloc/realloc function
+           pointers), or NULL to use the default system allocator.
+           All four pointers must be set when mprocs is non-NULL;
+           a partially-populated struct causes the call to return
+           NULL without creating a logger. The struct is copied
+           internally; the caller may free it after this call.
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new logger handle on success.
+Returns NULL if fd < 0, if mprocs is invalid, or if memory
+allocation fails.
+.fi
+.SH NOTES
+.nf
+The fd is not duplicated; the caller is responsible for keeping it
+open for the lifetime of the logger.
+All public functions are fully thread-safe via a per-logger mutex.
+.fi
+.SH "SEE ALSO"
+.BR clog_open_file_mp (3),
+.BR clog_close (3),
+.BR log_info (3),
+.BR log_error (3)

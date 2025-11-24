@@ -1,0 +1,49 @@
+.TH MEMPOOL_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+mempool_create \- create a fixed-size memory pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+mempool *mempool_create(size_t elem_count,
+                        size_t elem_size,
+                        bool fallback_to_dynamic_memory,
+                        bool single_threaded,
+                        ccol_memmgmt_procs_t *mmgmt_procs,
+                        char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a memory pool that manages a fixed number of fixed-size elements.
+All allocations return elements of the same size. Provides O(1) allocation
+and deallocation using a free list.
+.fi
+.SH PARAMETERS
+.nf
+elem_count                 Number of elements in the pool (must be > 0)
+elem_size                  Size of each element in bytes (must be > 0,
+                          minimum sizeof(uintptr_t))
+fallback_to_dynamic_memory If true, allocate from heap when pool exhausted
+single_threaded           If true, omit locking (faster but not thread-safe)
+mmgmt_procs               Custom memory management, or NULL for default
+err                       Optional pointer to receive error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created memory pool on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Actual element size includes header overhead
+If elem_size < sizeof(uintptr_t), it is rounded up
+Thread-safe if single_threaded is false (uses read-write locks)
+With fallback enabled, pool never fails allocation (until system OOM)
+Pool must be destroyed with mempool_destroy() when done
+.fi
+.SH "SEE ALSO"
+.BR mempool_create_from_preallocated_buffer (3),
+.BR mempool_destroy (3),
+.BR mempool_alloc_entry (3)

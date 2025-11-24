@@ -1,0 +1,29 @@
+.TH CHTTP_BASIC_AUTH 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_basic_auth \- build an HTTP Basic auth header value (default allocator)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttp.h>
+
+char *chttp_basic_auth(const char *username, const char *password);
+.fi
+.SH DESCRIPTION
+.nf
+Static inline wrapper around chttp_basic_auth_mp() with NULL memory
+management procedures (uses malloc/free).
+.fi
+.SH PARAMETERS
+.nf
+username  Username. Must not be NULL; may be empty.
+password  Password. Must not be NULL; may be empty.
+.fi
+.SH RETURN VALUE
+.nf
+Newly allocated "Basic <base64>" string on success.
+NULL on allocation failure, or if username or password is NULL.
+.fi
+.SH "SEE ALSO"
+.BR chttp_basic_auth_mp (3),
+.BR chttp_base64_encode (3)

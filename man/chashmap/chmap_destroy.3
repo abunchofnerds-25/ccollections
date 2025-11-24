@@ -1,0 +1,30 @@
+.TH CHMAP_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chmap_destroy \- destroy a hash map and set pointer to NULL
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+chmap_destroy(hm);
+.fi
+.SH DESCRIPTION
+.nf
+Frees all resources associated with the hash map including all key-value
+pairs. The hash map pointer is automatically set to NULL after destruction.
+.fi
+.SH PARAMETERS
+.nf
+hm   Hash map to destroy (will be set to NULL after destruction)
+.fi
+.SH NOTES
+.nf
+Safe to call with NULL pointer
+Frees all keys and values
+For maps created from preallocated buffers, only the map structure is
+freed (user must manage buffer lifetime)
+.fi
+.SH "SEE ALSO"
+.BR chmap_create (3),
+.BR __chmap_destroy (3)

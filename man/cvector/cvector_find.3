@@ -1,0 +1,38 @@
+.TH CVECTOR_FIND 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_find \- find the index of the first occurrence of an element
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+size_t cvector_find(cvec v, const void *elem,
+                    ccol_comparison_proc_t cmp);
+.fi
+.SH DESCRIPTION
+.nf
+Performs a linear scan and returns the zero-based index of the first
+element that compares equal to *elem. When cmp is NULL the comparison
+is done with memcmp over the element size (byte-wise equality).
+.fi
+.SH PARAMETERS
+.nf
+v     Vector to search (must not be NULL)
+elem  Pointer to the value to search for
+cmp   Comparison function (int(*)(const void*,const void*)), or NULL
+      to use memcmp
+.fi
+.SH RETURN VALUE
+.nf
+Zero-based index of the first matching element.
+ccol_invalid_size if no match is found or elem is NULL.
+.fi
+.SH NOTES
+.nf
+O(n) complexity
+Asserts if v is NULL
+Structs with padding bytes may not compare correctly when cmp is NULL
+.fi
+.SH "SEE ALSO"
+.BR cvec_find (3)

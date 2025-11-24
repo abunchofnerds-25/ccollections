@@ -1,0 +1,34 @@
+.TH R_MEMPOOL_CALLOC_ENTRY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+r_mempool_calloc_entry \- allocate zero-initialized entry
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+void *r_mempool_calloc_entry(r_mempool *rmp, size_t size);
+.fi
+.SH DESCRIPTION
+.nf
+Like r_mempool_alloc_entry(), but zeros the requested number of bytes
+before returning.
+.fi
+.SH PARAMETERS
+.nf
+rmp   Ranged memory pool to allocate from
+size  Size in bytes to allocate
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to zero-initialized entry on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Zeros exactly 'size' bytes (not the full pool element)
+Thread-safe if pool created with single_threaded=false
+.fi
+.SH "SEE ALSO"
+.BR r_mempool_alloc_entry (3),
+.BR r_mempool_realloc_entry (3)

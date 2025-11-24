@@ -1,0 +1,29 @@
+.TH CHTTPSVR_CONSTRUCT_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+chttpsvr_construct_scoped \- declare, initialise, and auto-destroy a chttpsvr handle
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttpsvr_construct_scoped(name, cl);
+.fi
+.SH DESCRIPTION
+.nf
+Combines chttpsvr_declare_scoped and a create_chttpsvr(cl) call.
+Declares name with a GCC cleanup attribute so that __chttpsvr_destroy
+is called automatically when name leaves scope.  Calls fatal_err() and
+does not return on failure.
+.fi
+.SH PARAMETERS
+.nf
+name     Identifier for the new handle variable.
+cl       Parent logger to derive this server's logger from, or NULL
+         to use an internal stderr/FATAL-only logger.  See
+         create_chttpsvr_mp for details.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_construct (3),
+.BR chttpsvr_declare_scoped (3),
+.BR __chttpsvr_destroy (3)

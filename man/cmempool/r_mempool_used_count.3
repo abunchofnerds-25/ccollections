@@ -1,0 +1,36 @@
+.TH R_MEMPOOL_USED_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+r_mempool_used_count \- get number of used entries for a size
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+size_t r_mempool_used_count(r_mempool *rmp, size_t size);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the number of currently allocated entries from the pool that would
+service the given size. Does not include dynamic allocations.
+.fi
+.SH PARAMETERS
+.nf
+rmp   Ranged memory pool to query
+size  Size in bytes to query (maps to a specific sub-pool)
+.fi
+.SH RETURN VALUE
+.nf
+Returns number of entries in use for this size
+Returns 0 on error
+.fi
+.SH NOTES
+.nf
+Returns 0 if size is invalid (0 or > largest_size)
+Size is rounded up to next power-of-2 pool
+Thread-safe if pool created with single_threaded=false
+Dynamic allocations are tracked separately
+.fi
+.SH "SEE ALSO"
+.BR r_mempool_total_capacity (3),
+.BR r_mempool_dynamic_allocs_count (3)

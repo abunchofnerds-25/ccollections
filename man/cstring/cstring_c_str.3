@@ -1,0 +1,45 @@
+.TH CSTRING_C_STR 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_c_str \- return a pointer to the null-terminated character data
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+const char *cstring_c_str(cstr s);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a read-only pointer to the internal null-terminated buffer.
+The pointer becomes invalid after any mutating operation on the string.
+
+This function is the recommended bridge when using a cstr with chashmap
+or cbstmap. Those containers understand char * keys (with content-based
+hashing and comparison) but have no special handling for the cstr type.
+Extract the C string first and pass it as the key:
+
+    char *k = (char *)cstring_c_str(my_cstr);
+    chmap_insert(map, k, value);
+
+The map copies the string content into its own storage immediately, so
+the cstr can be mutated or destroyed afterwards without affecting the
+map entry.
+.fi
+.SH PARAMETERS
+.nf
+s   String to query
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to null-terminated character data
+.fi
+.SH NOTES
+.nf
+Pointer is invalidated by any call that may reallocate (append, prepend,
+insert, set, replace, reserve, reset)
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_length (3),
+.BR cstring_at (3)

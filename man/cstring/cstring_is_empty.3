@@ -1,0 +1,30 @@
+.TH CSTRING_IS_EMPTY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_is_empty \- check whether the string contains no characters
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+bool cstring_is_empty(cstr s);
+.fi
+.SH DESCRIPTION
+.nf
+Returns true if and only if the string's length is zero.
+.fi
+.SH PARAMETERS
+.nf
+s   String to query
+.fi
+.SH RETURN VALUE
+.nf
+true if length is zero, false otherwise
+.fi
+.SH NOTES
+.nf
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_length (3),
+.BR cstring_reset (3)

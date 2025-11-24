@@ -1,0 +1,29 @@
+.TH CBMAP_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cbmap_destroy \- destroy a BST map and set pointer to NULL
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+cbmap_destroy(cbm);
+.fi
+.SH DESCRIPTION
+.nf
+Frees all resources associated with the BST map including all nodes,
+keys, and values. The map pointer is automatically set to NULL.
+.fi
+.SH PARAMETERS
+.nf
+cbm  BST map to destroy (will be set to NULL after destruction)
+.fi
+.SH NOTES
+.nf
+Safe to call with NULL pointer
+Frees all nodes, keys, and values
+Uses iterative post-order traversal
+.fi
+.SH "SEE ALSO"
+.BR cbmap_create (3),
+.BR ___cbmap_destroy (3)

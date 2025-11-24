@@ -1,0 +1,36 @@
+.TH CSTRING_APPEND 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_append \- append a C string to the end
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+ccol_retval_t cstring_append(cstr s, const char *str);
+.fi
+.SH DESCRIPTION
+.nf
+Appends the null-terminated C string str to the end of s. The internal
+buffer is grown if necessary.
+.fi
+.SH PARAMETERS
+.nf
+s     String to modify
+str   C string to append (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - Append succeeded
+ccol_invalid_args         - str is NULL
+ccol_container_full       - Result would overflow size_t
+ccol_not_enough_memory    - Reallocation failed
+.fi
+.SH NOTES
+.nf
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_prepend (3),
+.BR cstring_insert (3),
+.BR cstring_set (3)

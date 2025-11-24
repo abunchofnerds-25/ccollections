@@ -1,0 +1,33 @@
+.TH CVECTOR_DATA_PTR 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_data_ptr \- get pointer to internal data array
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+void *cvector_data_ptr(cvec v);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a pointer to the internal contiguous data array. Useful for
+passing vector data to C APIs that expect arrays.
+.fi
+.SH PARAMETERS
+.nf
+v    Vector to get data pointer from
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to internal data array
+.fi
+.SH NOTES
+.nf
+Pointer becomes invalid after vector is resized
+Pointer points to capacity elements, but only elem_count are valid
+Asserts if v is NULL
+.fi
+.SH "SEE ALSO"
+.BR cvec_data_ptr (3),
+.BR cvector_at (3)

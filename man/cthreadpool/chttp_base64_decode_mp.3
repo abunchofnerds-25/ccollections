@@ -1,0 +1,42 @@
+.TH CHTTP_BASE64_DECODE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_base64_decode_mp \- base64-decode a string with a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttp.h>
+
+void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp,
+                             const char *b64_input, size_t *out_len);
+.fi
+.SH DESCRIPTION
+.nf
+Decodes a NUL-terminated standard RFC 4648 base64 string (the '+'/'/'
+alphabet, '=' padding). The input length is taken from
+strlen(b64_input); it must be a multiple of 4 bytes, and any '='
+padding must appear only as the final one or two characters. Any
+other malformed input (invalid character, misplaced padding, wrong
+length) is rejected.
+
+The returned buffer is NUL-terminated as a convenience for decoding
+text payloads, but the decoded data may legitimately contain embedded
+NUL bytes; always use out_len, never strlen(), to determine its
+real size.
+.fi
+.SH PARAMETERS
+.nf
+mp         Custom allocator, or NULL for malloc/free.
+b64_input  NUL-terminated base64 string to decode. Must not be NULL.
+out_len    Optional; receives the decoded byte length. Pass NULL to
+           ignore.
+.fi
+.SH RETURN VALUE
+.nf
+Newly allocated decoded buffer on success.
+NULL on allocation failure or malformed input.
+.fi
+.SH "SEE ALSO"
+.BR chttp_base64_decode (3),
+.BR chttp_base64_encode_mp (3),
+.BR chttp_basic_auth_mp (3)

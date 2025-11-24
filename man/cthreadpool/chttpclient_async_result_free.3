@@ -1,0 +1,32 @@
+.TH CHTTPCLIENT_ASYNC_RESULT_FREE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_async_result_free \- release a chttpcli_async_result_t
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+void chttpclient_async_result_free(chttpcli_async_result_t *result);
+.fi
+.SH DESCRIPTION
+.nf
+Releases a chttpcli_async_result_t obtained via
+chttpclient_async_result_get.  Does NOT free result->resp; free
+that separately with chttpclient_resp_free first if
+result->rv == ccol_success.  Does NOT free the future itself; pair
+with exactly one ctpool_future_free, called separately (before or
+after this call, order does not matter).
+.fi
+.SH PARAMETERS
+.nf
+result Result to free; NULL is a safe no-op.
+.fi
+.SH RETURN VALUE
+.nf
+None.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_async_result_get (3),
+.BR chttpclient_resp_free (3),
+.BR ctpool_future_free (3)

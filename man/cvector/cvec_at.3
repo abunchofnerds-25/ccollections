@@ -1,0 +1,41 @@
+.TH CVEC_AT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_at \- access element at index (type-safe, returns reference)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+element_ref = cvec_at(v, index);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cvector_at() that returns the element reference
+(not pointer). Automatically casts to the correct type. Can be used as
+lvalue for assignment.
+.fi
+.SH PARAMETERS
+.nf
+v      Vector to access
+index  Zero-based index of element
+.fi
+.SH RETURN VALUE
+.nf
+Returns element reference at index
+.fi
+.SH NOTES
+.nf
+Returns reference, not pointer
+No bounds checking - will cause SIGSEGV if index out of bounds
+Can be used on left side of assignment
+.fi
+.SH EXAMPLES
+.nf
+cvec_construct(vec, int);
+cvec_push_rvalue(vec, 42);
+int val = cvec_at(vec, 0);  // val == 42
+cvec_at(vec, 0) = 5;        // now the first element is 5
+.fi
+.SH "SEE ALSO"
+.BR cvector_at (3)

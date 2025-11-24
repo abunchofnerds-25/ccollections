@@ -1,0 +1,31 @@
+.TH CHMAP_ELEM_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chmap_elem_count \- get the number of elements in the hash map
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+size_t chmap_elem_count(chmap chm);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the current number of key-value pairs stored in the hash map.
+.fi
+.SH PARAMETERS
+.nf
+chm   Hash map to query
+.fi
+.SH RETURN VALUE
+.nf
+Returns number of elements in the map
+.fi
+.SH NOTES
+.nf
+O(1) complexity
+Asserts if chm is NULL
+.fi
+.SH "SEE ALSO"
+.BR chmap_insert_elem (3),
+.BR chmap_delete_elem (3)

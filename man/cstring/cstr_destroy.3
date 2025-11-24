@@ -1,0 +1,26 @@
+.TH CSTR_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_destroy \- destroy a cstr and set it to NULL
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_destroy(s);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe alias for cstring_destroy(). Destroys the string and sets the
+pointer to NULL.
+.fi
+.SH PARAMETERS
+.nf
+s   cstr variable to destroy
+.fi
+.SH NOTES
+.nf
+Safe to call with a NULL pointer (no-op)
+.fi
+.SH "SEE ALSO"
+.BR cstring_destroy (3)

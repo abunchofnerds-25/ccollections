@@ -1,0 +1,38 @@
+.TH CIRCULAR_QUEUE_CREATE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+circular_queue_create \- create a circular queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+circular_queue_create(max_size, err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a fixed-size bounded queue that uses a circular buffer internally.
+Send operations block when the queue is full until space becomes available.
+Uses standard malloc/free for memory management.
+
+This is a convenience macro for circular_queue_create_with_mprocs() with
+NULL memory management procedures.
+.fi
+.SH PARAMETERS
+.nf
+max_size  Maximum number of messages the queue can hold (1 to max_elem_count)
+err_str   Optional pointer to receive error string on failure
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created circular queue on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+All operations on this queue are thread-safe
+Queue must be destroyed with circular_queue_destroy() when done
+.fi
+.SH "SEE ALSO"
+.BR circular_queue_create_with_mprocs (3),
+.BR circular_queue_destroy (3)

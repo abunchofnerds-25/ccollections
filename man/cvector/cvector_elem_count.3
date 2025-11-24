@@ -1,0 +1,31 @@
+.TH CVECTOR_ELEM_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_elem_count \- get the number of elements in the vector
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+size_t cvector_elem_count(cvec v);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the current number of elements stored in the vector.
+.fi
+.SH PARAMETERS
+.nf
+v    Vector to query
+.fi
+.SH RETURN VALUE
+.nf
+Returns number of elements in the vector
+.fi
+.SH NOTES
+.nf
+O(1) complexity
+Asserts if v is NULL
+.fi
+.SH "SEE ALSO"
+.BR cvec_size (3),
+.BR cvector_at (3)

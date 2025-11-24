@@ -1,0 +1,40 @@
+.TH CVECTOR_PUSH_BACK 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_push_back \- append an element to the end of the vector
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+ccol_retval_t cvector_push_back(cvec v, const void *new_elem);
+.fi
+.SH DESCRIPTION
+.nf
+Adds a new element to the end of the vector. If the vector is at capacity,
+it automatically grows by doubling its capacity. The element is copied
+into the vector using an optimized assignment based on element size.
+.fi
+.SH PARAMETERS
+.nf
+v         Vector to append to
+new_elem  Pointer to element to append (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success          - Element successfully appended
+ccol_invalid_args     - new_elem is NULL
+ccol_container_full   - Vector has reached max_elem_count
+ccol_not_enough_memory - Capacity expansion failed
+.fi
+.SH NOTES
+.nf
+Amortized O(1) complexity
+Element is copied into the vector
+Capacity doubles when full (2x scaling factor)
+Asserts if v is NULL
+.fi
+.SH "SEE ALSO"
+.BR cvector_pop_back (3),
+.BR cvec_push (3),
+.BR cvec_push_rvalue (3)

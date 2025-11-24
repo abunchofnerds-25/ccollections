@@ -1,0 +1,35 @@
+.TH CSTR_CONSTRUCT_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_construct_scoped \- declare and initialise a cstr with automatic RAII
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_construct_scoped(s, initial);
+.fi
+.SH DESCRIPTION
+.nf
+Combines cstr_declare_scoped() and cstr_init() into a single statement.
+The string is automatically destroyed when the variable leaves scope.
+.fi
+.SH PARAMETERS
+.nf
+s        Variable name to create
+initial  Initial content (C string or NULL for empty string)
+.fi
+.SH NOTES
+.nf
+Requires GCC or Clang (uses __attribute__((cleanup)))
+.fi
+.SH EXAMPLES
+.nf
+{
+  cstr_construct_scoped(s, "auto-freed");
+  /* use s ... */
+}  /* s is destroyed here automatically */
+.fi
+.SH "SEE ALSO"
+.BR cstr_construct (3),
+.BR cstr_construct_mp_scoped (3)

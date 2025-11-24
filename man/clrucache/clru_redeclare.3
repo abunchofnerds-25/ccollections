@@ -1,0 +1,46 @@
+.TH CLRU_REDECLARE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+clru_redeclare \- restore type-tracking variables for a cache passed across scopes
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clrucache.h>
+
+clru_redeclare(name, KeyT, ValT);
+.fi
+.SH DESCRIPTION
+.nf
+The type-dispatching macros clru_get() and clru_set() rely on hidden
+companion variables created by clru_declare() or clru_construct(). When
+a clru_cache handle is passed to another function, those companion
+variables are absent. clru_redeclare() re-creates them so that all
+type-safe macros work correctly in the new scope.
+.fi
+.SH PARAMETERS
+.nf
+name  Existing clru_cache variable to re-attach type information to
+KeyT  Key type (must match the type used at construction)
+ValT  Value type (must match the type used at construction)
+.fi
+.SH EXAMPLES
+.nf
+void use_cache(clru_cache c) {
+    clru_redeclare(c, int, double);
+    double out = 0.0;
+    if (clru_get(c, 42, &out) == ccol_success) {
+        printf("%.2f\en", out);
+    }
+}
+.fi
+.SH NOTES
+.nf
+Omitting clru_redeclare() before calling clru_get() or clru_set() in a
+new scope is the most common error when passing caches across function
+boundaries.
+.fi
+.SH "SEE ALSO"
+.BR clru_declare (3),
+.BR clru_construct (3),
+.BR clru_get (3),
+.BR clru_set (3)

@@ -1,0 +1,44 @@
+.TH CBMAP_CREATE_FULL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cbmap_create_full \- create a BST map with full customization
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+cbmap cbmap_create_full(bool keys_are_signed_ints,
+                        bool keys_are_strings,
+                        ccol_memmgmt_procs_t *mmgmt_procs,
+                        ccol_comparison_proc_t custom_comparison_proc,
+                        char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a self-balancing BST map with full control over key signedness,
+string key support, memory management, and comparison function.
+.fi
+.SH PARAMETERS
+.nf
+keys_are_signed_ints     Treat integer keys as signed
+keys_are_strings         If true, use strcmp for key comparison
+mmgmt_procs              Custom memory management, or NULL
+custom_comparison_proc   Custom comparison function, or NULL
+err                      Optional pointer to receive error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created BST map on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Default comparison for unsigned: memcmp
+Default comparison for signed: proper signed comparison (1, 2, 4, 8 bytes)
+Default comparison for strings: strcmp (when keys_are_strings is true)
+Custom comparison receives void* pointers to key data
+All tree operations are iterative using explicit stacks
+.fi
+.SH "SEE ALSO"
+.BR cbmap_create (3),
+.BR cbmap_destroy (3)

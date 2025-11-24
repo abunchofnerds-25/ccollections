@@ -1,0 +1,100 @@
+.TH CCOL_SELECT_VA 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_select_va \- wait for a message on an inline list of selectables (convenience macro)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_select_va(buf, ready_index, ...);
+ccol_select_timed_va(buf, ready_index, timeout_ms, ...);
+.fi
+.SH DESCRIPTION
+.nf
+ccol_select_va() builds a ccol_selectable array from the variadic arguments,
+computes the element count at compile time, and forwards everything to
+ccol_select().
+
+ccol_select_timed_va() does the same but calls ccol_select_timed() with the
+given timeout_ms (milliseconds; -1 = infinite, 0 = poll, positive = deadline).
+
+Each variadic argument must be a ccol_selectable value, typically produced
+by selectable_from_circq(), selectable_from_dynq(), selectable_from_chan(),
+or selectable_from_fd() with a ccol_select_read or ccol_select_write dir.
+All arguments are evaluated exactly once.
+
+The macros expand to GCC/Clang statement expressions and yield a value
+of type ccol_retval_t, so they can be used in assignments and conditions.
+.fi
+.SH PARAMETERS
+.nf
+buf          c_message_t * to receive the message.  On ccol_success the
+             caller owns buf->data.
+ready_index  size_t * set to the 0-based index of the ready selectable.
+             Valid only when ccol_success is returned.
+timeout_ms   (ccol_select_timed_va only) milliseconds to wait; -1 = infinite.
+\&...          One or more ccol_selectable values.  At least one is required.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success            Message received.  *ready_index set; caller frees
+                        buf->data.
+ccol_timed_out          (ccol_select_timed_va only) deadline elapsed without
+                        any selectable becoming ready.
+ccol_invalid_args       Any argument is NULL/zero, or a selectable contains a
+                        NULL queue pointer or unknown type tag.
+ccol_not_enough_memory  Waiter-node allocation failed (one node per selectable).
+ccol_msg_too_large      An fd selectable read exceeded its max_fd_read_bytes limit;
+                        buf is left untouched; *ready_index IS set to the offending
+                        fd's index; some or all fd bytes may already be consumed.
+ccol_unexpected_failure epoll/eventfd setup or the internal fd read(2) failed.
+.fi
+.SH WARNINGS
+.nf
+Uses a GCC/Clang statement expression (__extension__({ ... })).  Not
+valid under strict ISO C (-pedantic).  Compiles cleanly with -Wall
+-Wextra -Werror on both GCC and Clang without -pedantic.
+.fi
+.SH NOTES
+.nf
+The selectable array is a compound literal on the stack; no heap
+allocation occurs beyond that already performed by ccol_select_timed().
+.fi
+.SH EXAMPLES
+.nf
+c_message_t msg;
+size_t idx;
+
+/* Two circular queues and a channel, all read-wait: */
+ccol_retval_t r = ccol_select_va(&msg, &idx,
+    selectable_from_circq(q0, ccol_select_read),
+    selectable_from_circq(q1, ccol_select_read),
+    selectable_from_chan(ch, ccol_select_read));
+if (r == ccol_success) {
+    printf("ready selectable: %zu\en", idx);
+    free(msg.data);
+}
+
+/* Mixed: write-wait on q0, read-wait on ch: */
+c_message_t dummy = {0};
+ccol_select_va(&dummy, &idx,
+    selectable_from_circq(q0, ccol_select_write),
+    selectable_from_chan(ch, ccol_select_read));
+
+/* Timed wait with 200 ms deadline: */
+r = ccol_select_timed_va(&msg, &idx, 200,
+    selectable_from_circq(q0, ccol_select_read));
+if (r == ccol_timed_out) {
+    puts("no message within 200 ms");
+}
+.fi
+.SH "SEE ALSO"
+.BR ccol_select (3),
+.BR ccol_select_timed (3),
+.BR selectable_from_circq (3),
+.BR selectable_from_dynq (3),
+.BR selectable_from_chan (3),
+.BR selectable_from_fd (3),
+.BR selectable_from_fd_limited (3),
+.BR _selectable_from_chan (3)

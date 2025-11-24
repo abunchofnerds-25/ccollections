@@ -1,0 +1,60 @@
+.TH CHTTPCLIENT_DO_ASYNC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_do_async \- submit an HTTP request for asynchronous execution
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ctpool_future *chttpclient_do_async(chttpcli cli,
+                                    const chttp_request_t *req);
+.fi
+.SH DESCRIPTION
+.nf
+Non-blocking counterpart to chttpclient_do.  Queues req onto
+chttpclient's shared, lazily-started reactor engine and returns
+immediately; the whole request/response cycle, including any
+redirect hops, runs on the engine's own threads.
+
+The engine (a small pool of reactor threads plus a companion
+DNS/connect worker pool, both sized to the CPU count) starts on the
+first call to chttpclient_do_async or chttpclient_do_async_streaming
+anywhere in the process and stops automatically once no request is
+in flight and no connection remains in any chttpcli's async idle
+pool.  It is entirely separate from chttpclient_do's synchronous
+connection handling.  It shares its underlying reactor with
+chttpserver's own engine (both acquire/release references to the
+same lazily-started, process-wide facio reactor), so a process may
+freely run chttpserver and chttpclient_do_async/_streaming at the
+same time.  One consequence of that sharing: chttpsvr_engine_stop()
+tears down the shared reactor for both modules at once, aborting
+any in-flight chttpclient async work along with every chttpsvr
+listener.
+
+Unlike chttpclient_do, req need not remain valid after this call
+returns; everything needed is copied or serialised internally
+before the call returns.
+.fi
+.SH PARAMETERS
+.nf
+cli Client handle; must not be NULL.
+req Request to execute; must not be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+A future, or NULL if the request could not even be queued (NULL
+cli/req, malformed URL, TLS unusable, OOM, or the engine failing to
+start).  On success, the caller owns the future and must eventually
+call chttpclient_async_result_free (after
+chttpclient_async_result_get) followed by exactly one
+ctpool_future_free.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_do (3),
+.BR chttpclient_do_async_streaming (3),
+.BR chttpclient_do_pooled (3),
+.BR chttpclient_async_result_get (3),
+.BR chttpclient_async_result_free (3),
+.BR ctpool_future_get (3),
+.BR ctpool_future_free (3)

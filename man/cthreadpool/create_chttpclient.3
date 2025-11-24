@@ -1,0 +1,21 @@
+.TH CREATE_CHTTPCLIENT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+create_chttpclient \- create an HTTP client with the default allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+chttpcli create_chttpclient(char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Inline wrapper for create_chttpclient_mp with mprocs = NULL.
+.fi
+.SH RETURN VALUE
+.nf
+New client handle, or NULL on failure.
+.fi
+.SH "SEE ALSO"
+.BR create_chttpclient_mp (3)

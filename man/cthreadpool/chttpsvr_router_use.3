@@ -1,0 +1,38 @@
+.TH CHTTPSVR_ROUTER_USE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_router_use \- append middleware to a sub-router
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
+                                   chttpsvr_middleware_fn fn, void *ctx);
+.fi
+.SH DESCRIPTION
+.nf
+Appends middleware to the given sub-router's chain.  This middleware
+runs after global middleware and before the route handler, but only
+for requests routed through this sub-router.
+
+This function is thread-safe and may be called before or after
+chttpsvr_start is running.
+.fi
+.SH NOTES
+.nf
+See the NOTES section of chttpsvr_use for the per-router
+registration-time cap, the combined dispatch-time middleware limit (32
+steps per request), and the first-wins duplicate-route policy.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if router or fn is NULL.
+ccol_not_enough_memory if allocation fails.
+ccol_not_permitted if this router's middleware chain is already at the
+32-entry cap.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_use (3),
+.BR chttpsvr_subrouter (3)

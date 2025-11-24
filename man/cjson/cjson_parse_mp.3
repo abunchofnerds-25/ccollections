@@ -1,0 +1,78 @@
+.TH CJSON_PARSE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_parse_mp, cjson_parse \- parse a null-terminated JSON string into a DOM tree
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+cjson cjson_parse_mp(const char *json_str, char **err_str,
+                     ccol_memmgmt_procs_t *mp);
+/* convenience wrapper; default allocator */
+static inline cjson cjson_parse(const char *json_str,
+                                char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Parses json_str using a recursive-descent parser and returns the root
+node of the resulting DOM tree.  All seven JSON value kinds are
+supported: null, boolean, integer (stored as long long), number (double),
+string (UTF-8, owned heap copy), array (cvec of child cjson), and object
+(chmap of char*->cjson).
+
+Integer literals with no decimal point or exponent are stored as
+CJSON_INTEGER; all others (including integers that overflow long long)
+as CJSON_FLOAT.  Number literals are limited to 359 decimal characters;
+longer inputs produce a parse error.  Numbers that overflow IEEE 754
+double (i.e. strtod returns infinity) also produce a parse error.
+
+String escape sequences \e", \e\e, \e/, \eb, \ef, \en, \er, \et, and
+\euXXXX (including surrogate pairs) are decoded to UTF-8.  The
+\eu0000 is explicitly rejected with a parse error: cjson
+stores strings as null-terminated char * values and cannot
+represent embedded null bytes.
+
+cjson_parse() is a static inline wrapper that calls
+cjson_parse_mp(json_str, err_str, NULL).
+.fi
+.SH PARAMETERS
+.nf
+json_str  Null-terminated JSON text.
+err_str   Out-parameter for the parse error message.  On success
+          *err_str is set to NULL.  On failure a heap-allocated
+          null-terminated string is stored in *err_str; the caller
+          must free() it when done.  Pass NULL to discard the error
+          message.
+mp        Custom memory management procedures for all nodes in the
+          resulting tree, or NULL for the default allocator.
+.fi
+.SH RETURN VALUE
+.nf
+Root cjson node on success.
+NULL on parse failure; if err_str was non-NULL, *err_str holds the
+reason (caller must free it).
+.fi
+.SH NOTES
+.nf
+The caller owns the returned tree and must free it with cjson_destroy().
+The error string (when requested) is always allocated with plain
+malloc so the caller can always free it with plain free(), regardless
+of which mp was used for node allocation.
+.fi
+.SH EXAMPLE
+.nf
+char *err = NULL;
+cjson doc = cjson_parse_mp(input, &err, NULL);
+if (!doc) {
+    fprintf(stderr, "parse failed: %s\en", err);
+    free(err);
+    return -1;
+}
+/* use doc ... */
+cjson_destroy(doc);
+.fi
+.SH "SEE ALSO"
+.BR cjson_parse_n_mp (3),
+.BR cjson_destroy (3),
+.BR cjson_serialize (3)

@@ -1,0 +1,44 @@
+.TH CHTTPSVR_REQ_READ 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_read \- read body bytes as they arrive (streaming handlers)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
+.fi
+.SH DESCRIPTION
+.nf
+Reads up to buflen bytes of the request body into buf, batch by batch,
+as they actually arrive on the connection.  This call reads the socket
+itself (on the worker thread executing the handler, never the
+reactor thread) and blocks the calling worker until at least one
+byte is available, the body ends, an error occurs,
+chttpsvr_config_t.stream_read_timeout_ms elapses without new data, or
+(if set) chttpsvr_config_t.max_body_read_duration_ms elapses.
+
+Return values:
+  > 0   Number of bytes copied into buf.
+    0   End of body reached, or buflen is 0 (valid no-op).
+   -1   req is NULL; buf is NULL with buflen > 0; the handler was
+        registered with chttpsvr_register_handler (buffered), not
+        chttpsvr_register_streaming_handler; the connection was
+        dropped or reset; stream_read_timeout_ms or
+        max_body_read_duration_ms elapsed; or the body exceeded
+        max_body_size mid-stream.  Call chttpsvr_req_stream_error
+        immediately afterward to distinguish these.
+
+When buflen is 0 the function returns 0 immediately regardless of the
+value of buf.  Passing NULL for buf with buflen == 0 is therefore
+valid and returns 0 (a no-op), consistent with POSIX read(2)
+semantics.  Only when buflen > 0 is buf required to be non-NULL.
+
+This function is intended for streaming handlers registered with
+chttpsvr_register_streaming_handler.  For buffered handlers, use chttpsvr_req_body.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_body (3),
+.BR chttpsvr_req_stream_error (3),
+.BR chttpsvr_register_streaming_handler (3)

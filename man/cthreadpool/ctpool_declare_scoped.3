@@ -1,0 +1,44 @@
+.TH CTPOOL_DECLARE_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ctpool_declare_scoped \- declare a thread pool variable with automatic RAII destruction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ctpool_declare_scoped(name);
+.fi
+.SH DESCRIPTION
+.nf
+Like ctpool_declare() but attaches __attribute__((cleanup(___ctpool_destroy)))
+so that __ctpool_destroy() is called automatically when the variable
+leaves scope.
+
+The variable must still be assigned before use. If it is still NULL
+when it goes out of scope the cleanup is a no-op.
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name to declare.
+.fi
+.SH NOTES
+.nf
+Requires GCC or Clang (uses __attribute__((cleanup))).
+Perform an explicit shutdown before scope exit if drain behaviour is
+important; the implicit shutdown inside __ctpool_destroy() drains the
+queue, which may block for an unbounded time if tasks are long-running.
+.fi
+.SH EXAMPLES
+.nf
+{
+    ctpool_declare_scoped(pool);
+    pool = create_cthread_pool(4, 0, NULL);
+    ctpool_submit(pool, my_fn, my_arg, NULL);
+    ctpool_shutdown_drain(pool);
+}  /* pool is destroyed automatically here */
+.fi
+.SH "SEE ALSO"
+.BR ctpool_declare (3),
+.BR ctpool_construct_scoped (3),
+.BR ___ctpool_destroy (3)

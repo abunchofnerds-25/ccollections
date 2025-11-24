@@ -1,0 +1,31 @@
+.TH CSTR_INIT_MP 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_init_mp \- initialise a declared cstr using custom memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_init_mp(s, initial, mprocs);
+.fi
+.SH DESCRIPTION
+.nf
+Calls cstring_create_full() to initialise the already-declared cstr variable
+s with the given initial content and memory management procedures. Calls
+fatal_err() if creation fails.
+.fi
+.SH PARAMETERS
+.nf
+s        cstr variable to initialise (must have been declared)
+initial  Initial content (C string or NULL for empty string)
+mprocs   Custom memory management procedures (ccol_memmgmt_procs_t *)
+.fi
+.SH NOTES
+.nf
+Calls fatal_err() on allocation failure
+.fi
+.SH "SEE ALSO"
+.BR cstr_init (3),
+.BR cstr_construct_mp (3),
+.BR cstring_create_full (3)

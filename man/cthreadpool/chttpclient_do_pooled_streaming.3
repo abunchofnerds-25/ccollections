@@ -1,0 +1,42 @@
+.TH CHTTPCLIENT_DO_POOLED_STREAMING 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_do_pooled_streaming \- perform an HTTP request with a streaming response body using the shared Tier 2 engine, blocking until it completes
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
+                                               const chttp_request_t *req,
+                                               chttpcli_write_fn write_fn,
+                                               void *write_ctx,
+                                               int *status_code_out);
+.fi
+.SH DESCRIPTION
+.nf
+A thin wrapper over chttpclient_do_async_streaming with the exact
+same call shape as chttpclient_do_streaming. write_fn runs on one of
+the engine's own reactor threads (see chttpclient_do_async_
+streaming's documentation for the resulting must-not-block, must-
+not-call-back-into-the-engine contract) rather than the calling
+thread; that is the only respect in which this function behaves
+differently from chttpclient_do_streaming's caller-thread callback.
+.fi
+.SH PARAMETERS
+.nf
+cli             Client handle; must not be NULL.
+req             Request to execute; must not be NULL.
+write_fn        Chunk delivery callback; must not be NULL.
+write_ctx       Opaque context pointer passed verbatim to write_fn.
+status_code_out Receives HTTP status code on success; may be NULL.
+.fi
+.SH RETURN VALUE
+.nf
+Same codes as chttpclient_do_pooled.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_do_streaming (3),
+.BR chttpclient_do_async_streaming (3),
+.BR chttpclient_do_pooled (3),
+.BR chttpcli_write_fn (3)

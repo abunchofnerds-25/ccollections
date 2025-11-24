@@ -1,0 +1,29 @@
+.TH CSTRING_TRIM 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_trim \- strip leading and trailing whitespace in-place
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+void cstring_trim(cstr s);
+.fi
+.SH DESCRIPTION
+.nf
+Removes all leading and trailing whitespace characters, as classified by
+isspace(), from the string in-place. Internal whitespace is preserved.
+.fi
+.SH PARAMETERS
+.nf
+s   String to modify
+.fi
+.SH NOTES
+.nf
+Uses isspace() for whitespace classification
+If the string consists entirely of whitespace it becomes empty
+Asserts if s is NULL
+.fi
+.SH "SEE ALSO"
+.BR cstring_to_upper (3),
+.BR cstring_to_lower (3)

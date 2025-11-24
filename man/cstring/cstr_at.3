@@ -1,0 +1,26 @@
+.TH CSTR_AT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_at \- return the character at a given index
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_at(s, idx);
+.fi
+.SH DESCRIPTION
+.nf
+Pass-through wrapper for cstring_at().
+.fi
+.SH PARAMETERS
+.nf
+s     cstr to query
+idx   Zero-based character index
+.fi
+.SH RETURN VALUE
+.nf
+Character at idx, or '\e0' if idx >= length
+.fi
+.SH "SEE ALSO"
+.BR cstring_at (3)

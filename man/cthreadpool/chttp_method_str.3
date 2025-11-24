@@ -1,0 +1,24 @@
+.TH CHTTP_METHOD_STR 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_method_str \- return the canonical string for an HTTP method
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttp.h>
+
+const char *chttp_method_str(chttp_method_t m);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the uppercase ASCII method string for the given enum value
+(e.g. "GET", "POST").  Returns "ANY" for CHTTP_ANY (a server-side
+routing sentinel, not a real HTTP method).  Falls back to "UNKNOWN"
+for invalid values.
+.fi
+.SH RETURN VALUE
+.nf
+Pointer to a static string literal; must not be freed.
+.fi
+.SH "SEE ALSO"
+.BR chttp_method_t (3)

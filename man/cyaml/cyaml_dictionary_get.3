@@ -1,0 +1,22 @@
+.TH CYAML_DICTIONARY_GET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_dictionary_get \- look up a key in a dictionary
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_dictionary_get(cyaml map, const char *key);
+.fi
+.SH DESCRIPTION
+.nf
+Return a non-owning reference to the value stored under key in map.
+.fi
+.SH RETURN VALUE
+.nf
+Child node, or NULL if key is absent or map is not a CYAML_DICTIONARY.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_dictionary_set (3),
+.BR cyaml_dictionary_size (3)

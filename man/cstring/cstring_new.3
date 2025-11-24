@@ -1,0 +1,36 @@
+.TH CSTRING_NEW 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cstring_new \- create a string with default memory management (optimistic)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr cstring_new(const char *initial);
+.fi
+.SH DESCRIPTION
+.nf
+Convenience wrapper around cstring_create_full() that uses the default
+malloc/free allocators and provides no error output. Intended for call
+sites where allocation failure is treated as fatal and no error string
+is required.
+.fi
+.SH PARAMETERS
+.nf
+initial   Initial C string content, or NULL for an empty string
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created cstring on success
+Returns NULL on failure (no error detail is provided)
+.fi
+.SH NOTES
+.nf
+Equivalent to cstring_create_full(initial, NULL, NULL)
+Use cstring_create() when an error string on failure is needed
+.fi
+.SH "SEE ALSO"
+.BR cstring_create (3),
+.BR cstring_create_full (3),
+.BR cstring_destroy (3)

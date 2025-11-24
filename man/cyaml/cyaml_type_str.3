@@ -1,0 +1,23 @@
+.TH CYAML_TYPE_STR 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_type_str \- return a string name for a node's type
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+const char *cyaml_type_str(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Return a static string literal naming the type of node, e.g.
+"CYAML_INTEGER".  Returns "CYAML_UNKNOWN" for unexpected type values.
+Useful for diagnostics and test output.
+.fi
+.SH RETURN VALUE
+.nf
+Static null-terminated string; caller must not free it.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_type (3)

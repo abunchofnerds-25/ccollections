@@ -1,0 +1,36 @@
+.TH CIRCQ_TRY_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+circq_try_send_zc \- try to send without blocking
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t circq_try_send_zc(circular_queue *cq, c_message_t *msg);
+.fi
+.SH DESCRIPTION
+.nf
+Attempts to send immediately. If the queue is full, returns immediately
+with ccol_container_full. On success, transfers ownership of msg->data.
+.fi
+.SH PARAMETERS
+.nf
+cq   Circular queue to send to
+msg  Message to send (data ownership transfers on success)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success         - Message sent successfully
+ccol_invalid_args    - cq or msg is NULL, or msg validation fails
+ccol_not_permitted   - Sending has been disabled
+ccol_container_full  - Queue is full
+.fi
+.SH NOTES
+.nf
+Never blocks
+On failure, caller retains ownership of msg->data
+.fi
+.SH "SEE ALSO"
+.BR circq_send_zc (3),
+.BR circq_timed_send_zc (3)

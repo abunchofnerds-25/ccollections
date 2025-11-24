@@ -1,0 +1,35 @@
+.TH CHTTPSVR_SET_ENGINE_LOGGER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_set_engine_logger \- set the logger for engine-level diagnostics
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_set_engine_logger(clog cl);
+.fi
+.SH DESCRIPTION
+.nf
+Derives a child logger from cl, adds the field component=http-engine,
+and installs it as the facil.io engine logger.  Any previously installed
+engine logger is closed.
+
+Call this function before the first chttpsvr_start call so that engine
+log output is routed to cl from the moment the engine starts.  Calling
+it after the engine starts is also safe; the new logger takes effect
+immediately under a writer lock.
+
+cl must not be NULL; the derived child logger is owned by the engine
+and must not be closed by the caller.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if cl is NULL.
+ccol_not_enough_memory if the child logger cannot be allocated.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_start (3),
+.BR chttpsvr_engine_stop (3),
+.BR chttpsvr_engine_wait (3)

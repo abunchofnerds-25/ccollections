@@ -1,0 +1,36 @@
+.TH CVECTOR_RESERVE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_reserve \- reserve capacity for future elements
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+bool cvector_reserve(cvec v, size_t new_capacity_count);
+.fi
+.SH DESCRIPTION
+.nf
+Pre-allocates capacity to hold at least new_capacity_count elements,
+rounded up to the nearest power of two (minimum 4). Helps avoid multiple
+reallocations when the expected size is known in advance.
+.fi
+.SH PARAMETERS
+.nf
+v                    Vector to reserve capacity for
+new_capacity_count   Minimum number of elements to reserve
+.fi
+.SH RETURN VALUE
+.nf
+Returns true if reservation succeeds or capacity is already sufficient
+Returns false if allocation fails or new_capacity_count > max_elem_count
+.fi
+.SH NOTES
+.nf
+Does nothing if requested capacity <= current capacity
+Actual capacity may be larger due to power-of-2 rounding
+Does not change element count
+Asserts if v is NULL
+.fi
+.SH "SEE ALSO"
+.BR cvec_reserve (3)

@@ -1,0 +1,35 @@
+.TH MEMPOOL_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+mempool_destroy \- destroy a memory pool and set pointer to NULL
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+mempool_destroy(mp);
+.fi
+.SH DESCRIPTION
+.nf
+Frees all resources associated with the memory pool. For pools created
+from preallocated buffers, the buffer itself is not freed (only the pool
+struct).
+.fi
+.SH PARAMETERS
+.nf
+mp   Memory pool to destroy (will be set to NULL after destruction)
+.fi
+.SH WARNINGS
+.nf
+Unfreed dynamically allocated pointers via the fallback mechanism will
+cause assertion failure. All allocated entries should be freed before
+destroying the pool.
+.fi
+.SH NOTES
+.nf
+Safe to call with NULL pointer
+For preallocated pools, user must manage buffer lifetime
+.fi
+.SH "SEE ALSO"
+.BR mempool_create (3),
+.BR _mempool_destroy (3)

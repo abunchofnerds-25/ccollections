@@ -1,0 +1,45 @@
+.TH CTPOOL_TIMED_SUBMIT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ctpool_timed_submit \- submit a task with a relative timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadpool.h>
+
+ccol_retval_t ctpool_timed_submit(ctpool pool,
+                                  void (*fn)(void *),
+                                  void *arg,
+                                  void (*on_complete)(void *),
+                                  struct timespec *timeout);
+.fi
+.SH DESCRIPTION
+.nf
+Identical to ctpool_submit except that for bounded queues it waits at
+most timeout for a free slot. The timeout is a relative duration;
+internally it is converted to an absolute deadline using CLOCK_REALTIME.
+
+Passing NULL as timeout is equivalent to ctpool_try_submit (no waiting).
+.fi
+.SH PARAMETERS
+.nf
+pool         Thread pool handle
+fn           Task function (must not be NULL)
+arg          Passed to fn and on_complete (may be NULL)
+on_complete  Called after fn returns (may be NULL)
+timeout      Relative duration to wait (NULL = do not wait)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success           - task enqueued.
+ccol_invalid_args      - pool or fn is NULL.
+ccol_not_enough_memory - task struct allocation failed.
+ccol_not_permitted     - pool is shutting down.
+ccol_container_full    - NULL timeout and queue is full.
+ccol_timed_out         - timeout elapsed before a slot became free.
+ccol_unexpected_failure - clock_gettime or pthread_cond_timedwait
+                          returned an unexpected error.
+.fi
+.SH "SEE ALSO"
+.BR ctpool_submit (3),
+.BR ctpool_try_submit (3)

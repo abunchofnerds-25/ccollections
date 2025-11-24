@@ -1,0 +1,53 @@
+.TH _CYAML_SET_TYPED 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+_cyaml_set_typed \- path-write back-end (prefer cyaml_set macro)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
+                               cyaml_node_type_t type, void *raw,
+                               size_t raw_size, bool is_signed,
+                               bool raw_is_char_array);
+.fi
+.SH DESCRIPTION
+.nf
+Write a scalar value to the leaf addressed by path.  The leaf is
+created if absent (its immediate parent must already exist).  If the
+leaf exists its type is replaced unconditionally; any composite
+(list, dictionary) resources it previously held are deep-freed.
+
+raw is a void pointer to the C value; raw_size is sizeof the original
+C expression.  For string values, raw points to a const char * variable
+unless raw_is_char_array is true, in which case raw points directly at
+the char[] bytes of a string literal.
+
+Escape sequences in path components:
+  \e.   -> literal '.' in the key (not a path separator)
+  \e\e   -> literal '\e' in the key
+A '\e' before any other character is left unchanged.
+
+The cyaml_set() macro is the preferred public interface and fills in
+type, raw_size, is_signed, and raw_is_char_array automatically from the
+compile-time type of the value expression.
+.fi
+.SH PARAMETERS
+.nf
+root             Root of the DOM tree.
+path             Dot-separated path string.
+type             YAML type of the new value.
+raw              Pointer to the raw C value.
+raw_size         sizeof() of the original C expression.
+is_signed        Whether the integer source type is signed.
+raw_is_char_array  true when raw points directly at a char[] array.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success, ccol_invalid_args, ccol_key_not_found, or
+ccol_not_enough_memory.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_set (macro) (3),
+.BR _cyaml_get (3)

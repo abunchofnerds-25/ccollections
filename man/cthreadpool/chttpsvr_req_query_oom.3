@@ -1,0 +1,33 @@
+.TH CHTTPSVR_REQ_QUERY_OOM 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_req_query_oom \- check whether chttpsvr_req_query ran out of memory
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+bool chttpsvr_req_query_oom(const chttpsvr_req *req);
+.fi
+.SH DESCRIPTION
+.nf
+Returns true if chttpsvr_req_query could not grow its internal result
+array due to an allocation failure during the current request.
+
+chttpsvr_req_query returns (NULL, count=0) both when the requested key
+is absent and when an OOM condition prevents building the result array.
+Use this function to distinguish the two cases after any NULL return
+from chttpsvr_req_query.
+
+The flag is latching: once set it remains true for the remainder of the
+request regardless of subsequent query calls.  Returns false when req is
+NULL.
+.fi
+.SH RETURN VALUE
+.nf
+true; chttpsvr_req_query failed with an allocation error.
+false; no allocation error occurred (or req is NULL).
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_req_query (3),
+.BR chttpsvr_req_query_one (3)

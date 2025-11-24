@@ -1,0 +1,23 @@
+.TH CREATE_CHTTPSVR 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+create_chttpsvr \- create an HTTP server with the default allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+chttpsvr create_chttpsvr(clog cl, char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Inline wrapper for create_chttpsvr_mp with mprocs = NULL.
+
+cl may be NULL; see create_chttpsvr_mp for the logger semantics.
+.fi
+.SH RETURN VALUE
+.nf
+A valid chttpsvr handle on success, or NULL on failure.
+.fi
+.SH "SEE ALSO"
+.BR create_chttpsvr_mp (3)

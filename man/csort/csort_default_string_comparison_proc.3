@@ -1,0 +1,37 @@
+.TH CSORT_DEFAULT_STRING_COMPARISON_PROC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+csort_default_string_comparison_proc \- default comparison for C strings
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <csort.h>
+
+int csort_default_string_comparison_proc(const void *first,
+                                          const void *second);
+.fi
+.SH DESCRIPTION
+.nf
+Compares two strings using strcmp(). Both arguments must be pointers to
+char pointers (char**). This is the default comparison function used by
+csort for string types.
+.fi
+.SH PARAMETERS
+.nf
+first   Pointer to first char* (i.e., char**)
+second  Pointer to second char* (i.e., char**)
+.fi
+.SH RETURN VALUE
+.nf
+Returns negative if *first < *second
+Returns zero if strings are equal
+Returns positive if *first > *second
+.fi
+.SH NOTES
+.nf
+Uses strcmp() semantics
+Both strings must be null-terminated
+.fi
+.SH "SEE ALSO"
+.BR strcmp (3),
+.BR csort_get_default_comparison_proc (3)

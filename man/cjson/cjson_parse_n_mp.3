@@ -1,0 +1,35 @@
+.TH CJSON_PARSE_N_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cjson_parse_n_mp, cjson_parse_n \- parse a bounded JSON buffer into a DOM tree
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cjson.h>
+
+cjson cjson_parse_n_mp(const char *json_str, size_t len,
+                       char **err_str, ccol_memmgmt_procs_t *mp);
+/* convenience wrapper; default allocator */
+static inline cjson cjson_parse_n(const char *json_str, size_t len,
+                                  char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Like cjson_parse_mp() but operates on len bytes instead of a
+null-terminated string.  cjson_parse_n() is a static inline wrapper
+that calls cjson_parse_n_mp(json_str, len, err_str, NULL).
+.fi
+.SH PARAMETERS
+.nf
+json_str  Input buffer (need not be null-terminated).
+len       Number of bytes to parse.
+err_str   Out-parameter for the parse error message (same semantics
+          as cjson_parse_mp).  Pass NULL to discard.
+mp        Custom allocator for all nodes, or NULL for default.
+.fi
+.SH RETURN VALUE
+.nf
+Root cjson node on success, NULL on failure.
+.fi
+.SH "SEE ALSO"
+.BR cjson_parse_mp (3)

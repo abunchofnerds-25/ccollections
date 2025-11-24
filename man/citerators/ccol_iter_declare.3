@@ -1,0 +1,46 @@
+.TH CCOL_ITER_DECLARE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_iter_declare \- declare a typed iterator variable with RAII cleanup
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <citerators.h>   /* or any container header */
+
+ccol_iter_declare(container, it);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a cmap_iterator pointer named it bound to the type information
+of container.  The declaration attaches __attribute__((cleanup)) so the
+iterator is destroyed automatically when it leaves scope; no explicit
+ccol_iter_destroy() call is required.
+
+Also declares two hidden companion type variables that allow
+ccol_iter_key_ptr() and ccol_iter_val_ptr() to return correctly-typed
+pointers for container.
+.fi
+.SH PARAMETERS
+.nf
+container  Container variable previously declared with a *_declare /
+           *_construct macro.  Must be cvec, chmap, or cbmap.
+it         Name to use for the iterator variable.
+.fi
+.SH NOTES
+.nf
+container must be in scope and its type companion variables must be
+visible (same scope or a parent scope).
+Requires GCC or Clang (uses __attribute__((cleanup))).
+.fi
+.SH EXAMPLES
+.nf
+ccol_iter_declare(my_map, it);
+for (it = ccol_begin(my_map); it != NULL; it = ccol_iter_next(it)) {
+    printf("%d\en", *ccol_iter_val_ptr(it));
+}
+.fi
+.SH "SEE ALSO"
+.BR ccol_begin (3),
+.BR ccol_iter_next (3),
+.BR ccol_for_each (3),
+.BR ccol_iter_destroy (3)

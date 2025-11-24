@@ -1,0 +1,31 @@
+.TH CYAML_CREATE_STRING_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_create_string_mp, cyaml_create_string \- allocate a YAML string node
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_create_string_mp(const char *val, ccol_memmgmt_procs_t *mp);
+cyaml cyaml_create_string(const char *val);
+.fi
+.SH DESCRIPTION
+.nf
+Allocate a DOM node of type CYAML_STRING containing a heap-owned copy
+of val.  Passing NULL for val produces a CYAML_NULL node (the function
+itself never returns NULL due to a null val argument).
+cyaml_create_string() passes NULL for mp.
+.fi
+.SH PARAMETERS
+.nf
+val  Null-terminated source string, or NULL to produce a null node.
+mp   Custom allocator, or NULL for default.
+.fi
+.SH RETURN VALUE
+.nf
+New cyaml node on success, NULL only on allocation failure.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_str_val (3),
+.BR cyaml_destroy (3)

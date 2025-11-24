@@ -1,0 +1,27 @@
+.TH CYAML_CLONE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_clone \- produce a deep independent copy of a DOM subtree
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+cyaml cyaml_clone(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Recursively copy node and all of its descendants.  The clone uses the
+same allocator as the source tree.  Mutating the clone does not affect
+the original and vice versa.
+.fi
+.SH PARAMETERS
+.nf
+node  Root of the subtree to copy.  NULL is accepted and returns NULL.
+.fi
+.SH RETURN VALUE
+.nf
+Root of the new tree (caller owns it), or NULL on allocation failure.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_destroy (3)

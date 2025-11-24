@@ -1,0 +1,38 @@
+.TH CVECTOR_POP_BACK 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cvector_pop_back \- remove and return the last element from the vector
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+ccol_retval_t cvector_pop_back(cvec v, void *target_elem);
+.fi
+.SH DESCRIPTION
+.nf
+Removes the last element from the vector and copies it to the target
+buffer. If the vector becomes less than 1/4 full, it automatically
+shrinks by halving its capacity (minimum capacity is 4).
+.fi
+.SH PARAMETERS
+.nf
+v            Vector to pop from
+target_elem  Pointer to buffer to receive the element (must not be NULL)
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        - Element successfully popped
+ccol_invalid_args   - target_elem is NULL
+ccol_container_empty - Vector is empty
+.fi
+.SH NOTES
+.nf
+O(1) complexity
+Element is copied to target_elem
+Capacity halves when < 1/4 full (down to minimum of 4)
+Asserts if v is NULL
+.fi
+.SH "SEE ALSO"
+.BR cvector_push_back (3),
+.BR cvec_pop (3)

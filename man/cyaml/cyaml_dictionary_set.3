@@ -1,0 +1,33 @@
+.TH CYAML_DICTIONARY_SET 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_dictionary_set \- insert or replace a key in a dictionary
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+ccol_retval_t cyaml_dictionary_set(cyaml map, const char *key,
+                                cyaml child);
+.fi
+.SH DESCRIPTION
+.nf
+Store child under key in the CYAML_DICTIONARY node map.  An internal copy
+of key is made.  Ownership of child transfers to map.  If the key
+already exists, the previous child is deep-freed before the new one is
+stored.
+.fi
+.SH PARAMETERS
+.nf
+map    CYAML_DICTIONARY target node.
+key    Null-terminated key string.
+child  Value node (ownership transfers).
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_dictionary_get (3),
+.BR cyaml_dictionary_size (3),
+.BR cyaml_create_dictionary (3)

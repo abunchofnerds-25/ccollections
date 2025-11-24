@@ -1,0 +1,29 @@
+.TH CYAML_SERIALIZE_FREE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_serialize_free_mp, cyaml_serialize_free \- free a serializer buffer
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+void cyaml_serialize_free_mp(char *s, ccol_memmgmt_procs_t *mp);
+void cyaml_serialize_free(char *s);
+.fi
+.SH DESCRIPTION
+.nf
+Free a buffer returned by cyaml_serialize() or cyaml_serialize_flow().
+cyaml_serialize_free() is an inline wrapper that passes NULL for mp.
+
+The mp argument must match the allocator that was active when the DOM
+tree was created (i.e., the mp passed to cyaml_parse_mp() or the
+create functions).  Passing the wrong allocator is undefined behaviour.
+.fi
+.SH PARAMETERS
+.nf
+s    String to free.  May be NULL (no-op).
+mp   Allocator to use for deallocation, or NULL for the default.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_serialize (3),
+.BR cyaml_serialize_flow (3)

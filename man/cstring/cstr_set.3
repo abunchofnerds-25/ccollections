@@ -1,0 +1,29 @@
+.TH CSTR_SET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cstr_set \- replace entire content; calls fatal_err() on failure
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cstring.h>
+
+cstr_set(s, str);
+.fi
+.SH DESCRIPTION
+.nf
+Calls cstring_set() and calls fatal_err() if the return value is not
+ccol_success.
+.fi
+.SH PARAMETERS
+.nf
+s     cstr to modify
+str   New content (must not be NULL)
+.fi
+.SH NOTES
+.nf
+Use cstring_set() directly if you need to handle errors gracefully
+.fi
+.SH "SEE ALSO"
+.BR cstring_set (3),
+.BR cstr_append (3),
+.BR cstr_reset (3)

@@ -1,0 +1,43 @@
+.TH CIRCQ_TIMED_SEND_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+circq_timed_send_zc \- send with timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t circq_timed_send_zc(circular_queue *cq,
+                                   c_message_t *msg,
+                                   struct timespec *timeout);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks up to the specified timeout waiting for space. If space becomes
+available, sends the message and transfers ownership. If timeout expires
+or sending is disabled, returns with appropriate error code.
+.fi
+.SH PARAMETERS
+.nf
+cq       Circular queue to send to
+msg      Message to send (data ownership transfers on success)
+timeout  Relative timeout duration
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - Message sent successfully
+ccol_invalid_args         - cq or msg is NULL, or msg validation fails
+ccol_not_permitted        - Sending has been disabled
+ccol_timed_out            - Timeout expired
+ccol_unexpected_failure   - System error (check errno)
+.fi
+.SH NOTES
+.nf
+Blocks up to timeout duration
+After waking, rechecks if sending is still enabled
+On failure, caller retains ownership of msg->data
+Uses CLOCK_REALTIME for timeout calculations
+.fi
+.SH "SEE ALSO"
+.BR circq_send_zc (3),
+.BR circq_try_send_zc (3)

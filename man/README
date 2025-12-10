@@ -46,6 +46,5 @@ These pages are hand-authored text, not auto-generated from source
 comments; edit the relevant .3 file directly when a function's or macro's
 documented behavior changes, following the surrounding pages' section
 order (NAME, LIBRARY, SYNOPSIS, DESCRIPTION, PARAMETERS, RETURN VALUE,
-NOTES, WARNINGS, THREAD SAFETY, EXAMPLES, SEE ALSO). Keep new pages ASCII
-only, and never use a double hyphen as punctuation, per the conventions
-documented in guidelines.txt.
+NOTES, WARNINGS, THREAD SAFETY, EXAMPLES, SEE ALSO). Please keep new pages
+ASCII only.

@@ -465,10 +465,8 @@ static void *_engine_stop_get_thread(void *arg) {
   ctpool_future *f = chttpclient_do_async(cli, req);
   chttp_request_free(req);
   /* Guaranteed to eventually be fulfilled exactly once regardless of how
-   * the connection dies; see chttp_async_chain_t's fulfilled-once-guard
-   * backstop, documented in guidelines.txt's chttpclient section; so blocking
-   * here cannot hang even if chttpsvr_engine_stop() tears the connection
-   * down mid-flight. */
+   * the connection dies; so blocking here cannot hang even if
+   * chttpsvr_engine_stop() tears the connection down mid-flight. */
   job->raw = chttpclient_async_result_get(f);
   ctpool_future_free(f);
   chttpclient_destroy(cli);

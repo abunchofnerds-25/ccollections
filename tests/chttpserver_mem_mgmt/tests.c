@@ -24,6 +24,7 @@ SOFTWARE.
 
 #include <chttpclient.h>
 #include <chttpserver.h>
+#include <fio.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -187,6 +188,46 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
   REQUIRE_GT(g_mm_free_count, (size_t)0);
 }
 
+TEST(chttpserver_mem_mgmt, procs_wired_into_engine_reallocations) {
+  /* procs_wired_into_engine_allocations only proves malloc/calloc/free were
+   * routed through the configured procs; fio_realloc2 (used by, e.g.,
+   * fiobj_hash's table growth - see fiobj_hash.c's FIO_SET_REALLOC - when a
+   * request's header FIOBJ hash outgrows its initial capacity) is a
+   * distinct code path that a stray plain-libc-realloc call site could
+   * regress without procs_wired_into_engine_allocations ever noticing, since
+   * g_mm_realloc_count was tracked but never asserted on. Sending a request
+   * with many distinct headers reliably forces that hash to grow at least
+   * once. Capped well under facio's own HTTP_MAX_HEADER_COUNT (128, a
+   * "header flood" security ceiling in third_party/facio/http.h enforced
+   * over the whole header set including Host/Accept/User-Agent/etc, not
+   * just these custom ones) so the request itself still succeeds normally
+   * instead of being rejected with 413. */
+  size_t realloc_before =
+      __atomic_load_n(&g_mm_realloc_count, __ATOMIC_RELAXED);
+
+  chttpcli cli = create_chttpclient(NULL);
+  REQUIRE_TRUE(cli != NULL);
+  chttp_request_t *req =
+      chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
+  REQUIRE_TRUE(req != NULL);
+  char hdr_name[32];
+  for (int i = 0; i < 64; i++) {
+    snprintf(hdr_name, sizeof(hdr_name), "x-mm-header-%d", i);
+    chttp_request_set_header(req, hdr_name, "v");
+  }
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  chttpclient_resp_free(resp);
+  chttp_request_free(req);
+  chttpclient_destroy(cli);
+
+  REQUIRE_GT(__atomic_load_n(&g_mm_realloc_count, __ATOMIC_RELAXED),
+            realloc_before);
+}
+
 TEST(chttpserver_mem_mgmt, null_function_pointer_rejected) {
   /* One missing function pointer must be rejected regardless of engine
    * state; validated unconditionally before the "already running" check. */
@@ -217,4 +258,82 @@ TEST(chttpserver_mem_mgmt, null_procs_reverts_rejected_while_running) {
   /* NULL (revert-to-default) is also subject to the "not while running"
    * rule; it is still a live allocator swap. */
   REQUIRE_EQ(chttpsvr_set_engine_mem_mgmt_procs(NULL), ccol_not_permitted);
+}
+
+TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
+  /* chttpsvr_set_engine_mem_mgmt_procs's own doc comment states it "may be
+   * called again after the engine has fully stopped (chttpsvr_engine_wait()
+   * has returned), before the next chttpsvr_start()" - but no test anywhere
+   * in this suite exercised that path; the other three tests above only
+   * cover install-before-start (implicitly, via _setup()) and
+   * reject-while-running. A regression that made the "engine already
+   * running" check sticky (e.g. a latch never cleared on stop) would pass
+   * every other test in this file untouched.
+   *
+   * This must be the last test in the file: it fully tears down g_srv (the
+   * only thing keeping the shared engine's refcount above zero in this
+   * process) and blocks until the shared engine has genuinely stopped, then
+   * reinstalls procs and starts a fresh server on the same port; every test
+   * declared after this one would otherwise run with no server listening.
+   * g_srv is repointed at the new server so _teardown() still cleans up
+   * normally at process exit. */
+  chttpsvr_stop(g_srv);
+  __chttpsvr_destroy(g_srv);
+  g_srv = NULL;
+  chttpsvr_engine_wait();
+
+  ccol_memmgmt_procs_t procs = {
+      .malloc = _counting_malloc,
+      .free = _counting_free,
+      .calloc = _counting_calloc,
+      .realloc = _counting_realloc,
+  };
+  REQUIRE_EQ(chttpsvr_set_engine_mem_mgmt_procs(&procs), ccol_success);
+
+  char *err = NULL;
+  chttpsvr new_srv = create_chttpsvr(g_test_logger, &err);
+  REQUIRE_TRUE(new_srv != NULL);
+  ccol_retval_t rv =
+      chttpsvr_register_handler(new_srv, CHTTP_GET, "/hello", _hello_handler,
+                                NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT;
+  REQUIRE_EQ((int)chttpsvr_start(new_srv, &cfg), (int)ccol_success);
+  g_srv = new_srv;
+
+  /* Note on what is (and isn't) asserted below: a naive "malloc_count must
+   * increase after this request" check does NOT hold here and would make
+   * this test flaky/wrong, not stronger. fio_data's connection-state table
+   * and, empirically (confirmed while writing this test, via a temporary
+   * debug instrumentation pass), facio's per-connection protocol structs are
+   * allocated once during this process's first-ever engine start and then
+   * recycled internally across any number of later stop/restart cycles in
+   * the same process; a second server's request in the same process can
+   * therefore genuinely trigger zero *new* fio_malloc/fio_calloc calls even
+   * though every allocation that already exists was originally obtained
+   * through the counting procs. fio_has_mem_mgmt_procs() reflects the
+   * routing flag itself (a real, direct observable of whether the reinstall
+   * call took effect) without depending on whether facio's internal reuse
+   * happens to need a fresh allocation on this particular call. */
+  REQUIRE_TRUE(fio_has_mem_mgmt_procs());
+
+  chttpcli cli = create_chttpclient(NULL);
+  REQUIRE_TRUE(cli != NULL);
+  chttp_request_t *req =
+      chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
+  REQUIRE_TRUE(req != NULL);
+  chttpcli_response *resp = NULL;
+  rv = chttpclient_do(cli, req, &resp);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "Hello, mem-mgmt!");
+  chttpclient_resp_free(resp);
+  chttp_request_free(req);
+  chttpclient_destroy(cli);
+
+  REQUIRE_TRUE(fio_has_mem_mgmt_procs());
 }

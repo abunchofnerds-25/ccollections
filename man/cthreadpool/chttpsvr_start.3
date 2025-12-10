@@ -81,6 +81,17 @@ ccol_not_permitted if this server is already started.
 ccol_not_enough_memory if memory allocation fails.
 ccol_unexpected_failure on http_listen errors.
 .fi
+.SH "THREAD SAFETY"
+.nf
+chttpsvr_stop only closes the listener socket; connections already
+accepted before the stop keep running and may still dispatch further
+requests on this same handle at any point during a subsequent restart.
+The old ctpool is only drained and destroyed once every request already
+in flight (dispatched, from http_pause onward) has completed, so a
+restart is safe to call even while such a connection is still active;
+no request can ever be handed to a ctpool that is concurrently being
+torn down.
+.fi
 .SH "SEE ALSO"
 .BR chttpsvr_stop (3),
 .BR chttpsvr_engine_stop (3),

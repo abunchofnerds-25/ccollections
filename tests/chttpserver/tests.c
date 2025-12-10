@@ -1747,22 +1747,53 @@ TEST(chttpserver, multi_key_query_missing) {
   chttpclient_resp_free(resp);
 }
 
-/* Simple pass-through allocator so create_chttpsvr_mp can be exercised. */
-static void *_wrap_malloc(size_t n) { return malloc(n); }
-static void _wrap_free(void *p) { free(p); }
-static void *_wrap_calloc(size_t n, size_t s) { return calloc(n, s); }
-static void *_wrap_realloc(void *p, size_t s) { return realloc(p, s); }
+/* Counting pass-through allocator so create_chttpsvr_mp can be exercised and
+ * the test can prove the supplied procs (not the library default allocator)
+ * actually handled every allocation/free, not just that create/destroy
+ * happened to succeed. */
+static size_t g_wrap_malloc_count;
+static size_t g_wrap_free_count;
+static size_t g_wrap_calloc_count;
+static size_t g_wrap_realloc_count;
+
+static void *_wrap_malloc(size_t n) {
+  g_wrap_malloc_count++;
+  return malloc(n);
+}
+static void _wrap_free(void *p) {
+  if (p) g_wrap_free_count++;
+  free(p);
+}
+static void *_wrap_calloc(size_t n, size_t s) {
+  g_wrap_calloc_count++;
+  return calloc(n, s);
+}
+static void *_wrap_realloc(void *p, size_t s) {
+  g_wrap_realloc_count++;
+  return realloc(p, s);
+}
 
 TEST(chttpserver, custom_allocator_lifecycle) {
   /* create_chttpsvr_mp must succeed with a custom allocator, accept route
      registrations, and release all memory through the same allocator on
      destroy.  Previously bug #1 caused UB in the mutex_init failure path;
-     the happy-path test here exercises the same m_procs copying code. */
+     the happy-path test here exercises the same m_procs copying code.
+     Counting the wrapper calls (rather than using bare passthroughs) proves
+     create_chttpsvr_mp actually threaded the supplied procs through to every
+     allocation site instead of silently falling back to the library
+     default. */
+  g_wrap_malloc_count = 0;
+  g_wrap_free_count = 0;
+  g_wrap_calloc_count = 0;
+  g_wrap_realloc_count = 0;
+
   ccol_memmgmt_procs_t mp = {_wrap_malloc, _wrap_free, _wrap_calloc,
                              _wrap_realloc};
   char *err = NULL;
   chttpsvr srv = create_chttpsvr_mp(&mp, g_test_logger, &err);
   REQUIRE_TRUE(srv != NULL);
+  REQUIRE_GT(g_wrap_malloc_count + g_wrap_calloc_count, (size_t)0);
+  REQUIRE_EQ(g_wrap_free_count, (size_t)0);
 
   ccol_retval_t rv =
       chttpsvr_register_handler(srv, CHTTP_GET, "/ping", _hello_handler, NULL);
@@ -1777,7 +1808,14 @@ TEST(chttpserver, custom_allocator_lifecycle) {
   rv = chttpsvr_router_on(r, CHTTP_GET, "/x", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 
+  size_t allocs_before_destroy = g_wrap_malloc_count + g_wrap_calloc_count;
   __chttpsvr_destroy(srv);
+  /* Every allocation this test drove (create, three route registrations)
+     must have been released through the same wrapper by the time destroy
+     returns; a silently-ignored custom allocator would leave
+     g_wrap_free_count at 0 here. */
+  REQUIRE_GT(g_wrap_free_count, (size_t)0);
+  REQUIRE_GE(g_wrap_free_count, allocs_before_destroy);
 }
 
 /* ========================================================================== */
@@ -2275,6 +2313,56 @@ TEST(chttpserver, keep_alive_across_two_requests_on_one_connection) {
     REQUIRE_EQ(status, 200);
     REQUIRE_TRUE(strstr(buf, "Hello, world!") != NULL);
   }
+  close(fd);
+}
+
+TEST(chttpserver, keep_alive_two_consecutive_streaming_requests) {
+  /* Per-message ingestion state (stream_diverted, stream_body_done,
+     stream_err, primed/carry buffers) is documented to reset at the top of
+     every http1_on_headers_complete call, since http1pr_s is reused across
+     every request on a keep-alive connection. Every other keep-alive test in
+     this file pairs at most one streaming request with a buffered GET on the
+     same connection; this sends two full streaming POSTs back to back on one
+     connection, the scenario most likely to expose stale per-message
+     streaming state (e.g. a leftover primed buffer or stream_err from
+     request 1 corrupting request 2's ingestion). Each request has a
+     different body so the two responses can only match if the ingestion
+     state was genuinely reset in between. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *bodies[2] = {"first-streamed-body",
+                           "second-streamed-body-is-longer-than-the-first"};
+  for (int i = 0; i < 2; i++) {
+    size_t body_len = strlen(bodies[i]);
+    char hdr[256];
+    int hn = snprintf(hdr, sizeof(hdr),
+                      "POST /stream-echo HTTP/1.1\r\n"
+                      "Host: 127.0.0.1\r\n"
+                      "Content-Type: text/plain\r\n"
+                      "Content-Length: %zu\r\n"
+                      "\r\n",
+                      body_len);
+    REQUIRE_TRUE(hn > 0 && (size_t)hn < sizeof(hdr));
+    REQUIRE_EQ(write(fd, hdr, (size_t)hn), (ssize_t)hn);
+    REQUIRE_EQ(write(fd, bodies[i], body_len), (ssize_t)body_len);
+
+    char buf[1024];
+    memset(buf, 0, sizeof(buf));
+    int status = _read_one_http_response(fd, buf, sizeof(buf));
+    REQUIRE_EQ(status, 200);
+    char *body_out = _decode_raw_body(buf);
+    REQUIRE_TRUE(body_out != NULL);
+    REQUIRE_STREQ(body_out, bodies[i]);
+  }
+
   close(fd);
 }
 
@@ -3797,6 +3885,60 @@ TEST(chttpserver, streaming_max_body_size_exceeded_reported) {
   REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
 }
 
+TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
+  /* The 413/ccol_msg_too_large tests above are the only other exercise in
+     this file of the "diverted parse errors do not force-close the socket
+     synchronously" mechanism: http1_on_error special-cases a diverted
+     connection by setting p->close=1 and returning, instead of calling
+     fio_close immediately (which would destroy the connection before the
+     worker's own error response could ever be written), so headers2str
+     forces Connection: close into the response that is about to go out and
+     the socket closes gracefully only after that response is flushed. This
+     test exercises a distinct llhttp parse-error class hitting that same
+     path: malformed chunk-size framing in a Transfer-Encoding: chunked body
+     (caught by http1_on_body_chunk's chunk-size decoder), not a
+     max_body_size/declared-length check. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  /* "ZZZZ" is not a valid hex chunk-size token; llhttp must reject it while
+     consuming the body on the worker thread, well after routing (at
+     headers-complete time) has already matched /stream-error-report. */
+  const char *req =
+      "POST /stream-error-report HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "\r\n"
+      "ZZZZ\r\n"
+      "garbage-chunk-data\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[1024] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  /* The malformed body must still produce a real, complete HTTP response
+     (not a bare reset) reporting the ingestion failure, and the connection
+     must close afterward rather than staying alive for a corrupted next
+     request. */
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:") != NULL);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:none") == NULL);
+  REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
+}
+
 /* ========================================================================== */
 /*                    SERVER DESTROY-WHILE-IN-FLIGHT TESTS                    */
 /* ========================================================================== */
@@ -3890,6 +4032,91 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
   pthread_join(bg, NULL);
 }
 
+static _Atomic bool g_restart_race_stop;
+
+/* Repeatedly pipelines GET requests over `fd` (an already-open keep-alive
+   connection) until g_restart_race_stop is set, tolerating any write/read
+   failure by exiting (the listener side of the connection is expected to be
+   torn down and replaced repeatedly by the main thread while this runs).
+   Used by restart_races_live_keep_alive_connection_is_safe below to keep
+   real pressure on _task_pause_cb's read of srv->worker_pool throughout a
+   restart storm. */
+static void *_restart_race_pipeline_thread(void *arg) {
+  int fd = *(int *)arg;
+  const char *req = "GET /restart-race HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+  char buf[512];
+  while (!atomic_load(&g_restart_race_stop)) {
+    if (write(fd, req, strlen(req)) <= 0) break;
+    ssize_t r = read(fd, buf, sizeof(buf));
+    if (r <= 0) break;
+  }
+  return NULL;
+}
+
+TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
+  /* Regression test for a srv->worker_pool data race: worker_pool used to be
+   * written (drained/destroyed/recreated) without srv->mutex in every
+   * chttpsvr_start restart/teardown path, while _task_pause_cb read it under
+   * the lock - a genuine data race, and a real use-after-free risk if a
+   * leftover pool were destroyed while a still-open keep-alive connection's
+   * next pipelined request was concurrently reading/submitting to it:
+   * chttpsvr_stop only closes the listener, already-accepted connections
+   * keep running, and their _on_headers_complete does not check
+   * srv->started, so _task_pause_cb can fire at any point during a restart.
+   * Fixed by _wait_and_detach_worker_pool, which waits for
+   * in_flight_requests to drain to zero before ever detaching/destroying a
+   * pool, guaranteeing no _task_pause_cb call can be mid-flight holding a
+   * stale copy of the pointer being handed to ctpool_destroy.
+   *
+   * This test doesn't assert on a return value for most of its body; the bug
+   * is a data race / UAF, not a wrong result, so the real verification is
+   * `make memtest` (valgrind) running this test clean, and a debug build
+   * aborting/crashing outright if the race were reintroduced. A background
+   * thread keeps one keep-alive connection continuously pipelining requests
+   * while the main thread restarts the server many times in a tight loop (a
+   * fresh port each cycle, so bind timing on a just-closed port can never
+   * make this flaky; the race under test lives entirely on the srv side, not
+   * the listener's port). Uses its own short-lived server so it cannot
+   * disturb the shared test fixture. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/restart-race",
+                                               _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 50;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 50));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  atomic_store(&g_restart_race_stop, false);
+  pthread_t pipeline_thread;
+  REQUIRE_EQ(pthread_create(&pipeline_thread, NULL,
+                            _restart_race_pipeline_thread, &fd),
+             0);
+
+  for (int i = 0; i < 5; i++) {
+    chttpsvr_stop(srv);
+    cfg.port = (uint16_t)(TEST_PORT + 51 + i);
+    REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+  }
+
+  atomic_store(&g_restart_race_stop, true);
+  pthread_join(pipeline_thread, NULL);
+  close(fd);
+  __chttpsvr_destroy(srv);
+}
+
 /* ========================================================================== */
 /*                   MAX_BODY_READ_DURATION_MS TESTS                          */
 /* ========================================================================== */
@@ -3938,6 +4165,8 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
       "Connection: close\r\n"
       "\r\n"
       "abc"; /* 3 of the declared 10 bytes; never send the rest */
+  struct timespec t_start, t_end;
+  clock_gettime(CLOCK_MONOTONIC, &t_start);
   REQUIRE_EQ(write(fd, hdr, strlen(hdr)), (ssize_t)strlen(hdr));
 
   char buf[1024] = {0};
@@ -3946,11 +4175,27 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
   while (total < sizeof(buf) - 1 &&
          (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
     total += (size_t)r;
+  clock_gettime(CLOCK_MONOTONIC, &t_end);
   buf[total] = '\0';
   close(fd);
 
   REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
   REQUIRE_TRUE(strstr(buf, "x-stream-err:ccol_timed_out") != NULL);
+
+  /* The response body alone cannot distinguish which of the two caps fired:
+   * both stream_read_timeout_ms and max_body_read_duration_ms collapse to
+   * the identical ccol_timed_out value (see _stream_err_to_retval /
+   * req->_deadline_exceeded in src/chttpserver.c). Without a wall-clock
+   * check, a max_body_read_duration_ms implementation that was silently a
+   * no-op would still pass this test: the connection would simply sit until
+   * the 5000ms stream_read_timeout_ms cap eventually fired instead, taking
+   * roughly 5s instead of roughly 300ms. Bound elapsed time well below the
+   * 5000ms per-gap cap (leaving generous headroom above the 300ms overall
+   * cap for scheduling jitter under load/valgrind) to prove the *short*
+   * cap is what actually fired. */
+  long elapsed_ms = (t_end.tv_sec - t_start.tv_sec) * 1000 +
+                    (t_end.tv_nsec - t_start.tv_nsec) / 1000000;
+  REQUIRE_LT(elapsed_ms, 2500L);
 
   __chttpsvr_destroy(srv);
 }

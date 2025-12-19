@@ -40,14 +40,16 @@ TAU_MAIN()
 /*     chttpsvr_set_engine_mem_mgmt_procs COVERAGE (dedicated binary)         */
 /*                                                                            */
 /* chttpsvr_set_engine_mem_mgmt_procs() may only be called before the first  */
-/* chttpsvr_start() in the process; a process-wide, set-once-ever          */
+/* chttpsvr_start() in the process; a process-wide, set-once-ever            */
 /* requirement, exactly like the shared facio engine it configures. The rest */
-/* of the chttpserver test suite (tests/chttpserver) already calls           */
-/* chttpsvr_start() during its own shared _setup(), so testing the "install  */
-/* procs, then start" happy path there is impossible. This suite is kept     */
-/* isolated (same reasoning as tests/chttpserver_tls) so it can install      */
-/* counting procs and start the shared engine exactly once, before anything  */
-/* else in the process has a chance to.                                     */
+/* of the chttpserver test suite (tests.c, sharing this same directory)      */
+/* already calls chttpsvr_start() during its own shared _setup(), so testing */
+/* the "install procs, then start" happy path there is impossible. This      */
+/* file is therefore compiled into its own binary, tests_mem_mgmt, separate  */
+/* from tests.c's tests binary (see the Makefile in this same directory;     */
+/* same reasoning as tests_tls.c) so it can install counting procs and       */
+/* start the shared engine exactly once, before anything else in the        */
+/* process has a chance to.                                                  */
 /* ========================================================================== */
 
 #define TEST_PORT 18795

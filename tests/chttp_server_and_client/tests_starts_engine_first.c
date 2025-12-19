@@ -27,7 +27,7 @@ SOFTWARE.
  * genuinely first-ever caller into the shared facio reactor
  * (src/cfio_engine.c) in a fresh process.
  *
- * tests/chttp_server_and_client/tests.c documents and tests the opposite
+ * tests.c (sharing this same directory) documents and tests the opposite
  * ordering (chttpclient's async engine calling _cfio_engine_acquire() first,
  * chttpserver second). But cfio_engine.c's one-time global init
  * (_cfio_fio_global_init) is pthread_once-guarded for the whole process
@@ -35,13 +35,15 @@ SOFTWARE.
  * ever be genuinely "first" within a single test binary/process: whichever
  * of the two runs second in that file is only ever exercising a
  * ref-count-from-zero restart of an already-globally-initialized reactor,
- * not a true first-caller path. This suite is the other half of that claim,
- * in its own process: chttpserver calls _cfio_engine_acquire() (via
+ * not a true first-caller path. This file is therefore compiled into its
+ * own binary, tests_starts_engine_first, separate from tests.c's tests
+ * binary (see the Makefile in this same directory) so it gets a genuinely
+ * fresh process: chttpserver calls _cfio_engine_acquire() (via
  * chttpsvr_start()) before anything else in this process has ever touched
  * the shared engine, and a second test then confirms chttpclient's async
  * engine can still come up afterward and share the already-running reactor
- * normally, exactly mirroring what tests/chttp_server_and_client/tests.c
- * verifies from the opposite starting direction.
+ * normally, exactly mirroring what tests.c verifies from the opposite
+ * starting direction.
  */
 
 #include <cfio_engine.h>

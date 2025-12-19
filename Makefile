@@ -162,7 +162,8 @@ $(THIRD_PARTY_LLHTTP_OBJ_DIR)/%.static.o: $(THIRD_PARTY_LLHTTP_DIR)/%.c $(THIRD_
 
 clean:
 	rm -rf $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) $(OBJECT_DIR) \
-		tests/*/tests tests/*/coverage tests/*/third_party_obj \
+		tests/*/tests tests/*/tests_tls tests/*/tests_mem_mgmt \
+		tests/*/tests_starts_engine_first tests/*/coverage tests/*/third_party_obj \
 		tests/*/*.gcno tests/*/*.gcda tests/*/*.gcov tests/*/*.c.info
 
 HEADER_INSTALL_DIR = /usr/local/include

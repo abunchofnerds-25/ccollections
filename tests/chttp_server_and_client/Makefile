@@ -9,8 +9,23 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 # the same process -- see src/cfio_engine.c/.h, the shared facio reactor
 # lifecycle module both now acquire/release references to instead of each
 # owning an independent (mutually exclusive) reactor.
-OUR_SRC_FILES = tests.c \
-	../../src/chttpserver.c \
+#
+# Two binaries are built from this shared source set:
+#   tests                        (tests.c) - chttpclient's async engine calls
+#                                 _cfio_engine_acquire() first, chttpserver
+#                                 second, plus the rest of this suite's
+#                                 engine-unification coverage.
+#   tests_starts_engine_first    (tests_starts_engine_first.c) - the other
+#                                 half of the "either order" claim tests.c
+#                                 cannot cover by itself in one process:
+#                                 cfio_engine.c's one-time global init is
+#                                 pthread_once-guarded for the whole process
+#                                 lifetime, so only ONE ordering can ever be
+#                                 genuinely "first" per binary. Kept as a
+#                                 SEPARATE BINARY so chttpserver gets its own
+#                                 genuinely fresh process to be the first-ever
+#                                 caller into the shared engine.
+COMMON_SRC_FILES = ../../src/chttpserver.c \
 	../../src/chttpclient.c \
 	../../src/chttp.c \
 	../../src/cfio_engine.c \
@@ -72,29 +87,45 @@ third_party_obj/llhttp/%.o: $(LLHTTP_DIR)/%.c $(LLHTTP_HEADER_FILES) | third_par
 	$(CC) -c $(LLHTTP_CFLAGS) $< -o $@
 
 build: $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS)
-	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) $(OUR_SRC_FILES) -o tests $(LFLAGS)
+	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) tests.c $(COMMON_SRC_FILES) -o tests $(LFLAGS)
 
-test: build
+build_starts_engine_first: $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS)
+	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) tests_starts_engine_first.c \
+		$(COMMON_SRC_FILES) -o tests_starts_engine_first $(LFLAGS)
+
+test: build build_starts_engine_first
 	./tests
+	./tests_starts_engine_first
 
-memtest: build
+memtest: build build_starts_engine_first
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests
+	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
+		--error-exitcode=1 ./tests_starts_engine_first
 
 generate_coverage_report:
-	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) $(OUR_SRC_FILES) \
-		$(THIRD_PARTY_OBJS) -o tests $(LFLAGS) && \
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests.c $(COMMON_SRC_FILES) \
+		$(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-chttp_server_and_client && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent \
 		--capture --directory . --output-file chttp_server_and_client.c.info && \
 	genhtml --ignore-errors inconsistent -s chttp_server_and_client.c.info \
-		--output-directory coverage && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info
+		--output-directory coverage/tests && \
+	rm -rf *.gcno *.gcda *.gcov *.c.info tests
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_starts_engine_first.c $(COMMON_SRC_FILES) \
+		$(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) -o tests_starts_engine_first $(LFLAGS) && \
+	./tests_starts_engine_first && \
+	gcov -d -w tests_starts_engine_first-chttp_server_and_client && \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent \
+		--capture --directory . --output-file chttpserver_starts_engine_first.c.info && \
+	genhtml --ignore-errors inconsistent -s chttpserver_starts_engine_first.c.info \
+		--output-directory coverage/tests_starts_engine_first && \
+	rm -rf *.gcno *.gcda *.gcov *.c.info tests_starts_engine_first
 
-all: build test memtest generate_coverage_report
+all: build build_starts_engine_first test memtest generate_coverage_report
 
 clean:
-	rm -rf tests third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
+	rm -rf tests tests_starts_engine_first third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
 
-default: build
+default: build build_starts_engine_first

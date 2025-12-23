@@ -162,23 +162,10 @@ $(THIRD_PARTY_LLHTTP_OBJ_DIR)/%.static.o: $(THIRD_PARTY_LLHTTP_DIR)/%.c $(THIRD_
 
 clean:
 	rm -rf $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) $(OBJECT_DIR) \
-		tests/*/tests tests/*/coverage tests/*/third_party_obj \
+		tests/*/tests tests/*/tests_tls tests/*/tests_mem_mgmt \
+		tests/*/tests_starts_engine_first tests/*/coverage tests/*/third_party_obj \
 		tests/*/*.gcno tests/*/*.gcda tests/*/*.gcov tests/*/*.c.info
 
-<<<<<<< HEAD
-HEADER_INSTALL_DIR = /usr/include
-LIBRARY_INSTALL_DIR = /usr/lib
-
-SUDO := $(shell [ "$$(id -u)" -eq 0 ] && echo "" || echo "sudo")
-
-install: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME)
-	$(SUDO) install -d $(HEADER_INSTALL_DIR)
-	$(SUDO) install -m 644 $(HEADER_FILES) $(HEADER_INSTALL_DIR)
-	$(SUDO) install -m 755 $(SHARED_LIBRARY_NAME) $(LIBRARY_INSTALL_DIR)
-	$(SUDO) install -m 644 $(STATIC_LIBRARY_NAME) $(LIBRARY_INSTALL_DIR)
-	$(SUDO) ldconfig
-
-=======
 HEADER_INSTALL_DIR = /usr/local/include
 LIBRARY_INSTALL_DIR = /usr/local/lib
 MAN_INSTALL_DIR = /usr/local/share/man
@@ -206,16 +193,11 @@ install: $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME)
 	$(SUDO) ldconfig
 	-$(SUDO) mandb -q
 
->>>>>>> f0e1a5a71a67673b95f01c93dd69c847e3b417e5
 uninstall:
 	$(SUDO) rm -f $(addprefix $(HEADER_INSTALL_DIR)/,$(notdir $(HEADER_FILES)))
 	$(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(SHARED_LIBRARY_NAME)
 	$(SUDO) rm -f $(LIBRARY_INSTALL_DIR)/$(STATIC_LIBRARY_NAME)
-<<<<<<< HEAD
-	$(SUDO) ldconfig
-=======
 	$(SUDO) rm -f $(addprefix $(MAN_INSTALL_DIR)/man3/,$(notdir $(MAN3_SRC_FILES)))
 	$(SUDO) rm -f $(addprefix $(MAN_INSTALL_DIR)/man7/,$(notdir $(MAN7_SRC_FILES)))
 	$(SUDO) ldconfig
 	-$(SUDO) mandb -q
->>>>>>> f0e1a5a71a67673b95f01c93dd69c847e3b417e5

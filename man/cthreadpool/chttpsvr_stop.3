@@ -18,6 +18,13 @@ all other registered listeners continue running unaffected.
 Idempotent: calling chttpsvr_stop on a server that was never started,
 or that was already stopped, is a no-op.
 
+Connections already accepted before this call keep running; they are
+not closed and may continue dispatching further requests through this
+handle for as long as the client keeps the connection open, even
+across a subsequent chttpsvr_start restart on the same handle.
+__chttpsvr_destroy is the only call that waits for such in-flight
+requests to fully drain before releasing the server's resources.
+
 Safe to call with NULL.
 .fi
 .SH "SEE ALSO"

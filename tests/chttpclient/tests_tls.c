@@ -49,21 +49,23 @@ TAU_MAIN()
 /*   REAL TLS HANDSHAKE COVERAGE FOR THE ASYNC ENGINE (dedicated binary)      */
 /*                                                                            */
 /* tests/chttpclient's own async_step_a TLS tests only cover failure paths   */
-/* (connection refused, handshake against a non-TLS server); a real        */
+/* (connection refused, handshake against a non-TLS server); a real          */
 /* successful handshake needs a valid certificate/key pair and a peer that   */
 /* actually speaks TLS. This suite generates a real, throwaway self-signed   */
 /* cert/key pair via the `openssl` CLI at startup and runs a minimal,        */
-/* hand-rolled raw-OpenSSL mock TLS server (SSL_accept/SSL_read/SSL_write;*/
+/* hand-rolled raw-OpenSSL mock TLS server (SSL_accept/SSL_read/SSL_write;   */
 /* NOT chttpserver.c) to drive chttpclient's async engine through a genuine  */
-/* end-to-end HTTPS request. It cannot reuse tests/chttpserver_tls's fixture:*/
-/* that suite runs chttpserver's own facio engine, which cannot share a      */
-/* process with chttpclient's independent async engine (see chttpclient.c's */
-/* g_client_engine_* comments); both are process-wide facio reactors, and  */
-/* only one can be started per process. Kept in its own binary (mirroring   */
-/* tests/chttpserver_tls) so a missing/broken openssl CLI or an invalid cert */
-/* file; either of which makes the vendored facio TLS layer call          */
-/* FIO_LOG_FATAL and abort the whole process; cannot take the rest of the  */
-/* chttpclient test suite down with it.                                     */
+/* end-to-end HTTPS request. A hand-rolled mock server is used instead of    */
+/* reusing chttpserver.c purely for simplicity, keeping this TLS-handshake-  */
+/* focused suite free of chttpserver's routing/dispatch machinery; not       */
+/* because of any per-process engine restriction (chttpserver and           */
+/* chttpclient's async engine safely share one process-wide reactor via     */
+/* cfio_engine.c). This file is compiled into its own binary, tests_tls,     */
+/* separate from tests.c's tests binary (see the Makefile in this same      */
+/* directory) so a missing/broken openssl CLI or an invalid cert file,      */
+/* either of which makes the vendored facio TLS layer call FIO_LOG_FATAL     */
+/* and abort the whole process, cannot take the rest of the chttpclient      */
+/* test suite down with it.                                                  */
 /* ========================================================================== */
 
 /* White-box entry points into chttpclient's async engine internals (the

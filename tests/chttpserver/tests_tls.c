@@ -46,8 +46,10 @@ TAU_MAIN()
 /* files are missing or invalid.  This suite generates a real, throwaway     */
 /* self-signed cert/key pair via the `openssl` CLI at startup, starts a real */
 /* TLS chttpsvr listener, and drives an actual HTTPS request through it via  */
-/* chttpclient; kept isolated in its own binary so a broken openssl CLI or */
-/* a bad cert only fails this suite, not the rest of the chttpserver tests.  */
+/* chttpclient. This file is compiled into its own binary, tests_tls,        */
+/* separate from tests.c's tests binary (see the Makefile in this same       */
+/* directory) so a broken openssl CLI or a bad cert only fails this suite,   */
+/* not the rest of the chttpserver tests.                                    */
 /* ========================================================================== */
 
 #define TLS_TEST_PORT 18790

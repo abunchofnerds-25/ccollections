@@ -32,6 +32,7 @@ SOFTWARE.
 #include <http1.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -207,8 +208,15 @@ struct chttpserver {
   chttpsvr_router **routers; /* [0] = root, [1..n] = sub-routers */
   size_t router_count;
   size_t router_cap;
-  ctpool worker_pool; /* owned; created at chttpsvr_start, destroyed at
-                         __chttpsvr_destroy */
+  ctpool worker_pool; /* owned; created at chttpsvr_start, replaced on a
+                         restart, and destroyed at __chttpsvr_destroy. Every
+                         read and write goes through mutex (see
+                         _task_pause_cb and _wait_and_detach_worker_pool):
+                         an already-accepted keep-alive connection's
+                         _on_headers_complete/_task_pause_cb does not check
+                         `started` and can still fire while a restart or
+                         teardown is swapping this pointer out from under
+                         it. */
   fio_tls_s
       *tls; /* non-NULL when TLS was configured; freed in __chttpsvr_destroy */
   mutex_t mutex;
@@ -226,16 +234,27 @@ struct chttpserver {
   bool contributed_to_engine; /* true once this server has acquired its one
                                   shared cfio_engine reference (see
                                   chttpsvr_start/__chttpsvr_destroy) */
-  unsigned stream_read_timeout_ms;    /* set at chttpsvr_start; bounds each
-                                          http1_stream_read wait for more body
-                                          bytes, for both buffered and
-                                          streaming routes */
-  unsigned max_body_read_duration_ms; /* set at chttpsvr_start; 0 = no limit.
-                                          Bounds the *total* time spent
-                                          reading one request's body, closing
-                                          the trickle-forever loophole that
-                                          stream_read_timeout_ms alone leaves
-                                          open (see _check_read_deadline). */
+  _Atomic unsigned
+      stream_read_timeout_ms; /* set at chttpsvr_start; bounds each
+                                  http1_stream_read wait for more body bytes,
+                                  for both buffered and streaming routes.
+                                  _Atomic (plain store/load, no mutex) because
+                                  a restart writes it while an
+                                  already-accepted keep-alive connection's
+                                  worker thread may concurrently be reading it
+                                  once per body chunk on the hot ingestion
+                                  path (see _ingest_buffered_body /
+                                  chttpsvr_req_read); a mutex there would add
+                                  lock/unlock overhead to every chunk read. */
+  _Atomic unsigned
+      max_body_read_duration_ms; /* set at chttpsvr_start; 0 = no limit.
+                                     Bounds the *total* time spent reading one
+                                     request's body, closing the
+                                     trickle-forever loophole that
+                                     stream_read_timeout_ms alone leaves open
+                                     (see _check_read_deadline). _Atomic for
+                                     the same reason as stream_read_timeout_ms
+                                     above. */
   ccol_memmgmt_procs_t *m_procs;
 };
 
@@ -1853,6 +1872,46 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
   return srv;
 }
 
+/* Waits (bounded by a 30-second safety-net timeout: a permanent hang is
+ * worse than a potential use-after-free in that degenerate edge case) for
+ * every already-dispatched request to finish, then atomically detaches
+ * srv->worker_pool (NULLing it under srv->mutex) and returns the detached
+ * pool so the caller can drain and destroy it outside the lock.
+ *
+ * Waiting first is what makes the detach-then-destroy safe: in_flight_requests
+ * spans exactly the window from http_pause (in _on_headers_complete, before
+ * _task_pause_cb ever reads worker_pool) through the matching http_resume, so
+ * once it reaches zero no _task_pause_cb call can be mid-flight holding a
+ * stale local copy of the pool pointer this function is about to hand to
+ * ctpool_shutdown_drain/ctpool_destroy. This matters because an
+ * already-accepted keep-alive connection's _on_headers_complete does not
+ * check srv->started, so it (and the _task_pause_cb it triggers) can still
+ * fire while chttpsvr_start is mid-restart or __chttpsvr_destroy is tearing
+ * the server down.
+ *
+ * Used by both __chttpsvr_destroy and chttpsvr_start (leftover-pool cleanup
+ * on a restart, and every failure-path teardown after the pool has already
+ * been assigned to srv->worker_pool), so a pool is never destroyed while a
+ * concurrent request could still be about to submit to it. Caller must hold
+ * no lock on entry. */
+static ctpool _wait_and_detach_worker_pool(chttpsvr srv) {
+  mutex_lock(srv->mutex);
+  if (srv->in_flight_requests > 0) {
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += 30;
+    while (srv->in_flight_requests > 0) {
+      if (cond_var_timedwait(srv->requests_done_cv, srv->mutex, deadline) ==
+          ETIMEDOUT)
+        break;
+    }
+  }
+  ctpool old_pool = srv->worker_pool;
+  srv->worker_pool = NULL;
+  mutex_unlock(srv->mutex);
+  return old_pool;
+}
+
 void __chttpsvr_destroy(chttpsvr srv) {
   if (!srv) return;
 
@@ -1890,8 +1949,9 @@ void __chttpsvr_destroy(chttpsvr srv) {
   if (should_release_engine) _cfio_engine_release();
 
   /* Block until every in-flight task has called http_resume and its
-   * send/cleanup callback has completed.  All handlers now run through the
-   * server's ctpool, so in_flight_requests tracks all dispatched work.
+   * send/cleanup callback has completed, then drain and destroy the
+   * server-owned worker pool. All handlers now run through the server's
+   * ctpool, so in_flight_requests tracks all dispatched work.
    *
    * For the last reference: _cfio_engine_release() above triggers fio_stop()
    * on its reaper thread momentarily, which signals the reactor to drain;
@@ -1902,26 +1962,13 @@ void __chttpsvr_destroy(chttpsvr srv) {
    * timing of the reaper's fio_stop() call; a worker thread calls
    * http_resume when it finishes regardless of engine-stop state.
    *
-   * 30-second timeout as a safety net: a permanent hang is worse than a
-   * potential use-after-free in that degenerate edge case. */
-  mutex_lock(srv->mutex);
-  if (srv->in_flight_requests > 0) {
-    struct timespec deadline;
-    clock_gettime(CLOCK_MONOTONIC, &deadline);
-    deadline.tv_sec += 30;
-    while (srv->in_flight_requests > 0) {
-      if (cond_var_timedwait(srv->requests_done_cv, srv->mutex, deadline) ==
-          ETIMEDOUT)
-        break;
-    }
-  }
-  mutex_unlock(srv->mutex);
-
-  /* Drain then destroy the server-owned worker pool. */
-  if (srv->worker_pool) {
-    ctpool_shutdown_drain(srv->worker_pool);
-    ctpool_destroy(srv->worker_pool);
-    srv->worker_pool = NULL;
+   * See _wait_and_detach_worker_pool's own comment for why waiting for
+   * in_flight_requests to drain before touching worker_pool is required, not
+   * just a nice-to-have. */
+  ctpool old_pool = _wait_and_detach_worker_pool(srv);
+  if (old_pool) {
+    ctpool_shutdown_drain(old_pool);
+    ctpool_destroy(old_pool);
   }
 
   if (srv->tls) {
@@ -1970,11 +2017,18 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   }
   mutex_unlock(srv->mutex);
 
-  /* Drain and destroy any pool left over from a previous start/stop cycle. */
-  if (srv->worker_pool) {
-    ctpool_shutdown_drain(srv->worker_pool);
-    ctpool_destroy(srv->worker_pool);
-    srv->worker_pool = NULL;
+  /* Drain and destroy any pool left over from a previous start/stop cycle.
+   * chttpsvr_stop only closes the listener; already-accepted keep-alive
+   * connections keep running and their _on_headers_complete does not check
+   * srv->started, so one can still be dispatching through the leftover pool
+   * right up until _wait_and_detach_worker_pool's in_flight_requests wait
+   * confirms otherwise. See that helper's comment for the full reasoning. */
+  {
+    ctpool leftover_pool = _wait_and_detach_worker_pool(srv);
+    if (leftover_pool) {
+      ctpool_shutdown_drain(leftover_pool);
+      ctpool_destroy(leftover_pool);
+    }
   }
 
   /* Determine worker thread count and queue capacity. */
@@ -1993,9 +2047,12 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   }
 
   char *pool_err = NULL;
-  srv->worker_pool = create_cthread_pool_mp((size_t)nthreads, queue_cap,
-                                            srv->m_procs, &pool_err);
-  if (!srv->worker_pool) return ccol_not_enough_memory;
+  ctpool new_pool = create_cthread_pool_mp((size_t)nthreads, queue_cap,
+                                           srv->m_procs, &pool_err);
+  if (!new_pool) return ccol_not_enough_memory;
+  mutex_lock(srv->mutex);
+  srv->worker_pool = new_pool;
+  mutex_unlock(srv->mutex);
 
   srv->stream_read_timeout_ms = cfg->stream_read_timeout_ms;
   srv->max_body_read_duration_ms = cfg->max_body_read_duration_ms;
@@ -2037,9 +2094,11 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   if (cfg->tls && cfg->tls->cert_path && cfg->tls->key_path) {
     tls = fio_tls_new(cfg->host, cfg->tls->cert_path, cfg->tls->key_path, NULL);
     if (!tls) {
-      ctpool_shutdown_drain(srv->worker_pool);
-      ctpool_destroy(srv->worker_pool);
-      srv->worker_pool = NULL;
+      ctpool failed_pool = _wait_and_detach_worker_pool(srv);
+      if (failed_pool) {
+        ctpool_shutdown_drain(failed_pool);
+        ctpool_destroy(failed_pool);
+      }
       return ccol_unexpected_failure;
     }
     if (cfg->tls->ca_bundle_path) fio_tls_trust(tls, cfg->tls->ca_bundle_path);
@@ -2072,9 +2131,13 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
       srv->contributed_to_engine = false; /* roll back; nothing was acquired */
       mutex_unlock(srv->mutex);
       if (tls) fio_tls_destroy(tls);
-      ctpool_shutdown_drain(srv->worker_pool);
-      ctpool_destroy(srv->worker_pool);
-      srv->worker_pool = NULL;
+      {
+        ctpool failed_pool = _wait_and_detach_worker_pool(srv);
+        if (failed_pool) {
+          ctpool_shutdown_drain(failed_pool);
+          ctpool_destroy(failed_pool);
+        }
+      }
       return engine_rc;
     }
   }
@@ -2099,9 +2162,13 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
      * release it later, mirroring this module's pre-unification behavior
      * for this exact failure path. */
     if (tls) fio_tls_destroy(tls);
-    ctpool_shutdown_drain(srv->worker_pool);
-    ctpool_destroy(srv->worker_pool);
-    srv->worker_pool = NULL;
+    {
+      ctpool failed_pool = _wait_and_detach_worker_pool(srv);
+      if (failed_pool) {
+        ctpool_shutdown_drain(failed_pool);
+        ctpool_destroy(failed_pool);
+      }
+    }
     return ccol_unexpected_failure;
   }
 

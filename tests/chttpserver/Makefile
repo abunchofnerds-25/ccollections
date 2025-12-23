@@ -6,8 +6,26 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 # Our source files (compiled with strict flags + -Werror). cfio_engine.c is
 # the shared facio reactor lifecycle module both chttpserver.c and
 # chttpclient.c acquire/release references to -- see cfio_engine.h.
-OUR_SRC_FILES = tests.c \
-	../../src/chttpserver.c \
+#
+# Three binaries are built from this shared source set:
+#   tests            (tests.c) - the main suite.
+#   tests_tls        (tests_tls.c) - drives a real TLS handshake against a
+#                     genuine self-signed cert generated at test-startup via
+#                     the `openssl` CLI. Kept as a SEPARATE BINARY because a
+#                     missing/broken openssl CLI or an invalid cert file makes
+#                     the vendored facio TLS layer call FIO_LOG_FATAL, which
+#                     aborts the whole process -- isolating it means that
+#                     failure mode can only take down the TLS suite, not the
+#                     rest of this directory's tests.
+#   tests_mem_mgmt   (tests_mem_mgmt.c) - calls
+#                     chttpsvr_set_engine_mem_mgmt_procs() before the first
+#                     chttpsvr_start() in the process, a process-wide,
+#                     set-once-ever requirement. tests.c's own shared _setup()
+#                     already calls chttpsvr_start(), so the "install procs,
+#                     then start" happy path can only be exercised in a
+#                     process where nothing else has started the engine
+#                     first -- hence its own SEPARATE BINARY.
+COMMON_SRC_FILES = ../../src/chttpserver.c \
 	../../src/chttpclient.c \
 	../../src/chttp.c \
 	../../src/cfio_engine.c \
@@ -69,29 +87,59 @@ third_party_obj/llhttp/%.o: $(LLHTTP_DIR)/%.c $(LLHTTP_HEADER_FILES) | third_par
 	$(CC) -c $(LLHTTP_CFLAGS) $< -o $@
 
 build: $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS)
-	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) $(OUR_SRC_FILES) -o tests $(LFLAGS)
+	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) tests.c $(COMMON_SRC_FILES) -o tests $(LFLAGS)
 
-test: build
+build_tls: $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS)
+	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) tests_tls.c $(COMMON_SRC_FILES) -o tests_tls $(LFLAGS)
+
+build_mem_mgmt: $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS)
+	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) tests_mem_mgmt.c $(COMMON_SRC_FILES) -o tests_mem_mgmt $(LFLAGS)
+
+test: build build_tls build_mem_mgmt
 	./tests
+	./tests_tls
+	./tests_mem_mgmt
 
-memtest: build
+memtest: build build_tls build_mem_mgmt
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests
+	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
+		--error-exitcode=1 ./tests_tls
+	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
+		--error-exitcode=1 ./tests_mem_mgmt
 
 generate_coverage_report:
-	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) $(OUR_SRC_FILES) \
-		$(THIRD_PARTY_OBJS) -o tests $(LFLAGS) && \
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests.c $(COMMON_SRC_FILES) \
+		$(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-chttpserver && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent \
 		--capture --directory . --output-file chttpserver.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpserver.c.info \
-		--output-directory coverage && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info
+		--output-directory coverage/tests && \
+	rm -rf *.gcno *.gcda *.gcov *.c.info tests
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_tls.c $(COMMON_SRC_FILES) \
+		$(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) -o tests_tls $(LFLAGS) && \
+	./tests_tls && \
+	gcov -d -w tests_tls-chttpserver && \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent \
+		--capture --directory . --output-file chttpserver_tls.c.info && \
+	genhtml --ignore-errors inconsistent -s chttpserver_tls.c.info \
+		--output-directory coverage/tests_tls && \
+	rm -rf *.gcno *.gcda *.gcov *.c.info tests_tls
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_mem_mgmt.c $(COMMON_SRC_FILES) \
+		$(THIRD_PARTY_OBJS) $(LLHTTP_OBJS) -o tests_mem_mgmt $(LFLAGS) && \
+	./tests_mem_mgmt && \
+	gcov -d -w tests_mem_mgmt-chttpserver && \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent \
+		--capture --directory . --output-file chttpserver_mem_mgmt.c.info && \
+	genhtml --ignore-errors inconsistent -s chttpserver_mem_mgmt.c.info \
+		--output-directory coverage/tests_mem_mgmt && \
+	rm -rf *.gcno *.gcda *.gcov *.c.info tests_mem_mgmt
 
-all: build test memtest generate_coverage_report
+all: build build_tls build_mem_mgmt test memtest generate_coverage_report
 
 clean:
-	rm -rf tests third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
+	rm -rf tests tests_tls tests_mem_mgmt third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
 
-default: build
+default: build build_tls build_mem_mgmt

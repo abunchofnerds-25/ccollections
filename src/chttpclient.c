@@ -552,6 +552,12 @@ static char *_merge_ref_path(ccol_memmgmt_procs_t *mp,
  * The result is always re-parsed by _parse_chttp_url on the next hop, so
  * this function does not need to know anything about userinfo/credential
  * carry-forward; that is handled by each tier's own hop loop.
+ *
+ * Dot-segment removal (RFC 3986 SS5.2.4) is applied to the path component
+ * only; a query string is always split off first and re-appended verbatim
+ * afterward, on every branch below that can produce one, so a query value
+ * that happens to contain "/", "..", or "." bytes is never reinterpreted as
+ * path navigation.
  */
 static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
                                    const chttp_url_t *base,
@@ -583,35 +589,50 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
   bool default_port = (base->is_https && base->port == 443) ||
                       (!base->is_https && base->port == 80);
 
+  /* Split R.query off of R.path ONCE, up front, shared by both branches
+   * below: remove_dot_segments (RFC 3986 SS5.2.4) must operate on the path
+   * component only, never on query bytes, since a literal ".."/"." inside
+   * a query value must never be reinterpreted as path navigation (e.g. a
+   * query containing "/../" would otherwise cause dot-segment removal to
+   * walk backwards through, and delete, path segments it was never meant to
+   * touch). ref_query (if any) is re-appended untouched after dot-segment
+   * removal has run, for both branches. */
+  const char *ref_query = strchr(location, '?');
+  size_t ref_path_len =
+      ref_query ? (size_t)(ref_query - location) : strlen(location);
+
   char *new_path = NULL;
   if (location[0] == '/') {
     /* Absolute-path reference: T.path = remove_dot_segments(R.path)
      * directly, no merge against the base path needed. */
-    new_path = _remove_dot_segments(mp, location);
+    char *path_only = (char *)_mem_alloc(mp, ref_path_len + 1);
+    if (path_only) {
+      memcpy(path_only, location, ref_path_len);
+      path_only[ref_path_len] = '\0';
+      new_path = _remove_dot_segments(mp, path_only);
+      _mem_free(mp, path_only);
+    }
   } else {
-    const char *ref_query = strchr(location, '?');
-    size_t ref_path_len =
-        ref_query ? (size_t)(ref_query - location) : strlen(location);
     char *merged =
         _merge_ref_path(mp, base->path_and_query, location, ref_path_len);
     if (merged) {
       new_path = _remove_dot_segments(mp, merged);
       _mem_free(mp, merged);
     }
-    if (new_path && ref_query) {
-      size_t path_len = strlen(new_path);
-      size_t query_len = strlen(ref_query);
-      char *with_query = (char *)_mem_alloc(mp, path_len + query_len + 1);
-      if (!with_query) {
-        _mem_free(mp, new_path);
-        new_path = NULL;
-      } else {
-        memcpy(with_query, new_path, path_len);
-        memcpy(with_query + path_len, ref_query, query_len);
-        with_query[path_len + query_len] = '\0';
-        _mem_free(mp, new_path);
-        new_path = with_query;
-      }
+  }
+  if (new_path && ref_query) {
+    size_t path_len = strlen(new_path);
+    size_t query_len = strlen(ref_query);
+    char *with_query = (char *)_mem_alloc(mp, path_len + query_len + 1);
+    if (!with_query) {
+      _mem_free(mp, new_path);
+      new_path = NULL;
+    } else {
+      memcpy(with_query, new_path, path_len);
+      memcpy(with_query + path_len, ref_query, query_len);
+      with_query[path_len + query_len] = '\0';
+      _mem_free(mp, new_path);
+      new_path = with_query;
     }
   }
   if (!new_path) {
@@ -1657,7 +1678,16 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
 
   if (cli->tls.ca_bundle_path) {
     fio_tls_trust(ctx, cli->tls.ca_bundle_path);
-  } else if (cli->tls.verify_peer) {
+  } else if (cli->tls.verify_peer || cli->tls.verify_host) {
+    /* verify_host implies verify_peer: hostname matching against a
+     * certificate whose chain was never validated (SSL_VERIFY_NONE, no
+     * trust store configured) gives no real security guarantee: the
+     * certificate itself could be entirely attacker-forged. Without this,
+     * a caller setting verify_peer=false, verify_host=true (plausible if
+     * the two are read as independent toggles, which chttp_tls_config_t's
+     * field comments now warn against) got a false sense of security: the
+     * hostname check would run and "pass" against literally any
+     * self-signed certificate for that hostname. */
     fio_tls_trust_system(ctx);
   }
 

@@ -7,10 +7,10 @@ License: MIT
 #endif
 
 /**
- * A dynamic type for reading / writing to a local file,  a temporary file or an
+ * A dynamic type for reading / writing to a local file, a temporary file or an
  * in-memory string.
  *
- * Supports basic reak, write, seek, puts and gets operations.
+ * Supports basic read, write and seek operations.
  *
  * Writing is always performed at the end of the stream / memory buffer,
  * ignoring the current seek position.
@@ -76,6 +76,19 @@ static inline void fiobj_data_pre_write(FIOBJ o, uintptr_t length) {
         fiobj_data_copy_buffer(o);
       }
       break;
+  }
+  /* `len + length` can wrap a size_t; an unguarded wrap here would let the
+   * capacity check below pass (or compute an undersized capacity) without
+   * actually growing the buffer, while the caller (fiobj_data_write, in
+   * particular) still goes on to memcpy the full, un-wrapped `length` bytes
+   * into it - a heap buffer overflow. Not currently reachable with this
+   * codebase's own callers (bodies are bounded by max_body_size upstream of
+   * every fiobj_data_write call), but this is a general-purpose function
+   * with a public FIOBJ entry point (fiobj_data_write), so the overflow
+   * class itself is worth closing regardless. */
+  if (length > SIZE_MAX - obj2io(o)->len) {
+    perror("FATAL ERROR: fiobj IO buffer size overflow");
+    exit(EOVERFLOW);
   }
   if (obj2io(o)->capa >= obj2io(o)->len + length) return;
   /* add rounded pages (4096) to capacity */
@@ -156,8 +169,17 @@ static fio_str_info_s fio_io2str(const FIOBJ o) {
 
 static size_t fiobj_data_iseq(const FIOBJ self, const FIOBJ other) {
   int64_t len;
-  return ((len = fiobj_data_i(self)) == fiobj_data_i(other) &&
-          !memcmp(fio_io2str(self).data, fio_io2str(other).data, (size_t)len));
+  if ((len = fiobj_data_i(self)) != fiobj_data_i(other)) return 0;
+  if (len <= 0) return 1; /* both empty/zero-length; nothing to compare */
+  fio_str_info_s a = fio_io2str(self);
+  fio_str_info_s b = fio_io2str(other);
+  /* fio_io2str's file-backed path can return {.data=NULL} if its internal
+   * pread doesn't return the full requested length (e.g. the backing file
+   * shrank or its fd went bad between the fiobj_data_i length check above
+   * and this read) - len > 0 with a NULL a.data/b.data was previously
+   * possible here, and memcmp(NULL, ..., len>0) is undefined behavior. */
+  if (!a.data || !b.data) return 0;
+  return !memcmp(a.data, b.data, (size_t)len);
 }
 
 uintptr_t fiobject___noop_count(FIOBJ o);
@@ -312,7 +334,19 @@ static fio_str_info_s fiobj_data_read_str(FIOBJ io, intptr_t length) {
 
 /** Reads up to `length` bytes */
 static fio_str_info_s fiobj_data_read_file(FIOBJ io, intptr_t length) {
-  uintptr_t fsize = fiobj_data_get_fd_size(io);
+  int64_t fsize = fiobj_data_get_fd_size(io);
+  if (fsize < 0) {
+    /* fstat failed (e.g. the backing tmpfile's fd went bad under this
+     * object out from under it). fsize was previously stored into a
+     * uintptr_t, silently turning fiobj_data_get_fd_size's -1 error
+     * sentinel into SIZE_MAX; the `length = (fsize - pos) + length` below
+     * would then compute a huge bogus length that flows unbounded into
+     * fiobj_data_pre_write's buffer growth and this function's own pread()
+     * call. Fail cleanly instead, matching fiobj_data_read_str's own EOF
+     * return shape. */
+    errno = EIO;
+    return (fio_str_info_s){.data = NULL, .len = 0};
+  }
 
   if (length <= 0) {
     /* read to EOF - length */

@@ -18,10 +18,19 @@ Expands to a chttp_tls_config_t initialiser with:
   cert_path      = NULL  (no client certificate)
   key_path       = NULL  (no client key)
 .fi
+.PP
+verify_host always implies verify_peer in practice: hostname matching
+against a certificate whose chain was never validated gives no real
+security guarantee, since the certificate itself could be forged.
+Setting verify_peer = false with verify_host left at true (the
+CHTTP_TLS_DEFAULT value) still performs full certificate verification.
+To disable all server certificate checking, set both verify_peer and
+verify_host to false.
 .SH EXAMPLES
 .nf
 chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
 tls.verify_peer = false;
+tls.verify_host = false;
 chttpclient_set_tls(cli, &tls);
 .fi
 .SH "SEE ALSO"

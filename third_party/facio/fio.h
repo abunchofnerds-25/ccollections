@@ -308,7 +308,17 @@ Memory pool / custom allocator for short lived objects
 
 ***************************************************************************** */
 
-/* inform the compiler that the returned value is aligned on 16 byte marker */
+/* inform the compiler that the returned value is aligned on 16 byte marker.
+ * NOTE: fio_malloc/fio_calloc/fio_realloc/fio_realloc2/fio_mmap can be
+ * redirected at runtime to a caller-supplied custom allocator (see
+ * fio_set_mem_mgmt_procs / chttpsvr_set_engine_mem_mgmt_procs); this
+ * attribute is NOT conditioned on whether that redirection is active, so
+ * every custom allocator installed this way must itself return memory
+ * aligned to at least 16 bytes, or every call site that sees these
+ * declarations is building on a false compiler assumption. See the
+ * "Hard requirement" note on chttpsvr_set_engine_mem_mgmt_procs
+ * (chttpserver.h) and the runtime check in fio.c's
+ * _fio_mem_procs_check_align16. */
 #if FIO_FORCE_MALLOC
 #define FIO_ALIGN
 #define FIO_ALIGN_NEW
@@ -683,6 +693,38 @@ void fio_force_read_rearm(intptr_t uuid);
  * once `WANT_WRITE`/a partial write is hit. Call this to arrange one.
  */
 void fio_force_write_rearm(intptr_t uuid);
+
+/**
+ * Marks `uuid`'s underlying fd as "busy" for the duration of an external
+ * raw read/wait operation performed OUTSIDE of `fio_read`/`fio_write`/
+ * `fio_write2` (e.g. a worker thread's own `poll()`+`read()` loop that
+ * bypasses the reactor entirely, such as `http1_stream_read`'s
+ * worker-driven body ingestion).
+ *
+ * `fio_read` already marks its own read window busy internally (see
+ * `fio_clear_fd`'s `rw_busy` field), which is what stops `fio_clear_fd`/
+ * `fio_force_close` from synchronously `close()`ing the fd while a call is
+ * still using it - critical because a synchronous close lets the OS hand
+ * that exact fd number to a brand-new, unrelated connection before the
+ * still-in-flight caller notices, corrupting whichever connection reads
+ * next. Code that reads the fd directly, without going through `fio_read`,
+ * gets none of that protection by default: in particular, a raw blocking
+ * `poll()` call sitting idle on the fd is invisible to `fio_review_timeout`'s
+ * idle-connection sweep only in the sense that the *sweep* doesn't know
+ * a caller is mid-wait - it can still decide the connection has been idle
+ * longer than its configured timeout and force-close it out from under
+ * that `poll()`.
+ *
+ * Call this immediately before such a raw operation and pair it with
+ * exactly one `fio_rw_busy_unmark` call afterward, on every return path
+ * (including error paths) - the same discipline `fio_read` itself follows
+ * internally. Safe to call on an already-invalid `uuid` (a no-op).
+ */
+void fio_rw_busy_mark(intptr_t uuid);
+
+/** Releases one busy mark set by `fio_rw_busy_mark`. Safe to call on an
+ * already-invalid `uuid` (a no-op). */
+void fio_rw_busy_unmark(intptr_t uuid);
 
 /**
  * Temporarily prevents `on_data` events from firing.
@@ -1520,18 +1562,56 @@ void fio_protocol_unlock(fio_protocol_s *pr, enum fio_protocol_lock_e);
 
 /* Select the correct compiler builtin method. */
 #elif __has_builtin(__sync_add_and_fetch)
-/** An atomic exchange operation, ruturns previous value */
-#define fio_atomic_xchange(p_obj, value) \
-  __sync_val_compare_and_swap((p_obj), *(p_obj), (value))
+/** An atomic exchange operation, returns previous value */
+/* A single `__sync_val_compare_and_swap((p_obj), *(p_obj), (value))` is NOT
+ * an atomic exchange: the `*(p_obj)` read happens outside the CAS, so under
+ * real contention another thread's write between that read and the CAS
+ * makes the "expected" value stale, the CAS silently fails to store
+ * `value`, and the macro nonetheless returns as if an exchange happened.
+ * Retry the CAS with the freshly-observed value until it actually succeeds,
+ * which is what a correct exchange requires. This path is currently dead
+ * code on any C11-atomics-capable toolchain (see the `__ATOMIC_RELAXED`
+ * branch above, which is what's actually compiled here) but every lock
+ * primitive in this file (fio_trylock/fio_unlock, and everything built on
+ * them) is defined in terms of fio_atomic_xchange, so it must be correct if
+ * this branch is ever the one selected. */
+#define fio_atomic_xchange(p_obj, value)                                    \
+  ({                                                                        \
+    __typeof__(*(p_obj)) __fio_ax_expected = *(p_obj);                      \
+    __typeof__(*(p_obj)) __fio_ax_actual;                                   \
+    while ((__fio_ax_actual = __sync_val_compare_and_swap(                  \
+                (p_obj), __fio_ax_expected, (value))) != __fio_ax_expected) \
+      __fio_ax_expected = __fio_ax_actual;                                  \
+    __fio_ax_expected;                                                      \
+  })
 /** An atomic addition operation */
 #define fio_atomic_add(p_obj, value) __sync_add_and_fetch((p_obj), (value))
 /** An atomic subtraction operation */
 #define fio_atomic_sub(p_obj, value) __sync_sub_and_fetch((p_obj), (value))
 
 #elif __GNUC__ > 3
-/** An atomic exchange operation, ruturns previous value */
-#define fio_atomic_xchange(p_obj, value) \
-  __sync_val_compare_and_swap((p_obj), *(p_obj), (value))
+/** An atomic exchange operation, returns previous value */
+/* A single `__sync_val_compare_and_swap((p_obj), *(p_obj), (value))` is NOT
+ * an atomic exchange: the `*(p_obj)` read happens outside the CAS, so under
+ * real contention another thread's write between that read and the CAS
+ * makes the "expected" value stale, the CAS silently fails to store
+ * `value`, and the macro nonetheless returns as if an exchange happened.
+ * Retry the CAS with the freshly-observed value until it actually succeeds,
+ * which is what a correct exchange requires. This path is currently dead
+ * code on any C11-atomics-capable toolchain (see the `__ATOMIC_RELAXED`
+ * branch above, which is what's actually compiled here) but every lock
+ * primitive in this file (fio_trylock/fio_unlock, and everything built on
+ * them) is defined in terms of fio_atomic_xchange, so it must be correct if
+ * this branch is ever the one selected. */
+#define fio_atomic_xchange(p_obj, value)                                    \
+  ({                                                                        \
+    __typeof__(*(p_obj)) __fio_ax_expected = *(p_obj);                      \
+    __typeof__(*(p_obj)) __fio_ax_actual;                                   \
+    while ((__fio_ax_actual = __sync_val_compare_and_swap(                  \
+                (p_obj), __fio_ax_expected, (value))) != __fio_ax_expected) \
+      __fio_ax_expected = __fio_ax_actual;                                  \
+    __fio_ax_expected;                                                      \
+  })
 /** An atomic addition operation */
 #define fio_atomic_add(p_obj, value) __sync_add_and_fetch((p_obj), (value))
 /** An atomic subtraction operation */
@@ -1652,26 +1732,37 @@ FIO_FUNC inline uintptr_t fio_ct_if2(uintptr_t cond, uintptr_t a, uintptr_t b) {
 #if __has_builtin(__builtin_bswap16)
 #define fio_bswap16(i) __builtin_bswap16((uint16_t)(i))
 #else
-#define fio_bswap16(i) ((((i) & 0xFFU) << 8) | (((i) & 0xFF00U) >> 8))
+/* A macro form of this (`((((i) & 0xFFU) << 8) | (((i) & 0xFF00U) >> 8))`)
+ * would evaluate `i` twice, silently misbehaving for any side-effecting
+ * argument (e.g. `fio_bswap16(x++)`). Defined as an inline function instead
+ * - only reached when the compiler lacks __builtin_bswap16. */
+FIO_FUNC inline uint16_t fio_bswap16(uint16_t i) {
+  return (uint16_t)(((i & 0xFFU) << 8) | ((i & 0xFF00U) >> 8));
+}
 #endif
 /** inplace byte swap 32 bit integer */
 #if __has_builtin(__builtin_bswap32)
 #define fio_bswap32(i) __builtin_bswap32((uint32_t)(i))
 #else
-#define fio_bswap32(i)                                \
-  ((((i) & 0xFFUL) << 24) | (((i) & 0xFF00UL) << 8) | \
-   (((i) & 0xFF0000UL) >> 8) | (((i) & 0xFF000000UL) >> 24))
+/* see fio_bswap16 above for why this is an inline function, not a macro. */
+FIO_FUNC inline uint32_t fio_bswap32(uint32_t i) {
+  return (uint32_t)(((i & 0xFFUL) << 24) | ((i & 0xFF00UL) << 8) |
+                    ((i & 0xFF0000UL) >> 8) | ((i & 0xFF000000UL) >> 24));
+}
 #endif
 /** inplace byte swap 64 bit integer */
 #if __has_builtin(__builtin_bswap64)
 #define fio_bswap64(i) __builtin_bswap64((uint64_t)(i))
 #else
-#define fio_bswap64(i)                                                  \
-  ((((i) & 0xFFULL) << 56) | (((i) & 0xFF00ULL) << 40) |                \
-   (((i) & 0xFF0000ULL) << 24) | (((i) & 0xFF000000ULL) << 8) |         \
-   (((i) & 0xFF00000000ULL) >> 8) | (((i) & 0xFF0000000000ULL) >> 24) | \
-   (((i) & 0xFF000000000000ULL) >> 40) |                                \
-   (((i) & 0xFF00000000000000ULL) >> 56))
+/* see fio_bswap16 above for why this is an inline function, not a macro. */
+FIO_FUNC inline uint64_t fio_bswap64(uint64_t i) {
+  return (uint64_t)(((i & 0xFFULL) << 56) | ((i & 0xFF00ULL) << 40) |
+                    ((i & 0xFF0000ULL) << 24) | ((i & 0xFF000000ULL) << 8) |
+                    ((i & 0xFF00000000ULL) >> 8) |
+                    ((i & 0xFF0000000000ULL) >> 24) |
+                    ((i & 0xFF000000000000ULL) >> 40) |
+                    ((i & 0xFF00000000000000ULL) >> 56));
+}
 #endif
 
 /* Note: using BIG_ENDIAN invokes false positives on some systems */
@@ -1719,25 +1810,43 @@ FIO_FUNC inline uintptr_t fio_ct_if2(uintptr_t cond, uintptr_t a, uintptr_t b) {
 
 #endif
 
+/* fio_lrot32/64 and fio_rrot32/64 used to be macros that expanded `i` twice
+ * and `bits` three times each - any call with a side-effecting argument
+ * (`fio_lrot64(x++, n)`, a function call, etc.) would silently misbehave.
+ * No current call site does that (they're all plain variable reads in
+ * hashing hot paths), but defined as inline functions removes the hazard
+ * entirely at no performance cost (trivially inlined by any optimizing
+ * build, and this project always builds -O3). */
 /** 32Bit left rotation, inlined. */
-#define fio_lrot32(i, bits) \
-  (((uint32_t)(i) << ((bits) & 31UL)) | ((uint32_t)(i) >> ((-(bits)) & 31UL)))
+FIO_FUNC inline uint32_t fio_lrot32(uint32_t i, size_t bits) {
+  return (i << (bits & 31UL)) | (i >> ((0 - bits) & 31UL));
+}
 /** 32Bit right rotation, inlined. */
-#define fio_rrot32(i, bits) \
-  (((uint32_t)(i) >> ((bits) & 31UL)) | ((uint32_t)(i) << ((-(bits)) & 31UL)))
+FIO_FUNC inline uint32_t fio_rrot32(uint32_t i, size_t bits) {
+  return (i >> (bits & 31UL)) | (i << ((0 - bits) & 31UL));
+}
 
 /** 64Bit left rotation, inlined. */
-#define fio_lrot64(i, bits) \
-  (((uint64_t)(i) << ((bits) & 63UL)) | ((uint64_t)(i) >> ((-(bits)) & 63UL)))
+FIO_FUNC inline uint64_t fio_lrot64(uint64_t i, size_t bits) {
+  return (i << (bits & 63UL)) | (i >> ((0 - bits) & 63UL));
+}
 /** 64Bit right rotation, inlined. */
-#define fio_rrot64(i, bits) \
-  (((uint64_t)(i) >> ((bits) & 63UL)) | ((uint64_t)(i) << ((-(bits)) & 63UL)))
+FIO_FUNC inline uint64_t fio_rrot64(uint64_t i, size_t bits) {
+  return (i >> (bits & 63UL)) | (i << ((0 - bits) & 63UL));
+}
 
-/** unknown size element - left rotation, inlined. */
+/** unknown size element - left rotation, inlined.
+ * NOTE: unlike fio_lrot32/64 above, this one genuinely can't be a plain
+ * inline function - `sizeof((i))` has to see the caller's own original
+ * type to pick the right rotation width, which a function parameter of a
+ * fixed type would lose. `i` and `bits` are each still expanded more than
+ * once; only ever called (as of this writing) with plain variable
+ * arguments with no side effects - keep it that way, or add a _Generic
+ * dispatch to type-specific inline functions instead. */
 #define fio_lrot(i, bits)                         \
   (((i) << ((bits) & ((sizeof((i)) << 3) - 1))) | \
    ((i) >> ((-(bits)) & ((sizeof((i)) << 3) - 1))))
-/** unknown size element - right rotation, inlined. */
+/** unknown size element - right rotation, inlined. See fio_lrot's note. */
 #define fio_rrot(i, bits)                         \
   (((i) >> ((bits) & ((sizeof((i)) << 3) - 1))) | \
    ((i) << ((-(bits)) & ((sizeof((i)) << 3) - 1))))
@@ -1763,34 +1872,37 @@ FIO_FUNC inline uintptr_t fio_ct_if2(uintptr_t cond, uintptr_t a, uintptr_t b) {
               (((uint64_t)((uint8_t *)(c))[5]) << 16) | \
               (((uint64_t)((uint8_t *)(c))[6]) << 8) | (((uint8_t *)(c))[7])))
 
+/* fio_u2str16/32/64 used to be macros that expanded `buffer` 2/4/8 times and
+ * `i` the same number of times - any call with a side-effecting argument
+ * would silently misbehave (e.g. write through the wrong offset, or convert
+ * a different value in each expansion). No current call site does that,
+ * but defined as inline functions removes the hazard entirely at no
+ * performance cost. */
 /** Writes a local 16 bit number to an unaligned buffer in network order. */
-#define fio_u2str16(buffer, i)                              \
-  do {                                                      \
-    ((uint8_t *)(buffer))[0] = ((uint16_t)(i) >> 8) & 0xFF; \
-    ((uint8_t *)(buffer))[1] = ((uint16_t)(i)) & 0xFF;      \
-  } while (0);
+FIO_FUNC inline void fio_u2str16(void *buffer, uint16_t i) {
+  ((uint8_t *)buffer)[0] = (uint8_t)((i >> 8) & 0xFF);
+  ((uint8_t *)buffer)[1] = (uint8_t)(i & 0xFF);
+}
 
 /** Writes a local 32 bit number to an unaligned buffer in network order. */
-#define fio_u2str32(buffer, i)                               \
-  do {                                                       \
-    ((uint8_t *)(buffer))[0] = ((uint32_t)(i) >> 24) & 0xFF; \
-    ((uint8_t *)(buffer))[1] = ((uint32_t)(i) >> 16) & 0xFF; \
-    ((uint8_t *)(buffer))[2] = ((uint32_t)(i) >> 8) & 0xFF;  \
-    ((uint8_t *)(buffer))[3] = ((uint32_t)(i)) & 0xFF;       \
-  } while (0);
+FIO_FUNC inline void fio_u2str32(void *buffer, uint32_t i) {
+  ((uint8_t *)buffer)[0] = (uint8_t)((i >> 24) & 0xFF);
+  ((uint8_t *)buffer)[1] = (uint8_t)((i >> 16) & 0xFF);
+  ((uint8_t *)buffer)[2] = (uint8_t)((i >> 8) & 0xFF);
+  ((uint8_t *)buffer)[3] = (uint8_t)(i & 0xFF);
+}
 
 /** Writes a local 64 bit number to an unaligned buffer in network order. */
-#define fio_u2str64(buffer, i)                                 \
-  do {                                                         \
-    ((uint8_t *)(buffer))[0] = (((uint64_t)(i) >> 56) & 0xFF); \
-    ((uint8_t *)(buffer))[1] = (((uint64_t)(i) >> 48) & 0xFF); \
-    ((uint8_t *)(buffer))[2] = (((uint64_t)(i) >> 40) & 0xFF); \
-    ((uint8_t *)(buffer))[3] = (((uint64_t)(i) >> 32) & 0xFF); \
-    ((uint8_t *)(buffer))[4] = (((uint64_t)(i) >> 24) & 0xFF); \
-    ((uint8_t *)(buffer))[5] = (((uint64_t)(i) >> 16) & 0xFF); \
-    ((uint8_t *)(buffer))[6] = (((uint64_t)(i) >> 8) & 0xFF);  \
-    ((uint8_t *)(buffer))[7] = (((uint64_t)(i)) & 0xFF);       \
-  } while (0);
+FIO_FUNC inline void fio_u2str64(void *buffer, uint64_t i) {
+  ((uint8_t *)buffer)[0] = (uint8_t)((i >> 56) & 0xFF);
+  ((uint8_t *)buffer)[1] = (uint8_t)((i >> 48) & 0xFF);
+  ((uint8_t *)buffer)[2] = (uint8_t)((i >> 40) & 0xFF);
+  ((uint8_t *)buffer)[3] = (uint8_t)((i >> 32) & 0xFF);
+  ((uint8_t *)buffer)[4] = (uint8_t)((i >> 24) & 0xFF);
+  ((uint8_t *)buffer)[5] = (uint8_t)((i >> 16) & 0xFF);
+  ((uint8_t *)buffer)[6] = (uint8_t)((i >> 8) & 0xFF);
+  ((uint8_t *)buffer)[7] = (uint8_t)(i & 0xFF);
+}
 
 /* *****************************************************************************
 
@@ -3150,14 +3262,23 @@ inline FIO_FUNC fio_str_info_s fio_str_write_i(fio_str_s *s, int64_t num) {
   char buf[22];
   uint64_t l = 0;
   uint8_t neg;
+  /* Compute the magnitude in unsigned arithmetic rather than `num = 0 -
+   * num` on the signed int64_t: the latter is UB (and, in practice, a
+   * no-op that leaves num negative) when num == INT64_MIN, which has no
+   * positive int64_t representation. Unsigned negation is well-defined
+   * (wraps modulo 2^64) and yields the correct magnitude for every
+   * representable num, INT64_MIN included. */
+  uint64_t mag;
   if ((neg = (num < 0))) {
-    num = 0 - num;
+    mag = (uint64_t)0 - (uint64_t)num;
     neg = 1;
+  } else {
+    mag = (uint64_t)num;
   }
-  while (num) {
-    uint64_t t = num / 10;
-    buf[l++] = '0' + (num - (t * 10));
-    num = t;
+  while (mag) {
+    uint64_t t = mag / 10;
+    buf[l++] = '0' + (mag - (t * 10));
+    mag = t;
   }
   if (neg) {
     buf[l++] = '-';
@@ -3608,7 +3729,9 @@ FIO_FUNC inline intptr_t FIO_NAME(__rel2absolute)(FIO_NAME(s) * ary,
 
 /** Makes sure that `len` positions are available at the Array's end. */
 FIO_FUNC void FIO_NAME(__require_on_top)(FIO_NAME(s) * ary, size_t len) {
-  if (ary->end + len < ary->capa) return;
+  /* `<=`, not `<`: when end+len == capa exactly, the array already fits
+   * with zero slack and a reallocation would be pure unnecessary work. */
+  if (ary->end + len <= ary->capa) return;
   len = FIO_ARY_SIZE2WORDS((len + ary->end));
   /* reallocate enough memory */
   ary->arry = FIO_ARY_REALLOC(ary->arry, sizeof(*ary->arry) * ary->capa,

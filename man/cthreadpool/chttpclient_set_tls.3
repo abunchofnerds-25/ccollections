@@ -25,6 +25,12 @@ lazily, at the time an HTTPS request actually needs them, rather than
 here; a path that does not currently exist is accepted here without
 error and only surfaces as ccol_http_tls_cert_verification_failed from
 chttpclient_do/chttpclient_do_streaming once a request needs it.
+
+verify_host always implies verify_peer: a request run with
+verify_peer = false but verify_host = true still performs full
+certificate chain verification, since hostname matching against an
+unverified certificate provides no real security guarantee. See
+CHTTP_TLS_DEFAULT(3) for details.
 .fi
 .SH PARAMETERS
 .nf

@@ -3044,6 +3044,8 @@ chttpclient_set_tls(cli, &tls2);
 
 Pass `NULL` to restore the defaults.
 
+`verify_host` always implies `verify_peer` in practice: hostname matching against a certificate whose chain was never validated gives no real security guarantee, since the certificate itself could be entirely forged. Setting `verify_peer = false, verify_host = true` does not get you "hostname-only checking with no chain trust"; it gets full verification (using the system CA store, or `ca_bundle_path` if set), the same as `verify_peer = true` would. To genuinely disable all server certificate checking, set both `verify_peer = false` and `verify_host = false`, as in the example above.
+
 ### Connection Pool Behaviour
 
 Each `chttpcli` handle has two independent layers:
@@ -3055,7 +3057,7 @@ Each `chttpcli` handle has two independent layers:
 
 Redirects (`chttpclient_do` and `chttpclient_do_streaming` both follow up to 50 hops) apply an explicit method/body policy on each hop: 301, 302, and 303 rewrite the method to a bodyless GET (HEAD is left as HEAD), while 307 and 308 preserve the original method and resend the original body.
 
-A `Location` header may be an absolute URL, a protocol-relative reference (`//host/path`), an absolute-path reference (`/foo`), or a general relative reference (`foo`, `../foo`, `./foo`, `?query`); all are resolved per RFC 3986. If the original request URL embedded credentials, the resulting `Authorization: Basic ...` header is resent on every subsequent hop as long as the redirect stays on the same origin (scheme + host + port); it is dropped permanently (and never re-acquired even if a later hop redirects back to the original origin) the first time a hop changes origin. This matches curl's default (non `--location-trusted`) behavior and prevents credentials from leaking to an unexpected host via a redirect. A caller-supplied `Authorization` header set explicitly on the request is unaffected by any of this.
+A `Location` header may be an absolute URL, a protocol-relative reference (`//host/path`), an absolute-path reference (`/foo`), or a general relative reference (`foo`, `../foo`, `./foo`, `?query`); all are resolved per RFC 3986. Dot-segment normalization (`..`, `.`) only ever rewrites the path component; a query string is always carried forward byte-for-byte, even one that happens to contain `/`, `..`, or `.` characters. If the original request URL embedded credentials, the resulting `Authorization: Basic ...` header is resent on every subsequent hop as long as the redirect stays on the same origin (scheme + host + port); it is dropped permanently (and never re-acquired even if a later hop redirects back to the original origin) the first time a hop changes origin. This matches curl's default (non `--location-trusted`) behavior and prevents credentials from leaking to an unexpected host via a redirect. A caller-supplied `Authorization` header set explicitly on the request is unaffected by any of this.
 
 ### Scoped Variant
 
@@ -3334,6 +3336,15 @@ swapping allocators once the engine has already allocated memory with the
 previous one would produce mismatched malloc/free pairs. Passing NULL later
 (also before the first start, or after the engine has fully stopped) reverts
 to the default facio arena/libc behavior.
+
+Every pointer `mp`'s `malloc`/`calloc`/`realloc` returns must be aligned to
+at least 16 bytes: the engine's allocation entry points are compiler-annotated
+as always returning 16-byte-aligned memory regardless of whether custom procs
+are installed, so a misaligned pointer from a non-conforming allocator is
+undefined behavior under optimization, not merely a missed optimization hint.
+Standard `malloc`/`calloc`/`realloc` already satisfy this on glibc/x86-64;
+this only matters for a bump/pool/arena-style custom allocator with a smaller
+natural alignment.
 
 ### Quick Start
 

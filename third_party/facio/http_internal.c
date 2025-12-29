@@ -6,19 +6,26 @@ Feel free to copy, use and enjoy according to the license provided.
 */
 #include <http1.h>
 #include <http_internal.h>
+#include <stdatomic.h>
 
 /* *****************************************************************************
 Internal Request / Response Handlers
 ***************************************************************************** */
 
-static uint64_t http_upgrade_hash = 0;
+/* _Atomic: this lazy-init runs from both the reactor thread and the
+ * worker-thread-driven request path, unsynchronized plain reads/writes of a
+ * shared static are a data race under the C11 memory model even though
+ * every racing writer computes the same idempotent value. _Atomic costs
+ * nothing extra here (a single aligned load/store, no lock) and removes
+ * the race formally, not just in practice. */
+static _Atomic uint64_t http_upgrade_hash = 0;
 /** Use this function to handle HTTP requests.*/
 void http_on_request_handler______internal(http_s *h,
                                            http_settings_s *settings) {
   if (!http_upgrade_hash) http_upgrade_hash = fiobj_hash_string("upgrade", 7);
   h->udata = settings->udata;
 
-  static uint64_t host_hash = 0;
+  static _Atomic uint64_t host_hash = 0;
   if (!host_hash) host_hash = fiobj_hash_string("host", 4);
 
   if (1) {
@@ -38,6 +45,18 @@ void http_on_request_handler______internal(http_s *h,
 
 upgrade:
   if (1) {
+    /* A client sending more than one `Upgrade:` header line stores the
+     * duplicate as a FIOBJ_T_ARRAY (see set_header_add in http1.c), not a
+     * plain string, unlike the Host-header lookup above which already
+     * guards against this. fiobj_obj2cstr on an array returns
+     * {.data=NULL} (fiobject___noop_to_str), and val.data[0] below was
+     * previously dereferenced unconditionally: a trivial, remotely
+     * triggerable NULL-pointer-dereference crash from any request with two
+     * Upgrade: header lines. fiobj_ary_index(t, -1) returns a
+     * temporary/borrowed reference to the last occurrence, matching the
+     * "duplicate headers: last one wins" convention already used for the
+     * Host header just above. */
+    if (FIOBJ_TYPE_IS(t, FIOBJ_T_ARRAY)) t = fiobj_ary_index(t, -1);
     fiobj_dup(t); /* allow upgrade name access after http_finish */
     fio_str_info_s val = fiobj_obj2cstr(t);
     if (val.data[0] == 'h' && val.data[1] == '2') {
@@ -75,8 +94,17 @@ Internal helpers
 int http_send_error2(size_t error, intptr_t uuid, http_settings_s *settings) {
   if (!uuid || !settings || !error) return -1;
   fio_protocol_s *pr = http1_new(uuid, settings, NULL, 0);
+  /* Was previously a single FIO_ASSERT(pr, "...response object...") placed
+   * after both allocations, whose message actually describes `r` while the
+   * condition it tested was `pr` - and `r` itself was never checked at all,
+   * so an OOM on the fio_malloc below (this is, after all, the "server
+   * already under memory pressure" error-reporting path) would fall through
+   * to http_s_new(r, ...) dereferencing a NULL `r`. Checked separately, each
+   * with its own accurate message, matching http1_new's own
+   * FIO_ASSERT_ALLOC(p) convention for the same class of allocation. */
+  FIO_ASSERT(pr, "Couldn't allocate the HTTP/1.1 protocol for error report.");
   http_s *r = fio_malloc(sizeof(*r));
-  FIO_ASSERT(pr, "Couldn't allocate response object for error report.");
+  FIO_ASSERT(r, "Couldn't allocate response object for error report.");
   http_s_new(r, (http_fio_protocol_s *)pr, http1_vtable());
   int ret = http_send_error(r, error);
   fio_close(uuid);

@@ -2855,7 +2855,7 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 
 ## 18. HTTP Client - `chttpclient`
 
-`chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: a vendored `llhttp` parser drives request/response framing over raw sockets, TLS is provided by the same vendored facil.io ("facio") OpenSSL layer that backs `chttpserver`, and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library.
+`chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: an internal `chttp1_parser` module drives request/response framing over raw sockets, TLS is provided by the same vendored facil.io ("facio") OpenSSL layer that backs `chttpserver`, and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library.
 
 **Supported URL forms:** `http://`/`https://` only. Both a plain hostname/IPv4 literal and a bracketed IPv6 literal (`https://[::1]:8443/path`) are accepted. A URL may embed credentials (`http://user:pass@host/path`); they are turned into an `Authorization: Basic ...` header automatically unless the request already sets its own `Authorization` header. A trailing `#fragment` is recognized and discarded (fragments are a client-side-only concept and are never sent to a server). See "Redirect Following" below for how embedded credentials interact with redirects to a different origin.
 

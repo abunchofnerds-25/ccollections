@@ -3985,10 +3985,11 @@ TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
      worker's own error response could ever be written), so headers2str
      forces Connection: close into the response that is about to go out and
      the socket closes gracefully only after that response is flushed. This
-     test exercises a distinct llhttp parse-error class hitting that same
-     path: malformed chunk-size framing in a Transfer-Encoding: chunked body
-     (caught by http1_on_body_chunk's chunk-size decoder), not a
-     max_body_size/declared-length check. */
+     test exercises a distinct parse-error class hitting that same path:
+     malformed chunk-size framing in a Transfer-Encoding: chunked body
+     (caught by http1_on_body_chunk's own chunk-size decoder, part of the
+     vendored facio http1.c parser this server is built on -- chttpserver
+     never uses llhttp at all), not a max_body_size/declared-length check. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -3999,8 +4000,8 @@ TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
   REQUIRE_TRUE(fd >= 0);
   REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
-  /* "ZZZZ" is not a valid hex chunk-size token; llhttp must reject it while
-     consuming the body on the worker thread, well after routing (at
+  /* "ZZZZ" is not a valid hex chunk-size token; the parser must reject it
+     while consuming the body on the worker thread, well after routing (at
      headers-complete time) has already matched /stream-error-report. */
   const char *req =
       "POST /stream-error-report HTTP/1.1\r\n"

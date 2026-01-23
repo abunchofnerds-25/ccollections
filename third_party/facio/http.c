@@ -11,6 +11,7 @@ Feel free to copy, use and enjoy according to the license provided.
 #include <http1.h>
 #include <http_internal.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -60,7 +61,13 @@ Small Helpers
 static inline int hex2byte(uint8_t *dest, const uint8_t *source);
 
 static inline void add_content_length(http_s *r, uintptr_t length) {
-  static uint64_t cl_hash = 0;
+  /* _Atomic: this lazy-init runs from both the reactor thread and the
+   * worker-thread-driven response path, unsynchronized plain reads/writes
+   * of a shared static are a data race under the C11 memory model even
+   * though every racing writer computes the same idempotent value. _Atomic
+   * costs nothing extra here (a single aligned load/store, no lock) and
+   * removes the race formally, not just in practice. */
+  static _Atomic uint64_t cl_hash = 0;
   if (!cl_hash) cl_hash = fiobj_hash_string("content-length", 14);
   if (!fiobj_hash_get2(r->private_data.out_headers, cl_hash)) {
     fiobj_hash_set(r->private_data.out_headers, HTTP_HEADER_CONTENT_LENGTH,
@@ -72,9 +79,10 @@ static FIOBJ current_date;
 static time_t last_date_added;
 static fio_lock_i date_lock;
 static inline void add_date(http_s *r) {
-  static uint64_t date_hash = 0;
+  /* see the matching comment on add_content_length's cl_hash above. */
+  static _Atomic uint64_t date_hash = 0;
   if (!date_hash) date_hash = fiobj_hash_string("date", 4);
-  static uint64_t mod_hash = 0;
+  static _Atomic uint64_t mod_hash = 0;
   if (!mod_hash) mod_hash = fiobj_hash_string("last-modified", 13);
 
   if (fio_last_tick().tv_sec > last_date_added) {
@@ -91,15 +99,30 @@ static inline void add_date(http_s *r) {
     fio_unlock(&date_lock);
   }
 
+  /* `current_date` itself must never be read outside date_lock: the refresh
+   * block above frees the previous value under the lock, and a concurrent,
+   * unlocked fiobj_dup(current_date) here could increment a refcount field
+   * on memory that free just released (a use-after-free write) if that was
+   * the only other outstanding reference at the time. add_date runs on
+   * every single response, from both the reactor thread and the
+   * worker-thread-driven response path this module now supports, so this
+   * race was exercised continuously, not just on the once-per-second
+   * refresh. Take one locked, duped snapshot and reuse it for both header
+   * slots below instead of dereferencing the shared global directly. */
+  fio_lock(&date_lock);
+  FIOBJ date_snapshot = fiobj_dup(current_date);
+  fio_unlock(&date_lock);
+
   if (!fiobj_hash_get2(r->private_data.out_headers, date_hash)) {
     fiobj_hash_set(r->private_data.out_headers, HTTP_HEADER_DATE,
-                   fiobj_dup(current_date));
+                   fiobj_dup(date_snapshot));
   }
   if (r->status_str == FIOBJ_INVALID &&
       !fiobj_hash_get2(r->private_data.out_headers, mod_hash)) {
     fiobj_hash_set(r->private_data.out_headers, HTTP_HEADER_LAST_MODIFIED,
-                   fiobj_dup(current_date));
+                   fiobj_dup(date_snapshot));
   }
+  fiobj_free(date_snapshot);
 }
 
 /* *****************************************************************************
@@ -348,7 +371,19 @@ static void http_on_server_protocol_http1(intptr_t uuid, void *set,
   if (fio_uuid2fd(uuid) >= ((http_settings_s *)set)->max_clients) {
     if (!fio_http_at_capa) FIO_LOG_WARNING("HTTP server at capacity");
     fio_http_at_capa = 1;
-    http_send_error2(uuid, 503, set);
+    /* http_send_error2's real signature is (error, uuid, settings), not
+     * (uuid, error, settings); this call had them swapped. Since `set` was
+     * typed `void*`, no compiler warning caught it: `error` silently became
+     * this connection's (typically large) real uuid, clamped harmlessly to
+     * 500 by http_send_error's own bounds check, while `uuid` became the
+     * literal integer 503. http1_new(503, settings, NULL, 0) then attached a
+     * brand-new HTTP/1.1 protocol to whatever unrelated live connection
+     * happened to map to raw uuid 503 in facio's fd table (plausible
+     * specifically because the server is already over capacity, i.e. many
+     * connections are open) and wrote a spurious response onto it, then
+     * closed it too, on top of the caller's own fio_close(uuid) for the
+     * actual over-capacity connection just below. */
+    http_send_error2(503, uuid, set);
     fio_close(uuid);
     return;
   }
@@ -489,7 +524,14 @@ void http_write_log(http_s *h) {
     fio_lock(&date_lock);
     date = fiobj_dup(current_date);
     fio_unlock(&date_lock);
-    fiobj_str_join(l, current_date);
+    /* Was `fiobj_str_join(l, current_date)`: the dup above was taken
+     * specifically so this join would operate on a safely-referenced
+     * snapshot, but the join itself read the shared `current_date` global
+     * directly instead of the local `date` handle it was dup'd into -
+     * leaving the same unlocked-read-races-locked-free hazard fixed in
+     * add_date's identical pattern, just with a pointless dup/free sitting
+     * right next to it doing nothing. */
+    fiobj_str_join(l, date);
     fiobj_free(date);
   }
   fiobj_str_write(l, "] \"", 3);

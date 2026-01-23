@@ -29,6 +29,16 @@ before the next chttpsvr_start.
 If mp is non-NULL, all four function pointers (malloc, free, calloc,
 realloc) must be set.
 
+Hard requirement: every pointer returned by mp's malloc/calloc/realloc
+must be aligned to at least 16 bytes.  The engine's allocation entry
+points are compiler-annotated as always returning 16-byte-aligned
+memory, and that annotation applies regardless of whether custom procs
+are installed; a misaligned pointer from a non-conforming allocator is
+undefined behavior, not merely a missed optimization.  Standard
+malloc/calloc/realloc on glibc/x86-64 already satisfy this; it is only
+a concern for a bump/pool/arena-style custom allocator with a smaller
+natural alignment.
+
 A small, fixed amount of memory is always allocated once via mmap at
 library load time, before any call to this function is possible; this
 is harmless and freed normally at process exit, but it means a custom

@@ -151,7 +151,16 @@ typedef struct chttp_tls_config {
   const char *key_path;  /* server key  / client key  for mTLS (NULL = none) */
   const char *ca_bundle_path; /* custom CA bundle path; NULL = system default */
   bool verify_peer; /* client: verify server certificate (default: true) */
-  bool verify_host; /* client: verify server hostname   (default: true) */
+  /* client: verify server hostname against the certificate (default: true).
+   * NOTE: verify_host always implies verify_peer in practice; hostname
+   * matching against a certificate whose chain was never validated gives no
+   * real security guarantee, since the certificate itself could be entirely
+   * forged. Setting verify_peer=false, verify_host=true does NOT get you
+   * "hostname-only checking with no chain trust"; it gets full verification
+   * (using the system CA store, or ca_bundle_path if set), same as
+   * verify_peer=true would. To genuinely disable all server certificate
+   * checking, set both verify_peer=false AND verify_host=false. */
+  bool verify_host;
 } chttp_tls_config_t;
 
 /**

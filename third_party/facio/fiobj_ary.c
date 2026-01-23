@@ -8,7 +8,16 @@ License: MIT
 #define FIO_ARY_NAME fio_ary__
 #define FIO_ARY_TYPE FIOBJ
 #define FIO_ARY_TYPE_INVALID FIOBJ_INVALID
-#define FIO_ARY_TYPE_COMPARE(a, b) (fiobj_iseq((a), (b)))
+/* The generic array template (see fio.h) looks for FIO_ARY_COMPARE, not
+ * FIO_ARY_TYPE_COMPARE - the latter has no effect on the template at all
+ * and is silently ignored, so this definition previously did nothing:
+ * fio_ary__find/remove2/compact (inherited from the template, even though
+ * this file's own public surface doesn't currently call them) would have
+ * silently fallen back to the template's own default shallow `(o1) == (o2)`
+ * FIOBJ-handle comparison instead of the deep fiobj_iseq comparison clearly
+ * intended here - see fio_tls_openssl.c's cert_ary/trust_ary/alpn_list for
+ * the same template pattern using the correct macro name. */
+#define FIO_ARY_COMPARE(a, b) (fiobj_iseq((a), (b)))
 #define FIO_ARY_INVALID FIOBJ_INVALID
 #include <assert.h>
 #include <fio.h>

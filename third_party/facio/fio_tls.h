@@ -22,6 +22,19 @@ Feel free to copy, use and enjoy according to the license provided.
 typedef struct fio_tls_s fio_tls_s;
 
 /**
+ * Thread-safety note: fio_tls_cert_add, fio_tls_alpn_add, fio_tls_trust and
+ * fio_tls_trust_system may each be called concurrently with fio_tls_accept
+ * and/or fio_tls_connect_create on the same fio_tls_s object (e.g. a
+ * runtime SNI-cert reload racing an in-flight accept) - internally
+ * synchronized so a reload can never observe or hand out a torn/freed SSL
+ * context. They are NOT safe to call concurrently with each other on the
+ * same object from the caller's side beyond that guarantee - i.e. two
+ * concurrent fio_tls_trust calls are individually safe but their combined
+ * effect on the sni/trust/alpn containers is only as well-defined as
+ * calling them in some serial order would be.
+ */
+
+/**
  * Creates a new SSL/TLS context / settings object with a default certificate
  * (if any).
  *
@@ -148,6 +161,20 @@ typedef enum {
  *
  * `hostname` (may be NULL) is used for SNI and, if `verify_host` is nonzero,
  * for X.509 hostname verification.
+ *
+ * IMPORTANT: `verify_host` only configures the hostname/IP match target; it
+ * does NOT by itself enable certificate chain verification. Chain
+ * verification is controlled separately, at the `tls` object level, by
+ * whether `fio_tls_trust` / `fio_tls_trust_system` has been called on it.
+ * Requesting `verify_host` on a `tls` object with no trust store configured
+ * means the handshake runs with SSL_VERIFY_NONE: hostname matching against
+ * an attacker-forged, entirely unverified certificate is not a meaningful
+ * security check. Callers that want real hostname verification must ensure
+ * both are set together, not treat them as independent options - see
+ * chttp_tls_config_t's verify_peer/verify_host in chttp.h, where the two
+ * are exposed as separate booleans specifically to preserve callers'
+ * ability to disable each independently, but with verify_host implying
+ * verify_peer at the point they're translated into fio_tls_s calls.
  *
  * Returns NULL on allocation / SSL_new / BIO_new_socket failure.
  */

@@ -180,7 +180,15 @@ static int http1_on_error(http1_parser_s *parser);
 #define HTTP1_P_FLAG_HEADER_COMPLETE 2
 #define HTTP1_P_FLAG_COMPLETE 4
 #define HTTP1_P_FLAG_CLENGTH 8
-#define HTTP1_PARSER_BIT_16 16
+/* Set only by http1_consume_body_chunked's trailer-needed path, to tell the
+ * `case 1: headers` state (re-entered via its `-2` return) that the header
+ * lines it's about to parse are chunked trailer fields, not a fresh
+ * message's primary header block - see the finished_headers: label in
+ * http1_parse for why this distinction matters. Always cleared before the
+ * next message starts (parser->state is fully zeroed once HTTP1_P_FLAG_
+ * COMPLETE fires), so it can never leak across a keep-alive connection's
+ * messages. */
+#define HTTP1_P_FLAG_TRAILER 16
 #define HTTP1_PARSER_BIT_32 32
 #define HTTP1_P_FLAG_CHUNKED 64
 #define HTTP1_P_FLAG_RESPONSE 128
@@ -515,6 +523,31 @@ inline /* inline the function of it's short enough */
     return 0;
   }
 #endif /* HTTP1_ALLOW_CHUNKED_IN_MIDDLE_OF_HEADER */
+  /* Reaching here (with HTTP1_ALLOW_CHUNKED_IN_MIDDLE_OF_HEADER undefined,
+   * the default) means the two fast paths above did not find `chunked`
+   * either alone or as the last coding in the list. RFC 7230 SS3.3.1
+   * requires `chunked`, when present, to be the final transfer-coding; if
+   * it instead appears anywhere else (e.g. "chunked, gzip"), this
+   * implementation cannot reliably determine where the message body ends
+   * and must treat the message as malformed, not silently store the header
+   * as an ordinary opaque value while framing the body by Content-Length
+   * (or an implicit zero-body) instead of the chunked encoding the client
+   * is actually about to send. Falling through silently here is exactly
+   * the kind of front/back disagreement request smuggling exploits: an
+   * upstream proxy that DOES honor `chunked` appearing anywhere in the
+   * list would disagree with this server about where one request ends and
+   * the next begins. Scan for a `chunked` token properly delimited by
+   * list separators (or the value's own start/end) anywhere in the value
+   * and reject outright if found. */
+  for (uint8_t *p = start_value; p + 7 <= end; ++p) {
+    if ((p[0] | 32) == 'c' && (p[1] | 32) == 'h' && (p[2] | 32) == 'u' &&
+        (p[3] | 32) == 'n' && (p[4] | 32) == 'k' && (p[5] | 32) == 'e' &&
+        (p[6] | 32) == 'd' &&
+        (p == start_value || p[-1] == ',' || p[-1] == ' ') &&
+        (p + 7 == end || p[7] == ',' || p[7] == ' ' || p[7] == ';')) {
+      return -1;
+    }
+  }
   /* perform callback */
   if (http1_on_header(parser, (char *)start, (end_name - start),
                       (char *)start_value, end - start_value))
@@ -537,6 +570,16 @@ inline static int http1_consume_header_top(http1_parser_s *parser,
       return 0; /* ignore if `chunked` */
     long long old_clen = parser->state.content_length;
     parser->state.content_length = http1_atol(start_value, NULL);
+    if (parser->state.content_length < 0) {
+      /* http1_atol honors a leading '-', so "Content-Length: -1" parsed
+       * without this check: http1_consume_body treats content_length <= 0
+       * as "no body, already complete" the instant headers finish, so any
+       * body bytes the client actually sends would be silently reparsed as
+       * the start of the next pipelined request instead - a framing desync
+       * (RFC 7230 requires a negative or otherwise malformed
+       * Content-Length to be rejected, not reinterpreted). */
+      return -1;
+    }
     if ((parser->state.reserved & HTTP1_P_FLAG_CLENGTH) &&
         old_clen != parser->state.content_length) {
       /* content-length header repeated with conflict */
@@ -661,6 +704,20 @@ inline static int http1_consume_body_chunked(http1_parser_s *parser,
         return -1; /* required EOL after content length */
       end += 2;
 
+      /* http1_atol16 accumulates into an unsigned long long and only stops
+       * once the top nibble becomes non-zero, so a chunk-size hex string of
+       * 16+ digits (e.g. "ffffffffffffffff") can legitimately come back
+       * with bit 63 set - i.e. negative once read as `long long` above.
+       * `0 - chunk_len` (meant to turn a positive chunk size into the
+       * negative "bytes remaining" sentinel this parser uses) is undefined
+       * behavior for chunk_len == LLONG_MIN, and for any other negative
+       * chunk_len produces a *positive* content_length - breaking this
+       * function's invariant that content_length stays negative while
+       * mid-chunk, which sends `end = *start + (0 - content_length)` below
+       * walking backward instead of forward. No legitimate chunk size
+       * needs anywhere near 63 bits; reject it as malformed framing instead
+       * of miscomputing a corrupt byte count. */
+      if (chunk_len < 0) return -1;
       parser->state.content_length = 0 - chunk_len;
       *start = end;
       if (parser->state.content_length == 0) {
@@ -689,9 +746,16 @@ inline static int http1_consume_body_chunked(http1_parser_s *parser,
         if (*start + 2 <= stop && (start[0][0] == '\r' || start[0][0] == '\n'))
           *start += 1 + (start[0][1] == '\r' || start[0][1] == '\n');
         else {
-          /* remove the "headers complete" and "trailer" flags */
-          parser->state.reserved =
-              HTTP1_P_FLAG_STATUS_LINE | HTTP1_P_FLAG_CLENGTH;
+          /* remove the "headers complete" and "trailer" flags, and mark
+           * HTTP1_P_FLAG_TRAILER so the re-entered `case 1: headers` state
+           * (see the `-2` handling in http1_parse) knows the header lines
+           * it's about to parse are chunked trailer fields following a
+           * body that has already started (or, for a zero-chunk body,
+           * already fully "started and finished" with zero bytes) - not a
+           * fresh message's primary header block, which must never have
+           * http1_on_headers_complete invoked for it a second time. */
+          parser->state.reserved = HTTP1_P_FLAG_STATUS_LINE |
+                                   HTTP1_P_FLAG_CLENGTH | HTTP1_P_FLAG_TRAILER;
           return -2;
         }
         /* the parsing complete flag */
@@ -826,7 +890,23 @@ re_eval:
       if (*start == '\n') ++start;
       end = start;
       parser->state.reserved |= HTTP1_P_FLAG_HEADER_COMPLETE;
-      {
+      if (parser->state.reserved & HTTP1_P_FLAG_TRAILER) {
+        /* This `finished_headers:` completion is for chunked trailer
+         * fields (see HTTP1_P_FLAG_TRAILER's doc comment), not a fresh
+         * message's primary header block. http1_on_headers_complete's
+         * documented contract is "called once, before any body byte is
+         * consumed"; calling it again here - after the body has already
+         * been delivered via http1_on_body_chunk, quite possibly to a
+         * worker thread already mid-processing this exact message - would
+         * violate that and re-run whatever diversion/routing side effects
+         * it performs a second time. Skip straight to the fallthrough
+         * body-consumption case below instead: http1_consume_body will
+         * see content_length already set equal to state.read (done when
+         * the terminating 0-chunk was parsed) and mark
+         * HTTP1_P_FLAG_COMPLETE on its own, exactly like the "no trailers"
+         * fast path in http1_consume_body_chunked already does directly
+         * without ever routing through here at all. */
+      } else {
         int hc = http1_on_headers_complete(parser, start, stop - start);
         if (hc < 0) goto error;
         if (hc > 0) {

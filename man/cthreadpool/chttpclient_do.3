@@ -1,4 +1,4 @@
-.TH CHTTPCLIENT_DO 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPCLIENT_DO 3 "2026-07-11" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpclient_do \- perform an HTTP request and buffer the full response
 .SH LIBRARY
@@ -26,7 +26,10 @@ left as HEAD); 307/308 preserve the original method and body.  The
 Location header may be an absolute URL, a protocol-relative
 reference ("//host/path"), an absolute-path reference ("/foo"), or a
 general relative reference ("foo", "../foo", "./foo", "?query");
-all are resolved per RFC 3986.  If the request URL embedded
+all are resolved per RFC 3986.  Dot-segment normalization
+("..", ".") only ever rewrites the path component; a query string
+is always carried forward byte-for-byte, even one that happens to
+contain "/", "..", or "." characters.  If the request URL embedded
 credentials (see below), the resulting Authorization header is
 resent on every hop that stays on the same origin (scheme, host,
 and port) and is dropped permanently the first time a hop changes

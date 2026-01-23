@@ -221,7 +221,17 @@ typedef struct {
   uint8_t is_worker;
   /* polling and global lock */
   fio_lock_i lock;
-  /* The highest active fd with a protocol object */
+  /* The highest active fd with a protocol object. Every read and write of
+   * this field must go through max_protocol_fd_lock: fio_clear_fd is called
+   * concurrently, on different fds, from different threads under nothing
+   * but that fd's own per-fd sock_lock, which does not serialize a
+   * different fd's concurrent update to this shared field. Without a
+   * dedicated lock, one thread's raise-and-scan-down sequence can be torn
+   * by another thread's concurrent raise, silently lowering this value
+   * below the true high-water mark - after which fio_review_timeout's idle
+   * sweep and fio_worker_cleanup's shutdown loop both stop covering the
+   * fd(s) above the clobbered value. */
+  fio_lock_i max_protocol_fd_lock;
   uint32_t max_protocol_fd;
   /* timer handler */
   pid_t parent;
@@ -416,6 +426,7 @@ static inline int fio_clear_fd(intptr_t fd, uint8_t is_open) {
     fd_data(fd).rw_busy = rw_busy;
     fd_data(fd).rw_cleanup_pending = 1;
   }
+  fio_lock(&fio_data->max_protocol_fd_lock);
   if (fio_data->max_protocol_fd < fd) {
     fio_data->max_protocol_fd = fd;
   } else {
@@ -423,6 +434,7 @@ static inline int fio_clear_fd(intptr_t fd, uint8_t is_open) {
            !fd_data(fio_data->max_protocol_fd).open)
       --fio_data->max_protocol_fd;
   }
+  fio_unlock(&fio_data->max_protocol_fd_lock);
   fio_unlock(&(fd_data(fd).sock_lock));
   if (!deferred) _fio_finalize_rw_cleanup(fd, rw_hooks, rw_udata);
   while (packet) {
@@ -2224,10 +2236,13 @@ intptr_t fio_accept(intptr_t srv_uuid) {
 #ifdef SOCK_NONBLOCK
   client = accept4(fio_uuid2fd(srv_uuid), (struct sockaddr *)addrinfo, &addrlen,
                    SOCK_NONBLOCK | SOCK_CLOEXEC);
-  if (client <= 0) return -1;
+  /* accept4/accept can legitimately return fd 0 (e.g. when the process was
+   * started with stdin closed); only a negative return is a real failure.
+   * A `<= 0` check here would silently leak the just-accepted fd 0. */
+  if (client < 0) return -1;
 #else
   client = accept(fio_uuid2fd(srv_uuid), (struct sockaddr *)addrinfo, &addrlen);
-  if (client <= 0) return -1;
+  if (client < 0) return -1;
   if (fio_set_non_block(client) == -1) {
     close(client);
     return -1;
@@ -2357,7 +2372,10 @@ static intptr_t fio_tcp_socket(const char *address, const char *port,
   // get the file descriptor
   int fd =
       socket(addrinfo->ai_family, addrinfo->ai_socktype, addrinfo->ai_protocol);
-  if (fd <= 0) {
+  /* socket() can legitimately return fd 0 (e.g. when the process was
+   * started with stdin closed); only a negative return is a real failure.
+   * A `<= 0` check here would silently leak the just-created fd 0. */
+  if (fd < 0) {
     freeaddrinfo(addrinfo);
     return -1;
   }
@@ -2625,6 +2643,23 @@ Socket / Connection Functions
  * `fio_accept` or opened using `fio_connect`.
  */
 
+/* See the declarations in fio.h for the full contract. Mirrors exactly what
+ * fio_read (below) does internally around its own read call: bump rw_busy
+ * under sock_lock before the external operation, release it (via the
+ * existing fio_rw_busy_release, which also finishes any close that
+ * fio_clear_fd had to defer while busy) after. */
+void fio_rw_busy_mark(intptr_t uuid) {
+  if (!uuid_is_valid(uuid)) return;
+  fio_lock(&uuid_data(uuid).sock_lock);
+  ++uuid_data(uuid).rw_busy;
+  fio_unlock(&uuid_data(uuid).sock_lock);
+}
+
+void fio_rw_busy_unmark(intptr_t uuid) {
+  if (!uuid_is_valid(uuid)) return;
+  fio_rw_busy_release(uuid);
+}
+
 /**
  * `fio_read` attempts to read up to count bytes from the socket into the
  * buffer starting at `buffer`.
@@ -2879,6 +2914,15 @@ ssize_t fio_flush(intptr_t uuid) {
   if (tmp <= 0) {
     goto test_errno;
   }
+  /* Track real forward progress so the Slowloris check below has something
+   * to compare against. Without this, `.sent` was only ever reset to 0 (in
+   * fio_force_close) and never incremented, making `sent >= old_sent` a
+   * tautology and collapsing the "did we make progress" guard entirely -
+   * any connection with a deep write queue (packet_count >= the limit)
+   * whose head packet needed more than one fio_flush call to drain (which
+   * is ordinary TCP backpressure, not an attack) was killed as a
+   * false-positive Slowloris attack. */
+  uuid_data(uuid).sent += tmp;
 
   if (uuid_data(uuid).packet_count >= FIO_SLOWLORIS_LIMIT &&
       uuid_data(uuid).packet == old_packet &&
@@ -3404,6 +3448,7 @@ Initialize the library
 static void fio_on_fork(void) {
   fio_timer_lock = FIO_LOCK_INIT;
   fio_data->lock = FIO_LOCK_INIT;
+  fio_data->max_protocol_fd_lock = FIO_LOCK_INIT;
   fio_defer_on_fork();
   fio_malloc_after_fork();
   fio_poll_init();
@@ -3590,13 +3635,26 @@ static void fio_review_timeout(void *arg, void *ignr) {
     if (fd_data(fd).rw_hooks != &FIO_DEFAULT_RW_HOOKS) fio_close(fd2uuid(fd));
   }
 finish:
-  do {
-    fd++;
-  } while (!fd_data(fd).open && (fd <= fio_data->max_protocol_fd));
+  /* Snapshot under max_protocol_fd_lock: concurrent fio_clear_fd calls on
+   * other fds update this field without holding this fd's own sock_lock, so
+   * an unsynchronized read here is a data race. Using a single snapshot for
+   * the whole scan (rather than re-reading the live field on every
+   * iteration) also fixes a separate, pre-existing bug: the old loop
+   * condition evaluated `fd_data(fd).open` before checking `fd <=
+   * max_protocol_fd`, so once `fd` walked past a live snapshot's bound it
+   * could read one entry past the allocated fd table. */
+  fio_lock(&fio_data->max_protocol_fd_lock);
+  {
+    const uint32_t max_fd = fio_data->max_protocol_fd;
+    fio_unlock(&fio_data->max_protocol_fd_lock);
+    do {
+      fd++;
+    } while (fd <= max_fd && !fd_data(fd).open);
 
-  if (fio_data->max_protocol_fd < fd) {
-    fio_data->need_review = 1;
-    return;
+    if ((uint32_t)fd > max_fd) {
+      fio_data->need_review = 1;
+      return;
+    }
   }
 reschedule:
   fio_defer_push_task(fio_review_timeout, (void *)fd, NULL);
@@ -4000,15 +4058,23 @@ size_t fio_ltoa(char *dest, int64_t num, uint8_t base) {
       /* Base 8 */
       {
         uint64_t l = 0;
+        /* `0 - num` on a signed int64_t is UB (and, in practice, a no-op)
+         * when num == INT64_MIN, since INT64_MIN has no positive int64_t
+         * representation. Compute the magnitude in unsigned arithmetic
+         * instead, which is well-defined (wraps modulo 2^64) and yields the
+         * correct value for every representable num, INT64_MIN included. */
+        uint64_t mag;
         if (num < 0) {
           dest[len++] = '-';
-          num = 0 - num;
+          mag = (uint64_t)0 - (uint64_t)num;
+        } else {
+          mag = (uint64_t)num;
         }
         dest[len++] = '0';
 
-        while (num) {
-          buf[l++] = '0' + (num & 7);
-          num = num >> 3;
+        while (mag) {
+          buf[l++] = '0' + (mag & 7);
+          mag = mag >> 3;
         }
         while (l) {
           --l;
@@ -4055,44 +4121,59 @@ size_t fio_ltoa(char *dest, int64_t num, uint8_t base) {
     case 7: /* fallthrough */
     case 9: /* fallthrough */
       /* rare bases */
-      if (num < 0) {
-        dest[len++] = '-';
-        num = 0 - num;
+      {
+        /* see the base-8 case above for why this can't be `num = 0 - num`
+         * on the signed int64_t directly (UB / wrong result for
+         * INT64_MIN). */
+        uint64_t mag;
+        if (num < 0) {
+          dest[len++] = '-';
+          mag = (uint64_t)0 - (uint64_t)num;
+        } else {
+          mag = (uint64_t)num;
+        }
+        uint64_t l = 0;
+        while (mag) {
+          uint64_t t = mag / base;
+          buf[l++] = '0' + (mag - (t * base));
+          mag = t;
+        }
+        while (l) {
+          --l;
+          dest[len++] = buf[l];
+        }
+        dest[len] = 0;
+        return len;
       }
-      uint64_t l = 0;
-      while (num) {
-        uint64_t t = num / base;
-        buf[l++] = '0' + (num - (t * base));
-        num = t;
-      }
-      while (l) {
-        --l;
-        dest[len++] = buf[l];
-      }
-      dest[len] = 0;
-      return len;
 
     default:
       break;
   }
   /* Base 10, the default base */
 
-  if (num < 0) {
-    dest[len++] = '-';
-    num = 0 - num;
+  {
+    /* see the base-8 case above for why this can't be `num = 0 - num` on
+     * the signed int64_t directly (UB / wrong result for INT64_MIN). */
+    uint64_t mag;
+    if (num < 0) {
+      dest[len++] = '-';
+      mag = (uint64_t)0 - (uint64_t)num;
+    } else {
+      mag = (uint64_t)num;
+    }
+    uint64_t l = 0;
+    while (mag) {
+      uint64_t t = mag / 10;
+      buf[l++] = '0' + (mag - (t * 10));
+      mag = t;
+    }
+    while (l) {
+      --l;
+      dest[len++] = buf[l];
+    }
+    dest[len] = 0;
+    return len;
   }
-  uint64_t l = 0;
-  while (num) {
-    uint64_t t = num / 10;
-    buf[l++] = '0' + (num - (t * 10));
-    num = t;
-  }
-  while (l) {
-    --l;
-    dest[len++] = buf[l];
-  }
-  dest[len] = 0;
-  return len;
 
 zero:
   switch (base) {
@@ -4531,6 +4612,31 @@ comment on fio_set_mem_mgmt_procs() in fio.h for the contract.
 static ccol_memmgmt_procs_t g_fio_mem_procs;
 static bool g_fio_mem_procs_set = false;
 
+/* fio_malloc/fio_calloc/fio_realloc/fio_realloc2/fio_mmap are all declared
+ * FIO_ALIGN_NEW/FIO_ALIGN in fio.h (`__attribute__((assume_aligned(16)))`
+ * where the compiler supports it), which tells every caller across this
+ * codebase's translation units it may emit aligned loads/stores against the
+ * returned pointer. That is a safe promise as long as these functions are
+ * backed by facio's own arena (always 16-byte aligned by construction), but
+ * once a caller redirects them to custom procs via fio_set_mem_mgmt_procs
+ * (see chttpsvr_set_engine_mem_mgmt_procs in chttpserver.h), the returned
+ * pointer's alignment is only whatever that custom allocator happens to
+ * provide - ccol_memmgmt_procs_t's own contract makes no alignment
+ * guarantee at all. A misaligned pointer handed to an assume_aligned(16)
+ * call site is undefined behavior under -O3 (silent corruption or a SIGSEGV
+ * that looks nothing like a memory bug), not merely a missed optimization.
+ * This check converts that into an immediate, diagnosable failure instead. */
+static inline void *_fio_mem_procs_check_align16(void *ptr, const char *fn) {
+  FIO_ASSERT(!ptr || (((uintptr_t)ptr) & 15) == 0,
+             "custom memory management procs returned a pointer from %s "
+             "that isn't 16-byte aligned (%p) - fio_malloc/fio_calloc/"
+             "fio_realloc/fio_realloc2/fio_mmap require this of any "
+             "installed custom allocator (see chttpsvr_set_engine_mem_"
+             "mgmt_procs).",
+             fn, ptr);
+  return ptr;
+}
+
 void fio_set_mem_mgmt_procs(const struct ccol_memmgmt_procs_t *mp) {
   if (mp) {
     g_fio_mem_procs = *(const ccol_memmgmt_procs_t *)mp;
@@ -4553,6 +4659,11 @@ void *fio_malloc(size_t size) {
   return calloc(size, 1);
 }
 
+/* Note: under FIO_FORCE_MALLOC, FIO_ALIGN/FIO_ALIGN_NEW (fio.h) expand to
+ * nothing (no assume_aligned attribute is applied to these declarations in
+ * this build mode - see fio.h), so, unlike the default arena-backed build
+ * below, a custom allocator's return value here carries no alignment
+ * assumption for the compiler to violate; no alignment check is needed. */
 void *fio_calloc(size_t size_per_unit, size_t unit_count) {
   if (g_fio_mem_procs_set)
     return _mem_calloc(&g_fio_mem_procs, unit_count, size_per_unit);
@@ -5120,7 +5231,8 @@ void *fio_malloc(size_t size) {
     /* fio_calloc simply delegates to fio_malloc and relies on the result
      * being pre-zeroed (see fio_calloc below); preserve that guarantee by
      * calloc'ing through the custom procs instead of malloc'ing. */
-    return _mem_calloc(&g_fio_mem_procs, 1, size);
+    return _fio_mem_procs_check_align16(_mem_calloc(&g_fio_mem_procs, 1, size),
+                                        "fio_malloc");
   }
   /* Lazily initialize the arena on first real use, regardless of
    * FIO_OVERRIDE_MALLOC: fio_lib_init (which used to be the only caller of
@@ -5151,6 +5263,13 @@ void *fio_malloc(size_t size) {
 }
 
 void *fio_calloc(size_t size, size_t count) {
+  /* `size * count` can silently wrap on overflow; without this check a
+   * caller (e.g. FIO_SET_CALLOC-instantiated containers) would receive a
+   * far smaller buffer than the `size`/`count` it asked for and go on to
+   * write/index past its true end - a heap buffer overflow, not merely a
+   * missed allocation. Matches the standard calloc(3) contract of failing
+   * outright on overflow. */
+  if (size && count > (SIZE_MAX / size)) return NULL;
   return fio_malloc(size *
                     count);  // memory is pre-initialized by mmap or pool.
 }
@@ -5189,7 +5308,8 @@ void *fio_realloc2(void *ptr, size_t new_size, size_t copy_length) {
      * this by allocating a fresh zeroed block and memcpy-ing just that much);
      * a real realloc() would otherwise happily preserve more, so the tail
      * beyond copy_length is explicitly zeroed to match. */
-    void *new_mem = _mem_realloc(&g_fio_mem_procs, ptr, new_size);
+    void *new_mem = _fio_mem_procs_check_align16(
+        _mem_realloc(&g_fio_mem_procs, ptr, new_size), "fio_realloc2");
     if (new_mem && new_size > copy_length)
       memset((uint8_t *)new_mem + copy_length, 0, new_size - copy_length);
     return new_mem;
@@ -5224,7 +5344,8 @@ void *fio_realloc(void *ptr, size_t new_size) {
       fio_free(ptr);
       return fio_malloc(0);
     }
-    return _mem_realloc(&g_fio_mem_procs, ptr, new_size);
+    return _fio_mem_procs_check_align16(
+        _mem_realloc(&g_fio_mem_procs, ptr, new_size), "fio_realloc");
   }
   const size_t max_old =
       FIO_MEMORY_BLOCK_SIZE - ((uintptr_t)ptr & FIO_MEMORY_BLOCK_MASK);
@@ -5241,7 +5362,9 @@ void *fio_mmap(size_t size) {
   if (!size) {
     return NULL;
   }
-  if (g_fio_mem_procs_set) return _mem_calloc(&g_fio_mem_procs, 1, size);
+  if (g_fio_mem_procs_set)
+    return _fio_mem_procs_check_align16(_mem_calloc(&g_fio_mem_procs, 1, size),
+                                        "fio_mmap");
   return big_alloc(size);
 }
 

@@ -31,7 +31,7 @@ SOFTWARE.
 
 /**
  * @file chttpclient.h
- * @brief Hand-rolled HTTP/1.1 client: a vendored llhttp parser drives
+ * @brief Hand-rolled HTTP/1.1 client: an internal chttp1_parser drives
  *        request/response framing over raw sockets, with TLS provided by
  *        the same vendored facil.io ("facio") OpenSSL layer that backs
  *        chttpserver.

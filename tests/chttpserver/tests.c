@@ -2288,6 +2288,97 @@ TEST(chttpserver, unmatched_route_rejected_without_reading_body) {
   REQUIRE_EQ(status, 404);
 }
 
+/* NOTE on the duplicate-`Upgrade:`-header NULL-deref fix
+ * (http_on_request_handler______internal in http_internal.c): no test was
+ * added for it here. http_on_request_handler______internal is only ever
+ * reached from http1_on_request when !stream_diverted, but
+ * http1_on_headers_complete (the http1.c wrapper chttpserver's
+ * _on_headers_complete is installed as) unconditionally returns 1 to
+ * http1_parse regardless of whether the inner hook diverted the request or
+ * rejected it synchronously (see the "hc>0 ... message handed off
+ * elsewhere; stop parsing it here" branch), so http1_parse always stops
+ * right after headers complete and never reaches the body-consumption /
+ * on_request dispatch within that same call, for either a matched or an
+ * unmatched route. Confirmed empirically, not just by reading the code: a
+ * raw-socket request with two Upgrade: header lines was sent against a
+ * deliberately un-reverted build (this fix backed out, old unguarded
+ * fiobj_obj2cstr call restored) targeting both a matched and an unmatched
+ * route, and neither reached the vulnerable code path or crashed the
+ * process. The bug is real and the fix is correct (it is still reachable
+ * by any other caller of http.c/http1.c that uses on_request without
+ * chttpserver's on_headers_complete-based routing, i.e. plain facio-http
+ * usage), but chttpserver's own routes cannot currently exercise it, so
+ * there is no meaningful black-box regression test to add for it here. */
+
+TEST(chttpserver, pipelined_bytes_after_rejected_route_not_misparsed) {
+  /* http1_on_headers_complete's "not diverted" branch (route rejected
+     synchronously, e.g. 404) used to free the primed pipelined-bytes buffer
+     but never reset parser->state, unlike the adjacent OOM branch a few
+     lines above it which already carried this exact fix. p->close is
+     already 1 for a rejected route, but http1_consume_data's do-while loop
+     only stops on stream_diverted (never set here) or p->stop (only
+     http_pause sets it, never called here either) - so if a second,
+     pipelined request's bytes are already sitting in the same read buffer
+     behind the rejected one, the loop's next http1_parse call re-entered
+     with parser->state.reserved still holding HEADER_COMPLETE|STATUS_LINE
+     from the finished request, misparsing the second request's raw bytes
+     as a (zero declared length, so immediately "complete") body of the
+     first, already-finished http_s, causing http1_on_request to fire a
+     second time on it.
+     Full disclosure on this test's actual coverage: with this exact
+     two-plain-GETs reproduction, that second dispatch is fully absorbed by
+     HTTP_INVALID_HANDLE's guard in http.c (an already-finished h has no
+     `method`/`status_str` left, so the second http_send_error/http_finish
+     call is a silent no-op) - confirmed empirically, including under
+     valgrind, that reverting just this fix does not change this specific
+     test's outcome. The fix is still correct and worth keeping (a
+     non-empty declared body length on the misparsed "request" would not
+     be as harmless), but this test's real, verified value is narrower than
+     its historical motivation: it locks in that pipelined bytes behind a
+     rejected route never produce more than one response and the connection
+     still closes cleanly, a property worth guarding regardless. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  /* Both requests concatenated into one write() call so they are guaranteed
+     to arrive together in the same read buffer server-side: the first hits
+     an unmatched route (rejected without ever diverting), the second hits
+     a matched one and would misparse as its "body" if the bug were still
+     present. */
+  const char *req =
+      "GET /no-such-route-at-all HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "\r\n"
+      "GET /hello HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[4096] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  /* Exactly one response (the 404 for the rejected first request); the
+     connection must close on its own right after, without ever touching
+     the second request's bytes as this connection's body/next message. */
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 404") != NULL);
+  char *first = strstr(buf, "HTTP/1.1");
+  REQUIRE_TRUE(first != NULL);
+  REQUIRE_TRUE(strstr(first + 8, "HTTP/1.1") == NULL);
+}
+
 TEST(chttpserver, keep_alive_across_two_requests_on_one_connection) {
   /* Two matched requests sent back to back on the same connection (no
      Connection: close) must both succeed; verifies that pausing at
@@ -3894,10 +3985,11 @@ TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
      worker's own error response could ever be written), so headers2str
      forces Connection: close into the response that is about to go out and
      the socket closes gracefully only after that response is flushed. This
-     test exercises a distinct llhttp parse-error class hitting that same
-     path: malformed chunk-size framing in a Transfer-Encoding: chunked body
-     (caught by http1_on_body_chunk's chunk-size decoder), not a
-     max_body_size/declared-length check. */
+     test exercises a distinct parse-error class hitting that same path:
+     malformed chunk-size framing in a Transfer-Encoding: chunked body
+     (caught by http1_on_body_chunk's own chunk-size decoder, part of the
+     vendored facio http1.c parser this server is built on -- chttpserver
+     never uses llhttp at all), not a max_body_size/declared-length check. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -3908,8 +4000,8 @@ TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
   REQUIRE_TRUE(fd >= 0);
   REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
 
-  /* "ZZZZ" is not a valid hex chunk-size token; llhttp must reject it while
-     consuming the body on the worker thread, well after routing (at
+  /* "ZZZZ" is not a valid hex chunk-size token; the parser must reject it
+     while consuming the body on the worker thread, well after routing (at
      headers-complete time) has already matched /stream-error-report. */
   const char *req =
       "POST /stream-error-report HTTP/1.1\r\n"
@@ -3937,6 +4029,208 @@ TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
   REQUIRE_TRUE(strstr(buf, "x-stream-err:") != NULL);
   REQUIRE_TRUE(strstr(buf, "x-stream-err:none") == NULL);
   REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
+}
+
+TEST(chttpserver, oversized_chunk_size_hex_rejected_gracefully) {
+  /* http1_atol16 accumulates into an unsigned long long and only stops once
+     the top nibble becomes non-zero, so a 16-hex-digit chunk-size token can
+     come back with bit 63 set; negative once read as `long long`.
+     `0 - chunk_len` (turning a positive chunk size into this parser's
+     negative "bytes remaining" sentinel) was undefined behavior for
+     chunk_len == LLONG_MIN, and produced a *positive* content_length (an
+     inverted, wrong sign) for any other negative chunk_len, walking the
+     body cursor backward instead of forward. Verifies the fix (reject any
+     chunk-size token whose accumulated value comes back negative) produces
+     the exact same graceful, single-response, connection-closing behavior
+     as the sibling "ZZZZ" malformed-chunk-size test above, rather than a
+     crash, hang, or corrupted read. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req =
+      "POST /stream-error-report HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "\r\n"
+      "8000000000000000\r\n"
+      "garbage-chunk-data\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[1024] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:") != NULL);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:none") == NULL);
+  REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
+}
+
+TEST(chttpserver, chunked_body_with_trailer_headers_handled_once) {
+  /* A chunked body's terminating "0\r\n" can be followed by a trailer-part
+     (zero or more header-field lines) before the final CRLF, per RFC 7230
+     SS4.1.2. http1_consume_body_chunked used to handle "no trailers, CRLF
+     immediately follows" as a fast path, but when a real trailer field WAS
+     present, it re-entered the `case 1: headers` parsing state to consume
+     it, landing back at the exact same `finished_headers:` label used for
+     a message's *primary* header block, which unconditionally called
+     http1_on_headers_complete a second time once the trailer's own blank
+     line was found. For a diverted (matched-route) request, that second
+     call would re-run chttpserver's routing/dispatch a second time for a
+     request already handed to a worker. The fix (HTTP1_P_FLAG_TRAILER)
+     skips the second on_headers_complete call for a trailer completion.
+     Full disclosure on this test's actual coverage: reverting just this
+     fix and running this exact test (including 25x back-to-back stress
+     runs) did not reproduce an observable failure - the second dispatch
+     appears to be absorbed without a visible symptom in this specific
+     single-connection, single-request reproduction, plausibly because
+     chttpserver's own routing for the second call still resolves
+     synchronously on the same thread before any worker has a chance to
+     race it. The fix is still correct (the underlying double-dispatch is
+     real, confirmed by direct code reading, and its blast radius under
+     different timing or a busier worker pool is not something a single
+     deterministic test can rule out), but this test's verified value is
+     that a real trailer field is parsed correctly at all (a distinct,
+     genuine gap: the parser previously had no exercise of the trailer
+     code path with an actual trailer present) - not that it specifically
+     catches the double-dispatch race. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req =
+      "POST /stream-error-report HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Transfer-Encoding: chunked\r\n"
+      "Connection: close\r\n"
+      "\r\n"
+      "5\r\n"
+      "hello\r\n"
+      "0\r\n"
+      "X-Trailer: some-value\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[2048] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  /* Exactly one response: a second on_headers_complete dispatch for the
+     trailer completion would, at best, corrupt the single response with
+     extra bytes, and at worst crash the worker or hang the connection. */
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
+  char *first = strstr(buf, "HTTP/1.1");
+  REQUIRE_TRUE(first != NULL);
+  REQUIRE_TRUE(strstr(first + 8, "HTTP/1.1") == NULL);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:none") != NULL);
+}
+
+TEST(chttpserver, negative_content_length_rejected) {
+  /* http1_atol honors a leading '-', so "Content-Length: -1" used to parse
+     successfully; http1_consume_body treats content_length <= 0 as "no
+     body, already complete" the instant headers finish, so any body bytes
+     the client actually sent would have been silently reparsed as the
+     start of the next pipelined request; a framing desync. This is
+     caught during header parsing itself (http1_consume_header_top), before
+     routing/diversion ever happens, so the fixed behavior is the parser's
+     ordinary malformed-input response: the connection is closed outright
+     with no HTTP response at all, not a graceful error page (matching
+     every other pre-routing parse error in this parser, e.g. a
+     syntactically invalid request line). */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req =
+      "POST /hello HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Content-Length: -1\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[512] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  /* No HTTP response was ever produced; the connection was closed as soon
+     as the malformed header was parsed. */
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1") == NULL);
+}
+
+TEST(chttpserver, chunked_not_last_in_transfer_encoding_list_rejected) {
+  /* RFC 7230 SS3.3.1 requires `chunked`, when present, to be the final
+     transfer-coding. http1_consume_header_transfer_encoding's two fast
+     paths handle "chunked" alone or "chunked" as the last item in the
+     list; previously, anything else (e.g. "chunked, gzip", chunked
+     appearing in the middle) fell through and was silently stored as an
+     ordinary opaque header with neither HTTP1_P_FLAG_CHUNKED nor a usable
+     Content-Length set, framing the body as an implicit zero-length
+     message instead of rejecting it, a request-smuggling-shaped front/back
+     disagreement with any upstream proxy that DOES honor `chunked`
+     appearing anywhere in the list. This is caught during header parsing,
+     before routing, so (like the negative Content-Length case) the fixed
+     behavior is an outright connection close with no HTTP response. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req =
+      "POST /hello HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Transfer-Encoding: chunked, gzip\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[512] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1") == NULL);
 }
 
 /* ========================================================================== */

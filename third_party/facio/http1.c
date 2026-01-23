@@ -499,6 +499,23 @@ static int http1_on_headers_complete(http1_parser_s *parser, void *leftover,
     p->stream_primed = NULL;
     p->stream_primed_len = 0;
     p->stream_primed_pos = 0;
+    /* Same hazard as the OOM branch above, and the same fix: headers were
+     * already fully parsed (parser->state still carries HEADER_COMPLETE|
+     * STATUS_LINE, never reset since that only normally happens at the
+     * bottom of http1_parse, which this "hc>0" return path skips entirely).
+     * p->close is already 1, but http1_consume_data's do-while loop only
+     * stops on stream_diverted (never set on this branch) or p->stop (only
+     * http_pause sets it, and http_pause is never called here either) - so
+     * if pipelined next-request bytes are already sitting in the buffer,
+     * the loop's next iteration re-enters case (HEADER_COMPLETE|STATUS_LINE)
+     * and misparses those bytes as this already-finished (via
+     * http_send_error, e.g. a 404) request's body. If that "body" happens
+     * to complete, http1_on_request fires and http_finish sends a *second*
+     * response on an http_s already finished once - a duplicate-send /
+     * protocol-desync bug. This branch had no reset at all, unlike the OOM
+     * branch nine lines above which already carries this exact fix and
+     * comment for the identical hazard. */
+    p->parser.state = (struct http1_parser_protected_read_only_state_s){0};
   }
   return 1;
 }
@@ -909,7 +926,22 @@ ssize_t http1_stream_read(http_s *h, void *buf, size_t buflen,
         pfd.fd = (int)fio_uuid2fd(p->p.uuid);
         pfd.events = POLLIN;
         pfd.revents = 0;
+        /* Unlike the fio_read call just above (which marks its own read
+         * window busy internally), this raw poll() sits directly on the fd
+         * with no protection of its own: fio_review_timeout's idle sweep
+         * can decide this connection has been idle past its configured
+         * timeout and fio_force_close it while this call blocks, and since
+         * nothing marks the fd busy, fio_clear_fd will not defer - it
+         * synchronously close()s the real fd out from under this poll(),
+         * which the OS can then hand to a brand-new, unrelated connection
+         * before this call wakes up; a subsequent successful fio_read
+         * above would then read that unrelated connection's bytes into
+         * what this code believes is still the original request's body.
+         * Mark it busy for the duration, exactly as fio_read does for its
+         * own read window. */
+        fio_rw_busy_mark(p->p.uuid);
         int pr = poll(&pfd, 1, timeout_ms ? (int)timeout_ms : -1);
+        fio_rw_busy_unmark(p->p.uuid);
         if (pr == 0) {
           p->stream_err = HTTP1_STREAM_ERR_TIMEOUT;
           return -1;

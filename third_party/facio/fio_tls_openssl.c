@@ -141,6 +141,20 @@ struct fio_tls_s {
   SSL_CTX *ctx;            /* The Open SSL context (updated each time). */
   unsigned char *alpn_str; /* the computed server-format ALPN string */
   int alpn_len;
+  /* Guards `ctx` (and the sni/trust/alpn containers that feed it) against
+   * concurrent mutation vs. concurrent use. fio_tls_cert_add/_trust/
+   * _alpn_add/_trust_system each mutate one of those containers and then
+   * rebuild `ctx` from scratch (fio_tls_build_context frees the old ctx via
+   * SSL_CTX_free and assigns a new one); meanwhile fio_tls_attach2uuid
+   * (every accept) and fio_tls_connect_create (every client connect) read
+   * `ctx` via SSL_new(tls->ctx). Without this lock, a cert/trust/ALPN
+   * reload racing an in-flight accept/connect is a data race on `ctx`
+   * itself - in the worst observed window SSL_new(tls->ctx) reads it while
+   * it is momentarily NULL (fio_tls_destroy_context nulls it before the
+   * replacement is assigned), and SSL_new(NULL) returns NULL, which
+   * FIO_ASSERT_ALLOC(c->ssl) at every accept-mode call site turns into a
+   * process-wide abort - not a narrow per-connection failure. */
+  fio_lock_i lock;
 };
 
 /* *****************************************************************************
@@ -378,6 +392,13 @@ static void fio_tls_build_context(fio_tls_s *tls) {
 
   /* create new context */
   tls->ctx = SSL_CTX_new(TLS_method());
+  /* SSL_CTX_new can return NULL on allocation failure; every call below
+   * this point dereferences tls->ctx unconditionally, so an unchecked NULL
+   * here would crash with a NULL-pointer dereference instead of a clear,
+   * diagnosable abort. Matches this codebase's existing OOM-calls-exit
+   * convention (FIO_ASSERT_ALLOC is used for every other allocation in this
+   * function). */
+  FIO_ASSERT_ALLOC(tls->ctx);
   SSL_CTX_set_mode(tls->ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
   /* see: https://caniuse.com/#search=tls */
   SSL_CTX_set_min_proto_version(tls->ctx, TLS1_2_VERSION);
@@ -402,6 +423,15 @@ static void fio_tls_build_context(fio_tls_s *tls) {
             SSL_CTX_use_PrivateKey(tls->ctx, k);
           }
           BIO_free(bio);
+        } else {
+          /* Previously silent: a BIO_new_mem_buf OOM here left the context
+           * with a certificate but no private key, and no log message
+           * pointing at why - indistinguishable from "no private key was
+           * ever configured" until the handshake itself failed much later
+           * with an unrelated-looking error. */
+          FIO_LOG_ERROR(
+              "TLS failed to allocate a BIO for the private key data "
+              "(out of memory?) - no private key will be configured.");
         }
       }
       /* Certificate Files loaded */
@@ -476,6 +506,13 @@ static void fio_tls_build_context(fio_tls_s *tls) {
   if (trust_ary_count(&tls->trust) || tls->verify_default_store) {
     /* TODO: enable peer verification */
     X509_STORE *store = X509_STORE_new();
+    /* SSL_CTX_set_cert_store(tls->ctx, NULL) would silently leave the
+     * context's previous/default store in place while SSL_VERIFY_PEER gets
+     * enabled just below regardless - i.e. verification would appear to be
+     * configured but not actually be backed by the trust/verify_default_store
+     * state this function was just asked to apply. Fail loudly instead,
+     * matching this function's existing OOM-calls-exit convention. */
+    FIO_ASSERT_ALLOC(store);
     SSL_CTX_set_cert_store(tls->ctx, store);
     SSL_CTX_set_verify(tls->ctx, SSL_VERIFY_PEER, NULL);
     if (tls->verify_default_store) {
@@ -542,6 +579,16 @@ static void fio_tls_delayed_close(void *uuid, void *ignr_) {
 static ssize_t fio_tls_read(intptr_t uuid, void *udata, void *buf,
                             size_t count) {
   fio_tls_connection_s *c = udata;
+  /* SSL_get_error's classification of the result below is only reliable if
+   * the calling thread's OpenSSL error queue was empty beforehand (see the
+   * OpenSSL SSL_get_error(3) manual). This codebase runs many unrelated
+   * connections' TLS I/O on a small, shared set of threads (chttpclient's
+   * pooled workers, and the async engine's reactor threads handling many
+   * different SSL* objects across their on_data/on_ready callbacks); without
+   * this, one connection's failure can leave a stale error on the queue that
+   * skews the very next unrelated call's WANT_READ/WANT_WRITE/SSL_ERROR_SSL/
+   * SSL_ERROR_SYSCALL classification on this same thread. */
+  ERR_clear_error();
   ssize_t ret = SSL_read(c->ssl, buf, count);
   if (ret > 0) return ret;
   ret = SSL_get_error(c->ssl, ret);
@@ -557,6 +604,21 @@ static ssize_t fio_tls_read(intptr_t uuid, void *udata, void *buf,
        * connect-side path (fio_tls_connection_read, reached via this same
        * function), which faces an arbitrary, potentially hostile server. */
       errno = ECONNRESET;
+      return -1;
+    case SSL_ERROR_SYSCALL:
+      /* A fatal, underlying I/O failure (as opposed to SSL_ERROR_SSL's
+       * record-layer failure above) - the connection is dead, not
+       * "try again". This used to fall through to the default branch below
+       * and be reported as EWOULDBLOCK; since the kernel makes a socket in
+       * this state immediately "ready" on every subsequent poll(), that
+       * turned into a tight busy-loop pinning the calling thread at 100% CPU
+       * (and hanging forever if no deadline was configured) instead of
+       * failing the connection. The underlying syscall usually already set
+       * errno appropriately (e.g. ECONNRESET, EPIPE); only fall back to
+       * ECONNRESET if it didn't (some OpenSSL versions report a peer that
+       * closed the TCP connection without ever sending a TLS close_notify
+       * this way, with errno left at 0). */
+      if (!errno) errno = ECONNRESET;
       return -1;
     case SSL_ERROR_NONE:             /* overflow */
     case SSL_ERROR_WANT_CONNECT:     /* overflow */
@@ -604,6 +666,9 @@ static ssize_t fio_tls_flush(intptr_t uuid, void *udata) {
 static ssize_t fio_tls_write(intptr_t uuid, void *udata, const void *buf,
                              size_t count) {
   fio_tls_connection_s *c = udata;
+  /* See the matching call in fio_tls_read for why this is needed on a
+   * shared-thread design like this one. */
+  ERR_clear_error();
   ssize_t ret = SSL_write(c->ssl, buf, count);
   if (ret > 0) return ret;
   ret = SSL_get_error(c->ssl, ret);
@@ -614,6 +679,12 @@ static ssize_t fio_tls_write(intptr_t uuid, void *udata, const void *buf,
       /* See the matching case in fio_tls_read: a fatal record-layer problem
        * is not a clean close and must not be reported as one. */
       errno = ECONNRESET;
+      return -1;
+    case SSL_ERROR_SYSCALL:
+      /* See the matching case in fio_tls_read: a fatal underlying I/O
+       * failure, not "try again" - falling through to EWOULDBLOCK here
+       * busy-loops the calling thread against a dead connection. */
+      if (!errno) errno = ECONNRESET;
       return -1;
     case SSL_ERROR_NONE:             /* overflow */
     case SSL_ERROR_WANT_CONNECT:     /* overflow */
@@ -672,6 +743,11 @@ static fio_rw_hook_s FIO_TLS_HOOKS = {
 static size_t fio_tls_handshake(intptr_t uuid, void *udata) {
   fio_tls_connection_s *c = udata;
   int ri;
+  /* See the matching call in fio_tls_read for why this is needed: without
+   * it, a stale error left on this thread's queue by some other
+   * connection's earlier failure can skew SSL_get_error's classification
+   * of this handshake step below. */
+  ERR_clear_error();
   if (c->is_server) {
     ri = SSL_accept(c->ssl);
   } else {
@@ -696,11 +772,20 @@ static size_t fio_tls_handshake(intptr_t uuid, void *udata) {
         // fio_force_event(uuid, FIO_EVENT_ON_DATA);
         return 0;
       case SSL_ERROR_SYSCALL:
+        /* A fatal, underlying I/O failure - the peer is gone or the
+         * connection is otherwise dead, not merely "handshake not done
+         * yet". This used to `return 0` here, identical to the WANT_READ/
+         * WANT_WRITE cases above, which left a socket that died mid
+         * handshake sitting half-handshaked (repeatedly re-attempting
+         * SSL_accept/SSL_connect against a truly dead peer) until facio's
+         * generic ~40s idle reaper eventually force-closed it, instead of
+         * failing fast like every other fatal case in this switch (which
+         * `break`s down to the fio_defer(fio_tls_delayed_close, ...) call
+         * below). */
         FIO_LOG_DEBUG(
             "SSL_accept/SSL_connect %p error: SSL_ERROR_SYSCALL, errno: %s",
             (void *)uuid, strerror(errno));
-        // fio_force_event(uuid, FIO_EVENT_ON_DATA);
-        return 0;
+        break;
       case SSL_ERROR_SSL:
         FIO_LOG_DEBUG("SSL_accept/SSL_connect %p error: SSL_ERROR_SSL",
                       (void *)uuid);
@@ -848,22 +933,34 @@ static fio_rw_hook_s FIO_TLS_HANDSHAKE_HOOKS = {
 static inline void fio_tls_attach2uuid(intptr_t uuid, fio_tls_s *tls,
                                        void *udata, uint8_t is_server) {
   fio_atomic_add(&tls->ref, 1);
-  /* create SSL connection context from global context */
+  /* create SSL connection context from global context. Locked against
+   * fio_tls_build_context (see the `lock` field's comment on fio_tls_s):
+   * without this, a concurrent cert/trust/ALPN reload could free `ctx`
+   * (or momentarily null it) between this read and SSL_new's use of it. */
+  fio_lock(&tls->lock);
+  SSL *ssl = SSL_new(tls->ctx);
+  fio_unlock(&tls->lock);
+  FIO_ASSERT_ALLOC(ssl);
   fio_tls_connection_s *c = fio_malloc(sizeof(*c));
   FIO_ASSERT_ALLOC(c);
   *c = (fio_tls_connection_s){
       .alpn_arg = udata,
       .tls = tls,
       .uuid = uuid,
-      .ssl = SSL_new(tls->ctx),
+      .ssl = ssl,
       .is_server = is_server,
       .alpn_ok = 0,
   };
-  FIO_ASSERT_ALLOC(c->ssl);
   /* set facil.io data in the SSL object */
   SSL_set_ex_data(c->ssl, 0, (void *)c);
   /* attach socket - TODO: Switch to BIO socket */
   BIO *bio = BIO_new_socket(fio_uuid2fd(uuid), 0);
+  /* BIO_new_socket can return NULL under memory pressure; the newer
+   * client-mode fio_tls_connect_create already checks this (see below) but
+   * this server-mode accept path previously didn't, letting BIO_up_ref(NULL)
+   * dereference a NULL bio->references and crash the whole process on an
+   * OOM during a single incoming TLS accept. */
+  FIO_ASSERT_ALLOC(bio);
   BIO_up_ref(bio);
   SSL_set0_rbio(c->ssl, bio);
   SSL_set0_wbio(c->ssl, bio);
@@ -918,14 +1015,23 @@ void FIO_TLS_WEAK fio_tls_cert_add(fio_tls_s *tls, const char *server_name,
       goto file_missing;
     if (fio_str_readfile(&c.public_key, cert, 0, 0).data == NULL)
       goto file_missing;
+    fio_lock(&tls->lock);
     cert_ary_push(&tls->sni, c);
+    fio_tls_cert_destroy(&c);
+    fio_tls_build_context(tls);
+    fio_unlock(&tls->lock);
+    return;
   } else if (server_name) {
     /* Self-Signed TLS Certificates */
     c.private_key = FIO_STR_INIT_STATIC(server_name);
+    fio_lock(&tls->lock);
     cert_ary_push(&tls->sni, c);
+    fio_tls_cert_destroy(&c);
+    fio_tls_build_context(tls);
+    fio_unlock(&tls->lock);
+    return;
   }
   fio_tls_cert_destroy(&c);
-  fio_tls_build_context(tls);
   return;
 file_missing:
   FIO_LOG_FATAL("TLS certificate file missing for either %s or %s or both.",
@@ -955,8 +1061,10 @@ void FIO_TLS_WEAK fio_tls_alpn_add(
     void (*on_selected)(intptr_t uuid, void *udata_connection, void *udata_tls),
     void *udata_tls, void (*on_cleanup)(void *udata_tls)) {
   REQUIRE_LIBRARY();
+  fio_lock(&tls->lock);
   alpn_add(tls, protocol_name, on_selected, udata_tls, on_cleanup);
   fio_tls_build_context(tls);
+  fio_unlock(&tls->lock);
 }
 
 /**
@@ -986,9 +1094,11 @@ void FIO_TLS_WEAK fio_tls_trust(fio_tls_s *tls, const char *public_cert_file) {
   if (!public_cert_file) return;
   if (fio_str_readfile(&c.pem, public_cert_file, 0, 0).data == NULL)
     goto file_missing;
+  fio_lock(&tls->lock);
   trust_ary_push(&tls->trust, c);
   fio_tls_trust_destroy(&c);
   fio_tls_build_context(tls);
+  fio_unlock(&tls->lock);
   return;
 file_missing:
   FIO_LOG_FATAL("TLS certificate file missing for %s ", public_cert_file);
@@ -1037,8 +1147,10 @@ void FIO_TLS_WEAK fio_tls_destroy(fio_tls_s *tls) {
  */
 void FIO_TLS_WEAK fio_tls_trust_system(fio_tls_s *tls) {
   REQUIRE_LIBRARY();
+  fio_lock(&tls->lock);
   tls->verify_default_store = 1;
   fio_tls_build_context(tls);
+  fio_unlock(&tls->lock);
 }
 
 /* *****************************************************************************
@@ -1053,7 +1165,11 @@ fio_tls_connection_s *FIO_TLS_WEAK fio_tls_connect_create(fio_tls_s *tls,
   if (!tls) return NULL; /* documented contract: NULL on failure, not a crash */
   fio_tls_connection_s *c = fio_malloc(sizeof(*c));
   if (!c) return NULL;
+  /* Locked against fio_tls_build_context - see the `lock` field's comment
+   * on fio_tls_s. */
+  fio_lock(&tls->lock);
   SSL *ssl = SSL_new(tls->ctx);
+  fio_unlock(&tls->lock);
   if (!ssl) {
     fio_free(c);
     return NULL;
@@ -1123,6 +1239,11 @@ fio_tls_connection_s *FIO_TLS_WEAK fio_tls_connect_create(fio_tls_s *tls,
 
 fio_tls_handshake_result_e FIO_TLS_WEAK
 fio_tls_client_handshake_step(fio_tls_connection_s *c) {
+  /* See the matching call in fio_tls_read for why this is needed on a
+   * shared-thread design like chttpclient's Tier 2 async engine, which
+   * drives many different connections' handshake steps from the same small
+   * set of reactor threads. */
+  ERR_clear_error();
   int ri = SSL_connect(c->ssl);
   if (ri == 1) return FIO_TLS_HANDSHAKE_DONE;
   switch (SSL_get_error(c->ssl, ri)) {

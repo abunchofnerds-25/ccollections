@@ -1,6 +1,6 @@
 CC = gcc
 
-INCLUDES = -I.. -I../../include -I../../third_party/facio -I../../third_party/llhttp
+INCLUDES = -I.. -I../../include -I../../third_party/facio
 DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 
 # Our source files (compiled with strict flags + -Werror). clogger.c is a
@@ -21,6 +21,7 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 # binary means that failure mode can only take down the TLS suite, not the
 # rest of tests/chttpclient.
 COMMON_SRC_FILES = ../../src/chttpclient.c \
+	../../src/chttp1_parser.c \
 	../../src/chttp.c \
 	../../src/cfio_engine.c \
 	../../src/clogger.c \
@@ -53,12 +54,6 @@ FACIO_SRC_FILES = $(FACIO_DIR)/fio.c \
 FACIO_HEADER_FILES = $(wildcard $(FACIO_DIR)/*.h)
 FACIO_OBJS = $(FACIO_SRC_FILES:$(FACIO_DIR)/%.c=third_party_obj/facio/%.o)
 
-# llhttp (HTTP/1.1 parser), vendored verbatim (see ../../third_party/llhttp).
-LLHTTP_DIR = ../../third_party/llhttp
-LLHTTP_SRC_FILES = $(LLHTTP_DIR)/llhttp.c $(LLHTTP_DIR)/api.c $(LLHTTP_DIR)/http.c
-LLHTTP_HEADER_FILES = $(wildcard $(LLHTTP_DIR)/*.h)
-LLHTTP_OBJS = $(LLHTTP_SRC_FILES:$(LLHTTP_DIR)/%.c=third_party_obj/llhttp/%.o)
-
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O0 -Werror
 
@@ -68,40 +63,44 @@ THIRD_PARTY_CFLAGS = $(INCLUDES) $(DEFINITIONS) -g -O0 \
 	-Wno-deprecated-declarations -Wno-cast-function-type \
 	-Wno-unused-parameter -Wno-sign-compare -Wno-type-limits
 
-# llhttp's generated state machine only ever triggers -Wunused-parameter
-# (verified under -Wall -Wextra); reusing facio's broader suppression list
-# would silently mask a real regression on a future llhttp re-vendor.
-LLHTTP_CFLAGS = $(INCLUDES) $(DEFINITIONS) -g -O0 -Wno-unused-parameter
-
 LFLAGS = -lpthread -lssl -lcrypto -lz -lm
 
-third_party_obj/facio third_party_obj/llhttp:
+third_party_obj/facio:
 	mkdir -p $@
 
 third_party_obj/facio/%.o: $(FACIO_DIR)/%.c $(FACIO_HEADER_FILES) | third_party_obj/facio
 	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
 
-third_party_obj/llhttp/%.o: $(LLHTTP_DIR)/%.c $(LLHTTP_HEADER_FILES) | third_party_obj/llhttp
-	$(CC) -c $(LLHTTP_CFLAGS) $< -o $@
+build: $(FACIO_OBJS)
+	$(CC) $(CFLAGS) $(FACIO_OBJS) tests.c $(COMMON_SRC_FILES) -o tests $(LFLAGS)
 
-build: $(FACIO_OBJS) $(LLHTTP_OBJS)
-	$(CC) $(CFLAGS) $(FACIO_OBJS) $(LLHTTP_OBJS) tests.c $(COMMON_SRC_FILES) -o tests $(LFLAGS)
+build_tls: $(FACIO_OBJS)
+	$(CC) $(CFLAGS) $(FACIO_OBJS) tests_tls.c $(COMMON_SRC_FILES) -o tests_tls $(LFLAGS)
 
-build_tls: $(FACIO_OBJS) $(LLHTTP_OBJS)
-	$(CC) $(CFLAGS) $(FACIO_OBJS) $(LLHTTP_OBJS) tests_tls.c $(COMMON_SRC_FILES) -o tests_tls $(LFLAGS)
+# tests_parser exercises chttp1_parser.c directly (no sockets, no TLS, no
+# chttpclient.c at all) with hand-crafted byte sequences, including
+# malformed/hostile input the real-socket-based tests/tests_tls binaries
+# structurally cannot reach (their mock servers only ever send well-formed
+# responses). Kept as its own binary in this same directory, mirroring the
+# tests_tls precedent, rather than a new top-level tests/ directory.
+build_parser:
+	$(CC) $(CFLAGS) tests_parser.c ../../src/chttp1_parser.c -o tests_parser $(LFLAGS)
 
-test: build build_tls
+test: build build_tls build_parser
 	./tests
 	./tests_tls
+	./tests_parser
 
-memtest: build build_tls
+memtest: build build_tls build_parser
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 --suppressions=ld_so_dlopen.supp ./tests
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests_tls
+	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
+		--error-exitcode=1 ./tests_parser
 
 generate_coverage_report:
-	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) $(FACIO_OBJS) $(LLHTTP_OBJS) tests.c \
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) $(FACIO_OBJS) tests.c \
 		$(COMMON_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-chttpclient && \
@@ -109,7 +108,7 @@ generate_coverage_report:
 	--output-file chttpclient.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpclient.c.info --output-directory coverage/tests && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests
-	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) $(FACIO_OBJS) $(LLHTTP_OBJS) tests_tls.c \
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) $(FACIO_OBJS) tests_tls.c \
 		$(COMMON_SRC_FILES) -o tests_tls $(LFLAGS) && \
 	./tests_tls && \
 	gcov -d -w tests_tls-chttpclient && \
@@ -117,10 +116,18 @@ generate_coverage_report:
 	--output-file chttpclient_tls.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpclient_tls.c.info --output-directory coverage/tests_tls && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests_tls
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_parser.c ../../src/chttp1_parser.c \
+		-o tests_parser $(LFLAGS) && \
+	./tests_parser && \
+	gcov -d -w tests_parser-chttp1_parser && \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --capture --directory . \
+	--output-file chttp1_parser.c.info && \
+	genhtml --ignore-errors inconsistent -s chttp1_parser.c.info --output-directory coverage/tests_parser && \
+	rm -rf *.gcno *.gcda *.gcov *.c.info tests_parser
 
-all: build build_tls test memtest generate_coverage_report
+all: build build_tls build_parser test memtest generate_coverage_report
 
 clean:
-	rm -rf tests tests_tls third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
+	rm -rf tests tests_tls tests_parser third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
 
-default: build build_tls
+default: build build_tls build_parser

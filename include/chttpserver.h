@@ -364,8 +364,24 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
  * exit, but it means a custom allocator can never observe absolutely every
  * byte ever mapped by the process.
  *
+ * Hard requirement: every pointer returned by mp->malloc/calloc/realloc must
+ * be aligned to at least 16 bytes. The engine's allocation entry points are
+ * compiler-annotated as always returning 16-byte-aligned memory (matching
+ * facio's own default arena, which guarantees it by construction), and that
+ * annotation is not conditioned on whether custom procs are installed - the
+ * compiler is free to emit aligned loads/stores against the returned
+ * pointer at every call site in this codebase regardless. A misaligned
+ * pointer from a non-conforming allocator is therefore undefined behavior,
+ * not merely a missed optimization; a debug-time check aborts with a clear
+ * message if this is violated (see _fio_mem_procs_check_align16 in
+ * cfio_engine's fio.c), but a release build cannot be relied on to catch
+ * it. Standard malloc/calloc/realloc on glibc/x86-64 already satisfy this,
+ * so this is only a concern for a bump/pool/arena-style custom allocator
+ * with a smaller natural alignment.
+ *
  * @param mp  Custom memory management procs, or NULL to revert to the
- *            default. If non-NULL, all four function pointers must be set.
+ *            default. If non-NULL, all four function pointers must be set,
+ *            and each must return memory aligned to at least 16 bytes.
  * @return ccol_success, ccol_invalid_args (mp is non-NULL but has a NULL
  *         function pointer), or ccol_not_permitted (the engine is already
  *         running; stop it first).

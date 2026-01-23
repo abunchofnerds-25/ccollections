@@ -24,6 +24,7 @@ SOFTWARE.
 
 #include <cfio_engine.h>
 #include <chashmap.h>
+#include <chttp1_parser.h>
 #include <chttpclient.h>
 #include <cthreadpool.h>
 #include <ctype.h>
@@ -32,7 +33,6 @@ SOFTWARE.
 #include <fio.h>
 #include <fio_tls.h>
 #include <limits.h>
-#include <llhttp.h>
 #include <netdb.h>
 #include <poll.h>
 #include <pthread.h>
@@ -106,11 +106,6 @@ typedef struct {
   ccol_memmgmt_procs_t *mp;
   chmap headers; /* chmap(char* -> char*); owned until transferred/destroyed */
 
-  char *cur_field;
-  size_t cur_field_len, cur_field_cap;
-  char *cur_value;
-  size_t cur_value_len, cur_value_cap;
-
   bool is_head_request;
   bool redirects_still_allowed;
   bool will_redirect;
@@ -177,9 +172,6 @@ struct chttpclient {
 
 static chttpcli g_default_client = NULL;
 static pthread_once_t g_default_client_once = PTHREAD_ONCE_INIT;
-
-static llhttp_settings_t g_llhttp_settings;
-static pthread_once_t g_llhttp_settings_once = PTHREAD_ONCE_INIT;
 
 /* ========================================================================== */
 /*                         URL PARSING                                        */
@@ -552,6 +544,12 @@ static char *_merge_ref_path(ccol_memmgmt_procs_t *mp,
  * The result is always re-parsed by _parse_chttp_url on the next hop, so
  * this function does not need to know anything about userinfo/credential
  * carry-forward; that is handled by each tier's own hop loop.
+ *
+ * Dot-segment removal (RFC 3986 SS5.2.4) is applied to the path component
+ * only; a query string is always split off first and re-appended verbatim
+ * afterward, on every branch below that can produce one, so a query value
+ * that happens to contain "/", "..", or "." bytes is never reinterpreted as
+ * path navigation.
  */
 static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
                                    const chttp_url_t *base,
@@ -583,35 +581,50 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
   bool default_port = (base->is_https && base->port == 443) ||
                       (!base->is_https && base->port == 80);
 
+  /* Split R.query off of R.path ONCE, up front, shared by both branches
+   * below: remove_dot_segments (RFC 3986 SS5.2.4) must operate on the path
+   * component only, never on query bytes, since a literal ".."/"." inside
+   * a query value must never be reinterpreted as path navigation (e.g. a
+   * query containing "/../" would otherwise cause dot-segment removal to
+   * walk backwards through, and delete, path segments it was never meant to
+   * touch). ref_query (if any) is re-appended untouched after dot-segment
+   * removal has run, for both branches. */
+  const char *ref_query = strchr(location, '?');
+  size_t ref_path_len =
+      ref_query ? (size_t)(ref_query - location) : strlen(location);
+
   char *new_path = NULL;
   if (location[0] == '/') {
     /* Absolute-path reference: T.path = remove_dot_segments(R.path)
      * directly, no merge against the base path needed. */
-    new_path = _remove_dot_segments(mp, location);
+    char *path_only = (char *)_mem_alloc(mp, ref_path_len + 1);
+    if (path_only) {
+      memcpy(path_only, location, ref_path_len);
+      path_only[ref_path_len] = '\0';
+      new_path = _remove_dot_segments(mp, path_only);
+      _mem_free(mp, path_only);
+    }
   } else {
-    const char *ref_query = strchr(location, '?');
-    size_t ref_path_len =
-        ref_query ? (size_t)(ref_query - location) : strlen(location);
     char *merged =
         _merge_ref_path(mp, base->path_and_query, location, ref_path_len);
     if (merged) {
       new_path = _remove_dot_segments(mp, merged);
       _mem_free(mp, merged);
     }
-    if (new_path && ref_query) {
-      size_t path_len = strlen(new_path);
-      size_t query_len = strlen(ref_query);
-      char *with_query = (char *)_mem_alloc(mp, path_len + query_len + 1);
-      if (!with_query) {
-        _mem_free(mp, new_path);
-        new_path = NULL;
-      } else {
-        memcpy(with_query, new_path, path_len);
-        memcpy(with_query + path_len, ref_query, query_len);
-        with_query[path_len + query_len] = '\0';
-        _mem_free(mp, new_path);
-        new_path = with_query;
-      }
+  }
+  if (new_path && ref_query) {
+    size_t path_len = strlen(new_path);
+    size_t query_len = strlen(ref_query);
+    char *with_query = (char *)_mem_alloc(mp, path_len + query_len + 1);
+    if (!with_query) {
+      _mem_free(mp, new_path);
+      new_path = NULL;
+    } else {
+      memcpy(with_query, new_path, path_len);
+      memcpy(with_query + path_len, ref_query, query_len);
+      with_query[path_len + query_len] = '\0';
+      _mem_free(mp, new_path);
+      new_path = with_query;
     }
   }
   if (!new_path) {
@@ -1388,24 +1401,8 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
 }
 
 /* ========================================================================== */
-/*                         LLHTTP INTEGRATION                                 */
+/*                         CHTTP1_PARSER INTEGRATION                          */
 /* ========================================================================== */
-
-static bool _accum_append(ccol_memmgmt_procs_t *mp, char **buf, size_t *len,
-                          size_t *cap, const char *data, size_t n) {
-  if (*len + n + 1 > *cap) {
-    size_t nc = *cap ? *cap * 2 : 64;
-    while (nc < *len + n + 1) nc *= 2;
-    char *nb = (char *)_mem_realloc(mp, *buf, nc);
-    if (!nb) return false;
-    *buf = nb;
-    *cap = nc;
-  }
-  memcpy(*buf + *len, data, n);
-  *len += n;
-  (*buf)[*len] = '\0';
-  return true;
-}
 
 static size_t _sink_discard(const void *data, size_t len, void *ctx) {
   (void)data;
@@ -1433,52 +1430,44 @@ static size_t _sink_buffered(const void *data, size_t len, void *ctx) {
   return len;
 }
 
-static int _on_header_field(llhttp_t *p, const char *at, size_t len) {
+/* chttp1_parser hands a header/trailer line to this callback whole (name and
+ * value already split and OWS-trimmed), unlike llhttp's old 3-callback
+ * field/value/value-complete fragment protocol -- there is no accumulator
+ * state to maintain here any more. name/value point into the parser's own
+ * internal line buffer and are only valid for this call, so BOTH need a
+ * local, NUL-terminated copy before use: name because it must be
+ * lower-cased, and value because this codebase's cmap_pair convention for
+ * string values is "size = strlen + 1" (chmap_insert_elem copies exactly
+ * that many bytes) -- reading value_len+1 raw bytes directly out of the
+ * parser's own line buffer would read one uncontrolled byte past the value
+ * itself, which is not guaranteed to be '\0'. Both buffers are sized to
+ * CHTTP1_MAX_LINE_LEN+1, more than enough for any substring of one line. */
+static int _on_header(chttp1_parser_t *p, const char *name, size_t name_len,
+                      const char *value, size_t value_len) {
   chttp_parse_ctx_t *ctx = (chttp_parse_ctx_t *)p->data;
-  if (!_accum_append(ctx->mp, &ctx->cur_field, &ctx->cur_field_len,
-                     &ctx->cur_field_cap, at, len)) {
-    ctx->error = true;
-    return HPE_USER;
-  }
-  return 0;
-}
 
-static int _on_header_value(llhttp_t *p, const char *at, size_t len) {
-  chttp_parse_ctx_t *ctx = (chttp_parse_ctx_t *)p->data;
-  if (!_accum_append(ctx->mp, &ctx->cur_value, &ctx->cur_value_len,
-                     &ctx->cur_value_cap, at, len)) {
-    ctx->error = true;
-    return HPE_USER;
-  }
-  return 0;
-}
+  char lower_name[CHTTP1_MAX_LINE_LEN + 1];
+  for (size_t i = 0; i < name_len; i++)
+    lower_name[i] = (char)tolower((unsigned char)name[i]);
+  lower_name[name_len] = '\0';
 
-static int _on_header_value_complete(llhttp_t *p) {
-  chttp_parse_ctx_t *ctx = (chttp_parse_ctx_t *)p->data;
-  if (ctx->cur_field_len == 0) return 0;
+  char value_copy[CHTTP1_MAX_LINE_LEN + 1];
+  memcpy(value_copy, value, value_len);
+  value_copy[value_len] = '\0';
 
-  for (size_t i = 0; i < ctx->cur_field_len; i++)
-    ctx->cur_field[i] = (char)tolower((unsigned char)ctx->cur_field[i]);
-
-  cmap_pair kp = {.ptr = ctx->cur_field, .size = ctx->cur_field_len + 1};
-  cmap_pair vp = {.ptr = ctx->cur_value ? ctx->cur_value : (void *)"",
-                  .size = (ctx->cur_value ? ctx->cur_value_len : 0) + 1};
+  cmap_pair kp = {.ptr = lower_name, .size = name_len + 1};
+  cmap_pair vp = {.ptr = value_copy, .size = value_len + 1};
   ccol_retval_t rv = chmap_insert_elem(ctx->headers, &kp, &vp);
   if (rv != ccol_success && rv != ccol_key_already_present) {
     ctx->error = true;
-    return HPE_USER;
+    return 1;
   }
-
-  ctx->cur_field_len = 0;
-  ctx->cur_value_len = 0;
-  if (ctx->cur_field) ctx->cur_field[0] = '\0';
-  if (ctx->cur_value) ctx->cur_value[0] = '\0';
   return 0;
 }
 
-static int _on_headers_complete(llhttp_t *p) {
+static int _on_headers_complete(chttp1_parser_t *p) {
   chttp_parse_ctx_t *ctx = (chttp_parse_ctx_t *)p->data;
-  ctx->status_code = (int)p->status_code;
+  ctx->status_code = p->status_code;
 
   bool is_redirect_status = ctx->status_code == 301 ||
                             ctx->status_code == 302 ||
@@ -1491,7 +1480,7 @@ static int _on_headers_complete(llhttp_t *p) {
       ctx->location = ccol_strdup(ctx->mp, (const char *)vp->ptr);
       if (!ctx->location) {
         ctx->error = true;
-        return HPE_USER;
+        return -1; /* anything outside {0, 1} aborts with CHTTP1_USER */
       }
       ctx->will_redirect = true;
     }
@@ -1501,54 +1490,50 @@ static int _on_headers_complete(llhttp_t *p) {
   ctx->sink_ctx = ctx->will_redirect ? NULL : ctx->requested_sink_ctx;
 
   /* A HEAD response's Content-Length (if any) describes a body that was
-   * never sent; this is the one case llhttp cannot infer from the wire. */
+   * never sent; this is the one case the parser cannot infer from the wire
+   * on its own. */
   return ctx->is_head_request ? 1 : 0;
 }
 
-static int _on_body(llhttp_t *p, const char *at, size_t len) {
+static int _on_body(chttp1_parser_t *p, const char *at, size_t len) {
   chttp_parse_ctx_t *ctx = (chttp_parse_ctx_t *)p->data;
   size_t n = ctx->sink_fn ? ctx->sink_fn(at, len, ctx->sink_ctx) : len;
   if (n != len) {
     ctx->aborted = true;
-    return HPE_USER;
+    return 1;
   }
   return 0;
 }
 
-static int _on_message_complete(llhttp_t *p) {
+static int _on_message_complete(chttp1_parser_t *p) {
   chttp_parse_ctx_t *ctx = (chttp_parse_ctx_t *)p->data;
   ctx->message_complete = true;
-  /* Pause so the caller can find out exactly how many bytes of the last read
-   * chunk belonged to this message (llhttp_get_error_pos), rather than
-   * silently continuing to parse a hypothetical next pipelined message that
-   * this client never solicited. */
-  return HPE_PAUSED;
+  return 0;
 }
 
-static void _init_llhttp_settings(void) {
-  llhttp_settings_init(&g_llhttp_settings);
-  g_llhttp_settings.on_header_field = _on_header_field;
-  g_llhttp_settings.on_header_value = _on_header_value;
-  g_llhttp_settings.on_header_value_complete = _on_header_value_complete;
-  g_llhttp_settings.on_headers_complete = _on_headers_complete;
-  g_llhttp_settings.on_body = _on_body;
-  g_llhttp_settings.on_message_complete = _on_message_complete;
+static chttp1_settings_t g_chttp1_settings;
+static pthread_once_t g_chttp1_settings_once = PTHREAD_ONCE_INIT;
+
+static void _init_chttp1_settings(void) {
+  chttp1_settings_init(&g_chttp1_settings);
+  g_chttp1_settings.on_header = _on_header;
+  g_chttp1_settings.on_headers_complete = _on_headers_complete;
+  g_chttp1_settings.on_body = _on_body;
+  g_chttp1_settings.on_message_complete = _on_message_complete;
 }
 
 static void _parse_ctx_free_fields(chttp_parse_ctx_t *ctx) {
-  _mem_free(ctx->mp, ctx->cur_field);
-  _mem_free(ctx->mp, ctx->cur_value);
   _mem_free(ctx->mp, ctx->location);
   if (ctx->headers) __chmap_destroy(ctx->headers);
-  ctx->cur_field = ctx->cur_value = ctx->location = NULL;
+  ctx->location = NULL;
   ctx->headers = NULL;
 }
 
 /*
  * Reads and parses exactly one HTTP/1.1 response from `conn`. On
  * ccol_success, *keep_alive_out reflects whether the connection may be
- * reused for a subsequent request (llhttp's own bookkeeping, further gated
- * by "no trailing garbage after the message boundary").
+ * reused for a subsequent request (chttp1_parser's own bookkeeping, further
+ * gated by "no trailing garbage after the message boundary").
  *
  * *any_bytes_read_out is set to true the moment the first byte of the
  * response is actually received off the wire. Callers use this to decide
@@ -1562,10 +1547,10 @@ static ccol_retval_t _chttp_read_response(chttp_conn_t *conn,
                                           chttp_deadline_t *overall,
                                           bool *keep_alive_out,
                                           bool *any_bytes_read_out) {
-  pthread_once(&g_llhttp_settings_once, _init_llhttp_settings);
+  pthread_once(&g_chttp1_settings_once, _init_chttp1_settings);
 
-  llhttp_t parser;
-  llhttp_init(&parser, HTTP_RESPONSE, &g_llhttp_settings);
+  chttp1_parser_t parser;
+  chttp1_parser_init(&parser, &g_chttp1_settings);
   parser.data = pctx;
 
   char buf[8192];
@@ -1582,26 +1567,30 @@ static ccol_retval_t _chttp_read_response(chttp_conn_t *conn,
     }
     if (n > 0) *any_bytes_read_out = true;
     if (n == 0) {
-      llhttp_errno_t fe = llhttp_finish(&parser);
-      if (fe != HPE_OK || !pctx->message_complete)
+      /* CHTTP1_PAUSED here (not just CHTTP1_OK) is the expected outcome for
+       * a valid EOF-delimited body (HTTP/1.0-style, or an explicit
+       * Connection: close with no Content-Length/chunked framing): see
+       * chttp1_parser_finish's own doc comment. Only CHTTP1_ERROR (a
+       * genuinely truncated message) falls through to the aborted case. */
+      chttp1_errno_t fe = chttp1_parser_finish(&parser);
+      if ((fe != CHTTP1_OK && fe != CHTTP1_PAUSED) || !pctx->message_complete)
         return ccol_http_transfer_aborted;
       *keep_alive_out = false; /* peer closed; nothing left to reuse */
       return ccol_success;
     }
 
-    llhttp_errno_t err = llhttp_execute(&parser, buf, (size_t)n);
-    if (err == HPE_PAUSED) {
-      const char *pos = llhttp_get_error_pos(&parser);
-      size_t consumed = (size_t)(pos - buf);
+    chttp1_errno_t err = chttp1_parser_execute(&parser, buf, (size_t)n);
+    if (err == CHTTP1_PAUSED) {
+      size_t consumed = chttp1_parser_consumed(&parser);
       if (consumed < (size_t)n) pctx->trailing_garbage = true;
       *keep_alive_out =
-          llhttp_should_keep_alive(&parser) && !pctx->trailing_garbage;
+          chttp1_should_keep_alive(&parser) && !pctx->trailing_garbage;
       return ccol_success;
     }
-    if (err == HPE_USER) {
+    if (err == CHTTP1_USER) {
       return pctx->error ? ccol_not_enough_memory : ccol_http_transfer_aborted;
     }
-    if (err != HPE_OK) return ccol_http_transfer_aborted;
+    if (err != CHTTP1_OK) return ccol_http_transfer_aborted;
     /* else: message not yet complete, need more data */
   }
 }
@@ -1657,7 +1646,16 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
 
   if (cli->tls.ca_bundle_path) {
     fio_tls_trust(ctx, cli->tls.ca_bundle_path);
-  } else if (cli->tls.verify_peer) {
+  } else if (cli->tls.verify_peer || cli->tls.verify_host) {
+    /* verify_host implies verify_peer: hostname matching against a
+     * certificate whose chain was never validated (SSL_VERIFY_NONE, no
+     * trust store configured) gives no real security guarantee: the
+     * certificate itself could be entirely attacker-forged. Without this,
+     * a caller setting verify_peer=false, verify_host=true (plausible if
+     * the two are read as independent toggles, which chttp_tls_config_t's
+     * field comments now warn against) got a false sense of security: the
+     * hostname check would run and "pass" against literally any
+     * self-signed certificate for that hostname. */
     fio_tls_trust_system(ctx);
   }
 
@@ -2351,7 +2349,7 @@ typedef struct chttp_async_ctx_s {
                        * global's own comment for the lock-ordering contract
                        * between the two). */
 
-  llhttp_t parser;
+  chttp1_parser_t parser;
   chttp_parse_ctx_t pctx;
   chttp_bodybuf_t bb;
 } chttp_async_ctx_t;
@@ -2815,7 +2813,7 @@ static void _async_fulfill(chttp_async_ctx_t *ctx, ccol_retval_t rv,
  * ownership of ctx->pctx.headers/ctx->bb.buf out of ctx (nulling them there)
  *; called BEFORE _async_finish_connection's idle-pool-offer path, which
  * would otherwise free those exact same fields while resetting ctx for its
- * idle life; see _async_on_data's HPE_PAUSED handling for why the ordering
+ * idle life; see _async_on_data's CHTTP1_PAUSED handling for why the ordering
  * (build response, then finish the connection, then actually fulfil) matters
  * on its own terms too.
  *
@@ -3168,7 +3166,7 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
  * pool if `reusable`, otherwise closes it. Mirrors Tier 1's identical
  * reusable/_idle_pool_offer dance in chttp_do_internal, applied uniformly
  * regardless of whether this hop turns out to be a redirect or the final
- * response (see _async_handle_redirect and _async_on_data's HPE_PAUSED
+ * response (see _async_handle_redirect and _async_on_data's CHTTP1_PAUSED
  * handling, both of which call this before doing anything else with the
  * connection).
  */
@@ -3388,7 +3386,7 @@ static void _async_on_data(intptr_t uuid, fio_protocol_s *pr) {
    * route in the test server's mock sends "Connection: close" and closes
    * its end right after writing the response, so the peer's EOF can be
    * observed in a SEPARATE on_data callback from the one that already
-   * consumed the response bytes and hit HPE_PAUSED, racing our own
+   * consumed the response bytes and hit CHTTP1_PAUSED, racing our own
    * subsequent fio_close/fio_force_close call). Re-running the completion
    * logic would be harmless for a plain fulfill (guarded by
    * chain->fulfilled) or a repeat fio_tls_client_handshake_step call on an
@@ -3458,14 +3456,19 @@ static void _async_on_data(intptr_t uuid, fio_protocol_s *pr) {
 
   if (eof) {
     /* Mirrors Tier 1's own n==0/EOF handling in _chttp_read_response: a
-     * clean llhttp_finish with a complete message is valid for responses
-     * that signal their end via connection-close rather than
+     * clean chttp1_parser_finish with a complete message is valid for
+     * responses that signal their end via connection-close rather than
      * Content-Length/chunked framing. A reused connection that produces
      * this before any response byte came back is Tier 1's retry-once
      * scenario, checked BEFORE marking hop_completed/fulfilling; the
-     * whole point is that nothing has failed for the caller yet. */
-    llhttp_errno_t fe = llhttp_finish(&ctx->parser);
-    bool ok = (fe == HPE_OK && ctx->pctx.message_complete);
+     * whole point is that nothing has failed for the caller yet.
+     *
+     * fe == CHTTP1_PAUSED (not just CHTTP1_OK) is the EXPECTED outcome for a
+     * valid EOF-delimited body; see chttp1_parser_finish's own doc comment
+     * and Tier 1's identical comment in _chttp_read_response. */
+    chttp1_errno_t fe = chttp1_parser_finish(&ctx->parser);
+    bool ok = ((fe == CHTTP1_OK || fe == CHTTP1_PAUSED) &&
+               ctx->pctx.message_complete);
     if (!ok && ctx->reused && !ctx->any_bytes_read) {
       _async_retry_hop(ctx); /* marks ctx->hop_completed = true itself */
       /* Plain HTTP: facio already force-closed the connection as part of
@@ -3490,16 +3493,15 @@ static void _async_on_data(intptr_t uuid, fio_protocol_s *pr) {
     return; /* on_close runs the actual teardown either way. */
   }
 
-  llhttp_errno_t err = llhttp_execute(&ctx->parser, buf, (size_t)n);
-  if (err == HPE_PAUSED) {
-    /* Message complete; llhttp intentionally pauses right after, exactly
-     * like Tier 1's own HPE_PAUSED handling. */
+  chttp1_errno_t err = chttp1_parser_execute(&ctx->parser, buf, (size_t)n);
+  if (err == CHTTP1_PAUSED) {
+    /* Message complete; the parser intentionally pauses right after, exactly
+     * like Tier 1's own CHTTP1_PAUSED handling. */
     ctx->hop_completed = true;
-    const char *pos = llhttp_get_error_pos(&ctx->parser);
-    size_t consumed = (size_t)(pos - buf);
+    size_t consumed = chttp1_parser_consumed(&ctx->parser);
     if (consumed < (size_t)n) ctx->pctx.trailing_garbage = true;
     bool keep_alive =
-        llhttp_should_keep_alive(&ctx->parser) && !ctx->pctx.trailing_garbage;
+        chttp1_should_keep_alive(&ctx->parser) && !ctx->pctx.trailing_garbage;
 
     if (ctx->pctx.will_redirect) {
       _async_handle_redirect(ctx, uuid, keep_alive); /* closes/pools uuid */
@@ -3532,7 +3534,7 @@ static void _async_on_data(intptr_t uuid, fio_protocol_s *pr) {
     }
     return;
   }
-  if (err == HPE_USER) {
+  if (err == CHTTP1_USER) {
     ctx->hop_completed = true;
     _async_fulfill(
         ctx,
@@ -3541,7 +3543,7 @@ static void _async_on_data(intptr_t uuid, fio_protocol_s *pr) {
     fio_force_close(uuid);
     return;
   }
-  if (err != HPE_OK) {
+  if (err != CHTTP1_OK) {
     ctx->hop_completed = true;
     _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
     fio_force_close(uuid);
@@ -3732,8 +3734,8 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
    * continues to apply unchanged across the retry. */
   ctx->connect_deadline = _deadline_make(chain->connect_timeout_ms);
 
-  pthread_once(&g_llhttp_settings_once, _init_llhttp_settings);
-  llhttp_init(&ctx->parser, HTTP_RESPONSE, &g_llhttp_settings);
+  pthread_once(&g_chttp1_settings_once, _init_chttp1_settings);
+  chttp1_parser_init(&ctx->parser, &g_chttp1_settings);
   ctx->parser.data = &ctx->pctx;
 
   /* Registered BEFORE submitting; see _async_submit_hop's identical
@@ -3960,8 +3962,8 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
   }
   _url_free(chain->mp, &url);
 
-  pthread_once(&g_llhttp_settings_once, _init_llhttp_settings);
-  llhttp_init(&ctx->parser, HTTP_RESPONSE, &g_llhttp_settings);
+  pthread_once(&g_chttp1_settings_once, _init_chttp1_settings);
+  chttp1_parser_init(&ctx->parser, &g_chttp1_settings);
   ctx->parser.data = &ctx->pctx;
 
   if (reused) {

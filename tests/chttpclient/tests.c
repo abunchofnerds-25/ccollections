@@ -404,6 +404,28 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
     return true;
   }
 
+  if (strcmp(path, "/redirect-abs-path-query-with-slashes") == 0) {
+    /* Absolute-path Location whose QUERY string (not the path) contains
+     * "/../"; RFC 3986 SS5.2.4 dot-segment removal must never touch query
+     * bytes. Regression test for a bug where _resolve_redirect_url's
+     * absolute-path branch fed the whole "path?query" string into
+     * remove_dot_segments, letting "/../" inside the query corrupt the
+     * resolved path (e.g. "/foo/bar?x=1/../2" resolved to "/foo/2" instead
+     * of leaving the query untouched). The client must preserve the query
+     * byte-for-byte, so the next hop's request line must land on the exact
+     * route below, not some dot-segment-mangled path. */
+    srv_respond(conn_fd, 302, "Found", "text/plain",
+                "Location: /query-preserved-target?x=1/../2\r\n", NULL, 0,
+                false);
+    return true;
+  }
+
+  if (strcmp(path, "/query-preserved-target?x=1/../2") == 0) {
+    const char *b = "ok";
+    srv_respond(conn_fd, 200, "OK", "text/plain", NULL, b, strlen(b), false);
+    return true;
+  }
+
   if (strcmp(path, "/redirect-to-echo-auth-same-origin") == 0) {
     char loc_hdr[128];
     snprintf(loc_hdr, sizeof(loc_hdr),
@@ -448,6 +470,26 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
     snprintf(loc_hdr, sizeof(loc_hdr),
              "Location: http://127.0.0.1:%d/redirect-infinite\r\n", g_srv.port);
     srv_respond(conn_fd, 302, "Found", "text/plain", loc_hdr, NULL, 0, false);
+    return true;
+  }
+
+  if (strcmp(path, "/eof-delimited-body") == 0) {
+    /* Deliberately raw (bypassing srv_respond, which always sets
+     * Content-Length): a genuinely EOF-delimited body -- no Content-Length,
+     * no Transfer-Encoding -- whose end is signaled purely by the
+     * connection closing, exactly like a real HTTP/1.0 (or
+     * Connection: close, no explicit length) server response. Regression
+     * test for a bug where llhttp_finish's HTTP_FINISH_SAFE_WITH_CB case
+     * propagates on_message_complete's HPE_PAUSED return value as its own
+     * return value, which chttpclient.c's "fe != HPE_OK" check didn't
+     * originally account for, causing every such response to be reported
+     * as ccol_http_transfer_aborted. */
+    const char *raw =
+        "HTTP/1.0 200 OK\r\n"
+        "Content-Type: text/plain\r\n"
+        "\r\n"
+        "eof-delimited-body-ok";
+    send(conn_fd, raw, strlen(raw), 0);
     return true;
   }
 
@@ -882,6 +924,19 @@ TEST(http, get_200) {
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_NE((void *)resp->body, NULL);
+  chttpclient_resp_free(resp);
+}
+
+TEST(http, eof_delimited_body_without_content_length) {
+  char url[128];
+  make_url(url, sizeof(url), "/eof-delimited-body");
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get(url, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "eof-delimited-body-ok");
   chttpclient_resp_free(resp);
 }
 
@@ -2610,25 +2665,50 @@ TEST(relative_redirects, rfc3986_5_4_reference_table) {
    * "..", "../", multi-level "..", root-exhaustion, "/./", "/../", and
    * dot-segments in the middle of a path ("g/./h", "g/../h") as well as
    * non-special trailing/leading dots ("g.", ".g") that must NOT be treated
-   * as dot-segments. */
+   * as dot-segments. Also covers a query string containing "/../"-shaped
+   * bytes on both the absolute-path and relative-path branches: dot-segment
+   * removal (RFC 3986 SS5.2.4) operates on the path component only, and a
+   * query value must never be reinterpreted as path navigation, even when
+   * it happens to contain slashes and dots that would otherwise look like
+   * dot segments (regression coverage for a bug where the absolute-path
+   * branch fed the whole "path?query" string into remove_dot_segments,
+   * corrupting both the path and the query whenever the query contained a
+   * "/../"-aligned sequence). */
   static const struct {
     const char *location;
     const char *expected;
   } cases[] = {
-      {"g", "http://a/b/c/g"},       {"./g", "http://a/b/c/g"},
-      {"g/", "http://a/b/c/g/"},     {"/g", "http://a/g"},
-      {"//g", "http://g"},           {"?y", "http://a/b/c/d;p?y"},
-      {"g?y", "http://a/b/c/g?y"},   {"g;x", "http://a/b/c/g;x"},
-      {".", "http://a/b/c/"},        {"./", "http://a/b/c/"},
-      {"..", "http://a/b/"},         {"../", "http://a/b/"},
-      {"../g", "http://a/b/g"},      {"../..", "http://a/"},
-      {"../../", "http://a/"},       {"../../g", "http://a/g"},
-      {"../../../g", "http://a/g"},  {"../../../../g", "http://a/g"},
-      {"/./g", "http://a/g"},        {"/../g", "http://a/g"},
-      {"g.", "http://a/b/c/g."},     {".g", "http://a/b/c/.g"},
-      {"g..", "http://a/b/c/g.."},   {"..g", "http://a/b/c/..g"},
-      {"./../g", "http://a/b/g"},    {"./g/.", "http://a/b/c/g/"},
-      {"g/./h", "http://a/b/c/g/h"}, {"g/../h", "http://a/b/c/h"},
+      {"g", "http://a/b/c/g"},
+      {"./g", "http://a/b/c/g"},
+      {"g/", "http://a/b/c/g/"},
+      {"/g", "http://a/g"},
+      {"//g", "http://g"},
+      {"?y", "http://a/b/c/d;p?y"},
+      {"g?y", "http://a/b/c/g?y"},
+      {"g;x", "http://a/b/c/g;x"},
+      {".", "http://a/b/c/"},
+      {"./", "http://a/b/c/"},
+      {"..", "http://a/b/"},
+      {"../", "http://a/b/"},
+      {"../g", "http://a/b/g"},
+      {"../..", "http://a/"},
+      {"../../", "http://a/"},
+      {"../../g", "http://a/g"},
+      {"../../../g", "http://a/g"},
+      {"../../../../g", "http://a/g"},
+      {"/./g", "http://a/g"},
+      {"/../g", "http://a/g"},
+      {"g.", "http://a/b/c/g."},
+      {".g", "http://a/b/c/.g"},
+      {"g..", "http://a/b/c/g.."},
+      {"..g", "http://a/b/c/..g"},
+      {"./../g", "http://a/b/g"},
+      {"./g/.", "http://a/b/c/g/"},
+      {"g/./h", "http://a/b/c/g/h"},
+      {"g/../h", "http://a/b/c/h"},
+      {"/foo/bar?x=1/../2", "http://a/foo/bar?x=1/../2"},
+      {"/a/../b?x=1/../2", "http://a/b?x=1/../2"},
+      {"g?x=1/../2", "http://a/b/c/g?x=1/../2"},
   };
 
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
@@ -2649,6 +2729,25 @@ TEST(relative_redirects, live_multi_level_dot_segments) {
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
+  chttpclient_resp_free(resp);
+}
+
+TEST(relative_redirects, live_absolute_path_query_with_slashes_not_corrupted) {
+  /* End-to-end regression test (not just at the _resolve_redirect_url unit
+   * level): an absolute-path Location whose query string contains "/../"
+   * must be forwarded to the server byte-for-byte. Before the fix, the
+   * client would mangle the request target into a different path entirely
+   * (see /redirect-abs-path-query-with-slashes' own comment in the mock
+   * server), which would 404 instead of hitting /query-preserved-target. */
+  char url[160];
+  make_url(url, sizeof(url), "/redirect-abs-path-query-with-slashes");
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get(url, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "ok");
   chttpclient_resp_free(resp);
 }
 
@@ -3181,6 +3280,38 @@ TEST(async_step_a, get_200) {
   chttpclient_destroy(cli);
 }
 
+TEST(async_step_a, eof_delimited_body_without_content_length) {
+  /* Async-tier counterpart of http.eof_delimited_body_without_content_length
+   * -- same underlying bug (llhttp_finish's HTTP_FINISH_SAFE_WITH_CB case
+   * returning on_message_complete's HPE_PAUSED instead of HPE_OK), checked
+   * against _async_on_data's independent copy of the same fixed logic. */
+  chttpcli_construct(cli);
+  char url[160];
+  make_url(url, sizeof(url), "/eof-delimited-body");
+
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+
+  chttpcli_response *resp = raw->resp;
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "eof-delimited-body-ok");
+
+  chttpclient_resp_free(resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
 TEST(async_step_a, post_echoes_body) {
   chttpcli_construct(cli);
   char url[160];
@@ -3433,7 +3564,8 @@ TEST(async_step_a, concurrent_requests_all_succeed) {
  * assertions, plus async-specific chain-lifecycle coverage (multi-hop
  * chains, the CHTTP_MAX_REDIRECTS cap, and a relative Location) that has no
  * Tier 1 equivalent above since those code paths are shared with Tier 1 via
- * _resolve_redirect_url and the shared llhttp on_headers_complete callback.
+ * _resolve_redirect_url and the shared chttp1_parser on_headers_complete
+ * callback.
  */
 
 TEST(async_redirects, get_301_follows_to_final_resource) {

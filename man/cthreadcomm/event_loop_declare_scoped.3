@@ -1,0 +1,45 @@
+.TH EVENT_LOOP_DECLARE_SCOPED 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+event_loop_declare_scoped \- declare an event_loop with automatic destruction on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+event_loop_declare_scoped(name);
+.fi
+.SH DESCRIPTION
+.nf
+Declares an event_loop variable initialised to NULL and tagged with a
+GCC/Clang cleanup attribute (via _ccol_destructor) that calls
+___event_loop_destroy() automatically when the variable goes out of
+scope.  The variable must still be assigned via event_loop_construct()
+or an event_loop_create*() call before use.
+
+Prefer event_loop_construct_scoped() when declaration and
+initialisation can happen together, which is the common case.
+.fi
+.SH PARAMETERS
+.nf
+name  Variable name to declare.
+.fi
+.SH NOTES
+.nf
+Safe to leave the variable NULL through the whole scope (the cleanup
+function is a no-op on NULL).
+.fi
+.SH EXAMPLES
+.nf
+{
+    event_loop_declare_scoped(loop);
+    char *err = NULL;
+    loop = event_loop_create(32, &err);
+    if (!loop) { fprintf(stderr, "%s\en", err); return; }
+    /* ... */
+}  /* loop is automatically destroyed here */
+.fi
+.SH "SEE ALSO"
+.BR event_loop_declare (3),
+.BR event_loop_construct_scoped (3),
+.BR event_loop_create (3)

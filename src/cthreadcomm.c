@@ -22,11 +22,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+#include <chashmap.h>
 #include <cthreadcomm.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/socket.h>
@@ -37,7 +40,7 @@ SOFTWARE.
 #endif
 
 /* Adds duration to target, normalising tv_nsec into [0, 1e9) to keep the
- * struct in a valid state for pthread_cond_timedwait. Both inputs are
+ * struct in a valid state for cond_var_timedwait. Both inputs are
  * normalised independently so the function is safe even when either
  * carries an already-overflowed tv_nsec. */
 void add_duration_to_timespec(struct timespec *target,
@@ -74,8 +77,8 @@ void add_duration_to_timespec(struct timespec *target,
  * waiter list is read or modified, which guarantees that these nodes remain
  * valid during any traversal by a producer. */
 typedef struct ccol_sel_waiter {
-  pthread_mutex_t *sel_mtx;
-  pthread_cond_t *sel_cond;
+  mutex_t *sel_mtx;
+  cond_var_t *sel_cond;
   bool *ready;
   int efd; /* eventfd for epoll mode; -1 in condvar-only mode */
   struct ccol_sel_waiter *prev;
@@ -85,10 +88,10 @@ typedef struct ccol_sel_waiter {
 /* Wakes a single waiter node.  Must be called while the owning queue's mutex
  * is held so that the node pointer remains valid throughout. */
 static void _notify_waiter(ccol_sel_waiter *w) {
-  pthread_mutex_lock(w->sel_mtx);
+  mutex_lock(*w->sel_mtx);
   *w->ready = true;
-  pthread_mutex_unlock(w->sel_mtx);
-  pthread_cond_signal(w->sel_cond);
+  mutex_unlock(*w->sel_mtx);
+  cond_var_signal(*w->sel_cond);
   if (w->efd >= 0) {
     uint64_t one = 1;
     (void)write(w->efd, &one, sizeof(one));
@@ -1098,14 +1101,14 @@ size_t chan_msg_count(channel *ch, channel_direction d) {
  * head must be the address of the appropriate sel_{read,write}_waiters_head
  * pointer in the owning queue. */
 static void _sel_unlink_waiter(ccol_sel_waiter *node, ccol_sel_waiter **head,
-                               pthread_mutex_t *mtx) {
-  pthread_mutex_lock(mtx);
+                               mutex_t *mtx) {
+  mutex_lock(*mtx);
   if (node->prev)
     node->prev->next = node->next;
   else
     *head = node->next;
   if (node->next) node->next->prev = node->prev;
-  pthread_mutex_unlock(mtx);
+  mutex_unlock(*mtx);
 }
 
 /* Removes the waiter node at index i from its queue's waiter list.  Acquires
@@ -1322,9 +1325,9 @@ static bool _sel_ensure_efd(size_t i, ccol_sel_waiter *nodes, int epfd) {
 
 /* Fills in nodes[i] and prepends it to *head.  Called under the owning queue's
  * mutex; the caller unlocks after this returns. */
-static void _sel_link_waiter(size_t i, ccol_sel_waiter *nodes,
-                             pthread_mutex_t *sel_mtx, pthread_cond_t *sel_cond,
-                             bool *ready, ccol_sel_waiter **head) {
+static void _sel_link_waiter(size_t i, ccol_sel_waiter *nodes, mutex_t *sel_mtx,
+                             cond_var_t *sel_cond, bool *ready,
+                             ccol_sel_waiter **head) {
   nodes[i].sel_mtx = sel_mtx;
   nodes[i].sel_cond = sel_cond;
   nodes[i].ready = ready;
@@ -1402,8 +1405,8 @@ static int _sel_setup_epoll(size_t n, ccol_selectable *selectables) {
  * caller must call deregister_all_sel_waiters before freeing them. */
 static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
                                      ccol_sel_waiter *nodes, bool has_fd_sels,
-                                     int epfd, pthread_mutex_t *sel_mtx,
-                                     pthread_cond_t *sel_cond, bool *ready,
+                                     int epfd, mutex_t *sel_mtx,
+                                     cond_var_t *sel_cond, bool *ready,
                                      c_message_t *buf) {
   int found = -1;
   for (size_t i = 0; i < n && found < 0; i++) {
@@ -1493,27 +1496,26 @@ static int _sel_phase1_scan_register(size_t n, ccol_selectable *selectables,
 /* Waits on sel_cond until *ready is set by a producer or the deadline elapses.
  * Returns true if the deadline elapsed with *ready still false; false on a
  * normal wakeup.  Always resets *ready to false before returning. */
-static bool _sel_wait_condvar(pthread_mutex_t *sel_mtx,
-                              pthread_cond_t *sel_cond, bool *ready,
-                              bool has_deadline,
+static bool _sel_wait_condvar(mutex_t *sel_mtx, cond_var_t *sel_cond,
+                              bool *ready, bool has_deadline,
                               const struct timespec *deadline) {
-  pthread_mutex_lock(sel_mtx);
+  mutex_lock(*sel_mtx);
   if (has_deadline) {
     bool timed_out_flag = false;
     while (!*ready) {
-      int wait_ret = pthread_cond_timedwait(sel_cond, sel_mtx, deadline);
+      int wait_ret = cond_var_timedwait(*sel_cond, *sel_mtx, *deadline);
       if (wait_ret == ETIMEDOUT) {
         if (!*ready) timed_out_flag = true;
         break;
       }
     }
     *ready = false;
-    pthread_mutex_unlock(sel_mtx);
+    mutex_unlock(*sel_mtx);
     return timed_out_flag;
   }
-  while (!*ready) pthread_cond_wait(sel_cond, sel_mtx);
+  while (!*ready) cond_var_wait(*sel_cond, *sel_mtx);
   *ready = false;
-  pthread_mutex_unlock(sel_mtx);
+  mutex_unlock(*sel_mtx);
   return false;
 }
 
@@ -1603,7 +1605,7 @@ static _sel_epoll_outcome _sel_wait_epoll(
  *       while-loop guards against spurious wakeups and against signals that
  *       fired between Phase 1 and cond_wait.  Producers set the ready flag
  *       under sel_mtx before signalling, so no wakeup can be lost.
- *       If a deadline is set, pthread_cond_timedwait is used on a
+ *       If a deadline is set, cond_var_timedwait is used on a
  *       CLOCK_MONOTONIC condvar; ETIMEDOUT breaks the loop and returns
  *       ccol_timed_out.
  *     fd selectables present: block on epoll_wait(epfd).  Queue waiters
@@ -1664,19 +1666,19 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
     nodes[i].efd = -1;
   }
 
-  pthread_mutex_t sel_mtx;
-  pthread_cond_t sel_cond;
+  mutex_t sel_mtx;
+  cond_var_t sel_cond;
   bool ready = false;
-  pthread_mutex_init(&sel_mtx, NULL);
+  mutex_init(sel_mtx);
   /* Always initialise with CLOCK_MONOTONIC so timed waits are immune to
    * wall-clock adjustments.  Infinite waits ignore the clock attribute so
    * this is safe even when no timeout is used. */
   {
-    pthread_condattr_t cond_attr;
-    pthread_condattr_init(&cond_attr);
-    pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
-    pthread_cond_init(&sel_cond, &cond_attr);
-    pthread_condattr_destroy(&cond_attr);
+    cond_var_attr_t cond_attr;
+    cond_var_attr_init(cond_attr);
+    cond_var_attr_setclock(cond_attr, CLOCK_MONOTONIC);
+    cond_var_init_ca(sel_cond, cond_attr);
+    cond_var_attr_destroy(cond_attr);
   }
 
   bool has_deadline;
@@ -1688,8 +1690,8 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
     epfd = _sel_setup_epoll(n, selectables);
     if (epfd < 0) {
       free(nodes);
-      pthread_mutex_destroy(&sel_mtx);
-      pthread_cond_destroy(&sel_cond);
+      mutex_destroy(sel_mtx);
+      cond_var_destroy(sel_cond);
       return ccol_unexpected_failure;
     }
   }
@@ -1741,8 +1743,8 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
     if (nodes[i].efd >= 0) close(nodes[i].efd);
   }
   if (epfd >= 0) close(epfd);
-  pthread_mutex_destroy(&sel_mtx);
-  pthread_cond_destroy(&sel_cond);
+  mutex_destroy(sel_mtx);
+  cond_var_destroy(sel_cond);
   free(nodes);
   return retval;
 
@@ -1752,8 +1754,8 @@ cleanup_unexpected_failure:
     if (nodes[i].efd >= 0) close(nodes[i].efd);
   }
   if (epfd >= 0) close(epfd);
-  pthread_mutex_destroy(&sel_mtx);
-  pthread_cond_destroy(&sel_cond);
+  mutex_destroy(sel_mtx);
+  cond_var_destroy(sel_cond);
   free(nodes);
   return ccol_unexpected_failure;
 }
@@ -1761,4 +1763,968 @@ cleanup_unexpected_failure:
 ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
                           ccol_selectable *selectables) {
   return ccol_select_timed(buf, ready_index, n, selectables, -1);
+}
+
+/* event_loop related section starts here. */
+
+typedef struct event_entry event_entry;
+
+struct event_reg {
+  ccol_selectable sel;
+  event_handlers_t handlers;
+  void *arg;
+  _Atomic int refcount; /* 1 while registered; +1 per in-flight callback */
+  _Atomic bool removed;
+  event_entry *owning_entry;
+  int bridge_efd; /* -1 for fd selectables; the persistent bridge eventfd
+                   * for queue/channel selectables */
+
+  /* Queue/channel selectables only: _notify_waiter (above) unconditionally
+   * locks sel_mtx / signals sel_cond before checking efd, so a persistent
+   * registration needs its own owned mutex/cond/ready-bool to satisfy that
+   * contract, even though the reactor thread never actually
+   * cond_var_wait's on wait_cond (only the bridge_efd ping matters
+   * here). */
+  mutex_t wait_mtx;
+  cond_var_t wait_cond;
+  bool wait_ready;
+  ccol_sel_waiter waiter_node;
+
+  /* Intrusive list of every currently-registered queue-backed reg for this
+   * loop. fd-backed regs don't need this (they're already reachable via the
+   * loop's fd table); queue selectables have no equivalent table to
+   * enumerate them from, and __event_loop_destroy must be able to find and
+   * unlink every queue-backed waiter_node from its queue's own list before
+   * freeing it. */
+  event_reg *loop_list_prev;
+  event_reg *loop_list_next;
+
+  /* Linked into loop->pending_reg_frees when its refcount reaches 0 (see
+   * _event_loop_defer_reg_free below); never reused once freeing begins. */
+  event_reg *pending_free_next;
+};
+
+/* What ev.data.ptr always points to for every epoll registration this
+ * module owns. For an fd, one entry can be shared by up to two event_regs
+ * (read_reg/write_reg), since epoll_ctl keys its interest list by fd, not
+ * by (fd, direction) pair; a bare event_reg* cannot be what ev.data.ptr
+ * holds directly, or whichever direction's reg was registered last would
+ * silently receive every event on that fd, including ones meant for the
+ * other direction. Queue/channel selectables never share an entry: each
+ * gets its own dedicated bridge eventfd and one-reg entry. */
+struct event_entry {
+  bool is_fd;
+  int fd; /* fd selectables only; also the fd-table key */
+  union {
+    struct {
+      event_reg *read_reg;
+      event_reg *write_reg;
+    } fd;
+    event_reg *reg; /* queue/channel selectables: 1:1, no sharing */
+  } as;
+
+  /* Linked into loop->pending_entry_frees when retired (see
+   * _event_loop_defer_entry_free below); never reused once an entry is
+   * retired, so this doubling as both "live" and "pending free" state is
+   * safe. */
+  event_entry *pending_free_next;
+};
+
+struct event_loop_s {
+  int epfd;
+  int shutdown_efd;
+  pthread_t thread;
+
+  mutex_t registry_lock;
+  cond_var_t joined_cv;
+  bool shutdown_started;
+  bool joined;
+  _Atomic bool shutting_down;
+
+  /* event_entry structs retired by event_loop_remove but not yet freed.
+   * See _event_loop_defer_entry_free's comment for why a synchronous free
+   * there would be a use-after-free. */
+  event_entry *pending_entry_frees;
+
+  /* event_reg structs whose refcount reached 0 but are not yet freed. A
+   * synchronous free here (the common case: refcount reaches 0 immediately,
+   * with no in-flight dispatch) would leave a caller-held event_reg* that
+   * still gets passed to event_loop_modify/event_loop_remove (both
+   * documented to gracefully return ccol_invalid_args for an
+   * already-removed reg, not to be undefined behaviour) pointing at freed
+   * memory; see _event_loop_defer_reg_free's comment. */
+  event_reg *pending_reg_frees;
+
+  size_t max_events_per_wait;
+
+  /* int fd -> event_entry* (fd registry). Raw function layer (not the
+   * fatal_err-calling type-safe macros): an insertion failure here must
+   * propagate to event_loop_add's caller as ccol_not_enough_memory, not
+   * abort the process, per this codebase's documented two-level API
+   * convention for library-internal code. */
+  chmap fd_registry;
+
+  event_reg *queue_regs_head;
+
+  size_t reg_count;
+
+  ccol_memmgmt_procs_t *m_procs;
+};
+
+/* chmap's separate-chaining chmap_entry storage is __attribute__((packed)),
+ * so a stored event_entry* is not guaranteed 8-byte aligned; a direct
+ * *(event_entry **)val_pair->ptr cast is UB and can crash at -O3 (the exact
+ * alignment hazard already documented for cjson/cyaml's own chmap usage in
+ * this codebase). Always read/write the stored pointer via memcpy. */
+static event_entry *_fd_registry_find(struct event_loop_s *loop, int fd) {
+  cmap_pair key_pair = {.ptr = &fd, .size = sizeof(fd)};
+  cmap_pair *val_pair = NULL;
+  if (chmap_get_elem_ref(loop->fd_registry, &key_pair, &val_pair) !=
+      ccol_success) {
+    return NULL;
+  }
+  event_entry *entry;
+  memcpy(&entry, val_pair->ptr, sizeof(entry));
+  return entry;
+}
+
+/* Inserts fd->entry. Caller must have already confirmed fd is not present
+ * (via a prior _fd_registry_find returning NULL). */
+static bool _fd_registry_insert(struct event_loop_s *loop, int fd,
+                                event_entry *entry) {
+  cmap_pair key_pair = {.ptr = &fd, .size = sizeof(fd)};
+  cmap_pair val_pair = {.ptr = &entry, .size = sizeof(entry)};
+  return chmap_insert_elem(loop->fd_registry, &key_pair, &val_pair) ==
+         ccol_success;
+}
+
+static void _fd_registry_remove(struct event_loop_s *loop, int fd) {
+  cmap_pair key_pair = {.ptr = &fd, .size = sizeof(fd)};
+  chmap_delete_elem(loop->fd_registry, &key_pair);
+}
+
+static void _loop_queue_list_add(struct event_loop_s *loop, event_reg *reg) {
+  reg->loop_list_prev = NULL;
+  reg->loop_list_next = loop->queue_regs_head;
+  if (loop->queue_regs_head) loop->queue_regs_head->loop_list_prev = reg;
+  loop->queue_regs_head = reg;
+}
+
+static void _loop_queue_list_remove(struct event_loop_s *loop, event_reg *reg) {
+  if (reg->loop_list_prev)
+    reg->loop_list_prev->loop_list_next = reg->loop_list_next;
+  else
+    loop->queue_regs_head = reg->loop_list_next;
+  if (reg->loop_list_next)
+    reg->loop_list_next->loop_list_prev = reg->loop_list_prev;
+}
+
+/* Resolves the queue mutex and the correct sel_{read,write}_waiters_head
+ * pointer for sel (circq or dynq only; fd selectables never reach here).
+ * ccol_selectable_from_chan has already resolved chan selectables down to a
+ * concrete circq by the time sel reaches event_loop_add. */
+static void _queue_sel_locate(ccol_selectable *sel, mutex_t **out_mtx,
+                              ccol_sel_waiter ***out_head) {
+  if (sel->type == ccol_selectable_circq) {
+    circular_queue *cq = sel->cq;
+    *out_mtx = &cq->mutex;
+    *out_head = (sel->dir == ccol_select_read) ? &cq->sel_read_waiters_head
+                                               : &cq->sel_write_waiters_head;
+  } else {
+    dynamic_queue *dq = sel->dq;
+    *out_mtx = &dq->mutex;
+    *out_head = (sel->dir == ccol_select_read) ? &dq->sel_read_waiters_head
+                                               : &dq->sel_write_waiters_head;
+  }
+}
+
+static event_reg *_event_reg_create(struct event_loop_s *loop,
+                                    ccol_selectable sel,
+                                    event_handlers_t handlers, void *arg) {
+  event_reg *reg = _mem_calloc(loop->m_procs, 1, sizeof(event_reg));
+  if (!reg) return NULL;
+  reg->sel = sel;
+  reg->handlers = handlers;
+  reg->arg = arg;
+  atomic_init(&reg->refcount, 1);
+  atomic_init(&reg->removed, false);
+  reg->bridge_efd = -1;
+  return reg;
+}
+
+static void _event_reg_free(struct event_loop_s *loop, event_reg *reg) {
+  if (reg->sel.type != ccol_selectable_fd) {
+    mutex_destroy(reg->wait_mtx);
+    cond_var_destroy(reg->wait_cond);
+    if (reg->bridge_efd >= 0) close(reg->bridge_efd);
+  }
+  _mem_free(loop->m_procs, reg);
+}
+
+/* Registers a new fd direction for reg. If sel.fd already has an event_entry
+ * (its other direction is already registered), combines interest via
+ * EPOLL_CTL_MOD; otherwise creates a fresh entry via EPOLL_CTL_ADD. Rejects
+ * a direction that's already occupied by a different reg with
+ * ccol_not_permitted. On success, sets reg->owning_entry. */
+static ccol_retval_t _event_loop_add_fd(struct event_loop_s *loop,
+                                        event_reg *reg) {
+  int fd = reg->sel.fd;
+  event_entry *entry = _fd_registry_find(loop, fd);
+  bool new_entry = (entry == NULL);
+
+  if (new_entry) {
+    entry = _mem_calloc(loop->m_procs, 1, sizeof(event_entry));
+    if (!entry) return ccol_not_enough_memory;
+    entry->is_fd = true;
+    entry->fd = fd;
+    entry->as.fd.read_reg = NULL;
+    entry->as.fd.write_reg = NULL;
+  }
+
+  event_reg **slot = (reg->sel.dir == ccol_select_read)
+                         ? &entry->as.fd.read_reg
+                         : &entry->as.fd.write_reg;
+  if (*slot != NULL) {
+    if (new_entry) _mem_free(loop->m_procs, entry);
+    return ccol_not_permitted;
+  }
+  *slot = reg;
+
+  uint32_t mask = 0;
+  if (entry->as.fd.read_reg)
+    mask |= (EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP);
+  if (entry->as.fd.write_reg) mask |= (EPOLLOUT | EPOLLERR | EPOLLHUP);
+
+  struct epoll_event ev;
+  ev.data.ptr = entry;
+  ev.events = mask;
+  int ctl_op = new_entry ? EPOLL_CTL_ADD : EPOLL_CTL_MOD;
+  if (epoll_ctl(loop->epfd, ctl_op, fd, &ev) < 0) {
+    *slot = NULL;
+    if (new_entry) _mem_free(loop->m_procs, entry);
+    return ccol_unexpected_failure;
+  }
+
+  if (new_entry && !_fd_registry_insert(loop, fd, entry)) {
+    epoll_ctl(loop->epfd, EPOLL_CTL_DEL, fd, NULL);
+    *slot = NULL;
+    _mem_free(loop->m_procs, entry);
+    return ccol_not_enough_memory;
+  }
+
+  reg->owning_entry = entry;
+  return ccol_success;
+}
+
+/* Sets up a queue-backed registration: allocates the dedicated bridge
+ * eventfd, registers it with the loop's persistent epoll instance, and
+ * links reg's embedded waiter_node into the queue's own waiter list,
+ * permanently (unlike ccol_select's transient per-call nodes), so the
+ * queue's existing notify_one_sel_waiter/notify_all_sel_waiters (already
+ * called from circq_send_zc/recv_zc, dynmq_send_zc/recv_zc, and the
+ * enable_sending/disable_sending functions) wakes this registration too. */
+static ccol_retval_t _event_loop_add_queue(struct event_loop_s *loop,
+                                           event_entry *entry, event_reg *reg) {
+  mutex_init(reg->wait_mtx);
+  cond_var_init(reg->wait_cond);
+  reg->wait_ready = false;
+
+  reg->bridge_efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+  if (reg->bridge_efd < 0) {
+    mutex_destroy(reg->wait_mtx);
+    cond_var_destroy(reg->wait_cond);
+    return ccol_unexpected_failure;
+  }
+  reg->waiter_node.efd = reg->bridge_efd;
+
+  struct epoll_event ev;
+  ev.data.ptr = entry;
+  ev.events = EPOLLIN;
+  if (epoll_ctl(loop->epfd, EPOLL_CTL_ADD, reg->bridge_efd, &ev) < 0) {
+    close(reg->bridge_efd);
+    reg->bridge_efd = -1;
+    mutex_destroy(reg->wait_mtx);
+    cond_var_destroy(reg->wait_cond);
+    return ccol_unexpected_failure;
+  }
+
+  mutex_t *q_mtx;
+  ccol_sel_waiter **q_head;
+  _queue_sel_locate(&reg->sel, &q_mtx, &q_head);
+
+  mutex_lock(*q_mtx);
+  /* Single-element-array call convention: _sel_link_waiter indexes into
+   * nodes[i] because ccol_select_timed always has a real caller-owned
+   * array; event_loop has exactly one standalone waiter_node per
+   * registration, and nodes[0] with nodes = &reg->waiter_node is just
+   * reg->waiter_node. */
+  _sel_link_waiter(0, &reg->waiter_node, &reg->wait_mtx, &reg->wait_cond,
+                   &reg->wait_ready, q_head);
+  /* Unlike a real fd (where epoll_ctl(ADD) against an already-readable
+   * kernel object is picked up by the very next epoll_wait, since epoll
+   * tracks the resource's live state, not just edge transitions), this
+   * bridge eventfd only rings on a *future* notify_one_sel_waiter call.  A
+   * message already sitting in the queue before this registration existed
+   * would otherwise be missed entirely until the next send.  Self-trigger
+   * here, still under q_mtx so the check is consistent with the link above,
+   * if the queue is already in the target state; the reactor thread's own
+   * next epoll_wait then picks it up and dispatches through the completely
+   * standard drain-then-try_recv path, so callbacks still only ever run
+   * from there. */
+  bool already_ready =
+      (reg->sel.type == ccol_selectable_circq)
+          ? (reg->sel.dir == ccol_select_read
+                 ? reg->sel.cq->msg_count > 0
+                 : reg->sel.cq->msg_count < reg->sel.cq->max_size &&
+                       !reg->sel.cq->writing_disabled)
+          : (reg->sel.dir == ccol_select_read
+                 ? reg->sel.dq->msg_count > 0
+                 : !reg->sel.dq->writing_disabled &&
+                       reg->sel.dq->msg_count < max_elem_count);
+  mutex_unlock(*q_mtx);
+
+  if (already_ready) {
+    uint64_t one = 1;
+    (void)write(reg->bridge_efd, &one, sizeof(one));
+  }
+
+  return ccol_success;
+}
+
+/* Validates a ccol_selectable for event_loop_add. Rejects
+ * selectable_from_fd_limited (non-zero max_fd_read_bytes) for fd
+ * selectables: event_loop never reads an fd itself (see
+ * event_readable_fn's documentation), so a read-size cap has no meaning
+ * here and would otherwise be silently ignored. */
+static ccol_retval_t _event_loop_validate_add_args(event_loop loop,
+                                                   ccol_selectable *sel) {
+  if (!loop) return ccol_invalid_args;
+  if (sel->dir != ccol_select_read && sel->dir != ccol_select_write)
+    return ccol_invalid_args;
+
+  if (sel->type == ccol_selectable_fd) {
+    if (sel->fd < 0) return ccol_invalid_args;
+    if (sel->max_fd_read_bytes != 0) return ccol_invalid_args;
+  } else if (sel->type == ccol_selectable_circq) {
+    if (!sel->cq) return ccol_invalid_args;
+  } else if (sel->type == ccol_selectable_dynq) {
+    if (!sel->dq) return ccol_invalid_args;
+  } else {
+    return ccol_invalid_args;
+  }
+  return ccol_success;
+}
+
+event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
+                          event_handlers_t handlers, void *arg,
+                          char **err_str) {
+  ccol_retval_t validate = _event_loop_validate_add_args(loop, &sel);
+  if (validate != ccol_success) {
+    if (err_str) *err_str = CCOL_ERR_STR("Invalid arguments to event_loop_add");
+    return NULL;
+  }
+
+  event_reg *reg = _event_reg_create(loop, sel, handlers, arg);
+  if (!reg) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for event_reg");
+    return NULL;
+  }
+
+  mutex_lock(loop->registry_lock);
+
+  ccol_retval_t rv;
+  if (sel.type == ccol_selectable_fd) {
+    rv = _event_loop_add_fd(loop, reg);
+  } else {
+    event_entry *entry = _mem_calloc(loop->m_procs, 1, sizeof(event_entry));
+    if (!entry) {
+      rv = ccol_not_enough_memory;
+    } else {
+      entry->is_fd = false;
+      entry->fd = -1;
+      entry->as.reg = reg;
+      rv = _event_loop_add_queue(loop, entry, reg);
+      if (rv == ccol_success) {
+        reg->owning_entry = entry;
+        _loop_queue_list_add(loop, reg);
+      } else {
+        _mem_free(loop->m_procs, entry);
+      }
+    }
+  }
+
+  if (rv == ccol_success) loop->reg_count++;
+
+  mutex_unlock(loop->registry_lock);
+
+  if (rv != ccol_success) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("Failed to register selectable with event_loop");
+    _event_reg_free(loop, reg);
+    return NULL;
+  }
+
+  return reg;
+}
+
+ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
+                                ccol_select_dir new_dir) {
+  if (!loop || !reg) return ccol_invalid_args;
+  if (new_dir != ccol_select_read && new_dir != ccol_select_write)
+    return ccol_invalid_args;
+  if (reg->sel.type != ccol_selectable_fd) return ccol_invalid_args;
+
+  mutex_lock(loop->registry_lock);
+
+  if (atomic_load(&reg->removed)) {
+    mutex_unlock(loop->registry_lock);
+    return ccol_invalid_args;
+  }
+
+  if (reg->sel.dir == new_dir) {
+    mutex_unlock(loop->registry_lock);
+    return ccol_success;
+  }
+
+  event_entry *entry = reg->owning_entry;
+  event_reg **target_slot = (new_dir == ccol_select_read)
+                                ? &entry->as.fd.read_reg
+                                : &entry->as.fd.write_reg;
+  if (*target_slot != NULL) {
+    mutex_unlock(loop->registry_lock);
+    return ccol_not_permitted;
+  }
+
+  event_reg **current_slot = (reg->sel.dir == ccol_select_read)
+                                 ? &entry->as.fd.read_reg
+                                 : &entry->as.fd.write_reg;
+  *current_slot = NULL;
+  *target_slot = reg;
+  reg->sel.dir = new_dir;
+
+  uint32_t mask = 0;
+  if (entry->as.fd.read_reg)
+    mask |= (EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP);
+  if (entry->as.fd.write_reg) mask |= (EPOLLOUT | EPOLLERR | EPOLLHUP);
+  struct epoll_event ev;
+  ev.data.ptr = entry;
+  ev.events = mask;
+  epoll_ctl(loop->epfd, EPOLL_CTL_MOD, entry->fd, &ev);
+
+  mutex_unlock(loop->registry_lock);
+  return ccol_success;
+}
+
+/* event_entry cannot be freed synchronously from event_loop_remove, even
+ * though epoll_ctl(DEL)/entry-slot-clearing already prevents any FUTURE
+ * epoll_wait call from returning a new event for it. epoll_wait can return
+ * a batch of several ready events in one call, which the reactor thread
+ * then processes one at a time; if this entry's event is sitting at some
+ * later index in a batch already fetched (fetched before this remove()
+ * call, sitting in the reactor thread's local stack array), freeing the
+ * entry here races that not-yet-processed index against event_loop_remove,
+ * a genuine use-after-free reproduced via a real SIGSEGV during this
+ * feature's own test development (gdb backtrace on the resulting core
+ * pinned it to a stale event_entry* read after a concurrent remove()).
+ * epoll_ctl(DEL) has no way to retroactively invalidate an event already
+ * copied out of the kernel into userspace.
+ *
+ * Deferring the actual free to a point where the reactor thread can prove
+ * no batch could still reference this entry (between finishing one
+ * epoll_wait batch and starting the next) closes the race completely: by
+ * the time a deferred entry is actually freed, every index of every batch
+ * that could have referenced it has already been processed (safely, since
+ * this function has already cleared its slots / retired it under
+ * registry_lock before deferring the free). */
+static void _event_loop_defer_entry_free(struct event_loop_s *loop,
+                                         event_entry *entry) {
+  entry->pending_free_next = loop->pending_entry_frees;
+  loop->pending_entry_frees = entry;
+}
+
+/* event_reg cannot be freed synchronously either, for a related but
+ * distinct reason from _event_loop_defer_entry_free's: event_loop_modify
+ * and event_loop_remove are both documented to gracefully return
+ * ccol_invalid_args (not invoke undefined behaviour) when called on a reg
+ * that was already removed. Freeing reg the instant its refcount reaches
+ * 0 (the common case, whenever no dispatch happens to be in flight for it)
+ * means a caller that calls event_loop_remove and then passes that same
+ * (now-dangling) pointer to event_loop_modify hits exactly the use-after-
+ * free the documented contract promises can't happen; caught directly by
+ * valgrind on this feature's own test for that exact scenario. Deferring
+ * the free the same way as entries keeps the memory (and its `removed`
+ * flag) valid for that later check to read safely. */
+static void _event_loop_defer_reg_free(struct event_loop_s *loop,
+                                       event_reg *reg) {
+  reg->pending_free_next = loop->pending_reg_frees;
+  loop->pending_reg_frees = reg;
+}
+
+/* Frees every entry/reg deferred by _event_loop_defer_entry_free /
+ * _event_loop_defer_reg_free. Safe to call only between epoll_wait batches
+ * (the reactor thread's own loop) or after the reactor thread has been
+ * joined (event_loop_shutdown/destroy); both are points where no stale
+ * batch reference and no further external add/modify/remove call can be
+ * racing this drain. */
+static void _event_loop_drain_pending_frees(struct event_loop_s *loop) {
+  mutex_lock(loop->registry_lock);
+  event_entry *e = loop->pending_entry_frees;
+  loop->pending_entry_frees = NULL;
+  event_reg *r = loop->pending_reg_frees;
+  loop->pending_reg_frees = NULL;
+  mutex_unlock(loop->registry_lock);
+  while (e) {
+    event_entry *next = e->pending_free_next;
+    _mem_free(loop->m_procs, e);
+    e = next;
+  }
+  while (r) {
+    event_reg *next = r->pending_free_next;
+    _event_reg_free(loop, r);
+    r = next;
+  }
+}
+
+ccol_retval_t event_loop_remove(event_loop loop, event_reg *reg) {
+  if (!loop || !reg) return ccol_invalid_args;
+
+  mutex_lock(loop->registry_lock);
+
+  if (atomic_load(&reg->removed)) {
+    mutex_unlock(loop->registry_lock);
+    return ccol_success;
+  }
+
+  event_entry *entry = reg->owning_entry;
+
+  if (reg->sel.type == ccol_selectable_fd) {
+    event_reg **slot = (reg->sel.dir == ccol_select_read)
+                           ? &entry->as.fd.read_reg
+                           : &entry->as.fd.write_reg;
+    *slot = NULL;
+    if (entry->as.fd.read_reg == NULL && entry->as.fd.write_reg == NULL) {
+      epoll_ctl(loop->epfd, EPOLL_CTL_DEL, entry->fd, NULL);
+      _fd_registry_remove(loop, entry->fd);
+      _event_loop_defer_entry_free(loop, entry);
+    } else {
+      uint32_t mask = 0;
+      if (entry->as.fd.read_reg)
+        mask |= (EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLHUP);
+      if (entry->as.fd.write_reg) mask |= (EPOLLOUT | EPOLLERR | EPOLLHUP);
+      struct epoll_event ev;
+      ev.data.ptr = entry;
+      ev.events = mask;
+      epoll_ctl(loop->epfd, EPOLL_CTL_MOD, entry->fd, &ev);
+    }
+  } else {
+    mutex_t *q_mtx;
+    ccol_sel_waiter **q_head;
+    _queue_sel_locate(&reg->sel, &q_mtx, &q_head);
+    _sel_unlink_waiter(&reg->waiter_node, q_head, q_mtx);
+    epoll_ctl(loop->epfd, EPOLL_CTL_DEL, reg->bridge_efd, NULL);
+    _loop_queue_list_remove(loop, reg);
+    /* entry itself is deferred (safe, still-valid memory) below, but its
+     * as.reg field must be nulled HERE, under the lock, before that; a
+     * stale batch entry could otherwise read entry->as.reg after reg is
+     * deferred-freed and get a still-dangling-looking pointer into the
+     * pending-free list rather than a clean NULL. The fd branch above
+     * already does the equivalent via *slot = NULL. */
+    entry->as.reg = NULL;
+    _event_loop_defer_entry_free(loop, entry);
+  }
+
+  atomic_store(&reg->removed, true);
+  loop->reg_count--;
+
+  int prev = atomic_fetch_sub(&reg->refcount, 1);
+  /* Deferred, not freed here directly; see _event_loop_defer_reg_free's
+   * comment: a caller-held reg* may still be passed to event_loop_modify or
+   * event_loop_remove again after this call returns, and both are
+   * documented to read reg->removed safely in that case. */
+  if (prev == 1) _event_loop_defer_reg_free(loop, reg);
+
+  mutex_unlock(loop->registry_lock);
+
+  return ccol_success;
+}
+
+size_t event_loop_reg_count(event_loop loop) {
+  if (!loop) return ccol_invalid_size;
+  mutex_lock(loop->registry_lock);
+  size_t count = loop->reg_count;
+  mutex_unlock(loop->registry_lock);
+  return count;
+}
+
+/* One reg collected for dispatch under registry_lock, acted on after the
+ * lock is released. */
+typedef struct _dispatch_item {
+  event_reg *reg;
+  bool is_error;
+  bool is_readable;
+  bool is_writable;
+} _dispatch_item;
+
+static void _event_loop_run_callback(event_loop loop, _dispatch_item *item) {
+  event_reg *reg = item->reg;
+  if (item->is_error) {
+    if (reg->handlers.on_error)
+      reg->handlers.on_error(loop, &reg->sel, reg->arg);
+  } else if (item->is_readable) {
+    if (reg->sel.type == ccol_selectable_fd) {
+      if (reg->handlers.on_readable)
+        reg->handlers.on_readable(loop, &reg->sel, NULL, reg->arg);
+    } else {
+      c_message_t msg;
+      ccol_retval_t rv = (reg->sel.type == ccol_selectable_circq)
+                             ? circq_try_recv_zc(reg->sel.cq, &msg)
+                             : dynmq_try_recv_zc(reg->sel.dq, &msg);
+      /* rv == ccol_container_empty means a concurrent consumer already
+       * claimed the message (TOCTOU, same as ccol_select's own
+       * write-direction contract); silently skip. The queue's next
+       * notify will fire again if something is still there. */
+      if (rv == ccol_success && reg->handlers.on_readable) {
+        reg->handlers.on_readable(loop, &reg->sel, &msg, reg->arg);
+      }
+    }
+  } else if (item->is_writable) {
+    if (reg->handlers.on_writable)
+      reg->handlers.on_writable(loop, &reg->sel, reg->arg);
+  }
+}
+
+/* Decrements reg's refcount after its callback (if any) has returned;
+ * defers it for freeing if this was the last reference and it had already
+ * been removed (see _event_loop_defer_reg_free's comment for why this
+ * can't be a synchronous free here). */
+static void _event_loop_release_after_dispatch(struct event_loop_s *loop,
+                                               event_reg *reg) {
+  mutex_lock(loop->registry_lock);
+  int prev = atomic_fetch_sub(&reg->refcount, 1);
+  if (prev == 1 && atomic_load(&reg->removed)) {
+    _event_loop_defer_reg_free(loop, reg);
+  }
+  mutex_unlock(loop->registry_lock);
+}
+
+/* Called once per epoll_event returned by epoll_wait, on the reactor
+ * thread. Collects live regs to dispatch under registry_lock (incrementing
+ * each one's refcount so it can't be freed while its callback runs), then
+ * releases the lock and runs callbacks unlocked; never holding
+ * registry_lock across a user callback. */
+static void _event_loop_handle_event(struct event_loop_s *loop,
+                                     struct epoll_event *ev) {
+  event_entry *entry = (event_entry *)ev->data.ptr;
+
+  if (entry == NULL) {
+    /* The shutdown-eventfd's ev.data.ptr is left NULL; it exists purely
+     * to interrupt epoll_wait, nothing to dispatch. Drain it so it doesn't
+     * keep re-firing (harmless if it does, but tidy). */
+    uint64_t val;
+    (void)read(loop->shutdown_efd, &val, sizeof(val));
+    return;
+  }
+
+  _dispatch_item items[2];
+  size_t n_items = 0;
+
+  mutex_lock(loop->registry_lock);
+
+  if (entry->is_fd) {
+    bool is_err = (ev->events & (EPOLLERR | EPOLLHUP)) != 0;
+    bool is_in = (ev->events & (EPOLLIN | EPOLLRDHUP)) != 0;
+    bool is_out = (ev->events & EPOLLOUT) != 0;
+
+    event_reg *r = entry->as.fd.read_reg;
+    if (r && !atomic_load(&r->removed) && (is_err || is_in)) {
+      atomic_fetch_add(&r->refcount, 1);
+      items[n_items].reg = r;
+      items[n_items].is_error = is_err;
+      items[n_items].is_readable = !is_err;
+      items[n_items].is_writable = false;
+      n_items++;
+    }
+    event_reg *w = entry->as.fd.write_reg;
+    if (w && !atomic_load(&w->removed) && (is_err || is_out)) {
+      atomic_fetch_add(&w->refcount, 1);
+      items[n_items].reg = w;
+      items[n_items].is_error = is_err;
+      items[n_items].is_readable = false;
+      items[n_items].is_writable = !is_err;
+      n_items++;
+    }
+  } else {
+    /* Queue entry: drain the bridge eventfd here, under the lock, so a
+     * racing event_loop_remove (which also takes registry_lock before
+     * touching reg->bridge_efd) cannot read()/close() it concurrently.
+     * entry->as.reg can legitimately be NULL here: event_loop_remove nulls
+     * it (under this same lock) before deferring entry's own free, so a
+     * stale batch entry reaching this point after a concurrent removal
+     * must be treated as nothing-to-do rather than dereferenced. */
+    event_reg *r = entry->as.reg;
+    if (r) {
+      uint64_t val;
+      (void)read(r->bridge_efd, &val, sizeof(val));
+    }
+    if (r && !atomic_load(&r->removed)) {
+      atomic_fetch_add(&r->refcount, 1);
+      items[n_items].reg = r;
+      items[n_items].is_error = false;
+      items[n_items].is_readable = (r->sel.dir == ccol_select_read);
+      items[n_items].is_writable = (r->sel.dir == ccol_select_write);
+      n_items++;
+    }
+  }
+
+  mutex_unlock(loop->registry_lock);
+
+  for (size_t i = 0; i < n_items; i++) {
+    _event_loop_run_callback(loop, &items[i]);
+    _event_loop_release_after_dispatch(loop, items[i].reg);
+  }
+}
+
+static void *_event_loop_thread_fn(void *arg) {
+  struct event_loop_s *loop = (struct event_loop_s *)arg;
+  struct epoll_event *events = _mem_alloc(
+      loop->m_procs, loop->max_events_per_wait * sizeof(struct epoll_event));
+  if (!events) {
+    /* Extremely unlikely (small, fixed-size allocation); nothing safe to do
+     * except exit; event_loop_shutdown will still join this thread
+     * cleanly, just with zero events ever dispatched. */
+    return NULL;
+  }
+
+  for (;;) {
+    if (atomic_load(&loop->shutting_down)) break;
+
+    /* Between batches: the previous batch (if any) has been fully iterated
+     * over by this point, so any event_entry deferred by a concurrent
+     * event_loop_remove during that batch's processing can now be safely
+     * freed; see _event_loop_defer_entry_free's comment. */
+    _event_loop_drain_pending_frees(loop);
+
+    int n = epoll_wait(loop->epfd, events, (int)loop->max_events_per_wait, -1);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    for (int i = 0; i < n; i++) {
+      _event_loop_handle_event(loop, &events[i]);
+    }
+  }
+
+  _mem_free(loop->m_procs, events);
+  return NULL;
+}
+
+event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
+                                         ccol_memmgmt_procs_t *mmgmt_procs,
+                                         char **err_str) {
+  if (max_events_per_wait == 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("max_events_per_wait must be positive");
+    return NULL;
+  }
+  if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
+    return NULL;
+  }
+
+  struct event_loop_s *loop = (struct event_loop_s *)_mem_alloc(
+      mmgmt_procs, sizeof(struct event_loop_s));
+  if (!loop) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("Failed to allocate memory for event_loop");
+    return NULL;
+  }
+
+  if (!ccol_populate_mem_mgmt_procs(loop, mmgmt_procs, err_str)) {
+    _mem_free(mmgmt_procs, loop);
+    return NULL;
+  }
+
+  loop->epfd = epoll_create1(EPOLL_CLOEXEC);
+  if (loop->epfd < 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("epoll_create1 failed");
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return NULL;
+  }
+
+  loop->shutdown_efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+  if (loop->shutdown_efd < 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("eventfd failed");
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return NULL;
+  }
+
+  struct epoll_event ev;
+  ev.data.ptr = NULL;
+  ev.events = EPOLLIN;
+  if (epoll_ctl(loop->epfd, EPOLL_CTL_ADD, loop->shutdown_efd, &ev) < 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("epoll_ctl failed registering shutdown eventfd");
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return NULL;
+  }
+
+  mutex_init(loop->registry_lock);
+  cond_var_init(loop->joined_cv);
+  loop->shutdown_started = false;
+  loop->joined = false;
+  atomic_init(&loop->shutting_down, false);
+  loop->max_events_per_wait = max_events_per_wait;
+  loop->queue_regs_head = NULL;
+  loop->pending_entry_frees = NULL;
+  loop->pending_reg_frees = NULL;
+  loop->reg_count = 0;
+
+  char *fd_registry_err = NULL;
+  loop->fd_registry =
+      chmap_create_full(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_int,
+                        ccol_pointer, mmgmt_procs, NULL, &fd_registry_err);
+  if (!loop->fd_registry) {
+    if (err_str)
+      *err_str = fd_registry_err ? fd_registry_err
+                                 : CCOL_ERR_STR("Failed to create fd registry");
+    cond_var_destroy(loop->joined_cv);
+    mutex_destroy(loop->registry_lock);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return NULL;
+  }
+
+  if (pthread_create(&loop->thread, NULL, _event_loop_thread_fn, loop) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("pthread_create failed");
+    chmap_destroy(loop->fd_registry);
+    cond_var_destroy(loop->joined_cv);
+    mutex_destroy(loop->registry_lock);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return NULL;
+  }
+
+  if (err_str) *err_str = NULL;
+  return loop;
+}
+
+ccol_retval_t event_loop_shutdown(event_loop loop) {
+  if (!loop) return ccol_invalid_args;
+
+  mutex_lock(loop->registry_lock);
+  bool is_leader = !loop->shutdown_started;
+  loop->shutdown_started = true;
+  mutex_unlock(loop->registry_lock);
+
+  if (is_leader) {
+    atomic_store(&loop->shutting_down, true);
+    uint64_t one = 1;
+    (void)write(loop->shutdown_efd, &one, sizeof(one));
+
+    pthread_join(loop->thread, NULL);
+
+    mutex_lock(loop->registry_lock);
+    loop->joined = true;
+    cond_var_broadcast(loop->joined_cv);
+    mutex_unlock(loop->registry_lock);
+  } else {
+    mutex_lock(loop->registry_lock);
+    while (!loop->joined) {
+      cond_var_wait(loop->joined_cv, loop->registry_lock);
+    }
+    mutex_unlock(loop->registry_lock);
+  }
+
+  return ccol_success;
+}
+
+void __event_loop_destroy(event_loop loop) {
+  if (!loop) return;
+
+  event_loop_shutdown(loop);
+
+  /* Entries deferred during the final batch's processing (right before
+   * shutting_down was observed) never got a chance to reach the drain point
+   * inside the reactor thread's own loop; the thread is joined now (no
+   * concurrent access possible), so it's safe to free them directly here
+   * rather than leaking them. */
+  event_entry *pending = loop->pending_entry_frees;
+  loop->pending_entry_frees = NULL;
+  while (pending) {
+    event_entry *next = pending->pending_free_next;
+    _mem_free(loop->m_procs, pending);
+    pending = next;
+  }
+
+  /* Same reasoning for regs deferred by _event_loop_defer_reg_free: each
+   * was already fully detached from fd_registry's entries / queue_regs_head
+   * at defer time (see event_loop_remove), so freeing them here can never
+   * double-free anything the walks below will also touch. */
+  event_reg *pending_reg = loop->pending_reg_frees;
+  loop->pending_reg_frees = NULL;
+  while (pending_reg) {
+    event_reg *next = pending_reg->pending_free_next;
+    _event_reg_free(loop, pending_reg);
+    pending_reg = next;
+  }
+
+  /* The reactor thread has been joined and every other in-flight
+   * event_loop_shutdown caller has already returned too (the leader/
+   * follower join protocol above guarantees this); no dispatch can be in
+   * flight and no other thread can be touching this loop's registry.  Safe
+   * to walk and free every remaining registration without the lock.
+   *
+   * chmap's separate-chaining storage is packed (see _fd_registry_find), so
+   * the stored event_entry* is read via memcpy, not a direct pointer cast.
+   * chashmap_begin_iter/it->_next_fn only free the iterator's own
+   * bookkeeping as they walk; freeing what a stored value POINTS TO here
+   * is this loop's responsibility, same as chmap_destroy below only frees
+   * the map's copies of the int keys and pointer values, never the
+   * event_entry structs those pointers reference. */
+  char *iter_err = NULL;
+  cmap_iterator *it = chashmap_begin_iter(loop->fd_registry, &iter_err);
+  while (it) {
+    event_entry *entry;
+    memcpy(&entry, it->val_pair->ptr, sizeof(entry));
+    if (entry->as.fd.read_reg) _event_reg_free(loop, entry->as.fd.read_reg);
+    if (entry->as.fd.write_reg) _event_reg_free(loop, entry->as.fd.write_reg);
+    _mem_free(loop->m_procs, entry);
+    it = it->_next_fn(it);
+  }
+  chmap_destroy(loop->fd_registry);
+
+  event_reg *reg = loop->queue_regs_head;
+  while (reg) {
+    event_reg *next = reg->loop_list_next;
+    mutex_t *q_mtx;
+    ccol_sel_waiter **q_head;
+    _queue_sel_locate(&reg->sel, &q_mtx, &q_head);
+    _sel_unlink_waiter(&reg->waiter_node, q_head, q_mtx);
+    _mem_free(loop->m_procs, reg->owning_entry);
+    _event_reg_free(loop, reg);
+    reg = next;
+  }
+
+  cond_var_destroy(loop->joined_cv);
+  mutex_destroy(loop->registry_lock);
+  close(loop->shutdown_efd);
+  close(loop->epfd);
+
+  if (loop->m_procs) {
+    ccol_free_t free_func = loop->m_procs->free;
+    free_func(loop->m_procs);
+    free_func(loop);
+  } else {
+    mem_free(loop);
+  }
 }

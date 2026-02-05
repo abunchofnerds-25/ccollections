@@ -1,0 +1,41 @@
+.TH EVENT_LOOP_CONSTRUCT 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+event_loop_construct \- declare and initialise an event_loop in one step
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+event_loop_construct(name, max_events_per_wait);
+.fi
+.SH DESCRIPTION
+.nf
+Declares an event_loop variable named name, calls event_loop_create() to
+initialise it, and calls fatal_err() if creation fails.
+.fi
+.SH PARAMETERS
+.nf
+name                  Variable name for the event_loop handle.
+max_events_per_wait   Size of the epoll_wait batch buffer (must be >= 1).
+.fi
+.SH NOTES
+.nf
+Calls fatal_err() on failure; use event_loop_create() or
+event_loop_create_with_mprocs() directly when graceful error handling
+is required.
+.fi
+.SH EXAMPLES
+.nf
+event_loop_construct(loop, 32);
+event_reg *reg = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
+                                handlers, NULL, NULL);
+event_loop_remove(loop, reg);
+event_loop_destroy(loop);
+.fi
+.SH "SEE ALSO"
+.BR event_loop_construct_scoped (3),
+.BR event_loop_declare (3),
+.BR event_loop_create (3),
+.BR event_loop_add (3),
+.BR event_loop_destroy (3)

@@ -1,0 +1,32 @@
+.TH ___EVENT_LOOP_DESTROY 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+___event_loop_destroy \- RAII cleanup function for event_loop
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+___event_loop_destroy(event_loop *lp);
+.fi
+.SH DESCRIPTION
+.nf
+Static inline function used as the cleanup callback in
+event_loop_declare_scoped() and event_loop_construct_scoped().  If *lp
+is non-NULL, calls __event_loop_destroy(*lp) and sets *lp to NULL.
+
+This function is not intended to be called directly; use
+event_loop_declare_scoped() or event_loop_construct_scoped() instead.
+.fi
+.SH PARAMETERS
+.nf
+lp  Pointer to an event_loop variable (must not be NULL).
+.fi
+.SH NOTES
+.nf
+Compatible with __attribute__((cleanup)) on GCC and Clang.
+.fi
+.SH "SEE ALSO"
+.BR event_loop_declare_scoped (3),
+.BR event_loop_construct_scoped (3),
+.BR event_loop_destroy (3)

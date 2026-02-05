@@ -1,0 +1,41 @@
+.TH EVENT_LOOP_CONSTRUCT_SCOPED 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+event_loop_construct_scoped \- declare, initialise, and auto-destroy an event_loop on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+event_loop_construct_scoped(name, max_events_per_wait);
+.fi
+.SH DESCRIPTION
+.nf
+Declares an event_loop variable named name tagged with a GCC/Clang
+cleanup attribute, calls event_loop_create() to initialise it, and calls
+fatal_err() if creation fails.  The variable is automatically destroyed
+(reactor thread shut down, all registrations freed) when it goes out of
+scope, without an explicit event_loop_destroy() call.
+.fi
+.SH PARAMETERS
+.nf
+name                  Variable name for the event_loop handle.
+max_events_per_wait   Size of the epoll_wait batch buffer (must be >= 1).
+.fi
+.SH NOTES
+.nf
+Calls fatal_err() on failure.
+.fi
+.SH EXAMPLES
+.nf
+{
+    event_loop_construct_scoped(loop, 32);
+    event_reg *reg = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
+                                    handlers, NULL, NULL);
+    /* ... */
+}  /* loop is automatically shut down and destroyed here */
+.fi
+.SH "SEE ALSO"
+.BR event_loop_construct (3),
+.BR event_loop_declare_scoped (3),
+.BR event_loop_create (3)

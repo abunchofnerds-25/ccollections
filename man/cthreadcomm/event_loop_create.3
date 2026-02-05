@@ -1,0 +1,41 @@
+.TH EVENT_LOOP_CREATE 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+event_loop_create \- create an event_loop with default memory management
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+event_loop_create(max_events_per_wait, err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Convenience macro equivalent to event_loop_create_with_mprocs() with
+mmgmt_procs = NULL (standard malloc/free).
+.fi
+.SH PARAMETERS
+.nf
+max_events_per_wait  Size of the epoll_wait batch buffer (must be >= 1).
+                      Bounds how many ready events the reactor thread
+                      drains per epoll_wait call, not the number of
+                      registrations the loop can hold.
+err_str               Optional pointer to receive an error string on
+                      failure (pass NULL to ignore).
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new event_loop handle on success.
+Returns NULL on failure (invalid arguments, allocation failure,
+epoll_create1/eventfd/pthread_create failure).
+.fi
+.SH NOTES
+.nf
+The returned event_loop's background reactor thread is already running
+by the time this call returns.  Destroy with event_loop_destroy() when
+done.
+.fi
+.SH "SEE ALSO"
+.BR event_loop_create_with_mprocs (3),
+.BR event_loop_destroy (3),
+.BR event_loop_add (3)

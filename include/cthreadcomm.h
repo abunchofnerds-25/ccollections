@@ -1134,3 +1134,346 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
                       sizeof(_cqsel_arr) / sizeof(_cqsel_arr[0]), _cqsel_arr, \
                       (timeout_ms));                                          \
   })
+
+/* ========================================================================== */
+/*                             EVENT_LOOP API                                 */
+/* ========================================================================== */
+
+/**
+ * @brief Opaque event_loop structure
+ *
+ * A persistent, incrementally-mutable epoll(7)-based reactor: one long-lived
+ * background thread, one epoll instance created once at construction and
+ * mutated (EPOLL_CTL_ADD/MOD/DEL) as registrations come and go, rather than
+ * ccol_select's per-call fresh epoll instance that waits for exactly one
+ * ready selectable and tears everything down before returning.
+ *
+ * Registrations are built from the same ccol_selectable type ccol_select
+ * uses (selectable_from_fd, selectable_from_circq, selectable_from_dynq,
+ * selectable_from_chan), with one deliberate difference: for fd selectables,
+ * event_loop never reads the fd itself (see event_loop_add's documentation);
+ * the caller always performs its own read()/recv() from inside the
+ * callback. selectable_from_fd_limited (a non-zero max_fd_read_bytes) is
+ * rejected outright for this reason.
+ */
+typedef struct event_loop_s event_loop_s;
+
+/** @brief Handle type (pointer to opaque struct) */
+typedef event_loop_s *event_loop;
+
+/** @brief Opaque handle to a single event_loop registration */
+typedef struct event_reg event_reg;
+
+/**
+ * @brief Callback invoked when a registration becomes readable
+ *
+ * For fd selectables, msg is always NULL: the reactor never reads the fd
+ * itself, the callback performs its own read()/recv() on sel->fd. For queue
+ * selectables (circq/dynq/chan-resolved), msg is populated with the
+ * consumed message (ownership transferred to the callback, zero-copy,
+ * mirroring circq_try_recv_zc/dynmq_try_recv_zc), unless a concurrent
+ * consumer already claimed the message (a TOCTOU race inherent to the
+ * design, same as ccol_select's own write-direction contract), in which
+ * case the callback is not invoked for this wakeup at all.
+ *
+ * @param loop The event_loop this registration belongs to
+ * @param sel  The ccol_selectable this registration was created from
+ *             (sel->dir reflects the registration's current direction,
+ *             which may have changed since event_loop_add via
+ *             event_loop_modify)
+ * @param msg  Populated message for queue selectables; NULL for fd
+ *             selectables
+ * @param arg  The opaque pointer passed to event_loop_add
+ */
+typedef void (*event_readable_fn)(event_loop loop, ccol_selectable *sel,
+                                  c_message_t *msg, void *arg);
+
+/**
+ * @brief Callback invoked when a registration becomes writable
+ *
+ * No payload is ever delivered: for fd selectables the caller performs its
+ * own write()/send(); for queue selectables the registration only signals
+ * that room may be available; the callback must call
+ * circq_try_send_zc/dynmq_try_send_zc itself (a TOCTOU race is possible,
+ * same contract as ccol_select's write-direction wins).
+ *
+ * @param loop The event_loop this registration belongs to
+ * @param sel  The ccol_selectable this registration was created from
+ * @param arg  The opaque pointer passed to event_loop_add
+ */
+typedef void (*event_writable_fn)(event_loop loop, ccol_selectable *sel,
+                                  void *arg);
+
+/**
+ * @brief Callback invoked on a fatal condition for a registration
+ *
+ * For fd selectables, fires on EPOLLERR/EPOLLHUP (the fd itself is broken;
+ * if both directions are registered on the same fd, both receive an error
+ * dispatch). Queue selectables never produce an error condition and never
+ * invoke this callback.
+ *
+ * @param loop The event_loop this registration belongs to
+ * @param sel  The ccol_selectable this registration was created from
+ * @param arg  The opaque pointer passed to event_loop_add
+ */
+typedef void (*event_error_fn)(event_loop loop, ccol_selectable *sel,
+                               void *arg);
+
+/**
+ * @brief Callback bundle for a single event_loop_add call
+ *
+ * Any of the three may be NULL, in which case that class of event is
+ * silently dropped for this registration (e.g. a write-only producer that
+ * never expects on_error may pass NULL there).
+ */
+typedef struct event_handlers {
+  event_readable_fn on_readable; /**< EPOLLIN|EPOLLRDHUP, or a queue message */
+  event_writable_fn on_writable; /**< EPOLLOUT, or queue room available */
+  event_error_fn on_error;       /**< EPOLLERR|EPOLLHUP (fd selectables only) */
+} event_handlers_t;
+
+/**
+ * @brief Create an event_loop with custom memory management
+ *
+ * Creates a persistent epoll instance and immediately spawns the single
+ * background reactor thread that drives it (the thread is ready to dispatch
+ * events as soon as this call returns, mirroring create_cthread_pool's
+ * "ready to work the moment you get the handle" ergonomics).
+ *
+ * @param max_events_per_wait Size of the epoll_wait batch buffer (must be
+ * >= 1); bounds how many ready events the reactor thread drains per
+ * epoll_wait call, not the number of registrations the loop can hold
+ * @param mmgmt_procs Custom memory management procedures, or NULL to use
+ * default malloc/free
+ * @param err_str Optional pointer to receive error string on failure (pass
+ * NULL to ignore)
+ *
+ * @return New event_loop handle, or NULL on failure (invalid arguments,
+ * allocation failure, epoll_create1/eventfd/pthread_create failure)
+ *
+ * @see event_loop_create
+ * @see event_loop_destroy
+ */
+event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
+                                         ccol_memmgmt_procs_t *mmgmt_procs,
+                                         char **err_str);
+
+/**
+ * @brief Create an event_loop with default memory management
+ *
+ * Convenience macro equivalent to event_loop_create_with_mprocs with
+ * mmgmt_procs = NULL.
+ */
+#define event_loop_create(max_events_per_wait, err_str) \
+  event_loop_create_with_mprocs((max_events_per_wait), NULL, (err_str))
+
+/**
+ * @brief Register a selectable with the event loop
+ *
+ * Builds on the same ccol_selectable type ccol_select uses:
+ * selectable_from_fd, selectable_from_circq, selectable_from_dynq, and
+ * selectable_from_chan are all directly reusable to build sel.
+ * selectable_from_fd_limited (a non-zero max_fd_read_bytes) is rejected:
+ * unlike ccol_select, event_loop never reads an fd selectable's data
+ * itself (see event_readable_fn's documentation), so a read-size cap has
+ * no meaning here.
+ *
+ * One registration covers exactly one direction (sel.dir). A caller wanting
+ * both directions live on the same fd at once (e.g. a full-duplex pipe)
+ * calls event_loop_add twice and gets two independent handles; flipping a
+ * single registration's direction over time (e.g. a connecting socket:
+ * write-interest until connect completes, then read-interest afterward)
+ * uses one registration plus event_loop_modify instead. Registering a
+ * second selectable for a direction already occupied on the same fd (two
+ * read registrations on one fd, for example) is rejected with
+ * ccol_not_permitted.
+ *
+ * @param loop     event_loop to register with
+ * @param sel      What to watch (see above)
+ * @param handlers Callback bundle (individual callbacks may be NULL)
+ * @param arg      Opaque pointer passed to every callback for this
+ *                 registration
+ * @param err_str  Optional pointer to receive error string on failure
+ *
+ * @return New registration handle, or NULL on failure
+ *
+ * @note Thread-safe; may be called concurrently with event_loop_remove,
+ *       event_loop_modify, and from within a callback running on the
+ *       reactor thread
+ *
+ * @see event_loop_remove
+ * @see event_loop_modify
+ */
+event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
+                          event_handlers_t handlers, void *arg,
+                          char **err_str);
+
+/**
+ * @brief Change an existing fd registration's direction
+ *
+ * fd-only: called on a registration built from a queue/channel selectable,
+ * returns ccol_invalid_args (a queue selectable's direction is part of its
+ * identity; remove and re-add instead). On success, updates the
+ * registration's ccol_selectable.dir (visible to subsequent callbacks via
+ * the sel parameter), moves it to the other slot on its underlying fd, and
+ * recomputes the fd's combined epoll interest mask, without a window
+ * where the fd is briefly unregistered.
+ *
+ * @param loop    event_loop the registration belongs to
+ * @param reg     Registration to modify
+ * @param new_dir ccol_select_read or ccol_select_write
+ *
+ * @return ccol_success on success
+ * @return ccol_invalid_args if loop/reg is NULL, reg is a queue/channel
+ * registration, new_dir is invalid, or reg was concurrently removed
+ * @return ccol_not_permitted if the target direction is already occupied by
+ * a different registration on the same fd
+ *
+ * @note Thread-safe; may be called concurrently with event_loop_remove and
+ *       from within a callback running on the reactor thread
+ */
+ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
+                                ccol_select_dir new_dir);
+
+/**
+ * @brief Deregister a selectable from the event loop
+ *
+ * Safe to call from within a callback for the very registration being
+ * removed (self-removal on error is a common pattern) as well as from any
+ * other thread, including concurrently with an in-flight dispatch for the
+ * same registration; teardown is deferred until any in-progress callback
+ * returns.
+ *
+ * Does not close an fd or affect a queue's own lifetime; only the
+ * event_loop's registration bookkeeping is released, mirroring
+ * selectable_from_fd's existing "caller owns the fd" contract.
+ *
+ * @param loop event_loop the registration belongs to
+ * @param reg  Registration to remove
+ *
+ * @return ccol_success on success
+ * @return ccol_invalid_args if loop or reg is NULL
+ *
+ * @note Thread-safe
+ */
+ccol_retval_t event_loop_remove(event_loop loop, event_reg *reg);
+
+/**
+ * @brief Number of currently-registered event_reg handles
+ *
+ * Counts live registrations (event_loop_add calls not yet removed), not
+ * epoll interest-list entries; one fd with both directions registered
+ * counts as 2.
+ *
+ * @param loop event_loop to query
+ * @return Registration count, or (size_t)-1 if loop is NULL
+ */
+size_t event_loop_reg_count(event_loop loop);
+
+/**
+ * @brief Stop the reactor thread
+ *
+ * Idempotent: safe to call more than once, or not at all before
+ * event_loop_destroy (which calls this internally if needed). Blocks until
+ * the reactor thread has been joined; no dispatch can be in flight once
+ * this returns.
+ *
+ * @param loop event_loop to shut down
+ *
+ * @return ccol_success on success
+ * @return ccol_invalid_args if loop is NULL
+ *
+ * @warning Must not be called from within a callback running on loop's own
+ * reactor thread: internally this joins that thread, and a thread cannot
+ * join itself (undefined behavior / EDEADLK). Defer shutdown to another
+ * thread, or to after the callback returns, instead.
+ */
+ccol_retval_t event_loop_shutdown(event_loop loop);
+
+/**
+ * @brief Destroy an event_loop (internal function)
+ *
+ * @param loop event_loop to destroy
+ *
+ * @warning Do not call directly - use event_loop_destroy() macro instead
+ */
+void __event_loop_destroy(event_loop loop);
+
+/**
+ * @brief RAII cleanup function (used with _ccol_destructor)
+ */
+static inline __attribute__((always_inline)) void ___event_loop_destroy(
+    event_loop *lp) {
+  if (lp && *lp) {
+    __event_loop_destroy(*lp);
+    *lp = NULL;
+  }
+}
+
+/**
+ * @brief Destroy an event_loop and set handle to NULL
+ *
+ * Shuts the reactor thread down (if not already shut down) and frees every
+ * remaining registration; for queue-backed registrations this correctly
+ * unlinks each one from its queue's own waiter list first, so a queue that
+ * outlives this event_loop is never left with a dangling waiter pointer.
+ *
+ * @param loop event_loop to destroy (will be set to NULL after destruction)
+ *
+ * @note Safe to call with NULL pointer
+ */
+#define event_loop_destroy(loop)  \
+  do {                            \
+    __event_loop_destroy((loop)); \
+    (loop) = NULL;                \
+  } while (0)
+
+/**
+ * @brief Declare an uninitialised event_loop variable
+ *
+ * Must be followed by event_loop_construct or an event_loop_create* call.
+ */
+#define event_loop_declare(name) event_loop name
+
+/**
+ * @brief Declare with automatic destruction on scope exit
+ */
+#define event_loop_declare_scoped(name) \
+  event_loop name _ccol_destructor(___event_loop_destroy) = NULL
+
+/**
+ * @brief Declare and initialise in one step; fatal_err on failure
+ *
+ * Example:
+ * @code
+ * event_loop_construct(loop, 32);
+ * event_reg *r = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
+ *                                handlers, NULL, NULL);
+ * event_loop_destroy(loop);
+ * @endcode
+ */
+#define event_loop_construct(name, max_events_per_wait)                     \
+  event_loop name = NULL;                                                   \
+  do {                                                                      \
+    char *_evl_err = NULL;                                                  \
+    (name) = event_loop_create((max_events_per_wait), &_evl_err);           \
+    if (!(name)) {                                                          \
+      fatal_err("event_loop_construct('%s'): %s", #name,                    \
+                _evl_err ? _evl_err : "unknown error");                     \
+    }                                                                       \
+  } while (0)
+
+/**
+ * @brief Declare, initialise, and auto-destroy on scope exit; fatal_err on
+ *        failure
+ */
+#define event_loop_construct_scoped(name, max_events_per_wait)              \
+  event_loop name _ccol_destructor(___event_loop_destroy) = NULL;           \
+  do {                                                                      \
+    char *_evl_err = NULL;                                                  \
+    (name) = event_loop_create((max_events_per_wait), &_evl_err);           \
+    if (!(name)) {                                                          \
+      fatal_err("event_loop_construct_scoped('%s'): %s", #name,             \
+                _evl_err ? _evl_err : "unknown error");                     \
+    }                                                                       \
+  } while (0)

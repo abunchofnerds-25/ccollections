@@ -1626,6 +1626,83 @@ ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
 
 ---
 
+### Persistent Event Loop - `event_loop`
+
+`ccol_select` creates a fresh `epoll(7)` instance on every call, waits for exactly one ready selectable, and tears everything down before returning. `event_loop` is the persistent counterpart: one `epoll` instance and one background reactor thread, created once and mutated incrementally (`event_loop_add` / `event_loop_modify` / `event_loop_remove`) as fds and queues come and go, dispatching readiness through callbacks for as long as the loop lives. It reuses the exact same `ccol_selectable` type `ccol_select` uses, so `selectable_from_fd`, `selectable_from_circq`, `selectable_from_dynq`, and `selectable_from_chan` all carry over unchanged.
+
+```c
+event_loop_construct(loop, /*max_events_per_wait=*/32);
+
+circular_queue *jobs = circular_queue_create(64, NULL);
+
+void on_job_ready(event_loop loop, ccol_selectable *sel, c_message_t *msg, void *arg) {
+    /* msg is populated for queue selectables: ownership transferred, zero-copy */
+    printf("job: %s\n", (char *)msg->data);
+    free(msg->data);
+}
+
+event_handlers_t handlers = { .on_readable = on_job_ready };
+event_reg *reg = event_loop_add(loop, selectable_from_circq(jobs, ccol_select_read),
+                                 handlers, NULL, NULL);
+
+c_message_t msg = { .data = strdup("build #42"), .size = 10 };
+circq_send_zc(jobs, &msg);   /* on_job_ready fires asynchronously, on the reactor thread */
+
+/* event_loop_shutdown blocks until the reactor thread is joined, so no
+   dispatch can still be touching jobs/reg by the time it returns; tearing
+   these down immediately after circq_send_zc, with no such synchronization,
+   would race the callback that hasn't necessarily run yet. */
+event_loop_shutdown(loop);
+event_loop_remove(loop, reg);
+circular_queue_destroy(jobs);
+event_loop_destroy(loop);
+```
+
+A minimal single-connection echo handler over a raw socket shows the fd side, including the one deliberate difference from `ccol_select`: `event_loop` never reads an fd itself, so `msg` is always `NULL` for fd selectables and the callback performs its own `read(2)`/`write(2)`.
+
+```c
+typedef struct { event_loop loop; event_reg *reg; } conn_ctx_t;
+
+void close_conn(conn_ctx_t *ctx, int fd) {
+    /* Self-removal from within the callback that triggered it is safe */
+    event_loop_remove(ctx->loop, ctx->reg);
+    close(fd);
+    free(ctx);
+}
+
+void on_client_readable(event_loop loop, ccol_selectable *sel, c_message_t *msg, void *arg) {
+    conn_ctx_t *ctx = (conn_ctx_t *)arg;
+    char buf[512];
+    ssize_t n = read(sel->fd, buf, sizeof(buf));
+    if (n <= 0) { close_conn(ctx, sel->fd); return; }  /* EOF or error */
+    write(sel->fd, buf, (size_t)n);  /* echo back */
+}
+
+void on_client_error(event_loop loop, ccol_selectable *sel, void *arg) {
+    close_conn((conn_ctx_t *)arg, sel->fd);
+}
+
+/* conn_ctx_t is allocated once the connection is accepted, e.g. from a
+   listen-socket's own on_readable handler after accept(2): */
+conn_ctx_t *ctx = malloc(sizeof(*ctx));
+ctx->loop = loop;
+event_handlers_t client_handlers = { .on_readable = on_client_readable,
+                                      .on_error = on_client_error };
+ctx->reg = event_loop_add(loop, selectable_from_fd(client_fd, ccol_select_read),
+                           client_handlers, ctx, NULL);
+```
+
+Both directions may be registered on the same fd at once (e.g. a full-duplex socket being read and written concurrently) by calling `event_loop_add` twice, once per direction; each call returns an independent `event_reg *`. Flipping a single registration's direction over time instead (e.g. a non-blocking connect: write-interest until the connect completes, then read-interest afterward) uses one registration plus `event_loop_modify`.
+
+**Key properties:**
+
+- One background reactor thread per `event_loop`, spawned at creation and joined at `event_loop_shutdown` / `event_loop_destroy`; multiple independent instances share no global state.
+- `event_loop_remove` is safe to call from within a registration's own callback (self-removal on error is a common pattern) as well as from any other thread, including concurrently with an in-flight dispatch for the same registration.
+- Removing an fd registration or destroying the loop never closes the fd itself, and never destroys a registered queue; ownership stays exactly where `selectable_from_fd`/`selectable_from_circq`/etc. already put it.
+- `selectable_from_fd_limited` (a capped read size) has no meaning for `event_loop` and is rejected with `ccol_invalid_args`, since the reactor never performs the read itself.
+
+---
+
 ## 13. LRU Cache - `clrucache`
 
 A cache stores the results of expensive operations so that repeated requests for the same input return immediately without redoing the work. An LRU (Least-Recently-Used) cache has a fixed capacity; when it is full and a new entry needs to be added, the entry that has gone the longest without being accessed is evicted first. This keeps frequently requested results in memory and lets old, rarely used ones fall out automatically.

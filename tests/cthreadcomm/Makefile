@@ -2,7 +2,9 @@ CC = gcc
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS
 SRC_FILE_PREFIX = cthreadcomm
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/common.c
+# chashmap.c is a transitive dependency: event_loop's internal fd registry
+# (int fd -> event_entry*) is backed by chmap.
+SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror

@@ -93,11 +93,26 @@ SOFTWARE.
 /** @brief Condition variable type (wraps pthread_cond_t) */
 #define cond_var_t pthread_cond_t
 
+/** @brief Condition variable attributes type (wraps pthread_cond_attr_t) */
+#define cond_var_attr_t pthread_condattr_t
+
+/** @brief Destroy condition variable attributes */
+#define cond_var_attr_destroy(ca) pthread_condattr_destroy(&(ca))
+
+/** @brief Initialize condition variable attributes */
+#define cond_var_attr_init(ca) pthread_condattr_init(&(ca))
+
+/** @brief Set the clock type of condition variable attributes */
+#define cond_var_attr_setclock(ca, clk) pthread_condattr_setclock(&(ca), clk)
+
 /** @brief Destroy a condition variable */
 #define cond_var_destroy(c) pthread_cond_destroy(&(c))
 
 /** @brief Initialize a condition variable with default attributes */
 #define cond_var_init(c) pthread_cond_init(&(c), NULL)
+
+/** @brief Initialize a condition variable with custom attributes */
+#define cond_var_init_ca(c, ca) pthread_cond_init(&(c), &(ca))
 
 /** @brief Wait on condition variable (releases mutex while waiting) */
 #define cond_var_wait(c, m) pthread_cond_wait(&(c), &(m))

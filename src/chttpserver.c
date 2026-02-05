@@ -224,8 +224,8 @@ struct chttpserver {
       requests_done_cv;   /* signalled when in_flight_requests drops to 0 */
   int in_flight_requests; /* # requests dispatched (from http_pause onward)
                              through completion; guarded by mutex */
-  pthread_rwlock_t
-      routes_lock; /* guards routers[], route_count, routes[], mw lists */
+  pthread_rwlock_t routes_lock; /* guards routers[], route_count, routes[],
+                                   mw lists */
   clog cl; /* server-owned logger; a derived logger (component=http-server)
               when cl was passed in, or an internal stderr/FATAL-only logger
               when NULL was passed; closed in __chttpsvr_destroy */
@@ -234,27 +234,32 @@ struct chttpserver {
   bool contributed_to_engine; /* true once this server has acquired its one
                                   shared cfio_engine reference (see
                                   chttpsvr_start/__chttpsvr_destroy) */
-  _Atomic unsigned
-      stream_read_timeout_ms; /* set at chttpsvr_start; bounds each
-                                  http1_stream_read wait for more body bytes,
-                                  for both buffered and streaming routes.
-                                  _Atomic (plain store/load, no mutex) because
-                                  a restart writes it while an
-                                  already-accepted keep-alive connection's
-                                  worker thread may concurrently be reading it
-                                  once per body chunk on the hot ingestion
-                                  path (see _ingest_buffered_body /
-                                  chttpsvr_req_read); a mutex there would add
-                                  lock/unlock overhead to every chunk read. */
-  _Atomic unsigned
-      max_body_read_duration_ms; /* set at chttpsvr_start; 0 = no limit.
-                                     Bounds the *total* time spent reading one
-                                     request's body, closing the
-                                     trickle-forever loophole that
-                                     stream_read_timeout_ms alone leaves open
-                                     (see _check_read_deadline). _Atomic for
-                                     the same reason as stream_read_timeout_ms
-                                     above. */
+  _Atomic unsigned stream_read_timeout_ms;    /* set at chttpsvr_start; bounds
+                                                 each http1_stream_read wait for
+                                                 more body bytes, for both
+                                                 buffered and streaming routes.
+                                                 _Atomic (plain store/load, no
+                                                 mutex) because a restart writes
+                                                 it while an already-accepted
+                                                 keep-alive connection's worker
+                                                 thread may concurrently be
+                                                 reading it once per body chunk
+                                                 on the hot ingestion path (see
+                                                 _ingest_buffered_body /
+                                                 chttpsvr_req_read); a mutex
+                                                 there would add lock/unlock
+                                                 overhead to every chunk read. */
+  _Atomic unsigned max_body_read_duration_ms; /* set at chttpsvr_start; 0 =
+                                                 no limit. Bounds the *total*
+                                                 time spent reading one
+                                                 request's body, closing the
+                                                 trickle-forever loophole
+                                                 that stream_read_timeout_ms
+                                                 alone leaves open (see
+                                                 _check_read_deadline).
+                                                 _Atomic for the same reason
+                                                 as stream_read_timeout_ms
+                                                 above. */
   ccol_memmgmt_procs_t *m_procs;
 };
 

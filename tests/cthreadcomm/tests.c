@@ -1,8 +1,10 @@
 #include <assert.h>
 #include <cthreadcomm.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <tau/tau.h>
 #include <time.h>
 #include <unistd.h>
@@ -2230,4 +2232,876 @@ TEST(ccol_select, fd_limited_blocking_reads_up_to_max_bytes) {
 
   close(pfd[0]);
   close(pfd[1]);
+}
+
+// --- event_loop test helpers ---
+
+typedef struct evl_sync_ctx {
+  pthread_mutex_t mtx;
+  pthread_cond_t cond;
+  int readable_count;
+  int writable_count;
+  int error_count;
+  c_message_t last_msg;
+  bool last_msg_valid;
+  ccol_select_dir last_dir_seen;
+  event_reg *self_reg;  /* for self-removal tests */
+  event_loop self_loop;
+} evl_sync_ctx;
+
+static void evl_sync_ctx_init(evl_sync_ctx *c) {
+  pthread_mutex_init(&c->mtx, NULL);
+  pthread_cond_init(&c->cond, NULL);
+  c->readable_count = 0;
+  c->writable_count = 0;
+  c->error_count = 0;
+  c->last_msg = (c_message_t){.data = NULL, .size = 0};
+  c->last_msg_valid = false;
+  c->self_reg = NULL;
+  c->self_loop = NULL;
+}
+
+static void evl_sync_ctx_destroy(evl_sync_ctx *c) {
+  if (c->last_msg_valid && c->last_msg.data) free(c->last_msg.data);
+  pthread_mutex_destroy(&c->mtx);
+  pthread_cond_destroy(&c->cond);
+}
+
+static void evl_on_readable(event_loop loop, ccol_selectable *sel,
+                            c_message_t *msg, void *arg) {
+  (void)loop;
+  evl_sync_ctx *c = (evl_sync_ctx *)arg;
+  pthread_mutex_lock(&c->mtx);
+  c->readable_count++;
+  c->last_dir_seen = sel->dir;
+  if (c->last_msg_valid && c->last_msg.data) free(c->last_msg.data);
+  if (msg) {
+    c->last_msg = *msg;
+    c->last_msg_valid = true;
+  } else {
+    c->last_msg = (c_message_t){.data = NULL, .size = 0};
+    c->last_msg_valid = false;
+  }
+  pthread_cond_broadcast(&c->cond);
+  pthread_mutex_unlock(&c->mtx);
+}
+
+static void evl_on_writable(event_loop loop, ccol_selectable *sel,
+                            void *arg) {
+  (void)loop;
+  evl_sync_ctx *c = (evl_sync_ctx *)arg;
+  pthread_mutex_lock(&c->mtx);
+  c->writable_count++;
+  c->last_dir_seen = sel->dir;
+  pthread_cond_broadcast(&c->cond);
+  pthread_mutex_unlock(&c->mtx);
+}
+
+static void evl_on_error(event_loop loop, ccol_selectable *sel, void *arg) {
+  (void)loop;
+  (void)sel;
+  evl_sync_ctx *c = (evl_sync_ctx *)arg;
+  pthread_mutex_lock(&c->mtx);
+  c->error_count++;
+  pthread_cond_broadcast(&c->cond);
+  pthread_mutex_unlock(&c->mtx);
+}
+
+/* Self-removing on_readable: removes its own registration from inside the
+ * callback, then behaves exactly like evl_on_readable. */
+static void evl_on_readable_self_remove(event_loop loop, ccol_selectable *sel,
+                                        c_message_t *msg, void *arg) {
+  evl_sync_ctx *c = (evl_sync_ctx *)arg;
+  REQUIRE_EQ(event_loop_remove(c->self_loop, c->self_reg), ccol_success);
+  evl_on_readable(loop, sel, msg, arg);
+}
+
+/* Waits until *counter_field >= target or timeout_ms elapses. Returns true
+ * if the target was reached before the deadline. */
+static bool evl_wait_for(evl_sync_ctx *c, int *counter_field, int target,
+                         int timeout_ms) {
+  struct timespec deadline;
+  clock_gettime(CLOCK_REALTIME, &deadline);
+  deadline.tv_sec += timeout_ms / 1000;
+  deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if (deadline.tv_nsec >= 1000000000L) {
+    deadline.tv_sec++;
+    deadline.tv_nsec -= 1000000000L;
+  }
+  pthread_mutex_lock(&c->mtx);
+  while (*counter_field < target) {
+    int r = pthread_cond_timedwait(&c->cond, &c->mtx, &deadline);
+    if (r == ETIMEDOUT) break;
+  }
+  bool ok = (*counter_field >= target);
+  pthread_mutex_unlock(&c->mtx);
+  return ok;
+}
+
+// --- event_loop tests ---
+
+TEST(event_loop, create_destroy) {
+  char *err = NULL;
+  event_loop loop = event_loop_create(8, &err);
+  REQUIRE_NE((void *)loop, NULL);
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+  event_loop_destroy(loop);
+  REQUIRE_EQ((void *)loop, NULL);
+}
+
+TEST(event_loop, create_destroy_scoped) {
+  {
+    event_loop_construct_scoped(loop, 8);
+    REQUIRE_NE((void *)loop, NULL);
+  }
+  /* loop was destroyed at scope exit; nothing to assert beyond "no crash,
+   * clean under valgrind" (checked by the memtest target). */
+}
+
+TEST(event_loop, fd_on_readable_fires) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+
+  int val = 42;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  /* fd selectables never get msg populated -- caller reads sel->fd itself. */
+  REQUIRE_FALSE(ctx.last_msg_valid);
+  char rbuf[16];
+  ssize_t n = read(pfd[0], rbuf, sizeof(rbuf));
+  REQUIRE_EQ(n, (ssize_t)sizeof(val));
+  REQUIRE_EQ(*(int *)rbuf, 42);
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, fd_on_writable_fires) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg =
+      event_loop_add(loop, selectable_from_fd(pfd[1], ccol_select_write),
+                     handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  /* A fresh pipe write end is always immediately writable. */
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, fd_both_directions_combine_and_recombine) {
+  /* A socketpair fd gives a genuinely bidirectional fd, unlike a pipe --
+   * needed to register both read and write interest on the SAME fd, which
+   * exercises the EPOLL_CTL_ADD-then-MOD combining path (and MOD-back-down
+   * on partial removal). */
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  evl_sync_ctx read_ctx, write_ctx;
+  evl_sync_ctx_init(&read_ctx);
+  evl_sync_ctx_init(&write_ctx);
+  event_handlers_t rh = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  event_handlers_t wh = {
+      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+  char *err = NULL;
+  event_reg *rreg = event_loop_add(
+      loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
+  REQUIRE_NE((void *)rreg, NULL);
+  event_reg *wreg =
+      event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
+                     &write_ctx, &err);
+  REQUIRE_NE((void *)wreg, NULL);
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)2);
+
+  /* sv[0] is immediately writable (empty send buffer). */
+  REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
+
+  /* Remove the write direction (MOD-back-down path); read direction must
+   * keep working afterward. */
+  REQUIRE_EQ(event_loop_remove(loop, wreg), ccol_success);
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+
+  int val = 7;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
+  REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+
+  event_loop_remove(loop, rreg);
+  evl_sync_ctx_destroy(&read_ctx);
+  evl_sync_ctx_destroy(&write_ctx);
+  close(sv[0]);
+  close(sv[1]);
+}
+
+TEST(event_loop, fd_simultaneous_readable_and_writable) {
+  /* Both directions registered on the same fd; write from the peer so sv[0]
+   * becomes readable while it is still writable -- both callbacks must fire
+   * for the SAME epoll_wait batch. An earlier version of the dispatch design
+   * stored a bare event_reg* in ev.data.ptr instead of the shared
+   * event_entry, which would have silently delivered only one of the two. */
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  evl_sync_ctx read_ctx, write_ctx;
+  evl_sync_ctx_init(&read_ctx);
+  evl_sync_ctx_init(&write_ctx);
+  event_handlers_t rh = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  event_handlers_t wh = {
+      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+  char *err = NULL;
+  event_reg *rreg = event_loop_add(
+      loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
+  REQUIRE_NE((void *)rreg, NULL);
+  event_reg *wreg =
+      event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
+                     &write_ctx, &err);
+  REQUIRE_NE((void *)wreg, NULL);
+
+  /* Drain the initial "immediately writable" dispatch before writing data,
+   * so the later wait unambiguously observes the combined batch. */
+  REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
+
+  int val = 99;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
+
+  REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+  /* sv[0] remains writable the whole time (nothing filled its send buffer),
+   * so the writable callback should have fired again too. */
+  REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 2, 2000));
+
+  event_loop_remove(loop, rreg);
+  event_loop_remove(loop, wreg);
+  evl_sync_ctx_destroy(&read_ctx);
+  evl_sync_ctx_destroy(&write_ctx);
+  close(sv[0]);
+  close(sv[1]);
+}
+
+TEST(event_loop, fd_on_error_fires_for_both_directions) {
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  evl_sync_ctx read_ctx, write_ctx;
+  evl_sync_ctx_init(&read_ctx);
+  evl_sync_ctx_init(&write_ctx);
+  event_handlers_t rh = {
+      .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
+  event_handlers_t wh = {
+      .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
+  char *err = NULL;
+  event_reg *rreg = event_loop_add(
+      loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
+  REQUIRE_NE((void *)rreg, NULL);
+  event_reg *wreg =
+      event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
+                     &write_ctx, &err);
+  REQUIRE_NE((void *)wreg, NULL);
+
+  close(sv[1]); /* peer hangs up */
+
+  REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.error_count, 1, 2000));
+  REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.error_count, 1, 2000));
+
+  event_loop_remove(loop, rreg);
+  event_loop_remove(loop, wreg);
+  evl_sync_ctx_destroy(&read_ctx);
+  evl_sync_ctx_destroy(&write_ctx);
+  close(sv[0]);
+}
+
+TEST(event_loop, fd_duplicate_direction_rejected) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg1 = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg1, NULL);
+
+  err = NULL;
+  event_reg *reg2 = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_EQ((void *)reg2, NULL);
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+
+  event_loop_remove(loop, reg1);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, fd_modify_rejects_occupied_direction) {
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *rreg = event_loop_add(
+      loop, selectable_from_fd(sv[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)rreg, NULL);
+  event_reg *wreg = event_loop_add(
+      loop, selectable_from_fd(sv[0], ccol_select_write), handlers, NULL, &err);
+  REQUIRE_NE((void *)wreg, NULL);
+
+  /* Flipping rreg to write would collide with wreg. */
+  REQUIRE_EQ(event_loop_modify(loop, rreg, ccol_select_write),
+             ccol_not_permitted);
+
+  event_loop_remove(loop, rreg);
+  event_loop_remove(loop, wreg);
+  close(sv[0]);
+  close(sv[1]);
+}
+
+TEST(event_loop, fd_modify_flips_direction_and_updates_sel) {
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {.on_readable = evl_on_readable,
+                               .on_writable = evl_on_writable,
+                               .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(sv[0], ccol_select_write), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+
+  REQUIRE_EQ(event_loop_modify(loop, reg, ccol_select_read), ccol_success);
+
+  int val = 5;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_EQ((int)ctx.last_dir_seen, (int)ccol_select_read);
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(sv[0]);
+  close(sv[1]);
+}
+
+TEST(event_loop, fd_modify_after_remove_returns_invalid_args) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(event_loop_modify(loop, reg, ccol_select_write),
+             ccol_invalid_args);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, fd_selectable_from_fd_limited_rejected) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd_limited(pfd[0], ccol_select_read, 4096),
+      handlers, NULL, &err);
+  REQUIRE_EQ((void *)reg, NULL);
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, queue_circq_readable_delivers_message) {
+  event_loop_construct_scoped(loop, 8);
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_circq(cq, ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  int *payload = malloc(sizeof(int));
+  *payload = 123;
+  c_message_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(cq, &msg), ccol_success);
+
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(ctx.last_msg_valid);
+  REQUIRE_EQ(ctx.last_msg.size, sizeof(int));
+  REQUIRE_EQ(*(int *)ctx.last_msg.data, 123);
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  circular_queue_destroy(cq);
+}
+
+TEST(event_loop, queue_circq_writable_fires_without_consuming) {
+  event_loop_construct_scoped(loop, 8);
+  circular_queue *cq = circular_queue_create(1, NULL);
+
+  /* Fill the queue so write-direction isn't immediately satisfiable. */
+  int *filler = malloc(sizeof(int));
+  *filler = 1;
+  c_message_t fmsg = {.data = filler, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(cq, &fmsg), ccol_success);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(loop,
+                                  selectable_from_circq(cq, ccol_select_write),
+                                  handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  /* Free the slot; on_writable must fire, but must NOT have consumed
+   * anything (queue still has room, not a message) -- the callback itself
+   * is responsible for the actual send. */
+  c_message_t recvd;
+  REQUIRE_EQ(circq_recv_zc(cq, &recvd), ccol_success);
+  free(recvd.data);
+
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+
+  int *payload = malloc(sizeof(int));
+  *payload = 55;
+  c_message_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(circq_try_send_zc(cq, &msg), ccol_success);
+  REQUIRE_EQ(circq_msg_count(cq), (size_t)1);
+
+  c_message_t out;
+  REQUIRE_EQ(circq_recv_zc(cq, &out), ccol_success);
+  REQUIRE_EQ(*(int *)out.data, 55);
+  free(out.data);
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  circular_queue_destroy(cq);
+}
+
+TEST(event_loop, queue_dynq_readable_delivers_message) {
+  event_loop_construct_scoped(loop, 8);
+  dynamic_queue *dq = dynamic_queue_create(NULL);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_dynq(dq, ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  int *payload = malloc(sizeof(int));
+  *payload = 321;
+  c_message_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(dynmq_send_zc(dq, &msg), ccol_success);
+
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(ctx.last_msg_valid);
+  REQUIRE_EQ(*(int *)ctx.last_msg.data, 321);
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  dynamic_queue_destroy(dq);
+}
+
+typedef struct evl_chan_sender_args {
+  channel *ch;
+  int value;
+} evl_chan_sender_args;
+
+static void *evl_chan_sender_thread(void *arg) {
+  evl_chan_sender_args *a = (evl_chan_sender_args *)arg;
+  int *payload = malloc(sizeof(int));
+  *payload = a->value;
+  c_message_t msg = {.data = payload, .size = sizeof(int)};
+  /* Called from a spawned thread, so get_thread_id() differs from the
+   * channel's owner (the test thread that called channel_create) -- this
+   * routes to workers_to_owner_cq, exactly what the owner-side
+   * ccol_select_read registration below watches. */
+  chan_send_zc(a->ch, &msg);
+  return NULL;
+}
+
+TEST(event_loop, queue_channel_selectable) {
+  event_loop_construct_scoped(loop, 8);
+  channel *ch = channel_create(4, NULL);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  /* This thread is the channel's owner; owner reads from workers_to_owner,
+   * so a worker (a separate thread) must send for the owner-side read
+   * registration to fire. */
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_chan(ch, ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  evl_chan_sender_args sargs = {.ch = ch, .value = 88};
+  pthread_t tid;
+  pthread_create(&tid, NULL, evl_chan_sender_thread, &sargs);
+  pthread_join(tid, NULL);
+
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_TRUE(ctx.last_msg_valid);
+  REQUIRE_EQ(*(int *)ctx.last_msg.data, 88);
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  channel_destroy(ch);
+}
+
+TEST(event_loop, queue_persistent_across_multiple_cycles) {
+  /* The core "persistent, not per-call" property: a single registration
+   * keeps firing across many independent send/recv cycles without ever
+   * being re-added. */
+  event_loop_construct_scoped(loop, 8);
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_circq(cq, ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  for (int i = 0; i < 5; i++) {
+    int *payload = malloc(sizeof(int));
+    *payload = i;
+    c_message_t msg = {.data = payload, .size = sizeof(int)};
+    REQUIRE_EQ(circq_send_zc(cq, &msg), ccol_success);
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, i + 1, 2000));
+    REQUIRE_EQ(*(int *)ctx.last_msg.data, i);
+  }
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  circular_queue_destroy(cq);
+}
+
+TEST(event_loop, queue_already_pending_message_at_registration_time) {
+  /* A message sent BEFORE event_loop_add is called must still be delivered
+   * -- the bridge eventfd has no prior notify to rely on, so event_loop_add
+   * must self-trigger when the queue is already in the target state at
+   * registration time. */
+  event_loop_construct_scoped(loop, 8);
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  int *payload = malloc(sizeof(int));
+  *payload = 999;
+  c_message_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(cq, &msg), ccol_success);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_circq(cq, ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_EQ(*(int *)ctx.last_msg.data, 999);
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  circular_queue_destroy(cq);
+}
+
+TEST(event_loop, remove_from_within_callback) {
+  event_loop_construct_scoped(loop, 8);
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  ctx.self_loop = loop;
+  event_handlers_t handlers = {.on_readable = evl_on_readable_self_remove,
+                               .on_writable = NULL,
+                               .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_circq(cq, ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+  ctx.self_reg = reg;
+
+  int *payload = malloc(sizeof(int));
+  *payload = 1;
+  c_message_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(cq, &msg), ccol_success);
+
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+
+  /* A second message must NOT be delivered (registration removed itself). */
+  int *payload2 = malloc(sizeof(int));
+  *payload2 = 2;
+  c_message_t msg2 = {.data = payload2, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(cq, &msg2), ccol_success);
+  usleep(50000);
+  REQUIRE_EQ(ctx.readable_count, 1);
+
+  c_message_t drained;
+  REQUIRE_EQ(circq_recv_zc(cq, &drained), ccol_success);
+  free(drained.data);
+
+  evl_sync_ctx_destroy(&ctx);
+  circular_queue_destroy(cq);
+}
+
+typedef struct evl_remover_args {
+  event_loop loop;
+  event_reg *reg;
+  int delay_us;
+} evl_remover_args;
+
+static void *evl_remover_thread(void *arg) {
+  evl_remover_args *a = (evl_remover_args *)arg;
+  usleep((useconds_t)a->delay_us);
+  event_loop_remove(a->loop, a->reg);
+  return NULL;
+}
+
+TEST(event_loop, remove_from_different_thread_concurrent_with_dispatch) {
+  /* Repeated add -> notify -> concurrent-remove-from-another-thread cycles,
+   * targeted stress for the refcount design; must never crash or leak
+   * (verified separately under valgrind by the memtest target). */
+  event_loop_construct_scoped(loop, 8);
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  for (int iter = 0; iter < 50; iter++) {
+    evl_sync_ctx ctx;
+    evl_sync_ctx_init(&ctx);
+    event_handlers_t handlers = {
+        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+    char *err = NULL;
+    event_reg *reg = event_loop_add(loop,
+                                    selectable_from_circq(cq, ccol_select_read),
+                                    handlers, &ctx, &err);
+    REQUIRE_NE((void *)reg, NULL);
+
+    evl_remover_args rargs = {.loop = loop, .reg = reg, .delay_us = 0};
+    pthread_t rtid;
+    pthread_create(&rtid, NULL, evl_remover_thread, &rargs);
+
+    int *payload = malloc(sizeof(int));
+    *payload = iter;
+    c_message_t msg = {.data = payload, .size = sizeof(int)};
+    circq_send_zc(cq, &msg); /* may or may not be delivered; that's fine */
+
+    pthread_join(rtid, NULL);
+    evl_sync_ctx_destroy(&ctx);
+
+    /* Drain whatever's left so the queue doesn't grow unbounded across
+     * iterations (the message may not have been consumed if removal won
+     * the race before dispatch). */
+    c_message_t leftover;
+    while (circq_try_recv_zc(cq, &leftover) == ccol_success) {
+      free(leftover.data);
+    }
+  }
+
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+  circular_queue_destroy(cq);
+}
+
+TEST(event_loop, shutdown_with_pending_registrations) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  char *err = NULL;
+  event_loop loop = event_loop_create(8, &err);
+  REQUIRE_NE((void *)loop, NULL);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  REQUIRE_EQ(event_loop_shutdown(loop), ccol_success);
+  /* Idempotent: calling again must not hang or double-join. */
+  REQUIRE_EQ(event_loop_shutdown(loop), ccol_success);
+
+  event_loop_destroy(loop);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, destroy_while_queue_registration_pending_queue_outlives_loop) {
+  /* Regression test for the destroy-path fix: freeing a queue-backed
+   * event_reg without first unlinking its waiter_node from the queue's own
+   * waiter list would leave the queue holding a dangling pointer, a
+   * use-after-free the next time anyone sends/receives on it -- especially
+   * dangerous here since the queue is intentionally NOT destroyed until
+   * after the event_loop is. */
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  char *err = NULL;
+  event_loop loop = event_loop_create(8, &err);
+  REQUIRE_NE((void *)loop, NULL);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_circq(cq, ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  /* Destroy the loop with the registration still pending -- must unlink
+   * from cq's waiter list before freeing, not after. */
+  event_loop_destroy(loop);
+
+  /* The queue must still be perfectly usable afterward. */
+  int *payload = malloc(sizeof(int));
+  *payload = 42;
+  c_message_t msg = {.data = payload, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(cq, &msg), ccol_success);
+  c_message_t out;
+  REQUIRE_EQ(circq_recv_zc(cq, &out), ccol_success);
+  REQUIRE_EQ(*(int *)out.data, 42);
+  free(out.data);
+
+  circular_queue_destroy(cq);
+}
+
+TEST(event_loop, reg_count_tracks_add_remove) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+  REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, high_add_remove_churn_stress) {
+  event_loop_construct_scoped(loop, 32);
+  const int n = 200;
+  int pfds[200][2];
+  event_reg *regs[200];
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+
+  for (int i = 0; i < n; i++) {
+    REQUIRE_EQ(pipe(pfds[i]), 0);
+    char *err = NULL;
+    regs[i] = event_loop_add(
+        loop, selectable_from_fd(pfds[i][0], ccol_select_read), handlers,
+        NULL, &err);
+    REQUIRE_NE((void *)regs[i], NULL);
+  }
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)n);
+
+  for (int i = 0; i < n; i++) {
+    REQUIRE_EQ(event_loop_remove(loop, regs[i]), ccol_success);
+    close(pfds[i][0]);
+    close(pfds[i][1]);
+  }
+  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+}
+
+TEST(event_loop, multiple_independent_instances) {
+  /* No shared global state between separate event_loop instances, unlike
+   * facio's process-wide singleton reactor. */
+  int pfd_a[2], pfd_b[2];
+  REQUIRE_EQ(pipe(pfd_a), 0);
+  REQUIRE_EQ(pipe(pfd_b), 0);
+
+  event_loop_construct_scoped(loop_a, 8);
+  event_loop_construct_scoped(loop_b, 8);
+
+  evl_sync_ctx ctx_a, ctx_b;
+  evl_sync_ctx_init(&ctx_a);
+  evl_sync_ctx_init(&ctx_b);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg_a =
+      event_loop_add(loop_a, selectable_from_fd(pfd_a[0], ccol_select_read),
+                     handlers, &ctx_a, &err);
+  REQUIRE_NE((void *)reg_a, NULL);
+  event_reg *reg_b =
+      event_loop_add(loop_b, selectable_from_fd(pfd_b[0], ccol_select_read),
+                     handlers, &ctx_b, &err);
+  REQUIRE_NE((void *)reg_b, NULL);
+
+  int val_a = 1, val_b = 2;
+  REQUIRE_EQ((ssize_t)sizeof(val_a), write(pfd_a[1], &val_a, sizeof(val_a)));
+  REQUIRE_TRUE(evl_wait_for(&ctx_a, &ctx_a.readable_count, 1, 2000));
+  /* loop_b's registration must not have fired for loop_a's fd. */
+  REQUIRE_EQ(ctx_b.readable_count, 0);
+
+  REQUIRE_EQ((ssize_t)sizeof(val_b), write(pfd_b[1], &val_b, sizeof(val_b)));
+  REQUIRE_TRUE(evl_wait_for(&ctx_b, &ctx_b.readable_count, 1, 2000));
+
+  event_loop_remove(loop_a, reg_a);
+  event_loop_remove(loop_b, reg_b);
+  evl_sync_ctx_destroy(&ctx_a);
+  evl_sync_ctx_destroy(&ctx_b);
+  close(pfd_a[0]);
+  close(pfd_a[1]);
+  close(pfd_b[0]);
+  close(pfd_b[1]);
 }

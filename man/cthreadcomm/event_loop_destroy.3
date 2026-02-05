@@ -1,0 +1,32 @@
+.TH EVENT_LOOP_DESTROY 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+event_loop_destroy \- destroy an event_loop and set handle to NULL
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+event_loop_destroy(loop);
+.fi
+.SH DESCRIPTION
+.nf
+Calls __event_loop_destroy() to shut the reactor thread down (if not
+already shut down) and free every remaining registration, then sets loop
+to NULL.
+
+See __event_loop_destroy(3) for the queue-outlives-the-loop safety
+guarantee this provides for queue-backed registrations.
+.fi
+.SH PARAMETERS
+.nf
+loop  event_loop variable to destroy (set to NULL after destruction).
+.fi
+.SH NOTES
+.nf
+Safe to call with a NULL handle (no-op).
+.fi
+.SH "SEE ALSO"
+.BR __event_loop_destroy (3),
+.BR event_loop_create (3),
+.BR event_loop_shutdown (3)

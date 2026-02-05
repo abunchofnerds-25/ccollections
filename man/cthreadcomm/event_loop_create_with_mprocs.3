@@ -1,0 +1,72 @@
+.TH EVENT_LOOP_CREATE_WITH_MPROCS 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+event_loop_create_with_mprocs \- create a persistent epoll-based event loop
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
+                        ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a persistent epoll(7) instance and immediately spawns the single
+background reactor thread that drives it.  Unlike ccol_select(), which
+creates a fresh epoll instance on every call and tears it down after
+exactly one ready selectable, an event_loop's epoll instance and reactor
+thread live for as long as the handle does, and registrations
+(event_loop_add / event_loop_modify / event_loop_remove) are mutated
+incrementally against it.
+
+The reactor thread is ready to dispatch events as soon as this call
+returns, mirroring create_cthread_pool()'s "ready to work the moment
+you get the handle" ergonomics.
+
+Registrations are built from the same ccol_selectable type ccol_select
+uses (selectable_from_fd, selectable_from_circq, selectable_from_dynq,
+selectable_from_chan).  One deliberate difference from ccol_select: for
+fd selectables, event_loop never reads the fd itself, so
+selectable_from_fd_limited (a non-zero max_fd_read_bytes) is rejected by
+event_loop_add.  See event_loop_add(3) for the full rationale.
+
+Internally, one persistent epoll interest-list entry backs each
+registered fd (both directions share one entry, since epoll_ctl keys its
+interest list by fd, not by (fd, direction) pair), while each queue or
+channel selectable gets its own dedicated bridge eventfd(2) permanently
+linked into the queue's own waiter list; not the transient, per-call
+waiter nodes ccol_select() uses.
+.fi
+.SH PARAMETERS
+.nf
+max_events_per_wait  Size of the epoll_wait batch buffer (must be >= 1).
+mmgmt_procs          Custom memory management procedures, or NULL for
+                      default malloc/free.
+err_str               Optional pointer to receive an error string on
+                      failure (pass NULL to ignore).
+.fi
+.SH RETURN VALUE
+.nf
+Returns a new event_loop handle on success.
+Returns NULL on failure: max_events_per_wait is 0, mmgmt_procs is
+malformed (some but not all of malloc/calloc/realloc/free set),
+allocation failure, or epoll_create1(2)/eventfd(2)/pthread_create(3)
+failure.
+.fi
+.SH NOTES
+.nf
+Multiple independent event_loop instances may coexist in the same
+process; each owns its own epoll instance and reactor thread and shares
+no global state with any other instance.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call concurrently with unrelated event_loop instances.  Not
+meaningful to call concurrently "on" a handle that does not exist yet.
+.fi
+.SH "SEE ALSO"
+.BR event_loop_create (3),
+.BR event_loop_add (3),
+.BR event_loop_shutdown (3),
+.BR event_loop_destroy (3)

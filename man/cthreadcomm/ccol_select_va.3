@@ -1,14 +1,14 @@
-.TH CCOL_SELECT_VA 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CCOL_SELECT_VA 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
 .SH NAME
-ccol_select_va \- wait for a message on an inline list of selectables (convenience macro)
+ccol_select_va \- wait for readiness on an inline list of selectables (convenience macro)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <cthreadcomm.h>
 
-ccol_select_va(buf, ready_index, ...);
-ccol_select_timed_va(buf, ready_index, timeout_ms, ...);
+ccol_select_va(ready_index, ...);
+ccol_select_timed_va(ready_index, timeout_ms, ...);
 .fi
 .SH DESCRIPTION
 .nf
@@ -24,13 +24,17 @@ by selectable_from_circq(), selectable_from_dynq(), selectable_from_chan(),
 or selectable_from_fd() with a ccol_select_read or ccol_select_write dir.
 All arguments are evaluated exactly once.
 
+Neither macro performs the receive or send itself: on ccol_success the
+caller must, immediately afterward, call circq_try_recv_zc()/
+dynmq_try_recv_zc()/circq_try_send_zc()/dynmq_try_send_zc() on the winning
+queue selectable, or read(2)/recv(2)/write(2)/send(2) on the winning fd
+selectable's descriptor.
+
 The macros expand to GCC/Clang statement expressions and yield a value
 of type ccol_retval_t, so they can be used in assignments and conditions.
 .fi
 .SH PARAMETERS
 .nf
-buf          c_message_t * to receive the message.  On ccol_success the
-             caller owns buf->data.
 ready_index  size_t * set to the 0-based index of the ready selectable.
              Valid only when ccol_success is returned.
 timeout_ms   (ccol_select_timed_va only) milliseconds to wait; -1 = infinite.
@@ -38,17 +42,14 @@ timeout_ms   (ccol_select_timed_va only) milliseconds to wait; -1 = infinite.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success            Message received.  *ready_index set; caller frees
-                        buf->data.
+ccol_success            A selectable is ready; *ready_index set.  Caller
+                        performs its own explicit receive/send afterward.
 ccol_timed_out          (ccol_select_timed_va only) deadline elapsed without
                         any selectable becoming ready.
 ccol_invalid_args       Any argument is NULL/zero, or a selectable contains a
                         NULL queue pointer or unknown type tag.
 ccol_not_enough_memory  Waiter-node allocation failed (one node per selectable).
-ccol_msg_too_large      An fd selectable read exceeded its max_fd_read_bytes limit;
-                        buf is left untouched; *ready_index IS set to the offending
-                        fd's index; some or all fd bytes may already be consumed.
-ccol_unexpected_failure epoll/eventfd setup or the internal fd read(2) failed.
+ccol_unexpected_failure epoll/eventfd setup failed.
 .fi
 .SH WARNINGS
 .nf
@@ -63,30 +64,31 @@ allocation occurs beyond that already performed by ccol_select_timed().
 .fi
 .SH EXAMPLES
 .nf
-c_message_t msg;
 size_t idx;
 
 /* Two circular queues and a channel, all read-wait: */
-ccol_retval_t r = ccol_select_va(&msg, &idx,
+ccol_retval_t r = ccol_select_va(&idx,
     selectable_from_circq(q0, ccol_select_read),
     selectable_from_circq(q1, ccol_select_read),
     selectable_from_chan(ch, ccol_select_read));
 if (r == ccol_success) {
     printf("ready selectable: %zu\en", idx);
-    free(msg.data);
+    /* claim the message from whichever selectable won, e.g.: */
+    c_message_t msg;
+    if (idx == 0 && circq_try_recv_zc(q0, &msg) == ccol_success)
+        free(msg.data);
 }
 
 /* Mixed: write-wait on q0, read-wait on ch: */
-c_message_t dummy = {0};
-ccol_select_va(&dummy, &idx,
+ccol_select_va(&idx,
     selectable_from_circq(q0, ccol_select_write),
     selectable_from_chan(ch, ccol_select_read));
 
 /* Timed wait with 200 ms deadline: */
-r = ccol_select_timed_va(&msg, &idx, 200,
+r = ccol_select_timed_va(&idx, 200,
     selectable_from_circq(q0, ccol_select_read));
 if (r == ccol_timed_out) {
-    puts("no message within 200 ms");
+    puts("no source ready within 200 ms");
 }
 .fi
 .SH "SEE ALSO"
@@ -96,5 +98,4 @@ if (r == ccol_timed_out) {
 .BR selectable_from_dynq (3),
 .BR selectable_from_chan (3),
 .BR selectable_from_fd (3),
-.BR selectable_from_fd_limited (3),
-.BR _selectable_from_chan (3)
+.BR ccol_selectable_from_chan (3)

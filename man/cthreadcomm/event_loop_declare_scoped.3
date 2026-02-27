@@ -34,7 +34,7 @@ function is a no-op on NULL).
 {
     event_loop_declare_scoped(loop);
     char *err = NULL;
-    loop = event_loop_create(32, &err);
+    loop = event_loop_create(32, 1, &err);
     if (!loop) { fprintf(stderr, "%s\en", err); return; }
     /* ... */
 }  /* loop is automatically destroyed here */

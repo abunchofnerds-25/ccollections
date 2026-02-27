@@ -19,10 +19,7 @@ event_loop_remove() is called.
 
 sel is built exactly the way ccol_select() builds one: selectable_from_fd,
 selectable_from_circq, selectable_from_dynq, and selectable_from_chan are
-all directly reusable.  selectable_from_fd_limited (a non-zero
-max_fd_read_bytes) is rejected with ccol_invalid_args: unlike
-ccol_select(), event_loop never reads an fd selectable's data itself, so
-a read-size cap has no meaning here.
+all directly reusable.
 
 One registration covers exactly one direction (sel.dir).  A caller
 wanting both directions live on the same fd at once (e.g. a full-duplex
@@ -34,12 +31,15 @@ registration plus event_loop_modify(3).  Registering a second selectable
 for a direction already occupied on the same fd (two read registrations
 on one fd, for example) is rejected with ccol_not_permitted.
 
-For fd selectables, handlers.on_readable always fires with msg == NULL;
-the caller performs its own read(2)/recv(2) on sel->fd from inside the
-callback.  For queue/channel selectables, handlers.on_readable fires
-with msg populated (the reactor thread performs the non-blocking
-try-receive itself and hands the consumed message to the callback,
-zero-copy); handlers.on_writable fires with no payload for either kind
+handlers.on_readable reports readiness only, for every selectable type:
+event_loop never performs the receive itself.  For fd selectables, the
+callback performs its own read(2)/recv(2) on sel->fd.  For queue/channel
+selectables, the callback performs its own circq_try_recv_zc()/
+dynmq_try_recv_zc() on sel->cq/sel->dq.  Either way a concurrent consumer
+may have already claimed the data (a TOCTOU race inherent to the design,
+same as ccol_select()'s own write-direction contract); the callback's
+own explicit receive call may find nothing, and must handle that
+gracefully.  handlers.on_writable fires with no payload for either kind
 (caller performs its own write(2)/send(2), or its own non-blocking
 try-send for queues).  handlers.on_error fires only for fd selectables,
 on EPOLLERR/EPOLLHUP; queue selectables never produce an error
@@ -61,8 +61,7 @@ err_str   Optional pointer to receive an error string on failure.
 .nf
 Returns a new registration handle on success.
 Returns NULL on failure: loop is NULL, sel is malformed (invalid
-type/dir, NULL queue pointer, negative fd, or a non-zero
-max_fd_read_bytes on an fd selectable), the direction is already
+type/dir, NULL queue pointer, or negative fd), the direction is already
 occupied on that fd (ccol_not_permitted), or allocation/epoll_ctl
 failure.
 .fi
@@ -73,9 +72,11 @@ and from within a callback running on the reactor thread.
 .fi
 .SH EXAMPLES
 .nf
-void on_msg(event_loop loop, ccol_selectable *sel, c_message_t *msg, void *arg) {
-    printf("job: %.*s\en", (int)msg->size, (char *)msg->data);
-    free(msg->data);
+void on_msg(event_loop loop, ccol_selectable *sel, void *arg) {
+    c_message_t msg;
+    if (circq_try_recv_zc(sel->cq, &msg) != ccol_success) return;
+    printf("job: %.*s\en", (int)msg.size, (char *)msg.data);
+    free(msg.data);
 }
 
 circular_queue *jobs = circular_queue_create(64, NULL);

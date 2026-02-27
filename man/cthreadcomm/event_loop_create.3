@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cthreadcomm.h>
 
-event_loop_create(max_events_per_wait, err_str);
+event_loop_create(max_events_per_wait, num_lock_stripes, err_str);
 .fi
 .SH DESCRIPTION
 .nf
@@ -20,6 +20,12 @@ max_events_per_wait  Size of the epoll_wait batch buffer (must be >= 1).
                       Bounds how many ready events the reactor thread
                       drains per epoll_wait call, not the number of
                       registrations the loop can hold.
+num_lock_stripes     Number of independent lock stripes for the fd/entry
+                      registry (must be >= 1).  1 matches the original
+                      single-lock behavior; pass a larger value to reduce
+                      event_loop_add/event_loop_remove/event_loop_modify
+                      contention across many different fds/registrations
+                      under concurrent use.
 err_str               Optional pointer to receive an error string on
                       failure (pass NULL to ignore).
 .fi

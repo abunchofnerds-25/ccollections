@@ -45,7 +45,7 @@ the same registration and from within that registration's own callback.
 .fi
 .SH EXAMPLES
 .nf
-void on_readable(event_loop loop, ccol_selectable *sel, c_message_t *msg, void *arg) {
+void on_readable(event_loop loop, ccol_selectable *sel, void *arg) {
     conn_ctx_t *ctx = (conn_ctx_t *)arg;
     char buf[512];
     ssize_t n = read(sel->fd, buf, sizeof(buf));

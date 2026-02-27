@@ -28,8 +28,9 @@ Returns (size_t)-1 if loop is NULL.
 .SH THREAD SAFETY
 .nf
 Safe to call concurrently with event_loop_add(), event_loop_remove(),
-and dispatch on the reactor thread; returns a consistent snapshot taken
-under the loop's internal lock.
+and dispatch on the reactor thread; returns a consistent snapshot (a
+single atomic load, torn-read-free) rather than a value protected by any
+lock.
 .fi
 .SH "SEE ALSO"
 .BR event_loop_add (3),

@@ -1,26 +1,33 @@
-.TH CCOL_SELECT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CCOL_SELECT 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_select \- wait for a message on any of several queues (blocking, zero-copy)
+ccol_select \- wait for readiness on any of several queues or file descriptors (blocking)
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <cthreadcomm.h>
 
-ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index,
-                        size_t n, ccol_selectable *selectables);
+ccol_retval_t ccol_select(size_t *ready_index, size_t n,
+                        ccol_selectable *selectables);
 
-ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index,
-                        size_t n, ccol_selectable *selectables,
-                        int timeout_ms);
+ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
+                        ccol_selectable *selectables, int timeout_ms);
 .fi
 .SH DESCRIPTION
 .nf
-Blocks the calling thread until at least one of the n selectables has a
-message available.  When a message is found, ownership of its data pointer
-is transferred into *buf (zero-copy, exactly as individual recv functions
-do) and the 0-based index of the ready selectable is written into
-*ready_index.
+Blocks the calling thread until at least one of the n selectables becomes
+ready, then writes its 0-based index into *ready_index and returns.
+
+ccol_select() never performs the receive or send itself, for any
+selectable type: it only reports readiness.  The caller must, immediately
+afterward, perform its own explicit non-blocking receive or send on the
+winning selectable: circq_try_recv_zc()/dynmq_try_recv_zc() or
+circq_try_send_zc()/dynmq_try_send_zc() for a queue selectable,
+read(2)/recv(2) or write(2)/send(2) on selectables[*ready_index].fd for an
+fd selectable.  A concurrent consumer or producer may win the race between
+ccol_select() returning and that explicit call (the same TOCTOU contract
+POSIX select(2) itself has), so the call must be non-blocking and its
+result checked.
 
 ccol_select_timed() accepts an additional timeout_ms argument.  Passing -1
 produces the same behaviour as ccol_select() (wait indefinitely).  Passing 0
@@ -29,7 +36,7 @@ milliseconds to wait before returning ccol_timed_out.  The deadline is
 computed once before the loop using CLOCK_MONOTONIC so that system time
 adjustments cannot extend the timeout.
 
-ccol_select() is equivalent to ccol_select_timed(buf, ready_index, n,
+ccol_select() is equivalent to ccol_select_timed(ready_index, n,
 selectables, -1).
 
 A ccol_selectable wraps a circular_queue, a dynamic_queue, or a raw file
@@ -59,10 +66,14 @@ Locking protocol
 Each loop iteration has three phases:
 
 Phase 1 (scan + register)
-    For each selectable, acquire the queue's mutex.  If data is present,
-    receive it immediately and return.  If the queue is empty and writing
-    is enabled, prepend a heap-allocated waiter node to the queue's
-    internal waiter list, then release the mutex.
+    For each selectable, acquire the queue's mutex and peek (never
+    consume/reserve): read direction checks for at least one message;
+    write direction checks for room.  If ready, forward the notify to the
+    next waiter in the queue's own waiter list (so a thread that is about
+    to stop watching still gives the next waiter a chance to observe the
+    same still-true condition) and return.  If not ready, prepend a
+    heap-allocated waiter node to the queue's internal waiter list, then
+    release the mutex.
 
 Phase 2 (wait)
     Condvar path (no fd selectables): lock the local sel_mtx and call
@@ -80,7 +91,7 @@ Phase 2 (wait)
 
 Phase 3 (deregister)
     Re-acquire each queue's mutex, splice the waiter node out of the
-    list, and loop back to Phase 1 to find which queue has data.
+    list, and loop back to Phase 1 to find which queue is ready.
 
 Lock ordering: producers acquire (queue mutex, then sel_mtx).  ccol_select
 holds each queue mutex alone in Phases 1 and 3, and sel_mtx alone in
@@ -94,11 +105,9 @@ it; the heap buffer backing the node array cannot be freed mid-traversal.
 .fi
 .SH PARAMETERS
 .nf
-buf           Buffer to receive the message.  On ccol_success the caller
-              owns buf->data and is responsible for freeing it.
 ready_index   Pointer to a size_t that receives the 0-based index of the
-              selectable that yielded the message.  Valid only when
-              ccol_success is returned.
+              selectable that became ready.  Valid only when ccol_success
+              is returned.
 n             Number of elements in the selectables array.  Must be >= 1.
 selectables   Array of n ccol_selectable values to monitor.
 timeout_ms    (ccol_select_timed only) Maximum milliseconds to wait.
@@ -108,48 +117,24 @@ timeout_ms    (ccol_select_timed only) Maximum milliseconds to wait.
 .SH RETURN VALUE
 .nf
 ccol_success            A selectable is ready and *ready_index is set.
-
-                        Queue read win: *buf is populated with the
-                        dequeued message (zero-copy ownership transfer);
-                        caller must free buf->data.
-
-                        fd read win: ccol_select() has already read data
-                        from the fd into buf->data (heap-allocated;
-                        caller must free) and set buf->size to the byte
-                        count.  How much data is read per call depends on
-                        fd type; see the NOTES section below.  EOF yields
-                        buf->data = NULL, buf->size = 0.
-
-                        Write-direction win (queue or fd): buf is left
-                        untouched; no queue slot is reserved and no I/O
-                        is performed on the fd.  Caller calls the
-                        appropriate send or write(2) afterwards.
+                        The caller must perform its own explicit receive
+                        or send afterward (see DESCRIPTION).
 
 ccol_timed_out          (ccol_select_timed only) timeout_ms elapsed
-                        before any selectable became ready.  buf and
-                        *ready_index are unmodified.
+                        before any selectable became ready.
+                        *ready_index is unmodified.
 
-ccol_invalid_args       buf, ready_index, or selectables is NULL; n is 0;
+ccol_invalid_args       ready_index or selectables is NULL; n is 0;
                         a queue selectable contains a NULL queue pointer;
                         an fd selectable contains a negative fd; or an
                         unrecognised type tag is present.
 ccol_not_enough_memory  malloc failed to allocate the internal waiter node
                         array (one node per selectable).
-ccol_unexpected_failure epoll_create1(2), eventfd(2), epoll_ctl(2), or
-                        the internal read(2) from a ready fd failed with
-                        an unexpected errno.  Only possible when at least
-                        one fd selectable is present.  Treat as a fatal
-                        configuration error (e.g., fd-table exhaustion or
-                        memory pressure).
-ccol_msg_too_large      The data available on a read-direction fd selectable
-                        exceeded the limit set in max_fd_read_bytes.  buf
-                        is left untouched.  *ready_index IS set to the
-                        index of the offending fd selectable so the caller
-                        can identify it.  Note: ccol_select() may have
-                        already consumed some or all bytes from the fd's
-                        kernel buffer during the read attempt; for datagram
-                        fds the entire datagram is consumed (lost).  The
-                        caller should not assume unread bytes remain.
+ccol_unexpected_failure epoll_create1(2), eventfd(2), or epoll_ctl(2)
+                        failed with an unexpected errno.  Only possible
+                        when at least one fd selectable is present.
+                        Treat as a fatal configuration error (e.g.,
+                        fd-table exhaustion or memory pressure).
 .fi
 .SH NOTES
 .nf
@@ -161,11 +146,14 @@ Any number of threads may simultaneously call ccol_select() watching the
 same queue.  The waiter list is a dynamically-linked list with no fixed
 capacity.
 
-When a message arrives in a queue watched by multiple ccol_select()
-threads, only the head waiter is woken (single-wake).  If the queue still
-has more messages after the first waiter claims one, it immediately wakes
-the next waiter (cascading wake).  This prevents both thundering herd and
-liveness gaps when multiple messages arrive in quick succession.
+When a queue becomes ready while watched by multiple ccol_select()
+threads, only the head waiter is woken by the producer (single-wake).
+The waiter that wakes forwards the notify to the next waiter in line
+before returning, unconditionally (not contingent on whether its own
+subsequent explicit receive/send succeeds), so every interested waiter
+eventually gets a chance to observe the same readiness (cascading wake).
+This prevents both thundering herd and liveness gaps when multiple
+messages arrive, or multiple slots free up, in quick succession.
 
 When writing is disabled on a queue (via circq_disable_sending() or
 dynmq_disable_sending()), read-direction waiters on that queue remain
@@ -177,90 +165,61 @@ File descriptors must be kept open for the entire duration of the
 ccol_select() call.  Closing an fd that ccol_select() is currently
 watching produces undefined behaviour.
 
-For read-direction fd wins, ccol_select() performs the read internally.
-To bound the heap allocation, set max_fd_read_bytes on the selectable
-(via selectable_from_fd_limited()).  getsockopt(SO_TYPE) is used to detect
-SOCK_DGRAM and SOCK_SEQPACKET fds:
-
-Datagram fds (SOCK_DGRAM, SOCK_SEQPACKET): a single read(2) into a 66 KiB
-buffer captures the full datagram without truncation for any standard
-IPv4/IPv6 UDP payload (max 65,507 bytes).  The grow-retry loop is suppressed
-regardless of O_NONBLOCK.  When max_fd_read_bytes is set and the datagram
-size exceeds it, ccol_msg_too_large is returned.
-
-Stream and non-socket fds (pipes, timerfd, signalfd, etc.): a 4 KiB initial
-buffer is used.  If the fd has O_NONBLOCK, the loop grows the buffer (up to
-max_fd_read_bytes + 1 when a limit is set) until EAGAIN.  If blocking,
-exactly one read(2) call is made using a buffer of
-max(4096, max_fd_read_bytes) bytes; passing max_fd_read_bytes > 4096 via
-selectable_from_fd_limited() therefore allows reading up to
-max_fd_read_bytes bytes in a single blocking call.  Any data remaining in
-the fd buffer after that single read will be returned on the next
-ccol_select() call because epoll(7) is level-triggered.  Use O_NONBLOCK on
-the fd if full-drain behaviour per call is required.  The fd's flags are
-inspected read-only via fcntl(F_GETFL) and are never modified, so concurrent
-users of the same fd are unaffected.
-
 Uses POSIX mutexes and condition variables internally; epoll(7) and
 eventfd(2) when fd selectables are present (Linux only).
 .fi
 .SH EXAMPLES
 .nf
 /* Fan-in from two circular queues and a channel: */
-c_message_t msg;
 size_t idx;
-ccol_retval_t r = ccol_select(&msg, &idx, 3,
+ccol_retval_t r = ccol_select(&idx, 3,
     (ccol_selectable[]){
         selectable_from_circq(q0, ccol_select_read),
         selectable_from_circq(q1, ccol_select_read),
         selectable_from_chan(ch, ccol_select_read),
     });
 if (r == ccol_success) {
-    printf("got message from selectable %zu\en", idx);
-    free(msg.data);
+    printf("selectable %zu is ready\en", idx);
 }
 
 /* Equivalent using the convenience macro: */
-r = ccol_select_va(&msg, &idx,
+r = ccol_select_va(&idx,
         selectable_from_circq(q0, ccol_select_read),
         selectable_from_dynq(dq, ccol_select_read),
         selectable_from_chan(ch, ccol_select_read));
 
 /* Mixed read+write: wake when q0 has room OR dq has a message: */
-r = ccol_select_va(&msg, &idx,
+r = ccol_select_va(&idx,
         selectable_from_circq(q0, ccol_select_write),
         selectable_from_dynq(dq,  ccol_select_read));
 
 /* Fan-in from a queue and a pipe read end: */
 int pfd[2];
 pipe(pfd);
-r = ccol_select_va(&msg, &idx,
+r = ccol_select_va(&idx,
         selectable_from_circq(q0, ccol_select_read),
         selectable_from_fd(pfd[0], ccol_select_read));
 if (r == ccol_success) {
+    c_message_t msg;
     if (idx == 0) {
-        /* queue won; buf has the dequeued message */
-        printf("queue message size: %zu\en", msg.size);
-        free(msg.data);
+        /* queue is ready; claim it ourselves (zero-copy) */
+        if (circq_try_recv_zc(q0, &msg) == ccol_success) {
+            printf("queue message size: %zu\en", msg.size);
+            free(msg.data);
+        }
     } else {
-        /* fd won; ccol_select already read the data into buf */
-        printf("read %zu bytes from fd\en", msg.size);
-        free(msg.data);   /* msg.data may be NULL on EOF */
+        /* fd is ready; read it ourselves */
+        char buf[512];
+        ssize_t n = read(pfd[0], buf, sizeof(buf));
+        printf("read %zd bytes from fd\en", n);
     }
 }
 
 /* Timed wait with 500 ms deadline: */
-r = ccol_select_timed_va(&msg, &idx, 500,
+r = ccol_select_timed_va(&idx, 500,
         selectable_from_circq(q0, ccol_select_read));
 if (r == ccol_timed_out) {
-    printf("no message within 500 ms\en");
-}
-
-/* Bounded fd read: reject messages larger than 64 KiB: */
-r = ccol_select_va(&msg, &idx,
-        selectable_from_fd_limited(pfd[0], ccol_select_read, 65536));
-if (r == ccol_msg_too_large) {
-    printf("oversized message rejected\en");
+    printf("no source ready within 500 ms\en");
 }
 .fi
 .SH "SEE ALSO"
@@ -272,7 +231,6 @@ if (r == ccol_msg_too_large) {
 .BR selectable_from_dynq (3),
 .BR selectable_from_chan (3),
 .BR selectable_from_fd (3),
-.BR selectable_from_fd_limited (3),
-.BR circq_recv_zc (3),
-.BR dynmq_recv_zc (3),
-.BR chan_recv_zc (3)
+.BR circq_try_recv_zc (3),
+.BR dynmq_try_recv_zc (3),
+.BR chan_try_recv_zc (3)

@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cthreadcomm.h>
 
-event_loop_construct(name, max_events_per_wait);
+event_loop_construct(name, max_events_per_wait, num_lock_stripes);
 .fi
 .SH DESCRIPTION
 .nf
@@ -18,6 +18,9 @@ initialise it, and calls fatal_err() if creation fails.
 .nf
 name                  Variable name for the event_loop handle.
 max_events_per_wait   Size of the epoll_wait batch buffer (must be >= 1).
+num_lock_stripes      Number of independent lock stripes for the fd/entry
+                      registry (must be >= 1).  1 matches the original
+                      single-lock behavior.
 .fi
 .SH NOTES
 .nf
@@ -27,7 +30,7 @@ is required.
 .fi
 .SH EXAMPLES
 .nf
-event_loop_construct(loop, 32);
+event_loop_construct(loop, 32, 1);
 event_reg *reg = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
                                 handlers, NULL, NULL);
 event_loop_remove(loop, reg);

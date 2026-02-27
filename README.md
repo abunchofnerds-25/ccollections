@@ -1571,7 +1571,7 @@ The `channel` automatically routes sends and receives based on thread identity: 
 
 ### Multiplexed Waiting - `ccol_select`
 
-`ccol_select` blocks until any one of a set of queue or file descriptor sources becomes ready, analogous to POSIX `select(2)` or `poll(2)` but integrated with the queue primitives. `ccol_select_timed` adds a millisecond deadline measured on `CLOCK_MONOTONIC`.
+`ccol_select` blocks until any one of a set of queue or file descriptor sources becomes ready, analogous to POSIX `select(2)` or `poll(2)` but integrated with the queue primitives. `ccol_select_timed` adds a millisecond deadline measured on `CLOCK_MONOTONIC`. `ccol_select` never performs the receive or send itself, for any selectable type: it only reports which selectable is ready, and the caller performs its own explicit `circq_try_recv_zc`/`dynmq_try_recv_zc`/`circq_try_send_zc`/`dynmq_try_send_zc` (for a queue selectable) or `read(2)`/`recv(2)`/`write(2)`/`send(2)` (for an fd selectable) immediately afterward.
 
 ```c
 circular_queue *q0 = circular_queue_create(8, NULL);
@@ -1579,29 +1579,34 @@ dynamic_queue  *dq  = dynamic_queue_create(NULL);
 int pfd[2];
 pipe(pfd);
 
-c_message_t msg;
 size_t ready_index;
 
-ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
+ccol_retval_t rc = ccol_select_va(&ready_index,
     selectable_from_circq(q0,    ccol_select_read),
     selectable_from_dynq(dq,     ccol_select_read),
     selectable_from_fd(pfd[0],   ccol_select_read));
 
 if (rc == ccol_success) {
+    c_message_t msg;
     if (ready_index == 2) {
-        /* A file descriptor fired; msg.data contains the read data (caller must free).
-           msg.data is NULL on EOF. */
+        /* A file descriptor fired; read it directly. */
+        char buf[512];
+        ssize_t n = read(pfd[0], buf, sizeof(buf));
+        (void)n;
+    } else if (ready_index == 0) {
+        /* q0 fired; claim the message ourselves (zero-copy). */
+        if (circq_try_recv_zc(q0, &msg) == ccol_success) free(msg.data);
     } else {
-        /* A queue fired; caller owns msg.data */
+        /* dq fired. */
+        if (dynmq_try_recv_zc(dq, &msg) == ccol_success) free(msg.data);
     }
-    free(msg.data);
 }
 ```
 
 The timed variant returns `ccol_timed_out` if the deadline expires before any source fires. A timeout of `0` polls without blocking; `-1` blocks indefinitely (equivalent to `ccol_select`):
 
 ```c
-ccol_retval_t rc = ccol_select_timed_va(&msg, &ready_index, /*timeout_ms=*/200,
+ccol_retval_t rc = ccol_select_timed_va(&ready_index, /*timeout_ms=*/200,
     selectable_from_circq(q0, ccol_select_read),
     selectable_from_fd(pfd[0], ccol_select_read));
 
@@ -1610,35 +1615,29 @@ if (rc == ccol_timed_out) {
 }
 ```
 
-To protect against a misbehaving peer sending unbounded data on a file descriptor, use `selectable_from_fd_limited`. If the incoming data exceeds the cap, `ccol_select` returns `ccol_msg_too_large` and discards the partial buffer:
-
-```c
-ccol_retval_t rc = ccol_select_va(&msg, &ready_index,
-    selectable_from_fd_limited(pfd[0], ccol_select_read, /*max_bytes=*/65536));
-```
-
 **Key properties:**
 
-- A queue win is zero-copy: the message is dequeued atomically and ownership transferred.
-- A file descriptor read win: `msg.data` is heap-allocated by `ccol_select` (caller must `free`). `msg.size` is the byte count. EOF yields `msg.data = NULL`. The amount of data read per call depends on the fd type: datagram fds (SOCK_DGRAM / SOCK_SEQPACKET) receive one full datagram captured in a 66 KiB buffer; O_NONBLOCK stream / non-socket fds are fully drained until EAGAIN; blocking stream / non-socket fds receive exactly one read per call using a buffer of max(4096, max_bytes) bytes; pass `max_bytes > 4096` via `selectable_from_fd_limited` to read more per call; remaining data is returned on the next `ccol_select` call (epoll is level-triggered; use O_NONBLOCK if full-drain behaviour is required).
-- A file descriptor write win: readiness is reported only; the caller then calls `write(2)`.
+- Readiness only, for every selectable type: a queue win means a message is (probably) available to claim via `circq_try_recv_zc`/`dynmq_try_recv_zc`; a file descriptor read win means `read(2)`/`recv(2)` will (probably) return data. Either explicit call may still find nothing if a concurrent consumer/producer won the race first (TOCTOU, the same contract POSIX `select(2)` itself has) -- the call must be non-blocking and its result checked.
 - Queue-only selectable sets use a condition variable path with no `epoll` overhead. Any file descriptor in the set switches the implementation to `epoll(7)` automatically.
 
 ---
 
 ### Persistent Event Loop - `event_loop`
 
-`ccol_select` creates a fresh `epoll(7)` instance on every call, waits for exactly one ready selectable, and tears everything down before returning. `event_loop` is the persistent counterpart: one `epoll` instance and one background reactor thread, created once and mutated incrementally (`event_loop_add` / `event_loop_modify` / `event_loop_remove`) as fds and queues come and go, dispatching readiness through callbacks for as long as the loop lives. It reuses the exact same `ccol_selectable` type `ccol_select` uses, so `selectable_from_fd`, `selectable_from_circq`, `selectable_from_dynq`, and `selectable_from_chan` all carry over unchanged.
+`ccol_select` creates a fresh `epoll(7)` instance on every call, waits for exactly one ready selectable, and tears everything down before returning. `event_loop` is the persistent counterpart: one `epoll` instance and one background reactor thread, created once and mutated incrementally (`event_loop_add` / `event_loop_modify` / `event_loop_remove`) as fds and queues come and go, dispatching readiness through callbacks for as long as the loop lives. It reuses the exact same `ccol_selectable` type `ccol_select` uses, so `selectable_from_fd`, `selectable_from_circq`, `selectable_from_dynq`, and `selectable_from_chan` all carry over unchanged. Like `ccol_select`, `event_loop` never performs the receive or send itself, for any selectable type: the callback always performs its own explicit `circq_try_recv_zc`/`dynmq_try_recv_zc` or `read(2)`/`recv(2)`.
+
+The fd/registration registry is lock-striped: `num_lock_stripes` independent (mutex, chmap) pairs, each guarding a disjoint subset of registrations (one real fd, or one queue/channel registration's private bridge fd, is always handled by exactly one stripe). `1` reproduces the original single-lock behavior exactly; passing a larger value lets `event_loop_add` / `event_loop_remove` / `event_loop_modify` calls for different fds/registrations proceed concurrently under high-churn multi-threaded use instead of serializing through one lock, at the cost of `num_lock_stripes` mutexes and chmaps allocated up front. Most callers should just pass `1`.
 
 ```c
-event_loop_construct(loop, /*max_events_per_wait=*/32);
+event_loop_construct(loop, /*max_events_per_wait=*/32, /*num_lock_stripes=*/1);
 
 circular_queue *jobs = circular_queue_create(64, NULL);
 
-void on_job_ready(event_loop loop, ccol_selectable *sel, c_message_t *msg, void *arg) {
-    /* msg is populated for queue selectables: ownership transferred, zero-copy */
-    printf("job: %s\n", (char *)msg->data);
-    free(msg->data);
+void on_job_ready(event_loop loop, ccol_selectable *sel, void *arg) {
+    c_message_t msg;
+    if (circq_try_recv_zc(sel->cq, &msg) != ccol_success) return; /* lost the race */
+    printf("job: %s\n", (char *)msg.data);
+    free(msg.data);
 }
 
 event_handlers_t handlers = { .on_readable = on_job_ready };
@@ -1658,7 +1657,7 @@ circular_queue_destroy(jobs);
 event_loop_destroy(loop);
 ```
 
-A minimal single-connection echo handler over a raw socket shows the fd side, including the one deliberate difference from `ccol_select`: `event_loop` never reads an fd itself, so `msg` is always `NULL` for fd selectables and the callback performs its own `read(2)`/`write(2)`.
+A minimal single-connection echo handler over a raw socket shows the fd side:
 
 ```c
 typedef struct { event_loop loop; event_reg *reg; } conn_ctx_t;
@@ -1670,7 +1669,7 @@ void close_conn(conn_ctx_t *ctx, int fd) {
     free(ctx);
 }
 
-void on_client_readable(event_loop loop, ccol_selectable *sel, c_message_t *msg, void *arg) {
+void on_client_readable(event_loop loop, ccol_selectable *sel, void *arg) {
     conn_ctx_t *ctx = (conn_ctx_t *)arg;
     char buf[512];
     ssize_t n = read(sel->fd, buf, sizeof(buf));
@@ -1699,7 +1698,6 @@ Both directions may be registered on the same fd at once (e.g. a full-duplex soc
 - One background reactor thread per `event_loop`, spawned at creation and joined at `event_loop_shutdown` / `event_loop_destroy`; multiple independent instances share no global state.
 - `event_loop_remove` is safe to call from within a registration's own callback (self-removal on error is a common pattern) as well as from any other thread, including concurrently with an in-flight dispatch for the same registration.
 - Removing an fd registration or destroying the loop never closes the fd itself, and never destroys a registered queue; ownership stays exactly where `selectable_from_fd`/`selectable_from_circq`/etc. already put it.
-- `selectable_from_fd_limited` (a capped read size) has no meaning for `event_loop` and is rejected with `ccol_invalid_args`, since the reactor never performs the read itself.
 
 ---
 

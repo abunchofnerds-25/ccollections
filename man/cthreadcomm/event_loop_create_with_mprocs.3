@@ -8,6 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <cthreadcomm.h>
 
 event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
+                        size_t num_lock_stripes,
                         ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
 .fi
 .SH DESCRIPTION
@@ -26,10 +27,9 @@ you get the handle" ergonomics.
 
 Registrations are built from the same ccol_selectable type ccol_select
 uses (selectable_from_fd, selectable_from_circq, selectable_from_dynq,
-selectable_from_chan).  One deliberate difference from ccol_select: for
-fd selectables, event_loop never reads the fd itself, so
-selectable_from_fd_limited (a non-zero max_fd_read_bytes) is rejected by
-event_loop_add.  See event_loop_add(3) for the full rationale.
+selectable_from_chan).  Like ccol_select, event_loop never performs the
+receive or send itself, for any selectable type; the callback always
+does so explicitly.  See event_loop_add(3) for the full rationale.
 
 Internally, one persistent epoll interest-list entry backs each
 registered fd (both directions share one entry, since epoll_ctl keys its
@@ -37,10 +37,25 @@ interest list by fd, not by (fd, direction) pair), while each queue or
 channel selectable gets its own dedicated bridge eventfd(2) permanently
 linked into the queue's own waiter list; not the transient, per-call
 waiter nodes ccol_select() uses.
+
+The fd/registration registry is lock-striped: num_lock_stripes
+independent (mutex, chmap) pairs, each guarding a disjoint subset of
+registrations.  A real fd, or a queue/channel registration's private
+bridge eventfd, is always handled by exactly one stripe for its entire
+lifetime, so no operation ever needs more than one stripe's lock.
+Passing 1 reproduces the original single-lock design exactly (one mutex,
+one chmap), just with one extra array indirection.  Passing a larger
+value lets event_loop_add/event_loop_remove/event_loop_modify calls for
+different fds/registrations proceed concurrently instead of serializing
+through a single lock, at the cost of num_lock_stripes mutexes and
+chmaps allocated up front.
 .fi
 .SH PARAMETERS
 .nf
 max_events_per_wait  Size of the epoll_wait batch buffer (must be >= 1).
+num_lock_stripes     Number of independent lock stripes for the fd/entry
+                      registry (must be >= 1).  1 matches the original
+                      single-lock behavior.  No upper bound is enforced.
 mmgmt_procs          Custom memory management procedures, or NULL for
                       default malloc/free.
 err_str               Optional pointer to receive an error string on
@@ -49,16 +64,18 @@ err_str               Optional pointer to receive an error string on
 .SH RETURN VALUE
 .nf
 Returns a new event_loop handle on success.
-Returns NULL on failure: max_events_per_wait is 0, mmgmt_procs is
-malformed (some but not all of malloc/calloc/realloc/free set),
-allocation failure, or epoll_create1(2)/eventfd(2)/pthread_create(3)
+Returns NULL on failure: max_events_per_wait is 0, num_lock_stripes is 0,
+mmgmt_procs is malformed (some but not all of malloc/calloc/realloc/free
+set), allocation failure, or epoll_create1(2)/eventfd(2)/pthread_create(3)
 failure.
 .fi
 .SH NOTES
 .nf
 Multiple independent event_loop instances may coexist in the same
-process; each owns its own epoll instance and reactor thread and shares
-no global state with any other instance.
+process; each owns its own epoll instance, reactor thread, and lock
+stripe array, and shares no global state with any other instance
+(including num_lock_stripes itself, which is a genuinely per-instance
+setting).
 .fi
 .SH THREAD SAFETY
 .nf

@@ -24,7 +24,6 @@ SOFTWARE.
 
 #include <cthreadpool.h>
 #include <errno.h>
-#include <pthread.h>
 #include <stdlib.h>
 
 /* ========================================================================== */
@@ -85,7 +84,7 @@ struct cthread_pool {
   bool shutdown_started;   /* either shutdown has been initiated        */
 
   /* Worker threads */
-  pthread_t *threads;
+  thread_id_t *threads;
   size_t num_threads;
 
   ccol_memmgmt_procs_t *m_procs;
@@ -356,8 +355,8 @@ ctpool create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
     return NULL;
   }
 
-  pool->threads =
-      (pthread_t *)_mem_calloc(pool->m_procs, num_threads, sizeof(pthread_t));
+  pool->threads = (thread_id_t *)_mem_calloc(pool->m_procs, num_threads,
+                                             sizeof(thread_id_t));
   if (!pool->threads) {
     if (err_str) *err_str = CCOL_ERR_STR("failed to allocate threads array");
     mutex_destroy(pool->mu);
@@ -371,7 +370,7 @@ ctpool create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
   pool->num_threads = num_threads;
 
   for (size_t i = 0; i < num_threads; i++) {
-    if (pthread_create(&pool->threads[i], NULL, worker_thread_fn, pool) != 0) {
+    if (thread_create(pool->threads[i], worker_thread_fn, pool) != 0) {
       /* Shut down the threads already started, then clean up. */
       mutex_lock(pool->mu);
       pool->shutdown_drain = true;
@@ -379,7 +378,7 @@ ctpool create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
       cond_var_broadcast(pool->not_empty);
       mutex_unlock(pool->mu);
       for (size_t j = 0; j < i; j++) {
-        pthread_join(pool->threads[j], NULL);
+        thread_join(pool->threads[j]);
       }
       if (err_str) *err_str = CCOL_ERR_STR("pthread_create failed");
       _mem_free(pool->m_procs, pool->threads);
@@ -726,7 +725,7 @@ void ctpool_shutdown_drain(ctpool pool) {
   mutex_unlock(pool->mu);
 
   for (size_t i = 0; i < pool->num_threads; i++) {
-    pthread_join(pool->threads[i], NULL);
+    thread_join(pool->threads[i]);
   }
 }
 
@@ -766,7 +765,7 @@ void ctpool_shutdown_immediate(ctpool pool) {
   mutex_unlock(pool->mu);
 
   for (size_t i = 0; i < pool->num_threads; i++) {
-    pthread_join(pool->threads[i], NULL);
+    thread_join(pool->threads[i]);
   }
 }
 

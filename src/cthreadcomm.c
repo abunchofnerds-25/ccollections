@@ -25,7 +25,6 @@ SOFTWARE.
 #include <chashmap.h>
 #include <cthreadcomm.h>
 #include <errno.h>
-#include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1749,7 +1748,7 @@ typedef struct event_loop_stripe {
 struct event_loop_s {
   int epfd;
   int shutdown_efd;
-  pthread_t thread;
+  thread_id_t thread;
 
   /* Guards only shutdown_started/joined/joined_cv (event_loop_shutdown's
    * one-shot leader/follower coordination). Never touches per-fd state --
@@ -2634,7 +2633,7 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
     loop->stripes[stripes_created].queue_regs_head = NULL;
   }
 
-  if (pthread_create(&loop->thread, NULL, _event_loop_thread_fn, loop) != 0) {
+  if (thread_create(loop->thread, _event_loop_thread_fn, loop) != 0) {
     if (err_str) *err_str = CCOL_ERR_STR("pthread_create failed");
     _destroy_stripes(loop, mmgmt_procs, num_lock_stripes);
     cond_var_destroy(loop->joined_cv);
@@ -2663,7 +2662,7 @@ ccol_retval_t event_loop_shutdown(event_loop loop) {
     uint64_t one = 1;
     (void)write(loop->shutdown_efd, &one, sizeof(one));
 
-    pthread_join(loop->thread, NULL);
+    thread_join(loop->thread);
 
     mutex_lock(loop->shutdown_lock);
     loop->joined = true;

@@ -14,6 +14,7 @@ Feel free to copy, use and enjoy according to the license provided.
 #define FIO_INCLUDE_LINKED_LIST
 #include <arpa/inet.h>
 #include <clogger.h>
+#include <common.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fio.h>
@@ -22,7 +23,6 @@ Feel free to copy, use and enjoy according to the license provided.
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
-#include <pthread.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -245,13 +245,26 @@ static fio_data_s *fio_data = NULL;
 
 /* Engine-level clog handle; protected by g_fio_logger_rwlock. */
 static struct clogger *g_fio_logger = NULL;
-static pthread_rwlock_t g_fio_logger_rwlock = PTHREAD_RWLOCK_INITIALIZER;
+static rw_lock_t g_fio_logger_rwlock;
+/* g_fio_logger_rwlock used to carry a static PTHREAD_RWLOCK_INITIALIZER
+ * initializer; converted to lazy, call_once-guarded runtime init (see
+ * _fio_logger_init_globals), mirroring the identical treatment already
+ * applied to src/cfio_engine.c's and src/chttpclient.c's own mutex/condvar
+ * pairs, for the same reason: a non-pthread backend's equivalent primitive
+ * may need real setup work a compile-time constant can't provide. Every
+ * function below that touches this rwlock calls
+ * call_once(g_fio_logger_globals_once, ...) as its first statement. */
+static once_flag_t g_fio_logger_globals_once = ONCE_INIT;
+static void _fio_logger_init_globals(void) {
+  rw_lock_init(g_fio_logger_rwlock);
+}
 
 void fio_set_logger(struct clogger *cl) {
-  pthread_rwlock_wrlock(&g_fio_logger_rwlock);
+  call_once(g_fio_logger_globals_once, _fio_logger_init_globals);
+  rw_lock_wrlock(g_fio_logger_rwlock);
   struct clogger *old = g_fio_logger;
   g_fio_logger = cl;
-  pthread_rwlock_unlock(&g_fio_logger_rwlock);
+  rw_lock_unlock(g_fio_logger_rwlock);
   /* Close outside the lock so _fio_vlog readers cannot observe a freed
    * pointer: the write lock above waited for all active readers to drain
    * before the swap, so no reader can hold a reference to 'old' now. */
@@ -259,9 +272,10 @@ void fio_set_logger(struct clogger *cl) {
 }
 
 bool fio_has_logger(void) {
-  pthread_rwlock_rdlock(&g_fio_logger_rwlock);
+  call_once(g_fio_logger_globals_once, _fio_logger_init_globals);
+  rw_lock_rdlock(g_fio_logger_rwlock);
   bool has = (g_fio_logger != NULL);
-  pthread_rwlock_unlock(&g_fio_logger_rwlock);
+  rw_lock_unlock(g_fio_logger_rwlock);
   return has;
 }
 
@@ -269,16 +283,17 @@ bool fio_has_logger(void) {
 static void _fio_vlog(clog_level_t level, const char *file, int line,
                       const char *func, bool trace, const char *fmt,
                       va_list ap) {
-  pthread_rwlock_rdlock(&g_fio_logger_rwlock);
+  call_once(g_fio_logger_globals_once, _fio_logger_init_globals);
+  rw_lock_rdlock(g_fio_logger_rwlock);
   struct clogger *cl = g_fio_logger;
   if (!cl) {
-    pthread_rwlock_unlock(&g_fio_logger_rwlock);
+    rw_lock_unlock(g_fio_logger_rwlock);
     return;
   }
   char buf[FIO_LOG_LENGTH_LIMIT];
   vsnprintf(buf, sizeof(buf), fmt, ap);
   _clog_write(cl, level, file, line, func, trace, "%s", buf);
-  pthread_rwlock_unlock(&g_fio_logger_rwlock);
+  rw_lock_unlock(g_fio_logger_rwlock);
 }
 
 void __fio_log_debug(const char *file, int line, const char *func,
@@ -640,9 +655,9 @@ Section Start Marker
 #pragma weak fio_thread_new
 void *__attribute__((weak)) fio_thread_new(void *(*thread_func)(void *),
                                            void *arg) {
-  pthread_t *thread = fio_malloc(sizeof(*thread));
+  thread_id_t *thread = fio_malloc(sizeof(*thread));
   FIO_ASSERT_ALLOC(thread);
-  if (pthread_create(thread, NULL, thread_func, arg)) goto error;
+  if (thread_create(*thread, thread_func, arg)) goto error;
   return thread;
 error:
   fio_free(thread);
@@ -659,9 +674,9 @@ error:
  */
 #pragma weak fio_thread_join
 int __attribute__((weak)) fio_thread_join(void *p_thr) {
-  if (!p_thr || !(*((pthread_t *)p_thr))) return -1;
-  pthread_join(*((pthread_t *)p_thr), NULL);
-  *((pthread_t *)p_thr) = (pthread_t)NULL;
+  if (!p_thr || !(*((thread_id_t *)p_thr))) return -1;
+  thread_join(*((thread_id_t *)p_thr));
+  *((thread_id_t *)p_thr) = (thread_id_t)NULL;
   fio_free(p_thr);
   return 0;
 }
@@ -5190,7 +5205,7 @@ static void fio_mem_init(void) {
   arenas = big_alloc(sizeof(*arenas) * cpu_count);
   FIO_ASSERT_ALLOC(arenas);
   block_free(block_new());
-  pthread_atfork(NULL, NULL, fio_malloc_after_fork);
+  at_fork(NULL, NULL, fio_malloc_after_fork);
 }
 
 static void fio_mem_destroy(void) {

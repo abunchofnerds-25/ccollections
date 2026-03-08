@@ -30,7 +30,6 @@ SOFTWARE.
 #include <fiobj.h>
 #include <http.h>
 #include <http1.h>
-#include <pthread.h>
 #include <stdarg.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -224,8 +223,8 @@ struct chttpserver {
       requests_done_cv;   /* signalled when in_flight_requests drops to 0 */
   int in_flight_requests; /* # requests dispatched (from http_pause onward)
                              through completion; guarded by mutex */
-  pthread_rwlock_t routes_lock; /* guards routers[], route_count, routes[],
-                                   mw lists */
+  rw_lock_t routes_lock;  /* guards routers[], route_count, routes[],
+                              mw lists */
   clog cl; /* server-owned logger; a derived logger (component=http-server)
               when cl was passed in, or an internal stderr/FATAL-only logger
               when NULL was passed; closed in __chttpsvr_destroy */
@@ -1291,22 +1290,22 @@ static int _on_headers_complete(http_s *h) {
    * create_chttpsvr_mp must not acquire any lock that _router_add_route,
    * _router_add_mw, or chttpsvr_subrouter also hold; otherwise deadlock is
    * possible. */
-  pthread_rwlock_rdlock(&srv->routes_lock);
+  rw_lock_rdlock(srv->routes_lock);
   match_result_t mr = _find_route(srv, path, method);
   if (mr.result == ROUTE_MATCH_NONE) {
-    pthread_rwlock_unlock(&srv->routes_lock);
+    rw_lock_unlock(srv->routes_lock);
     if (path_heap) _mem_free(srv->m_procs, path);
     http_send_error(h, 404);
     return 0;
   }
   if (mr.result == ROUTE_MATCH_METHOD) {
-    pthread_rwlock_unlock(&srv->routes_lock);
+    rw_lock_unlock(srv->routes_lock);
     if (path_heap) _mem_free(srv->m_procs, path);
     http_send_error(h, 405);
     return 0;
   }
   if (mr.result == ROUTE_MATCH_OOM) {
-    pthread_rwlock_unlock(&srv->routes_lock);
+    rw_lock_unlock(srv->routes_lock);
     if (path_heap) _mem_free(srv->m_procs, path);
     http_send_error(h, 500);
     return 0;
@@ -1337,14 +1336,14 @@ static int _on_headers_complete(http_s *h) {
     }
     dispatch.mw_count = mc;
     if (overflow) {
-      pthread_rwlock_unlock(&srv->routes_lock);
+      rw_lock_unlock(srv->routes_lock);
       _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
       if (path_heap) _mem_free(srv->m_procs, path);
       http_send_error(h, 500);
       return 0;
     }
   }
-  pthread_rwlock_unlock(&srv->routes_lock);
+  rw_lock_unlock(srv->routes_lock);
 
   /* URL-decode the path in-place now that routing is done.
    * The raw (encoded) path was needed for segment comparison; the user-facing
@@ -1536,13 +1535,13 @@ static ccol_retval_t _router_add_route(chttpsvr_router *router,
   }
 
   /* Publish the fully-initialised route pointer under the write lock. */
-  pthread_rwlock_wrlock(&router->srv->routes_lock);
+  rw_lock_wrlock(router->srv->routes_lock);
   if (router->route_count >= router->route_cap) {
     size_t new_cap = router->route_cap * 2 + 4;
     chttpsvr_route_t **nr = (chttpsvr_route_t **)_mem_realloc(
         mp, router->routes, new_cap * sizeof(chttpsvr_route_t *));
     if (!nr) {
-      pthread_rwlock_unlock(&router->srv->routes_lock);
+      rw_lock_unlock(router->srv->routes_lock);
       _free_route_data(rt, mp);
       _mem_free(mp, rt);
       return ccol_not_enough_memory;
@@ -1551,7 +1550,7 @@ static ccol_retval_t _router_add_route(chttpsvr_router *router,
     router->route_cap = new_cap;
   }
   router->routes[router->route_count++] = rt;
-  pthread_rwlock_unlock(&router->srv->routes_lock);
+  rw_lock_unlock(router->srv->routes_lock);
   return ccol_success;
 }
 
@@ -1569,9 +1568,9 @@ static ccol_retval_t _router_add_mw(chttpsvr_router *router,
 
   /* Append under the write lock.  The lock provides the ordering needed to
    * make the new node visible to snapshot readers under the read-lock. */
-  pthread_rwlock_wrlock(&router->srv->routes_lock);
+  rw_lock_wrlock(router->srv->routes_lock);
   if (router->mw_count >= _CHTTPSVR_MAX_MW) {
-    pthread_rwlock_unlock(&router->srv->routes_lock);
+    rw_lock_unlock(router->srv->routes_lock);
     _mem_free(mp, node);
     return ccol_not_permitted;
   }
@@ -1582,7 +1581,7 @@ static ccol_retval_t _router_add_mw(chttpsvr_router *router,
     router->mw_tail = node;
   }
   router->mw_count++;
-  pthread_rwlock_unlock(&router->srv->routes_lock);
+  rw_lock_unlock(router->srv->routes_lock);
   return ccol_success;
 }
 
@@ -1813,12 +1812,12 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
   }
 
   {
-    pthread_condattr_t _cv_attr;
+    cond_var_attr_t _cv_attr;
     int _cv_rc = 0;
-    if (pthread_condattr_init(&_cv_attr) == 0) {
-      pthread_condattr_setclock(&_cv_attr, CLOCK_MONOTONIC);
-      _cv_rc = pthread_cond_init(&srv->requests_done_cv, &_cv_attr);
-      pthread_condattr_destroy(&_cv_attr);
+    if (cond_var_attr_init(_cv_attr) == 0) {
+      cond_var_attr_setclock(_cv_attr, CLOCK_MONOTONIC);
+      _cv_rc = cond_var_init_ca(srv->requests_done_cv, _cv_attr);
+      cond_var_attr_destroy(_cv_attr);
     } else {
       _cv_rc = 1;
     }
@@ -1832,20 +1831,20 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     }
   }
 
-  if (pthread_rwlock_init(&srv->routes_lock, NULL) != 0) {
+  if (rw_lock_init(srv->routes_lock) != 0) {
     cond_var_destroy(srv->requests_done_cv);
     mutex_destroy(srv->mutex);
     clog_close(logger);
     _mem_free(mprocs, srv->m_procs);
     _mem_free(mprocs, srv);
-    if (err_str) *err_str = CCOL_ERR_STR("pthread_rwlock_init failed");
+    if (err_str) *err_str = CCOL_ERR_STR("rw_lock_init failed");
     return NULL;
   }
 
   /* Create the root router (prefix = ""). */
   chttpsvr_router *root = _create_router(srv, "", srv->m_procs);
   if (!root) {
-    pthread_rwlock_destroy(&srv->routes_lock);
+    rw_lock_destroy(srv->routes_lock);
     cond_var_destroy(srv->requests_done_cv);
     mutex_destroy(srv->mutex);
     clog_close(logger);
@@ -1859,7 +1858,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
       (chttpsvr_router **)_mem_alloc(srv->m_procs, sizeof(chttpsvr_router *));
   if (!srv->routers) {
     _destroy_router(root, srv->m_procs);
-    pthread_rwlock_destroy(&srv->routes_lock);
+    rw_lock_destroy(srv->routes_lock);
     cond_var_destroy(srv->requests_done_cv);
     mutex_destroy(srv->mutex);
     clog_close(logger);
@@ -1987,7 +1986,7 @@ void __chttpsvr_destroy(chttpsvr srv) {
   _mem_free(srv->m_procs, srv->routers);
   mutex_destroy(srv->mutex);
   cond_var_destroy(srv->requests_done_cv);
-  pthread_rwlock_destroy(&srv->routes_lock);
+  rw_lock_destroy(srv->routes_lock);
 
   clog_close(srv->cl);
   srv->cl = NULL;
@@ -2289,13 +2288,13 @@ chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix) {
 
   /* Publish under the write lock so _find_route readers never see a
    * partially-updated routers array. */
-  pthread_rwlock_wrlock(&srv->routes_lock);
+  rw_lock_wrlock(srv->routes_lock);
   if (srv->router_count >= srv->router_cap) {
     size_t nc = srv->router_cap * 2 + 2;
     chttpsvr_router **nr = (chttpsvr_router **)_mem_realloc(
         srv->m_procs, srv->routers, nc * sizeof(chttpsvr_router *));
     if (!nr) {
-      pthread_rwlock_unlock(&srv->routes_lock);
+      rw_lock_unlock(srv->routes_lock);
       _destroy_router(r, srv->m_procs);
       return NULL;
     }
@@ -2303,7 +2302,7 @@ chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix) {
     srv->router_cap = nc;
   }
   srv->routers[srv->router_count++] = r;
-  pthread_rwlock_unlock(&srv->routes_lock);
+  rw_lock_unlock(srv->routes_lock);
   return r;
 }
 

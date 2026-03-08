@@ -384,10 +384,10 @@ static pid_t _get_tid(void) {
   return (pid_t)syscall(SYS_gettid);
 #elif defined(__APPLE__)
   uint64_t tid64 = 0;
-  pthread_threadid_np(NULL, &tid64);
+  get_thread_id_np(NULL, &tid64);
   return (pid_t)tid64;
 #else
-  return (pid_t)(uintptr_t)pthread_self();
+  return (pid_t)(uintptr_t)get_thread_id();
 #endif
 }
 
@@ -400,7 +400,7 @@ static void _get_thread_name(char *buf, size_t bufsz) {
     return;
   }
 #elif defined(__APPLE__) || defined(__FreeBSD__)
-  if (pthread_getname_np(pthread_self(), buf, bufsz) == 0 && buf[0]) return;
+  if (get_thread_name_np(get_thread_id(), buf, bufsz) == 0 && buf[0]) return;
 #endif
   snprintf(buf, bufsz, "unknown");
 }

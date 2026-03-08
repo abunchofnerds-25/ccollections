@@ -3819,26 +3819,7 @@ Even if each individual call were internally serialised, the window between `chm
 
 `cjson` follows the same rule.  Concurrent calls to `cjson_parse_mp()` and `cjson_parse_n_mp()` on **independent** DOM trees are fully safe: the `err_str` out-parameter is caller-supplied and per-call; there is no shared state between concurrent parsers.  Access to any single DOM tree from multiple threads still requires external synchronisation.
 
-The library provides thin, portable wrappers over pthreads in `include/common.h`:
-
-```c
-/* Exclusive mutex */
-mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-mutex_lock(lock);
-chmap_insert(map, key, value);
-mutex_unlock(lock);
-
-/* Reader-writer lock for read-heavy workloads */
-rw_lock_t rw = PTHREAD_RWLOCK_INITIALIZER;
-
-rw_lock_rdlock(rw);
-int val = chmap_get(map, key);
-rw_lock_unlock(rw);
-
-rw_lock_wrlock(rw);
-chmap_insert(map, key, new_value);
-rw_lock_unlock(rw);
-```
+`include/common.h` defines a set of thin, portable wrappers over pthreads (`mutex_t`, `cond_var_t`, `rw_lock_t`, `once_flag_t`, `thread_id_t`, `thread_ls_key_t`, their operation macros, and the thread creation/join, fork-handler, and thread-naming helpers built on `thread_id_t`). These exist purely as this library's own internal portability seam, so that a future port of the library to a pthread-less environment only requires retargeting `include/common.h`, not touching every module that needs synchronisation. They are not public API: callers guarding their own shared containers (per the previous section) should reach for whatever synchronisation primitive suits their application, such as raw pthreads or C11 `<threads.h>`, rather than these internal wrappers.
 
 ### Thread-Safe Components
 

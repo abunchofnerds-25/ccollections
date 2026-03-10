@@ -1,0 +1,68 @@
+.TH EVENT_LOOP_MODIFY 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+event_loop_modify \- change an existing fd registration's direction
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
+                        ccol_select_dir new_dir);
+.fi
+.SH DESCRIPTION
+.nf
+Changes reg's direction in place, without a window where the underlying
+fd is briefly unregistered.  fd-only: called on a registration built
+from a queue/channel selectable, returns ccol_invalid_args, since a
+queue selectable's direction is part of its identity (remove and re-add
+instead of modifying).
+
+On success:
+  - reg->sel.dir is updated, visible to subsequent callbacks via the sel
+    parameter they receive.
+  - reg moves to the other slot on its underlying fd's shared epoll
+    entry.
+  - The fd's combined epoll interest mask is recomputed via a single
+    EPOLL_CTL_MOD call.
+
+This is only valid when the target direction's slot is not already
+occupied by a different registration on the same fd; use this to
+implement, for example, a non-blocking connect that starts with
+write-interest and switches to read-interest once the connect
+completes, without needing two separate event_loop_add() calls.
+.fi
+.SH PARAMETERS
+.nf
+loop     event_loop the registration belongs to.
+reg      Registration to modify.
+new_dir  ccol_select_read or ccol_select_write.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        Direction changed.
+ccol_invalid_args   loop or reg is NULL; reg is a queue/channel
+                    registration; new_dir is neither ccol_select_read
+                    nor ccol_select_write; or reg was concurrently
+                    removed (by another thread, or by reg's own
+                    callback self-removing) between the caller obtaining
+                    it and this call.
+ccol_not_permitted  The target direction is already occupied by a
+                    different registration on the same fd.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call concurrently with event_loop_remove() and from within a
+callback running on the reactor thread.
+.fi
+.SH EXAMPLES
+.nf
+event_handlers_t handlers = { .on_writable = on_connected, .on_readable = on_data };
+event_reg *reg = event_loop_add(loop, selectable_from_fd(sock, ccol_select_write),
+                                handlers, ctx, NULL);
+/* ... inside on_connected, once the non-blocking connect completes ... */
+event_loop_modify(loop, reg, ccol_select_read);
+.fi
+.SH "SEE ALSO"
+.BR event_loop_add (3),
+.BR event_loop_remove (3)

@@ -29,7 +29,9 @@ SOFTWARE.
  * @brief Common definitions, types, and utilities for the C collections library
  *
  * Provides foundational infrastructure used across all collection types:
- * - Threading primitives (mutex, rwlock, condition variables)
+ * - Threading primitives (mutex, rwlock, condition variables, one-time
+ *   initialization, thread creation/join, thread-local storage keys, fork
+ *   handler registration)
  * - Error handling and reporting macros
  * - Memory management abstraction layer
  * - Return value codes
@@ -93,11 +95,26 @@ SOFTWARE.
 /** @brief Condition variable type (wraps pthread_cond_t) */
 #define cond_var_t pthread_cond_t
 
+/** @brief Condition variable attributes type (wraps pthread_cond_attr_t) */
+#define cond_var_attr_t pthread_condattr_t
+
+/** @brief Destroy condition variable attributes */
+#define cond_var_attr_destroy(ca) pthread_condattr_destroy(&(ca))
+
+/** @brief Initialize condition variable attributes */
+#define cond_var_attr_init(ca) pthread_condattr_init(&(ca))
+
+/** @brief Set the clock type of condition variable attributes */
+#define cond_var_attr_setclock(ca, clk) pthread_condattr_setclock(&(ca), clk)
+
 /** @brief Destroy a condition variable */
 #define cond_var_destroy(c) pthread_cond_destroy(&(c))
 
 /** @brief Initialize a condition variable with default attributes */
 #define cond_var_init(c) pthread_cond_init(&(c), NULL)
+
+/** @brief Initialize a condition variable with custom attributes */
+#define cond_var_init_ca(c, ca) pthread_cond_init(&(c), &(ca))
 
 /** @brief Wait on condition variable (releases mutex while waiting) */
 #define cond_var_wait(c, m) pthread_cond_wait(&(c), &(m))
@@ -116,6 +133,74 @@ SOFTWARE.
 
 /** @brief Get current thread ID */
 #define get_thread_id pthread_self
+
+/**
+ * @brief Create a thread running fn(arg), storing its handle in handle
+ *
+ * Every current call site passes default (NULL) attributes and ignores the
+ * return value beyond a success/failure check, so this wrapper hides the
+ * attributes argument, mirroring how mutex_init()/cond_var_init() already
+ * hide their own NULL-attributes argument.
+ */
+#define thread_create(handle, fn, arg) \
+  pthread_create(&(handle), NULL, (fn), (arg))
+
+/** @brief Block until the thread identified by handle has terminated */
+#define thread_join(handle) pthread_join((handle), NULL)
+
+/** @brief One-time-initialization guard type (wraps pthread_once_t) */
+#define once_flag_t pthread_once_t
+
+/**
+ * @brief Static initializer for a once_flag_t (wraps PTHREAD_ONCE_INIT)
+ *
+ * Unlike mutex/cond/rwlock, a one-time-init flag is a trivial, universally
+ * representable "not yet run" state, not a real synchronization object, so
+ * it is the one primitive in this file that may still use a static/constant
+ * initializer; it is what makes lazily initializing everything else
+ * possible without a chicken-and-egg problem.
+ */
+#define ONCE_INIT PTHREAD_ONCE_INIT
+
+/** @brief Run fn exactly once across all callers racing the same flag */
+#define call_once(flag, fn) pthread_once(&(flag), (fn))
+
+/** @brief Thread-local storage key type (wraps pthread_key_t) */
+#define thread_ls_key_t pthread_key_t
+
+/** @brief Create a thread-local storage key with an optional destructor */
+#define thread_ls_key_create(key, destructor) \
+  pthread_key_create(&(key), (destructor))
+
+/** @brief Delete a thread-local storage key */
+#define thread_ls_key_delete(key) pthread_key_delete((key))
+
+/** @brief Set the calling thread's value for a thread-local storage key */
+#define thread_ls_set(key, val) pthread_setspecific((key), (val))
+
+/** @brief Get the calling thread's value for a thread-local storage key */
+#define thread_ls_get(key) pthread_getspecific((key))
+
+/** @brief Register prepare/parent/child handlers to run around fork(2) */
+#define at_fork(prepare, parent, child) \
+  pthread_atfork((prepare), (parent), (child))
+
+/**
+ * @brief Get a thread's name (wraps pthread_getname_np)
+ *
+ * Non-portable (Apple/BSD only); used solely by clogger.c's platform
+ * fallback branches for systems without a /proc-based thread name lookup.
+ */
+#define get_thread_name_np(thread, buf, len) \
+  pthread_getname_np((thread), (buf), (len))
+
+/**
+ * @brief Get a thread's 64-bit numeric id (wraps pthread_threadid_np)
+ *
+ * Non-portable (Apple-only); used solely by clogger.c's platform fallback
+ * branch for systems without a syscall-based thread id lookup.
+ */
+#define get_thread_id_np(thread, out_id) pthread_threadid_np((thread), (out_id))
 
 /**
  * @brief Assertion macro for collections library

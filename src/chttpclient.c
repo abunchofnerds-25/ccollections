@@ -35,7 +35,6 @@ SOFTWARE.
 #include <limits.h>
 #include <netdb.h>
 #include <poll.h>
-#include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -171,7 +170,7 @@ struct chttpclient {
 /* ========================================================================== */
 
 static chttpcli g_default_client = NULL;
-static pthread_once_t g_default_client_once = PTHREAD_ONCE_INIT;
+static once_flag_t g_default_client_once = ONCE_INIT;
 
 /* ========================================================================== */
 /*                         URL PARSING                                        */
@@ -1512,7 +1511,7 @@ static int _on_message_complete(chttp1_parser_t *p) {
 }
 
 static chttp1_settings_t g_chttp1_settings;
-static pthread_once_t g_chttp1_settings_once = PTHREAD_ONCE_INIT;
+static once_flag_t g_chttp1_settings_once = ONCE_INIT;
 
 static void _init_chttp1_settings(void) {
   chttp1_settings_init(&g_chttp1_settings);
@@ -1547,7 +1546,7 @@ static ccol_retval_t _chttp_read_response(chttp_conn_t *conn,
                                           chttp_deadline_t *overall,
                                           bool *keep_alive_out,
                                           bool *any_bytes_read_out) {
-  pthread_once(&g_chttp1_settings_once, _init_chttp1_settings);
+  call_once(g_chttp1_settings_once, _init_chttp1_settings);
 
   chttp1_parser_t parser;
   chttp1_parser_init(&parser, &g_chttp1_settings);
@@ -1702,11 +1701,25 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
  * a separate lazy singleton, since nothing needs it once no Tier 2/3 caller
  * is outstanding. */
 static ctpool g_client_dns_pool = NULL;
-static pthread_mutex_t g_client_async_mutex = PTHREAD_MUTEX_INITIALIZER;
+static mutex_t g_client_async_mutex;
 /* Signalled once this module's own reaper thread (see
  * _client_engine_reaper_fn) finishes tearing its resources down
  * (g_client_async_stopping -> false). */
-static pthread_cond_t g_client_async_stopped_cv = PTHREAD_COND_INITIALIZER;
+static cond_var_t g_client_async_stopped_cv;
+/* g_client_async_mutex/_stopped_cv used to carry static
+ * PTHREAD_MUTEX_INITIALIZER/PTHREAD_COND_INITIALIZER initializers; converted
+ * to lazy, call_once-guarded runtime init (see _client_async_init_globals),
+ * mirroring src/cfio_engine.c's identical treatment of its own mutex/condvar
+ * pair, for the same reason: a non-pthread backend's equivalent primitive may
+ * need real setup work a compile-time constant can't provide. Every function
+ * below that touches either global calls
+ * call_once(g_client_async_globals_once, ...) as its first statement, found
+ * by grepping every direct lock/unlock/wait site for these two globals. */
+static once_flag_t g_client_async_globals_once = ONCE_INIT;
+static void _client_async_init_globals(void) {
+  mutex_init(g_client_async_mutex);
+  cond_var_init(g_client_async_stopped_cv);
+}
 /* True while g_client_dns_pool/the deadline sweep are up (i.e. this module
  * currently holds its one shared-engine reference). */
 static bool g_client_async_running = false;
@@ -1727,7 +1740,7 @@ static int g_client_async_users = 0;
  * join, not just its stopped_cv broadcast, is required for a caller to be
  * able to rely on this module's teardown having fully completed at the OS
  * level (mirrors src/cfio_engine.c's identical reaper-joining pattern). */
-static pthread_t g_client_reaper_thread;
+static thread_id_t g_client_reaper_thread;
 static bool g_client_reaper_joinable = false;
 
 /* Forward declaration: defined below (near _client_engine_wait_for_
@@ -1736,7 +1749,7 @@ static bool g_client_reaper_joinable = false;
  *; see _client_register_atexit_safety_net's own comment for why this
  * exact ordering matters. */
 static void _client_engine_atexit_safety_net(void);
-static pthread_once_t _client_atexit_once = PTHREAD_ONCE_INIT;
+static once_flag_t _client_atexit_once = ONCE_INIT;
 static void _client_register_atexit_safety_net(void) {
   atexit(_client_engine_atexit_safety_net);
 }
@@ -1772,16 +1785,17 @@ static void _client_deadline_sweep_stop_and_join(void);
  */
 static void *_client_engine_reaper_fn(void *arg) {
   (void)arg;
+  call_once(g_client_async_globals_once, _client_async_init_globals);
   _cfio_engine_release();
   _cfio_engine_wait_for_quiescence();
   _client_deadline_sweep_stop_and_join();
-  pthread_mutex_lock(&g_client_async_mutex);
+  mutex_lock(g_client_async_mutex);
   ctpool_destroy(g_client_dns_pool); /* implicit drain shutdown; see
                                       * __ctpool_destroy */
   g_client_dns_pool = NULL;
   g_client_async_stopping = false;
-  pthread_cond_broadcast(&g_client_async_stopped_cv);
-  pthread_mutex_unlock(&g_client_async_mutex);
+  cond_var_broadcast(g_client_async_stopped_cv);
+  mutex_unlock(g_client_async_mutex);
   return NULL;
 }
 
@@ -1811,7 +1825,7 @@ static void *_client_engine_reaper_fn(void *arg) {
  */
 static void _client_engine_join_reaper_if_needed_locked(void) {
   if (g_client_reaper_joinable) {
-    pthread_join(g_client_reaper_thread, NULL);
+    thread_join(g_client_reaper_thread);
     g_client_reaper_joinable = false;
   }
 }
@@ -1825,14 +1839,15 @@ static void _client_engine_join_reaper_if_needed_locked(void) {
  * exactly one _client_engine_release() call.
  */
 static ccol_retval_t _client_engine_acquire(void) {
-  pthread_mutex_lock(&g_client_async_mutex);
+  call_once(g_client_async_globals_once, _client_async_init_globals);
+  mutex_lock(g_client_async_mutex);
 
   /* A previous instance may still be mid-teardown on this module's own
    * reaper thread (see _client_engine_release). Reusing g_client_dns_pool
    * while that's in flight would be a use-after-free, so wait for it to
    * fully finish before deciding whether to start fresh. */
   while (g_client_async_stopping) {
-    pthread_cond_wait(&g_client_async_stopped_cv, &g_client_async_mutex);
+    cond_var_wait(g_client_async_stopped_cv, g_client_async_mutex);
   }
   _client_engine_join_reaper_if_needed_locked();
 
@@ -1848,7 +1863,7 @@ static ccol_retval_t _client_engine_acquire(void) {
     char *dns_err = NULL;
     g_client_dns_pool = create_cthread_pool((size_t)nthreads, 0, &dns_err);
     if (!g_client_dns_pool) {
-      pthread_mutex_unlock(&g_client_async_mutex);
+      mutex_unlock(g_client_async_mutex);
       return ccol_not_enough_memory;
     }
 
@@ -1859,7 +1874,7 @@ static ccol_retval_t _client_engine_acquire(void) {
     if (_client_deadline_sweep_start() != ccol_success) {
       ctpool_destroy(g_client_dns_pool);
       g_client_dns_pool = NULL;
-      pthread_mutex_unlock(&g_client_async_mutex);
+      mutex_unlock(g_client_async_mutex);
       return ccol_unexpected_failure;
     }
 
@@ -1868,7 +1883,7 @@ static ccol_retval_t _client_engine_acquire(void) {
       _client_deadline_sweep_stop_and_join();
       ctpool_destroy(g_client_dns_pool);
       g_client_dns_pool = NULL;
-      pthread_mutex_unlock(&g_client_async_mutex);
+      mutex_unlock(g_client_async_mutex);
       return engine_rc;
     }
 
@@ -1889,13 +1904,13 @@ static ccol_retval_t _client_engine_acquire(void) {
      * own terms, rather than having the shared reactor rippped out from
      * under a still-registered deadline-sweep ctx by the shared module's own
      * safety net running first. */
-    pthread_once(&_client_atexit_once, _client_register_atexit_safety_net);
+    call_once(_client_atexit_once, _client_register_atexit_safety_net);
 
     g_client_async_running = true;
   }
 
   g_client_async_users++;
-  pthread_mutex_unlock(&g_client_async_mutex);
+  mutex_unlock(g_client_async_mutex);
   return ccol_success;
 }
 
@@ -1928,8 +1943,9 @@ static ccol_retval_t _client_engine_acquire(void) {
  * now" decision, just via different triggers (ref count hitting 0 vs.
  * process exit). */
 static void _client_engine_spawn_reaper(void) {
-  pthread_t reaper;
-  if (pthread_create(&reaper, NULL, _client_engine_reaper_fn, NULL) != 0) {
+  call_once(g_client_async_globals_once, _client_async_init_globals);
+  thread_id_t reaper;
+  if (thread_create(reaper, _client_engine_reaper_fn, NULL) != 0) {
     /* Could not spawn the reaper (OOM-class failure). No safer fallback
      * exists than doing it inline; this reintroduces the deadlock/blocking
      * risk documented on _client_engine_release only in this already-
@@ -1938,22 +1954,23 @@ static void _client_engine_spawn_reaper(void) {
     _client_engine_reaper_fn(NULL);
     return;
   }
-  pthread_mutex_lock(&g_client_async_mutex);
+  mutex_lock(g_client_async_mutex);
   g_client_reaper_thread = reaper;
   g_client_reaper_joinable = true;
-  pthread_mutex_unlock(&g_client_async_mutex);
+  mutex_unlock(g_client_async_mutex);
 }
 
 static void _client_engine_release(void) {
+  call_once(g_client_async_globals_once, _client_async_init_globals);
   bool should_reap = false;
-  pthread_mutex_lock(&g_client_async_mutex);
+  mutex_lock(g_client_async_mutex);
   if (g_client_async_users > 0) g_client_async_users--;
   if (g_client_async_users == 0 && g_client_async_running) {
     g_client_async_running = false;
     g_client_async_stopping = true;
     should_reap = true;
   }
-  pthread_mutex_unlock(&g_client_async_mutex);
+  mutex_unlock(g_client_async_mutex);
 
   if (should_reap) _client_engine_spawn_reaper();
 }
@@ -1980,12 +1997,13 @@ static void _client_engine_release(void) {
  * side.
  */
 static void _client_engine_wait_for_quiescence(void) {
-  pthread_mutex_lock(&g_client_async_mutex);
+  call_once(g_client_async_globals_once, _client_async_init_globals);
+  mutex_lock(g_client_async_mutex);
   while (g_client_async_stopping) {
-    pthread_cond_wait(&g_client_async_stopped_cv, &g_client_async_mutex);
+    cond_var_wait(g_client_async_stopped_cv, g_client_async_mutex);
   }
   _client_engine_join_reaper_if_needed_locked();
-  pthread_mutex_unlock(&g_client_async_mutex);
+  mutex_unlock(g_client_async_mutex);
 }
 
 /*
@@ -2015,15 +2033,16 @@ static void _client_engine_wait_for_quiescence(void) {
  * release already triggered one that hadn't finished yet".
  */
 static void _client_engine_atexit_safety_net(void) {
+  call_once(g_client_async_globals_once, _client_async_init_globals);
   bool should_reap = false;
-  pthread_mutex_lock(&g_client_async_mutex);
+  mutex_lock(g_client_async_mutex);
   if (g_client_async_running) {
     g_client_async_users = 0;
     g_client_async_running = false;
     g_client_async_stopping = true;
     should_reap = true;
   }
-  pthread_mutex_unlock(&g_client_async_mutex);
+  mutex_unlock(g_client_async_mutex);
 
   if (should_reap) _client_engine_spawn_reaper();
   _client_engine_wait_for_quiescence();
@@ -2398,10 +2417,23 @@ typedef struct chttp_async_ctx_s {
  * g_client_deadline_lock. This one-directional order is what makes nesting
  * the two safe.
  */
-static pthread_mutex_t g_client_deadline_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_client_deadline_cv = PTHREAD_COND_INITIALIZER;
+static mutex_t g_client_deadline_lock;
+static cond_var_t g_client_deadline_cv;
+/* g_client_deadline_lock/_cv used to carry static
+ * PTHREAD_MUTEX_INITIALIZER/PTHREAD_COND_INITIALIZER initializers; converted
+ * to lazy, call_once-guarded runtime init (see _client_deadline_init_globals),
+ * independent of the async engine pair's own once-guard above, for the same
+ * reason: a non-pthread backend's equivalent primitive may need real setup
+ * work a compile-time constant can't provide. Every function below that
+ * touches either global calls
+ * call_once(g_client_deadline_globals_once, ...) as its first statement. */
+static once_flag_t g_client_deadline_globals_once = ONCE_INIT;
+static void _client_deadline_init_globals(void) {
+  mutex_init(g_client_deadline_lock);
+  cond_var_init(g_client_deadline_cv);
+}
 static chttp_async_ctx_t *g_client_deadline_head = NULL;
-static pthread_t g_client_deadline_thread;
+static thread_id_t g_client_deadline_thread;
 static bool g_client_deadline_stop = false;
 
 #define CHTTP_DEADLINE_SWEEP_INTERVAL_MS 100
@@ -2419,7 +2451,8 @@ static bool g_client_deadline_stop = false;
  * with ctx->idle_lock NOT held (see the lock-ordering note above).
  */
 static void _client_deadline_register(chttp_async_ctx_t *ctx) {
-  pthread_mutex_lock(&g_client_deadline_lock);
+  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
+  mutex_lock(g_client_deadline_lock);
   if (!ctx->deadline_registered) {
     ctx->deadline_prev = NULL;
     ctx->deadline_next = g_client_deadline_head;
@@ -2427,14 +2460,15 @@ static void _client_deadline_register(chttp_async_ctx_t *ctx) {
     g_client_deadline_head = ctx;
     ctx->deadline_registered = true;
   }
-  pthread_mutex_unlock(&g_client_deadline_lock);
+  mutex_unlock(g_client_deadline_lock);
 }
 
 /* Removes ctx from the deadline registry if present. Called exactly once,
  * as the first thing _async_ctx_free does; see that function's own
  * comment for why that is the single correct place for this. */
 static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
-  pthread_mutex_lock(&g_client_deadline_lock);
+  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
+  mutex_lock(g_client_deadline_lock);
   if (ctx->deadline_registered) {
     if (ctx->deadline_prev) {
       ctx->deadline_prev->deadline_next = ctx->deadline_next;
@@ -2446,7 +2480,7 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
     ctx->deadline_prev = ctx->deadline_next = NULL;
     ctx->deadline_registered = false;
   }
-  pthread_mutex_unlock(&g_client_deadline_lock);
+  mutex_unlock(g_client_deadline_lock);
 }
 
 /*
@@ -2501,10 +2535,11 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
  * is still mid-teardown from an earlier tick's force-close.
  */
 static void _client_deadline_sweep_once(void) {
+  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
   intptr_t to_close[CHTTP_DEADLINE_SWEEP_BATCH];
   size_t n_to_close = 0;
 
-  pthread_mutex_lock(&g_client_deadline_lock);
+  mutex_lock(g_client_deadline_lock);
   chttp_async_ctx_t *node = g_client_deadline_head;
   while (node && n_to_close < CHTTP_DEADLINE_SWEEP_BATCH) {
     chttp_async_ctx_t *next = node->deadline_next;
@@ -2530,14 +2565,15 @@ static void _client_deadline_sweep_once(void) {
     if (expired && uuid >= 0) to_close[n_to_close++] = uuid;
     node = next;
   }
-  pthread_mutex_unlock(&g_client_deadline_lock);
+  mutex_unlock(g_client_deadline_lock);
 
   for (size_t i = 0; i < n_to_close; i++) fio_force_close(to_close[i]);
 }
 
 static void *_client_deadline_sweep_fn(void *arg) {
   (void)arg;
-  pthread_mutex_lock(&g_client_deadline_lock);
+  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
+  mutex_lock(g_client_deadline_lock);
   while (!g_client_deadline_stop) {
     struct timespec wake;
     clock_gettime(CLOCK_MONOTONIC, &wake);
@@ -2546,14 +2582,13 @@ static void *_client_deadline_sweep_fn(void *arg) {
       wake.tv_nsec -= 1000000000L;
       wake.tv_sec += 1;
     }
-    pthread_cond_timedwait(&g_client_deadline_cv, &g_client_deadline_lock,
-                           &wake);
+    cond_var_timedwait(g_client_deadline_cv, g_client_deadline_lock, wake);
     if (g_client_deadline_stop) break;
-    pthread_mutex_unlock(&g_client_deadline_lock);
+    mutex_unlock(g_client_deadline_lock);
     _client_deadline_sweep_once();
-    pthread_mutex_lock(&g_client_deadline_lock);
+    mutex_lock(g_client_deadline_lock);
   }
-  pthread_mutex_unlock(&g_client_deadline_lock);
+  mutex_unlock(g_client_deadline_lock);
   return NULL;
 }
 
@@ -2562,8 +2597,8 @@ static void *_client_deadline_sweep_fn(void *arg) {
  * rollback-on-failure handling. */
 static ccol_retval_t _client_deadline_sweep_start(void) {
   g_client_deadline_stop = false;
-  int rc = pthread_create(&g_client_deadline_thread, NULL,
-                          _client_deadline_sweep_fn, NULL);
+  int rc =
+      thread_create(g_client_deadline_thread, _client_deadline_sweep_fn, NULL);
   return (rc == 0) ? ccol_success : ccol_unexpected_failure;
 }
 
@@ -2572,11 +2607,12 @@ static ccol_retval_t _client_deadline_sweep_start(void) {
  * own comment for why teardown always happens on a dedicated reaper thread,
  * never inline from a facio callback. */
 static void _client_deadline_sweep_stop_and_join(void) {
-  pthread_mutex_lock(&g_client_deadline_lock);
+  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
+  mutex_lock(g_client_deadline_lock);
   g_client_deadline_stop = true;
-  pthread_cond_broadcast(&g_client_deadline_cv);
-  pthread_mutex_unlock(&g_client_deadline_lock);
-  pthread_join(g_client_deadline_thread, NULL);
+  cond_var_broadcast(g_client_deadline_cv);
+  mutex_unlock(g_client_deadline_lock);
+  thread_join(g_client_deadline_thread);
 }
 
 /* Deep-copies a chmap(char* -> char*) header map; used to give a redirect
@@ -3734,7 +3770,7 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
    * continues to apply unchanged across the retry. */
   ctx->connect_deadline = _deadline_make(chain->connect_timeout_ms);
 
-  pthread_once(&g_chttp1_settings_once, _init_chttp1_settings);
+  call_once(g_chttp1_settings_once, _init_chttp1_settings);
   chttp1_parser_init(&ctx->parser, &g_chttp1_settings);
   ctx->parser.data = &ctx->pctx;
 
@@ -3962,7 +3998,7 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
   }
   _url_free(chain->mp, &url);
 
-  pthread_once(&g_chttp1_settings_once, _init_chttp1_settings);
+  call_once(g_chttp1_settings_once, _init_chttp1_settings);
   chttp1_parser_init(&ctx->parser, &g_chttp1_settings);
   ctx->parser.data = &ctx->pctx;
 
@@ -4279,16 +4315,18 @@ static ctpool_future *_chttp_do_async_internal(chttpcli cli,
  * but these five functions exist purely for test instrumentation). */
 #ifdef RUNNING_UNIT_TESTS
 int _chttpclient_engine_ref_count_for_tests(void) {
-  pthread_mutex_lock(&g_client_async_mutex);
+  call_once(g_client_async_globals_once, _client_async_init_globals);
+  mutex_lock(g_client_async_mutex);
   int n = g_client_async_users;
-  pthread_mutex_unlock(&g_client_async_mutex);
+  mutex_unlock(g_client_async_mutex);
   return n;
 }
 
 bool _chttpclient_engine_running_for_tests(void) {
-  pthread_mutex_lock(&g_client_async_mutex);
+  call_once(g_client_async_globals_once, _client_async_init_globals);
+  mutex_lock(g_client_async_mutex);
   bool running = g_client_async_running;
-  pthread_mutex_unlock(&g_client_async_mutex);
+  mutex_unlock(g_client_async_mutex);
   return running;
 }
 
@@ -4918,7 +4956,7 @@ static void _init_default_client(void) {
 }
 
 chttpcli chttp_default_client(void) {
-  pthread_once(&g_default_client_once, _init_default_client);
+  call_once(g_default_client_once, _init_default_client);
   return g_default_client;
 }
 

@@ -1,4 +1,4 @@
-.TH SELECTABLE_FROM_CIRCQ 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH SELECTABLE_FROM_CIRCQ 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
 .SH NAME
 selectable_from_circq \- build a ccol_selectable from a circular_queue
 .SH LIBRARY
@@ -20,9 +20,11 @@ wrapping the given circular_queue pointer with the specified direction.
 This is a macro that expands to a compound literal; it has no run-time
 overhead beyond loading the pointer.
 
-For write-direction wins, ccol_select() leaves buf untouched; no message
-is consumed.  The caller must subsequently call circq_try_send_zc() since
-the available slot is not reserved (TOCTOU, same as POSIX select(2)).
+ccol_select() only reports readiness for either direction; it never
+consumes or reserves anything itself.  The caller must subsequently call
+circq_try_recv_zc() (read-direction win) or circq_try_send_zc()
+(write-direction win) itself, since nothing is claimed or reserved by
+ccol_select() (TOCTOU, same as POSIX select(2)).
 .fi
 .SH PARAMETERS
 .nf
@@ -39,15 +41,16 @@ ccol_selectable value (not a pointer).
 circular_queue *q0 = circular_queue_create(8, NULL);
 circular_queue *q1 = circular_queue_create(8, NULL);
 
-c_message_t msg;
 size_t idx;
 /* Read-wait on two queues: */
-ccol_select_va(&msg, &idx,
+ccol_select_va(&idx,
     selectable_from_circq(q0, ccol_select_read),
     selectable_from_circq(q1, ccol_select_read));
+/* on ccol_success, claim the message via circq_try_recv_zc() on
+   whichever of q0/q1 idx points at */
 
 /* Mixed: wait until q0 has room to send or q1 has a message: */
-ccol_select_va(&msg, &idx,
+ccol_select_va(&idx,
     selectable_from_circq(q0, ccol_select_write),
     selectable_from_circq(q1, ccol_select_read));
 .fi

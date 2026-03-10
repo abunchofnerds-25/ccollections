@@ -1,0 +1,37 @@
+.TH __EVENT_LOOP_DESTROY 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+__event_loop_destroy \- destroy an event_loop (internal function)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+void __event_loop_destroy(event_loop loop);
+.fi
+.SH DESCRIPTION
+.nf
+Calls event_loop_shutdown() if the caller skipped it (guaranteeing the
+reactor thread is joined and no dispatch can be in flight before the
+next step), then frees every remaining registration through the same
+per-registration path event_loop_remove() uses.
+
+For queue-backed registrations this correctly unlinks each one from its
+queue's own waiter list before freeing it, so a queue that outlives this
+event_loop is never left with a dangling waiter pointer.  fd
+registrations are not closed and queues are not destroyed; only the
+event_loop's own registration bookkeeping is freed.
+.fi
+.SH PARAMETERS
+.nf
+loop  event_loop to destroy.
+.fi
+.SH WARNINGS
+.nf
+Do not call directly; use the event_loop_destroy() macro instead, which
+also sets the caller's handle to NULL.
+.fi
+.SH "SEE ALSO"
+.BR event_loop_destroy (3),
+.BR event_loop_shutdown (3),
+.BR event_loop_remove (3)

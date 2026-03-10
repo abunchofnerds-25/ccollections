@@ -24,7 +24,6 @@ SOFTWARE.
 
 #include <chttp.h>
 #include <common.h>
-#include <pthread.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -44,7 +43,7 @@ static const char g_chttp_base64_alphabet[] =
  * a literal would need every one of the 61 non-specified alphabet slots to
  * default to something other than 0, since 0 already means 'A'. */
 static signed char g_chttp_base64_decode_table[256];
-static pthread_once_t g_chttp_base64_decode_table_once = PTHREAD_ONCE_INIT;
+static once_flag_t g_chttp_base64_decode_table_once = ONCE_INIT;
 
 static void _chttp_base64_decode_table_init(void) {
   memset(g_chttp_base64_decode_table, -1, sizeof(g_chttp_base64_decode_table));
@@ -118,8 +117,7 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
   }
   if (in_len % 4 != 0) return NULL;
 
-  pthread_once(&g_chttp_base64_decode_table_once,
-               _chttp_base64_decode_table_init);
+  call_once(g_chttp_base64_decode_table_once, _chttp_base64_decode_table_init);
 
   /* '=' padding may only appear as the final one or two bytes of the whole
    * string; this pre-scan bounds the output allocation exactly, and the

@@ -1,4 +1,4 @@
-.TH SELECTABLE_FROM_DYNQ 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH SELECTABLE_FROM_DYNQ 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
 .SH NAME
 selectable_from_dynq \- build a ccol_selectable from a dynamic_queue
 .SH LIBRARY
@@ -37,11 +37,12 @@ ccol_selectable value (not a pointer).
 dynamic_queue *dq = dynamic_queue_create(NULL);
 circular_queue *q0 = circular_queue_create(8, NULL);
 
-c_message_t msg;
 size_t idx;
-ccol_select_va(&msg, &idx,
+ccol_select_va(&idx,
     selectable_from_circq(q0, ccol_select_read),
     selectable_from_dynq(dq, ccol_select_read));
+/* on ccol_success, claim the message via dynmq_try_recv_zc(dq, ...) or
+   circq_try_recv_zc(q0, ...), whichever selectable idx points at */
 .fi
 .SH "SEE ALSO"
 .BR ccol_select (3),

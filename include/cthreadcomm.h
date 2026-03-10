@@ -833,15 +833,16 @@ typedef enum {
 /**
  * @brief Direction of interest for a ccol_selectable
  *
- * ccol_select_read  — wait until the queue has at least one message to receive.
- * ccol_select_write — wait until the queue has room to accept at least one send
+ * ccol_select_read;  wait until the queue has at least one message to receive.
+ * ccol_select_write; wait until the queue has room to accept at least one send
  *                   (circular_queue: msg_count < max_size && !writing_disabled;
  *                    dynamic_queue: !writing_disabled).
  *
- * Write-ready notification does NOT consume a message; buf is left untouched
- * for write-direction wins.  The caller must call circq_try_send_zc /
- * dynmq_try_send_zc after waking — a TOCTOU race is possible (same as
- * POSIX select(2)), so the send must be non-blocking.
+ * Neither direction is consumed or reserved by ccol_select() itself; the
+ * caller must call circq_try_recv_zc/dynmq_try_recv_zc (read-direction win)
+ * or circq_try_send_zc/dynmq_try_send_zc (write-direction win) after waking.
+ * A TOCTOU race is possible (same as POSIX select(2)), so that call must
+ * be non-blocking.
  */
 typedef enum {
   ccol_select_read,  /**< Wait for at least one readable message      */
@@ -857,16 +858,12 @@ typedef enum {
  * For channels the correct underlying queue is resolved at construction time
  * from the calling thread's ID, exactly as chan_recv_zc() / chan_send_zc() do.
  *
- * For fd selectables, max_fd_read_bytes limits how many bytes ccol_select will
- * read from the fd into buf on a read-direction win (0 = unlimited).  When
- * the limit is exceeded, ccol_select returns ccol_msg_too_large and no data
- * is placed in buf.  Use selectable_from_fd_limited() to set a non-zero limit;
- * selectable_from_fd() always leaves it at 0.
+ * ccol_select() never performs the receive/send itself for any selectable
+ * type; it only reports readiness (see ccol_select()'s own documentation).
  */
 typedef struct {
   ccol_selectable_type type;
   ccol_select_dir dir;
-  size_t max_fd_read_bytes; /**< 0 = unlimited; fd selectables only */
   union {
     circular_queue *cq;
     dynamic_queue *dq;
@@ -892,72 +889,25 @@ typedef struct {
   ((ccol_selectable){                     \
       .type = ccol_selectable_dynq, .dir = (sel_dir), .dq = (q_)})
 
-/** @brief Build a selectable from a raw file descriptor (no read size limit)
+/** @brief Build a selectable from a raw file descriptor
  *
  *  ccol_select uses epoll(7) internally whenever any fd selectable is present.
  *  Queue selectables in the same array are bridged via per-waiter eventfd(2)s
  *  so both fd and queue readiness are multiplexed on a single epoll_wait call.
  *
+ *  ccol_select() never reads or writes the fd itself; it only reports
+ *  readiness (see ccol_select()'s own documentation). The caller performs
+ *  its own read(2)/recv(2) or write(2)/send(2) on fd_ afterward.
+ *
  *  @param fd_      File descriptor to watch (must be >= 0)
  *  @param sel_dir  ccol_select_read  -> EPOLLIN (readable)
  *                  ccol_select_write -> EPOLLOUT (writable)
  *
- *  @note For read-direction fd wins: ccol_select() reads data from the fd into
- *        a heap buffer and sets buf->data (caller must free()) and buf->size.
- *        EOF yields buf->data = NULL, buf->size = 0.  No read size limit is
- *        enforced; use selectable_from_fd_limited() to cap the allocation.
- *        Read behaviour depends on fd type:
- *          - Datagram fds (SOCK_DGRAM, SOCK_SEQPACKET): one read(2) into a
- *            66 KiB buffer, capturing the full datagram without truncation.
- *          - O_NONBLOCK stream / non-socket fds (pipes, timerfd, etc.): the
- *            read loop grows the buffer until EAGAIN, draining all data that
- *            arrived before the wakeup.
- *          - Blocking stream / non-socket fds: exactly one read(2) of up to
- *            4096 bytes.  Any remaining data stays in the fd buffer and will
- *            be returned on the next ccol_select() call because epoll is
- *            level-triggered.  Use selectable_from_fd_limited() with
- *            max_bytes_ > 4096 to read more per call, or use O_NONBLOCK for
- *            full-drain behaviour.
- *  @note For write-direction fd wins: buf is left untouched (symmetric with
- *        write-direction queue wins); caller calls write(2).  A TOCTOU race is
- *        possible (same contract as POSIX select(2)); the write(2) call should
- *        be non-blocking or must handle EWOULDBLOCK/EAGAIN.
  *  @note EPOLLRDHUP, EPOLLERR, and EPOLLHUP are always included for read
  *        selectables; EPOLLERR and EPOLLHUP for write selectables.
  */
-#define selectable_from_fd(fd_, sel_dir)         \
-  ((ccol_selectable){.type = ccol_selectable_fd, \
-                     .dir = (sel_dir),           \
-                     .max_fd_read_bytes = 0,     \
-                     .fd = (fd_)})
-
-/** @brief Build a selectable from a raw file descriptor with a read size limit
- *
- *  Identical to selectable_from_fd() but caps the heap buffer that
- *  ccol_select allocates when reading a read-direction fd win.  If more than
- *  max_bytes_ of data would be needed to drain the fd, ccol_select returns
- *  ccol_msg_too_large without placing any data in buf (no partial reads).
- *
- *  For non-blocking stream fds the internal grow loop doubles the buffer up to
- *  max_bytes_ + 1 bytes, which allows a message of exactly max_bytes_ to
- *  succeed while anything larger is caught and rejected before buf is returned
- *  to the caller.  For datagram sockets, any datagram whose size exceeds
- *  max_bytes_ triggers the same ccol_msg_too_large error.  For blocking stream
- *  fds, exactly one read(2) is performed per call using a buffer of
- *  max(4096, max_bytes_) bytes, allowing up to max_bytes_ bytes to be returned
- *  in a single call when max_bytes_ > 4096.  Data beyond the buffer size stays
- *  in the fd kernel buffer for the next ccol_select() call.
- *
- *  @param fd_        File descriptor to watch (must be >= 0)
- *  @param sel_dir    ccol_select_read or ccol_select_write
- *  @param max_bytes_ Maximum bytes to read; 0 is equivalent to
- * selectable_from_fd
- */
-#define selectable_from_fd_limited(fd_, sel_dir, max_bytes_) \
-  ((ccol_selectable){.type = ccol_selectable_fd,             \
-                     .dir = (sel_dir),                       \
-                     .max_fd_read_bytes = (max_bytes_),      \
-                     .fd = (fd_)})
+#define selectable_from_fd(fd_, sel_dir) \
+  ((ccol_selectable){.type = ccol_selectable_fd, .dir = (sel_dir), .fd = (fd_)})
 
 /**
  * @brief Resolve a channel's queue for the calling thread and return a
@@ -966,10 +916,16 @@ typedef struct {
  * The direction determines both which queue is selected and the waiter list
  * used inside ccol_select():
  *
- *   ccol_select_read  — owner reads from workers_to_owner_cq; worker reads
+ *   ccol_select_read;  owner reads from workers_to_owner_cq; worker reads
  *                     from owner_to_workers_cq  (same as chan_recv_zc)
- *   ccol_select_write — owner writes to owner_to_workers_cq; worker writes
+ *   ccol_select_write; owner writes to owner_to_workers_cq; worker writes
  *                     to workers_to_owner_cq    (same as chan_send_zc)
+ *
+ * As with every other queue selectable, readiness on the resolved queue is
+ * receive-explicit: ccol_select() only reports that the queue is ready, the
+ * caller performs its own chan_try_recv_zc()/chan_try_send_zc() (or the
+ * equivalent circq_try_recv_zc()/circq_try_send_zc() on the resolved queue)
+ * afterward.
  *
  * @param ch  Channel to resolve (NULL yields a selectable ccol_select()
  * rejects)
@@ -990,57 +946,48 @@ ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir);
 /**
  * @brief Wait for readability or writability on any of n selectables
  *
- * Blocks until at least one selectable is ready according to its direction:
- *
- *   ccol_select_read  — the queue has a message; buf receives it (zero-copy
- *                     ownership transfer) and *ready_index is set.
- *   ccol_select_write — the queue has room for at least one send; *ready_index
- *                     is set but buf is left untouched.  The caller must
- *                     subsequently call circq_try_send_zc / dynmq_send_zc
- *                     because the window is not reserved.
+ * Blocks until at least one selectable is ready according to its direction,
+ * then sets *ready_index and returns. ccol_select() never performs the
+ * receive or send itself, for any selectable type (queue or fd): the caller
+ * must, immediately afterward, perform its own explicit receive/send on the
+ * winning selectable: circq_try_recv_zc()/dynmq_try_recv_zc() or
+ * circq_try_send_zc()/dynmq_try_send_zc() for a queue selectable,
+ * read(2)/recv(2) or write(2)/send(2) on selectables[*ready_index].fd for an
+ * fd selectable. This is a TOCTOU-safe contract (the same one write-direction
+ * wins have always had): a concurrent consumer/producer may win the race
+ * between ccol_select() returning and the caller's own explicit call, so
+ * that call must be non-blocking and its result checked.
  *
  * Mixed read+write arrays are supported: any selectable in the array may have
  * any direction.  The first one that becomes ready wins the race.
  *
  * Waiter nodes are heap-allocated (one per selectable).  Any number of threads
- * may simultaneously call ccol_select watching the same queue — there is no
+ * may simultaneously call ccol_select watching the same queue; there is no
  * fixed cap on concurrent waiters.
  *
- * Equivalent to ccol_select_timed(buf, ready_index, n, selectables, -1).
+ * Equivalent to ccol_select_timed(ready_index, n, selectables, -1).
  *
- * @param buf         Buffer to receive the message for read-direction wins
- *                    (caller gains ownership); ignored for write-direction wins
  * @param ready_index Set to the index of the selectable that became ready
  *                    (valid only when ccol_success is returned)
  * @param n           Number of selectables (must be >= 1)
  * @param selectables Array of n ccol_selectable values to monitor
  *
  * @return ccol_success           A selectable is ready; *ready_index is set.
- *                                For read-direction queue or fd wins buf is
- *                                populated (caller must free buf->data).
- *                                For write-direction wins buf is untouched.
+ *                                The caller must perform its own explicit
+ *                                receive/send afterward (see above).
  * @return ccol_invalid_args      Any argument is NULL/zero; a queue selectable
  *                                contains a NULL queue pointer; an fd
  * selectable has fd < 0; or an unknown type/dir value
  * @return ccol_not_enough_memory Internal waiter-node allocation (one node per
  *                                selectable) failed; no state was changed
- * @return ccol_unexpected_failure epoll_create1, eventfd, epoll_ctl, or the
- *                                 fd-read buffer malloc or read(2) call failed
- * @return ccol_msg_too_large      The data on a read-direction fd selectable
- *                                 exceeded the limit set in max_fd_read_bytes;
- *                                 buf is left untouched; *ready_index IS set
- *                                 to the triggering fd's index so the caller
- *                                 can identify which fd to handle
+ * @return ccol_unexpected_failure epoll_create1, eventfd, or epoll_ctl failed
  *
- * @note For read wins (queue or fd): caller is responsible for freeing
- * buf->data
- * @note For write-direction fd wins: buf is untouched; caller calls write(2)
  * @note When no fd selectables are present, only POSIX condition variables are
  *       used; no additional system calls occur beyond normal queue operations
  * @note When fd selectables are present, epoll(7) and eventfd(2) are used
  *       internally (Linux-only)
  */
-ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
+ccol_retval_t ccol_select(size_t *ready_index, size_t n,
                           ccol_selectable *selectables);
 
 /**
@@ -1050,10 +997,8 @@ ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
  * Identical to ccol_select() except that the call returns ccol_timed_out if no
  * selectable becomes ready within timeout_ms milliseconds.
  *
- * @param buf         Buffer to receive the message for read-direction wins
- *                    (caller gains ownership); ignored for write-direction wins
  * @param ready_index Set to the index of the selectable that became ready.
- *                    Valid when ccol_success or ccol_msg_too_large is returned.
+ *                    Valid when ccol_success is returned.
  *                    Unmodified on ccol_timed_out, ccol_invalid_args,
  *                    ccol_not_enough_memory, or ccol_unexpected_failure.
  * @param n           Number of selectables (must be >= 1)
@@ -1064,13 +1009,10 @@ ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
  *
  * @return ccol_success           A selectable is ready; *ready_index is set.
  * @return ccol_timed_out         timeout_ms elapsed without any selectable
- *                                becoming ready; buf and *ready_index are
- *                                unmodified.
+ *                                becoming ready; *ready_index is unmodified.
  * @return ccol_invalid_args      (same conditions as ccol_select)
  * @return ccol_not_enough_memory (same conditions as ccol_select)
  * @return ccol_unexpected_failure (same conditions as ccol_select)
- * @return ccol_msg_too_large      (same conditions as ccol_select;
- *                                 *ready_index is set to the fd's index)
  *
  * @note Uses CLOCK_MONOTONIC for the deadline so system time adjustments do
  *       not affect the timeout.
@@ -1078,7 +1020,7 @@ ccol_retval_t ccol_select(c_message_t *buf, size_t *ready_index, size_t n,
  *       on a CLOCK_MONOTONIC condvar; when fd selectables are present, the
  *       remaining time is passed to each epoll_wait call.
  */
-ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
+ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
                                 ccol_selectable *selectables, int timeout_ms);
 
 /**
@@ -1095,20 +1037,23 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
  *
  * Example:
  * @code
- *   c_message_t msg;
  *   size_t idx;
- *   ccol_retval_t r = ccol_select_va(&msg, &idx,
+ *   ccol_retval_t r = ccol_select_va(&idx,
  *       selectable_from_circq(q0, ccol_select_read),
  *       selectable_from_chan(ch, ccol_select_read));
+ *   if (r == ccol_success) {
+ *       // perform the explicit receive appropriate to whichever
+ *       // selectable won, e.g. circq_try_recv_zc(q0, &msg)
+ *   }
  * @endcode
  *
  * @note Uses a GCC/Clang statement expression; not valid under strict ISO C
  */
-#define ccol_select_va(buf, ready_index, ...)                            \
-  __extension__({                                                        \
-    ccol_selectable _cqsel_arr[] = {__VA_ARGS__};                        \
-    ccol_select((buf), (ready_index),                                    \
-                sizeof(_cqsel_arr) / sizeof(_cqsel_arr[0]), _cqsel_arr); \
+#define ccol_select_va(ready_index, ...)                                   \
+  __extension__({                                                          \
+    ccol_selectable _cqsel_arr[] = {__VA_ARGS__};                          \
+    ccol_select((ready_index), sizeof(_cqsel_arr) / sizeof(_cqsel_arr[0]), \
+                _cqsel_arr);                                               \
   })
 
 /**
@@ -1118,19 +1063,387 @@ ccol_retval_t ccol_select_timed(c_message_t *buf, size_t *ready_index, size_t n,
  *
  * Example:
  * @code
- *   c_message_t msg;
  *   size_t idx;
- *   ccol_retval_t r = ccol_select_timed_va(&msg, &idx, 500,
+ *   ccol_retval_t r = ccol_select_timed_va(&idx, 500,
  *       selectable_from_circq(q0, ccol_select_read),
  *       selectable_from_chan(ch, ccol_select_read));
  * @endcode
  *
  * @note Uses a GCC/Clang statement expression; not valid under strict ISO C
  */
-#define ccol_select_timed_va(buf, ready_index, timeout_ms, ...)               \
+#define ccol_select_timed_va(ready_index, timeout_ms, ...)                    \
   __extension__({                                                             \
     ccol_selectable _cqsel_arr[] = {__VA_ARGS__};                             \
-    ccol_select_timed((buf), (ready_index),                                   \
+    ccol_select_timed((ready_index),                                          \
                       sizeof(_cqsel_arr) / sizeof(_cqsel_arr[0]), _cqsel_arr, \
                       (timeout_ms));                                          \
   })
+
+/* ========================================================================== */
+/*                             EVENT_LOOP API                                 */
+/* ========================================================================== */
+
+/**
+ * @brief Opaque event_loop structure
+ *
+ * A persistent, incrementally-mutable epoll(7)-based reactor: one long-lived
+ * background thread, one epoll instance created once at construction and
+ * mutated (EPOLL_CTL_ADD/MOD/DEL) as registrations come and go, rather than
+ * ccol_select's per-call fresh epoll instance that waits for exactly one
+ * ready selectable and tears everything down before returning.
+ *
+ * Registrations are built from the same ccol_selectable type ccol_select
+ * uses (selectable_from_fd, selectable_from_circq, selectable_from_dynq,
+ * selectable_from_chan). Like ccol_select, event_loop never performs the
+ * receive or send itself for any selectable type: the caller always
+ * performs its own read()/recv()/circq_try_recv_zc()/dynmq_try_recv_zc()
+ * from inside the callback (see event_loop_add's documentation).
+ */
+typedef struct event_loop_s event_loop_s;
+
+/** @brief Handle type (pointer to opaque struct) */
+typedef event_loop_s *event_loop;
+
+/** @brief Opaque handle to a single event_loop registration */
+typedef struct event_reg event_reg;
+
+/**
+ * @brief Callback invoked when a registration becomes readable
+ *
+ * Reports readiness only, for every selectable type: the reactor never
+ * performs the receive itself. For fd selectables, the callback performs
+ * its own read()/recv() on sel->fd. For queue selectables (circq/dynq/
+ * chan-resolved), the callback performs its own circq_try_recv_zc()/
+ * dynmq_try_recv_zc() on sel->cq/sel->dq. Either way a concurrent consumer
+ * may have already claimed the data (a TOCTOU race inherent to the design,
+ * same as ccol_select's own write-direction contract); the callback's own
+ * explicit receive call may find nothing, and must handle that gracefully.
+ *
+ * @param loop The event_loop this registration belongs to
+ * @param sel  The ccol_selectable this registration was created from
+ *             (sel->dir reflects the registration's current direction,
+ *             which may have changed since event_loop_add via
+ *             event_loop_modify)
+ * @param arg  The opaque pointer passed to event_loop_add
+ */
+typedef void (*event_readable_fn)(event_loop loop, ccol_selectable *sel,
+                                  void *arg);
+
+/**
+ * @brief Callback invoked when a registration becomes writable
+ *
+ * No payload is ever delivered: for fd selectables the caller performs its
+ * own write()/send(); for queue selectables the registration only signals
+ * that room may be available; the callback must call
+ * circq_try_send_zc/dynmq_try_send_zc itself (a TOCTOU race is possible,
+ * same contract as ccol_select's write-direction wins).
+ *
+ * @param loop The event_loop this registration belongs to
+ * @param sel  The ccol_selectable this registration was created from
+ * @param arg  The opaque pointer passed to event_loop_add
+ */
+typedef void (*event_writable_fn)(event_loop loop, ccol_selectable *sel,
+                                  void *arg);
+
+/**
+ * @brief Callback invoked on a fatal condition for a registration
+ *
+ * For fd selectables, fires on EPOLLERR/EPOLLHUP (the fd itself is broken;
+ * if both directions are registered on the same fd, both receive an error
+ * dispatch). Queue selectables never produce an error condition and never
+ * invoke this callback.
+ *
+ * @param loop The event_loop this registration belongs to
+ * @param sel  The ccol_selectable this registration was created from
+ * @param arg  The opaque pointer passed to event_loop_add
+ */
+typedef void (*event_error_fn)(event_loop loop, ccol_selectable *sel,
+                               void *arg);
+
+/**
+ * @brief Callback bundle for a single event_loop_add call
+ *
+ * Any of the three may be NULL, in which case that class of event is
+ * silently dropped for this registration (e.g. a write-only producer that
+ * never expects on_error may pass NULL there).
+ */
+typedef struct event_handlers {
+  event_readable_fn on_readable; /**< EPOLLIN|EPOLLRDHUP, or a queue message */
+  event_writable_fn on_writable; /**< EPOLLOUT, or queue room available */
+  event_error_fn on_error;       /**< EPOLLERR|EPOLLHUP (fd selectables only) */
+} event_handlers_t;
+
+/**
+ * @brief Create an event_loop with custom memory management
+ *
+ * Creates a persistent epoll instance and immediately spawns the single
+ * background reactor thread that drives it (the thread is ready to dispatch
+ * events as soon as this call returns, mirroring create_cthread_pool's
+ * "ready to work the moment you get the handle" ergonomics).
+ *
+ * The fd/entry registry is lock-striped: num_lock_stripes independent
+ * (mutex, chmap) pairs, each guarding a disjoint subset of registrations
+ * (one real fd, or one queue/channel registration's private bridge fd, is
+ * always handled by exactly one stripe -- never split across two). Passing
+ * 1 reproduces the original single-lock design exactly, just with one
+ * extra array indirection; passing more lets event_loop_add/_remove/_modify
+ * calls for different fds/registrations proceed concurrently instead of
+ * serializing through one lock, at the cost of num_lock_stripes mutexes and
+ * chmaps being allocated up front.
+ *
+ * @param max_events_per_wait Size of the epoll_wait batch buffer (must be
+ * >= 1); bounds how many ready events the reactor thread drains per
+ * epoll_wait call, not the number of registrations the loop can hold
+ * @param num_lock_stripes Number of independent lock stripes for the fd/
+ * entry registry (must be >= 1). 1 matches this module's original
+ * single-lock behavior; pass a larger value to reduce
+ * event_loop_add/_remove/_modify contention across many different fds/
+ * registrations under concurrent use. No upper bound is enforced.
+ * @param mmgmt_procs Custom memory management procedures, or NULL to use
+ * default malloc/free
+ * @param err_str Optional pointer to receive error string on failure (pass
+ * NULL to ignore)
+ *
+ * @return New event_loop handle, or NULL on failure (invalid arguments,
+ * allocation failure, epoll_create1/eventfd/pthread_create failure)
+ *
+ * @see event_loop_create
+ * @see event_loop_destroy
+ */
+event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
+                                         size_t num_lock_stripes,
+                                         ccol_memmgmt_procs_t *mmgmt_procs,
+                                         char **err_str);
+
+/**
+ * @brief Create an event_loop with default memory management
+ *
+ * Convenience macro equivalent to event_loop_create_with_mprocs with
+ * mmgmt_procs = NULL.
+ */
+#define event_loop_create(max_events_per_wait, num_lock_stripes, err_str)  \
+  event_loop_create_with_mprocs((max_events_per_wait), (num_lock_stripes), \
+                                NULL, (err_str))
+
+/**
+ * @brief Register a selectable with the event loop
+ *
+ * Builds on the same ccol_selectable type ccol_select uses:
+ * selectable_from_fd, selectable_from_circq, selectable_from_dynq, and
+ * selectable_from_chan are all directly reusable to build sel.
+ *
+ * One registration covers exactly one direction (sel.dir). A caller wanting
+ * both directions live on the same fd at once (e.g. a full-duplex pipe)
+ * calls event_loop_add twice and gets two independent handles; flipping a
+ * single registration's direction over time (e.g. a connecting socket:
+ * write-interest until connect completes, then read-interest afterward)
+ * uses one registration plus event_loop_modify instead. Registering a
+ * second selectable for a direction already occupied on the same fd (two
+ * read registrations on one fd, for example) is rejected with
+ * ccol_not_permitted.
+ *
+ * @param loop     event_loop to register with
+ * @param sel      What to watch (see above)
+ * @param handlers Callback bundle (individual callbacks may be NULL)
+ * @param arg      Opaque pointer passed to every callback for this
+ *                 registration
+ * @param err_str  Optional pointer to receive error string on failure
+ *
+ * @return New registration handle, or NULL on failure
+ *
+ * @note Thread-safe; may be called concurrently with event_loop_remove,
+ *       event_loop_modify, and from within a callback running on the
+ *       reactor thread
+ *
+ * @see event_loop_remove
+ * @see event_loop_modify
+ */
+event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
+                          event_handlers_t handlers, void *arg, char **err_str);
+
+/**
+ * @brief Change an existing fd registration's direction
+ *
+ * fd-only: called on a registration built from a queue/channel selectable,
+ * returns ccol_invalid_args (a queue selectable's direction is part of its
+ * identity; remove and re-add instead). On success, updates the
+ * registration's ccol_selectable.dir (visible to subsequent callbacks via
+ * the sel parameter), moves it to the other slot on its underlying fd, and
+ * recomputes the fd's combined epoll interest mask, without a window
+ * where the fd is briefly unregistered.
+ *
+ * @param loop    event_loop the registration belongs to
+ * @param reg     Registration to modify
+ * @param new_dir ccol_select_read or ccol_select_write
+ *
+ * @return ccol_success on success
+ * @return ccol_invalid_args if loop/reg is NULL, reg is a queue/channel
+ * registration, new_dir is invalid, or reg was concurrently removed
+ * @return ccol_not_permitted if the target direction is already occupied by
+ * a different registration on the same fd
+ *
+ * @note Thread-safe; may be called concurrently with event_loop_remove and
+ *       from within a callback running on the reactor thread
+ */
+ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
+                                ccol_select_dir new_dir);
+
+/**
+ * @brief Deregister a selectable from the event loop
+ *
+ * Safe to call from within a callback for the very registration being
+ * removed (self-removal on error is a common pattern) as well as from any
+ * other thread, including concurrently with an in-flight dispatch for the
+ * same registration; teardown is deferred until any in-progress callback
+ * returns.
+ *
+ * Does not close an fd or affect a queue's own lifetime; only the
+ * event_loop's registration bookkeeping is released, mirroring
+ * selectable_from_fd's existing "caller owns the fd" contract.
+ *
+ * @param loop event_loop the registration belongs to
+ * @param reg  Registration to remove
+ *
+ * @return ccol_success on success
+ * @return ccol_invalid_args if loop or reg is NULL
+ *
+ * @note Thread-safe
+ */
+ccol_retval_t event_loop_remove(event_loop loop, event_reg *reg);
+
+/**
+ * @brief Number of currently-registered event_reg handles
+ *
+ * Counts live registrations (event_loop_add calls not yet removed), not
+ * epoll interest-list entries; one fd with both directions registered
+ * counts as 2.
+ *
+ * @param loop event_loop to query
+ * @return Registration count, or (size_t)-1 if loop is NULL
+ */
+size_t event_loop_reg_count(event_loop loop);
+
+/**
+ * @brief Stop the reactor thread
+ *
+ * Idempotent: safe to call more than once, or not at all before
+ * event_loop_destroy (which calls this internally if needed). Blocks until
+ * the reactor thread has been joined; no dispatch can be in flight once
+ * this returns.
+ *
+ * @param loop event_loop to shut down
+ *
+ * @return ccol_success on success
+ * @return ccol_invalid_args if loop is NULL
+ *
+ * @warning Must not be called from within a callback running on loop's own
+ * reactor thread: internally this joins that thread, and a thread cannot
+ * join itself (undefined behavior / EDEADLK). Defer shutdown to another
+ * thread, or to after the callback returns, instead.
+ */
+ccol_retval_t event_loop_shutdown(event_loop loop);
+
+/**
+ * @brief Destroy an event_loop (internal function)
+ *
+ * @param loop event_loop to destroy
+ *
+ * @warning Do not call directly - use event_loop_destroy() macro instead
+ */
+void __event_loop_destroy(event_loop loop);
+
+/**
+ * @brief RAII cleanup function (used with _ccol_destructor)
+ */
+static inline __attribute__((always_inline)) void ___event_loop_destroy(
+    event_loop *lp) {
+  if (lp && *lp) {
+    __event_loop_destroy(*lp);
+    *lp = NULL;
+  }
+}
+
+/**
+ * @brief Destroy an event_loop and set handle to NULL
+ *
+ * Shuts the reactor thread down (if not already shut down) and frees every
+ * remaining registration; for queue-backed registrations this correctly
+ * unlinks each one from its queue's own waiter list first, so a queue that
+ * outlives this event_loop is never left with a dangling waiter pointer.
+ *
+ * @param loop event_loop to destroy (will be set to NULL after destruction)
+ *
+ * @note Safe to call with NULL pointer
+ */
+#define event_loop_destroy(loop)  \
+  do {                            \
+    __event_loop_destroy((loop)); \
+    (loop) = NULL;                \
+  } while (0)
+
+/**
+ * @brief Declare an uninitialised event_loop variable
+ *
+ * Must be followed by event_loop_construct or an event_loop_create* call.
+ */
+#define event_loop_declare(name) event_loop name
+
+/**
+ * @brief Declare with automatic destruction on scope exit
+ */
+#define event_loop_declare_scoped(name) \
+  event_loop name _ccol_destructor(___event_loop_destroy) = NULL
+
+/**
+ * @brief Declare and initialise in one step; fatal_err on failure
+ *
+ * Example:
+ * @code
+ * event_loop_construct(loop, 32, 1);
+ * event_reg *r = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
+ *                                handlers, NULL, NULL);
+ * event_loop_destroy(loop);
+ * @endcode
+ *
+ * @param name               Variable name for the event_loop handle
+ * @param max_events_per_wait Size of the epoll_wait batch buffer (must be
+ *                            >= 1)
+ * @param num_lock_stripes   Number of lock stripes for the fd/entry
+ *                           registry (must be >= 1; 1 matches the original
+ *                           single-lock behavior)
+ */
+#define event_loop_construct(name, max_events_per_wait, num_lock_stripes) \
+  event_loop name = NULL;                                                 \
+  do {                                                                    \
+    char *_evl_err = NULL;                                                \
+    (name) = event_loop_create((max_events_per_wait), (num_lock_stripes), \
+                               &_evl_err);                                \
+    if (!(name)) {                                                        \
+      fatal_err("event_loop_construct('%s'): %s", #name,                  \
+                _evl_err ? _evl_err : "unknown error");                   \
+    }                                                                     \
+  } while (0)
+
+/**
+ * @brief Declare, initialise, and auto-destroy on scope exit; fatal_err on
+ *        failure
+ *
+ * @param name               Variable name for the event_loop handle
+ * @param max_events_per_wait Size of the epoll_wait batch buffer (must be
+ *                            >= 1)
+ * @param num_lock_stripes   Number of lock stripes for the fd/entry
+ *                           registry (must be >= 1; 1 matches the original
+ *                           single-lock behavior)
+ */
+#define event_loop_construct_scoped(name, max_events_per_wait,            \
+                                    num_lock_stripes)                     \
+  event_loop name _ccol_destructor(___event_loop_destroy) = NULL;         \
+  do {                                                                    \
+    char *_evl_err = NULL;                                                \
+    (name) = event_loop_create((max_events_per_wait), (num_lock_stripes), \
+                               &_evl_err);                                \
+    if (!(name)) {                                                        \
+      fatal_err("event_loop_construct_scoped('%s'): %s", #name,           \
+                _evl_err ? _evl_err : "unknown error");                   \
+    }                                                                     \
+  } while (0)

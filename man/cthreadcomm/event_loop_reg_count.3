@@ -1,0 +1,37 @@
+.TH EVENT_LOOP_REG_COUNT 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+event_loop_reg_count \- number of currently-registered event_reg handles
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+size_t event_loop_reg_count(event_loop loop);
+.fi
+.SH DESCRIPTION
+.nf
+Returns the number of live registrations (event_loop_add() calls not yet
+removed), not the number of epoll interest-list entries: one fd with
+both directions registered counts as 2, since it is backed by two
+independent event_reg handles sharing one entry.
+.fi
+.SH PARAMETERS
+.nf
+loop  event_loop to query.
+.fi
+.SH RETURN VALUE
+.nf
+Returns the registration count on success.
+Returns (size_t)-1 if loop is NULL.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call concurrently with event_loop_add(), event_loop_remove(),
+and dispatch on the reactor thread; returns a consistent snapshot (a
+single atomic load, torn-read-free) rather than a value protected by any
+lock.
+.fi
+.SH "SEE ALSO"
+.BR event_loop_add (3),
+.BR event_loop_remove (3)

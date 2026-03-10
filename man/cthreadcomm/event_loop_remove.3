@@ -1,0 +1,63 @@
+.TH EVENT_LOOP_REMOVE 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+event_loop_remove \- deregister a selectable from an event loop
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t event_loop_remove(event_loop loop, event_reg *reg);
+.fi
+.SH DESCRIPTION
+.nf
+Deregisters reg.  Safe to call from within a callback for the very
+registration being removed (self-removal on error is a common pattern),
+as well as from any other thread, including concurrently with an
+in-flight dispatch for the same registration; teardown is deferred until
+any in-progress callback returns.
+
+Does not close an fd or affect a queue's own lifetime; only the
+event_loop's registration bookkeeping is released, mirroring
+selectable_from_fd's existing "caller owns the fd" contract.
+
+Idempotent: calling event_loop_remove() a second time on an
+already-removed reg returns ccol_success without side effects.  The reg
+handle itself remains safe to pass to a subsequent event_loop_modify()
+or event_loop_remove() call after removal (both are documented to
+detect this and return gracefully), but must not be otherwise
+dereferenced by the caller once removed.
+.fi
+.SH PARAMETERS
+.nf
+loop  event_loop the registration belongs to.
+reg   Registration to remove.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        Removed (or was already removed).
+ccol_invalid_args   loop or reg is NULL.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call from any thread, including concurrently with dispatch for
+the same registration and from within that registration's own callback.
+.fi
+.SH EXAMPLES
+.nf
+void on_readable(event_loop loop, ccol_selectable *sel, void *arg) {
+    conn_ctx_t *ctx = (conn_ctx_t *)arg;
+    char buf[512];
+    ssize_t n = read(sel->fd, buf, sizeof(buf));
+    if (n <= 0) {
+        event_loop_remove(loop, ctx->reg);  /* self-removal, safe */
+        close(sel->fd);
+        free(ctx);
+        return;
+    }
+    /* ... */
+}
+.fi
+.SH "SEE ALSO"
+.BR event_loop_add (3),
+.BR event_loop_modify (3)

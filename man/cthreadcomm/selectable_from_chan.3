@@ -1,4 +1,4 @@
-.TH SELECTABLE_FROM_CHAN 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH SELECTABLE_FROM_CHAN 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
 .SH NAME
 selectable_from_chan \- build a ccol_selectable from a channel, resolving the queue for the calling thread and the requested direction
 .SH LIBRARY
@@ -38,16 +38,16 @@ to one of its internal circular queues).
 .SH EXAMPLES
 .nf
 /* Owner reads from two channels: */
-c_message_t msg;
 size_t idx;
-ccol_select_va(&msg, &idx,
+ccol_select_va(&idx,
     selectable_from_chan(ch0, ccol_select_read),
     selectable_from_chan(ch1, ccol_select_read));
+/* on ccol_success, claim the message via chan_try_recv_zc() on
+   whichever of ch0/ch1 idx points at */
 
 /* Owner waits for room to send on one channel: */
-c_message_t dummy = {0};
-ccol_select_va(&dummy, &idx,
-    selectable_from_chan(ch, ccol_select_write));
+ccol_select_va(&idx, selectable_from_chan(ch, ccol_select_write));
+/* on ccol_success, send via chan_try_send_zc(ch, ...) */
 .fi
 .SH "SEE ALSO"
 .BR ccol_selectable_from_chan (3),

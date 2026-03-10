@@ -1,6 +1,6 @@
-.TH SELECTABLE_FROM_FD 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH SELECTABLE_FROM_FD 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
 .SH NAME
-selectable_from_fd \- build a ccol_selectable from a raw file descriptor (no read size limit)
+selectable_from_fd \- build a ccol_selectable from a raw file descriptor
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -8,7 +8,6 @@ C Collections (libccollections, \-lccollections)
 #include <cthreadcomm.h>
 
 selectable_from_fd(fd, dir);
-selectable_from_fd_limited(fd, dir, max_bytes);
 .fi
 .SH DESCRIPTION
 .nf
@@ -19,51 +18,14 @@ wrapping the given file descriptor with the specified I/O direction.
                      EOF / error condition)
   ccol_select_write; wake when the fd becomes writable (send buffer has room)
 
-Both macros expand to compound literals; they have no run-time overhead.
+Expands to a compound literal; it has no run-time overhead.
 
-selectable_from_fd() sets max_fd_read_bytes to 0 (unlimited).
-selectable_from_fd_limited() accepts an explicit max_bytes limit; if the
-data available on the fd exceeds that limit, ccol_select() returns
-ccol_msg_too_large without placing any data in buf (no partial reads).
-
-For non-blocking stream fds, the internal grow loop uses max_bytes + 1 as
-its ceiling so that a message of exactly max_bytes succeeds: the next read
-after filling the buffer returns EAGAIN, so total < capacity and the function
-returns ccol_success.  Only when total > max_bytes (more data than the limit)
-is ccol_msg_too_large returned.
-
-For ccol_select_read direction: when ccol_select() returns ccol_success,
-buf->data points to a heap buffer containing the data read from the fd
-(how much is read per call depends on fd type; see Read behaviour detail
-below), and buf->size holds the byte count.  The caller gains ownership
-of buf->data and must call free() on it.  EOF yields buf->data = NULL,
-buf->size = 0.  This is the same ownership model as queue read wins.
-
-For ccol_select_write direction: buf is left untouched; ccol_select() only
-signals that the fd has room in its kernel send buffer.  The caller must
-subsequently call write(2) (symmetric with write-direction queue wins, where
-no queue slot is reserved).  max_bytes is ignored for write-direction fds.
-
-Read behaviour detail: ccol_select() inspects the fd with getsockopt(SO_TYPE)
-to determine whether it is a datagram socket (SOCK_DGRAM or SOCK_SEQPACKET).
-
-Datagram fds: a single read(2) is performed into a 66 KiB buffer.  This
-exceeds the maximum standard IPv4/IPv6 UDP payload (65,507 bytes), so the
-full datagram is always captured without truncation.  The grow-retry loop is
-suppressed for datagram fds regardless of O_NONBLOCK.  When max_bytes is set
-and the datagram size exceeds it, ccol_msg_too_large is returned.
-
-Stream fds and non-socket fds (pipes, timerfd, signalfd, etc.): a 4 KiB
-initial buffer is used.  If the fd has O_NONBLOCK, the read loop grows the
-buffer (up to max_bytes + 1 when a limit is set) until EAGAIN to drain all
-data that arrived before the wakeup.  If the fd is in blocking mode, exactly
-one read(2) call is made using a buffer of max(4096, max_bytes) bytes;
-passing max_bytes > 4096 via selectable_from_fd_limited() therefore allows
-reading up to max_bytes bytes in a single blocking call.  Any data remaining
-in the fd buffer after that single read is NOT drained in that call; it
-will be returned on the next ccol_select() call because epoll(7) is
-level-triggered.  Use O_NONBLOCK on the fd if full-drain behaviour per call
-is required.
+ccol_select() never reads or writes the fd itself; it only reports
+readiness (see ccol_select()'s own documentation).  For a ccol_select_read
+win, the caller performs its own read(2)/recv(2) on fd afterward.  For a
+ccol_select_write win, the caller performs its own write(2)/send(2).
+Either call may find nothing/EWOULDBLOCK if a concurrent reader/writer won
+the race first (the same TOCTOU contract POSIX select(2) itself has).
 
 Mixing fd selectables with queue selectables in the same ccol_select() call
 is supported.  The implementation switches to an epoll(7)-based wait path
@@ -76,9 +38,6 @@ fd        An open file descriptor.  Must be >= 0.  Passing a negative value
           produces a selectable that ccol_select() will reject with
           ccol_invalid_args.
 dir       ccol_select_read or ccol_select_write.
-max_bytes (selectable_from_fd_limited only) Maximum bytes to read from the
-          fd on a ccol_select_read win.  0 is equivalent to selectable_from_fd
-          (unlimited).
 .fi
 .SH RETURN VALUE
 .nf
@@ -92,27 +51,19 @@ int src = 42;
 write(pfd[1], &src, sizeof(src));
 
 /* Wake when the pipe read end has data OR q has a message: */
-c_message_t msg;
 size_t idx;
-ccol_retval_t r = ccol_select_va(&msg, &idx,
+ccol_retval_t r = ccol_select_va(&idx,
     selectable_from_circq(q, ccol_select_read),
     selectable_from_fd(pfd[0], ccol_select_read));
 if (r == ccol_success && idx == 1) {
-    /* fd won; data already read into msg.data */
-    int val = *(int *)msg.data;
-    free(msg.data);
+    /* fd is ready; read it ourselves */
+    int val;
+    read(pfd[0], &val, sizeof(val));
 }
 
-/* Watch a socket for writability (buf untouched, no data read): */
-ccol_select_va(&msg, &idx,
-    selectable_from_fd(sock_fd, ccol_select_write));
-
-/* Reject fd messages larger than 64 KiB: */
-r = ccol_select_va(&msg, &idx,
-    selectable_from_fd_limited(pfd[0], ccol_select_read, 65536));
-if (r == ccol_msg_too_large) {
-    /* data exceeded limit; fd kernel buffer still holds the bytes */
-}
+/* Watch a socket for writability: */
+r = ccol_select_va(&idx, selectable_from_fd(sock_fd, ccol_select_write));
+if (r == ccol_success) write(sock_fd, "hi", 2);
 .fi
 .SH "SEE ALSO"
 .BR ccol_select (3),

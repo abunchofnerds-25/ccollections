@@ -24,7 +24,6 @@ SOFTWARE.
 
 #include <cfio_engine.h>
 #include <fio.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -53,11 +52,26 @@ extern void http_lib_constructor(void);
 extern void fio_lib_init(void);
 extern void fio_lib_destroy(void);
 
-static pthread_mutex_t g_cfio_engine_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t g_cfio_engine_ready_cv = PTHREAD_COND_INITIALIZER;
+static mutex_t g_cfio_engine_mutex;
+static cond_var_t g_cfio_engine_ready_cv;
 /* Signalled once a reaper thread (see _cfio_engine_reaper_fn) finishes
  * tearing the shared reactor down (g_cfio_engine_stopping -> false). */
-static pthread_cond_t g_cfio_engine_stopped_cv = PTHREAD_COND_INITIALIZER;
+static cond_var_t g_cfio_engine_stopped_cv;
+/* g_cfio_engine_mutex/_ready_cv/_stopped_cv used to carry static
+ * PTHREAD_MUTEX_INITIALIZER/PTHREAD_COND_INITIALIZER initializers; converted
+ * to lazy, call_once-guarded runtime init (see _cfio_engine_init_globals)
+ * since a non-pthread backend's equivalent primitive may need real setup
+ * work a compile-time constant can't provide. Every function below that
+ * touches any of the three calls call_once(g_cfio_engine_globals_once, ...)
+ * as its first statement, found by grepping every direct lock/unlock/wait
+ * site for these three globals, not by assuming only "public-looking"
+ * functions matter. */
+static once_flag_t g_cfio_engine_globals_once = ONCE_INIT;
+static void _cfio_engine_init_globals(void) {
+  mutex_init(g_cfio_engine_mutex);
+  cond_var_init(g_cfio_engine_ready_cv);
+  cond_var_init(g_cfio_engine_stopped_cv);
+}
 static bool g_cfio_engine_running = false;
 /* True from the moment the last reference is released until the reaper
  * thread has fully finished tearing the reactor down (joined its thread).
@@ -67,7 +81,7 @@ static bool g_cfio_engine_running = false;
 static bool g_cfio_engine_stopping = false;
 static bool g_cfio_engine_ready = false;
 static bool g_cfio_engine_thread_started = false;
-static pthread_t g_cfio_engine_thread;
+static thread_id_t g_cfio_engine_thread;
 static int16_t g_cfio_engine_threads = 1;
 /* Number of outstanding acquire() callers (from either module) currently
  * relying on the reactor. Stops when this reaches 0. */
@@ -78,12 +92,12 @@ static int g_cfio_engine_ref_count = 0;
  * join, not just its stopped_cv broadcast, is required for a caller to be
  * able to rely on the reactor thread's OS-level teardown having fully
  * completed. */
-static pthread_t g_cfio_engine_reaper_thread;
+static thread_id_t g_cfio_engine_reaper_thread;
 static bool g_cfio_engine_reaper_joinable = false;
 
 static void _cfio_engine_atexit_safety_net(void);
 
-static pthread_once_t _cfio_fio_init_once = PTHREAD_ONCE_INIT;
+static once_flag_t _cfio_fio_init_once = ONCE_INIT;
 static void _cfio_fio_global_init(void) {
   http_lib_constructor();
   fio_lib_init();
@@ -95,10 +109,11 @@ static void _cfio_fio_global_init(void) {
  * event loop. Signals _cfio_engine_acquire that the reactor is ready. */
 static void _cfio_engine_ready_cb(void *arg) {
   (void)arg;
-  pthread_mutex_lock(&g_cfio_engine_mutex);
+  call_once(g_cfio_engine_globals_once, _cfio_engine_init_globals);
+  mutex_lock(g_cfio_engine_mutex);
   g_cfio_engine_ready = true;
-  pthread_cond_broadcast(&g_cfio_engine_ready_cv);
-  pthread_mutex_unlock(&g_cfio_engine_mutex);
+  cond_var_broadcast(g_cfio_engine_ready_cv);
+  mutex_unlock(g_cfio_engine_mutex);
 }
 
 static void *_cfio_fio_thread_fn(void *arg) {
@@ -125,13 +140,14 @@ static void *_cfio_fio_thread_fn(void *arg) {
  */
 static void *_cfio_engine_reaper_fn(void *arg) {
   (void)arg;
+  call_once(g_cfio_engine_globals_once, _cfio_engine_init_globals);
   fio_stop();
-  pthread_join(g_cfio_engine_thread, NULL);
-  pthread_mutex_lock(&g_cfio_engine_mutex);
+  thread_join(g_cfio_engine_thread);
+  mutex_lock(g_cfio_engine_mutex);
   g_cfio_engine_thread_started = false;
   g_cfio_engine_stopping = false;
-  pthread_cond_broadcast(&g_cfio_engine_stopped_cv);
-  pthread_mutex_unlock(&g_cfio_engine_mutex);
+  cond_var_broadcast(g_cfio_engine_stopped_cv);
+  mutex_unlock(g_cfio_engine_mutex);
   /* fio_lib_destroy (registered via atexit in _cfio_fio_global_init) fires
    * after all other cleanup, at process exit. */
   return NULL;
@@ -169,7 +185,7 @@ static void *_cfio_engine_reaper_fn(void *arg) {
  */
 static void _cfio_engine_join_reaper_if_needed_locked(void) {
   if (g_cfio_engine_reaper_joinable) {
-    pthread_join(g_cfio_engine_reaper_thread, NULL);
+    thread_join(g_cfio_engine_reaper_thread);
     g_cfio_engine_reaper_joinable = false;
   }
 }
@@ -179,8 +195,9 @@ static void _cfio_engine_join_reaper_if_needed_locked(void) {
  * _cfio_engine_atexit_safety_net; all three reach the same "something must
  * stop the reactor now" decision, just via different triggers. */
 static void _cfio_engine_spawn_reaper(void) {
-  pthread_t reaper;
-  if (pthread_create(&reaper, NULL, _cfio_engine_reaper_fn, NULL) != 0) {
+  call_once(g_cfio_engine_globals_once, _cfio_engine_init_globals);
+  thread_id_t reaper;
+  if (thread_create(reaper, _cfio_engine_reaper_fn, NULL) != 0) {
     /* Could not spawn the reaper (OOM-class failure). No safer fallback
      * exists than doing it inline; this reintroduces the self-join deadlock
      * risk documented on _cfio_engine_release only in this already-
@@ -189,26 +206,27 @@ static void _cfio_engine_spawn_reaper(void) {
     _cfio_engine_reaper_fn(NULL);
     return;
   }
-  pthread_mutex_lock(&g_cfio_engine_mutex);
+  mutex_lock(g_cfio_engine_mutex);
   g_cfio_engine_reaper_thread = reaper;
   g_cfio_engine_reaper_joinable = true;
-  pthread_mutex_unlock(&g_cfio_engine_mutex);
+  mutex_unlock(g_cfio_engine_mutex);
 }
 
 ccol_retval_t _cfio_engine_acquire(void) {
-  pthread_mutex_lock(&g_cfio_engine_mutex);
+  call_once(g_cfio_engine_globals_once, _cfio_engine_init_globals);
+  mutex_lock(g_cfio_engine_mutex);
 
   /* A previous engine instance may still be mid-teardown on the reaper
    * thread (see _cfio_engine_release). Reusing g_cfio_engine_thread while
    * that's in flight would be a use-after-free, so wait for it to fully
    * finish before deciding whether to start fresh. */
   while (g_cfio_engine_stopping) {
-    pthread_cond_wait(&g_cfio_engine_stopped_cv, &g_cfio_engine_mutex);
+    cond_var_wait(g_cfio_engine_stopped_cv, g_cfio_engine_mutex);
   }
   _cfio_engine_join_reaper_if_needed_locked();
 
   if (!g_cfio_engine_running) {
-    pthread_once(&_cfio_fio_init_once, _cfio_fio_global_init);
+    call_once(_cfio_fio_init_once, _cfio_fio_global_init);
 
     long raw = sysconf(_SC_NPROCESSORS_ONLN);
     if (raw < 1) raw = 1;
@@ -217,11 +235,10 @@ ccol_retval_t _cfio_engine_acquire(void) {
     g_cfio_engine_ready = false;
     fio_state_callback_add(FIO_CALL_ON_START, _cfio_engine_ready_cb, NULL);
 
-    int rc =
-        pthread_create(&g_cfio_engine_thread, NULL, _cfio_fio_thread_fn, NULL);
+    int rc = thread_create(g_cfio_engine_thread, _cfio_fio_thread_fn, NULL);
     if (rc != 0) {
       fio_state_callback_remove(FIO_CALL_ON_START, _cfio_engine_ready_cb, NULL);
-      pthread_mutex_unlock(&g_cfio_engine_mutex);
+      mutex_unlock(g_cfio_engine_mutex);
       return ccol_unexpected_failure;
     }
 
@@ -231,12 +248,12 @@ ccol_retval_t _cfio_engine_acquire(void) {
     /* Block until the reactor fires FIO_CALL_ON_START: it is now in its
      * event loop. */
     while (!g_cfio_engine_ready) {
-      pthread_cond_wait(&g_cfio_engine_ready_cv, &g_cfio_engine_mutex);
+      cond_var_wait(g_cfio_engine_ready_cv, g_cfio_engine_mutex);
     }
   }
 
   g_cfio_engine_ref_count++;
-  pthread_mutex_unlock(&g_cfio_engine_mutex);
+  mutex_unlock(g_cfio_engine_mutex);
   return ccol_success;
 }
 
@@ -265,26 +282,28 @@ ccol_retval_t _cfio_engine_acquire(void) {
  * possibly touching it mid-teardown.
  */
 void _cfio_engine_release(void) {
+  call_once(g_cfio_engine_globals_once, _cfio_engine_init_globals);
   bool should_reap = false;
-  pthread_mutex_lock(&g_cfio_engine_mutex);
+  mutex_lock(g_cfio_engine_mutex);
   if (g_cfio_engine_ref_count > 0) g_cfio_engine_ref_count--;
   if (g_cfio_engine_ref_count == 0 && g_cfio_engine_running) {
     g_cfio_engine_running = false;
     g_cfio_engine_stopping = true;
     should_reap = true;
   }
-  pthread_mutex_unlock(&g_cfio_engine_mutex);
+  mutex_unlock(g_cfio_engine_mutex);
 
   if (should_reap) _cfio_engine_spawn_reaper();
 }
 
 void _cfio_engine_wait_for_quiescence(void) {
-  pthread_mutex_lock(&g_cfio_engine_mutex);
+  call_once(g_cfio_engine_globals_once, _cfio_engine_init_globals);
+  mutex_lock(g_cfio_engine_mutex);
   while (g_cfio_engine_stopping) {
-    pthread_cond_wait(&g_cfio_engine_stopped_cv, &g_cfio_engine_mutex);
+    cond_var_wait(g_cfio_engine_stopped_cv, g_cfio_engine_mutex);
   }
   _cfio_engine_join_reaper_if_needed_locked();
-  pthread_mutex_unlock(&g_cfio_engine_mutex);
+  mutex_unlock(g_cfio_engine_mutex);
 }
 
 /*
@@ -300,31 +319,34 @@ void _cfio_engine_wait_for_quiescence(void) {
  * _cfio_engine_wait_for_quiescence already relies on.
  */
 void _cfio_engine_wait_until_stopped(void) {
-  pthread_mutex_lock(&g_cfio_engine_mutex);
+  call_once(g_cfio_engine_globals_once, _cfio_engine_init_globals);
+  mutex_lock(g_cfio_engine_mutex);
   while (g_cfio_engine_running || g_cfio_engine_stopping) {
-    pthread_cond_wait(&g_cfio_engine_stopped_cv, &g_cfio_engine_mutex);
+    cond_var_wait(g_cfio_engine_stopped_cv, g_cfio_engine_mutex);
   }
   _cfio_engine_join_reaper_if_needed_locked();
-  pthread_mutex_unlock(&g_cfio_engine_mutex);
+  mutex_unlock(g_cfio_engine_mutex);
 }
 
 bool _cfio_engine_running(void) {
-  pthread_mutex_lock(&g_cfio_engine_mutex);
+  call_once(g_cfio_engine_globals_once, _cfio_engine_init_globals);
+  mutex_lock(g_cfio_engine_mutex);
   bool running = g_cfio_engine_running;
-  pthread_mutex_unlock(&g_cfio_engine_mutex);
+  mutex_unlock(g_cfio_engine_mutex);
   return running;
 }
 
 void _cfio_engine_force_stop(void) {
+  call_once(g_cfio_engine_globals_once, _cfio_engine_init_globals);
   bool should_reap = false;
-  pthread_mutex_lock(&g_cfio_engine_mutex);
+  mutex_lock(g_cfio_engine_mutex);
   if (g_cfio_engine_running) {
     g_cfio_engine_ref_count = 0;
     g_cfio_engine_running = false;
     g_cfio_engine_stopping = true;
     should_reap = true;
   }
-  pthread_mutex_unlock(&g_cfio_engine_mutex);
+  mutex_unlock(g_cfio_engine_mutex);
 
   if (should_reap) _cfio_engine_spawn_reaper();
 }

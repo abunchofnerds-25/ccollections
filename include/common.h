@@ -380,28 +380,45 @@ SOFTWARE.
  * zero indicates success.
  */
 typedef enum ccollections_retval_t {
-  ccol_unexpected_failure = -17, /**< Unexpected/unknown error */
-  ccol_http_connection_failed,   /**< TCP connection to the server could not be
-                                    established */
-  ccol_http_host_resolution_failed, /**< DNS or hostname resolution failed */
-  ccol_http_tls_handshake_failed, /**< TLS/SSL handshake with the server failed
-                                   */
-  ccol_http_tls_cert_verification_failed, /**< Peer TLS certificate could not be
-                                             verified */
-  ccol_http_too_many_redirects, /**< HTTP redirect limit was exceeded */
-  ccol_http_invalid_url, /**< URL is malformed or uses an unsupported scheme */
-  ccol_http_transfer_aborted, /**< Network send/receive error or streaming
-                                 callback aborted */
-  ccol_msg_too_large,   /**< Message data exceeded the configured size limit */
-  ccol_container_empty, /**< Container has no elements */
-  ccol_container_full,  /**< Container at maximum capacity */
-  ccol_timed_out,       /**< Operation timed out */
-  ccol_not_permitted,   /**< Operation not allowed in current state */
-  ccol_invalid_args,    /**< Invalid arguments provided */
-  ccol_key_not_found,   /**< Key does not exist in map */
-  ccol_key_already_present, /**< Key already exists (for update operations) */
-  ccol_not_enough_memory,   /**< Memory allocation failed */
-  ccol_success              /**< Operation succeeded */
+  /* Every enumerator below is given an explicit value, deliberately, even
+   * though C would auto-increment them the same way if left implicit:
+   * ccol_success == 0 is a load-bearing invariant real call sites depend on
+   * (some check "== 0" directly rather than always spelling out
+   * ccol_success), and an implicit-value list silently renumbers every
+   * later entry (including ccol_success itself) the moment a new
+   * enumerator is inserted anywhere but the very end -- exactly the
+   * regression that occurred here once, caught via a cbstmap test
+   * failure that had nothing to do with cbstmap at all. Pin every value
+   * explicitly so a future addition cannot reintroduce that class of bug. */
+  ccol_unexpected_failure = -18,          /**< Unexpected/unknown error */
+  ccol_http_connection_failed = -17,      /**< TCP connection to the server
+                                             could not be established */
+  ccol_http_host_resolution_failed = -16, /**< DNS or hostname resolution
+                                             failed */
+  ccol_http_tls_handshake_failed = -15, /**< TLS/SSL handshake with the server
+                                          failed */
+  ccol_http_tls_cert_verification_failed = -14, /**< Peer TLS certificate
+                                                   could not be verified */
+  ccol_http_tls_cert_load_failed = -13, /**< A local certificate/key/CA-bundle
+                                          file could not be read or was
+                                          malformed */
+  ccol_http_too_many_redirects = -12, /**< HTTP redirect limit was exceeded */
+  ccol_http_invalid_url = -11, /**< URL is malformed or uses an unsupported
+                                 scheme */
+  ccol_http_transfer_aborted = -10, /**< Network send/receive error or
+                                      streaming callback aborted */
+  ccol_msg_too_large = -9,   /**< Message data exceeded the configured size
+                               limit */
+  ccol_container_empty = -8, /**< Container has no elements */
+  ccol_container_full = -7,  /**< Container at maximum capacity */
+  ccol_timed_out = -6,       /**< Operation timed out */
+  ccol_not_permitted = -5,   /**< Operation not allowed in current state */
+  ccol_invalid_args = -4,    /**< Invalid arguments provided */
+  ccol_key_not_found = -3,   /**< Key does not exist in map */
+  ccol_key_already_present = -2, /**< Key already exists (for update
+                                    operations) */
+  ccol_not_enough_memory = -1,   /**< Memory allocation failed */
+  ccol_success = 0                /**< Operation succeeded */
 } ccol_retval_t;
 
 /** Returns a string literal for @p r, suitable for use in fatal_err() messages.
@@ -436,6 +453,8 @@ static inline const char *ccol_retval_to_str(ccol_retval_t r) {
       return "ccol_http_tls_handshake_failed";
     case ccol_http_tls_cert_verification_failed:
       return "ccol_http_tls_cert_verification_failed";
+    case ccol_http_tls_cert_load_failed:
+      return "ccol_http_tls_cert_load_failed";
     case ccol_http_too_many_redirects:
       return "ccol_http_too_many_redirects";
     case ccol_http_invalid_url:

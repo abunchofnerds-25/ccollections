@@ -1666,6 +1666,22 @@ struct event_reg {
    * doesn't extend to protecting reads made through a stale reg. */
   size_t stripe_idx;
 
+  /* Caller-visible identity token (event_loop_reg_generation), copied from
+   * owning_entry->generation at the same point stripe_idx is copied and for
+   * the identical reason: a stale reg* must never read this through
+   * owning_entry, which can already be freed independently. Set once, never
+   * written again after that copy -- safe to read unconditionally under
+   * reg's own deferred-free contract, exactly like stripe_idx. */
+  uint64_t generation;
+
+  /* Snapshot of loop->global_gen taken at the moment this reg is pushed
+   * onto loop->pending_reg_frees (see _event_loop_defer_reg_free). Not
+   * meaningful until removed is true; determines when every reactor
+   * thread has definitively finished any batch that could still reference
+   * this reg, so freeing it is safe under multi-threaded dispatch. See the
+   * large comment above _event_loop_reclaim_pending_frees. */
+  size_t defer_gen;
+
   int bridge_efd; /* -1 for fd selectables; the persistent bridge eventfd
                    * for queue/channel selectables */
 
@@ -1719,6 +1735,49 @@ struct event_entry {
    * stripe key from that exact field at dispatch time would defeat that. */
   size_t stripe_idx;
 
+  /* Per-entry dispatch lock: with more than one reactor thread, epoll's
+   * default (non-EPOLLEXCLUSIVE) level-triggered semantics mean two threads
+   * genuinely can each receive this same still-ready entry from their own
+   * concurrent epoll_wait call (the classic "thundering herd") -- nothing
+   * about epoll itself prevents that. Held across the entire dispatch of
+   * this entry (both the read_reg/write_reg collection under the stripe
+   * lock below AND the callback invocation itself, unlike the stripe lock
+   * which is only ever held for collection), this is what actually
+   * guarantees a single registration's callback is never invoked
+   * concurrently with itself, and -- since both directions on one fd share
+   * this same entry -- that a read and a write registration on the same fd
+   * never run concurrently with each other either. This is a materially
+   * stricter guarantee than facio's own FIO_PR_LOCK_TASK/FIO_PR_LOCK_WRITE
+   * (which only serializes on_data against itself and on_ready against
+   * itself, not against each other), deliberately, so a caller layering a
+   * single shared resource (e.g. one TLS connection object) across both
+   * directions of one fd never needs an ad-hoc lock of its own the way this
+   * codebase's own chttpclient.c tls_lock had to be added after the fact to
+   * compensate for facio's lack of that exact guarantee.
+   *
+   * NOT the same lock as the stripe lock: the stripe lock protects the
+   * registry (read_reg/write_reg slots, the fd_index chmap) against
+   * concurrent event_loop_add/_remove/_modify calls from ANY thread; this
+   * lock protects one entry's dispatch against concurrent reactor threads.
+   * Never held while attempting to acquire a stripe lock from a different
+   * entry, and no other code path acquires a stripe lock and then tries to
+   * acquire this lock, so no new lock-ordering cycle is introduced. */
+  mutex_t dispatch_lock;
+
+  /* Caller-visible identity token (event_loop_reg_generation): minted once,
+   * from loop->fd_generation_counter, at entry-creation time (never for an
+   * existing entry gaining its second direction) and copied into every
+   * reg->generation that ever attaches to this entry. See event_reg's own
+   * generation field for why reads through a stale reg must never go
+   * through owning_entry->generation instead of reg's own copy. */
+  uint64_t generation;
+
+  /* Snapshot of loop->global_gen taken at the moment this entry is pushed
+   * onto loop->pending_entry_frees (see _event_loop_defer_entry_free). See
+   * the large comment above _event_loop_reclaim_pending_frees for the full
+   * multi-threaded reclamation scheme this supports. */
+  size_t defer_gen;
+
   union {
     struct {
       event_reg *read_reg;
@@ -1748,7 +1807,13 @@ typedef struct event_loop_stripe {
 struct event_loop_s {
   int epfd;
   int shutdown_efd;
-  thread_id_t thread;
+
+  /* One or more background reactor threads, all calling epoll_wait on the
+   * same epfd (see event_loop_create_with_mprocs's num_reactor_threads).
+   * num_threads == 1 reproduces this module's original single-thread
+   * behavior exactly, including timing (see the reclamation scheme below). */
+  thread_id_t *threads;
+  size_t num_threads;
 
   /* Guards only shutdown_started/joined/joined_cv (event_loop_shutdown's
    * one-shot leader/follower coordination). Never touches per-fd state --
@@ -1778,6 +1843,39 @@ struct event_loop_s {
    * memory; see _event_loop_defer_reg_free's comment. Lock-free, same shape
    * as pending_entry_frees. */
   _Atomic(event_reg *) pending_reg_frees;
+
+  /* Multi-threaded deferred-free reclamation (see the large comment above
+   * _event_loop_reclaim_pending_frees for the full design). With a single
+   * reactor thread, "safe to free" was simply "the next between-batches
+   * point"; with N threads, a deferred item must not be freed until every
+   * thread has independently proven it has completed whatever batch it was
+   * processing at defer time, since any of them could be mid-processing a
+   * stale, already-fetched epoll_wait batch that still references it.
+   *
+   * global_gen is a loop-wide monotonic counter, incremented by whichever
+   * reactor thread reaches its own between-batches point (right before
+   * calling epoll_wait again). thread_reached_gen[i] records the highest
+   * global_gen value thread i has personally observed at one of its own
+   * between-batches points -- allocated once, sized to num_threads, at
+   * loop creation. A deferred item's own defer_gen field (see event_entry
+   * and event_reg) is a snapshot of global_gen taken at defer time; the
+   * item is safe to free once defer_gen < every thread_reached_gen[i]
+   * (equivalently, defer_gen < the minimum across all threads), since that
+   * means every thread has crossed a between-batches point -- and
+   * therefore fully finished any batch it might have had in flight -- since
+   * the deferral happened. With num_threads == 1 this reduces to exactly
+   * the original single-thread timing: the deferring thread's very next
+   * between-batches point. */
+  _Atomic size_t global_gen;
+  _Atomic size_t *thread_reached_gen; /* array of num_threads atomics */
+
+  /* Mints event_loop_reg_generation's caller-visible identity token.
+   * Loop-wide, monotonic, starts at 1 (0 is reserved to mean "no reg", see
+   * event_loop_reg_generation's own doc comment) -- incremented once per
+   * NEW event_entry (not per event_loop_add call: a second direction
+   * joining an already-registered fd shares the existing entry's
+   * generation, it doesn't mint a new one). */
+  _Atomic uint64_t fd_generation_counter;
 
   size_t max_events_per_wait;
 
@@ -1935,13 +2033,22 @@ static ccol_retval_t _event_loop_add_fd(struct event_loop_s *loop, size_t idx,
     entry->stripe_idx = idx;
     entry->as.fd.read_reg = NULL;
     entry->as.fd.write_reg = NULL;
+    mutex_init(entry->dispatch_lock);
+    /* Minted once per NEW entry, never for a second direction joining an
+     * already-registered fd (that case takes the !new_entry path below and
+     * shares the existing entry's generation, correctly reflecting that
+     * both directions represent one logical connection). */
+    entry->generation = atomic_fetch_add(&loop->fd_generation_counter, 1) + 1;
   }
 
   event_reg **slot = (reg->sel.dir == ccol_select_read)
                          ? &entry->as.fd.read_reg
                          : &entry->as.fd.write_reg;
   if (*slot != NULL) {
-    if (new_entry) _mem_free(loop->m_procs, entry);
+    if (new_entry) {
+      mutex_destroy(entry->dispatch_lock);
+      _mem_free(loop->m_procs, entry);
+    }
     return ccol_not_permitted;
   }
   *slot = reg;
@@ -1957,19 +2064,24 @@ static ccol_retval_t _event_loop_add_fd(struct event_loop_s *loop, size_t idx,
   int ctl_op = new_entry ? EPOLL_CTL_ADD : EPOLL_CTL_MOD;
   if (epoll_ctl(loop->epfd, ctl_op, fd, &ev) < 0) {
     *slot = NULL;
-    if (new_entry) _mem_free(loop->m_procs, entry);
+    if (new_entry) {
+      mutex_destroy(entry->dispatch_lock);
+      _mem_free(loop->m_procs, entry);
+    }
     return ccol_unexpected_failure;
   }
 
   if (new_entry && !_fd_registry_insert(stripe, fd, entry)) {
     epoll_ctl(loop->epfd, EPOLL_CTL_DEL, fd, NULL);
     *slot = NULL;
+    mutex_destroy(entry->dispatch_lock);
     _mem_free(loop->m_procs, entry);
     return ccol_not_enough_memory;
   }
 
   reg->owning_entry = entry;
   reg->stripe_idx = idx;
+  reg->generation = entry->generation;
   return ccol_success;
 }
 
@@ -2110,12 +2222,21 @@ event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
       entry->fd = -1;
       entry->stripe_idx = idx;
       entry->as.reg = reg;
+      mutex_init(entry->dispatch_lock);
+      /* Queue/channel selectables never share an entry (1:1, no combining),
+       * so every event_loop_add call here mints a fresh generation --
+       * unlike the fd path, there is no "second direction joins the
+       * existing entry" case to special-case. */
+      entry->generation =
+          atomic_fetch_add(&loop->fd_generation_counter, 1) + 1;
       rv = _event_loop_add_queue(loop, entry, reg);
       if (rv == ccol_success) {
         reg->owning_entry = entry;
         reg->stripe_idx = idx;
+        reg->generation = entry->generation;
         _loop_queue_list_add(stripe, reg);
       } else {
+        mutex_destroy(entry->dispatch_lock);
         _mem_free(loop->m_procs, entry);
       }
     }
@@ -2135,6 +2256,25 @@ event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
   return reg;
 }
 
+uint64_t event_loop_reg_generation(const event_reg *reg) {
+  if (!reg) return 0;
+  return reg->generation;
+}
+
+/* Deliberately does not also take entry->dispatch_lock: doing so would
+ * require reading reg->owning_entry before the stripe lock has confirmed
+ * reg->removed is false, which is exactly the unsafe read pattern the
+ * owning_entry doc comment (see event_reg's own stripe_idx field) warns
+ * against -- entry->dispatch_lock is only ever acquired after that stripe-
+ * lock-protected confirmation, in _event_loop_handle_event, never before
+ * it. This function's write to reg->sel.dir below can therefore genuinely
+ * run concurrently with an in-flight callback's use of *sel (a real,
+ * pre-existing race, not one this module's own dispatch_lock introduces or
+ * closes) -- see _dispatch_item.sel_snapshot's own comment for how that's
+ * made safe instead: the dispatch path snapshots reg->sel under the stripe
+ * lock at collection time rather than handing callbacks a live pointer
+ * into reg->sel, so this function's write here (also under the stripe
+ * lock) can never race a callback's read. */
 ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
                                 ccol_select_dir new_dir) {
   if (!loop || !reg) return ccol_invalid_args;
@@ -2196,38 +2336,50 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
 /* event_entry cannot be freed synchronously from event_loop_remove, even
  * though epoll_ctl(DEL)/entry-slot-clearing already prevents any FUTURE
  * epoll_wait call from returning a new event for it. epoll_wait can return
- * a batch of several ready events in one call, which the reactor thread
- * then processes one at a time; if this entry's event is sitting at some
- * later index in a batch already fetched (fetched before this remove()
- * call, sitting in the reactor thread's local stack array), freeing the
- * entry here races that not-yet-processed index against event_loop_remove,
- * a genuine use-after-free reproduced via a real SIGSEGV during this
- * feature's own test development (gdb backtrace on the resulting core
- * pinned it to a stale event_entry* read after a concurrent remove()).
- * epoll_ctl(DEL) has no way to retroactively invalidate an event already
- * copied out of the kernel into userspace.
+ * a batch of several ready events in one call, which a reactor thread then
+ * processes one at a time; if this entry's event is sitting at some later
+ * index in a batch already fetched (fetched before this remove() call,
+ * sitting in that thread's local stack array), freeing the entry here races
+ * that not-yet-processed index against event_loop_remove, a genuine
+ * use-after-free reproduced via a real SIGSEGV during this feature's own
+ * test development (gdb backtrace on the resulting core pinned it to a
+ * stale event_entry* read after a concurrent remove()). epoll_ctl(DEL) has
+ * no way to retroactively invalidate an event already copied out of the
+ * kernel into userspace.
  *
- * Deferring the actual free to a point where the reactor thread can prove
- * no batch could still reference this entry (between finishing one
- * epoll_wait batch and starting the next) closes the race completely: by
- * the time a deferred entry is actually freed, every index of every batch
- * that could have referenced it has already been processed (safely, since
- * this function has already cleared its slots / retired it under the
- * entry's stripe lock before deferring the free).
+ * With a single reactor thread, deferring the actual free to a point where
+ * that one thread can prove no batch could still reference this entry
+ * (between finishing one epoll_wait batch and starting the next) closed the
+ * race completely. With more than one reactor thread, "the reactor thread's
+ * own next batch boundary" no longer means anything -- ANY of the N threads
+ * could be mid-processing a stale, already-fetched batch that references
+ * this entry, independent of which thread happens to reach its own next
+ * batch boundary first. See the large comment above
+ * _event_loop_reclaim_pending_frees for the epoch-based scheme this module
+ * uses to generalize the same guarantee to N threads; this function only
+ * pushes the node with its defer_gen snapshot stamped, it does not decide
+ * when freeing is actually safe.
  *
  * Lock-free Treiber-stack push (loop->pending_entry_frees is loop-wide
  * aggregate state, not per-stripe -- entries from every stripe are threaded
  * onto this one list, so a single stripe lock couldn't protect it anyway).
- * No ABA hazard: the only consumer, _event_loop_drain_pending_frees, always
- * takes the entire list at once via one atomic_exchange and frees every
- * node in it, never popping and freeing one node at a time. */
-static void _event_loop_defer_entry_free(struct event_loop_s *loop,
-                                         event_entry *entry) {
+ * No ABA hazard: a node is only ever popped as part of claiming the WHOLE
+ * list at once via one atomic_exchange (see
+ * _event_loop_reclaim_pending_frees), never popped and freed one node at a
+ * time while the list is still shared. */
+static void _event_loop_push_entry_free_node(struct event_loop_s *loop,
+                                             event_entry *entry) {
   event_entry *old_head = atomic_load(&loop->pending_entry_frees);
   do {
     entry->pending_free_next = old_head;
   } while (!atomic_compare_exchange_weak(&loop->pending_entry_frees, &old_head,
                                          entry));
+}
+
+static void _event_loop_defer_entry_free(struct event_loop_s *loop,
+                                         event_entry *entry) {
+  entry->defer_gen = atomic_load(&loop->global_gen);
+  _event_loop_push_entry_free_node(loop, entry);
 }
 
 /* event_reg cannot be freed synchronously either, for a related but
@@ -2240,11 +2392,13 @@ static void _event_loop_defer_entry_free(struct event_loop_s *loop,
  * (now-dangling) pointer to event_loop_modify hits exactly the use-after-
  * free the documented contract promises can't happen; caught directly by
  * valgrind on this feature's own test for that exact scenario. Deferring
- * the free the same way as entries keeps the memory (and its `removed` and
- * `stripe_idx` fields) valid for that later access to read safely.
- * Lock-free, identical shape to _event_loop_defer_entry_free. */
-static void _event_loop_defer_reg_free(struct event_loop_s *loop,
-                                       event_reg *reg) {
+ * the free the same way as entries keeps the memory (and its `removed`,
+ * `stripe_idx`, and `generation` fields) valid for that later access to
+ * read safely. Same shape as _event_loop_push_entry_free_node/
+ * _event_loop_defer_entry_free, including the same multi-threaded
+ * generalization via defer_gen. */
+static void _event_loop_push_reg_free_node(struct event_loop_s *loop,
+                                           event_reg *reg) {
   event_reg *old_head = atomic_load(&loop->pending_reg_frees);
   do {
     reg->pending_free_next = old_head;
@@ -2252,23 +2406,124 @@ static void _event_loop_defer_reg_free(struct event_loop_s *loop,
       !atomic_compare_exchange_weak(&loop->pending_reg_frees, &old_head, reg));
 }
 
-/* Frees every entry/reg deferred by _event_loop_defer_entry_free /
- * _event_loop_defer_reg_free. Safe to call only between epoll_wait batches
- * (the reactor thread's own loop) or after the reactor thread has been
- * joined (event_loop_shutdown/destroy); both are points where no stale
- * batch reference and no further external add/modify/remove call can be
- * racing this drain. Lock-free: each list's entire contents are claimed in
- * one atomic_exchange, then walked and freed outside of any lock -- also
- * used directly by __event_loop_destroy post-join, unifying what used to
- * be two separately-written copies of this same swap-then-free shape. */
-static void _event_loop_drain_pending_frees(struct event_loop_s *loop) {
+static void _event_loop_defer_reg_free(struct event_loop_s *loop,
+                                       event_reg *reg) {
+  reg->defer_gen = atomic_load(&loop->global_gen);
+  _event_loop_push_reg_free_node(loop, reg);
+}
+
+/* Returns the minimum of thread_reached_gen[] across every reactor thread --
+ * the highest defer_gen value for which we can be certain EVERY thread has
+ * crossed at least one of its own between-batches points since that
+ * generation was current, and therefore fully finished any batch it might
+ * have had in flight then. See the struct event_loop_s field comments for
+ * the full design. */
+static size_t _event_loop_min_reached_gen(struct event_loop_s *loop) {
+  size_t min = atomic_load(&loop->thread_reached_gen[0]);
+  for (size_t i = 1; i < loop->num_threads; i++) {
+    size_t g = atomic_load(&loop->thread_reached_gen[i]);
+    if (g < min) min = g;
+  }
+  return min;
+}
+
+/* Reclaims every entry/reg deferred by _event_loop_defer_entry_free /
+ * _event_loop_defer_reg_free that is now provably safe to free, and
+ * otherwise leaves it pending for a later attempt.
+ *
+ * With a single reactor thread, "safe to free" used to just mean "between
+ * batches" -- the one thread calling this function was, by construction,
+ * the only thread that could ever have referenced a deferred item, and it
+ * had just finished its own previous batch. With N reactor threads all
+ * calling epoll_wait on the same epfd, that reasoning breaks down: epoll's
+ * default (non-EPOLLEXCLUSIVE) level-triggered semantics let the same ready
+ * entry be handed to more than one thread's concurrent epoll_wait call (the
+ * same "thundering herd" property that motivates the per-entry
+ * dispatch_lock), so ANY of the N threads could independently be
+ * mid-processing a stale batch that references a just-removed item,
+ * regardless of which thread happens to call this function right now.
+ *
+ * This function is called by every reactor thread at its own
+ * between-batches point (see _event_loop_thread_fn), after that thread has
+ * already published its own advanced epoch via thread_reached_gen. An
+ * item is eligible once its defer_gen snapshot is older than every thread's
+ * currently-published epoch (_event_loop_min_reached_gen): that means every
+ * thread has crossed its own between-batches point at least once since the
+ * item was deferred, so none of them can still be mid-processing whatever
+ * batch (if any) it had in flight at defer time -- and since the item was
+ * already removed from the registry (epoll_ctl(DEL) or slot-clearing)
+ * before it was ever deferred, no thread's FUTURE batch can reference it
+ * either. With num_threads == 1 this reduces to exactly the original
+ * timing: an item becomes eligible at the deferring thread's very next
+ * between-batches point.
+ *
+ * Lock-free: each list's entire contents are claimed in one
+ * atomic_exchange, partitioned outside of any lock into "free now" and
+ * "not yet eligible", and anything not yet eligible is individually pushed
+ * back via the same CAS-based push the original defer call used -- WITHOUT
+ * re-stamping defer_gen, since these items' original snapshot is what lets
+ * them make forward progress; re-stamping would reset their eligibility
+ * clock every time a reclaim attempt finds them still-pending and could
+ * starve them indefinitely under sustained load. Also used, in its
+ * unconditional form (see _event_loop_free_all_pending), by
+ * __event_loop_destroy after every reactor thread has been joined, where no
+ * epoch check is needed at all since no thread can reference anything any
+ * more. */
+static void _event_loop_reclaim_pending_frees(struct event_loop_s *loop) {
+  size_t min_reached = _event_loop_min_reached_gen(loop);
+
   event_entry *e = atomic_exchange(&loop->pending_entry_frees, NULL);
-  event_reg *r = atomic_exchange(&loop->pending_reg_frees, NULL);
+  event_entry *e_keep = NULL;
   while (e) {
     event_entry *next = e->pending_free_next;
+    if (e->defer_gen < min_reached) {
+      mutex_destroy(e->dispatch_lock);
+      _mem_free(loop->m_procs, e);
+    } else {
+      e->pending_free_next = e_keep;
+      e_keep = e;
+    }
+    e = next;
+  }
+  while (e_keep) {
+    event_entry *next = e_keep->pending_free_next;
+    _event_loop_push_entry_free_node(loop, e_keep);
+    e_keep = next;
+  }
+
+  event_reg *r = atomic_exchange(&loop->pending_reg_frees, NULL);
+  event_reg *r_keep = NULL;
+  while (r) {
+    event_reg *next = r->pending_free_next;
+    if (r->defer_gen < min_reached) {
+      _event_reg_free(loop, r);
+    } else {
+      r->pending_free_next = r_keep;
+      r_keep = r;
+    }
+    r = next;
+  }
+  while (r_keep) {
+    event_reg *next = r_keep->pending_free_next;
+    _event_loop_push_reg_free_node(loop, r_keep);
+    r_keep = next;
+  }
+}
+
+/* Unconditional variant for use after every reactor thread has already been
+ * joined (event_loop_shutdown has returned): no thread exists any more to
+ * reference anything, so every remaining deferred item is safe to free
+ * regardless of its defer_gen. Frees whatever _event_loop_reclaim_pending_frees
+ * left pending from its very last, pre-join invocation. */
+static void _event_loop_free_all_pending(struct event_loop_s *loop) {
+  event_entry *e = atomic_exchange(&loop->pending_entry_frees, NULL);
+  while (e) {
+    event_entry *next = e->pending_free_next;
+    mutex_destroy(e->dispatch_lock);
     _mem_free(loop->m_procs, e);
     e = next;
   }
+  event_reg *r = atomic_exchange(&loop->pending_reg_frees, NULL);
   while (r) {
     event_reg *next = r->pending_free_next;
     _event_reg_free(loop, r);
@@ -2358,22 +2613,49 @@ typedef struct _dispatch_item {
   bool is_error;
   bool is_readable;
   bool is_writable;
+  /* Snapshot of reg->sel taken under the stripe lock at collection time
+   * (see _event_loop_handle_event), not a live pointer into reg->sel
+   * itself. Pre-existing bug, not introduced by multi-threaded dispatch:
+   * event_loop_modify updates reg->sel.dir under the stripe lock only (see
+   * its own comment for why it cannot also take entry->dispatch_lock
+   * without a lock-ordering conflict against the safe-owning_entry-read
+   * pattern), while the dispatch path used to hand callbacks a live
+   * `&reg->sel` pointer *after* releasing the stripe lock -- a genuine,
+   * unsynchronized concurrent read/write on reg->sel.dir between a
+   * callback in flight and a concurrent event_loop_modify call from any
+   * other thread, always possible (even with a single reactor thread,
+   * since event_loop_modify is documented callable from any thread
+   * concurrently with dispatch), just never actually caught until
+   * ThreadSanitizer was run against this module for the first time during
+   * this feature's own development. A snapshot copied once, under the
+   * stripe lock, alongside the rest of collection, closes it: the
+   * callback observes a self-consistent, well-defined "as of collection
+   * time" selectable, and event_readable_fn/event_writable_fn's own
+   * documented contract ("sel->dir reflects the registration's current
+   * direction, which may have changed via event_loop_modify") is still
+   * satisfied -- collection re-reads reg->sel fresh every single dispatch,
+   * so an event_loop_modify call that completed before this collection is
+   * still correctly observed; only a modify running fully concurrently
+   * with an in-flight callback (previously a data race with an undefined
+   * outcome) now deterministically resolves to whichever direction was
+   * current at collection time. */
+  ccol_selectable sel_snapshot;
 } _dispatch_item;
 
 static void _event_loop_run_callback(event_loop loop, _dispatch_item *item) {
   event_reg *reg = item->reg;
   if (item->is_error) {
     if (reg->handlers.on_error)
-      reg->handlers.on_error(loop, &reg->sel, reg->arg);
+      reg->handlers.on_error(loop, &item->sel_snapshot, reg->arg);
   } else if (item->is_readable) {
     /* Readiness only, for every selectable type: the reactor never performs
      * the receive itself, the callback does (see event_readable_fn's
      * documentation). */
     if (reg->handlers.on_readable)
-      reg->handlers.on_readable(loop, &reg->sel, reg->arg);
+      reg->handlers.on_readable(loop, &item->sel_snapshot, reg->arg);
   } else if (item->is_writable) {
     if (reg->handlers.on_writable)
-      reg->handlers.on_writable(loop, &reg->sel, reg->arg);
+      reg->handlers.on_writable(loop, &item->sel_snapshot, reg->arg);
   }
 }
 
@@ -2391,23 +2673,52 @@ static void _event_loop_release_after_dispatch(struct event_loop_s *loop,
   }
 }
 
-/* Called once per epoll_event returned by epoll_wait, on the reactor
- * thread. Collects live regs to dispatch under entry->stripe_idx's own
- * stripe lock (incrementing each one's refcount so it can't be freed while
- * its callback runs), then releases that lock and runs callbacks unlocked;
- * never holding a stripe lock across a user callback. */
+/* Called once per epoll_event returned by epoll_wait, on whichever reactor
+ * thread's epoll_wait call happened to return it. Collects live regs to
+ * dispatch under entry->stripe_idx's own stripe lock (incrementing each
+ * one's refcount so it can't be freed while its callback runs), then
+ * releases that lock and runs callbacks unlocked; never holding a stripe
+ * lock across a user callback.
+ *
+ * Held across the WHOLE function, not just collection: entry->dispatch_lock.
+ * With more than one reactor thread, epoll's default level-triggered
+ * semantics mean this exact entry can genuinely be handed to more than one
+ * thread's concurrent epoll_wait call (the same still-ready fd reported to
+ * each), so without this lock two threads could both pass the collection
+ * step below for the SAME reg and both invoke its callback concurrently --
+ * a real double-dispatch, not a memory-safety bug (that's what the
+ * generation/defer_gen scheme guards against) but a serialization bug this
+ * lock exists specifically to close. Because dispatch_lock lives on the
+ * entry (shared by both directions), this also gives read_reg and write_reg
+ * callbacks on the same fd mutual exclusion against each other, not just
+ * self-exclusion -- see the entry's own dispatch_lock field comment for why
+ * that's a deliberately stricter guarantee than facio's equivalent. */
 static void _event_loop_handle_event(struct event_loop_s *loop,
                                      struct epoll_event *ev) {
   event_entry *entry = (event_entry *)ev->data.ptr;
 
   if (entry == NULL) {
-    /* The shutdown-eventfd's ev.data.ptr is left NULL; it exists purely
-     * to interrupt epoll_wait, nothing to dispatch. Drain it so it doesn't
-     * keep re-firing (harmless if it does, but tidy). */
-    uint64_t val;
-    (void)read(loop->shutdown_efd, &val, sizeof(val));
+    /* The shutdown-eventfd's ev.data.ptr is left NULL; it exists purely to
+     * interrupt epoll_wait, nothing to dispatch. Deliberately NOT drained
+     * via read() here -- with more than one reactor thread, an earlier
+     * version of this function did drain it, and that was a real,
+     * reproduced deadlock: whichever thread happened to process this event
+     * FIRST reset the eventfd's counter to 0, and any other thread still
+     * blocked in its own epoll_wait call at that moment (with timeout=-1)
+     * then had nothing left to observe as ready and never returned,
+     * leaving event_loop_shutdown's join loop hung on it forever. Leaving
+     * the counter non-zero and never draining it means every thread's
+     * epoll_wait call -- whichever order they happen to run in, already
+     * blocked or not yet called -- keeps seeing this fd as ready
+     * (level-triggered) for as long as the process lives, which is exactly
+     * what's needed here: shutdown is one-way, so there is no future point
+     * where this fd's readiness would need to be revoked. Every thread
+     * still reaches the top-of-loop shutting_down check immediately after,
+     * so no thread spins on this indefinitely either. */
     return;
   }
+
+  mutex_lock(entry->dispatch_lock);
 
   _dispatch_item items[2];
   size_t n_items = 0;
@@ -2427,9 +2738,39 @@ static void _event_loop_handle_event(struct event_loop_s *loop,
     if (r && !atomic_load(&r->removed) && (is_err || is_in)) {
       atomic_fetch_add(&r->refcount, 1);
       items[n_items].reg = r;
-      items[n_items].is_error = is_err;
-      items[n_items].is_readable = !is_err;
+      /* EPOLLIN/EPOLLRDHUP and EPOLLERR/EPOLLHUP are not mutually
+       * exclusive: the kernel legitimately reports both together on the
+       * SAME event when a peer writes data and then immediately closes
+       * (or resets) the connection -- the bytes are genuinely sitting in
+       * the socket's receive buffer, readable, even though the peer is
+       * also already gone. Unconditionally prioritising is_err here (as an
+       * earlier version of this function did) silently discarded that
+       * already-arrived data by dispatching on_error instead of
+       * on_readable, with nothing left for the caller to ever read it back
+       * out of; a real, reproduced bug (caught via chttpclient's Tier 2
+       * unix-domain-socket tests, whose near-zero-latency round trip makes
+       * a peer's write-then-close race this fd's own read-side epoll_wait
+       * far more often than TCP's added latency ever did, though the same
+       * race is possible over TCP too).
+       *
+       * The fix is conditioned on has_reader, not unconditional: an
+       * error-only registration (on_readable == NULL, on_error set --
+       * exactly how a caller signals "notify me this fd died, I have no
+       * interest in reading it") must still see is_error on a bare hangup
+       * with no reader to hand the data to. EPOLLHUP alone (no data ever
+       * written, a pure close) also sets EPOLLIN on Linux (reading it
+       * would return EOF, which is itself a form of read-readiness), so
+       * without this guard such a registration would never be notified at
+       * all: _event_loop_run_callback's on_readable branch is a silent
+       * no-op when the handler pointer is NULL, unlike on_error. Confirmed
+       * via a real regression this exact scenario caused in this module's
+       * own existing fd_on_error_fires_for_both_directions test, which
+       * registers precisely this on_readable=NULL/on_error-only shape. */
+      bool has_reader = (r->handlers.on_readable != NULL);
+      items[n_items].is_readable = is_in && has_reader;
+      items[n_items].is_error = is_err && !items[n_items].is_readable;
       items[n_items].is_writable = false;
+      items[n_items].sel_snapshot = r->sel;
       n_items++;
     }
     event_reg *w = entry->as.fd.write_reg;
@@ -2439,6 +2780,7 @@ static void _event_loop_handle_event(struct event_loop_s *loop,
       items[n_items].is_error = is_err;
       items[n_items].is_readable = false;
       items[n_items].is_writable = !is_err;
+      items[n_items].sel_snapshot = w->sel;
       n_items++;
     }
   } else {
@@ -2461,6 +2803,7 @@ static void _event_loop_handle_event(struct event_loop_s *loop,
       items[n_items].is_error = false;
       items[n_items].is_readable = (r->sel.dir == ccol_select_read);
       items[n_items].is_writable = (r->sel.dir == ccol_select_write);
+      items[n_items].sel_snapshot = r->sel;
       n_items++;
     }
   }
@@ -2471,27 +2814,49 @@ static void _event_loop_handle_event(struct event_loop_s *loop,
     _event_loop_run_callback(loop, &items[i]);
     _event_loop_release_after_dispatch(loop, items[i].reg);
   }
+
+  mutex_unlock(entry->dispatch_lock);
 }
 
+/* One per spawned reactor thread; freed by the thread itself right before
+ * it returns (event_loop_shutdown/destroy only need the thread_id_t handles
+ * in loop->threads to join, not this context). */
+typedef struct event_loop_thread_ctx {
+  struct event_loop_s *loop;
+  size_t thread_index;
+} event_loop_thread_ctx;
+
 static void *_event_loop_thread_fn(void *arg) {
-  struct event_loop_s *loop = (struct event_loop_s *)arg;
+  event_loop_thread_ctx *ctx = (event_loop_thread_ctx *)arg;
+  struct event_loop_s *loop = ctx->loop;
+  size_t my_idx = ctx->thread_index;
+  _mem_free(loop->m_procs, ctx);
+
   struct epoll_event *events = _mem_alloc(
       loop->m_procs, loop->max_events_per_wait * sizeof(struct epoll_event));
   if (!events) {
     /* Extremely unlikely (small, fixed-size allocation); nothing safe to do
      * except exit; event_loop_shutdown will still join this thread
-     * cleanly, just with zero events ever dispatched. */
+     * cleanly, just with zero events ever dispatched by it. */
     return NULL;
   }
 
   for (;;) {
     if (atomic_load(&loop->shutting_down)) break;
 
-    /* Between batches: the previous batch (if any) has been fully iterated
-     * over by this point, so any event_entry deferred by a concurrent
-     * event_loop_remove during that batch's processing can now be safely
-     * freed; see _event_loop_defer_entry_free's comment. */
-    _event_loop_drain_pending_frees(loop);
+    /* Between batches: this thread has fully iterated over its previous
+     * batch (if any) by this point. Publish that fact by advancing this
+     * thread's own epoch past the current global_gen, then attempt to
+     * reclaim whatever deferred entries/regs that advance (combined with
+     * every other thread's own most recent publish) now proves safe to
+     * free. See the large comment above _event_loop_reclaim_pending_frees
+     * for why a single "between batches" check is no longer sufficient
+     * with more than one reactor thread, and struct event_loop_s's own
+     * field comments for the full epoch design. With num_threads == 1 this
+     * reduces to exactly the original single-thread timing. */
+    size_t new_gen = atomic_fetch_add(&loop->global_gen, 1) + 1;
+    atomic_store(&loop->thread_reached_gen[my_idx], new_gen);
+    _event_loop_reclaim_pending_frees(loop);
 
     int n = epoll_wait(loop->epfd, events, (int)loop->max_events_per_wait, -1);
     if (n < 0) {
@@ -2526,6 +2891,7 @@ static void _destroy_stripes(struct event_loop_s *loop,
 
 event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
                                          size_t num_lock_stripes,
+                                         size_t num_reactor_threads,
                                          ccol_memmgmt_procs_t *mmgmt_procs,
                                          char **err_str) {
   if (max_events_per_wait == 0) {
@@ -2535,6 +2901,11 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
   }
   if (num_lock_stripes == 0) {
     if (err_str) *err_str = CCOL_ERR_STR("num_lock_stripes must be positive");
+    return NULL;
+  }
+  if (num_reactor_threads == 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("num_reactor_threads must be positive");
     return NULL;
   }
   if (!ccol_verify_memmgmt_procs(mmgmt_procs, err_str)) {
@@ -2592,9 +2963,12 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
   loop->max_events_per_wait = max_events_per_wait;
   atomic_init(&loop->pending_entry_frees, NULL);
   atomic_init(&loop->pending_reg_frees, NULL);
+  atomic_init(&loop->global_gen, (size_t)0);
+  atomic_init(&loop->fd_generation_counter, (uint64_t)0);
   atomic_init(&loop->next_queue_stripe, (size_t)0);
   atomic_init(&loop->reg_count, (size_t)0);
   loop->num_stripes = num_lock_stripes;
+  loop->num_threads = num_reactor_threads;
 
   loop->stripes =
       _mem_calloc(mmgmt_procs, num_lock_stripes, sizeof(event_loop_stripe_t));
@@ -2633,8 +3007,70 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
     loop->stripes[stripes_created].queue_regs_head = NULL;
   }
 
-  if (thread_create(loop->thread, _event_loop_thread_fn, loop) != 0) {
+  loop->thread_reached_gen = (_Atomic size_t *)_mem_calloc(
+      mmgmt_procs, num_reactor_threads, sizeof(size_t));
+  if (!loop->thread_reached_gen) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("Failed to allocate thread epoch array");
+    _destroy_stripes(loop, mmgmt_procs, num_lock_stripes);
+    cond_var_destroy(loop->joined_cv);
+    mutex_destroy(loop->shutdown_lock);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return NULL;
+  }
+  for (size_t i = 0; i < num_reactor_threads; i++) {
+    atomic_init(&loop->thread_reached_gen[i], (size_t)0);
+  }
+
+  loop->threads =
+      _mem_calloc(mmgmt_procs, num_reactor_threads, sizeof(thread_id_t));
+  if (!loop->threads) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to allocate thread array");
+    _mem_free(mmgmt_procs, loop->thread_reached_gen);
+    _destroy_stripes(loop, mmgmt_procs, num_lock_stripes);
+    cond_var_destroy(loop->joined_cv);
+    mutex_destroy(loop->shutdown_lock);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return NULL;
+  }
+
+  size_t threads_created = 0;
+  for (; threads_created < num_reactor_threads; threads_created++) {
+    event_loop_thread_ctx *ctx =
+        _mem_alloc(mmgmt_procs, sizeof(event_loop_thread_ctx));
+    if (!ctx) break;
+    ctx->loop = loop;
+    ctx->thread_index = threads_created;
+    if (thread_create(loop->threads[threads_created], _event_loop_thread_fn,
+                      ctx) != 0) {
+      _mem_free(mmgmt_procs, ctx);
+      break;
+    }
+  }
+
+  if (threads_created < num_reactor_threads) {
     if (err_str) *err_str = CCOL_ERR_STR("pthread_create failed");
+    /* Roll back any threads that DID start: signal shutdown (the same
+     * single-write mechanism event_loop_shutdown itself uses -- every
+     * already-started thread will observe shutting_down at the top of its
+     * own loop, whether or not it happens to personally see the eventfd
+     * event, so a partial start is joined cleanly the same way a full
+     * shutdown is) and join them before freeing anything they might still
+     * be touching. */
+    atomic_store(&loop->shutting_down, true);
+    uint64_t one = 1;
+    (void)write(loop->shutdown_efd, &one, sizeof(one));
+    for (size_t i = 0; i < threads_created; i++) {
+      thread_join(loop->threads[i]);
+    }
+    _mem_free(mmgmt_procs, loop->threads);
+    _mem_free(mmgmt_procs, loop->thread_reached_gen);
     _destroy_stripes(loop, mmgmt_procs, num_lock_stripes);
     cond_var_destroy(loop->joined_cv);
     mutex_destroy(loop->shutdown_lock);
@@ -2662,7 +3098,27 @@ ccol_retval_t event_loop_shutdown(event_loop loop) {
     uint64_t one = 1;
     (void)write(loop->shutdown_efd, &one, sizeof(one));
 
-    thread_join(loop->thread);
+    /* A single write is sufficient for every reactor thread, not just one --
+     * but only because _event_loop_handle_event's NULL-entry branch
+     * deliberately never drains shutdown_efd (see its own comment for the
+     * real deadlock an earlier version of this code hit here: draining it
+     * let whichever thread processed the event first reset the counter to
+     * 0 before some other already-blocked thread's epoll_wait call had a
+     * chance to observe it, leaving that thread stuck in epoll_wait
+     * forever and this join loop hung on it). With the counter left
+     * permanently non-zero once written, every thread's epoll_wait call --
+     * already blocked or not yet called, in whatever order they run --
+     * keeps seeing shutdown_efd as ready (level-triggered) until it
+     * actually returns and this loop's shutting_down check (set above,
+     * before this write) breaks it out. This was a real, reproduced hang
+     * during this feature's own development (gdb thread-apply-all-bt on a
+     * stuck test process pinned every remaining thread to this exact
+     * epoll_wait call), not a theoretical concern -- see the multi-thread
+     * shutdown tests in tests/cthreadcomm/tests.c for the regression
+     * coverage this fix is verified against. */
+    for (size_t i = 0; i < loop->num_threads; i++) {
+      thread_join(loop->threads[i]);
+    }
 
     mutex_lock(loop->shutdown_lock);
     loop->joined = true;
@@ -2684,17 +3140,17 @@ void __event_loop_destroy(event_loop loop) {
 
   event_loop_shutdown(loop);
 
-  /* Entries/regs deferred during the final batch's processing (right before
-   * shutting_down was observed) never got a chance to reach the drain point
-   * inside the reactor thread's own loop; the thread is joined now (no
-   * concurrent access possible), so it's safe to drain and free them
-   * directly here rather than leaking them. Reuses the same lock-free
-   * atomic-exchange-then-walk sequence the reactor thread itself uses
-   * between batches -- correct here too, since an uncontended atomic
-   * exchange against an already-quiescent loop is just a plain read. */
-  _event_loop_drain_pending_frees(loop);
+  /* Entries/regs deferred during the final round of batch processing (right
+   * before shutting_down was observed) never got a chance to reach a
+   * reclaim point on their own defer_gen's schedule. Every reactor thread
+   * is joined now (no concurrent access possible from any of them any
+   * more), so it's safe to free every remaining deferred item
+   * unconditionally rather than leaking them -- see
+   * _event_loop_free_all_pending's own comment for why no epoch check is
+   * needed at this specific point. */
+  _event_loop_free_all_pending(loop);
 
-  /* The reactor thread has been joined and every other in-flight
+  /* Every reactor thread has been joined and every other in-flight
    * event_loop_shutdown caller has already returned too (the leader/
    * follower join protocol above guarantees this); no dispatch can be in
    * flight and no other thread can be touching this loop's registry.  Safe
@@ -2718,6 +3174,7 @@ void __event_loop_destroy(event_loop loop) {
       memcpy(&entry, it->val_pair->ptr, sizeof(entry));
       if (entry->as.fd.read_reg) _event_reg_free(loop, entry->as.fd.read_reg);
       if (entry->as.fd.write_reg) _event_reg_free(loop, entry->as.fd.write_reg);
+      mutex_destroy(entry->dispatch_lock);
       _mem_free(loop->m_procs, entry);
       it = it->_next_fn(it);
     }
@@ -2730,6 +3187,7 @@ void __event_loop_destroy(event_loop loop) {
       ccol_sel_waiter **q_head;
       _queue_sel_locate(&reg->sel, &q_mtx, &q_head);
       _sel_unlink_waiter(&reg->waiter_node, q_head, q_mtx);
+      mutex_destroy(reg->owning_entry->dispatch_lock);
       _mem_free(loop->m_procs, reg->owning_entry);
       _event_reg_free(loop, reg);
       reg = next;
@@ -2738,6 +3196,8 @@ void __event_loop_destroy(event_loop loop) {
     mutex_destroy(stripe->lock);
   }
   _mem_free(loop->m_procs, loop->stripes);
+  _mem_free(loop->m_procs, loop->threads);
+  _mem_free(loop->m_procs, loop->thread_reached_gen);
 
   cond_var_destroy(loop->joined_cv);
   mutex_destroy(loop->shutdown_lock);

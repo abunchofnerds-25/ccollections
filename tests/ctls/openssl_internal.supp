@@ -1,0 +1,37 @@
+# Suppressions for reachable memory held by OpenSSL's own internal RSA/BN
+# caches (RSA blinding state, BN_MONT_CTX Montgomery contexts, and similar
+# lazily-computed values populated during RSA key generation and signing --
+# both heavily exercised by this suite's own self-signed certificate
+# generation, ctls_ctx_cert_add()'s self-signed path).
+#
+# These blocks are allocated via OpenSSL's own CRYPTO_malloc/CRYPTO_zalloc
+# wrappers and kept alive for the lifetime of the process by libcrypto's own
+# internal static/thread-local state; they are only released by an explicit
+# OPENSSL_cleanup() call, which this codebase does not make (calling it
+# unconditionally at process exit is not safe in a library meant to be
+# embedded in a larger application that may still have other OpenSSL
+# handles in use). They are not leaks, matching the same category of
+# already-accepted "still reachable" library-internal state documented in
+# tests/chttpclient/ld_so_dlopen.supp for glibc's own NSS module loading.
+
+{
+   openssl_internal_rsa_bn_caches_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:malloc
+   fun:CRYPTO_malloc
+   ...
+}
+
+# Same category, reached through OpenSSL 3's provider/encoder framework
+# (OSSL_ENCODER_CTX_new_for_pkey, via X509_set_pubkey -> X509_PUBKEY_set),
+# which grows an internal cache via realloc rather than a fresh malloc.
+{
+   openssl_internal_encoder_cache_still_reachable
+   Memcheck:Leak
+   match-leak-kinds: reachable
+   fun:realloc
+   ...
+   fun:OSSL_ENCODER_CTX_new_for_pkey
+   ...
+}

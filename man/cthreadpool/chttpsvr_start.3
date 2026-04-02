@@ -15,27 +15,27 @@ ccol_retval_t chttpsvr_start(chttpsvr srv,
 Starts the server on the port and host specified in cfg.  cfg may be
 NULL, in which case the defaults from CHTTPSVR_CONFIG_DEFAULT are used.
 
-If the shared facil.io engine is not yet running (including if
-chttpclient's async engine (chttpclient_do_async/_streaming) already
-started it in this process) it is started implicitly on this call
-and this call blocks until it is confirmed running (the
-FIO_CALL_ON_START callbacks have fired and the reactor is in its
-event loop) before proceeding.  Either way, the listener socket is
-then bound synchronously via http_listen and the function returns as
-soon as the socket is in LISTEN state.  The function does NOT return
-until the server is fully ready to accept connections.
+cfg->host may be a plain address ("0.0.0.0", "127.0.0.1", ...) for a
+TCP listener, or a "unix://path/to/socket" string to bind a Unix
+domain socket at that path instead (cfg->port is then ignored; a stale
+socket file already at that path is removed automatically before
+binding).  A single chttpsvr instance listens on either TCP or a Unix
+socket, never both; create two instances for both.
 
-The engine is shared with chttpclient's async engine; it stays
-running as long as any reference from either module is outstanding,
-and its teardown once the last reference is released is asynchronous
-; see chttpsvr_engine_wait and __chttpsvr_destroy.
+If the shared, process-wide event_loop reactor (and its companion
+idle-timeout sweep thread) is not yet running in this process, it is
+started implicitly on this call and this call blocks until it is
+confirmed running before proceeding.  This reactor is independent of
+chttpclient's own engine; starting or stopping one has no effect on
+the other.  The listener socket is then bound synchronously and the
+function returns once the socket is in LISTEN state and registered
+with the reactor.
 
-Multiple chttpsvr handles may be started on different ports
-simultaneously, all sharing the same engine.
+Multiple chttpsvr handles may be started on different ports (or Unix
+socket paths) simultaneously, all sharing the same reactor.
 
-Port 0 is rejected with ccol_invalid_args.  The OS-assigned ephemeral
-port that would result from binding port 0 cannot be discovered through
-this API, making the server unreachable by clients.
+Port 0 is rejected with ccol_invalid_args, unless cfg->host is a
+"unix://" path (where port is meaningless and ignored).
 
 A ctpool for dispatching all handlers (buffered and streaming) is
 created at start time using cfg->worker_thread_count threads and a
@@ -58,15 +58,38 @@ streaming); 0 waits indefinitely.  Because it resets on any new byte,
 a client that trickles data just fast enough never trips it, so
 cfg->max_body_read_duration_ms (0 = disabled, the default) separately
 bounds the *total* time spent reading one request's body regardless of
-per-gap progress; see chttpsvr_req_read.
+per-gap progress; see chttpsvr_req_read.  cfg->response_write_timeout_ms
+(0 = use stream_read_timeout_ms's value) bounds the analogous per-call
+wait on the response-write side, protecting a worker thread from a
+slow-reading client during response send.
 
-Connection timeout: both cfg->read_timeout_ms and cfg->idle_timeout_ms
-map to the single connection-timeout parameter exposed by the underlying
-facil.io http_listen call.  When idle_timeout_ms is non-zero it takes
-precedence over read_timeout_ms; otherwise read_timeout_ms is used.
-Both values are converted to whole seconds (rounded up from 1 ms,
-clamped to 255 s).  A value of 0 for both fields uses the facil.io
-default of approximately 40 seconds.
+Connection idle timeout: cfg->read_timeout_ms/idle_timeout_ms are
+enforced by the module-local idle-timeout sweep thread (shared by
+every chttpsvr instance in the process), not by any per-connection OS
+timer.  When idle_timeout_ms is non-zero it takes precedence over
+read_timeout_ms; otherwise read_timeout_ms is used; 0 for both
+disables idle-timeout enforcement entirely.  This only bounds time
+spent idle between requests (awaiting the next pipelined/keep-alive
+request), never time spent actively being handled by a worker thread.
+
+Header size limit: cfg->max_header_bytes (0 = library default, 64 KiB)
+bounds the combined size of one request's header block; a request
+whose headers exceed this has its connection closed outright (no HTTP
+response is sent, matching every other pre-routing parse error this
+module's request parser reports).
+
+Connection count limit: cfg->max_connections (0 = unlimited) bounds
+how many connections this listener may have open at once; once at
+capacity, new connections are simply left pending in the kernel's own
+listen backlog rather than accepted and immediately rejected.
+
+Socket options (all default false, all best-effort, all no-ops for a
+Unix domain socket listener): cfg->enable_keepalive sets SO_KEEPALIVE
+on every accepted connection. cfg->enable_reuseport sets SO_REUSEPORT
+on the listening socket, letting multiple chttpsvr instances bind the
+identical host:port for kernel-load-balanced accept. cfg->ipv6_only
+sets IPV6_V6ONLY on an AF_INET6 listener, so it does not also
+implicitly accept IPv4-mapped connections.
 
 Restart: after chttpsvr_stop is called, chttpsvr_start may be called
 again on the same handle to register a new listener.  The old ctpool is
@@ -76,10 +99,11 @@ previous cycle is freed automatically before the new one is installed.
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if srv is NULL or cfg->port is 0.
+ccol_invalid_args if srv is NULL, or if cfg->port is 0 and cfg->host
+is not a "unix://" path.
 ccol_not_permitted if this server is already started.
 ccol_not_enough_memory if memory allocation fails.
-ccol_unexpected_failure on http_listen errors.
+ccol_unexpected_failure if the listen socket could not be created/bound.
 .fi
 .SH "THREAD SAFETY"
 .nf
@@ -87,10 +111,9 @@ chttpsvr_stop only closes the listener socket; connections already
 accepted before the stop keep running and may still dispatch further
 requests on this same handle at any point during a subsequent restart.
 The old ctpool is only drained and destroyed once every request already
-in flight (dispatched, from http_pause onward) has completed, so a
-restart is safe to call even while such a connection is still active;
-no request can ever be handed to a ctpool that is concurrently being
-torn down.
+in flight has completed, so a restart is safe to call even while such a
+connection is still active; no request can ever be handed to a ctpool
+that is concurrently being torn down.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_stop (3),

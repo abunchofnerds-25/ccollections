@@ -11,9 +11,10 @@ void chttpsvr_stop(chttpsvr srv);
 .fi
 .SH DESCRIPTION
 .nf
-Schedules the listener socket registered by chttpsvr_start for close
-on the facil.io reactor.  Returns immediately.  The shared engine and
-all other registered listeners continue running unaffected.
+Removes the listener socket registered by chttpsvr_start from the
+shared reactor and closes it (unlinking the socket file first, for a
+Unix domain socket listener).  Returns immediately.  The shared reactor
+and all other registered listeners continue running unaffected.
 
 Idempotent: calling chttpsvr_stop on a server that was never started,
 or that was already stopped, is a no-op.
@@ -23,7 +24,8 @@ not closed and may continue dispatching further requests through this
 handle for as long as the client keeps the connection open, even
 across a subsequent chttpsvr_start restart on the same handle.
 __chttpsvr_destroy is the only call that waits for such in-flight
-requests to fully drain before releasing the server's resources.
+requests to fully drain (and closes every remaining idle connection)
+before releasing the server's resources.
 
 Safe to call with NULL.
 .fi

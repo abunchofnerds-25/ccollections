@@ -1,0 +1,86 @@
+.TH EVENT_LOOP_REG_GENERATION 3 "2026-07-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+event_loop_reg_generation \- caller-visible identity token for a registration's fd
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+uint64_t event_loop_reg_generation(const event_reg *reg);
+.fi
+.SH DESCRIPTION
+.nf
+Returns a monotonically increasing value, unique loop-wide, minted once
+when the fd (or queue/channel bridge) reg belongs to is first
+registered (event_loop_add()'s new-entry path) and shared by every
+registration on that same fd for as long as it lives -- including
+across event_loop_modify() (a direction flip is the same underlying
+fd/connection, so it keeps the same generation) and across both a read
+and a write registration on the same fd (both share one generation,
+since they represent one logical connection).
+
+This exists for a caller's own defensive bookkeeping across fd reuse, a
+direct analogue of what facil.io's uuid gave callers in this library's
+own HTTP modules: a caller holding onto a connection object across
+several asynchronous steps can stamp it with the generation it read
+right after event_loop_add() returned, and later compare against a
+fresh read to detect whether it is still reasoning about the same
+logical connection, or whether the underlying fd number has since been
+closed and reused by an unrelated new connection.
+
+Generation is not required for basic correctness. event_loop's own
+dispatch path already validates a registration's liveness before
+invoking any callback, unconditionally, whether or not a caller ever
+calls this function at all: with more than one reactor thread, epoll's
+own level-triggered semantics can hand the same still-ready entry to
+more than one thread's concurrent epoll_wait(2) call (the classic
+"thundering herd"), and a registration removed (or whose fd was reused
+by a brand-new registration) between one such batch being fetched and
+processed is safely skipped at dispatch time rather than misdispatched
+or leading to a use-after-free.  This function's return value is purely
+for the calling application's own bookkeeping on top of that guarantee.
+.fi
+.SH PARAMETERS
+.nf
+reg  Registration to query.
+.fi
+.SH RETURN VALUE
+.nf
+Returns the generation value.
+Returns 0 if reg is NULL (0 is never a valid generation for a real
+registration -- the counter starts at 1).
+.fi
+.SH NOTES
+.nf
+Safe to call even on an already-removed reg: like event_loop_modify()'s
+own safe handling of a stale reg pointer, this reads a field set once
+at registration and never written again, protected by reg's own
+deferred-free contract rather than requiring reg to still be live.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call from any thread, at any time, including concurrently with
+dispatch, event_loop_modify(), and event_loop_remove().
+.fi
+.SH EXAMPLES
+.nf
+typedef struct conn {
+    event_reg *reg;
+    uint64_t generation;
+} conn_t;
+
+conn_t *c = malloc(sizeof(*c));
+c->reg = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
+                        handlers, c, NULL);
+c->generation = event_loop_reg_generation(c->reg);
+
+/* ... later, from some other asynchronous step holding a conn_t* ... */
+if (event_loop_reg_generation(c->reg) != c->generation) {
+    /* stale: this fd number has been closed and reused since */
+}
+.fi
+.SH "SEE ALSO"
+.BR event_loop_add (3),
+.BR event_loop_modify (3),
+.BR event_loop_remove (3)

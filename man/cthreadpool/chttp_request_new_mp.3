@@ -21,6 +21,17 @@ The caller may free its originals immediately after this call returns.
 
 Pass NULL for body or use the CHTTP_NO_BODY macro when no request body
 is needed (e.g. GET, DELETE).
+
+The returned request's expect_continue field defaults to false (the
+struct is zero-initialised). Set it to true after construction (e.g.
+req->expect_continue = true) to send "Expect: 100-continue" and wait
+for the server's interim response before sending the body; see
+chttpclient_do(3) for the full protocol. Has no effect on a request
+with no body, or one that already has an explicit "Expect" header set
+via chttp_request_set_header. Tier 1 (chttpclient_do/
+chttpclient_do_streaming) only; chttpclient_do_async and everything
+built on it silently ignore this field for now and send the body
+immediately, exactly as if it were false.
 .fi
 .SH PARAMETERS
 .nf

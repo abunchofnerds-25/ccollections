@@ -19,8 +19,13 @@ queue selectable's direction is part of its identity (remove and re-add
 instead of modifying).
 
 On success:
-  - reg->sel.dir is updated, visible to subsequent callbacks via the sel
-    parameter they receive.
+  - reg->sel.dir is updated.  A callback dispatched after this call
+    returns observes the new direction via the sel parameter it
+    receives (the dispatch path copies reg->sel under its own internal
+    lock at the moment each dispatch is collected, not a live pointer
+    into reg->sel, so a callback already in flight when this function
+    is called deterministically keeps seeing whichever direction was
+    current when it was collected, rather than racing this update).
   - reg moves to the other slot on its underlying fd's shared epoll
     entry.
   - The fd's combined epoll interest mask is recomputed via a single
@@ -53,7 +58,7 @@ ccol_not_permitted  The target direction is already occupied by a
 .SH THREAD SAFETY
 .nf
 Safe to call concurrently with event_loop_remove() and from within a
-callback running on the reactor thread.
+callback running on one of the reactor threads.
 .fi
 .SH EXAMPLES
 .nf
@@ -65,4 +70,5 @@ event_loop_modify(loop, reg, ccol_select_read);
 .fi
 .SH "SEE ALSO"
 .BR event_loop_add (3),
-.BR event_loop_remove (3)
+.BR event_loop_remove (3),
+.BR event_loop_reg_generation (3)

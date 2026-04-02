@@ -26,7 +26,7 @@ name  Variable name to declare.
 .nf
 event_loop_declare(loop);
 char *err = NULL;
-loop = event_loop_create(32, 1, &err);
+loop = event_loop_create(32, 1, 1, &err);
 if (!loop) { fprintf(stderr, "%s\en", err); exit(1); }
 /* ... register selectables ... */
 event_loop_destroy(loop);

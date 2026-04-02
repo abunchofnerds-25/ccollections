@@ -90,7 +90,11 @@ static void wait_for_async_engine_idle(void) {
 #define TLS_TEST_BODY "{\"status\":\"ok\"}"
 
 static SSL_CTX *g_ssl_ctx = NULL;
-static int g_srv_fd = -1;
+/* atomic_int, not plain int: _stop_tls_server's teardown write races
+ * _tls_accept_loop's own accept() read of this same field on the way out,
+ * exactly the same benign-but-TSan-flagged shape already fixed for
+ * tests.c's g_srv.server_fd (see that field's own comment). */
+static atomic_int g_srv_fd = -1;
 static int g_srv_port = 0;
 static pthread_t g_accept_tid;
 static atomic_int g_srv_running = 0;

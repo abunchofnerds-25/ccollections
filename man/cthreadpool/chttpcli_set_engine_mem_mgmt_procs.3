@@ -1,0 +1,49 @@
+.TH CHTTPCLI_SET_ENGINE_MEM_MGMT_PROCS 3 "2026-07-14" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpcli_set_engine_mem_mgmt_procs \- set custom memory management for chttpclient's async-engine allocations
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
+.fi
+.SH DESCRIPTION
+.nf
+Redirects every allocation made by the event_loop reactor shared by
+every chttpcli instance's Tier 2/3 work in this process (the
+registration table, per-connection dispatch state, the DNS/connect
+worker pool, and so on) to the malloc/free/calloc/realloc supplied in
+mp, exactly like the memory management procs accepted by every other
+module in this library.  Passing NULL reverts to the default allocator.
+
+This is independent of the allocator each individual chttpcli instance
+uses for its own requests/connections (configured via
+create_chttpclient_mp, following the usual _mp convention); this
+function only affects the one shared reactor's own construction.
+
+May only be called before the reactor has ever started in this process
+(i.e. before the first chttpclient_do_async/_streaming call anywhere),
+or after the engine has fully stopped (every chttpcli async user has
+released its reference and the automatic teardown has completed).
+Unlike chttpsvr_set_engine_mem_mgmt_procs's typically process-lifetime
+reactor, this engine starts and stops on its own as Tier 2/3 usage
+comes and goes, so this window recurs naturally rather than being a
+one-shot process-startup opportunity.
+
+If mp is non-NULL, all four function pointers (malloc, free, calloc,
+realloc) must be set.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_invalid_args if mp is non-NULL but has a NULL function pointer.
+ccol_not_permitted if the engine is currently running; wait for it to
+    fully stop first.
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_set_engine_logger (3),
+.BR chttpclient_do_async (3),
+.BR chttpclient_do_pooled (3),
+.BR chttpsvr_set_engine_mem_mgmt_procs (3)

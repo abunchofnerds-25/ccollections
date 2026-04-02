@@ -1,22 +1,22 @@
 CC = gcc
 
-INCLUDES = -I.. -I../../include -I../../third_party/facio
+INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
 
-# Our source files (compiled with strict flags + -Werror). cfio_engine.c is
-# the shared facio reactor lifecycle module both chttpserver.c and
-# chttpclient.c acquire/release references to -- see cfio_engine.h.
+# Our source files (compiled with strict flags + -Werror). As of Phase 3 of
+# the facio-replacement roadmap, no binary in this directory depends on
+# third_party/facio at all any more: chttpserver.c and chttpclient.c each
+# own a fully independent static event_loop reactor (Phases 1/2), and
+# tests_mem_mgmt.c's own two facio-specific assertions were rewritten to
+# check the new event_loop-backed engine's real behavior instead.
 #
 # Three binaries are built from this shared source set:
 #   tests            (tests.c) - the main suite.
 #   tests_tls        (tests_tls.c) - drives a real TLS handshake against a
 #                     genuine self-signed cert generated at test-startup via
-#                     the `openssl` CLI. Kept as a SEPARATE BINARY because a
-#                     missing/broken openssl CLI or an invalid cert file makes
-#                     the vendored facio TLS layer call FIO_LOG_FATAL, which
-#                     aborts the whole process -- isolating it means that
-#                     failure mode can only take down the TLS suite, not the
-#                     rest of this directory's tests.
+#                     the `openssl` CLI. Kept as a SEPARATE BINARY matching
+#                     tests/chttpclient/tests_tls.c's own precedent for a
+#                     TLS-handshake-focused suite.
 #   tests_mem_mgmt   (tests_mem_mgmt.c) - calls
 #                     chttpsvr_set_engine_mem_mgmt_procs() before the first
 #                     chttpsvr_start() in the process, a process-wide,
@@ -29,55 +29,27 @@ COMMON_SRC_FILES = ../../src/chttpserver.c \
 	../../src/chttpclient.c \
 	../../src/chttp1_parser.c \
 	../../src/chttp.c \
-	../../src/cfio_engine.c \
+	../../src/cthreadcomm.c \
 	../../src/cthreadpool.c \
 	../../src/clogger.c \
 	../../src/chashmap.c \
 	../../src/cvector.c \
+	../../src/ctls.c \
 	../../src/common.c
-
-# third_party/facio source files (compiled without -Werror; several warnings are
-# expected from the third party facil.io library).
-THIRD_PARTY_DIR = ../../third_party/facio
-THIRD_PARTY_SRC_FILES = \
-	$(THIRD_PARTY_DIR)/fio.c \
-	$(THIRD_PARTY_DIR)/fiobject.c \
-	$(THIRD_PARTY_DIR)/fiobj_str.c \
-	$(THIRD_PARTY_DIR)/fiobj_hash.c \
-	$(THIRD_PARTY_DIR)/fiobj_ary.c \
-	$(THIRD_PARTY_DIR)/fiobj_numbers.c \
-	$(THIRD_PARTY_DIR)/fiobj_data.c \
-	$(THIRD_PARTY_DIR)/http.c \
-	$(THIRD_PARTY_DIR)/http1.c \
-	$(THIRD_PARTY_DIR)/http_internal.c \
-	$(THIRD_PARTY_DIR)/fio_tls_openssl.c
 
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O0 -Werror -fPIC
 
-THIRD_PARTY_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fPIC -g -O0 \
-	-Wno-deprecated-declarations -Wno-cast-function-type \
-	-Wno-unused-parameter -Wno-sign-compare -Wno-type-limits
-
 LFLAGS = -lpthread -lssl -lcrypto -lm -lz
 
-THIRD_PARTY_OBJS = $(THIRD_PARTY_SRC_FILES:$(THIRD_PARTY_DIR)/%.c=third_party_obj/facio/%.o)
-THIRD_PARTY_HEADER_FILES = $(wildcard $(THIRD_PARTY_DIR)/*.h)
+build:
+	$(CC) $(CFLAGS) tests.c $(COMMON_SRC_FILES) -o tests $(LFLAGS)
 
-third_party_obj/facio:
-	mkdir -p $@
+build_tls:
+	$(CC) $(CFLAGS) tests_tls.c $(COMMON_SRC_FILES) -o tests_tls $(LFLAGS)
 
-third_party_obj/facio/%.o: $(THIRD_PARTY_DIR)/%.c $(THIRD_PARTY_HEADER_FILES) | third_party_obj/facio
-	$(CC) -c $(THIRD_PARTY_CFLAGS) $< -o $@
-
-build: $(THIRD_PARTY_OBJS)
-	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) tests.c $(COMMON_SRC_FILES) -o tests $(LFLAGS)
-
-build_tls: $(THIRD_PARTY_OBJS)
-	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) tests_tls.c $(COMMON_SRC_FILES) -o tests_tls $(LFLAGS)
-
-build_mem_mgmt: $(THIRD_PARTY_OBJS)
-	$(CC) $(CFLAGS) $(THIRD_PARTY_OBJS) tests_mem_mgmt.c $(COMMON_SRC_FILES) -o tests_mem_mgmt $(LFLAGS)
+build_mem_mgmt:
+	$(CC) $(CFLAGS) tests_mem_mgmt.c $(COMMON_SRC_FILES) -o tests_mem_mgmt $(LFLAGS)
 
 test: build build_tls build_mem_mgmt
 	./tests
@@ -94,7 +66,7 @@ memtest: build build_tls build_mem_mgmt
 
 generate_coverage_report:
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests.c $(COMMON_SRC_FILES) \
-		$(THIRD_PARTY_OBJS) -o tests $(LFLAGS) && \
+		-o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-chttpserver && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent \
@@ -103,7 +75,7 @@ generate_coverage_report:
 		--output-directory coverage/tests && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_tls.c $(COMMON_SRC_FILES) \
-		$(THIRD_PARTY_OBJS) -o tests_tls $(LFLAGS) && \
+		-o tests_tls $(LFLAGS) && \
 	./tests_tls && \
 	gcov -d -w tests_tls-chttpserver && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent \
@@ -112,7 +84,7 @@ generate_coverage_report:
 		--output-directory coverage/tests_tls && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests_tls
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_mem_mgmt.c $(COMMON_SRC_FILES) \
-		$(THIRD_PARTY_OBJS) -o tests_mem_mgmt $(LFLAGS) && \
+		-o tests_mem_mgmt $(LFLAGS) && \
 	./tests_mem_mgmt && \
 	gcov -d -w tests_mem_mgmt-chttpserver && \
 	lcov --ignore-errors mismatch --ignore-errors inconsistent \

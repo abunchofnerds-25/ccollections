@@ -12,13 +12,21 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 .SH DESCRIPTION
 .nf
 Derives a child logger from cl, adds the field component=http-engine,
-and installs it as the facil.io engine logger.  Any previously installed
-engine logger is closed.
+and installs it as the shared reactor's diagnostics logger.  Any
+previously installed engine logger is closed.
 
-Call this function before the first chttpsvr_start call so that engine
-log output is routed to cl from the moment the engine starts.  Calling
-it after the engine starts is also safe; the new logger takes effect
-immediately under a writer lock.
+The reactor logs to this handle at exactly three points: a TLS
+handshake failure, a listen-socket bind failure, and each idle-timeout
+sweep pass that closes one or more connections.  If no engine logger is
+ever configured, the reactor simply does not log at those points; there
+is no default logger to fall back to (unlike create_chttpsvr's own
+internal stderr/FATAL-only logger).
+
+May be called at any time, including before the first chttpsvr_start,
+while the reactor is already running, or after a full engine stop; the
+reactor's own diagnostics logger is scoped to the reactor's lifetime
+(see chttpsvr_engine_stop), so a full stop/restart cycle requires
+calling this again if engine-level logging is still wanted afterward.
 
 cl must not be NULL; the derived child logger is owned by the engine
 and must not be closed by the caller.

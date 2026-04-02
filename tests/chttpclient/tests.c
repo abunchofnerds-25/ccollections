@@ -35,6 +35,7 @@ SOFTWARE.
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #pragma GCC diagnostic push
@@ -52,7 +53,15 @@ TAU_MAIN()
 #define TEST_SERVER_PORT 0 /* OS assigns a free port */
 
 typedef struct {
-  int server_fd;
+  /* atomic_int, not plain int: stop_test_server's teardown writes -1 here
+   * (after already shutdown()/close()-ing the fd) while the accept-loop
+   * thread's own accept() call reads this same field to make its syscall;
+   * a plain int would be a genuine, TSan-flagged data race between that
+   * write and read even though the outcome is harmless either way (the fd
+   * is already closed by the time the write happens), matching this
+   * codebase's own established _Atomic-field convention for exactly this
+   * shape of hazard. */
+  atomic_int server_fd;
   int port;
   pthread_t accept_tid;
   atomic_int running;
@@ -61,9 +70,16 @@ typedef struct {
    * every sandbox/CI environment has an IPv6 stack, so server_fd6 stays -1
    * (and port6 stays 0) when the bind fails, rather than treating that as a
    * hard test-server-setup failure. */
-  int server_fd6;
+  atomic_int server_fd6;
   int port6;
   pthread_t accept_tid6;
+
+  /* Unix domain socket listener, mirroring the fields above, for http+unix://
+   * coverage. unix_path is fixed (derived from getpid() at bind time, unique
+   * per test process) rather than OS-assigned like the TCP listeners' ports. */
+  atomic_int server_fd_unix;
+  char unix_path[128];
+  pthread_t accept_tid_unix;
 } test_server_t;
 
 static test_server_t g_srv;
@@ -158,32 +174,89 @@ static void srv_parse_request_line(const char *buf, char *method, size_t mlen,
   path[i] = '\0';
 }
 
-/* Read a full HTTP request (headers + body per Content-Length). */
-static ssize_t srv_read_request(int fd, char *buf, size_t max) {
+/*
+ * Reads request headers only, stopping at the first "\r\n\r\n" (never
+ * blocking to wait for any body bytes beyond whatever already arrived in
+ * the same recv() calls as the headers). *hdr_len_out receives the header
+ * block's length (through and including the terminating CRLFCRLF).
+ *
+ * Split out from what used to be a single-shot "read headers, then keep
+ * reading until content-length bytes of body have arrived" function
+ * (srv_read_request) specifically so srv_conn_thread can react to an
+ * "Expect: 100-continue" request header -- and decide the route -- before
+ * necessarily reading (or, for the reject route, ever reading) any body at
+ * all; srv_conn_thread's own body-reading tail, used for every route that
+ * isn't one of the two Expect: 100-continue-aware ones below, reproduces
+ * srv_read_request's old content-length loop exactly, so no route's timing
+ * or behavior changes.
+ */
+static ssize_t srv_read_headers(int fd, char *buf, size_t max,
+                                size_t *hdr_len_out) {
   struct timeval tv = {.tv_sec = 5, .tv_usec = 0};
   setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
   ssize_t total = 0;
   while (total < (ssize_t)(max - 1)) {
     ssize_t n = recv(fd, buf + total, max - 1 - (size_t)total, 0);
-    if (n <= 0) break;
+    if (n <= 0) return total > 0 ? total : n;
     total += n;
     buf[total] = '\0';
 
     char *hdr_end = strstr(buf, "\r\n\r\n");
-    if (!hdr_end) continue;
-
-    /* Check if we have the full body. */
-    char cl_str[32] = {0};
-    long content_length = 0;
-    if (srv_find_header(buf, "content-length", cl_str, sizeof(cl_str)))
-      content_length = atol(cl_str);
-
-    size_t hdr_size = (size_t)(hdr_end - buf) + 4;
-    size_t body_read = (size_t)total - hdr_size;
-    if (body_read >= (size_t)content_length) break;
+    if (hdr_end) {
+      *hdr_len_out = (size_t)(hdr_end - buf) + 4;
+      return total;
+    }
   }
   return total;
+}
+
+/*
+ * Handles the two Expect: 100-continue-aware test routes. `total` is the
+ * number of bytes already in buf (headers, and possibly some/all of the
+ * body if it arrived in the same reads); hdr_len is the header block's own
+ * length. Returns true if the connection should close after this response
+ * (matching srv_handle_route's own return convention).
+ *
+ * accept_body selects the route's behavior: true sends "100 Continue" first
+ * (then reads and echoes the body, exercising chttp_do_internal's "interim
+ * 100 seen -> reset pctx, send body, read real final response" path,
+ * including the pctx-reset correctness this route is the only one able to
+ * exercise); false answers 417 directly WITHOUT ever sending "100 Continue"
+ * or reading any body at all (RFC 7231 SS5.1.1's "server may reject
+ * without waiting" case, exercising chttp_do_internal's "server answered
+ * directly -> that IS the final response, body never sent" path).
+ */
+static bool srv_handle_expect_continue_route(int conn_fd, char *buf,
+                                             size_t max, size_t total,
+                                             size_t hdr_len, bool accept_body) {
+  if (!accept_body) {
+    const char *b = "expectation failed";
+    srv_respond(conn_fd, 417, "Expectation Failed", "text/plain", NULL, b,
+               strlen(b), false);
+    return true;
+  }
+
+  const char *cont = "HTTP/1.1 100 Continue\r\n\r\n";
+  send(conn_fd, cont, strlen(cont), 0);
+
+  char cl_str[32] = {0};
+  long cl = 0;
+  if (srv_find_header(buf, "content-length", cl_str, sizeof(cl_str)))
+    cl = atol(cl_str);
+
+  while (cl > 0 && total - hdr_len < (size_t)cl && total < max - 1) {
+    ssize_t m = recv(conn_fd, buf + total, max - 1 - total, 0);
+    if (m <= 0) break;
+    total += (size_t)m;
+    buf[total] = '\0';
+  }
+
+  const char *body = buf + hdr_len;
+  size_t body_len = (cl > 0) ? (size_t)cl : 0;
+  srv_respond(conn_fd, 200, "OK", "application/octet-stream", NULL, body,
+             body_len, false);
+  return true;
 }
 
 /*
@@ -517,28 +590,41 @@ static void *srv_conn_thread(void *arg) {
   }
 
   for (int iter = 0; iter < MAX_KEEPALIVE_REQUESTS_PER_CONN; iter++) {
-    ssize_t n = srv_read_request(conn_fd, buf, TEST_SERVER_BUF);
+    size_t hdr_len = 0;
+    ssize_t n = srv_read_headers(conn_fd, buf, TEST_SERVER_BUF, &hdr_len);
     if (n <= 0) break;
 
     char method[16], path[512];
     srv_parse_request_line(buf, method, sizeof(method), path, sizeof(path));
 
-    char *body = NULL;
-    size_t body_len = 0;
-    char *hdr_end = strstr(buf, "\r\n\r\n");
-    if (hdr_end) {
+    bool close_after;
+    if (strcmp(path, "/expect-continue-echo") == 0) {
+      close_after = srv_handle_expect_continue_route(
+          conn_fd, buf, TEST_SERVER_BUF, (size_t)n, hdr_len, true);
+    } else if (strcmp(path, "/expect-continue-reject") == 0) {
+      close_after = srv_handle_expect_continue_route(
+          conn_fd, buf, TEST_SERVER_BUF, (size_t)n, hdr_len, false);
+    } else {
+      /* Ordinary route: read the rest of the body (if any) per
+       * content-length, exactly reproducing the now-removed
+       * srv_read_request's own single-shot behavior. */
+      size_t total = (size_t)n;
       char cl_str[32] = {0};
       long cl = 0;
       if (srv_find_header(buf, "content-length", cl_str, sizeof(cl_str)))
         cl = atol(cl_str);
-      if (cl > 0) {
-        body = hdr_end + 4;
-        body_len = (size_t)cl;
+      while (cl > 0 && total - hdr_len < (size_t)cl &&
+            total < TEST_SERVER_BUF - 1) {
+        ssize_t m = recv(conn_fd, buf + total, TEST_SERVER_BUF - 1 - total, 0);
+        if (m <= 0) break;
+        total += (size_t)m;
+        buf[total] = '\0';
       }
-    }
 
-    bool close_after =
-        srv_handle_route(conn_fd, method, path, buf, body, body_len);
+      char *body = (cl > 0) ? buf + hdr_len : NULL;
+      size_t body_len = (cl > 0) ? (size_t)cl : 0;
+      close_after = srv_handle_route(conn_fd, method, path, buf, body, body_len);
+    }
     if (close_after) break;
   }
   free(buf);
@@ -596,8 +682,35 @@ static void *srv_accept_loop6(void *arg) {
   return NULL;
 }
 
+/* Unix-domain-socket counterpart of srv_accept_loop; shares g_srv.running
+ * and the same connection-thread registry/handler, only the listening fd
+ * (and address family) differs. */
+static void *srv_accept_loop_unix(void *arg) {
+  (void)arg;
+  while (atomic_load(&g_srv.running)) {
+    int conn_fd = accept(g_srv.server_fd_unix, NULL, NULL);
+    if (conn_fd < 0) break;
+    atomic_fetch_add(&g_accept_count, 1);
+
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, srv_conn_thread,
+                       (void *)(intptr_t)conn_fd) != 0) {
+      close(conn_fd);
+    } else {
+      pthread_mutex_lock(&g_conn_mutex);
+      if (g_conn_thread_count < MAX_CONN_THREADS)
+        g_conn_threads[g_conn_thread_count++] = tid;
+      else
+        pthread_detach(tid); /* registry full: fall back to detach */
+      pthread_mutex_unlock(&g_conn_mutex);
+    }
+  }
+  return NULL;
+}
+
 static void start_test_server(void) {
   g_srv.server_fd6 = -1;
+  g_srv.server_fd_unix = -1;
 
   g_srv.server_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (g_srv.server_fd < 0) return;
@@ -662,6 +775,46 @@ static void start_test_server(void) {
       close(fd6);
     }
   }
+
+  /* Unix domain socket listener; unlike the TCP listeners' OS-assigned
+   * ports, the path is fixed (derived from getpid() so concurrent test
+   * processes on the same machine cannot collide) and any stale file from a
+   * prior crashed run at the same path is unlinked first. */
+  snprintf(g_srv.unix_path, sizeof(g_srv.unix_path),
+           "/tmp/chttpclient_test_%d.sock", (int)getpid());
+  unlink(g_srv.unix_path);
+
+  int fd_unix = socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd_unix >= 0) {
+    struct sockaddr_un addr_un;
+    memset(&addr_un, 0, sizeof(addr_un));
+    addr_un.sun_family = AF_UNIX;
+    size_t path_len = strlen(g_srv.unix_path);
+    bool bound = false;
+    /* memcpy under an explicit length check, not snprintf: the check
+     * guarantees the copy fits, and gcc's -Wformat-truncation cannot see
+     * that guarantee through a "%s" format (it only knows sun_path's fixed
+     * 108-byte size versus unix_path's much larger nominal buffer size). A
+     * path this short from our own fixed "/tmp/chttpclient_test_<pid>.sock"
+     * format never actually fails this check in practice. */
+    if (path_len < sizeof(addr_un.sun_path)) {
+      memcpy(addr_un.sun_path, g_srv.unix_path, path_len + 1);
+      bound = (bind(fd_unix, (struct sockaddr *)&addr_un, sizeof(addr_un)) ==
+                   0 &&
+               listen(fd_unix, 64) == 0);
+    }
+    if (bound) {
+      g_srv.server_fd_unix = fd_unix;
+      if (pthread_create(&g_srv.accept_tid_unix, NULL, srv_accept_loop_unix,
+                         NULL) != 0) {
+        close(fd_unix);
+        g_srv.server_fd_unix = -1;
+        unlink(g_srv.unix_path);
+      }
+    } else {
+      close(fd_unix);
+    }
+  }
 }
 
 __attribute__((destructor)) static void stop_test_server(void) {
@@ -679,6 +832,13 @@ __attribute__((destructor)) static void stop_test_server(void) {
     close(g_srv.server_fd6);
     g_srv.server_fd6 = -1;
     pthread_join(g_srv.accept_tid6, NULL);
+  }
+  if (g_srv.server_fd_unix > 0) {
+    shutdown(g_srv.server_fd_unix, SHUT_RDWR);
+    close(g_srv.server_fd_unix);
+    g_srv.server_fd_unix = -1;
+    pthread_join(g_srv.accept_tid_unix, NULL);
+    unlink(g_srv.unix_path);
   }
   /* Join all connection-handling threads so sanitizers can account for
    * every allocation made on their stacks and no thread is left running. */
@@ -716,6 +876,45 @@ static void make_url(char *buf, size_t buf_size, const char *path) {
  * Only valid to call after checking get_test_port6() != 0. */
 static void make_url6(char *buf, size_t buf_size, const char *path) {
   snprintf(buf, buf_size, "http://[::1]:%d%s", get_test_port6(), path);
+}
+
+/* Path (not URL) of the Unix domain socket test server listens on; "" if no
+ * listener could be bound in this environment (AF_UNIX is expected to always
+ * be available on any POSIX target this library supports, so this is not
+ * treated as a best-effort/skip-if-absent case the way IPv6 is). */
+static const char *get_test_unix_socket_path(void) {
+  pthread_once(&g_srv_once, start_test_server);
+  return g_srv.unix_path;
+}
+
+/* Percent-encodes a raw filesystem path for use as the authority component
+ * of a "http+unix://<encoded-path>" URL, matching the encoding
+ * _parse_chttp_unix_url on the other end expects (RFC 3986 unreserved
+ * characters pass through verbatim; everything else, including '/', is
+ * %XX-encoded). Test-side counterpart of chttpclient.c's own internal
+ * _percent_encode_unix_path, not shared since that function is static. */
+static void percent_encode_unix_path(char *buf, size_t buf_size,
+                                     const char *raw) {
+  size_t w = 0;
+  for (const char *p = raw; *p && w + 4 < buf_size; p++) {
+    unsigned char c = (unsigned char)*p;
+    if (isalnum(c) || c == '-' || c == '.' || c == '_' || c == '~') {
+      buf[w++] = (char)c;
+    } else {
+      snprintf(buf + w, 4, "%%%02X", c);
+      w += 3;
+    }
+  }
+  buf[w] = '\0';
+}
+
+/* Build a "http+unix://<encoded-path><path>" URL for the Unix domain socket
+ * test server. */
+static void make_unix_url(char *buf, size_t buf_size, const char *path) {
+  char encoded[256];
+  percent_encode_unix_path(encoded, sizeof(encoded),
+                           get_test_unix_socket_path());
+  snprintf(buf, buf_size, "http+unix://%s%s", encoded, path);
 }
 
 /* ========================================================================== */
@@ -2460,7 +2659,8 @@ TEST(url_parsing, explicit_non_default_port_succeeds) {
 extern ccol_retval_t _chttp_parse_url_for_tests(
     const char *url, bool *is_https_out, bool *is_ipv6_out, char **host_out,
     uint16_t *port_out, char **path_and_query_out, char **origin_key_out,
-    char **userinfo_authorization_out);
+    char **userinfo_authorization_out, bool *is_unix_out,
+    char **unix_socket_path_out);
 extern char *_chttp_resolve_redirect_url_for_tests(const char *base_url,
                                                    const char *location);
 
@@ -2470,7 +2670,8 @@ TEST(url_parsing, ipv6_literal_no_port) {
   uint16_t port = 0;
   ccol_retval_t rv =
       _chttp_parse_url_for_tests("https://[::1]/path", &is_https, &is_ipv6,
-                                 &host, &port, &pq, &origin_key, &auth);
+                                 &host, &port, &pq, &origin_key, &auth, NULL,
+                                 NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(is_https);
   REQUIRE_TRUE(is_ipv6);
@@ -2490,7 +2691,8 @@ TEST(url_parsing, ipv6_literal_with_port) {
   uint16_t port = 0;
   ccol_retval_t rv =
       _chttp_parse_url_for_tests("http://[::1]:8443/", &is_https, &is_ipv6,
-                                 &host, &port, &pq, &origin_key, &auth);
+                                 &host, &port, &pq, &origin_key, &auth, NULL,
+                                 NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(is_ipv6);
   REQUIRE_STREQ(host, "::1");
@@ -2502,20 +2704,21 @@ TEST(url_parsing, ipv6_literal_with_port) {
 }
 
 TEST(url_parsing, ipv6_missing_closing_bracket_is_invalid) {
-  ccol_retval_t rv = _chttp_parse_url_for_tests("http://[::1/path", NULL, NULL,
-                                                NULL, NULL, NULL, NULL, NULL);
+  ccol_retval_t rv = _chttp_parse_url_for_tests(
+      "http://[::1/path", NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }
 
 TEST(url_parsing, ipv6_garbage_after_bracket_is_invalid) {
   ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http://[::1]x/path", NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+      "http://[::1]x/path", NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }
 
 TEST(url_parsing, ipv6_empty_brackets_is_invalid) {
-  ccol_retval_t rv = _chttp_parse_url_for_tests("http://[]/path", NULL, NULL,
-                                                NULL, NULL, NULL, NULL, NULL);
+  ccol_retval_t rv = _chttp_parse_url_for_tests(
+      "http://[]/path", NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }
 
@@ -2542,7 +2745,7 @@ TEST(url_parsing, userinfo_user_and_pass) {
   uint16_t port = 0;
   ccol_retval_t rv = _chttp_parse_url_for_tests(
       "http://alice:s3cr3t@host/path", &dummy_https, &dummy_ipv6, &host, &port,
-      &pq, &origin_key, &auth);
+      &pq, &origin_key, &auth, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_NE((void *)auth, NULL);
   /* base64("alice:s3cr3t") == "YWxpY2U6czNjcjN0" */
@@ -2559,7 +2762,7 @@ TEST(url_parsing, userinfo_user_only) {
   uint16_t port = 0;
   ccol_retval_t rv = _chttp_parse_url_for_tests(
       "http://alice@host/path", &dummy_https, &dummy_ipv6, &host, &port, &pq,
-      &origin_key, &auth);
+      &origin_key, &auth, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   /* base64("alice:") == "YWxpY2U6" */
   REQUIRE_STREQ(auth, "Basic YWxpY2U6");
@@ -2575,7 +2778,7 @@ TEST(url_parsing, userinfo_pass_only) {
   uint16_t port = 0;
   ccol_retval_t rv = _chttp_parse_url_for_tests(
       "http://:s3cr3t@host/path", &dummy_https, &dummy_ipv6, &host, &port, &pq,
-      &origin_key, &auth);
+      &origin_key, &auth, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   /* base64(":s3cr3t") == "OnMzY3IzdA==" */
   REQUIRE_STREQ(auth, "Basic OnMzY3IzdA==");
@@ -2593,7 +2796,7 @@ TEST(url_parsing, userinfo_percent_encoded_components) {
    * located before decoding, not after. */
   ccol_retval_t rv = _chttp_parse_url_for_tests(
       "http://user%40x:pa%3Ass@host/path", &dummy_https, &dummy_ipv6, &host,
-      &port, &pq, &origin_key, &auth);
+      &port, &pq, &origin_key, &auth, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   /* base64("user@x:pa:ss") == "dXNlckB4OnBhOnNz" */
   REQUIRE_STREQ(auth, "Basic dXNlckB4OnBhOnNz");
@@ -2605,7 +2808,8 @@ TEST(url_parsing, userinfo_percent_encoded_components) {
 
 TEST(url_parsing, userinfo_malformed_percent_escape_is_invalid) {
   ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http://user%zzpass@host/path", NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+      "http://user%zzpass@host/path", NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+      NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }
 
@@ -2615,7 +2819,8 @@ TEST(url_parsing, no_userinfo_means_no_auto_authorization) {
   uint16_t port = 0;
   ccol_retval_t rv =
       _chttp_parse_url_for_tests("http://host/path", &dummy_https, &dummy_ipv6,
-                                 &host, &port, &pq, &origin_key, &auth);
+                                 &host, &port, &pq, &origin_key, &auth, NULL,
+                                 NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ((void *)auth, NULL);
   free(host);
@@ -2646,7 +2851,7 @@ TEST(url_parsing, fragment_only_defaults_to_root_path) {
   uint16_t port = 0;
   ccol_retval_t rv = _chttp_parse_url_for_tests(
       "http://host#section", &dummy_https, &dummy_ipv6, &host, &port, &pq,
-      &origin_key, &auth);
+      &origin_key, &auth, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_STREQ(pq, "/");
   free(host);
@@ -3098,6 +3303,113 @@ TEST(http, delete_body_not_transmitted) {
 }
 
 /* ========================================================================== */
+/*                     EXPECT: 100-CONTINUE (TIER 1)                          */
+/* ========================================================================== */
+
+TEST(expect_continue, interim_100_then_body_sent) {
+  /* /expect-continue-echo sends "100 Continue" first, then reads and echoes
+   * the body -- exercises _chttp_send_and_read's "interim 100 seen" branch,
+   * including _parse_ctx_reset_for_continue (the final response's own
+   * headers/body must be exactly the real response, uncontaminated by the
+   * interim message). */
+  char url[160];
+  make_url(url, sizeof(url), "/expect-continue-echo");
+
+  const char *payload = "hold-until-continue";
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_do(req, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_EQ(resp->body_len, strlen(payload));
+  REQUIRE_STREQ(resp->body, payload);
+
+  chttp_request_free(req);
+  chttpclient_resp_free(resp);
+}
+
+TEST(expect_continue, server_rejects_without_100) {
+  /* /expect-continue-reject answers 417 directly, WITHOUT ever sending
+   * "100 Continue" or reading a body -- exercises _chttp_send_and_read's
+   * "server answered directly" branch: that response must be delivered to
+   * the caller as-is (RFC 7231 SS5.1.1), and the body must never be sent. */
+  char url[160];
+  make_url(url, sizeof(url), "/expect-continue-reject");
+
+  const char *payload = "should-never-be-sent";
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_do(req, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 417);
+  REQUIRE_STREQ(resp->body, "expectation failed");
+
+  chttp_request_free(req);
+  chttpclient_resp_free(resp);
+}
+
+TEST(expect_continue, wait_times_out_body_sent_anyway) {
+  /* /post is an ordinary route with no Expect: 100-continue awareness at
+   * all -- it simply waits to read the full body before responding.
+   * Exercises _chttp_send_and_read's timeout branch: after
+   * CHTTP_100_CONTINUE_WAIT_MS with no interim response, the body is sent
+   * anyway and the real (and, here, only) response is read normally.
+   * Slow (~1s): this is the whole point of the test. */
+  char url[160];
+  make_url(url, sizeof(url), "/post");
+
+  const char *payload = "{\"sent\":\"after-timeout\"}";
+  chttp_request_body_t body = CHTTP_JSON_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_do(req, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_EQ(resp->body_len, strlen(payload));
+  REQUIRE_STREQ(resp->body, payload);
+
+  chttp_request_free(req);
+  chttpclient_resp_free(resp);
+}
+
+TEST(expect_continue, ignored_for_bodyless_request) {
+  /* GET has no body, so expect_continue must have no effect at all (per its
+   * own doc comment) -- no "expect:" header is emitted (_serialize_request's
+   * own condition already requires a body-carrying method with a non-empty
+   * body), and the ordinary /get route (which knows nothing about
+   * Expect: 100-continue) answers normally. */
+  char url[160];
+  make_url(url, sizeof(url), "/get");
+
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_do(req, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+
+  chttp_request_free(req);
+  chttpclient_resp_free(resp);
+}
+
+/* ========================================================================== */
 /*                     ASYNC ENGINE LIFECYCLE (WHITE-BOX)                     */
 /* ========================================================================== */
 
@@ -3140,12 +3452,13 @@ TEST(async_engine, starts_on_first_acquire_and_stops_at_zero_refcount) {
   REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 1);
 
   _chttpclient_engine_release_for_tests();
-  /* g_client_engine_running flips false synchronously inside release, so
-   * this is deterministic without waiting; but the actual teardown (reaper
-   * thread) is still asynchronous; wait for it before the test returns. */
-  REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
+  /* Unlike the ref count (decremented synchronously inside release), whether
+   * the reactor itself is still considered "running" only flips once its
+   * actual teardown (on a separate reaper thread) completes; wait for that
+   * explicitly rather than assuming a synchronous flip. */
   REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 0);
   _chttpclient_engine_wait_for_quiescence_for_tests();
+  REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
 }
 
 TEST(async_engine, refcount_tracks_multiple_acquirers) {
@@ -3165,8 +3478,8 @@ TEST(async_engine, refcount_tracks_multiple_acquirers) {
 
   _chttpclient_engine_release_for_tests();
   REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 0);
-  REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
   _chttpclient_engine_wait_for_quiescence_for_tests();
+  REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
 }
 
 TEST(async_engine, restart_after_full_stop_works) {
@@ -3176,9 +3489,9 @@ TEST(async_engine, restart_after_full_stop_works) {
     REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
     REQUIRE_TRUE(_chttpclient_engine_running_for_tests());
     _chttpclient_engine_release_for_tests();
+    _chttpclient_engine_wait_for_quiescence_for_tests();
     REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
   }
-  _chttpclient_engine_wait_for_quiescence_for_tests();
 }
 
 typedef struct {
@@ -3215,8 +3528,8 @@ TEST(async_engine, concurrent_acquire_release_no_corruption) {
   REQUIRE_EQ(atomic_load(&acquired_ok), N);
   /* Every acquire was matched by exactly one release. */
   REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 0);
-  REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
   _chttpclient_engine_wait_for_quiescence_for_tests();
+  REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
 }
 
 /* ========================================================================== */
@@ -3449,12 +3762,12 @@ TEST(async_step_a, https_connection_refused_reports_error) {
 
 TEST(async_step_a, https_handshake_fails_against_plain_http_server) {
   /* Connects via https:// to the suite's own plain-HTTP mock server (which
-   * never speaks TLS); a real exercise of
-   * fio_tls_client_handshake_step's FIO_TLS_HANDSHAKE_ERROR path, without
-   * needing a live TLS-capable fixture. Slow (~5s): the mock server's
-   * srv_read_request has a fixed 5-second SO_RCVTIMEO and a raw TLS
-   * ClientHello never contains the "\r\n\r\n" it's waiting for, so the
-   * server sits silent until its own timeout closes the connection;
+   * never speaks TLS); a real exercise of ctls_conn_handshake_step's
+   * handshake-failure path, without needing a live TLS-capable fixture.
+   * Slow (~5s): the mock server's srv_read_headers has a fixed 5-second
+   * SO_RCVTIMEO and a raw TLS ClientHello never contains the "\r\n\r\n" it's
+   * waiting for, so the server sits silent until its own timeout closes the
+   * connection;
    * there is no per-request timeout enforcement in the async engine yet
    * (see the "reactor-owned timer/cancellation" roadmap item) to cut this
    * shorter client-side. */
@@ -4404,4 +4717,232 @@ TEST(pooled_streaming, bad_url_returns_specific_error_not_generic) {
 
   chttp_request_free(req);
   chttpclient_destroy(cli);
+}
+
+/* ========================================================================== */
+/*                     UNIX DOMAIN SOCKET TESTS (http+unix://)                */
+/*                                                                            */
+/* Phase 2 of the facio-replacement roadmap added real "http+unix://" support */
+/* to chttpclient (see _parse_chttp_unix_url/_unix_connect/_async_connect_   */
+/* task's is_unix branch in src/chttpclient.c). These exercise it end to end */
+/* against the Unix-domain listener added to this file's own mock server     */
+/* (srv_accept_loop_unix), covering all three tiers, connection pooling      */
+/* keyed by the "unix://<path>" origin_key, and the URL-parsing/connect-time */
+/* error paths unique to this scheme.                                       */
+/* ========================================================================== */
+
+TEST(unix_socket, get_request_succeeds) {
+  char url[256];
+  make_unix_url(url, sizeof(url), "/get");
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get(url, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  chttpclient_resp_free(resp);
+}
+
+TEST(unix_socket, post_with_body_succeeds) {
+  char url[256];
+  make_unix_url(url, sizeof(url), "/echo-method-body");
+
+  const char *body_str = "hello-over-unix-socket";
+  chttp_request_body_t body = CHTTP_JSON_BODY(body_str, strlen(body_str));
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_post(url, &body, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_NE((void *)resp->body, NULL);
+  /* /echo-method-body responds with "<METHOD>:<body_len>". */
+  char expected[64];
+  snprintf(expected, sizeof(expected), "POST:%zu", strlen(body_str));
+  REQUIRE_STREQ(resp->body, expected);
+  chttpclient_resp_free(resp);
+}
+
+TEST(unix_socket, keepalive_reuses_connection) {
+  char url[256];
+  make_unix_url(url, sizeof(url), "/keepalive");
+
+  chttpcli_construct(cli);
+  int accepts_before = test_server_accept_count();
+
+  for (int i = 0; i < 5; i++) {
+    chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+    REQUIRE_NE((void *)req, NULL);
+    chttpcli_response *resp = NULL;
+    ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+    chttp_request_free(req);
+    REQUIRE_EQ(rv, ccol_success);
+    REQUIRE_NE((void *)resp, NULL);
+    REQUIRE_EQ(resp->status_code, 200);
+    chttpclient_resp_free(resp);
+  }
+
+  /* Same rationale as keepalive.sequential_requests_reuse_connection: give
+   * the server's own accept-count increment a brief moment to land. */
+  usleep(20000);
+  int accepts_after = test_server_accept_count();
+  REQUIRE_EQ(accepts_after - accepts_before, 1);
+
+  chttpclient_destroy(cli);
+}
+
+TEST(unix_socket, nonexistent_socket_path_fails) {
+  char url[512];
+  char encoded[256];
+  percent_encode_unix_path(encoded, sizeof(encoded),
+                           "/tmp/chttpclient_test_nonexistent_xyz.sock");
+  snprintf(url, sizeof(url), "http+unix://%s/get", encoded);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get(url, &resp);
+  REQUIRE_EQ(rv, ccol_http_connection_failed);
+  REQUIRE_EQ((void *)resp, NULL);
+}
+
+TEST(unix_socket, path_too_long_returns_invalid_url) {
+  /* sizeof(struct sockaddr_un.sun_path) is 108 on Linux; a raw path of 108+
+   * bytes (before the NUL) cannot fit, and must be rejected as a bad URL
+   * rather than attempted. */
+  char raw_path[200];
+  memset(raw_path, 'a', sizeof(raw_path) - 1);
+  raw_path[0] = '/';
+  raw_path[sizeof(raw_path) - 1] = '\0';
+
+  char encoded[512];
+  percent_encode_unix_path(encoded, sizeof(encoded), raw_path);
+  char url[600];
+  snprintf(url, sizeof(url), "http+unix://%s/get", encoded);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get(url, &resp);
+  REQUIRE_EQ(rv, ccol_http_invalid_url);
+  REQUIRE_EQ((void *)resp, NULL);
+}
+
+TEST(unix_socket_async, basic_get_succeeds) {
+  char url[256];
+  make_unix_url(url, sizeof(url), "/get");
+
+  chttpcli_construct(cli);
+  ctpool_future *f = async_get(cli, url);
+  REQUIRE_NE((void *)f, NULL);
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  REQUIRE_NE((void *)raw->resp, NULL);
+  REQUIRE_EQ(raw->resp->status_code, 200);
+  chttpclient_resp_free(raw->resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(unix_socket_async, sequential_requests_reuse_connection_via_idle_pool) {
+  char url[256];
+  make_unix_url(url, sizeof(url), "/keepalive");
+
+  chttpcli_construct(cli);
+  int accepts_before = test_server_accept_count();
+
+  for (int i = 0; i < 5; i++) {
+    ctpool_future *f = async_get(cli, url);
+    REQUIRE_NE((void *)f, NULL);
+    chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+    REQUIRE_NE((void *)raw, NULL);
+    REQUIRE_EQ(raw->rv, ccol_success);
+    REQUIRE_NE((void *)raw->resp, NULL);
+    REQUIRE_EQ(raw->resp->status_code, 200);
+    chttpclient_resp_free(raw->resp);
+    chttpclient_async_result_free(raw);
+    ctpool_future_free(f);
+  }
+
+  usleep(20000);
+  int accepts_after = test_server_accept_count();
+  /* Confirms pooling is genuinely keyed on the "unix://<path>" origin_key
+   * (see _parse_chttp_unix_url's own construction of it): if unix-socket
+   * connections were never being pooled at all (e.g. falling back to one
+   * fresh connection per request, or being keyed identically to some other
+   * origin and evicted/misrouted), this would observe 5 accepts instead. */
+  REQUIRE_EQ(accepts_after - accepts_before, 1);
+
+  /* Mirrors async_idle_pool's own destroy-before-wait ordering: a
+   * successfully pooled connection holds its own engine reference until
+   * reused or drained by chttpclient_destroy. */
+  chttpclient_destroy(cli);
+  wait_for_async_engine_idle();
+}
+
+TEST(unix_socket_pooled, basic_get_succeeds) {
+  char url[256];
+  make_unix_url(url, sizeof(url), "/get");
+
+  chttpcli_construct(cli);
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do_pooled(cli, req, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  chttpclient_resp_free(resp);
+
+  chttp_request_free(req);
+  chttpclient_destroy(cli);
+  wait_for_async_engine_idle();
+}
+
+TEST(url_parsing, http_unix_scheme_basic) {
+  bool is_https = false, is_ipv6 = false, is_unix = false;
+  char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
+  char *unix_path = NULL;
+  uint16_t port = 0;
+  ccol_retval_t rv = _chttp_parse_url_for_tests(
+      "http+unix://%2Ftmp%2Fapp.sock/api/users", &is_https, &is_ipv6, &host,
+      &port, &pq, &origin_key, &auth, &is_unix, &unix_path);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(is_unix);
+  REQUIRE_FALSE(is_https);
+  REQUIRE_STREQ(unix_path, "/tmp/app.sock");
+  REQUIRE_STREQ(pq, "/api/users");
+  REQUIRE_STREQ(origin_key, "unix:///tmp/app.sock");
+  REQUIRE_EQ((void *)host, NULL);
+  REQUIRE_EQ((void *)auth, NULL);
+  free(unix_path);
+  free(pq);
+  free(origin_key);
+}
+
+TEST(url_parsing, http_unix_scheme_no_path_defaults_to_root) {
+  bool is_unix = false;
+  char *pq = NULL, *origin_key = NULL, *unix_path = NULL;
+  ccol_retval_t rv = _chttp_parse_url_for_tests(
+      "http+unix://%2Ftmp%2Fapp.sock", NULL, NULL, NULL, NULL, &pq,
+      &origin_key, NULL, &is_unix, &unix_path);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(is_unix);
+  REQUIRE_STREQ(unix_path, "/tmp/app.sock");
+  REQUIRE_STREQ(pq, "/");
+  free(unix_path);
+  free(pq);
+  free(origin_key);
+}
+
+TEST(url_parsing, https_unix_scheme_rejected) {
+  ccol_retval_t rv = _chttp_parse_url_for_tests(
+      "https+unix://%2Ftmp%2Fapp.sock/api", NULL, NULL, NULL, NULL, NULL,
+      NULL, NULL, NULL, NULL);
+  REQUIRE_EQ(rv, ccol_http_invalid_url);
+}
+
+TEST(url_parsing, http_unix_scheme_empty_path_rejected) {
+  ccol_retval_t rv = _chttp_parse_url_for_tests("http+unix:///api", NULL,
+                                                NULL, NULL, NULL, NULL, NULL,
+                                                NULL, NULL, NULL);
+  REQUIRE_EQ(rv, ccol_http_invalid_url);
 }

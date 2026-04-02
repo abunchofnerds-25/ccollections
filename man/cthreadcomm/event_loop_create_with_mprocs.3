@@ -8,22 +8,34 @@ C Collections (libccollections, \-lccollections)
 #include <cthreadcomm.h>
 
 event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
-                        size_t num_lock_stripes,
+                        size_t num_lock_stripes, size_t num_reactor_threads,
                         ccol_memmgmt_procs_t *mmgmt_procs, char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
-Creates a persistent epoll(7) instance and immediately spawns the single
-background reactor thread that drives it.  Unlike ccol_select(), which
-creates a fresh epoll instance on every call and tears it down after
-exactly one ready selectable, an event_loop's epoll instance and reactor
-thread live for as long as the handle does, and registrations
-(event_loop_add / event_loop_modify / event_loop_remove) are mutated
-incrementally against it.
+Creates a persistent epoll(7) instance and immediately spawns
+num_reactor_threads background reactor threads that drive it.  Unlike
+ccol_select(), which creates a fresh epoll instance on every call and
+tears it down after exactly one ready selectable, an event_loop's epoll
+instance and reactor thread(s) live for as long as the handle does, and
+registrations (event_loop_add / event_loop_modify / event_loop_remove)
+are mutated incrementally against it.
 
-The reactor thread is ready to dispatch events as soon as this call
+Every reactor thread is ready to dispatch events as soon as this call
 returns, mirroring create_cthread_pool()'s "ready to work the moment
-you get the handle" ergonomics.
+you get the handle" ergonomics.  Passing 1 reproduces this module's
+original single-thread behavior exactly.
+
+With more than one reactor thread, two correctness properties hold that
+a single thread gets for free from having only one caller: a single
+registration's callback(s) are never invoked concurrently with
+themselves, and a read registration and a write registration sharing
+the same fd never run concurrently with each other either (stricter
+than "no self-concurrency" alone, so a callback pair that shares state
+across both directions of one fd, such as one TLS connection object,
+needs no locking of its own).  See event_loop_reg_generation(3) for the
+separate, additional caller-visible identity token this design also
+makes available.
 
 Registrations are built from the same ccol_selectable type ccol_select
 uses (selectable_from_fd, selectable_from_circq, selectable_from_dynq,
@@ -52,10 +64,15 @@ chmaps allocated up front.
 .fi
 .SH PARAMETERS
 .nf
-max_events_per_wait  Size of the epoll_wait batch buffer (must be >= 1).
+max_events_per_wait  Size of the epoll_wait batch buffer each reactor
+                      thread uses (must be >= 1).
 num_lock_stripes     Number of independent lock stripes for the fd/entry
                       registry (must be >= 1).  1 matches the original
                       single-lock behavior.  No upper bound is enforced.
+num_reactor_threads  Number of background reactor threads that call
+                      epoll_wait on the shared epoll instance (must be
+                      >= 1).  1 matches this module's original
+                      single-thread behavior exactly.
 mmgmt_procs          Custom memory management procedures, or NULL for
                       default malloc/free.
 err_str               Optional pointer to receive an error string on
@@ -65,17 +82,29 @@ err_str               Optional pointer to receive an error string on
 .nf
 Returns a new event_loop handle on success.
 Returns NULL on failure: max_events_per_wait is 0, num_lock_stripes is 0,
-mmgmt_procs is malformed (some but not all of malloc/calloc/realloc/free
-set), allocation failure, or epoll_create1(2)/eventfd(2)/pthread_create(3)
-failure.
+num_reactor_threads is 0, mmgmt_procs is malformed (some but not all of
+malloc/calloc/realloc/free set), allocation failure, or
+epoll_create1(2)/eventfd(2)/pthread_create(3) failure.
 .fi
 .SH NOTES
 .nf
 Multiple independent event_loop instances may coexist in the same
-process; each owns its own epoll instance, reactor thread, and lock
+process; each owns its own epoll instance, reactor thread(s), and lock
 stripe array, and shares no global state with any other instance
-(including num_lock_stripes itself, which is a genuinely per-instance
-setting).
+(including num_lock_stripes and num_reactor_threads, both genuinely
+per-instance settings).
+
+Performance is workload-dependent, not simply "more threads is always
+faster": measured aggregate dispatch throughput across many distinct
+fds improved substantially from 1 to 4 reactor threads but regressed
+from 4 to 8 in one representative benchmark, and single-connection
+round-trip latency for one hot fd increased by roughly 15-20% once
+more than one reactor thread was configured at all (an inherent cost of
+more sleeper threads sharing one epoll instance), even though that one
+fd's own dispatch was never contended.  num_reactor_threads == 1 remains
+byte-for-byte the original single-thread design; choosing a higher value
+is a genuine tradeoff to measure for your own workload, not a strictly
+better default.
 .fi
 .SH THREAD SAFETY
 .nf

@@ -11,7 +11,7 @@ void __event_loop_destroy(event_loop loop);
 .fi
 .SH DESCRIPTION
 .nf
-Calls event_loop_shutdown() if the caller skipped it (guaranteeing the
+Calls event_loop_shutdown() if the caller skipped it (guaranteeing every
 reactor thread is joined and no dispatch can be in flight before the
 next step), then frees every remaining registration through the same
 per-registration path event_loop_remove() uses.

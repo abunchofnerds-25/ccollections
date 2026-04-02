@@ -1086,11 +1086,12 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
 /**
  * @brief Opaque event_loop structure
  *
- * A persistent, incrementally-mutable epoll(7)-based reactor: one long-lived
- * background thread, one epoll instance created once at construction and
- * mutated (EPOLL_CTL_ADD/MOD/DEL) as registrations come and go, rather than
- * ccol_select's per-call fresh epoll instance that waits for exactly one
- * ready selectable and tears everything down before returning.
+ * A persistent, incrementally-mutable epoll(7)-based reactor: one or more
+ * long-lived background reactor threads (see num_reactor_threads on
+ * event_loop_create_with_mprocs) sharing one epoll instance created once at
+ * construction and mutated (EPOLL_CTL_ADD/MOD/DEL) as registrations come and
+ * go, rather than ccol_select's per-call fresh epoll instance that waits for
+ * exactly one ready selectable and tears everything down before returning.
  *
  * Registrations are built from the same ccol_selectable type ccol_select
  * uses (selectable_from_fd, selectable_from_circq, selectable_from_dynq,
@@ -1098,6 +1099,26 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
  * receive or send itself for any selectable type: the caller always
  * performs its own read()/recv()/circq_try_recv_zc()/dynmq_try_recv_zc()
  * from inside the callback (see event_loop_add's documentation).
+ *
+ * With more than one reactor thread, two correctness properties hold that a
+ * single-threaded reactor gets for free from having only one caller:
+ *  - A single registration's callback(s) are never invoked concurrently with
+ *    themselves, and -- stricter than a bare "no self-concurrency" guarantee
+ *    -- a read registration and a write registration sharing the same fd
+ *    never run concurrently with *each other* either, so a callback pair
+ *    that shares state across both directions on one fd (e.g. one TLS
+ *    connection object) needs no additional locking of its own.
+ *  - Removing a registration and reusing its underlying fd number for an
+ *    unrelated new registration is safe even while other reactor threads
+ *    may still be mid-processing an already-fetched, now-stale epoll_wait
+ *    batch that referenced the old registration: dispatch always validates
+ *    liveness immediately before invoking a callback, so a stale batch entry
+ *    for an already-removed registration is a safe no-op, never a
+ *    use-after-free or a misdirected callback on the new registration.
+ * See event_loop_reg_generation() for the caller-visible identity token this
+ * makes available for a registration's own defensive bookkeeping across fd
+ * reuse -- a separate, additional concern from the two guarantees above,
+ * which hold unconditionally whether or not a caller ever inspects it.
  */
 typedef struct event_loop_s event_loop_s;
 
@@ -1176,10 +1197,12 @@ typedef struct event_handlers {
 /**
  * @brief Create an event_loop with custom memory management
  *
- * Creates a persistent epoll instance and immediately spawns the single
- * background reactor thread that drives it (the thread is ready to dispatch
- * events as soon as this call returns, mirroring create_cthread_pool's
- * "ready to work the moment you get the handle" ergonomics).
+ * Creates a persistent epoll instance and immediately spawns
+ * num_reactor_threads background reactor threads that drive it (every
+ * thread is ready to dispatch events as soon as this call returns,
+ * mirroring create_cthread_pool's "ready to work the moment you get the
+ * handle" ergonomics). Passing 1 reproduces this module's original
+ * single-thread behavior exactly.
  *
  * The fd/entry registry is lock-striped: num_lock_stripes independent
  * (mutex, chmap) pairs, each guarding a disjoint subset of registrations
@@ -1189,16 +1212,23 @@ typedef struct event_handlers {
  * extra array indirection; passing more lets event_loop_add/_remove/_modify
  * calls for different fds/registrations proceed concurrently instead of
  * serializing through one lock, at the cost of num_lock_stripes mutexes and
- * chmaps being allocated up front.
+ * chmaps being allocated up front. This is independent of
+ * num_reactor_threads: the stripe count controls registry contention, the
+ * thread count controls dispatch concurrency.
  *
- * @param max_events_per_wait Size of the epoll_wait batch buffer (must be
- * >= 1); bounds how many ready events the reactor thread drains per
- * epoll_wait call, not the number of registrations the loop can hold
+ * @param max_events_per_wait Size of the epoll_wait batch buffer each
+ * reactor thread uses (must be >= 1); bounds how many ready events a single
+ * epoll_wait call drains, not the number of registrations the loop can hold
  * @param num_lock_stripes Number of independent lock stripes for the fd/
  * entry registry (must be >= 1). 1 matches this module's original
  * single-lock behavior; pass a larger value to reduce
  * event_loop_add/_remove/_modify contention across many different fds/
  * registrations under concurrent use. No upper bound is enforced.
+ * @param num_reactor_threads Number of background reactor threads that call
+ * epoll_wait on the shared epoll instance (must be >= 1). 1 matches this
+ * module's original single-thread behavior exactly. See the event_loop
+ * struct's own doc comment for the two correctness guarantees that hold
+ * regardless of this value.
  * @param mmgmt_procs Custom memory management procedures, or NULL to use
  * default malloc/free
  * @param err_str Optional pointer to receive error string on failure (pass
@@ -1212,6 +1242,7 @@ typedef struct event_handlers {
  */
 event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
                                          size_t num_lock_stripes,
+                                         size_t num_reactor_threads,
                                          ccol_memmgmt_procs_t *mmgmt_procs,
                                          char **err_str);
 
@@ -1221,9 +1252,11 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
  * Convenience macro equivalent to event_loop_create_with_mprocs with
  * mmgmt_procs = NULL.
  */
-#define event_loop_create(max_events_per_wait, num_lock_stripes, err_str)  \
-  event_loop_create_with_mprocs((max_events_per_wait), (num_lock_stripes), \
-                                NULL, (err_str))
+#define event_loop_create(max_events_per_wait, num_lock_stripes,      \
+                          num_reactor_threads, err_str)               \
+  event_loop_create_with_mprocs(                                     \
+      (max_events_per_wait), (num_lock_stripes), (num_reactor_threads), \
+      NULL, (err_str))
 
 /**
  * @brief Register a selectable with the event loop
@@ -1260,6 +1293,40 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
  */
 event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
                           event_handlers_t handlers, void *arg, char **err_str);
+
+/**
+ * @brief Caller-visible identity token for a registration's underlying fd
+ *
+ * A monotonically increasing value, unique loop-wide, minted once when the
+ * fd (or queue/channel bridge) reg belongs to is first registered
+ * (event_loop_add's new-entry path) and shared by every registration on
+ * that same fd for as long as it lives -- including across
+ * event_loop_modify (a direction flip is the same underlying fd/connection,
+ * so it keeps the same generation) and across both a read and a write
+ * registration on the same fd (both share one generation, since they
+ * represent one logical connection).
+ *
+ * This exists for a caller's own defensive bookkeeping across fd reuse
+ * (mirroring what facio's uuid gave callers in this codebase's HTTP
+ * modules): a caller holding onto a connection object across several async
+ * steps can stamp it with the generation it read right after event_loop_add
+ * returned, and later compare against a fresh read to detect whether it's
+ * still reasoning about the same logical connection. It is not required for
+ * basic correctness -- event_loop's own dispatch already validates a
+ * registration's liveness before invoking any callback, unconditionally,
+ * whether or not a caller ever calls this function at all (see the
+ * event_loop struct's own doc comment).
+ *
+ * Safe to call even on an already-removed reg: like event_loop_reg_count's
+ * sibling accessors, this reads a field set once at registration and never
+ * written again, protected by reg's own deferred-free contract rather than
+ * requiring reg to still be live.
+ *
+ * @param reg Registration to query (must not be NULL)
+ * @return The generation value, or 0 if reg is NULL (0 is never a valid
+ * generation for a real registration, since the counter starts at 1)
+ */
+uint64_t event_loop_reg_generation(const event_reg *reg);
 
 /**
  * @brief Change an existing fd registration's direction
@@ -1399,7 +1466,7 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  *
  * Example:
  * @code
- * event_loop_construct(loop, 32, 1);
+ * event_loop_construct(loop, 32, 1, 1);
  * event_reg *r = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
  *                                handlers, NULL, NULL);
  * event_loop_destroy(loop);
@@ -1411,13 +1478,17 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  * @param num_lock_stripes   Number of lock stripes for the fd/entry
  *                           registry (must be >= 1; 1 matches the original
  *                           single-lock behavior)
+ * @param num_reactor_threads Number of background reactor threads (must be
+ *                           >= 1; 1 matches the original single-thread
+ *                           behavior)
  */
-#define event_loop_construct(name, max_events_per_wait, num_lock_stripes) \
+#define event_loop_construct(name, max_events_per_wait, num_lock_stripes, \
+                             num_reactor_threads)                        \
   event_loop name = NULL;                                                 \
   do {                                                                    \
     char *_evl_err = NULL;                                                \
     (name) = event_loop_create((max_events_per_wait), (num_lock_stripes), \
-                               &_evl_err);                                \
+                               (num_reactor_threads), &_evl_err);         \
     if (!(name)) {                                                        \
       fatal_err("event_loop_construct('%s'): %s", #name,                  \
                 _evl_err ? _evl_err : "unknown error");                   \
@@ -1434,14 +1505,17 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  * @param num_lock_stripes   Number of lock stripes for the fd/entry
  *                           registry (must be >= 1; 1 matches the original
  *                           single-lock behavior)
+ * @param num_reactor_threads Number of background reactor threads (must be
+ *                           >= 1; 1 matches the original single-thread
+ *                           behavior)
  */
 #define event_loop_construct_scoped(name, max_events_per_wait,            \
-                                    num_lock_stripes)                     \
+                                    num_lock_stripes, num_reactor_threads) \
   event_loop name _ccol_destructor(___event_loop_destroy) = NULL;         \
   do {                                                                    \
     char *_evl_err = NULL;                                                \
     (name) = event_loop_create((max_events_per_wait), (num_lock_stripes), \
-                               &_evl_err);                                \
+                               (num_reactor_threads), &_evl_err);         \
     if (!(name)) {                                                        \
       fatal_err("event_loop_construct_scoped('%s'): %s", #name,           \
                 _evl_err ? _evl_err : "unknown error");                   \

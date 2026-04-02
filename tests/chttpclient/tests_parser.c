@@ -24,16 +24,23 @@ SOFTWARE.
 
 /*
  * White-box, byte-sequence-level tests for chttp1_parser, exercised directly
- * (no sockets, no TLS, no chttpclient.c at all) with hand-crafted input,
- * including malformed/hostile input the real-socket-based tests.c suite
- * structurally cannot reach (its mock server only ever sends well-formed
- * responses). See tests.c/tests_tls.c for the "does real traffic still
- * work" end-to-end coverage; this file is purely about the parser's own
- * correctness in isolation.
+ * (no TLS, no chttpclient.c at all) with hand-crafted input, including
+ * malformed/hostile input the real-socket-based tests.c suite structurally
+ * cannot reach (its mock server only ever sends well-formed responses). See
+ * tests.c/tests_tls.c for the "does real traffic still work" end-to-end
+ * coverage; this file is purely about the parser's own correctness in
+ * isolation. The "stream" test group (chttp1_stream_t, added alongside
+ * request-mode parsing) does use local AF_UNIX socketpairs, but only to
+ * exercise its own read/write/poll logic directly -- no chttpclient.c, no
+ * TLS, no real network traffic.
  */
 
 #include <chttp1_parser.h>
+#include <ctls.h>
+#include <fcntl.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "../tau/tau.h"
 
@@ -48,6 +55,7 @@ typedef struct {
   bool force_on_header_error;
   bool force_on_body_error;
   bool force_on_headers_complete_error;
+  bool want_divert; /* on_headers_complete returns CHTTP1_HEADERS_DIVERT_BODY */
 
   char header_names[MAX_TEST_HEADERS][256];
   char header_values[MAX_TEST_HEADERS][256];
@@ -58,6 +66,12 @@ typedef struct {
 
   bool headers_complete_called;
   bool message_complete_called;
+
+  /* Request mode only. */
+  bool request_line_called;
+  bool force_on_request_line_error;
+  char method[32];
+  char target[256];
 } test_ctx_t;
 
 static int t_on_header(chttp1_parser_t *p, const char *name, size_t name_len,
@@ -81,7 +95,25 @@ static int t_on_headers_complete(chttp1_parser_t *p) {
   ctx->headers_complete_called = true;
   ctx->status_code = p->status_code;
   if (ctx->force_on_headers_complete_error) return -1;
-  return ctx->is_head ? 1 : 0;
+  if (ctx->want_divert) return CHTTP1_HEADERS_DIVERT_BODY;
+  return ctx->is_head ? CHTTP1_HEADERS_NO_BODY : CHTTP1_HEADERS_HAS_BODY;
+}
+
+static int t_on_request_line(chttp1_parser_t *p, const char *method,
+                             size_t method_len, const char *target,
+                             size_t target_len) {
+  test_ctx_t *ctx = (test_ctx_t *)p->data;
+  ctx->request_line_called = true;
+  if (ctx->force_on_request_line_error) return 1;
+  size_t ml = method_len < sizeof(ctx->method) - 1 ? method_len
+                                                   : sizeof(ctx->method) - 1;
+  memcpy(ctx->method, method, ml);
+  ctx->method[ml] = '\0';
+  size_t tl = target_len < sizeof(ctx->target) - 1 ? target_len
+                                                   : sizeof(ctx->target) - 1;
+  memcpy(ctx->target, target, tl);
+  ctx->target[tl] = '\0';
+  return 0;
 }
 
 static int t_on_body(chttp1_parser_t *p, const char *at, size_t len) {
@@ -115,6 +147,21 @@ static const chttp1_settings_t g_test_settings = {
 static void init_test(chttp1_parser_t *parser, test_ctx_t *ctx) {
   memset(ctx, 0, sizeof(*ctx));
   chttp1_parser_init(parser, &g_test_settings);
+  parser->data = ctx;
+}
+
+/* Same static-storage-duration rationale as g_test_settings above. */
+static const chttp1_settings_t g_test_request_settings = {
+    .on_request_line = t_on_request_line,
+    .on_header = t_on_header,
+    .on_headers_complete = t_on_headers_complete,
+    .on_body = t_on_body,
+    .on_message_complete = t_on_message_complete,
+};
+
+static void init_test_request(chttp1_parser_t *parser, test_ctx_t *ctx) {
+  memset(ctx, 0, sizeof(*ctx));
+  chttp1_parser_init_request(parser, &g_test_request_settings);
   parser->data = ctx;
 }
 
@@ -444,6 +491,39 @@ TEST(headers, total_header_bytes_cap_rejected) {
     REQUIRE_EQ(rv, CHTTP1_OK);
   }
   REQUIRE_TRUE(got_error);
+}
+
+TEST(headers, max_header_count_override_rejects_below_builtin_default) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  parser.max_header_count_override = 2; /* well under the 100 builtin default */
+
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nX-A: 1\r\nX-B: 2\r\nX-C: 3\r\n\r\n"; /* 3 headers */
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(headers, max_header_count_override_allows_up_to_the_override) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  parser.max_header_count_override = 4; /* X-A/X-B/X-C plus Content-Length */
+
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nX-A: 1\r\nX-B: 2\r\nX-C: 3\r\nContent-Length: 0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+}
+
+TEST(headers, max_total_header_bytes_override_rejects_below_builtin_default) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  parser.max_total_header_bytes_override = 32; /* well under the 64KB default */
+
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nX-Long-Header-Name: some longer value here\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
 }
 
 /* ========================================================================== */
@@ -879,4 +959,623 @@ TEST(misc, zero_length_execute_is_a_defined_noop) {
   REQUIRE_EQ(chttp1_parser_execute(&parser, "", 0), CHTTP1_OK);
   const char *msg = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+}
+
+/* ========================================================================== */
+/*                     REQUEST LINE (request mode)                           */
+/* ========================================================================== */
+
+TEST(request_line, basic_get_no_body) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path HTTP/1.1\r\nHost: x\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.request_line_called);
+  REQUIRE_STREQ(ctx.method, "GET");
+  REQUIRE_STREQ(ctx.target, "/path");
+  REQUIRE_EQ(parser.http_major, 1);
+  REQUIRE_EQ(parser.http_minor, 1);
+  REQUIRE_TRUE(ctx.message_complete_called);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+}
+
+TEST(request_line, post_with_content_length_body) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "POST /submit HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(ctx.method, "POST");
+  REQUIRE_STREQ(ctx.target, "/submit");
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+  REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
+}
+
+TEST(request_line, query_string_preserved_in_target) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path?a=1&b=2 HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(ctx.target, "/path?a=1&b=2");
+}
+
+TEST(request_line, asterisk_target_accepted) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "OPTIONS * HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(ctx.method, "OPTIONS");
+  REQUIRE_STREQ(ctx.target, "*");
+}
+
+TEST(request_line, http_1_0_request_accepted) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET / HTTP/1.0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_EQ(parser.http_major, 1);
+  REQUIRE_EQ(parser.http_minor, 0);
+}
+
+TEST(request_line, invalid_method_char_rejected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GE/T /path HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(request_line, missing_target_rejected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(request_line, missing_version_rejected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(request_line, bad_version_rejected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path FOO/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(request_line, control_char_in_target_rejected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /pa\x01th HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(request_line, on_request_line_callback_error_reports_user) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  ctx.force_on_request_line_error = true;
+  const char *msg = "GET /path HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_USER);
+}
+
+TEST(request_line, split_across_every_byte_boundary) {
+  const char *msg = "PUT /a/b/c HTTP/1.1\r\nContent-Length: 3\r\n\r\nxyz";
+  size_t len = strlen(msg);
+  for (size_t split = 0; split <= len; split++) {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test_request(&parser, &ctx);
+    chttp1_errno_t r1 = chttp1_parser_execute(&parser, msg, split);
+    if (r1 == CHTTP1_PAUSED) {
+      REQUIRE_EQ(split, len);
+      continue;
+    }
+    REQUIRE_EQ(r1, CHTTP1_OK);
+    chttp1_errno_t r2 =
+        chttp1_parser_execute(&parser, msg + split, len - split);
+    REQUIRE_EQ(r2, CHTTP1_PAUSED);
+  }
+}
+
+/* ========================================================================== */
+/*        REQUEST-MODE BODY FRAMING (RFC 7230 SS3.3 asymmetry vs response)   */
+/* ========================================================================== */
+
+TEST(request_body_framing, no_framing_headers_means_no_body_not_eof) {
+  /* Unlike a response, a request with neither Content-Length nor chunked
+   * Transfer-Encoding has NO body at all -- the message completes
+   * immediately after headers, it does not wait for EOF (there would be
+   * nothing to wait for anyway; the connection isn't closing). */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path HTTP/1.1\r\nHost: x\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.message_complete_called);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+}
+
+TEST(request_body_framing, content_length_zero_completes_immediately) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "POST /x HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+}
+
+TEST(request_body_framing, chunked_request_body) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+  REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
+}
+
+TEST(request_body_framing, trailer_name_not_whitelisted) {
+  /* Confirmed decision: no facio-style x-/server-timing trailer whitelist
+   * for requests -- any trailer name is accepted, matching the client
+   * parser's own pre-existing, unrestricted trailer handling. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n"
+      "5\r\nhello\r\n0\r\nCustom-Trailer: allowed\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(find_header(&ctx, "Custom-Trailer"), "allowed");
+}
+
+/* ========================================================================== */
+/*              HEADERS-COMPLETE BODY DIVERSION (CHTTP1_HEADERS_ONLY)        */
+/* ========================================================================== */
+
+TEST(divert, content_length_body_diverts_before_consuming) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  ctx.want_divert = true;
+  const char *headers = "POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
+            CHTTP1_HEADERS_ONLY);
+  REQUIRE_EQ(chttp1_parser_consumed(&parser), strlen(headers));
+  REQUIRE_FALSE(ctx.message_complete_called);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+
+  const char *body = "hello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, body, strlen(body)),
+            CHTTP1_PAUSED);
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+  REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
+}
+
+TEST(divert, body_already_in_same_buffer_is_not_consumed_by_divert) {
+  /* The critical carry-over case: header block AND body bytes arrive in
+   * the SAME chttp1_parser_execute call. Diversion must still stop exactly
+   * at the header boundary, leaving the body bytes unconsumed for the
+   * caller to hand off as carry-over -- not swallow them into on_body
+   * simply because they happened to already be available. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  ctx.want_divert = true;
+  const char *headers = "POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\n";
+  const char *whole = "POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, whole, strlen(whole)),
+            CHTTP1_HEADERS_ONLY);
+  REQUIRE_EQ(chttp1_parser_consumed(&parser), strlen(headers));
+  REQUIRE_FALSE(ctx.message_complete_called);
+  REQUIRE_EQ(ctx.body_len, (size_t)0);
+
+  size_t consumed = chttp1_parser_consumed(&parser);
+  const char *leftover = whole + consumed;
+  size_t leftover_len = strlen(whole) - consumed;
+  REQUIRE_EQ(leftover_len, (size_t)5);
+  REQUIRE_EQ(chttp1_parser_execute(&parser, leftover, leftover_len),
+            CHTTP1_PAUSED);
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+  REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
+}
+
+TEST(divert, chunked_body_diverts_before_consuming) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  ctx.want_divert = true;
+  const char *headers =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
+            CHTTP1_HEADERS_ONLY);
+  REQUIRE_EQ(chttp1_parser_consumed(&parser), strlen(headers));
+
+  const char *rest = "5\r\nhello\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, rest, strlen(rest)),
+            CHTTP1_PAUSED);
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+  REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
+}
+
+TEST(divert, no_body_downgrades_to_immediate_complete) {
+  /* Nothing to divert (no Content-Length, no chunked): want_divert is
+   * downgraded to ordinary immediate completion instead of pausing. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  ctx.want_divert = true;
+  const char *msg = "GET /path HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.message_complete_called);
+}
+
+TEST(divert, content_length_zero_downgrades_to_immediate_complete) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  ctx.want_divert = true;
+  const char *msg = "POST /x HTTP/1.1\r\nContent-Length: 0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.message_complete_called);
+}
+
+TEST(divert, response_mode_rejects_divert_hint) {
+  /* CHTTP1_HEADERS_DIVERT_BODY is request-mode only; a response-mode parser
+   * treats it as an invalid hint (there is no worker-thread diversion
+   * concept for chttpclient.c to hand off to). */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  ctx.want_divert = true;
+  const char *msg = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_USER);
+}
+
+/* ========================================================================== */
+/*                     EXPECT: 100-CONTINUE DETECTION                        */
+/* ========================================================================== */
+
+TEST(expect_continue, detected_with_body) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n"
+      "hello";
+  REQUIRE_FALSE(chttp1_expects_continue(&parser));
+  chttp1_parser_execute(&parser, msg, strlen(msg));
+  REQUIRE_TRUE(chttp1_expects_continue(&parser));
+}
+
+TEST(expect_continue, absent_by_default) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path HTTP/1.1\r\n\r\n";
+  chttp1_parser_execute(&parser, msg, strlen(msg));
+  REQUIRE_FALSE(chttp1_expects_continue(&parser));
+}
+
+TEST(expect_continue, other_expect_value_not_detected) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path HTTP/1.1\r\nExpect: something-else\r\n\r\n";
+  chttp1_parser_execute(&parser, msg, strlen(msg));
+  REQUIRE_FALSE(chttp1_expects_continue(&parser));
+}
+
+TEST(expect_continue, works_with_divert) {
+  /* The whole point: a caller diverting body ingestion to a worker thread
+   * still needs to know, at CHTTP1_HEADERS_ONLY time, whether to have
+   * already written a "100 Continue" interim response. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  ctx.want_divert = true;
+  const char *headers =
+      "POST /x HTTP/1.1\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
+            CHTTP1_HEADERS_ONLY);
+  REQUIRE_TRUE(chttp1_expects_continue(&parser));
+}
+
+/* ========================================================================== */
+/*                WORKER-PULL STREAMING (chttp1_stream_t)                    */
+/* ========================================================================== */
+
+static void make_pair(int fds[2]) {
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
+}
+
+/* Non-blocking variant, required for the stream_tls tests below: a TLS
+ * handshake driven by tls_drive_handshake()'s single-threaded ping-pong
+ * loop (call one side's step, then the other's, repeat) deadlocks on a
+ * blocking socketpair -- SSL_accept/SSL_connect's internal BIO_read can
+ * itself block waiting for bytes the peer never gets a chance to send,
+ * since driving that peer's own step is exactly what this thread would do
+ * next, if it weren't already stuck. Confirmed via gdb (a real hang
+ * reproduced during this test's own development, not a hypothetical): the
+ * backtrace showed ctls_conn_handshake_step blocked inside a plain
+ * BIO_read -> read(2) syscall. The plaintext "stream" tests above don't
+ * need this: they always gate any read/write with chttp1_stream_read/
+ * _write's own poll(2) call first (or, for the handful of direct read(2)/
+ * write(2) calls, only ever touch a fd after the peer has already
+ * synchronously written to it in the same thread), so blocking-mode
+ * sockets never actually block there. */
+static void make_nonblocking_pair(int fds[2]) {
+  make_pair(fds);
+  for (int i = 0; i < 2; i++) {
+    int flags = fcntl(fds[i], F_GETFL, 0);
+    fcntl(fds[i], F_SETFL, flags | O_NONBLOCK);
+  }
+}
+
+TEST(stream, prepare_no_leftover) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  REQUIRE_EQ(s.carry_len, (size_t)0);
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+TEST(stream, leftover_drained_before_touching_fd) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "hello", 5));
+
+  char buf[3] = {0};
+  REQUIRE_EQ(chttp1_stream_read(&s, buf, 3, 100), (ssize_t)3);
+  REQUIRE_EQ(memcmp(buf, "hel", 3), 0);
+
+  char buf2[10] = {0};
+  REQUIRE_EQ(chttp1_stream_read(&s, buf2, 10, 100), (ssize_t)2);
+  REQUIRE_EQ(memcmp(buf2, "lo", 2), 0);
+
+  /* Carry-over now fully drained; confirm a further read reaches the real
+   * fd rather than returning more (nonexistent) carry-over. */
+  REQUIRE_EQ(write(fds[1], "X", 1), (ssize_t)1);
+  char buf3[4] = {0};
+  REQUIRE_EQ(chttp1_stream_read(&s, buf3, sizeof(buf3), 1000), (ssize_t)1);
+  REQUIRE_EQ(buf3[0], 'X');
+
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+TEST(stream, read_real_fd_no_leftover) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  REQUIRE_EQ(write(fds[1], "abc", 3), (ssize_t)3);
+  char buf[8] = {0};
+  REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 1000), (ssize_t)3);
+  REQUIRE_EQ(memcmp(buf, "abc", 3), 0);
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+TEST(stream, read_eof_when_peer_closes) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  close(fds[1]);
+  char buf[8];
+  REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 1000), (ssize_t)0);
+  chttp1_stream_release(&s);
+  close(fds[0]);
+}
+
+TEST(stream, read_timeout_when_nothing_available) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  char buf[8];
+  REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 50), (ssize_t)-1);
+  REQUIRE_TRUE(chttp1_stream_timed_out(&s));
+  REQUIRE_EQ(chttp1_stream_last_error(&s), 0);
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+TEST(stream, write_basic) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[1], NULL, 0));
+  REQUIRE_EQ(chttp1_stream_write(&s, "hi", 2, 1000), (ssize_t)2);
+  char buf[4] = {0};
+  REQUIRE_EQ(read(fds[0], buf, sizeof(buf)), (ssize_t)2);
+  REQUIRE_EQ(memcmp(buf, "hi", 2), 0);
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+TEST(stream, read_error_on_bad_fd) {
+  /* A negative fd is specially ignored by poll(2) itself (POSIX: an entry
+   * with fd < 0 is never reported ready, so it would just silently time
+   * out here, not error) -- a real invalid-fd error needs a syntactically
+   * valid but already-closed fd number instead, which poll(2) reports
+   * ready with POLLNVAL for, and the subsequent read(2) then genuinely
+   * fails with EBADF. */
+  int fds[2];
+  make_pair(fds);
+  int bad_fd = fds[0];
+  close(fds[0]);
+  close(fds[1]);
+
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, bad_fd, NULL, 0));
+  char buf[8];
+  ssize_t r = chttp1_stream_read(&s, buf, sizeof(buf), 1000);
+  REQUIRE_EQ(r, (ssize_t)-1);
+  REQUIRE_FALSE(chttp1_stream_timed_out(&s));
+  REQUIRE_NE(chttp1_stream_last_error(&s), 0);
+  chttp1_stream_release(&s);
+}
+
+TEST(stream, release_is_idempotent) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "x", 1));
+  chttp1_stream_release(&s);
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+/* ========================================================================== */
+/*              WORKER-PULL STREAMING OVER A REAL TLS CONNECTION             */
+/* ========================================================================== */
+
+static bool tls_drive_handshake(ctls_conn_t *a, ctls_conn_t *b) {
+  bool a_done = false, b_done = false;
+  for (int i = 0; i < 200 && !(a_done && b_done); i++) {
+    if (!a_done) {
+      ctls_handshake_result_t r = ctls_conn_handshake_step(a);
+      if (r == CTLS_HANDSHAKE_DONE) a_done = true;
+      if (r == CTLS_HANDSHAKE_ERROR) return false;
+    }
+    if (!b_done) {
+      ctls_handshake_result_t r = ctls_conn_handshake_step(b);
+      if (r == CTLS_HANDSHAKE_DONE) b_done = true;
+      if (r == CTLS_HANDSHAKE_ERROR) return false;
+    }
+  }
+  return a_done && b_done;
+}
+
+TEST(stream_tls, read_over_real_tls_connection) {
+  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
+            ccol_success);
+  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+
+  int fds[2];
+  make_nonblocking_pair(fds);
+  ctls_conn_t *server_conn =
+      ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
+  ctls_conn_t *client_conn =
+      ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
+  REQUIRE_TRUE(tls_drive_handshake(client_conn, server_conn));
+
+  REQUIRE_EQ(ctls_conn_write(client_conn, "hello", 5), (ssize_t)5);
+
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare_tls(&s, fds[0], server_conn, NULL, 0));
+  char buf[16] = {0};
+  ssize_t got = -1;
+  for (int i = 0; i < 100 && got <= 0; i++)
+    got = chttp1_stream_read(&s, buf, sizeof(buf), 1000);
+  REQUIRE_EQ(got, (ssize_t)5);
+  REQUIRE_EQ(memcmp(buf, "hello", 5), 0);
+
+  chttp1_stream_release(&s);
+  ctls_conn_destroy(client_conn);
+  ctls_conn_destroy(server_conn);
+  close(fds[0]);
+  close(fds[1]);
+  ctls_ctx_release(client_ctx);
+  ctls_ctx_release(server_ctx);
+}
+
+TEST(stream_tls, write_over_real_tls_connection) {
+  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
+            ccol_success);
+  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+
+  int fds[2];
+  make_nonblocking_pair(fds);
+  ctls_conn_t *server_conn =
+      ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
+  ctls_conn_t *client_conn =
+      ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
+  REQUIRE_TRUE(tls_drive_handshake(client_conn, server_conn));
+
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare_tls(&s, fds[0], server_conn, NULL, 0));
+  REQUIRE_EQ(chttp1_stream_write(&s, "response body", 14, 1000), (ssize_t)14);
+
+  char buf[32] = {0};
+  ssize_t got = -1;
+  for (int i = 0; i < 100 && got <= 0; i++)
+    got = ctls_conn_read(client_conn, buf, sizeof(buf));
+  REQUIRE_EQ(got, (ssize_t)14);
+  REQUIRE_EQ(memcmp(buf, "response body", 14), 0);
+
+  chttp1_stream_release(&s);
+  ctls_conn_destroy(client_conn);
+  ctls_conn_destroy(server_conn);
+  close(fds[0]);
+  close(fds[1]);
+  ctls_ctx_release(client_ctx);
+  ctls_ctx_release(server_ctx);
+}
+
+TEST(stream_tls, leftover_decrypted_bytes_drained_before_ctls_conn_read) {
+  /* Mirrors the plaintext carry-over test: leftover bytes here represent
+   * already-decrypted application bytes the reactor thread would have
+   * produced via ctls_conn_read() during its own header-parsing loop --
+   * chttp1_stream_prepare_tls's leftover argument is never raw wire bytes. */
+  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
+            ccol_success);
+  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+
+  int fds[2];
+  make_nonblocking_pair(fds);
+  ctls_conn_t *server_conn =
+      ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
+  ctls_conn_t *client_conn =
+      ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
+  REQUIRE_TRUE(tls_drive_handshake(client_conn, server_conn));
+
+  chttp1_stream_t s;
+  REQUIRE_TRUE(
+      chttp1_stream_prepare_tls(&s, fds[0], server_conn, "carried", 7));
+  char buf[16] = {0};
+  REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 1000), (ssize_t)7);
+  REQUIRE_EQ(memcmp(buf, "carried", 7), 0);
+
+  REQUIRE_EQ(ctls_conn_write(client_conn, "next", 4), (ssize_t)4);
+  char buf2[16] = {0};
+  ssize_t got = -1;
+  for (int i = 0; i < 100 && got <= 0; i++)
+    got = chttp1_stream_read(&s, buf2, sizeof(buf2), 1000);
+  REQUIRE_EQ(got, (ssize_t)4);
+  REQUIRE_EQ(memcmp(buf2, "next", 4), 0);
+
+  chttp1_stream_release(&s);
+  ctls_conn_destroy(client_conn);
+  ctls_conn_destroy(server_conn);
+  close(fds[0]);
+  close(fds[1]);
+  ctls_ctx_release(client_ctx);
+  ctls_ctx_release(server_ctx);
 }

@@ -1,7 +1,9 @@
 #include <assert.h>
 #include <cthreadcomm.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -2268,11 +2270,31 @@ static bool evl_wait_for(evl_sync_ctx *c, int *counter_field, int target,
   return ok;
 }
 
+/* Several of the multi-thread tests below have their on_readable callback
+ * perform its own read() directly (rather than deferring consumption to the
+ * single-threaded test driver, as evl_on_readable's own fd-selectable path
+ * already documents doing for exactly this reason), specifically to mimic
+ * how a real production callback behaves under genuinely concurrent
+ * dispatch. That makes a *blocking* read unsafe: event_loop's own
+ * documentation already warns a callback's receive call "may find nothing,
+ * and must handle that gracefully" -- a plain blocking read() on an fd with
+ * nothing left to read, and no writer left to ever produce more (e.g. once
+ * every feeder/driver thread in a test has already finished), is not
+ * graceful, it hangs the reactor thread that called it forever, which in
+ * turn hangs event_loop_shutdown's join on that thread -- a real deadlock
+ * reproduced (via gdb thread-apply-all-bt on a stuck test process) during
+ * this test suite's own development. Setting O_NONBLOCK makes "nothing
+ * available" return -1/EAGAIN immediately instead. */
+static void evl_set_nonblocking(int fd) {
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+
 // --- event_loop tests ---
 
 TEST(event_loop, create_destroy) {
   char *err = NULL;
-  event_loop loop = event_loop_create(8, 1, &err);
+  event_loop loop = event_loop_create(8, 1, 1, &err);
   REQUIRE_NE((void *)loop, NULL);
   REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
   event_loop_destroy(loop);
@@ -2281,7 +2303,7 @@ TEST(event_loop, create_destroy) {
 
 TEST(event_loop, create_destroy_scoped) {
   {
-    event_loop_construct_scoped(loop, 8, 1);
+    event_loop_construct_scoped(loop, 8, 1, 1);
     REQUIRE_NE((void *)loop, NULL);
   }
   /* loop was destroyed at scope exit; nothing to assert beyond "no crash,
@@ -2291,30 +2313,56 @@ TEST(event_loop, create_destroy_scoped) {
 TEST(event_loop, fd_on_readable_fires) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  event_loop_construct_scoped(loop, 8, 1);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  event_handlers_t handlers = {
-      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  char *err = NULL;
-  event_reg *reg = event_loop_add(
-      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
-  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+  bool last_msg_valid;
 
-  int val = 42;
-  REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+  {
+    /* Nested block: see the multi-thread tests' identical pattern (e.g.
+     * fd_modify_flips_direction_and_updates_sel's own comment for the full
+     * explanation). evl_on_readable never drains an fd selectable's data
+     * (by design -- the caller reads sel->fd itself, as this test does
+     * below), so once pfd[0] becomes readable it stays level-triggered-
+     * ready and the reactor thread keeps re-dispatching indefinitely until
+     * the registration is removed; ctx must not be destroyed, nor may this
+     * function return, until that's guaranteed to have stopped, which only
+     * this block's join guarantees. */
+    event_loop_construct_scoped(loop, 8, 1, 1);
 
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+    event_handlers_t handlers = {
+        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+    char *err = NULL;
+    event_reg *reg = event_loop_add(
+        loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
+        &err);
+    REQUIRE_NE((void *)reg, NULL);
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+
+    int val = 42;
+    REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+    /* Read under ctx.mtx, not unprotected -- see fd_modify_flips_direction_
+     * and_updates_sel's identical last_dir_seen fix for why. */
+    pthread_mutex_lock(&ctx.mtx);
+    last_msg_valid = ctx.last_msg_valid;
+    pthread_mutex_unlock(&ctx.mtx);
+
+    char rbuf[16];
+    ssize_t n = read(pfd[0], rbuf, sizeof(rbuf));
+    REQUIRE_EQ(n, (ssize_t)sizeof(val));
+    REQUIRE_EQ(*(int *)rbuf, 42);
+
+    event_loop_remove(loop, reg);
+
+    /* loop shuts down and its one reactor thread is joined here, at block
+     * exit -- ctx is guaranteed quiescent from this point on. */
+  }
+
   /* fd selectables never get msg populated -- caller reads sel->fd itself. */
-  REQUIRE_FALSE(ctx.last_msg_valid);
-  char rbuf[16];
-  ssize_t n = read(pfd[0], rbuf, sizeof(rbuf));
-  REQUIRE_EQ(n, (ssize_t)sizeof(val));
-  REQUIRE_EQ(*(int *)rbuf, 42);
+  REQUIRE_FALSE(last_msg_valid);
 
-  event_loop_remove(loop, reg);
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
@@ -2323,22 +2371,31 @@ TEST(event_loop, fd_on_readable_fires) {
 TEST(event_loop, fd_on_writable_fires) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  event_loop_construct_scoped(loop, 8, 1);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  event_handlers_t handlers = {
-      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
-  char *err = NULL;
-  event_reg *reg =
-      event_loop_add(loop, selectable_from_fd(pfd[1], ccol_select_write),
-                     handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
 
-  /* A fresh pipe write end is always immediately writable. */
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+  {
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment.
+     * A fresh pipe write end stays writable indefinitely (nothing ever
+     * fills its buffer), so the reactor thread keeps re-dispatching until
+     * removed. */
+    event_loop_construct_scoped(loop, 8, 1, 1);
 
-  event_loop_remove(loop, reg);
+    event_handlers_t handlers = {
+        .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+    char *err = NULL;
+    event_reg *reg =
+        event_loop_add(loop, selectable_from_fd(pfd[1], ccol_select_write),
+                       handlers, &ctx, &err);
+    REQUIRE_NE((void *)reg, NULL);
+
+    /* A fresh pipe write end is always immediately writable. */
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+
+    event_loop_remove(loop, reg);
+  }
+
   evl_sync_ctx_destroy(&ctx);
   close(pfd[0]);
   close(pfd[1]);
@@ -2351,37 +2408,49 @@ TEST(event_loop, fd_both_directions_combine_and_recombine) {
    * on partial removal). */
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-  event_loop_construct_scoped(loop, 8, 1);
 
   evl_sync_ctx read_ctx, write_ctx;
   evl_sync_ctx_init(&read_ctx);
   evl_sync_ctx_init(&write_ctx);
-  event_handlers_t rh = {
-      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  event_handlers_t wh = {
-      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
-  char *err = NULL;
-  event_reg *rreg = event_loop_add(
-      loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
-  REQUIRE_NE((void *)rreg, NULL);
-  event_reg *wreg = event_loop_add(
-      loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx, &err);
-  REQUIRE_NE((void *)wreg, NULL);
-  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)2);
 
-  /* sv[0] is immediately writable (empty send buffer). */
-  REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
+  {
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment --
+     * both directions here stay level-triggered-ready indefinitely (sv[0]'s
+     * read side is never drained by evl_on_readable; its write side never
+     * fills up), so both ctx's must outlive every reactor thread, not just
+     * their own event_loop_remove call. */
+    event_loop_construct_scoped(loop, 8, 1, 1);
 
-  /* Remove the write direction (MOD-back-down path); read direction must
-   * keep working afterward. */
-  REQUIRE_EQ(event_loop_remove(loop, wreg), ccol_success);
-  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+    event_handlers_t rh = {
+        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+    event_handlers_t wh = {
+        .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+    char *err = NULL;
+    event_reg *rreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
+        &err);
+    REQUIRE_NE((void *)rreg, NULL);
+    event_reg *wreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
+        &err);
+    REQUIRE_NE((void *)wreg, NULL);
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)2);
 
-  int val = 7;
-  REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
-  REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+    /* sv[0] is immediately writable (empty send buffer). */
+    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
 
-  event_loop_remove(loop, rreg);
+    /* Remove the write direction (MOD-back-down path); read direction must
+     * keep working afterward. */
+    REQUIRE_EQ(event_loop_remove(loop, wreg), ccol_success);
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+
+    int val = 7;
+    REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
+    REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+
+    event_loop_remove(loop, rreg);
+  }
+
   evl_sync_ctx_destroy(&read_ctx);
   evl_sync_ctx_destroy(&write_ctx);
   close(sv[0]);
@@ -2396,37 +2465,45 @@ TEST(event_loop, fd_simultaneous_readable_and_writable) {
    * event_entry, which would have silently delivered only one of the two. */
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-  event_loop_construct_scoped(loop, 8, 1);
 
   evl_sync_ctx read_ctx, write_ctx;
   evl_sync_ctx_init(&read_ctx);
   evl_sync_ctx_init(&write_ctx);
-  event_handlers_t rh = {
-      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  event_handlers_t wh = {
-      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
-  char *err = NULL;
-  event_reg *rreg = event_loop_add(
-      loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
-  REQUIRE_NE((void *)rreg, NULL);
-  event_reg *wreg = event_loop_add(
-      loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx, &err);
-  REQUIRE_NE((void *)wreg, NULL);
 
-  /* Drain the initial "immediately writable" dispatch before writing data,
-   * so the later wait unambiguously observes the combined batch. */
-  REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
+  {
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment. */
+    event_loop_construct_scoped(loop, 8, 1, 1);
 
-  int val = 99;
-  REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
+    event_handlers_t rh = {
+        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+    event_handlers_t wh = {
+        .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+    char *err = NULL;
+    event_reg *rreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
+        &err);
+    REQUIRE_NE((void *)rreg, NULL);
+    event_reg *wreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
+        &err);
+    REQUIRE_NE((void *)wreg, NULL);
 
-  REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
-  /* sv[0] remains writable the whole time (nothing filled its send buffer),
-   * so the writable callback should have fired again too. */
-  REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 2, 2000));
+    /* Drain the initial "immediately writable" dispatch before writing data,
+     * so the later wait unambiguously observes the combined batch. */
+    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
 
-  event_loop_remove(loop, rreg);
-  event_loop_remove(loop, wreg);
+    int val = 99;
+    REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
+
+    REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+    /* sv[0] remains writable the whole time (nothing filled its send
+     * buffer), so the writable callback should have fired again too. */
+    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 2, 2000));
+
+    event_loop_remove(loop, rreg);
+    event_loop_remove(loop, wreg);
+  }
+
   evl_sync_ctx_destroy(&read_ctx);
   evl_sync_ctx_destroy(&write_ctx);
   close(sv[0]);
@@ -2436,30 +2513,42 @@ TEST(event_loop, fd_simultaneous_readable_and_writable) {
 TEST(event_loop, fd_on_error_fires_for_both_directions) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-  event_loop_construct_scoped(loop, 8, 1);
 
   evl_sync_ctx read_ctx, write_ctx;
   evl_sync_ctx_init(&read_ctx);
   evl_sync_ctx_init(&write_ctx);
-  event_handlers_t rh = {
-      .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
-  event_handlers_t wh = {
-      .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
-  char *err = NULL;
-  event_reg *rreg = event_loop_add(
-      loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
-  REQUIRE_NE((void *)rreg, NULL);
-  event_reg *wreg = event_loop_add(
-      loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx, &err);
-  REQUIRE_NE((void *)wreg, NULL);
 
-  close(sv[1]); /* peer hangs up */
+  {
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment --
+     * an EPOLLHUP/ERR condition from a hung-up peer persists (level-
+     * triggered) until the fd is removed, exactly like an undrained
+     * readable/writable fd, so the reactor thread keeps re-dispatching
+     * on_error until then. */
+    event_loop_construct_scoped(loop, 8, 1, 1);
 
-  REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.error_count, 1, 2000));
-  REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.error_count, 1, 2000));
+    event_handlers_t rh = {
+        .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
+    event_handlers_t wh = {
+        .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
+    char *err = NULL;
+    event_reg *rreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
+        &err);
+    REQUIRE_NE((void *)rreg, NULL);
+    event_reg *wreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
+        &err);
+    REQUIRE_NE((void *)wreg, NULL);
 
-  event_loop_remove(loop, rreg);
-  event_loop_remove(loop, wreg);
+    close(sv[1]); /* peer hangs up */
+
+    REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.error_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.error_count, 1, 2000));
+
+    event_loop_remove(loop, rreg);
+    event_loop_remove(loop, wreg);
+  }
+
   evl_sync_ctx_destroy(&read_ctx);
   evl_sync_ctx_destroy(&write_ctx);
   close(sv[0]);
@@ -2468,7 +2557,7 @@ TEST(event_loop, fd_on_error_fires_for_both_directions) {
 TEST(event_loop, fd_duplicate_direction_rejected) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
@@ -2491,7 +2580,7 @@ TEST(event_loop, fd_duplicate_direction_rejected) {
 TEST(event_loop, fd_modify_rejects_occupied_direction) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
@@ -2516,27 +2605,60 @@ TEST(event_loop, fd_modify_rejects_occupied_direction) {
 TEST(event_loop, fd_modify_flips_direction_and_updates_sel) {
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-  event_loop_construct_scoped(loop, 8, 1);
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  event_handlers_t handlers = {.on_readable = evl_on_readable,
-                               .on_writable = evl_on_writable,
-                               .on_error = NULL};
-  char *err = NULL;
-  event_reg *reg = event_loop_add(
-      loop, selectable_from_fd(sv[0], ccol_select_write), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+  ccol_select_dir last_dir_seen;
 
-  REQUIRE_EQ(event_loop_modify(loop, reg, ccol_select_read), ccol_success);
+  {
+    /* Nested block: see the other multi-thread tests' identical pattern.
+     * evl_on_readable never drains sv[0] for this fd selectable (nothing in
+     * this test reads it), so once sv[0] becomes readable it stays
+     * level-triggered-ready and the reactor thread keeps re-dispatching
+     * indefinitely until the registration is removed -- ctx must not be
+     * destroyed, nor may this function return (freeing ctx's stack slot),
+     * until that's guaranteed to have actually stopped, which only this
+     * block's join guarantees. */
+    event_loop_construct_scoped(loop, 8, 1, 1);
 
-  int val = 5;
-  REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
-  REQUIRE_EQ((int)ctx.last_dir_seen, (int)ccol_select_read);
+    event_handlers_t handlers = {.on_readable = evl_on_readable,
+                                 .on_writable = evl_on_writable,
+                                 .on_error = NULL};
+    char *err = NULL;
+    event_reg *reg = event_loop_add(loop,
+                                    selectable_from_fd(sv[0], ccol_select_write),
+                                    handlers, &ctx, &err);
+    REQUIRE_NE((void *)reg, NULL);
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
 
-  event_loop_remove(loop, reg);
+    REQUIRE_EQ(event_loop_modify(loop, reg, ccol_select_read), ccol_success);
+
+    int val = 5;
+    REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+
+    /* Read under ctx.mtx directly rather than through evl_wait_for's
+     * counter-only contract: evl_on_readable can (and, since it never
+     * drains sv[0] here, will) keep re-writing last_dir_seen for as long as
+     * the registration stays live and the reactor thread keeps
+     * re-dispatching, so a plain unprotected read immediately after
+     * evl_wait_for returns races those ongoing writes -- a real,
+     * pre-existing bug ThreadSanitizer caught here despite
+     * num_reactor_threads == 1 (this has nothing to do with multi-threaded
+     * dispatch; a single reactor thread re-dispatching a never-drained
+     * level-triggered fd is enough on its own). */
+    pthread_mutex_lock(&ctx.mtx);
+    last_dir_seen = ctx.last_dir_seen;
+    pthread_mutex_unlock(&ctx.mtx);
+
+    event_loop_remove(loop, reg);
+
+    /* loop shuts down and its one reactor thread is joined here, at block
+     * exit -- ctx is guaranteed quiescent from this point on. */
+  }
+
+  REQUIRE_EQ((int)last_dir_seen, (int)ccol_select_read);
+
   evl_sync_ctx_destroy(&ctx);
   close(sv[0]);
   close(sv[1]);
@@ -2545,7 +2667,7 @@ TEST(event_loop, fd_modify_flips_direction_and_updates_sel) {
 TEST(event_loop, fd_modify_after_remove_returns_invalid_args) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
@@ -2563,7 +2685,7 @@ TEST(event_loop, fd_modify_after_remove_returns_invalid_args) {
 }
 
 TEST(event_loop, queue_circq_readable_delivers_message) {
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
   circular_queue *cq = circular_queue_create(4, NULL);
 
   evl_sync_ctx ctx;
@@ -2591,7 +2713,7 @@ TEST(event_loop, queue_circq_readable_delivers_message) {
 }
 
 TEST(event_loop, queue_circq_writable_fires_without_consuming) {
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
   circular_queue *cq = circular_queue_create(1, NULL);
 
   /* Fill the queue so write-direction isn't immediately satisfiable. */
@@ -2635,7 +2757,7 @@ TEST(event_loop, queue_circq_writable_fires_without_consuming) {
 }
 
 TEST(event_loop, queue_dynq_readable_delivers_message) {
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
   dynamic_queue *dq = dynamic_queue_create(NULL);
 
   evl_sync_ctx ctx;
@@ -2680,7 +2802,7 @@ static void *evl_chan_sender_thread(void *arg) {
 }
 
 TEST(event_loop, queue_channel_selectable) {
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
   channel *ch = channel_create(4, NULL);
 
   evl_sync_ctx ctx;
@@ -2713,7 +2835,7 @@ TEST(event_loop, queue_persistent_across_multiple_cycles) {
   /* The core "persistent, not per-call" property: a single registration
    * keeps firing across many independent send/recv cycles without ever
    * being re-added. */
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
   circular_queue *cq = circular_queue_create(4, NULL);
 
   evl_sync_ctx ctx;
@@ -2744,7 +2866,7 @@ TEST(event_loop, queue_already_pending_message_at_registration_time) {
    * -- the bridge eventfd has no prior notify to rely on, so event_loop_add
    * must self-trigger when the queue is already in the target state at
    * registration time. */
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
   circular_queue *cq = circular_queue_create(4, NULL);
 
   int *payload = malloc(sizeof(int));
@@ -2770,7 +2892,7 @@ TEST(event_loop, queue_already_pending_message_at_registration_time) {
 }
 
 TEST(event_loop, remove_from_within_callback) {
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
   circular_queue *cq = circular_queue_create(4, NULL);
 
   evl_sync_ctx ctx;
@@ -2825,51 +2947,87 @@ static void *evl_remover_thread(void *arg) {
 TEST(event_loop, remove_from_different_thread_concurrent_with_dispatch) {
   /* Repeated add -> notify -> concurrent-remove-from-another-thread cycles,
    * targeted stress for the refcount design; must never crash or leak
-   * (verified separately under valgrind by the memtest target). */
-  event_loop_construct_scoped(loop, 8, 1);
+   * (verified separately under valgrind by the memtest target).
+   *
+   * ctx is heap-allocated per iteration and logged rather than destroyed
+   * inline: event_loop_remove is documented to return while an in-flight
+   * dispatch for the removed reg may still be running (it defers only the
+   * library's OWN memory reclamation, not how long the callback itself
+   * takes) -- so the remover thread joining does not, by itself, prove
+   * evl_on_readable has finished touching ctx. Destroying ctx.mtx (or
+   * reusing its stack slot next iteration, before this fix) could race
+   * that still-in-flight callback -- a real bug ThreadSanitizer caught
+   * here despite num_reactor_threads == 1: this hazard has nothing to do
+   * with multi-threaded dispatch, it's inherent to event_loop_remove's own
+   * documented contract and was already present before this feature. Every
+   * logged ctx is freed only after the whole loop -- and the one reactor
+   * thread that could still be mid-callback -- has been joined, at this
+   * test's own nested block below. cq itself has the identical hazard and
+   * fix: the ORIGINAL version of this test called circular_queue_destroy(cq)
+   * before the scoped loop's own automatic destructor (which only runs at
+   * this function's closing brace) had joined the reactor thread, meaning a
+   * stale, already-collected dispatch for the last iteration's just-removed
+   * reg could still call circq_try_recv_zc(sel->cq, ...) on an
+   * already-freed queue -- a real, pre-existing use-after-free hazard this
+   * fix also closes, not merely the ctx one. */
+  evl_sync_ctx *ctx_log[50];
+  int ctx_log_count = 0;
   circular_queue *cq = circular_queue_create(4, NULL);
 
-  for (int iter = 0; iter < 50; iter++) {
-    evl_sync_ctx ctx;
-    evl_sync_ctx_init(&ctx);
-    event_handlers_t handlers = {
-        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-    char *err = NULL;
-    event_reg *reg =
-        event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
-                       handlers, &ctx, &err);
-    REQUIRE_NE((void *)reg, NULL);
+  {
+    event_loop_construct_scoped(loop, 8, 1, 1);
 
-    evl_remover_args rargs = {.loop = loop, .reg = reg, .delay_us = 0};
-    pthread_t rtid;
-    pthread_create(&rtid, NULL, evl_remover_thread, &rargs);
+    for (int iter = 0; iter < 50; iter++) {
+      evl_sync_ctx *ctx = malloc(sizeof(*ctx));
+      evl_sync_ctx_init(ctx);
+      ctx_log[ctx_log_count++] = ctx;
+      event_handlers_t handlers = {
+          .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+      char *err = NULL;
+      event_reg *reg =
+          event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
+                         handlers, ctx, &err);
+      REQUIRE_NE((void *)reg, NULL);
 
-    int *payload = malloc(sizeof(int));
-    *payload = iter;
-    c_message_t msg = {.data = payload, .size = sizeof(int)};
-    circq_send_zc(cq, &msg); /* may or may not be delivered; that's fine */
+      evl_remover_args rargs = {.loop = loop, .reg = reg, .delay_us = 0};
+      pthread_t rtid;
+      pthread_create(&rtid, NULL, evl_remover_thread, &rargs);
 
-    pthread_join(rtid, NULL);
-    evl_sync_ctx_destroy(&ctx);
+      int *payload = malloc(sizeof(int));
+      *payload = iter;
+      c_message_t msg = {.data = payload, .size = sizeof(int)};
+      circq_send_zc(cq, &msg); /* may or may not be delivered; that's fine */
 
-    /* Drain whatever's left so the queue doesn't grow unbounded across
-     * iterations (the message may not have been consumed if removal won
-     * the race before dispatch). */
-    c_message_t leftover;
-    while (circq_try_recv_zc(cq, &leftover) == ccol_success) {
-      free(leftover.data);
+      pthread_join(rtid, NULL);
+
+      /* Drain whatever's left so the queue doesn't grow unbounded across
+       * iterations (the message may not have been consumed if removal won
+       * the race before dispatch). */
+      c_message_t leftover;
+      while (circq_try_recv_zc(cq, &leftover) == ccol_success) {
+        free(leftover.data);
+      }
     }
+
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+
+    /* loop shuts down and its one reactor thread is joined here, at block
+     * exit -- cq and every logged ctx are guaranteed quiescent from this
+     * point on. */
   }
 
-  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
   circular_queue_destroy(cq);
+  for (int i = 0; i < ctx_log_count; i++) {
+    evl_sync_ctx_destroy(ctx_log[i]);
+    free(ctx_log[i]);
+  }
 }
 
 TEST(event_loop, shutdown_with_pending_registrations) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
   char *err = NULL;
-  event_loop loop = event_loop_create(8, 1, &err);
+  event_loop loop = event_loop_create(8, 1, 1, &err);
   REQUIRE_NE((void *)loop, NULL);
 
   event_handlers_t handlers = {
@@ -2897,7 +3055,7 @@ TEST(event_loop, destroy_while_queue_registration_pending_queue_outlives_loop) {
   circular_queue *cq = circular_queue_create(4, NULL);
 
   char *err = NULL;
-  event_loop loop = event_loop_create(8, 1, &err);
+  event_loop loop = event_loop_create(8, 1, 1, &err);
   REQUIRE_NE((void *)loop, NULL);
 
   event_handlers_t handlers = {
@@ -2926,7 +3084,7 @@ TEST(event_loop, destroy_while_queue_registration_pending_queue_outlives_loop) {
 TEST(event_loop, reg_count_tracks_add_remove) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  event_loop_construct_scoped(loop, 8, 1);
+  event_loop_construct_scoped(loop, 8, 1, 1);
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
@@ -2944,7 +3102,7 @@ TEST(event_loop, reg_count_tracks_add_remove) {
 }
 
 TEST(event_loop, high_add_remove_churn_stress) {
-  event_loop_construct_scoped(loop, 32, 1);
+  event_loop_construct_scoped(loop, 32, 1, 1);
   const int n = 200;
   int pfds[200][2];
   event_reg *regs[200];
@@ -2981,35 +3139,51 @@ TEST(event_loop, multiple_independent_instances) {
   REQUIRE_EQ(pipe(pfd_a), 0);
   REQUIRE_EQ(pipe(pfd_b), 0);
 
-  event_loop_construct_scoped(loop_a, 8, 1);
-  event_loop_construct_scoped(loop_b, 8, 8);
-
   evl_sync_ctx ctx_a, ctx_b;
   evl_sync_ctx_init(&ctx_a);
   evl_sync_ctx_init(&ctx_b);
-  event_handlers_t handlers = {
-      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  char *err = NULL;
-  event_reg *reg_a =
-      event_loop_add(loop_a, selectable_from_fd(pfd_a[0], ccol_select_read),
-                     handlers, &ctx_a, &err);
-  REQUIRE_NE((void *)reg_a, NULL);
-  event_reg *reg_b =
-      event_loop_add(loop_b, selectable_from_fd(pfd_b[0], ccol_select_read),
-                     handlers, &ctx_b, &err);
-  REQUIRE_NE((void *)reg_b, NULL);
 
-  int val_a = 1, val_b = 2;
-  REQUIRE_EQ((ssize_t)sizeof(val_a), write(pfd_a[1], &val_a, sizeof(val_a)));
-  REQUIRE_TRUE(evl_wait_for(&ctx_a, &ctx_a.readable_count, 1, 2000));
-  /* loop_b's registration must not have fired for loop_a's fd. */
-  REQUIRE_EQ(ctx_b.readable_count, 0);
+  {
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment --
+     * both fds here stay level-triggered-ready (evl_on_readable never
+     * drains an fd selectable), so both loops' reactor threads must be
+     * joined before either ctx is destroyed. */
+    event_loop_construct_scoped(loop_a, 8, 1, 1);
+    event_loop_construct_scoped(loop_b, 8, 8, 1);
 
-  REQUIRE_EQ((ssize_t)sizeof(val_b), write(pfd_b[1], &val_b, sizeof(val_b)));
-  REQUIRE_TRUE(evl_wait_for(&ctx_b, &ctx_b.readable_count, 1, 2000));
+    event_handlers_t handlers = {
+        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+    char *err = NULL;
+    event_reg *reg_a =
+        event_loop_add(loop_a, selectable_from_fd(pfd_a[0], ccol_select_read),
+                       handlers, &ctx_a, &err);
+    REQUIRE_NE((void *)reg_a, NULL);
+    event_reg *reg_b =
+        event_loop_add(loop_b, selectable_from_fd(pfd_b[0], ccol_select_read),
+                       handlers, &ctx_b, &err);
+    REQUIRE_NE((void *)reg_b, NULL);
 
-  event_loop_remove(loop_a, reg_a);
-  event_loop_remove(loop_b, reg_b);
+    int val_a = 1, val_b = 2;
+    REQUIRE_EQ((ssize_t)sizeof(val_a), write(pfd_a[1], &val_a, sizeof(val_a)));
+    REQUIRE_TRUE(evl_wait_for(&ctx_a, &ctx_a.readable_count, 1, 2000));
+    /* loop_b's registration must not have fired for loop_a's fd. Safe to
+     * read unprotected: nothing has ever been written to pfd_b at this
+     * point, so there is no possible concurrent writer of ctx_b.
+     * readable_count to race -- that's precisely the property being
+     * tested. */
+    REQUIRE_EQ(ctx_b.readable_count, 0);
+
+    REQUIRE_EQ((ssize_t)sizeof(val_b), write(pfd_b[1], &val_b, sizeof(val_b)));
+    REQUIRE_TRUE(evl_wait_for(&ctx_b, &ctx_b.readable_count, 1, 2000));
+
+    event_loop_remove(loop_a, reg_a);
+    event_loop_remove(loop_b, reg_b);
+
+    /* both loops shut down and their reactor threads are joined here, at
+     * block exit -- ctx_a/ctx_b are guaranteed quiescent from this point
+     * on. */
+  }
+
   evl_sync_ctx_destroy(&ctx_a);
   evl_sync_ctx_destroy(&ctx_b);
   close(pfd_a[0]);
@@ -3022,7 +3196,7 @@ TEST(event_loop, multiple_independent_instances) {
 
 TEST(event_loop, num_lock_stripes_zero_returns_null) {
   char *err = NULL;
-  event_loop loop = event_loop_create(8, 0, &err);
+  event_loop loop = event_loop_create(8, 0, 1, &err);
   REQUIRE_EQ((void *)loop, NULL);
 }
 
@@ -3035,34 +3209,42 @@ TEST(event_loop, fd_both_directions_combine_and_recombine_multi_stripe) {
    * identically to the single-stripe case. */
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
-  event_loop_construct_scoped(loop, 8, 8);
 
   evl_sync_ctx read_ctx, write_ctx;
   evl_sync_ctx_init(&read_ctx);
   evl_sync_ctx_init(&write_ctx);
-  event_handlers_t rh = {
-      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  event_handlers_t wh = {
-      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
-  char *err = NULL;
-  event_reg *rreg = event_loop_add(
-      loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
-  REQUIRE_NE((void *)rreg, NULL);
-  event_reg *wreg = event_loop_add(
-      loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx, &err);
-  REQUIRE_NE((void *)wreg, NULL);
-  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)2);
 
-  REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
+  {
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment. */
+    event_loop_construct_scoped(loop, 8, 8, 1);
 
-  REQUIRE_EQ(event_loop_remove(loop, wreg), ccol_success);
-  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+    event_handlers_t rh = {
+        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+    event_handlers_t wh = {
+        .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+    char *err = NULL;
+    event_reg *rreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
+        &err);
+    REQUIRE_NE((void *)rreg, NULL);
+    event_reg *wreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
+        &err);
+    REQUIRE_NE((void *)wreg, NULL);
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)2);
 
-  int val = 7;
-  REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
-  REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+    REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
 
-  event_loop_remove(loop, rreg);
+    REQUIRE_EQ(event_loop_remove(loop, wreg), ccol_success);
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+
+    int val = 7;
+    REQUIRE_EQ((ssize_t)sizeof(val), write(sv[1], &val, sizeof(val)));
+    REQUIRE_TRUE(evl_wait_for(&read_ctx, &read_ctx.readable_count, 1, 2000));
+
+    event_loop_remove(loop, rreg);
+  }
+
   evl_sync_ctx_destroy(&read_ctx);
   evl_sync_ctx_destroy(&write_ctx);
   close(sv[0]);
@@ -3089,7 +3271,7 @@ TEST(event_loop, fd_modify_after_remove_returns_invalid_args_multi_stripe) {
    * test's own premise, not in event_loop_modify/_remove. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
-  event_loop_construct_scoped(loop, 8, 8);
+  event_loop_construct_scoped(loop, 8, 8, 1);
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
@@ -3110,6 +3292,25 @@ typedef struct {
   event_loop loop;
   int thread_id;
   int iterations;
+  /* Opened once before this worker's loop, closed once after -- not per
+   * iteration. Closing per iteration, while the loop (and its other 7
+   * concurrently-running workers) stays alive, raced a legitimate
+   * thundering-herd-adjacent stale dispatch's read() against this worker's
+   * own close(), the same close()-vs-read() hazard
+   * multi_thread_fd_reuse_generation_stays_consistent's own comment
+   * documents catching via ThreadSanitizer. */
+  int pfd[2];
+  /* Every iteration's ctx is logged here instead of destroyed inline, for
+   * the same reason as evl_reuse_driver_args's own identical field:
+   * event_loop_remove can return while an in-flight callback for the
+   * removed reg is still running, so destroying ctx.mtx (or reusing its
+   * stack slot next iteration) immediately after remove() returns can race
+   * that callback -- a real, pre-existing bug (present even with a single
+   * reactor thread; nothing about it is specific to multi-threaded
+   * dispatch) ThreadSanitizer caught here. Freed by the TEST function only
+   * after the whole loop, and every worker thread, has been joined. */
+  evl_sync_ctx **ctx_log;
+  int ctx_log_count;
 } evl_stripe_stress_args;
 
 static void *evl_stripe_stress_fd_worker(void *arg) {
@@ -3117,23 +3318,22 @@ static void *evl_stripe_stress_fd_worker(void *arg) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   for (int i = 0; i < a->iterations; i++) {
-    int pfd[2];
-    if (pipe(pfd) != 0) continue;
-    evl_sync_ctx ctx;
-    evl_sync_ctx_init(&ctx);
+    evl_sync_ctx *ctx = malloc(sizeof(*ctx));
+    evl_sync_ctx_init(ctx);
     char *err = NULL;
-    event_reg *reg =
-        event_loop_add(a->loop, selectable_from_fd(pfd[0], ccol_select_read),
-                       handlers, &ctx, &err);
+    event_reg *reg = event_loop_add(
+        a->loop, selectable_from_fd(a->pfd[0], ccol_select_read), handlers,
+        ctx, &err);
     if (reg) {
+      a->ctx_log[a->ctx_log_count++] = ctx;
       int val = a->thread_id;
-      (void)write(pfd[1], &val, sizeof(val));
-      evl_wait_for(&ctx, &ctx.readable_count, 1, 2000);
+      (void)write(a->pfd[1], &val, sizeof(val));
+      evl_wait_for(ctx, &ctx->readable_count, 1, 2000);
       event_loop_remove(a->loop, reg);
+    } else {
+      evl_sync_ctx_destroy(ctx);
+      free(ctx);
     }
-    evl_sync_ctx_destroy(&ctx);
-    close(pfd[0]);
-    close(pfd[1]);
   }
   return NULL;
 }
@@ -3144,23 +3344,50 @@ TEST(event_loop, multi_threaded_multi_fd_stress_with_stripes) {
    * above 1 -- exercises genuinely concurrent event_loop_add/_remove/
    * dispatch across different stripes running in parallel, not just churn
    * on a single lock. */
-  event_loop_construct_scoped(loop, 32, 16);
   const int n_threads = 8;
   const int iterations = 25;
   pthread_t threads[8];
   evl_stripe_stress_args args[8];
 
   for (int i = 0; i < n_threads; i++) {
-    args[i].loop = loop;
+    REQUIRE_EQ(pipe(args[i].pfd), 0);
+    /* Non-blocking: see evl_set_nonblocking's own comment -- a legitimate
+     * duplicate/stale dispatch reading this fd after this worker's own
+     * feeding has moved on to a later iteration must not block forever. */
+    evl_set_nonblocking(args[i].pfd[0]);
     args[i].thread_id = i;
     args[i].iterations = iterations;
-    pthread_create(&threads[i], NULL, evl_stripe_stress_fd_worker, &args[i]);
-  }
-  for (int i = 0; i < n_threads; i++) {
-    pthread_join(threads[i], NULL);
+    args[i].ctx_log = malloc(sizeof(evl_sync_ctx *) * (size_t)iterations);
+    args[i].ctx_log_count = 0;
   }
 
-  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+  {
+    /* Nested block: see the other multi-thread tests' identical pattern --
+     * this loop's destructor joins every reactor thread at this block's
+     * closing brace, which is what makes freeing every logged ctx
+     * afterward, below, actually safe. */
+    event_loop_construct_scoped(loop, 32, 16, 1);
+    for (int i = 0; i < n_threads; i++) {
+      args[i].loop = loop;
+      pthread_create(&threads[i], NULL, evl_stripe_stress_fd_worker,
+                     &args[i]);
+    }
+    for (int i = 0; i < n_threads; i++) {
+      pthread_join(threads[i], NULL);
+    }
+
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+  }
+
+  for (int i = 0; i < n_threads; i++) {
+    close(args[i].pfd[0]);
+    close(args[i].pfd[1]);
+    for (int j = 0; j < args[i].ctx_log_count; j++) {
+      evl_sync_ctx_destroy(args[i].ctx_log[j]);
+      free(args[i].ctx_log[j]);
+    }
+    free(args[i].ctx_log);
+  }
 }
 
 static void *evl_stripe_stress_queue_worker(void *arg) {
@@ -3194,7 +3421,7 @@ TEST(event_loop, multi_threaded_multi_queue_stress_with_stripes) {
    * queues -- hence many distinct bridge_efds, each round-robin-assigned to
    * a stripe via loop->next_queue_stripe -- registered/removed concurrently
    * across threads. */
-  event_loop_construct_scoped(loop, 32, 16);
+  event_loop_construct_scoped(loop, 32, 16, 1);
   const int n_threads = 8;
   const int iterations = 25;
   pthread_t threads[8];
@@ -3226,7 +3453,7 @@ TEST(event_loop, destroy_frees_registrations_across_multiple_stripes) {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
 
   {
-    event_loop_construct_scoped(loop, 32, 8);
+    event_loop_construct_scoped(loop, 32, 8, 1);
     char *err = NULL;
 
     for (int i = 0; i < n; i++) {
@@ -3254,4 +3481,552 @@ TEST(event_loop, destroy_frees_registrations_across_multiple_stripes) {
     close(pfds[i][1]);
     circular_queue_destroy(queues[i]);
   }
+}
+
+/* --- Multi-threaded reactor (num_reactor_threads > 1) tests below --- */
+
+TEST(event_loop, multi_thread_basic_smoke) {
+  /* Plain single-fd readable dispatch, but with several reactor threads
+   * sharing the epoll instance -- confirms ordinary dispatch still works
+   * correctly (not just "doesn't crash") once more than one thread is
+   * calling epoll_wait on the same epfd. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+
+  {
+    /* Nested block, same reasoning as the other multi-thread tests below:
+     * evl_sync_ctx_destroy (like every other caller of it in this file)
+     * assumes no callback can still be touching ctx by the time it runs --
+     * true by construction with the single-reactor-thread tests elsewhere
+     * in this file, but only an assumption here with 6 reactor threads
+     * unless this block's join actually guarantees it. */
+    event_loop_construct_scoped(loop, 8, 4, 6);
+
+    event_handlers_t handlers = {
+        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+    char *err = NULL;
+    event_reg *reg = event_loop_add(
+        loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
+        &err);
+    REQUIRE_NE((void *)reg, NULL);
+
+    int val = 7;
+    REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+
+    event_loop_remove(loop, reg);
+  }
+
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+typedef struct evl_no_double_dispatch_ctx {
+  pthread_mutex_t mtx;
+  int active;
+  bool violation;
+  _Atomic int total_calls;
+} evl_no_double_dispatch_ctx;
+
+/* Deliberately holds entry->dispatch_lock's protected region open for a
+ * moment (usleep) after checking/updating `active`, widening the window in
+ * which a second reactor thread -- if dispatch_lock were broken or absent --
+ * could receive this same still-ready fd from its own concurrent epoll_wait
+ * call (epoll's default level-triggered, non-EPOLLEXCLUSIVE semantics
+ * genuinely allow this) and enter this callback concurrently. */
+static void evl_no_double_dispatch_on_readable(event_loop loop,
+                                               ccol_selectable *sel,
+                                               void *arg) {
+  (void)loop;
+  evl_no_double_dispatch_ctx *c = (evl_no_double_dispatch_ctx *)arg;
+
+  pthread_mutex_lock(&c->mtx);
+  c->active++;
+  if (c->active > 1) c->violation = true;
+  pthread_mutex_unlock(&c->mtx);
+
+  char buf[8];
+  ssize_t n = read(sel->fd, buf, sizeof(buf));
+  (void)n;
+  struct timespec ts = {0, 200000}; /* 0.2ms */
+  nanosleep(&ts, NULL);
+
+  pthread_mutex_lock(&c->mtx);
+  c->active--;
+  pthread_mutex_unlock(&c->mtx);
+  atomic_fetch_add(&c->total_calls, 1);
+}
+
+typedef struct evl_feeder_args {
+  int write_fd;
+  int iterations;
+} evl_feeder_args;
+
+static void *evl_feeder_thread(void *arg) {
+  evl_feeder_args *a = (evl_feeder_args *)arg;
+  char byte = 'x';
+  for (int i = 0; i < a->iterations; i++) {
+    ssize_t n = write(a->write_fd, &byte, 1);
+    (void)n; /* a full pipe buffer blocking briefly is fine and even
+              * desirable here: it keeps the read end continuously ready,
+              * maximizing the chance several reactor threads' concurrent
+              * epoll_wait calls all observe it ready at once. */
+  }
+  return NULL;
+}
+
+TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
+  /* Many reactor threads, ONE hot fd continuously fed by a writer thread --
+   * exactly the thundering-herd scenario entry->dispatch_lock exists to
+   * close (see its own field comment in cthreadcomm.c). Without that lock,
+   * this test reliably catches active > 1 under stress; with it, active
+   * never exceeds 1 regardless of how many reactor threads race for the
+   * same entry. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  /* Non-blocking: the callback below performs its own read() directly (to
+   * mimic real usage under genuinely concurrent dispatch), and once the
+   * feeder thread stops writing, a legitimate thundering-herd duplicate
+   * dispatch reading an already-drained, permanently-quiet pipe would
+   * otherwise block forever on a blocking read -- a real, reproduced
+   * deadlock; see evl_set_nonblocking's own comment. */
+  evl_set_nonblocking(pfd[0]);
+
+  evl_no_double_dispatch_ctx ctx;
+  memset(&ctx, 0, sizeof(ctx));
+  pthread_mutex_init(&ctx.mtx, NULL);
+
+  {
+    /* Nested block: see multi_thread_cross_direction_serialization's
+     * identical pattern and comment -- ctx must not be destroyed, and pfd
+     * must not be closed, until every reactor thread has actually been
+     * joined (this block's closing brace), not merely after a heuristic
+     * grace period. */
+    event_loop_construct_scoped(loop, 8, 4, 12);
+
+    event_handlers_t handlers = {
+        .on_readable = evl_no_double_dispatch_on_readable,
+        .on_writable = NULL,
+        .on_error = NULL};
+    char *err = NULL;
+    event_reg *reg = event_loop_add(
+        loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
+        &err);
+    REQUIRE_NE((void *)reg, NULL);
+
+    evl_feeder_args feeder_args = {.write_fd = pfd[1], .iterations = 4000};
+    pthread_t feeder;
+    pthread_create(&feeder, NULL, evl_feeder_thread, &feeder_args);
+    pthread_join(feeder, NULL);
+
+    /* Give the reactor threads a brief grace period to finish draining
+     * whatever's left in the pipe after the feeder stops -- purely to let
+     * total_calls approach feeder_args.iterations before the assertion
+     * below, not relied on for safety (the nested block's join is what
+     * provides that). */
+    for (int spins = 0; spins < 400 &&
+                        atomic_load(&ctx.total_calls) < feeder_args.iterations;
+         spins++) {
+      struct timespec ts = {0, 2000000}; /* 2ms */
+      nanosleep(&ts, NULL);
+    }
+
+    event_loop_remove(loop, reg);
+
+    /* loop shuts down and every reactor thread is joined here, at block
+     * exit -- ctx and pfd are guaranteed quiescent from this point on. */
+  }
+
+  REQUIRE_FALSE(ctx.violation);
+  REQUIRE_GT(atomic_load(&ctx.total_calls), 0);
+
+  pthread_mutex_destroy(&ctx.mtx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+/* Same active-counter protocol as evl_no_double_dispatch_ctx, but shared
+ * between a read-direction AND a write-direction callback on the SAME fd,
+ * to verify entry->dispatch_lock's stricter cross-direction guarantee (not
+ * just self-exclusion). */
+static void evl_cross_dir_on_readable(event_loop loop, ccol_selectable *sel,
+                                      void *arg) {
+  (void)loop;
+  evl_no_double_dispatch_ctx *c = (evl_no_double_dispatch_ctx *)arg;
+  pthread_mutex_lock(&c->mtx);
+  c->active++;
+  if (c->active > 1) c->violation = true;
+  pthread_mutex_unlock(&c->mtx);
+
+  char buf[8];
+  ssize_t n = read(sel->fd, buf, sizeof(buf));
+  (void)n;
+  struct timespec ts = {0, 200000};
+  nanosleep(&ts, NULL);
+
+  pthread_mutex_lock(&c->mtx);
+  c->active--;
+  pthread_mutex_unlock(&c->mtx);
+  atomic_fetch_add(&c->total_calls, 1);
+}
+
+static void evl_cross_dir_on_writable(event_loop loop, ccol_selectable *sel,
+                                      void *arg) {
+  (void)loop;
+  (void)sel;
+  evl_no_double_dispatch_ctx *c = (evl_no_double_dispatch_ctx *)arg;
+  pthread_mutex_lock(&c->mtx);
+  c->active++;
+  if (c->active > 1) c->violation = true;
+  pthread_mutex_unlock(&c->mtx);
+
+  struct timespec ts = {0, 200000};
+  nanosleep(&ts, NULL);
+
+  pthread_mutex_lock(&c->mtx);
+  c->active--;
+  pthread_mutex_unlock(&c->mtx);
+  atomic_fetch_add(&c->total_calls, 1);
+}
+
+TEST(event_loop, multi_thread_cross_direction_serialization) {
+  /* A stream socketpair gives one fd with both directions independently
+   * live: sv[0]'s write direction stays ready indefinitely (nothing ever
+   * fills its send buffer, since nothing here writes from sv[0] to sv[1]),
+   * while a peer thread continuously feeds sv[1] to keep sv[0]'s read
+   * direction ready too -- both directions genuinely, concurrently
+   * dispatchable across many reactor threads for the whole test. */
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+  /* Non-blocking for the same reason as multi_thread_no_double_dispatch_
+   * same_fd's pfd[0] -- see evl_set_nonblocking's own comment. */
+  evl_set_nonblocking(sv[0]);
+
+  evl_no_double_dispatch_ctx ctx;
+  memset(&ctx, 0, sizeof(ctx));
+  pthread_mutex_init(&ctx.mtx, NULL);
+
+  {
+    /* Nested block: event_loop_construct_scoped's destructor fires at this
+     * block's closing brace, which shuts down AND JOINS every reactor
+     * thread before control leaves it. That join is a real, non-heuristic
+     * guarantee that no callback referencing ctx can possibly still be
+     * running afterward -- unlike a fixed nanosleep-based grace period
+     * (which an earlier version of this test used and which ThreadSanitizer
+     * still caught a real race through: event_loop_remove's own documented
+     * contract only guarantees an in-flight callback for the reg being
+     * removed will finish, not that no OTHER, independently-collected
+     * dispatch for the same still-live entry -- a legitimate, expected
+     * thundering-herd duplicate, exactly the scenario
+     * multi_thread_no_double_dispatch_same_fd exists to prove is
+     * lock-serialized, not eliminated -- won't still be running). Destroying
+     * ctx.mtx or letting this function return (freeing ctx's stack slot)
+     * before that join happened is exactly the bug this restructuring
+     * avoids. */
+    event_loop_construct_scoped(loop, 8, 4, 12);
+
+    event_handlers_t read_handlers = {
+        .on_readable = evl_cross_dir_on_readable,
+        .on_writable = NULL,
+        .on_error = NULL};
+    event_handlers_t write_handlers = {
+        .on_readable = NULL,
+        .on_writable = evl_cross_dir_on_writable,
+        .on_error = NULL};
+    char *err = NULL;
+    event_reg *rreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_read), read_handlers,
+        &ctx, &err);
+    REQUIRE_NE((void *)rreg, NULL);
+    event_reg *wreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_write), write_handlers,
+        &ctx, &err);
+    REQUIRE_NE((void *)wreg, NULL);
+
+    evl_feeder_args feeder_args = {.write_fd = sv[1], .iterations = 4000};
+    pthread_t feeder;
+    pthread_create(&feeder, NULL, evl_feeder_thread, &feeder_args);
+    pthread_join(feeder, NULL);
+
+    for (int spins = 0; spins < 400 && atomic_load(&ctx.total_calls) < 500;
+         spins++) {
+      struct timespec ts = {0, 2000000};
+      nanosleep(&ts, NULL);
+    }
+
+    event_loop_remove(loop, rreg);
+    event_loop_remove(loop, wreg);
+
+    /* loop shuts down and every reactor thread is joined here, at block
+     * exit -- ctx is guaranteed quiescent from this point on. */
+  }
+
+  REQUIRE_FALSE(ctx.violation);
+  REQUIRE_GT(atomic_load(&ctx.total_calls), 0);
+
+  pthread_mutex_destroy(&ctx.mtx);
+  close(sv[0]);
+  close(sv[1]);
+}
+
+typedef struct evl_reuse_ctx {
+  event_reg *reg;
+  uint64_t expected_generation;
+  _Atomic int mismatch_count;
+  _Atomic int call_count;
+} evl_reuse_ctx;
+
+static void evl_reuse_on_readable(event_loop loop, ccol_selectable *sel,
+                                  void *arg) {
+  (void)loop;
+  evl_reuse_ctx *c = (evl_reuse_ctx *)arg;
+  char buf[16];
+  ssize_t n = read(sel->fd, buf, sizeof(buf));
+  (void)n;
+  /* If a stale batch entry from a PREVIOUS (already-removed) registration
+   * on a recycled fd number ever misdispatched into this callback with the
+   * WRONG ctx/reg pairing, this would observe a generation mismatch. */
+  if (event_loop_reg_generation(c->reg) != c->expected_generation) {
+    atomic_fetch_add(&c->mismatch_count, 1);
+  }
+  atomic_fetch_add(&c->call_count, 1);
+}
+
+typedef struct evl_reuse_driver_args {
+  event_loop loop;
+  int iterations;
+  _Atomic int mismatch_total;
+  /* Every iteration's ctx is logged here instead of freed inline:
+   * event_loop_remove's own documented contract is "safe to call
+   * concurrently with an in-flight dispatch; teardown is deferred until any
+   * in-progress callback returns" -- it does NOT promise that no more
+   * callback invocations for this reg can possibly still be in flight (e.g.
+   * a second reactor thread that independently collected this same
+   * still-registered entry from its own epoll_wait batch, via the
+   * documented thundering-herd behavior other tests in this file also
+   * exercise) by the time remove() returns. Freeing ctx inline, or reusing
+   * its memory on the next iteration, would race a stale, still-running
+   * callback's reads/writes against this iteration's own writes/frees -- a
+   * real bug an earlier version of this test had, caught by valgrind
+   * (definitely-lost, from a first fix's deliberate never-free) and then
+   * ThreadSanitizer (an actual use-after-free once that leak was
+   * reasonably closed with a fixed-duration grace-period sleep instead of a
+   * real join-based guarantee). The test function frees every logged ctx
+   * only after the whole event_loop -- every reactor thread -- has been
+   * shut down and joined; see its own nested-block comment for why that's
+   * a real guarantee and a sleep never was. */
+  evl_reuse_ctx **ctx_log;
+  int ctx_log_count;
+  /* Kept open for this driver's ENTIRE run rather than closed and reopened
+   * every iteration. Re-adding the SAME still-open fd after removing it
+   * still mints a fresh event_entry and hence a fresh generation each time
+   * (event_loop_remove deletes the fd's registry entry before returning,
+   * so a subsequent event_loop_add on that same fd number always takes the
+   * new-entry path) -- enough to exercise this module's core generation
+   * guarantee under heavy concurrent add/remove/dispatch/reclaim churn
+   * across drivers sharing one event_loop, without ALSO needing to close()
+   * a fd that a legitimate (if rare) thundering-herd duplicate dispatch
+   * might still be reading -- the exact close()-vs-read() race
+   * ThreadSanitizer caught when this test did close per iteration. */
+  int pfd[2];
+} evl_reuse_driver_args;
+
+static void *evl_reuse_driver_thread(void *arg) {
+  evl_reuse_driver_args *a = (evl_reuse_driver_args *)arg;
+  event_handlers_t handlers = {
+      .on_readable = evl_reuse_on_readable, .on_writable = NULL, .on_error = NULL};
+
+  for (int i = 0; i < a->iterations; i++) {
+    evl_reuse_ctx *ctx = malloc(sizeof(*ctx));
+    memset(ctx, 0, sizeof(*ctx));
+    char *err = NULL;
+    event_reg *reg = event_loop_add(
+        a->loop, selectable_from_fd(a->pfd[0], ccol_select_read), handlers,
+        ctx, &err);
+    if (!reg) {
+      free(ctx);
+      continue;
+    }
+    ctx->reg = reg;
+    ctx->expected_generation = event_loop_reg_generation(reg);
+    a->ctx_log[a->ctx_log_count++] = ctx;
+
+    int val = i;
+    ssize_t wn = write(a->pfd[1], &val, sizeof(val));
+    (void)wn;
+
+    for (int spins = 0;
+         spins < 500 && atomic_load(&ctx->call_count) == 0; spins++) {
+      struct timespec ts = {0, 500000};
+      nanosleep(&ts, NULL);
+    }
+
+    event_loop_remove(a->loop, reg);
+
+    atomic_fetch_add(&a->mismatch_total, atomic_load(&ctx->mismatch_count));
+  }
+  return NULL;
+}
+
+TEST(event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
+  /* Several driver threads, each rapidly re-registering/writing/removing
+   * against its own fd in a tight loop, concurrently, sharing one
+   * event_loop -- exactly the kind of high-churn add/remove/dispatch/
+   * reclaim workload under which a fresh generation must be minted (and
+   * observed correctly) every single time, the core guarantee
+   * event_loop_reg_generation exists to make safe by construction (see its
+   * own doc comment; this is the same bug CLASS -- stale identity confusion
+   * across a fd's registration lifecycle -- that historically bit this
+   * codebase's fd-reuse-across-a-redirect-hand-off scenario, exercised
+   * here as repeated same-fd re-registration under concurrent load rather
+   * than an actual OS-level close+reopen, specifically to avoid racing a
+   * legitimate thundering-herd duplicate dispatch against a close() call --
+   * see evl_reuse_driver_args's own comment). Asserts every dispatch
+   * observed its OWN registration's generation, never a stale/mismatched
+   * one. */
+  const int n_drivers = 4;
+  const int iterations = 150;
+  pthread_t drivers[4];
+  evl_reuse_driver_args args[4];
+
+  for (int i = 0; i < n_drivers; i++) {
+    REQUIRE_EQ(pipe(args[i].pfd), 0);
+    /* Non-blocking for the same reason as multi_thread_no_double_dispatch_
+     * same_fd's pfd[0] -- see evl_set_nonblocking's own comment; here it
+     * additionally covers the window after a driver's last iteration
+     * removes its registration but before the whole loop is torn down. */
+    evl_set_nonblocking(args[i].pfd[0]);
+    args[i].iterations = iterations;
+    atomic_init(&args[i].mismatch_total, 0);
+    args[i].ctx_log = malloc(sizeof(evl_reuse_ctx *) * (size_t)iterations);
+    args[i].ctx_log_count = 0;
+  }
+
+  {
+    /* Nested block: see multi_thread_cross_direction_serialization's
+     * identical pattern and comment -- this loop's destructor shuts down
+     * and joins every reactor thread at this block's closing brace, which
+     * is what makes freeing every logged ctx afterward, below, actually
+     * safe rather than a timing guess. */
+    event_loop_construct_scoped(loop, 8, 4, 8);
+    for (int i = 0; i < n_drivers; i++) {
+      args[i].loop = loop;
+      pthread_create(&drivers[i], NULL, evl_reuse_driver_thread, &args[i]);
+    }
+    for (int i = 0; i < n_drivers; i++) {
+      pthread_join(drivers[i], NULL);
+    }
+  }
+
+  int total_mismatches = 0;
+  for (int i = 0; i < n_drivers; i++) {
+    close(args[i].pfd[0]);
+    close(args[i].pfd[1]);
+    for (int j = 0; j < args[i].ctx_log_count; j++) {
+      free(args[i].ctx_log[j]);
+    }
+    free(args[i].ctx_log);
+    total_mismatches += atomic_load(&args[i].mismatch_total);
+  }
+
+  REQUIRE_EQ(total_mismatches, 0);
+}
+
+TEST(event_loop, multi_thread_shutdown_wakes_all_idle_threads) {
+  /* Many reactor threads, nothing ever registered -- every one of them is
+   * blocked in epoll_wait on just the shutdown eventfd for the whole test.
+   * event_loop_shutdown's single write() must still wake and join every
+   * one of them: epoll's default (non-EPOLLEXCLUSIVE) semantics wake every
+   * thread blocked on the same epfd when a watched fd becomes ready, not
+   * just one, and every thread re-checks shutting_down at the top of its
+   * own loop regardless. Bounds how long shutdown is allowed to take,
+   * rather than merely asserting it eventually returns, so a regression
+   * that only wakes one thread (leaving the rest to eventually notice via
+   * some unrelated timeout, or never) would show up as a slow/hung test,
+   * not a silent pass. */
+  char *err = NULL;
+  event_loop loop = event_loop_create(8, 4, 16, &err);
+  REQUIRE_NE((void *)loop, NULL);
+
+  struct timespec start, end;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  REQUIRE_EQ(event_loop_shutdown(loop), ccol_success);
+  clock_gettime(CLOCK_MONOTONIC, &end);
+
+  double elapsed_ms = (double)(end.tv_sec - start.tv_sec) * 1000.0 +
+                      (double)(end.tv_nsec - start.tv_nsec) / 1e6;
+  REQUIRE_LT(elapsed_ms, 2000.0);
+
+  event_loop_destroy(loop);
+}
+
+TEST(event_loop, reg_generation_semantics) {
+  /* NULL reg reads as generation 0 (reserved, never minted for a real
+   * registration). */
+  REQUIRE_EQ(event_loop_reg_generation(NULL), (uint64_t)0);
+
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  int pfd2[2];
+  REQUIRE_EQ(pipe(pfd2), 0);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+
+  {
+    /* Nested block, same reasoning as the other multi-thread tests in this
+     * file: wreg's write direction dispatches almost immediately (a fresh
+     * pipe write end is always writable), and with 4 reactor threads
+     * evl_sync_ctx_destroy must not run -- nor may this function return,
+     * freeing ctx's stack slot -- until that dispatch (and any other one
+     * still in flight) is guaranteed finished, which only this block's
+     * join actually guarantees. */
+    event_loop_construct_scoped(loop, 8, 1, 4);
+    event_handlers_t handlers = {
+        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+    char *err = NULL;
+
+    /* Both directions on the same fd share one generation. */
+    event_reg *rreg = event_loop_add(
+        loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
+        &err);
+    REQUIRE_NE((void *)rreg, NULL);
+    uint64_t rgen = event_loop_reg_generation(rreg);
+    REQUIRE_GT(rgen, (uint64_t)0);
+
+    event_handlers_t write_handlers = {
+        .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+    event_reg *wreg = event_loop_add(
+        loop, selectable_from_fd(pfd[0], ccol_select_write), write_handlers,
+        &ctx, &err);
+    REQUIRE_NE((void *)wreg, NULL);
+    REQUIRE_EQ(event_loop_reg_generation(wreg), rgen);
+
+    /* event_loop_modify (direction flip) keeps the same generation -- it's
+     * the same underlying fd/connection, just a different direction. */
+    event_loop_remove(loop, wreg);
+    REQUIRE_EQ(event_loop_modify(loop, rreg, ccol_select_write), ccol_success);
+    REQUIRE_EQ(event_loop_reg_generation(rreg), rgen);
+    REQUIRE_EQ(event_loop_modify(loop, rreg, ccol_select_read), ccol_success);
+
+    /* A different fd gets a different generation. */
+    event_reg *reg2 = event_loop_add(
+        loop, selectable_from_fd(pfd2[0], ccol_select_read), handlers, &ctx,
+        &err);
+    REQUIRE_NE((void *)reg2, NULL);
+    REQUIRE_NE(event_loop_reg_generation(reg2), rgen);
+
+    event_loop_remove(loop, rreg);
+    event_loop_remove(loop, reg2);
+  }
+
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+  close(pfd2[0]);
+  close(pfd2[1]);
 }

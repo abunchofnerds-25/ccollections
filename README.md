@@ -147,11 +147,12 @@ Functions return `ccol_retval_t`, an enum whose value zero indicates success and
 
 ```c
 typedef enum {
-    ccol_unexpected_failure                = -17,
-    ccol_http_connection_failed            = -16,
-    ccol_http_host_resolution_failed       = -15,
-    ccol_http_tls_handshake_failed         = -14,
-    ccol_http_tls_cert_verification_failed = -13,
+    ccol_unexpected_failure                = -18,
+    ccol_http_connection_failed            = -17,
+    ccol_http_host_resolution_failed       = -16,
+    ccol_http_tls_handshake_failed         = -15,
+    ccol_http_tls_cert_verification_failed = -14,
+    ccol_http_tls_cert_load_failed         = -13,
     ccol_http_too_many_redirects           = -12,
     ccol_http_invalid_url                  = -11,
     ccol_http_transfer_aborted             = -10,
@@ -1624,12 +1625,17 @@ if (rc == ccol_timed_out) {
 
 ### Persistent Event Loop - `event_loop`
 
-`ccol_select` creates a fresh `epoll(7)` instance on every call, waits for exactly one ready selectable, and tears everything down before returning. `event_loop` is the persistent counterpart: one `epoll` instance and one background reactor thread, created once and mutated incrementally (`event_loop_add` / `event_loop_modify` / `event_loop_remove`) as fds and queues come and go, dispatching readiness through callbacks for as long as the loop lives. It reuses the exact same `ccol_selectable` type `ccol_select` uses, so `selectable_from_fd`, `selectable_from_circq`, `selectable_from_dynq`, and `selectable_from_chan` all carry over unchanged. Like `ccol_select`, `event_loop` never performs the receive or send itself, for any selectable type: the callback always performs its own explicit `circq_try_recv_zc`/`dynmq_try_recv_zc` or `read(2)`/`recv(2)`.
+`ccol_select` creates a fresh `epoll(7)` instance on every call, waits for exactly one ready selectable, and tears everything down before returning. `event_loop` is the persistent counterpart: one `epoll` instance and one or more background reactor threads, created once and mutated incrementally (`event_loop_add` / `event_loop_modify` / `event_loop_remove`) as fds and queues come and go, dispatching readiness through callbacks for as long as the loop lives. It reuses the exact same `ccol_selectable` type `ccol_select` uses, so `selectable_from_fd`, `selectable_from_circq`, `selectable_from_dynq`, and `selectable_from_chan` all carry over unchanged. Like `ccol_select`, `event_loop` never performs the receive or send itself, for any selectable type: the callback always performs its own explicit `circq_try_recv_zc`/`dynmq_try_recv_zc` or `read(2)`/`recv(2)`.
 
 The fd/registration registry is lock-striped: `num_lock_stripes` independent (mutex, chmap) pairs, each guarding a disjoint subset of registrations (one real fd, or one queue/channel registration's private bridge fd, is always handled by exactly one stripe). `1` reproduces the original single-lock behavior exactly; passing a larger value lets `event_loop_add` / `event_loop_remove` / `event_loop_modify` calls for different fds/registrations proceed concurrently under high-churn multi-threaded use instead of serializing through one lock, at the cost of `num_lock_stripes` mutexes and chmaps allocated up front. Most callers should just pass `1`.
 
+`num_reactor_threads` (a separate constructor parameter from `num_lock_stripes`) sizes how many background threads share the one `epoll` instance and actually call `epoll_wait(2)` and dispatch callbacks; `1` reproduces the original single-thread behavior exactly. With more than one reactor thread, a single registration's callback is still never invoked concurrently with itself, and a read registration and a write registration sharing the same fd are never invoked concurrently with each other either (stricter than "no self-concurrency" alone, so a callback pair sharing state across both directions of one fd, e.g. one TLS connection object, needs no locking of its own on that account) -- epoll's own level-triggered semantics can otherwise hand the same still-ready entry to more than one thread's concurrent `epoll_wait` call (the classic "thundering herd"), which is exactly the scenario this guarantee closes. Performance is workload-dependent, not simply "more threads is always faster": a representative benchmark saw aggregate dispatch throughput across many distinct fds improve substantially from 1 to 4 reactor threads but regress from 4 to 8, and single-connection round-trip latency for one hot fd increase by roughly 15-20% once more than one reactor thread was configured at all (an inherent cost of more sleeper threads sharing one epoll instance, even for an uncontended fd) -- measure for your own workload rather than assuming a higher value is strictly better.
+
+`event_loop_reg_generation(reg)` returns a monotonically increasing, loop-wide-unique identity token minted once per fd when it is first registered (shared by both directions on the same fd, and preserved across `event_loop_modify`), for a caller's own defensive bookkeeping across fd reuse -- a direct analogue of what facil.io's uuid gave callers in this library's own HTTP modules. It is not required for basic correctness: dispatch already validates a registration's liveness before invoking any callback unconditionally, so a stale, already-fetched batch entry for an already-removed (or fd-reused) registration is always a safe no-op regardless of whether a caller ever inspects the generation itself.
+
 ```c
-event_loop_construct(loop, /*max_events_per_wait=*/32, /*num_lock_stripes=*/1);
+event_loop_construct(loop, /*max_events_per_wait=*/32, /*num_lock_stripes=*/1,
+                      /*num_reactor_threads=*/1);
 
 circular_queue *jobs = circular_queue_create(64, NULL);
 
@@ -1695,7 +1701,9 @@ Both directions may be registered on the same fd at once (e.g. a full-duplex soc
 
 **Key properties:**
 
-- One background reactor thread per `event_loop`, spawned at creation and joined at `event_loop_shutdown` / `event_loop_destroy`; multiple independent instances share no global state.
+- One or more background reactor threads per `event_loop` (`num_reactor_threads`), spawned at creation and all joined at `event_loop_shutdown` / `event_loop_destroy`; multiple independent instances share no global state.
+- A single registration's callback is never invoked concurrently with itself, and a read and a write registration sharing the same fd are never invoked concurrently with each other, regardless of how many reactor threads are configured.
+- `event_loop_reg_generation` gives every fd registration a loop-wide-unique, monotonically increasing identity token, stable across `event_loop_modify` and shared by both directions on the same fd, for detecting fd reuse from application code; dispatch itself already validates a registration's liveness unconditionally, so this is for the caller's own bookkeeping, not required for internal correctness.
 - `event_loop_remove` is safe to call from within a registration's own callback (self-removal on error is a common pattern) as well as from any other thread, including concurrently with an in-flight dispatch for the same registration.
 - Removing an fd registration or destroying the loop never closes the fd itself, and never destroys a registered queue; ownership stays exactly where `selectable_from_fd`/`selectable_from_circq`/etc. already put it.
 
@@ -2930,9 +2938,9 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 
 ## 18. HTTP Client - `chttpclient`
 
-`chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: an internal `chttp1_parser` module drives request/response framing over raw sockets, TLS is provided by the same vendored facil.io ("facio") OpenSSL layer that backs `chttpserver`, and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library.
+`chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: an internal `chttp1_parser` module drives request/response framing over raw sockets, TLS is provided by `ctls` (a reactor-agnostic OpenSSL wrapper), the reactor backing Tier 2/3's async engine is `event_loop` (from `cthreadcomm`), and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library. `chttpclient` has no dependency on any vendored third-party code.
 
-**Supported URL forms:** `http://`/`https://` only. Both a plain hostname/IPv4 literal and a bracketed IPv6 literal (`https://[::1]:8443/path`) are accepted. A URL may embed credentials (`http://user:pass@host/path`); they are turned into an `Authorization: Basic ...` header automatically unless the request already sets its own `Authorization` header. A trailing `#fragment` is recognized and discarded (fragments are a client-side-only concept and are never sent to a server). See "Redirect Following" below for how embedded credentials interact with redirects to a different origin.
+**Supported URL forms:** `http://`/`https://`, plus `http+unix://<percent-encoded-socket-path>[/path][?query]` for connecting to a server listening on a Unix domain socket (matching Python's `requests-unixsocket` convention; `https+unix://` is not supported). Both a plain hostname/IPv4 literal and a bracketed IPv6 literal (`https://[::1]:8443/path`) are accepted for the network forms. A URL may embed credentials (`http://user:pass@host/path`); they are turned into an `Authorization: Basic ...` header automatically unless the request already sets its own `Authorization` header (not supported for `http+unix://`, which has no established userinfo convention). A trailing `#fragment` is recognized and discarded (fragments are a client-side-only concept and are never sent to a server). See "Redirect Following" below for how embedded credentials interact with redirects to a different origin, and "Unix Domain Sockets" below for the `http+unix://` scheme in full.
 
 The module is split across two headers: `chttp.h` declares shared types (`chttp_method_t`, `chttp_tls_config_t`, `chttp_request_body_t`, and status-code constants), and `chttpclient.h` declares the client API. Including `chttpclient.h` pulls in `chttp.h` automatically.
 
@@ -3048,6 +3056,24 @@ fclose(out);
 
 Response headers are not accessible via the streaming path. Returning a value less than `len` from the write callback aborts the transfer.
 
+### Expect: 100-continue
+
+Set `req->expect_continue = true` on a POST/PUT/PATCH request with a body to hold the body back until the server confirms it wants it, avoiding wasted upload bandwidth against a server that is about to reject the request outright (e.g. on size or authentication grounds):
+
+```c
+chttp_request_t *req = chttp_request_new(CHTTP_POST,
+    "https://api.example.com/uploads",
+    &CHTTP_JSON_BODY(json_str, json_len),
+    NULL);
+req->expect_continue = true;
+
+chttpcli_response *resp = NULL;
+ccol_retval_t rc = chttpclient_do(cli, req, &resp);
+chttp_request_free(req);
+```
+
+The client sends only the request's headers first, then waits up to one second for the server's interim `100 Continue` response before sending the body; if the server answers with a final status directly instead (e.g. `417 Expectation Failed`), that response is delivered to the caller and the body is never sent. A server that never replies within the one-second window is assumed to simply not support the mechanism: the body is sent anyway and the request proceeds normally. This has no effect on a request with no body, and is currently a Tier 1 (`chttpclient_do`/`chttpclient_do_streaming`) feature only; `chttpclient_do_async` and everything built on it (Tiers 2/3) ignore `expect_continue` and send the body immediately.
+
 ### Asynchronous Requests (Tier 2)
 
 `chttpclient_do` and `chttpclient_do_streaming` are synchronous; each call blocks the calling thread for the duration of the request. `chttpclient_do_async` and `chttpclient_do_async_streaming` submit a request to a shared, lazily-started reactor engine and return immediately with a `ctpool_future *`:
@@ -3073,7 +3099,7 @@ ctpool_future_free(f);
 chttpclient_destroy(cli);
 ```
 
-The engine (a small pool of reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. It shares its underlying reactor with `chttpserver`'s own engine (both acquire/release references to the same lazily-started, process-wide facio reactor), so a process may freely run `chttpserver` and `chttpclient_do_async`/`_streaming` at the same time; e.g. a service that both serves HTTP and calls out to other HTTP services asynchronously. One consequence of that sharing: `chttpsvr_engine_stop()` (see the `chttpserver` section below) tears down the shared reactor for both modules at once, aborting any in-flight `chttpclient` async work along with every `chttpsvr` listener. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`.
+The engine (a small pool of `event_loop` reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. This engine owns its own static, process-wide `event_loop` instance, fully independent of `chttpserver`'s own (separate) `event_loop` instance; the two modules share no reactor, so stopping/starting one has no effect on the other. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`. `chttpcli_set_engine_logger`/`chttpcli_set_engine_mem_mgmt_procs` configure this reactor's diagnostics logger and allocator respectively, and must be called before this engine's first lazy construction (mirroring `chttpserver`'s identical pair of functions for its own reactor).
 
 `chttpclient_do_async_streaming` delivers the response body via a `chttpcli_write_fn` callback, exactly like `chttpclient_do_streaming`:
 
@@ -3099,6 +3125,25 @@ if (rc == ccol_success) {
 ```
 
 This gives blocking-call ergonomics while sharing the engine's small, fixed-size reactor thread pool across every concurrent caller, instead of each call blocking its own OS thread the way `chttpclient_do` does. Error codes match `chttpclient_do` exactly for everything detected once the request is in flight (bad URL, TLS failure, connection failure, transfer errors, timeouts, too many redirects); a failure to even submit the request to the engine (OOM, or the engine failing to start) is reported as `ccol_unexpected_failure` rather than a more specific code. `chttpclient_do_pooled_streaming` mirrors `chttpclient_do_streaming`'s signature and semantics, with the same reactor-thread callback contract `chttpclient_do_async_streaming` documents.
+
+To redirect the engine's own diagnostics (TLS handshake failures, connect errors) to a `clog` handle, call `chttpcli_set_engine_logger` before the first Tier 2/3 call anywhere in the process:
+
+```c
+clog logger = clog_open_fd(2, CLOG_INFO);
+chttpcli_set_engine_logger(logger);   /* derive engine sub-logger; optional */
+```
+
+If no logger is ever configured, the engine simply does not log; there is no default logger to fall back to. To redirect the engine's own internal memory management (the `event_loop` instance itself, its DNS/connect worker pool, and its own connection-registration bookkeeping) to a custom allocator, call `chttpcli_set_engine_mem_mgmt_procs` before the engine's first start (or after it has fully stopped):
+
+```c
+ccol_memmgmt_procs_t mp = {
+    .malloc = my_malloc, .free = my_free,
+    .calloc = my_calloc, .realloc = my_realloc,
+};
+chttpcli_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default */
+```
+
+This is independent of the allocator each individual `chttpcli` instance uses for its own requests/connections (configured via `create_chttpclient_mp`); this setter only affects the one shared engine's own construction. Both functions mirror `chttpserver`'s identical `chttpsvr_set_engine_logger`/`chttpsvr_set_engine_mem_mgmt_procs` pair for its own, fully independent reactor.
 
 ### TLS Configuration
 
@@ -3132,7 +3177,20 @@ Each `chttpcli` handle has two independent layers:
 
 Redirects (`chttpclient_do` and `chttpclient_do_streaming` both follow up to 50 hops) apply an explicit method/body policy on each hop: 301, 302, and 303 rewrite the method to a bodyless GET (HEAD is left as HEAD), while 307 and 308 preserve the original method and resend the original body.
 
-A `Location` header may be an absolute URL, a protocol-relative reference (`//host/path`), an absolute-path reference (`/foo`), or a general relative reference (`foo`, `../foo`, `./foo`, `?query`); all are resolved per RFC 3986. Dot-segment normalization (`..`, `.`) only ever rewrites the path component; a query string is always carried forward byte-for-byte, even one that happens to contain `/`, `..`, or `.` characters. If the original request URL embedded credentials, the resulting `Authorization: Basic ...` header is resent on every subsequent hop as long as the redirect stays on the same origin (scheme + host + port); it is dropped permanently (and never re-acquired even if a later hop redirects back to the original origin) the first time a hop changes origin. This matches curl's default (non `--location-trusted`) behavior and prevents credentials from leaking to an unexpected host via a redirect. A caller-supplied `Authorization` header set explicitly on the request is unaffected by any of this.
+A `Location` header may be an absolute URL, a protocol-relative reference (`//host/path`), an absolute-path reference (`/foo`), or a general relative reference (`foo`, `../foo`, `./foo`, `?query`); all are resolved per RFC 3986. Dot-segment normalization (`..`, `.`) only ever rewrites the path component; a query string is always carried forward byte-for-byte, even one that happens to contain `/`, `..`, or `.` characters. If the original request URL embedded credentials, the resulting `Authorization: Basic ...` header is resent on every subsequent hop as long as the redirect stays on the same origin (scheme + host + port); it is dropped permanently (and never re-acquired even if a later hop redirects back to the original origin) the first time a hop changes origin. This matches curl's default (non `--location-trusted`) behavior and prevents credentials from leaking to an unexpected host via a redirect. A caller-supplied `Authorization` header set explicitly on the request is unaffected by any of this. A redirect that stays on a `http+unix://` origin (see below) resolves relative references against the same socket path; a redirect cannot cross between a network origin and a Unix-socket origin (there is no way to express that in a single `Location` header) and is followed only if the `Location` itself names the target scheme explicitly.
+
+### Unix Domain Sockets
+
+`chttpclient` can connect to a server listening on a Unix domain socket instead of a TCP/IP address, using the `http+unix://` URL scheme (matching Python's `requests-unixsocket` convention; `chttpsvr_config_t.host = "unix://<path>"` is the server-side counterpart):
+
+```c
+/* Socket path "/var/run/app.sock", percent-encoded (every byte, including
+ * '/', except RFC 3986 unreserved characters, must be %XX-escaped). */
+chttpcli_response *resp = NULL;
+chttp_get("http+unix://%2Fvar%2Frun%2Fapp.sock/api/users", &resp);
+```
+
+All three tiers (`chttpclient_do`, `chttpclient_do_async`/`_pooled`) support it identically to a network URL, including keep-alive connection pooling (Tier 2/3's idle pool keys pooled connections by a `"unix://<path>"` origin, distinct from any `"scheme://host:port"` origin). Since there is no real hostname for a Unix-socket target, the `Host:` header defaults to `localhost` (matching curl's `--unix-socket` behavior) unless the request sets its own `Host` header explicitly. `https+unix://` is not supported (TLS over a local socket has no real use case); `chttpclient_set_tls` has no effect on `http+unix://` requests. A socket path that does not fit in `sockaddr_un.sun_path` (108 bytes on Linux, including the terminating NUL) is rejected as `ccol_http_invalid_url` before any connection attempt.
 
 ### Scoped Variant
 
@@ -3202,9 +3260,9 @@ If the pool size is smaller than the number of concurrent callers, excess thread
 
 | Return value | Meaning |
 |---|---|
-| `ccol_http_invalid_url` | URL is malformed, uses an unsupported scheme (only `http://`/`https://` are supported), or has a missing/invalid host or port |
-| `ccol_http_host_resolution_failed` | DNS resolution failed for the target host |
-| `ccol_http_connection_failed` | The TCP connection could not be established (e.g. connection refused) |
+| `ccol_http_invalid_url` | URL is malformed, uses an unsupported scheme (only `http://`/`https://`/`http+unix://` are supported), has a missing/invalid host or port, or (for `http+unix://`) a socket path too long to fit `sockaddr_un.sun_path` |
+| `ccol_http_host_resolution_failed` | DNS resolution failed for the target host (never returned for `http+unix://`, which has no DNS step) |
+| `ccol_http_connection_failed` | The connection could not be established (e.g. connection refused, or a `http+unix://` socket path that does not exist) |
 | `ccol_http_too_many_redirects` | The redirect chain exceeded 50 hops |
 | `ccol_http_tls_handshake_failed` | The TLS handshake failed for a reason other than certificate verification |
 | `ccol_http_tls_cert_verification_failed` | The peer certificate or hostname could not be verified, or the configured client certificate/key/CA bundle path was not readable |
@@ -3293,6 +3351,13 @@ Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn
 | `chttpclient_set_request_timeout(cli, ms)` | Total request timeout in milliseconds (connect + transfer); 0 = no limit |
 | `chttpclient_set_tls(cli, tls)` | Override TLS settings; NULL restores verification-on defaults |
 
+**Engine Configuration (Tier 2/3)**
+
+| Function | Description |
+|---|---|
+| `chttpcli_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` that receives the shared reactor's own diagnostics; call before the first Tier 2/3 use in the process |
+| `chttpcli_set_engine_mem_mgmt_procs(mp)` | Redirect the shared reactor's own internal memory management to `mp`, or to the default allocator if `mp` is NULL; call before the engine's first start, or after it has fully stopped |
+
 **Request Execution**
 
 | Function | Description |
@@ -3350,7 +3415,9 @@ Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn
 
 ## 19. HTTP Server - `chttpserver`
 
-`chttpserver` is an embedded HTTP/1.1 server backed by the facil.io event-driven networking library. It provides a Go-style routing API: register handlers for method+pattern pairs, attach middleware chains, and create sub-routers with their own prefix and middleware. Multiple server instances may run simultaneously on different ports within the same process, all sharing a single facil.io event-loop engine.
+`chttpserver` is an embedded HTTP/1.1 server. It provides a Go-style routing API: register handlers for method+pattern pairs, attach middleware chains, and create sub-routers with their own prefix and middleware. Multiple server instances may run simultaneously on different ports (or Unix domain sockets) within the same process, all sharing one process-wide reactor.
+
+The module is built entirely on c_collections' own primitives rather than a vendored networking library: a multi-threaded `event_loop` (from `cthreadcomm`) drives the reactor, `ctls` provides a reactor-agnostic OpenSSL wrapper for TLS, and `chttp1_parser` is a small, hand-written HTTP/1.1 request parser. Routing happens on the reactor thread as soon as headers are parsed; the connection is then handed off to the server's own `ctpool` worker pool, which reads the body and runs the handler, so a large or slow body never blocks the reactor.
 
 The module is split across two headers: `chttp.h` declares shared types (`chttp_method_t`, `chttp_tls_config_t`, status-code constants, and body macros), and `chttpserver.h` declares the server API. Including `chttpserver.h` pulls in `chttp.h` automatically.
 
@@ -3360,7 +3427,9 @@ The module is split across two headers: `chttp.h` declares shared types (`chttp_
 
 ### Engine Lifecycle
 
-facil.io uses a single shared event loop ("engine") per process, shared with `chttpclient`'s async engine (`chttpclient_do_async`/`_streaming`/`chttpclient_do_pooled`/`_streaming`) as well; a process may run both at once. The engine starts automatically on the first `chttpsvr_start` call (or the first `chttpclient` async call, if that happens first) and stops automatically once the last reference from either module is released; no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the engine has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
+`chttpserver` maintains one static, process-wide `event_loop` reactor (internally multi-threaded, sized to the CPU count) shared by every `chttpsvr` instance in the process, plus one idle-connection-timeout sweep thread shared the same way. Both are lazily started on the first `chttpsvr_start` call and torn down once the last server releases its reference (i.e. every started `chttpsvr` has been destroyed); no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the reactor has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
+
+This reactor is entirely independent of `chttpclient`'s own engine (`chttpclient_do_async`/`_streaming`/`chttpclient_do_pooled`/`_streaming`); each module owns its own reactor, so stopping one never affects the other.
 
 The library does not install any signal handlers. Applications are responsible for wiring shutdown into whatever signal or lifecycle mechanism they use. `chttpsvr_engine_stop()` is async-signal-safe and is the intended shutdown hook:
 
@@ -3382,20 +3451,18 @@ int main(void) {
 }
 ```
 
-Note that `chttpsvr_engine_stop()` tears down the shared engine, not just this application's servers: if the same process also has `chttpclient` async requests in flight (`chttpclient_do_async`/`_streaming`, `chttpclient_do_pooled`/`_streaming`), those are aborted too. This is an inherent consequence of the two modules sharing one process-wide reactor for what is meant to be process-shutdown-driven use.
+`chttpsvr_engine_stop()` tears down this module's own shared reactor and idle-sweep thread only; it has no effect on `chttpclient`'s independent engine, and vice versa.
 
-To redirect engine log output, call `chttpsvr_set_engine_logger` before the first `chttpsvr_start`:
+To redirect the reactor's own diagnostics (TLS handshake failures, listen-socket bind failures, idle-timeout closures) to a `clog` handle, call `chttpsvr_set_engine_logger` at any time (it takes effect immediately, and again after any full stop/restart cycle):
 
 ```c
 clog logger = clog_open_fd(2, CLOG_INFO);
 chttpsvr_set_engine_logger(logger);   /* derive engine sub-logger; optional */
 ```
 
-To redirect the engine's own internal memory management (the connection-state
-table, protocol/listener structs, TLS connection objects, request-body
-streaming buffers, and everything else the shared facio engine allocates for
-itself) to a custom allocator, call `chttpsvr_set_engine_mem_mgmt_procs`
-before the first `chttpsvr_start`:
+If no logger is ever configured, the reactor simply does not log; there is no default logger to fall back to (unlike `create_chttpsvr`'s own internal stderr/FATAL-only logger).
+
+To redirect the reactor's own internal memory management (the `event_loop` instance itself, and its own connection-registration bookkeeping) to a custom allocator, call `chttpsvr_set_engine_mem_mgmt_procs` before the first `chttpsvr_start`:
 
 ```c
 ccol_memmgmt_procs_t mp = {
@@ -3405,21 +3472,7 @@ ccol_memmgmt_procs_t mp = {
 chttpsvr_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default */
 ```
 
-Unlike `chttpsvr_set_engine_logger`, this may only be called before the first
-`chttpsvr_start` in the process (it returns `ccol_not_permitted` afterward):
-swapping allocators once the engine has already allocated memory with the
-previous one would produce mismatched malloc/free pairs. Passing NULL later
-(also before the first start, or after the engine has fully stopped) reverts
-to the default facio arena/libc behavior.
-
-Every pointer `mp`'s `malloc`/`calloc`/`realloc` returns must be aligned to
-at least 16 bytes: the engine's allocation entry points are compiler-annotated
-as always returning 16-byte-aligned memory regardless of whether custom procs
-are installed, so a misaligned pointer from a non-conforming allocator is
-undefined behavior under optimization, not merely a missed optimization hint.
-Standard `malloc`/`calloc`/`realloc` already satisfy this on glibc/x86-64;
-this only matters for a bump/pool/arena-style custom allocator with a smaller
-natural alignment.
+This may only be called before the first `chttpsvr_start` in the process (it returns `ccol_not_permitted` afterward): swapping allocators once the reactor has already allocated memory with the previous one would produce mismatched malloc/free pairs. Passing NULL later (also before the first start, or after the reactor has fully stopped) reverts to the default allocator. Note this is independent of the allocator each individual `chttpsvr` instance uses for its own connections/requests (configured via `create_chttpsvr_mp`, following the usual `_mp` convention); this setter only affects the one shared reactor's own construction.
 
 ### Quick Start
 
@@ -3475,7 +3528,9 @@ chttpsvr srv  = create_chttpsvr_mp(mp, logger, &err);  /* custom allocator; deri
 chttpsvr srv2 = create_chttpsvr(NULL, NULL);           /* internal stderr/FATAL-only logger */
 
 chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
-cfg.host                 = "0.0.0.0";          /* listen address */
+cfg.host                 = "0.0.0.0";          /* listen address; or "unix:///path/to/socket"
+                                                    to bind a Unix domain socket instead (port
+                                                    is then ignored); see Unix Domain Sockets below */
 cfg.port                 = 8080;
 cfg.max_body_size        = 4*1024*1024;         /* 4 MiB body limit; exceeding it
                                                     is a 413 (buffered) or a stream
@@ -3490,8 +3545,27 @@ cfg.max_body_read_duration_ms = 0;              /* 0 = no cap (default); caps th
                                                     reading one request's body, closing the loophole a
                                                     client that trickles bytes just fast enough to always
                                                     beat stream_read_timeout_ms would otherwise leave open */
+cfg.response_write_timeout_ms = 0;              /* 0 = use stream_read_timeout_ms's value; bounds how
+                                                    long a worker will wait per write(2)-equivalent call
+                                                    while sending a response to a slow-reading client */
+cfg.max_header_bytes    = 0;                    /* 0 = library default (64 KiB); a request whose combined
+                                                    request-line + header block exceeds this is rejected
+                                                    (connection reset, no HTTP response: the header
+                                                    block itself couldn't be parsed far enough to answer) */
+cfg.max_connections     = 0;                    /* 0 = unlimited; once at capacity, new connections are
+                                                    simply left pending in the kernel's own listen backlog
+                                                    rather than accepted and immediately rejected */
 cfg.worker_thread_count  = 4;                   /* 0 = CPU core count */
 cfg.worker_queue_capacity = 128;                /* 0 = default (1024 * threads); CHTTPSVR_QUEUE_UNBOUNDED = no limit */
+cfg.enable_keepalive     = false;               /* SO_KEEPALIVE on every accepted connection; no effect on
+                                                    a Unix domain socket listener */
+cfg.enable_reuseport     = false;               /* SO_REUSEPORT on the listening socket, letting multiple
+                                                    chttpsvr instances (e.g. one per worker process) bind
+                                                    the identical host:port for kernel-load-balanced accept;
+                                                    no effect on a Unix domain socket listener */
+cfg.ipv6_only            = false;               /* IPV6_V6ONLY on an AF_INET6 listener, so it does not also
+                                                    implicitly accept IPv4-mapped connections; no effect on
+                                                    an IPv4 or Unix domain socket listener */
 cfg.tls                  = &tls_cfg;            /* optional TLS (chttp_tls_config_t) */
 
 ccol_retval_t rv = chttpsvr_start(srv, &cfg);   /* starts the engine on first call */
@@ -3521,6 +3595,18 @@ chttpsvr_stop(mgmt);
 chttpsvr_destroy(api);
 chttpsvr_destroy(mgmt);   /* engine stops after the last destroy */
 ```
+
+### Unix Domain Sockets
+
+Setting `host` to a `"unix://path"` string binds a Unix domain socket at that path instead of a TCP listener; `port` is then ignored (it may be left at 0):
+
+```c
+chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+cfg.host = "unix:///run/myapp.sock";
+chttpsvr_start(srv, &cfg);
+```
+
+A stale socket file already present at that path is removed automatically before binding. A single `chttpsvr` instance listens on either TCP or a Unix socket, never both; an application wanting both creates two `chttpsvr` instances (they already share the same process-wide reactor at no extra cost). `chttpsvr_stop` unlinks the socket file it created.
 
 The lifecycle macros follow the usual pattern:
 
@@ -3711,7 +3797,7 @@ Common status code constants from `chttp.h`:
 
 ### TLS
 
-Pass a `chttp_tls_config_t` (from `chttp.h`) in the server config to enable TLS. The server uses OpenSSL via facil.io's TLS abstraction layer:
+Pass a `chttp_tls_config_t` (from `chttp.h`) in the server config to enable TLS. The server uses OpenSSL via `ctls`, this library's own reactor-agnostic TLS wrapper:
 
 ```c
 chttp_tls_config_t tls = {
@@ -3733,20 +3819,20 @@ cfg.tls = &tls;
 | `__chttpsvr_destroy(srv)` | Destroy and free the server, including closing the server's own logger (`clog_close`); does not NULL the pointer; call only after engine is stopped |
 | `chttpsvr_destroy(srv)` | Macro: calls `__chttpsvr_destroy` then sets pointer to NULL |
 
-**Engine Lifecycle (shared, process-level)**
+**Engine Lifecycle (shared, process-level, independent of `chttpclient`'s own engine)**
 
 | Function | Description |
 |---|---|
-| `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-engine`); must be called before the first `chttpsvr_start`; returns `ccol_invalid_args` if `cl` is NULL |
-| `chttpsvr_set_engine_mem_mgmt_procs(mp)` | Redirect the engine's own internal memory management to `mp`, or to the default facio arena/libc behavior if `mp` is NULL; must be called before the first `chttpsvr_start` (may be called again once the engine has fully stopped); returns `ccol_invalid_args` if `mp` is non-NULL but has a NULL function pointer, or `ccol_not_permitted` if the engine is already running |
-| `chttpsvr_engine_stop()` | Signal the shared engine to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler. Also aborts any in-flight `chttpclient` async work in the same process (the engine is shared) |
-| `chttpsvr_engine_wait()` | Block until the shared engine has fully stopped; use as an escape hatch when you need a synchronous guarantee (e.g. after an external shutdown signal, or before reusing a just-freed port) |
+| `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-engine`) that receives the reactor's own diagnostics (TLS handshake failures, listen-socket bind failures, idle-timeout closures); may be called at any time, including after a full stop/restart cycle; returns `ccol_invalid_args` if `cl` is NULL |
+| `chttpsvr_set_engine_mem_mgmt_procs(mp)` | Redirect the reactor's own internal memory management to `mp`, or to the default allocator if `mp` is NULL; must be called before the first `chttpsvr_start` (may be called again once the reactor has fully stopped); returns `ccol_invalid_args` if `mp` is non-NULL but has a NULL function pointer, or `ccol_not_permitted` if the reactor is already running |
+| `chttpsvr_engine_stop()` | Signal the shared reactor to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler. Has no effect on `chttpclient`'s own, independent engine |
+| `chttpsvr_engine_wait()` | Block until the shared reactor has fully stopped; use as an escape hatch when you need a synchronous guarantee (e.g. after an external shutdown signal, or before reusing a just-freed port) |
 
 **Per-Server Lifecycle**
 
 | Function | Description |
 |---|---|
-| `chttpsvr_start(srv, cfg)` | Start the server; on the first call starts the engine and blocks until the port is bound and the reactor is in its event loop; subsequent calls bind synchronously and return immediately; returns `ccol_invalid_args` if `srv` is NULL or `cfg->port` is 0; returns `ccol_not_permitted` if already started |
+| `chttpsvr_start(srv, cfg)` | Start the server; on the first call in the process, lazily starts the shared reactor and idle-sweep thread; returns `ccol_invalid_args` if `srv` is NULL, or if `cfg->port` is 0 and `cfg->host` is not a `"unix://"` path; returns `ccol_not_permitted` if already started |
 | `chttpsvr_stop(srv)` | Close this server's listener; other servers continue running |
 
 **Route Registration (root router)**

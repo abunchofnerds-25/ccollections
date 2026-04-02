@@ -25,13 +25,16 @@ SOFTWARE.
 #include <arpa/inet.h>
 #include <chttpclient.h>
 #include <chttpserver.h>
+#include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -4599,4 +4602,474 @@ TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
   __chttpsvr_destroy(srv2);
 
   clog_close(parent);
+}
+
+/* ========================================================================== */
+/*                    UNIX DOMAIN SOCKET TESTS (Phase 1, new capability)      */
+/* ========================================================================== */
+
+TEST(chttpserver, unix_socket_listen_and_round_trip) {
+  /* "unix://path" on chttpsvr_config_t.host must bind a Unix domain socket
+     instead of a TCP listener, and a request over that socket must be
+     routed and answered exactly like a TCP connection would be. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/unix-hello",
+                                               _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  char sock_path[64];
+  snprintf(sock_path, sizeof(sock_path), "/tmp/chttpsvr_test_%d.sock",
+           (int)getpid());
+  unlink(sock_path);
+
+  char host_buf[96];
+  snprintf(host_buf, sizeof(host_buf), "unix://%s", sock_path);
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = host_buf;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
+
+  const char *req =
+      "GET /unix-hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[1024] = {0};
+  int status = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  char *body = _decode_raw_body(buf);
+  REQUIRE_TRUE(body != NULL);
+  REQUIRE_STREQ(body, "Hello, world!");
+
+  close(fd);
+  __chttpsvr_destroy(srv);
+  unlink(sock_path);
+}
+
+TEST(chttpserver, unix_socket_stale_file_replaced_on_start) {
+  /* A leftover file (regular file, not even a socket) already sitting at
+     the configured path must be removed automatically rather than causing
+     bind() to fail -- the documented "a stale socket file already at that
+     path is removed automatically before binding" behavior. */
+  char sock_path[64];
+  snprintf(sock_path, sizeof(sock_path), "/tmp/chttpsvr_test_stale_%d.sock",
+           (int)getpid());
+  unlink(sock_path);
+  int stale_fd = open(sock_path, O_CREAT | O_WRONLY, 0600);
+  REQUIRE_TRUE(stale_fd >= 0);
+  close(stale_fd);
+
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/stale-hello",
+                                               _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  char host_buf[96];
+  snprintf(host_buf, sizeof(host_buf), "unix://%s", sock_path);
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = host_buf;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, sock_path, sizeof(addr.sun_path) - 1);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
+
+  const char *req =
+      "GET /stale-hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+  char buf[1024] = {0};
+  int status = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+
+  close(fd);
+  __chttpsvr_destroy(srv);
+  unlink(sock_path);
+}
+
+TEST(chttpserver, unix_socket_unwritable_path_start_fails) {
+  /* A directory component that doesn't exist must fail chttpsvr_start
+     gracefully (bind() fails) rather than crashing or silently succeeding. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "unix:///chttpsvr_test_nonexistent_dir_xyz/socket.sock";
+  ccol_retval_t rv = chttpsvr_start(srv, &cfg);
+  REQUIRE_NE((int)rv, (int)ccol_success);
+  __chttpsvr_destroy(srv);
+}
+
+/* ========================================================================== */
+/*                    MAX_CONNECTIONS TESTS (Phase 1, new knob)               */
+/* ========================================================================== */
+
+TEST(chttpserver, max_connections_enforced) {
+  /* With max_connections == 1, a second concurrent connection must be left
+     pending in the kernel's listen backlog (never accept()'d, never
+     served) until the first connection closes and frees the one slot. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(
+      srv, CHTTP_GET, "/maxconn-hello", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 9;
+  cfg.max_connections = 1;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 9));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd_a = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd_a >= 0);
+  REQUIRE_EQ(connect(fd_a, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  /* Give the server a moment to accept() fd_a and occupy the one slot
+     before fd_b tries to connect. */
+  struct timespec nap = {0, 150000000L}; /* 150ms */
+  nanosleep(&nap, NULL);
+
+  int fd_b = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd_b >= 0);
+  REQUIRE_EQ(connect(fd_b, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  const char *req =
+      "GET /maxconn-hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: "
+      "close\r\n\r\n";
+  REQUIRE_EQ(write(fd_b, req, strlen(req)), (ssize_t)strlen(req));
+
+  /* fd_b's request must NOT be served yet: the server is at capacity. */
+  struct pollfd pfd = {.fd = fd_b, .events = POLLIN};
+  int pr = poll(&pfd, 1, 300);
+  REQUIRE_EQ(pr, 0);
+
+  close(fd_a); /* frees the one connection slot */
+
+  /* Now fd_b must be accepted and served. */
+  char buf[1024] = {0};
+  int status = _read_one_http_response(fd_b, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+
+  close(fd_b);
+  __chttpsvr_destroy(srv);
+}
+
+/* ========================================================================== */
+/*                    MAX_HEADER_BYTES TESTS (Phase 1, new knob)              */
+/* ========================================================================== */
+
+TEST(chttpserver, max_header_bytes_within_limit_succeeds) {
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(
+      srv, CHTTP_GET, "/hdrcap-hello", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 10;
+  cfg.max_header_bytes = 512;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  char url[128];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/hdrcap-hello",
+           TEST_PORT + 10);
+  chttpcli_response *resp = NULL;
+  chttp_get(url, &resp);
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  chttpclient_resp_free(resp);
+
+  __chttpsvr_destroy(srv);
+}
+
+TEST(chttpserver, max_header_bytes_exceeded_closes_connection) {
+  /* A header block exceeding the configured cap must be rejected before
+     routing -- an outright connection close with no HTTP response at all,
+     matching every other pre-routing parse error in this parser (see
+     negative_content_length_rejected above). */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(
+      srv, CHTTP_GET, "/hdrcap-hello2", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 11;
+  cfg.max_header_bytes = 128;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 11));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  char padding[300];
+  memset(padding, 'a', sizeof(padding) - 1);
+  padding[sizeof(padding) - 1] = '\0';
+  char req[512];
+  int n = snprintf(req, sizeof(req),
+                   "GET /hdrcap-hello2 HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                   "X-Padding: %s\r\n\r\n",
+                   padding);
+  REQUIRE_TRUE(n > 0 && (size_t)n < sizeof(req));
+  REQUIRE_EQ(write(fd, req, (size_t)n), (ssize_t)n);
+
+  char buf[512] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1") == NULL);
+
+  __chttpsvr_destroy(srv);
+}
+
+/* ========================================================================== */
+/*                    RESPONSE_WRITE_TIMEOUT_MS TEST (Phase 1, new knob)      */
+/* ========================================================================== */
+
+static void _large_body_handler(chttpsvr_req *req, chttpsvr_resp *resp,
+                                void *ctx) {
+  (void)req;
+  (void)ctx;
+  char chunk[65536];
+  memset(chunk, 'x', sizeof(chunk));
+  for (int i = 0; i < 400; i++) /* ~25 MiB total: comfortably bigger than any
+                                    default OS socket buffer, so a client
+                                    that never reads is guaranteed to
+                                    eventually stall the server's write. */
+    chttpsvr_resp_write(resp, chunk, sizeof(chunk));
+}
+
+TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/big-body",
+                                               _large_body_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 12;
+  cfg.response_write_timeout_ms = 200;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 12));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req = "GET /big-body HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  /* Deliberately never read while the server is writing: its send must
+     eventually stall against our never-drained receive buffer, hit
+     response_write_timeout_ms, and force the connection closed rather than
+     pinning the worker thread forever. Sleep well past the configured
+     timeout before ever touching the socket, so the server has already
+     made its close-or-succeed decision by the time we look -- reading (or
+     even polling for readability) any earlier risks a false "ready" signal
+     from data the server already buffered successfully before stalling. */
+  struct timespec wait_past_timeout = {0, 600000000L}; /* 600ms > 200ms cfg */
+  nanosleep(&wait_past_timeout, NULL);
+
+  char buf[65536];
+  ssize_t r;
+  while ((r = read(fd, buf, sizeof(buf))) > 0) { /* drain whatever got through */
+  }
+  REQUIRE_EQ(r, 0); /* EOF: server closed the connection */
+
+  close(fd);
+  __chttpsvr_destroy(srv);
+}
+
+/* ========================================================================== */
+/*                    IDLE-TIMEOUT SWEEP TEST (Phase 1, new mechanism)        */
+/* ========================================================================== */
+
+TEST(chttpserver, idle_timeout_closes_unused_connection) {
+  /* A connection that never sends a request at all must eventually be
+     closed by the module-local idle-timeout sweep thread once
+     idle_timeout_ms has elapsed, rather than being held open forever. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/idle-hello",
+                                               _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 13;
+  cfg.idle_timeout_ms = 300;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 13));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  /* Never send anything: nothing but the idle-timeout sweep can possibly
+     make this fd readable (an EOF), since the server has no data of its
+     own to proactively push. */
+  struct pollfd pfd = {.fd = fd, .events = POLLIN};
+  int pr = poll(&pfd, 1, 3000); /* generous vs. idle_timeout_ms=300 and the
+                                   sweep's own ~1s interval */
+  REQUIRE_TRUE(pr > 0);
+  char buf[16];
+  ssize_t r = read(fd, buf, sizeof(buf));
+  REQUIRE_EQ(r, 0);
+
+  close(fd);
+  __chttpsvr_destroy(srv);
+}
+
+TEST(chttpserver, enable_keepalive_does_not_break_normal_requests) {
+  /* SO_KEEPALIVE is set on an accepted connection's own fd, which a client
+     has no portable way to observe from the outside (getsockopt only ever
+     reports the calling process's own socket state); this is therefore a
+     black-box smoke test that the setsockopt(2) call itself neither fails
+     nor disturbs the normal request/response path, matching this file's
+     own established pattern for config knobs whose effect is otherwise
+     unobservable from a client (e.g. max_header_bytes_within_limit_
+     succeeds above, for the byte cap itself). */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(
+      srv, CHTTP_GET, "/keepalive-opt-hello", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 14;
+  cfg.enable_keepalive = true;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  char url[128];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/keepalive-opt-hello",
+           TEST_PORT + 14);
+  chttpcli_response *resp = NULL;
+  chttp_get(url, &resp);
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  chttpclient_resp_free(resp);
+
+  __chttpsvr_destroy(srv);
+}
+
+TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
+  /* Without SO_REUSEPORT, a second bind to the same host:port fails with
+     EADDRINUSE (chttpsvr_start returns ccol_unexpected_failure); this is a
+     real, externally observable effect of the option, unlike
+     enable_keepalive/ipv6_only above. */
+  chttpsvr srv1 = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv1 != NULL);
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 15;
+  cfg.enable_reuseport = true;
+  REQUIRE_EQ((int)chttpsvr_start(srv1, &cfg), (int)ccol_success);
+
+  chttpsvr srv2 = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv2 != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(
+      srv2, CHTTP_GET, "/reuseport-hello", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+  REQUIRE_EQ((int)chttpsvr_start(srv2, &cfg), (int)ccol_success);
+
+  /* Confirm the second listener genuinely serves traffic (not merely that
+     bind() itself succeeded): the kernel load-balances new connections
+     across every SO_REUSEPORT listener on this port, so which of the two
+     servers actually answers is not deterministic; only srv2 has the route
+     registered, so a 404 (srv1 answered) is treated as inconclusive-but-
+     acceptable rather than a hard failure, while any successful 200 proves
+     the mechanism works end to end. */
+  char url[128];
+  snprintf(url, sizeof(url), "http://127.0.0.1:%d/reuseport-hello",
+           TEST_PORT + 15);
+  bool got_200 = false;
+  for (int i = 0; i < 8 && !got_200; i++) {
+    chttpcli_response *resp = NULL;
+    chttp_get(url, &resp);
+    if (resp && resp->status_code == 200) got_200 = true;
+    if (resp) chttpclient_resp_free(resp);
+  }
+  REQUIRE_TRUE(got_200);
+
+  __chttpsvr_destroy(srv1);
+  __chttpsvr_destroy(srv2);
+}
+
+TEST(chttpserver, ipv6_only_listener_still_serves_ipv6_traffic) {
+  /* Best-effort, matching this codebase's own established IPv6 convention
+     elsewhere (not every sandbox/CI environment has an IPv6 stack): skip
+     rather than hard-fail if binding "::1" itself doesn't work at all,
+     since that's an environment limitation unrelated to ipv6_only. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/v6only-hello",
+                                               _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "::1";
+  cfg.port = TEST_PORT + 16;
+  cfg.ipv6_only = true;
+  if (chttpsvr_start(srv, &cfg) != ccol_success) {
+    __chttpsvr_destroy(srv);
+    fprintf(stderr,
+           "[SKIP] ipv6_only_listener_still_serves_ipv6_traffic: no IPv6 "
+           "stack available in this environment\n");
+    return;
+  }
+
+  int fd = socket(AF_INET6, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  struct sockaddr_in6 sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin6_family = AF_INET6;
+  sa.sin6_port = htons((uint16_t)(TEST_PORT + 16));
+  REQUIRE_EQ(inet_pton(AF_INET6, "::1", &sa.sin6_addr), 1);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  const char *req = "GET /v6only-hello HTTP/1.1\r\nHost: [::1]\r\n"
+                    "Connection: close\r\n\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+  char buf[512] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  REQUIRE_GT(n, (ssize_t)0);
+  REQUIRE_TRUE(strstr(buf, "200") != NULL);
+  close(fd);
+
+  __chttpsvr_destroy(srv);
 }

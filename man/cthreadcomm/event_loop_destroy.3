@@ -11,7 +11,7 @@ event_loop_destroy(loop);
 .fi
 .SH DESCRIPTION
 .nf
-Calls __event_loop_destroy() to shut the reactor thread down (if not
+Calls __event_loop_destroy() to shut every reactor thread down (if not
 already shut down) and free every remaining registration, then sets loop
 to NULL.
 

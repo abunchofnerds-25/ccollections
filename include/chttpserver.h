@@ -32,8 +32,9 @@ SOFTWARE.
 
 /**
  * @file chttpserver.h
- * @brief HTTP/1.1 server backed by facil.io with routing, middleware,
- *        sub-routers, TLS, and optional streaming-body dispatch.
+ * @brief HTTP/1.1 server backed by event_loop (a persistent, multi-threaded
+ *        epoll reactor) with routing, middleware, sub-routers, TLS, and
+ *        optional streaming-body dispatch.
  *
  * ### Quick start
  *
@@ -62,8 +63,8 @@ SOFTWARE.
  * chttpsvr_register_streaming_handler (streaming body)) is handed to the
  * server's own ctpool worker thread pool right away, regardless of body
  * size.  The worker thread reads the request body itself, batch by batch,
- * directly off the socket; the facil.io reactor thread's job on any request
- * is therefore O(1) and it is never blocked reading a large or slow body,
+ * directly off the socket; the reactor thread's job on any request is
+ * therefore O(1) and it is never blocked reading a large or slow body,
  * let alone by user handler code.
  *
  * Each server owns one ctpool, created when chttpsvr_start() is called.  The
@@ -82,18 +83,18 @@ SOFTWARE.
  *
  * ### Engine lifecycle (implicit)
  *
- * The shared facil.io event loop (the "engine") is started automatically on
+ * The shared event_loop reactor (the "engine") is started automatically on
  * the first chttpsvr_start() call and stopped automatically when the last
  * running server is destroyed.  There is no need to call engine lifecycle
  * functions manually.
  *
- * To install a custom logger for engine-level events (TLS init, epoll/kqueue
- * internals, etc.) before the first server starts, call
- * chttpsvr_set_engine_logger().
+ * To install a custom logger for engine-level events (TLS handshake
+ * failures, listen-socket bind failures, idle-timeout closures) before the
+ * first server starts, call chttpsvr_set_engine_logger().
  *
  * To block the calling thread until the engine exits (e.g. after an external
- * shutdown signal such as SIGTERM handled by fio_stop()), call
- * chttpsvr_engine_wait().
+ * shutdown signal such as SIGTERM triggers chttpsvr_engine_stop() from a
+ * signal handler), call chttpsvr_engine_wait().
  *
  * Multiple servers may run concurrently; each listens on its own port and
  * has its own routes, middleware, worker pool, and clog handle.
@@ -104,7 +105,7 @@ SOFTWARE.
  *   chttpsvr_register_handler(srv, CHTTP_GET, "/hello", hello, NULL);
  *   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
  *   chttpsvr_start(srv, &cfg);
- *   chttpsvr_engine_wait();  // blocks until signal / fio_stop()
+ *   chttpsvr_engine_wait();  // blocks until signal / chttpsvr_engine_stop()
  *   chttpsvr_destroy(srv);
  * @endcode
  *
@@ -231,9 +232,16 @@ typedef void (*chttpsvr_middleware_fn)(chttpsvr_req *req, chttpsvr_resp *resp,
  * chttpsvr_start().  Use CHTTPSVR_CONFIG_DEFAULT as a starting point.
  */
 typedef struct chttpsvr_config {
-  /** Bind address; NULL or "0.0.0.0" binds all interfaces. */
+  /** Bind address; NULL or "0.0.0.0" binds all interfaces. Alternatively,
+   *  a value of the form "unix://path/to/socket" binds a Unix domain socket
+   *  at that path instead of a TCP listener; port is then ignored (may be
+   *  0). A stale socket file already at that path is removed automatically
+   *  before binding. A given chttpsvr instance listens on either TCP or a
+   *  Unix socket, never both; an application wanting both creates two
+   *  chttpsvr instances (both share the same process-wide reactor already,
+   *  at no extra cost). */
   const char *host;
-  /** Listening port (default 8080). */
+  /** Listening port (default 8080). Ignored when host is a "unix://" path. */
   uint16_t port;
   /** Max request body in bytes (default 4 MiB). A buffered route whose body
    *  exceeds this is rejected with 413 before the handler ever runs; a
@@ -243,13 +251,16 @@ typedef struct chttpsvr_config {
    *  resulting response (Connection: close) rather than kept alive, since
    *  the excess body bytes beyond the limit are discarded, not drained. */
   size_t max_body_size;
-  /** Per-connection read timeout in ms; 0 = facil.io default (~40 s).
-   *  Used as the facil.io connection timeout when idle_timeout_ms is 0. */
+  /** Per-connection read timeout in ms; 0 = disabled (no idle timeout).
+   *  Used as the idle-timeout sweep's threshold when idle_timeout_ms is 0;
+   *  only applies while a connection is idle between requests (waiting for
+   *  the next pipelined/keep-alive request's headers), not while a request
+   *  is actively being handled by a worker thread (see
+   *  max_body_read_duration_ms for that). */
   long read_timeout_ms;
   /** Keep-alive idle timeout in ms; 0 = same as read_timeout_ms.
-   *  When non-zero, overrides read_timeout_ms as the facil.io connection
-   *  timeout.  Both fields map to the single timeout parameter exposed by
-   *  the underlying facil.io http_listen call. */
+   *  When non-zero, overrides read_timeout_ms as the idle-timeout sweep's
+   *  threshold. */
   long idle_timeout_ms;
   /** Bounds how long a worker thread will wait for the *next* batch of body
    *  bytes while reading a request body (buffered or streaming), in ms.
@@ -273,6 +284,27 @@ typedef struct chttpsvr_config {
    *  automatically. Default 0 (disabled) so existing deployments are
    *  unaffected until this is explicitly opted into. */
   unsigned max_body_read_duration_ms;
+  /** Bounds how long a worker thread will wait, per write(2)-equivalent
+   *  call, while sending one response to a slow-reading client, in ms; 0 =
+   *  use stream_read_timeout_ms's value. Bounds how long a slow-reading
+   *  peer can hold a worker thread during response send; a worker pool is
+   *  a small, explicitly-sized resource for handler work, and this closes
+   *  the same class of gap stream_read_timeout_ms closes for the read
+   *  side. */
+  unsigned response_write_timeout_ms;
+  /** Maximum combined size, in bytes, of a request's header block (request
+   *  line + all header lines). 0 = use the library's built-in default
+   *  (64 KiB). A request whose headers exceed this is rejected (the
+   *  connection is closed; the client sees a reset/EOF rather than a
+   *  well-formed error response, since the header block itself couldn't be
+   *  parsed far enough to know how to respond). */
+  size_t max_header_bytes;
+  /** Maximum number of simultaneously open connections across this
+   *  listener; 0 = unlimited. Once at capacity, new connections are simply
+   *  left pending in the kernel's own listen backlog (accept(2) is not
+   *  called again for this listener until a connection closes and frees a
+   *  slot) rather than accepted and immediately rejected. */
+  size_t max_connections;
   /** TLS config; NULL = plaintext. */
   const chttp_tls_config_t *tls;
   /** Number of worker threads in the server-owned ctpool (default: CPU count).
@@ -284,6 +316,30 @@ typedef struct chttpsvr_config {
    *  Any other value         = exact bounded capacity; 503 is returned when
    *                            the queue is full. */
   size_t worker_queue_capacity;
+  /** Enable SO_KEEPALIVE on every accepted TCP connection (default: off,
+   *  matching this library's historical behavior). Lets the OS detect and
+   *  close a connection whose peer has gone silently unreachable (e.g. a
+   *  pulled network cable) using the kernel's own keepalive probe interval,
+   *  independent of and in addition to idle_timeout_ms (which only measures
+   *  local inactivity, not peer reachability). No effect on a Unix domain
+   *  socket listener. */
+  bool enable_keepalive;
+  /** Set SO_REUSEPORT on the listening socket (default: off). Lets more
+   *  than one process (or, within one process, more than one chttpsvr
+   *  instance) bind the same host:port simultaneously, with the kernel
+   *  load-balancing accepted connections across them. This library does
+   *  not itself coordinate multiple processes; this knob only controls
+   *  whether the OS-level prerequisite for an application to do so
+   * itself is set. No effect on a Unix domain socket listener. */
+  bool enable_reuseport;
+  /** Set IPV6_V6ONLY on the listening socket when it ends up binding an
+   *  IPv6 address (default: off, i.e. leave the OS default, which on Linux
+   *  is a dual-stack socket that also accepts IPv4-mapped connections
+   *  unless already restricted elsewhere, e.g. by /proc/sys/net/ipv6/
+   *  bindv6only). Set this to true for an IPv6-only listener that must
+   *  never silently also accept IPv4 traffic. No effect on an IPv4 or
+   *  Unix domain socket listener. */
+  bool ipv6_only;
 } chttpsvr_config_t;
 
 /**
@@ -301,9 +357,15 @@ typedef struct chttpsvr_config {
       .idle_timeout_ms = 0,                  \
       .stream_read_timeout_ms = 30000,       \
       .max_body_read_duration_ms = 0,        \
+      .response_write_timeout_ms = 0,        \
+      .max_header_bytes = 0,                 \
+      .max_connections = 0,                  \
       .tls = NULL,                           \
       .worker_thread_count = 0,              \
       .worker_queue_capacity = 0,            \
+      .enable_keepalive = false,             \
+      .enable_reuseport = false,             \
+      .ipv6_only = false,                    \
   })
 
 /* ========================================================================== */
@@ -311,22 +373,23 @@ typedef struct chttpsvr_config {
 /* ========================================================================== */
 
 /**
- * @brief Install a custom logger for facil.io engine-level events.
+ * @brief Install a custom logger for the shared event_loop engine's own
+ *        diagnostics.
  *
- * The engine logger captures low-level facil.io diagnostics (epoll/kqueue
- * initialisation, TLS handshakes, internal memory events, etc.).  It is
- * separate from the per-server logger passed to create_chttpsvr().
+ * The engine logger captures the reactor's own diagnostics: TLS handshake
+ * failures, listen-socket bind failures, and idle-timeout sweep closures.
+ * It is separate from the per-server logger passed to create_chttpsvr().
  *
  * Call this before the first chttpsvr_start() if you want a custom engine
- * logger.  If no logger has been installed when the engine first starts, a
- * minimal default logger writing only FATAL messages to stderr is created
- * automatically.
+ * logger. If no logger has been installed when the engine first starts,
+ * diagnostics at those points are simply skipped; there is no default
+ * logger to fall back to (unlike create_chttpsvr's own internal
+ * stderr/FATAL-only logger).
  *
- * Internally this function derives a logger from cl via clog_derive(), adds
- * the field component=http-engine, and registers the derived logger with
- * facil.io.  The previously registered engine logger (if any) is closed.
- * The caller retains ownership of cl and must keep it alive for as long as
- * any server may be running.
+ * Internally this function derives a logger from cl via clog_derive() and
+ * adds the field component=http-engine.  The previously registered engine
+ * logger (if any) is closed.  The caller retains ownership of cl and must
+ * keep it alive for as long as any server may be running.
  *
  * @param cl  Parent logger to derive from; must not be NULL.
  * @return ccol_success or ccol_invalid_args (cl is NULL).
@@ -338,50 +401,31 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 /* ========================================================================== */
 
 /**
- * @brief Install custom memory management procs for facil.io engine-level
- * allocations.
+ * @brief Install custom memory management procs for the shared event_loop
+ *        engine's own internal allocations.
  *
- * By default, the facil.io engine shared by every chttpsvr instance in this
- * process (see the module notes on the shared engine) allocates all of its
- * own memory (the connection-state table, protocol/listener structs, TLS
- * connection objects, request-body streaming buffers, and so on) using its
- * own internal allocator (falling back to libc malloc/free/calloc/realloc for
- * a handful of auxiliary structures). Calling this function with a non-NULL
- * *mp* redirects all of that to the supplied procs instead, exactly like the
- * memory management procs accepted by every other module in this library.
- * Passing NULL reverts to the default behavior.
+ * By default, the event_loop reactor shared by every chttpsvr instance in
+ * this process (see the module notes on the shared engine) allocates its
+ * own memory (the registration table, per-connection dispatch state, and
+ * so on) using the default allocator. Calling this function with a
+ * non-NULL *mp* redirects all of that to the supplied procs instead,
+ * exactly like the memory management procs accepted by every other module
+ * in this library. Passing NULL reverts to the default behavior.
  *
- * Unlike chttpsvr_set_engine_logger(), which can be swapped at any time, this
- * function may only be called before the first chttpsvr_start() in the
- * process: once the engine has allocated memory with one set of procs,
- * swapping to a different malloc/free pairing would corrupt the heap. It may
- * be called again after the engine has fully stopped (chttpsvr_engine_wait()
- * has returned), before the next chttpsvr_start().
+ * This is independent of the allocator each individual chttpsvr instance
+ * uses for its own connections/requests (configured via create_chttpsvr_mp,
+ * following the usual _mp convention); this function only affects the one
+ * shared reactor's own construction.
  *
- * A small amount of memory (a few blocks used by facio's default arena) is
- * always allocated once via mmap at library load time, before any call to
- * this function is possible; this is harmless and freed normally at process
- * exit, but it means a custom allocator can never observe absolutely every
- * byte ever mapped by the process.
- *
- * Hard requirement: every pointer returned by mp->malloc/calloc/realloc must
- * be aligned to at least 16 bytes. The engine's allocation entry points are
- * compiler-annotated as always returning 16-byte-aligned memory (matching
- * facio's own default arena, which guarantees it by construction), and that
- * annotation is not conditioned on whether custom procs are installed - the
- * compiler is free to emit aligned loads/stores against the returned
- * pointer at every call site in this codebase regardless. A misaligned
- * pointer from a non-conforming allocator is therefore undefined behavior,
- * not merely a missed optimization; a debug-time check aborts with a clear
- * message if this is violated (see _fio_mem_procs_check_align16 in
- * cfio_engine's fio.c), but a release build cannot be relied on to catch
- * it. Standard malloc/calloc/realloc on glibc/x86-64 already satisfy this,
- * so this is only a concern for a bump/pool/arena-style custom allocator
- * with a smaller natural alignment.
+ * Unlike chttpsvr_set_engine_logger(), which can be swapped at any time,
+ * this function may only be called before the first chttpsvr_start() in
+ * the process: once the reactor has allocated memory with one set of
+ * procs, swapping to a different malloc/free pairing would corrupt the
+ * heap. It may be called again after the reactor has fully stopped
+ * (chttpsvr_engine_wait() has returned), before the next chttpsvr_start().
  *
  * @param mp  Custom memory management procs, or NULL to revert to the
- *            default. If non-NULL, all four function pointers must be set,
- *            and each must return memory aligned to at least 16 bytes.
+ *            default. If non-NULL, all four function pointers must be set.
  * @return ccol_success, ccol_invalid_args (mp is non-NULL but has a NULL
  *         function pointer), or ccol_not_permitted (the engine is already
  *         running; stop it first).
@@ -393,7 +437,7 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 /* ========================================================================== */
 
 /**
- * @brief Block until the facil.io engine thread exits.
+ * @brief Block until the shared event_loop engine's reactor threads exit.
  *
  * Returns immediately if the engine was never started or has already stopped.
  *
@@ -409,7 +453,7 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 void chttpsvr_engine_wait(void);
 
 /**
- * @brief Signal the facil.io engine to stop.
+ * @brief Signal the shared event_loop engine to stop.
  *
  * Non-blocking and async-signal-safe: safe to call from a signal handler.
  * The engine drains in-flight requests and exits; chttpsvr_engine_wait() can
@@ -466,9 +510,9 @@ create_chttpsvr(clog cl, char **err_str) {
  * @brief Internal destroy; use chttpsvr_destroy macro instead.
  *
  * Stops the server if it is running, drains the server's worker pool, and
- * if this is the last running server, stops the facil.io engine and waits
- * for it to exit.  Frees all owned resources including sub-routers, routes,
- * and the server-owned ctpool.
+ * if this is the last running server, stops the shared event_loop engine and
+ * waits for it to exit.  Frees all owned resources including sub-routers,
+ * routes, and the server-owned ctpool.
  */
 void __chttpsvr_destroy(chttpsvr srv);
 
@@ -566,8 +610,8 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  * @brief Register this server's listener on the shared engine.
  *
  * Binds the listening socket and begins accepting connections.  If this is
- * the first chttpsvr_start() call in the process, the shared facil.io event
- * loop is started automatically in a background thread.  Subsequent calls
+ * the first chttpsvr_start() call in the process, the shared event_loop
+ * reactor is started automatically in background threads.  Subsequent calls
  * for additional servers reuse the already-running engine.
  *
  * The server creates its own ctpool (worker_thread_count threads,

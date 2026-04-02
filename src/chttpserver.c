@@ -22,20 +22,25 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
-#include <cfio_engine.h>
+#include <chttp1_parser.h>
 #include <chttpserver.h>
+#include <cthreadcomm.h>
 #include <cthreadpool.h>
-#include <fio.h>
-#include <fio_tls.h>
-#include <fiobj.h>
-#include <http.h>
-#include <http1.h>
+#include <ctls.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -43,7 +48,6 @@ SOFTWARE.
 /*                         INTERNAL TYPES                                     */
 /* ========================================================================== */
 
-/* Forward declaration required for the self-referential next pointer below. */
 typedef struct chttpsvr_mw_node chttpsvr_mw_node_t;
 
 /** Linked list node for middleware entries.
@@ -136,178 +140,660 @@ typedef struct dispatch_ctx {
   int mw_idx;                    /* next entry to dispatch */
 } dispatch_ctx_t;
 
-/** Per-request object. */
-struct chttpsvr_req {
-  chttp_method_t method;
-  const char *path;      /* NUL-terminated decoded path */
-  const char *raw_query; /* NUL-terminated raw query, or NULL */
-  const void *body_data;
-  size_t body_len;
-  bool is_streaming;
-  void *_h;          /* opaque http_s*, valid for the life of the worker's
-                         dispatch; used by chttpsvr_req_read/_stream_error */
-  void *_body_owned; /* buffered-route ingestion buffer; freed by
-                         _task_worker after the handler chain returns */
+/* A small growable buffer used both for a buffered route's whole-body
+ * accumulation and for a streaming route's "pending, not yet delivered to
+ * chttpsvr_req_read" body bytes (see _on_body's own comment). */
+typedef struct {
+  char *buf;
+  size_t cap;
+  size_t len; /* valid bytes currently held */
+  size_t pos; /* streaming only: how much of [0,len) chttpsvr_req_read has
+               * already delivered to the caller */
+} growbuf_t;
 
-  /* Pre-extracted headers (always populated; all requests go through ctpool).
-   */
-  char **_hdr_names;
-  char **_hdr_values;
-  size_t _hdr_count;
+typedef enum {
+  CONN_ST_TLS_HANDSHAKE,
+  CONN_ST_READING_HEADERS,
+  CONN_ST_DIVERTED, /* worker thread owns fd; no reactor registration */
+  CONN_ST_CLOSING
+} conn_state_t;
 
-  const char **param_names; /* borrowed from route (const aliases) */
-  char **param_values;      /* owned */
-  int param_count;
-
-  chttpsvr_qparams_t *_qparams; /* NULL until first query access */
-  bool _qparams_attempted;      /* true after first parse attempt */
-  bool _qparams_parse_oom;      /* true when _parse_qparams returned OOM */
-  const char **_qresult;        /* scratch for multi-value return */
-  size_t _qresult_cap;
-  bool _qresult_oom; /* true when _qresult realloc failed in chttpsvr_req_query
-                      */
-
-  dispatch_ctx_t *_dispatch;
-  ccol_memmgmt_procs_t *m_procs;
-
-  /* max_body_read_duration_ms bookkeeping; see _check_read_deadline. */
-  struct timespec _read_deadline;
-  bool _read_deadline_set;
-  bool _deadline_exceeded;
-};
-
-/** Streaming-dispatch context (heap-allocated before http_pause).
- *
- * Built at headers-complete time, before the body has arrived; there is no
- * body/body_len here. Buffered routes accumulate the body in _task_worker
- * (via http1_stream_read) directly into the stack-local chttpsvr_req; only
- * streaming routes pull it lazily through chttpsvr_req_read. */
-typedef struct streaming_ctx {
-  http_pause_handle_s *ph;
+/** Per-connection object. Persists across every keep-alive request on this
+ * connection; per-request scratch fields (method/path/headers/route/
+ * dispatch/resp/body buffers) are reset by _conn_reset_for_request() before
+ * each new request begins. Heap-allocated; owned by whichever of (the
+ * reactor's event_reg, a worker's ctpool task) currently holds it -- never
+ * both at once (see the header-read callback and _task_worker for the
+ * handoff points). */
+typedef struct chttpsvr_conn {
+  int fd;
   struct chttpserver *srv;
-  chttpsvr_router *router;
-  chttpsvr_route_t *route;
+  event_reg *reg; /* current registration; NULL while diverted */
+  ctls_conn_t *tls;
+  conn_state_t state;
+  chttp1_parser_t parser;
+
+  /* Per-request scratch. */
   chttp_method_t method;
-  void *h;          /* opaque http_s*; still valid (paused, not destroyed) until
-                       http1_stream_release is called in _task_worker */
-  char *path;       /* owned */
-  char *raw_query;  /* owned, or NULL */
-  char **hdr_names; /* owned arrays */
-  char **hdr_values;
-  size_t hdr_count;
-  char **param_values; /* owned */
-  int param_count;
-  chttpsvr_resp resp;
+  /* owned, RAW (still percent-encoded): route matching must operate on this
+   * exact form -- _match_segments/_seg_matches_literal split on a literal
+   * '/' and decode each segment individually, which is the only way to tell
+   * an actual path separator from a %2F encoded one inside a {param}
+   * segment. Decoding the whole path eagerly here (as an earlier version of
+   * this function did) would turn %2F into a real '/' before segmentation,
+   * silently splitting one param segment into two path segments, and would
+   * also have to rejects the entire request on any malformed %XX anywhere
+   * in the path -- this module's own tests document that a malformed
+   * encoding in one segment must fall out as an ordinary route mismatch
+   * (404), not a 400, since _decode_seg_alloc/_seg_matches_literal already
+   * treat a decode failure as "this segment doesn't match" further down. */
+  char *path;
+  /* owned, fully URL-decoded; populated by _on_headers_complete() once a
+   * route has actually matched (decoding is then guaranteed to succeed,
+   * since a match already proved every segment decodes cleanly) -- this is
+   * what chttpsvr_req_path() returns. */
+  char *decoded_path;
+  char *raw_query; /* owned, or NULL */
+  char **hdr_names, **hdr_values;
+  size_t hdr_count, hdr_cap;
+  chttpsvr_router *matched_router;
+  chttpsvr_route_t *matched_route;
+  char **matched_param_values;
   dispatch_ctx_t dispatch;
+  chttpsvr_resp resp;
+  bool req_rejected;
+  int reject_status;
+  bool expects_continue;
+  growbuf_t body; /* buffered-route whole body, or streaming pending bytes */
+  size_t body_bytes_seen; /* cumulative, for max_body_size enforcement */
+  bool body_too_large;
+
+  /* Leftover bytes from the reactor's own header-parsing read buffer, past
+   * chttp1_parser_consumed(), copied out (see _conn_start_diverted) since
+   * the original buffer is the reactor thread's own stack memory and does
+   * not survive past the callback that produced it. Freed by _task_worker
+   * once chttp1_stream_prepare()/_tls() has copied it into its own
+   * heap buffer. */
+  char *_carry_over;
+  size_t _carry_over_len;
+
+  /* max_body_read_duration_ms bookkeeping. */
+  struct timespec read_deadline;
+  bool read_deadline_set;
+  bool deadline_exceeded;
+
+  /* Idle-timeout sweep bookkeeping; list fields guarded by srv->idle_mutex. */
+  struct timespec last_activity;
+  struct chttpsvr_conn *idle_prev, *idle_next;
+  bool in_idle_list;
+
   ccol_memmgmt_procs_t *m_procs;
-} streaming_ctx_t;
+} chttpsvr_conn_t;
+
+/** Per-request object handed to handlers/middleware. Thin view over a
+ * chttpsvr_conn_t plus the worker's own chttp1_stream_t (the latter cannot
+ * live on chttpsvr_conn_t itself: it is only valid, and only exists, for the
+ * duration of one worker's turn driving one request's body). */
+struct chttpsvr_req {
+  chttpsvr_conn_t *conn;
+  chttp1_stream_t *stream;  /* worker-local; NULL until the worker sets it up */
+  const char **param_names; /* borrowed from route (const aliases) */
+  chttpsvr_qparams_t *_qparams;
+  bool _qparams_attempted;
+  bool _qparams_parse_oom;
+  const char **_qresult;
+  size_t _qresult_cap;
+  bool _qresult_oom;
+  ccol_memmgmt_procs_t *m_procs;
+};
 
 /** Main server struct. */
 struct chttpserver {
   chttpsvr_router **routers; /* [0] = root, [1..n] = sub-routers */
   size_t router_count;
   size_t router_cap;
-  ctpool worker_pool; /* owned; created at chttpsvr_start, replaced on a
-                         restart, and destroyed at __chttpsvr_destroy. Every
-                         read and write goes through mutex (see
-                         _task_pause_cb and _wait_and_detach_worker_pool):
-                         an already-accepted keep-alive connection's
-                         _on_headers_complete/_task_pause_cb does not check
-                         `started` and can still fire while a restart or
-                         teardown is swapping this pointer out from under
-                         it. */
-  fio_tls_s
-      *tls; /* non-NULL when TLS was configured; freed in __chttpsvr_destroy */
+  ctpool worker_pool;
+  ctls_ctx_t *tls_ctx; /* non-NULL when TLS configured */
   mutex_t mutex;
-  cond_var_t
-      requests_done_cv;   /* signalled when in_flight_requests drops to 0 */
-  int in_flight_requests; /* # requests dispatched (from http_pause onward)
-                             through completion; guarded by mutex */
-  rw_lock_t routes_lock;  /* guards routers[], route_count, routes[],
-                              mw lists */
-  clog cl; /* server-owned logger; a derived logger (component=http-server)
-              when cl was passed in, or an internal stderr/FATAL-only logger
-              when NULL was passed; closed in __chttpsvr_destroy */
-  intptr_t listen_uuid;       /* facio listener uuid; -1 when not started */
-  bool started;               /* true after a successful chttpsvr_start call */
-  bool contributed_to_engine; /* true once this server has acquired its one
-                                  shared cfio_engine reference (see
-                                  chttpsvr_start/__chttpsvr_destroy) */
-  _Atomic unsigned stream_read_timeout_ms;    /* set at chttpsvr_start; bounds
-                                                 each http1_stream_read wait for
-                                                 more body bytes, for both
-                                                 buffered and streaming routes.
-                                                 _Atomic (plain store/load, no
-                                                 mutex) because a restart writes
-                                                 it while an already-accepted
-                                                 keep-alive connection's worker
-                                                 thread may concurrently be
-                                                 reading it once per body chunk
-                                                 on the hot ingestion path (see
-                                                 _ingest_buffered_body /
-                                                 chttpsvr_req_read); a mutex
-                                                 there would add lock/unlock
-                                                 overhead to every chunk read. */
-  _Atomic unsigned max_body_read_duration_ms; /* set at chttpsvr_start; 0 =
-                                                 no limit. Bounds the *total*
-                                                 time spent reading one
-                                                 request's body, closing the
-                                                 trickle-forever loophole
-                                                 that stream_read_timeout_ms
-                                                 alone leaves open (see
-                                                 _check_read_deadline).
-                                                 _Atomic for the same reason
-                                                 as stream_read_timeout_ms
-                                                 above. */
+  cond_var_t requests_done_cv;
+  int in_flight_requests;
+  rw_lock_t routes_lock;
+  clog cl;
+
+  int listen_fd; /* -1 when not started */
+  bool is_unix_socket;
+  char *unix_socket_path; /* owned; NULL for a TCP listener */
+  event_reg *listen_reg;
+  bool started;
+  bool contributed_to_engine;
+
+  _Atomic unsigned stream_read_timeout_ms;
+  _Atomic unsigned max_body_read_duration_ms;
+  _Atomic unsigned response_write_timeout_ms;
+  _Atomic unsigned idle_timeout_ms; /* keep-alive idle timeout; 0 = disabled */
+  size_t max_body_size;
+  size_t max_header_bytes;        /* 0 = chttp1_parser's own built-in default */
+  _Atomic size_t max_connections; /* 0 = unlimited */
+  bool enable_keepalive; /* SO_KEEPALIVE on every accepted TCP connection;
+                          * set once at chttpsvr_start, read-only afterward,
+                          * same treatment as max_body_size above */
+  _Atomic size_t current_connections;
+
+  /* Idle-connection registry for the idle-timeout sweep: every connection
+   * currently owned by the reactor and waiting for its next request's
+   * headers (never a diverted, worker-owned connection). */
+  mutex_t idle_mutex;
+  chttpsvr_conn_t *idle_head, *idle_tail;
+
   ccol_memmgmt_procs_t *m_procs;
 };
 
 /* ========================================================================== */
-/*                         GLOBAL STATE                                       */
+/*                    SHARED STATIC REACTOR (chttpserver's OWN engine)        */
 /* ========================================================================== */
 
 /*
- * The raw facil.io reactor lifecycle (start/stop/one-time global init) is
- * owned by the shared cfio_engine module (src/cfio_engine.c), not by this
- * file; see cfio_engine.h for why: chttpclient.c's async engine (Tier 2/3)
- * acquires/releases references to the exact same underlying reactor, so both
- * modules can run simultaneously in the same process. What remains here is
- * purely chttpserver-local bookkeeping: each chttpsvr instance acquires
- * exactly one shared-engine reference for its whole lifetime (across any
- * number of start/stop/restart cycles), tracked by
- * chttpserver::contributed_to_engine and released exactly once, in
- * __chttpsvr_destroy; guarded by the instance's own srv->mutex, so no
- * dedicated global mutex is needed for it any more.
+ * One static, process-wide event_loop reactor shared by every chttpsvr
+ * instance in the process -- confirmed via AskUserQuestion as one of two
+ * separate, independent reactors (the other belongs to chttpclient, its own
+ * analogous static event_loop; see chttpclient.c). Unlike the old
+ * facio-backed design (coordinated via the now-deleted cfio_engine.c),
+ * chttpserver and chttpclient no longer share a single process-wide
+ * reactor, so this lifecycle wrapper needs no cross-module coordination at
+ * all, only ref-counting across chttpsvr instances (mirroring the
+ * acquire/release/reaper-thread shape cfio_engine.c originally established,
+ * simplified: no atexit safety net cross-module ordering concern, since
+ * there is nothing else in the process racing to bring this specific
+ * reactor up first).
  */
-/* Installs a minimal default engine logger if the caller has not already set
- * one via chttpsvr_set_engine_logger(). Deliberately NOT a pthread_once: a
- * fully-stopped-then-restarted engine (chttpsvr_engine_wait() having already
- * nulled the logger via fio_set_logger(NULL), followed by a fresh
- * chttpsvr_start() well after that; an explicitly supported restart
- * pattern) must still get a fresh default logger, exactly like the
- * pre-unification code's per-engine-start check did; a one-shot guard would
- * silently leave the engine loggerless forever after the first stop. Instead
- * this is called once per *server's own* first start (guarded by the
- * need_acquire check at its call site in chttpsvr_start), and is idempotent
- * in effect regardless of how many times or from how many concurrent callers
- * it runs, since it only ever installs a default when fio_has_logger() is
- * still false at the moment it runs; also deliberately decoupled from "is
- * this the very first chttpsvr_start() call to bring the shared engine up":
- * with a shared engine, chttpclient's async engine may already have started
- * it before chttpserver ever calls chttpsvr_start(), so this cannot be tied
- * to that transition either. */
-static void _install_default_engine_logger(void) {
-  if (!fio_has_logger()) {
-    clog base = clog_open_fd(2, CLOG_FATAL);
-    if (base) {
-      clog derived = clog_derive(base);
-      clog_close(base);
-      if (derived) {
-        clog_set_field(derived, "component", "http-engine");
-        fio_set_logger(derived);
-      }
+static event_loop g_reactor = NULL;
+static size_t g_reactor_refs = 0;
+static mutex_t g_engine_mutex;
+static cond_var_t g_engine_stopped_cv;
+static once_flag_t g_engine_once = ONCE_INIT;
+static bool g_engine_stopping = false;
+static thread_id_t g_reaper_thread;
+static bool g_reaper_joinable = false;
+static ccol_memmgmt_procs_t g_engine_mp_storage;
+static ccol_memmgmt_procs_t *g_engine_mp = NULL;
+
+/* Repurposed "engine logger" (confirmed via AskUserQuestion): the new
+ * event_loop reactor has no internal logging of its own to forward, unlike
+ * facio's own unconditional FIO_LOG_* calls -- so this now captures
+ * chttpserver's OWN reactor-thread diagnostics (TLS handshake failures,
+ * listener bind errors, idle-timeout closes) across every chttpsvr instance
+ * sharing the one process-wide reactor. NULL (the default) means
+ * diagnostics are simply skipped; there is no default logger installed any
+ * more, since there is nothing generating log-worthy events until the
+ * caller opts in via chttpsvr_set_engine_logger(). Guarded by
+ * g_engine_mutex purely against a torn pointer read/write racing a
+ * concurrent chttpsvr_set_engine_logger() call -- clog itself is already
+ * thread-safe for concurrent logging calls through one handle. */
+static clog g_engine_logger = NULL;
+
+/* Idle-timeout sweep thread: one per process, shared by every chttpsvr
+ * instance's idle-connection registry (each server has its own
+ * srv->idle_head/tail list; the sweep just walks every started server). */
+static thread_id_t g_idle_sweep_thread;
+static bool g_idle_sweep_running = false;
+static bool g_idle_sweep_stop_flag = false;
+static mutex_t g_servers_mutex;
+static struct chttpserver **g_servers = NULL;
+static size_t g_servers_count = 0, g_servers_cap = 0;
+
+static void _idle_sweep_stop_if_running(void);
+
+static void _engine_globals_init(void) {
+  mutex_init(g_engine_mutex);
+  cond_var_init(g_engine_stopped_cv);
+  mutex_init(g_servers_mutex);
+  /* SIGPIPE must be suppressed for all TCP servers, unconditionally: a
+   * client can close its read side (or the whole connection) while a worker
+   * is still mid-write on the response, and chttp1_stream_write's raw
+   * write()/send() has no per-call SIGNONE suppression of its own. Without
+   * this, that write raises SIGPIPE, whose default disposition kills the
+   * whole process -- exactly the behavior facio's own fio.c already
+   * documents and installs this same global handler for. */
+  signal(SIGPIPE, SIG_IGN);
+}
+
+static clog _engine_logger_get(void) {
+  call_once(g_engine_once, _engine_globals_init);
+  mutex_lock(g_engine_mutex);
+  clog l = g_engine_logger;
+  mutex_unlock(g_engine_mutex);
+  return l;
+}
+
+static void _join_reaper_if_needed_locked(void) {
+  if (g_reaper_joinable) {
+    thread_join(g_reaper_thread);
+    g_reaper_joinable = false;
+  }
+}
+
+static void *_engine_reaper_fn(void *arg) {
+  (void)arg;
+  event_loop loop_to_destroy;
+  mutex_lock(g_engine_mutex);
+  loop_to_destroy = g_reactor;
+  mutex_unlock(g_engine_mutex);
+  /* Stop the idle sweep thread before tearing down the reactor it calls
+   * into (_conn_close -> event_loop_remove) -- see
+   * _idle_sweep_stop_if_running's own doc comment. */
+  _idle_sweep_stop_if_running();
+  if (loop_to_destroy) event_loop_destroy(loop_to_destroy);
+  /* g_servers' backing array is a plain realloc'd buffer, not itself tied to
+   * any one server's lifetime -- every server that ever contributed a ref
+   * to this engine has already been unregistered (and destroyed) by the
+   * time the ref count could reach zero and get here, so g_servers_count is
+   * always 0 at this point; free the now-empty array itself so it doesn't
+   * show up as a still-reachable allocation for the rest of the process. */
+  mutex_lock(g_servers_mutex);
+  free(g_servers);
+  g_servers = NULL;
+  g_servers_cap = 0;
+  mutex_unlock(g_servers_mutex);
+  mutex_lock(g_engine_mutex);
+  g_reactor = NULL;
+  g_engine_stopping = false;
+  /* The engine-wide diagnostics logger (chttpsvr_set_engine_logger) is
+   * scoped to this reactor's own lifetime, same as the reactor itself:
+   * closed here so a full engine stop doesn't leave it dangling as a
+   * still-reachable allocation for the rest of the process's life. A later
+   * chttpsvr_start() can bring the reactor back up; if engine-level
+   * logging is wanted after that, chttpsvr_set_engine_logger() must be
+   * called again, exactly like the "no logger configured" default already
+   * documented for a fresh process. */
+  clog old_logger = g_engine_logger;
+  g_engine_logger = NULL;
+  cond_var_broadcast(g_engine_stopped_cv);
+  mutex_unlock(g_engine_mutex);
+  if (old_logger) clog_close(old_logger);
+  return NULL;
+}
+
+static void _spawn_reaper(void) {
+  thread_id_t reaper;
+  if (thread_create(reaper, _engine_reaper_fn, NULL) != 0) {
+    /* No safer fallback than running it inline (OOM-class failure); nothing
+     * to join afterward since it already ran to completion synchronously. */
+    _engine_reaper_fn(NULL);
+    return;
+  }
+  mutex_lock(g_engine_mutex);
+  g_reaper_thread = reaper;
+  g_reaper_joinable = true;
+  mutex_unlock(g_engine_mutex);
+}
+
+static ccol_retval_t _engine_acquire(void) {
+  call_once(g_engine_once, _engine_globals_init);
+  mutex_lock(g_engine_mutex);
+  while (g_engine_stopping) cond_var_wait(g_engine_stopped_cv, g_engine_mutex);
+  _join_reaper_if_needed_locked();
+
+  if (!g_reactor) {
+    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    size_t nthreads = (cpus > 0) ? (size_t)cpus : 1;
+    char *err = NULL;
+    g_reactor =
+        event_loop_create_with_mprocs(256, 4, nthreads, g_engine_mp, &err);
+    if (!g_reactor) {
+      mutex_unlock(g_engine_mutex);
+      return ccol_not_enough_memory;
     }
   }
+  g_reactor_refs++;
+  mutex_unlock(g_engine_mutex);
+  return ccol_success;
+}
+
+static void _engine_release(void) {
+  bool should_reap = false;
+  mutex_lock(g_engine_mutex);
+  if (g_reactor_refs > 0) g_reactor_refs--;
+  if (g_reactor_refs == 0 && g_reactor) {
+    g_engine_stopping = true;
+    should_reap = true;
+  }
+  mutex_unlock(g_engine_mutex);
+  if (should_reap) _spawn_reaper();
+}
+
+static void _engine_wait_until_stopped(void) {
+  call_once(g_engine_once, _engine_globals_init);
+  mutex_lock(g_engine_mutex);
+  while (g_reactor || g_engine_stopping)
+    cond_var_wait(g_engine_stopped_cv, g_engine_mutex);
+  _join_reaper_if_needed_locked();
+  mutex_unlock(g_engine_mutex);
+}
+
+static void _engine_force_stop(void) {
+  call_once(g_engine_once, _engine_globals_init);
+  bool should_reap = false;
+  mutex_lock(g_engine_mutex);
+  if (g_reactor) {
+    g_reactor_refs = 0;
+    g_engine_stopping = true;
+    should_reap = true;
+  }
+  mutex_unlock(g_engine_mutex);
+  if (should_reap) _spawn_reaper();
+}
+
+/* ========================================================================== */
+/*                    IDLE-TIMEOUT SWEEP (module-local, own thread)           */
+/* ========================================================================== */
+
+static void _conn_close(chttpsvr_conn_t *conn);
+static void _conn_reject_and_close(chttpsvr_conn_t *conn);
+
+/* Registers a server so the idle sweep thread walks its idle-connection
+ * list too. Called from chttpsvr_start -- which runs not just once per
+ * server but again on every stop/start restart cycle -- so this must be
+ * idempotent: skip the add if srv is already present. Without this check,
+ * a srv that goes through N restart cycles ends up in g_servers N+1 times,
+ * and _servers_unregister's single-occurrence removal (see below) would
+ * leave N stale, dangling pointers behind after __chttpsvr_destroy frees
+ * srv -- a real use-after-free the idle sweep thread would read on its very
+ * next pass, caught by valgrind via
+ * restart_races_live_keep_alive_connection_is_safe (which restarts one srv
+ * 5 times before destroying it). */
+static void _servers_register(struct chttpserver *srv) {
+  mutex_lock(g_servers_mutex);
+  for (size_t i = 0; i < g_servers_count; i++) {
+    if (g_servers[i] == srv) {
+      mutex_unlock(g_servers_mutex);
+      return;
+    }
+  }
+  if (g_servers_count == g_servers_cap) {
+    size_t new_cap = g_servers_cap ? g_servers_cap * 2 : 8;
+    struct chttpserver **nn = (struct chttpserver **)realloc(
+        g_servers, new_cap * sizeof(struct chttpserver *));
+    if (nn) {
+      g_servers = nn;
+      g_servers_cap = new_cap;
+    }
+  }
+  if (g_servers_count < g_servers_cap) g_servers[g_servers_count++] = srv;
+  mutex_unlock(g_servers_mutex);
+}
+
+static void _servers_unregister(struct chttpserver *srv) {
+  mutex_lock(g_servers_mutex);
+  for (size_t i = 0; i < g_servers_count; i++) {
+    if (g_servers[i] == srv) {
+      g_servers[i] = g_servers[g_servers_count - 1];
+      g_servers_count--;
+      break;
+    }
+  }
+  mutex_unlock(g_servers_mutex);
+}
+
+#define _CHTTPSVR_IDLE_SWEEP_INTERVAL_MS 1000
+
+static void *_idle_sweep_fn(void *arg) {
+  (void)arg;
+  while (!g_idle_sweep_stop_flag) {
+    struct timespec ts = {
+        .tv_sec = _CHTTPSVR_IDLE_SWEEP_INTERVAL_MS / 1000,
+        .tv_nsec = (_CHTTPSVR_IDLE_SWEEP_INTERVAL_MS % 1000) * 1000000L};
+    nanosleep(&ts, NULL);
+    if (g_idle_sweep_stop_flag) break;
+
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    mutex_lock(g_servers_mutex);
+    for (size_t i = 0; i < g_servers_count; i++) {
+      struct chttpserver *srv = g_servers[i];
+      unsigned idle_ms = atomic_load(&srv->idle_timeout_ms);
+      if (!idle_ms) continue;
+
+      /* Collect timed-out connections under idle_mutex, claiming (removing)
+       * each one from the list right here rather than merely copying its
+       * pointer out, then close them outside the lock: _conn_close
+       * ultimately calls event_loop_remove, which must not run while
+       * holding a lock a callback dispatched from that same removal could
+       * also need. Claiming at collection time -- not just after, in a
+       * separately-locked pass -- is what stops a connection from being
+       * simultaneously "found here" and dispatched to _conn_pump on a
+       * reactor thread; see _idle_list_try_claim's own doc comment for the
+       * real use-after-free (a freed SSL* read concurrently by
+       * ctls_conn_read) this closes. */
+      chttpsvr_conn_t *to_close[64];
+      size_t to_close_n = 0;
+      mutex_lock(srv->idle_mutex);
+      chttpsvr_conn_t *c = srv->idle_head;
+      while (c && to_close_n < 64) {
+        chttpsvr_conn_t *next = c->idle_next;
+        long elapsed_ms = (long)(now.tv_sec - c->last_activity.tv_sec) * 1000 +
+                          (now.tv_nsec - c->last_activity.tv_nsec) / 1000000L;
+        if ((unsigned long)elapsed_ms >= idle_ms) {
+          if (c->idle_prev) c->idle_prev->idle_next = c->idle_next;
+          if (c->idle_next) c->idle_next->idle_prev = c->idle_prev;
+          if (srv->idle_head == c) srv->idle_head = c->idle_next;
+          if (srv->idle_tail == c) srv->idle_tail = c->idle_prev;
+          c->idle_prev = c->idle_next = NULL;
+          c->in_idle_list = false;
+          to_close[to_close_n++] = c;
+        }
+        c = next;
+      }
+      mutex_unlock(srv->idle_mutex);
+      if (to_close_n > 0) {
+        clog el = _engine_logger_get();
+        if (el)
+          log_info(el, "idle-timeout closing %zu connection(s)", to_close_n);
+      }
+      for (size_t j = 0; j < to_close_n; j++) _conn_close(to_close[j]);
+    }
+    mutex_unlock(g_servers_mutex);
+  }
+  return NULL;
+}
+
+static void _idle_sweep_start_if_needed(void) {
+  mutex_lock(g_servers_mutex);
+  if (!g_idle_sweep_running) {
+    g_idle_sweep_stop_flag = false;
+    if (thread_create(g_idle_sweep_thread, _idle_sweep_fn, NULL) == 0)
+      g_idle_sweep_running = true;
+  }
+  mutex_unlock(g_servers_mutex);
+}
+
+/* Stops and joins the idle sweep thread, if one is running. Tied to the
+ * shared engine's own lifetime (called from the engine reaper, alongside
+ * event_loop_destroy) rather than to any single server's stop/destroy,
+ * since the sweep thread walks every registered server, not one -- an
+ * unjoined sweep thread still running at process exit is exactly the class
+ * of "possibly lost" glibc TLS (allocate_dtv) false positive this
+ * codebase's other reaper threads are already documented to close (see
+ * this module's own reaper thread above). */
+static void _idle_sweep_stop_if_running(void) {
+  bool was_running = false;
+  thread_id_t t = {0};
+  mutex_lock(g_servers_mutex);
+  if (g_idle_sweep_running) {
+    g_idle_sweep_stop_flag = true;
+    t = g_idle_sweep_thread;
+    was_running = true;
+    g_idle_sweep_running = false;
+  }
+  mutex_unlock(g_servers_mutex);
+  if (was_running) thread_join(t);
+}
+
+static void _idle_list_add(chttpsvr_conn_t *conn) {
+  struct chttpserver *srv = conn->srv;
+  mutex_lock(srv->idle_mutex);
+  if (!conn->in_idle_list) {
+    conn->idle_prev = srv->idle_tail;
+    conn->idle_next = NULL;
+    if (srv->idle_tail) srv->idle_tail->idle_next = conn;
+    srv->idle_tail = conn;
+    if (!srv->idle_head) srv->idle_head = conn;
+    conn->in_idle_list = true;
+  }
+  clock_gettime(CLOCK_MONOTONIC, &conn->last_activity);
+  mutex_unlock(srv->idle_mutex);
+}
+
+static void _idle_list_remove(chttpsvr_conn_t *conn) {
+  struct chttpserver *srv = conn->srv;
+  mutex_lock(srv->idle_mutex);
+  if (conn->in_idle_list) {
+    if (conn->idle_prev) conn->idle_prev->idle_next = conn->idle_next;
+    if (conn->idle_next) conn->idle_next->idle_prev = conn->idle_prev;
+    if (srv->idle_head == conn) srv->idle_head = conn->idle_next;
+    if (srv->idle_tail == conn) srv->idle_tail = conn->idle_prev;
+    conn->idle_prev = conn->idle_next = NULL;
+    conn->in_idle_list = false;
+  }
+  mutex_unlock(srv->idle_mutex);
+}
+
+/* Attempts to atomically claim conn out of the idle list for exclusive
+ * processing (either dispatching a real I/O event for it, or closing it).
+ * Returns true if conn was idle and has now been removed -- the caller has
+ * sole ownership and may safely read/free conn. Returns false if conn was
+ * NOT in the idle list -- someone else (another dispatch, or a concurrent
+ * closer) already claimed it, and the caller must not touch conn at all.
+ *
+ * This is the one piece of synchronization that makes it safe for
+ * _close_all_idle_connections/_idle_sweep_fn to free a connection found in
+ * the idle list from a thread that is not the reactor: without it, a
+ * connection could be simultaneously "found idle" by a closer AND
+ * dispatched to _conn_pump on a reactor thread (new data having arrived in
+ * the same instant), and the closer's _conn_free (which for a TLS
+ * connection calls ctls_conn_destroy -> SSL_free) could run concurrently
+ * with _conn_pump's ctls_conn_read on the very same SSL* -- a real
+ * use-after-free valgrind caught (a segfault deep in libcrypto's BIO code,
+ * reproduced only against tests_tls.c, since the plaintext path's
+ * equivalent race is a same-shape but much less immediately fatal
+ * "read()/close() lost a race" instead of freeing live OpenSSL state).
+ *
+ * A connection is only ever added to the idle list AFTER the corresponding
+ * event_loop_add/_modify call that makes it dispatchable has already
+ * returned (see _conn_pump's handshake-wait branch and the main read
+ * loop's EWOULDBLOCK branch, and _task_worker's keep-alive re-arm) -- so a
+ * dispatch can, in a narrow window, fire before the idle-list add has
+ * happened yet and see try_claim fail here. That is harmless, not a bug:
+ * this module always uses level-triggered epoll, so a spurious "not idle
+ * yet" claim failure just means the same readiness is reported again on
+ * the very next epoll_wait, by which point the add has long since
+ * completed (a handful of instructions on the same thread, no I/O in
+ * between) -- never a dropped or hung request. */
+static bool _idle_list_try_claim(chttpsvr_conn_t *conn) {
+  struct chttpserver *srv = conn->srv;
+  bool claimed = false;
+  mutex_lock(srv->idle_mutex);
+  if (conn->in_idle_list) {
+    if (conn->idle_prev) conn->idle_prev->idle_next = conn->idle_next;
+    if (conn->idle_next) conn->idle_next->idle_prev = conn->idle_prev;
+    if (srv->idle_head == conn) srv->idle_head = conn->idle_next;
+    if (srv->idle_tail == conn) srv->idle_tail = conn->idle_prev;
+    conn->idle_prev = conn->idle_next = NULL;
+    conn->in_idle_list = false;
+    claimed = true;
+  }
+  mutex_unlock(srv->idle_mutex);
+  return claimed;
+}
+
+/* Closes and frees every connection of srv's still sitting idle (reactor-
+ * owned, awaiting its next pipelined request or simply an open keep-alive
+ * connection nothing has used again yet) -- called from __chttpsvr_destroy,
+ * after chttpsvr_stop() has closed the listener so no new connection can
+ * arrive. Without this, a keep-alive connection a test client never
+ * explicitly closed (the common case: chttpclient's own idle pool keeps a
+ * connection open after a response, not closed) outlives the server that
+ * accepted it, leaking its chttpsvr_conn_t (and everything it owns: path,
+ * headers, route match state, ...) for the rest of the process's life --
+ * caught by valgrind as a real "definitely lost" block traced back to
+ * _conn_create/_listener_on_readable, not a false positive.
+ *
+ * Each candidate is claimed (removed from the idle list) at collection
+ * time, under idle_mutex, via _idle_list_try_claim -- not merely copied
+ * out and closed afterward -- so a connection can never be simultaneously
+ * "found here" and "dispatched to _conn_pump on a reactor thread"; see
+ * _idle_list_try_claim's own doc comment for the use-after-free this
+ * closes. */
+static void _close_all_idle_connections(struct chttpserver *srv) {
+  for (;;) {
+    chttpsvr_conn_t *to_close[64];
+    size_t to_close_n = 0;
+    mutex_lock(srv->idle_mutex);
+    chttpsvr_conn_t *c = srv->idle_head;
+    while (c && to_close_n < 64) {
+      chttpsvr_conn_t *next = c->idle_next;
+      if (c->idle_prev) c->idle_prev->idle_next = c->idle_next;
+      if (c->idle_next) c->idle_next->idle_prev = c->idle_prev;
+      if (srv->idle_head == c) srv->idle_head = c->idle_next;
+      if (srv->idle_tail == c) srv->idle_tail = c->idle_prev;
+      c->idle_prev = c->idle_next = NULL;
+      c->in_idle_list = false;
+      to_close[to_close_n++] = c;
+      c = next;
+    }
+    mutex_unlock(srv->idle_mutex);
+    if (to_close_n == 0) break;
+    for (size_t i = 0; i < to_close_n; i++) _conn_close(to_close[i]);
+  }
+}
+
+/* ========================================================================== */
+/*                         PERCENT-DECODE HELPERS                             */
+/* ========================================================================== */
+
+/* Replaces facio's http_decode_path_unsafe()/http_decode_url_unsafe(): plain
+ * RFC 3986 %XX decoding, with '+' either left literal (path semantics) or
+ * turned into a space (query-string semantics). Safe for in-place decoding
+ * (dst == src): the write index never overtakes the read index. Returns the
+ * decoded length, or -1 on malformed percent-encoding (a '%' not followed by
+ * two hex digits) -- matching both replaced functions' contracts exactly. */
+static int _hex_nibble(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+static ssize_t _percent_decode(char *dst, const char *src, bool plus_as_space) {
+  size_t si = 0, di = 0;
+  while (src[si]) {
+    char c = src[si];
+    if (c == '%') {
+      char c1 = src[si + 1];
+      if (!c1) return -1;
+      int hi = _hex_nibble(c1);
+      char c2 = src[si + 2];
+      int lo = _hex_nibble(c2);
+      if (hi < 0 || lo < 0) return -1;
+      dst[di++] = (char)((hi << 4) | lo);
+      si += 3;
+    } else if (c == '+' && plus_as_space) {
+      dst[di++] = ' ';
+      si++;
+    } else {
+      dst[di++] = c;
+      si++;
+    }
+  }
+  return (ssize_t)di;
+}
+
+static ssize_t _decode_path_unsafe(char *dst, const char *src) {
+  return _percent_decode(dst, src, false);
+}
+
+static ssize_t _decode_url_unsafe(char *dst, const char *src) {
+  return _percent_decode(dst, src, true);
 }
 
 /* Private sentinel returned by _parse_method for unrecognised method strings.
@@ -320,14 +806,13 @@ static void _install_default_engine_logger(void) {
 /* ========================================================================== */
 
 static void _chttpsvr_next(chttpsvr_req *req, chttpsvr_resp *resp);
-static int _on_headers_complete(http_s *h);
-static void _task_pause_cb(http_pause_handle_s *ph);
 static void _task_worker(void *arg);
-static void _task_send_response(http_s *h);
-static void _task_cleanup(void *udata);
-static void _free_task_ctx(streaming_ctx_t *sctx);
 static void _destroy_resp(chttpsvr_resp *resp, ccol_memmgmt_procs_t *mp);
-static void _finalize_response(http_s *h, chttpsvr_resp *resp);
+static void _conn_on_readable(event_loop loop, ccol_selectable *sel, void *arg);
+static void _conn_on_writable(event_loop loop, ccol_selectable *sel, void *arg);
+static void _conn_on_error(event_loop loop, ccol_selectable *sel, void *arg);
+static void _listener_on_readable(event_loop loop, ccol_selectable *sel,
+                                  void *arg);
 
 /* ========================================================================== */
 /*                         PATTERN COMPILATION                                */
@@ -338,39 +823,23 @@ static ccol_retval_t _compile_pattern(const char *pattern, char ***segs_out,
                                       char ***param_names_out,
                                       int *param_count_out,
                                       ccol_memmgmt_procs_t *mp) {
-  /* All valid HTTP paths begin with '/'.  Reject patterns that don't so that
-   * callers receive an immediate error rather than a silently-registered route
-   * that happens to work (both the pattern and request path have the leading
-   * '/' stripped before comparison, so "health" and "/health" would match the
-   * same requests; but the API contract is unambiguous about the leading
-   * slash being required).  Empty string is also rejected by this check. */
   if (pattern[0] != '/') return ccol_invalid_args;
 
   const char *p = pattern;
   if (*p == '/') p++;
 
-  /* Reject a trailing slash.  _match_segments always rejects trailing slashes
-   * in request paths, so a pattern ending with '/' would match nothing with a
-   * trailing slash and silently behave like the no-trailing-slash pattern for
-   * everything else; the opposite of what the registration implies. */
   {
     size_t plen = strlen(p);
     if (plen > 0 && p[plen - 1] == '/') return ccol_invalid_args;
   }
 
-  /* Count segments; reject patterns that contain consecutive slashes (empty
-   * segments), which would produce ambiguous or silently-normalised routes. */
   int seg_count = 0;
   {
     const char *s = p;
     while (*s) {
       const char *e = strchr(s, '/');
       size_t len = e ? (size_t)(e - s) : strlen(s);
-      if (len == 0 && e != NULL) {
-        /* Two adjacent slashes: /foo//bar or a leading // after stripping one
-         */
-        return ccol_invalid_args;
-      }
+      if (len == 0 && e != NULL) return ccol_invalid_args;
       if (len > 0) seg_count++;
       if (!e) break;
       s = e + 1;
@@ -408,15 +877,11 @@ static ccol_retval_t _compile_pattern(const char *pattern, char ***segs_out,
     memcpy(segs[si], s, len);
     segs[si][len] = '\0';
     if (segs[si][0] == '{') {
-      /* Validate that the parameter segment is well-formed: {name} */
       if (len < 3 || segs[si][len - 1] != '}') {
         for (int j = 0; j <= si; j++) _mem_free(mp, segs[j]);
         _mem_free(mp, segs);
         return ccol_invalid_args;
       }
-      /* Validate param name: only [A-Za-z0-9_] are accepted.  Names with
-       * other characters (spaces, hyphens, etc.) can never be looked up via
-       * chttpsvr_req_param and would create silently unreachable parameters. */
       for (size_t ci = 1; ci < len - 1; ci++) {
         char c = segs[si][ci];
         if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
@@ -445,9 +910,7 @@ static ccol_retval_t _compile_pattern(const char *pattern, char ***segs_out,
     for (int i = 0; i < seg_count; i++) {
       if (segs[i][0] == '{') {
         size_t len = strlen(segs[i]);
-        /* Strip leading '{' and trailing '}'. */
-        param_names[pi] =
-            (char *)_mem_alloc(mp, len - 1); /* len-2+1 for NULL */
+        param_names[pi] = (char *)_mem_alloc(mp, len - 1);
         if (!param_names[pi]) {
           for (int j = 0; j < pi; j++) _mem_free(mp, param_names[j]);
           _mem_free(mp, param_names);
@@ -480,12 +943,6 @@ static void _free_route_data(chttpsvr_route_t *r, ccol_memmgmt_procs_t *mp) {
 /*                         URL DECODING HELPERS                               */
 /* ========================================================================== */
 
-/* Decode a path segment (not NUL-terminated) into a heap-allocated string.
- *
- * Returns the decoded string on success.  Returns NULL on failure; when NULL
- * is returned *oom_out (if non-NULL) distinguishes the two failure modes:
- *   true; allocation failure; caller should propagate as OOM (500)
- *   false; bad percent-encoding; caller may treat as no-match (404) */
 static char *_decode_seg_alloc(const char *seg, size_t len,
                                ccol_memmgmt_procs_t *mp, bool *oom_out) {
   if (oom_out) *oom_out = false;
@@ -510,25 +967,16 @@ static char *_decode_seg_alloc(const char *seg, size_t len,
     if (oom_out) *oom_out = true;
     return NULL;
   }
-  /* Use path semantics: '+' is a literal plus character in a path segment,
-   * not a space.  http_decode_url_unsafe (query-string semantics) would
-   * silently turn '+' into ' ', producing inconsistent param values vs the
-   * full decoded path returned by chttpsvr_req_path. */
-  ssize_t dlen = http_decode_path_unsafe(dest, src);
+  ssize_t dlen = _decode_path_unsafe(dest, src);
   if (src_heap) _mem_free(mp, src);
   if (dlen < 0) {
     _mem_free(mp, dest);
-    return NULL; /* bad encoding; *oom_out stays false */
+    return NULL;
   }
   dest[(size_t)dlen] = '\0';
   return dest;
 }
 
-/* Decode a path segment and compare with a literal pattern segment.
- *
- * Returns  1 on match,
- *          0 on no-match (including bad percent-encoding in the path),
- *         -1 on OOM (caller should propagate as a 500, not a 404). */
 static int _seg_matches_literal(const char *path_seg, size_t seg_len,
                                 const char *pattern_seg,
                                 ccol_memmgmt_procs_t *mp) {
@@ -541,20 +989,20 @@ static int _seg_matches_literal(const char *path_seg, size_t seg_len,
 
   if (seg_len + 1 > sizeof(src_buf)) {
     src = (char *)_mem_alloc(mp, seg_len + 1);
-    if (!src) return -1; /* OOM */
+    if (!src) return -1;
     src_heap = true;
   }
   if (seg_len + 1 > sizeof(decoded_buf)) {
     decoded = (char *)_mem_alloc(mp, seg_len + 1);
     if (!decoded) {
       if (src_heap) _mem_free(mp, src);
-      return -1; /* OOM */
+      return -1;
     }
     dec_heap = true;
   }
   memcpy(src, path_seg, seg_len);
   src[seg_len] = '\0';
-  ssize_t dlen = http_decode_path_unsafe(decoded, src);
+  ssize_t dlen = _decode_path_unsafe(decoded, src);
   if (dlen >= 0) decoded[(size_t)dlen] = '\0';
   int result = (dlen >= 0 && strcmp(decoded, pattern_seg) == 0) ? 1 : 0;
   if (src_heap) _mem_free(mp, src);
@@ -580,26 +1028,12 @@ typedef struct {
   route_match_t result;
 } match_result_t;
 
-/* Returns 0 (no path match), 1 (path matched), or -1 (OOM during capture).
- *
- * pv_out: when non-NULL the function allocates the param_values array lazily
- *         (on first captured parameter) and writes the pointer to *pv_out on
- *         success.  On no-match any partially-allocated entries are freed and
- *         *pv_out is set to NULL.  Pass NULL to perform a structure-only check
- *         with zero heap allocation (dry-run mode).
- *
- * OOM is returned when _mem_calloc fails (capture mode) or when a {param}
- * token is longer than 511 bytes and heap allocation for encoding validation
- * fails (dry-run mode).  _decode_seg_alloc failures (bad encoding) are treated
- * as no-match in both modes, ensuring consistent 404 behaviour regardless of
- * whether the method matched. */
 static int _match_segments(const char *sub_path, chttpsvr_route_t *route,
                            char ***pv_out, ccol_memmgmt_procs_t *mp) {
   const char *p = sub_path;
   if (*p == '/') p++;
 
   if (route->seg_count == 0) {
-    /* Matches "/" or "" only. */
     return (*p == '\0') ? 1 : 0;
   }
 
@@ -609,58 +1043,43 @@ static int _match_segments(const char *sub_path, chttpsvr_route_t *route,
     const char *next_sep = strchr(p, '/');
     size_t tok_len = next_sep ? (size_t)(next_sep - p) : strlen(p);
 
-    /* Empty tokens are not valid (trailing slash or double slash). */
     if (tok_len == 0) goto no_match;
 
     if (route->segs[i][0] == '{') {
       if (pv_out) {
-        /* Capture mode: allocate the array lazily on the first parameter so
-         * that routes with params that do not fully match avoid any heap
-         * allocation at all. */
         if (!pv) {
           pv = (char **)_mem_calloc(mp, (size_t)route->param_count,
                                     sizeof(char *));
-          if (!pv) return -1; /* OOM; propagate to caller */
+          if (!pv) return -1;
         }
         bool seg_oom = false;
         char *val = _decode_seg_alloc(p, tok_len, mp, &seg_oom);
         if (!val) {
           if (seg_oom) {
-            /* OOM: free partial captures and propagate so the server returns
-             * 500 rather than a misleading 404. */
             for (int j = 0; j < param_idx; j++) _mem_free(mp, pv[j]);
             _mem_free(mp, pv);
             if (pv_out) *pv_out = NULL;
             return -1;
           }
-          goto no_match; /* bad percent-encoding: treat as no-match (404) */
+          goto no_match;
         }
         pv[param_idx++] = val;
       } else {
-        /* Dry-run: validate percent-encoding without capturing.  Accepting a
-         * malformed token here while capture mode rejects it would make
-         * _match_segments return different results for the same path depending
-         * on whether the method matched, producing incorrect 405 responses
-         * instead of the correct 404.  In-place decoding is safe because
-         * output is always <= input length.  Stack buffer handles tokens up to
-         * 511 bytes; heap fallback for oversized tokens only. */
         char _vbuf[512];
         char *_vp = _vbuf;
         bool _vheap = false;
         if (tok_len + 1 > sizeof(_vbuf)) {
           _vp = (char *)_mem_alloc(mp, tok_len + 1);
-          if (!_vp) return -1; /* OOM */
+          if (!_vp) return -1;
           _vheap = true;
         }
         memcpy(_vp, p, tok_len);
         _vp[tok_len] = '\0';
-        ssize_t _vl = http_decode_path_unsafe(_vp, _vp);
+        ssize_t _vl = _decode_path_unsafe(_vp, _vp);
         if (_vheap) _mem_free(mp, _vp);
-        if (_vl < 0) goto no_match; /* bad encoding; mirrors capture mode */
+        if (_vl < 0) goto no_match;
       }
     } else {
-      /* Literal: compare decoded path token against the pattern literal.
-       * -1 means OOM (propagate as 500), 0 means no-match (404), 1 matches. */
       int lit = _seg_matches_literal(p, tok_len, route->segs[i], mp);
       if (lit < 0) {
         if (pv) {
@@ -674,8 +1093,6 @@ static int _match_segments(const char *sub_path, chttpsvr_route_t *route,
     }
 
     if (i == route->seg_count - 1) {
-      /* Last segment: a trailing '/' means the path has one too many
-       * components; /items/1/ must NOT match /items/{id}. */
       if (next_sep != NULL) goto no_match;
       p += tok_len;
     } else {
@@ -695,34 +1112,14 @@ no_match:
   return 0;
 }
 
-/* Matches `path` (raw, not yet percent-decoded) against `router`'s prefix,
- * segment by segment, decoding each raw path segment before comparing it to
- * the corresponding literal prefix segment; exactly what _seg_matches_literal
- * already does for route-pattern segments. A byte-for-byte strncmp against
- * the raw path (the previous approach) would fail to match a request whose
- * prefix portion happens to be percent-encoded (e.g. "/%61pi/v1/x" for a
- * prefix of "/api/v1"), even though an equivalent root-level route
- * registration would match it via the per-segment decoding _match_segments
- * already performs.
- *
- * Returns 1 on match (sets *sub_path_out to the remainder, "/" if the path
- * was exactly the prefix), 0 on no-match, -1 on OOM.
- *
- * router->prefix is always non-NULL, starts with '/', and contains no "//"
- * (validated in chttpsvr_subrouter at registration time); this function is
- * only ever called for a router with prefix_len > 0 (the caller handles the
- * prefix_len == 0 root-router case directly). */
 static int _prefix_matches(const char *path, chttpsvr_router *router,
                            ccol_memmgmt_procs_t *mp,
                            const char **sub_path_out) {
-  const char *pp = router->prefix + 1; /* skip leading '/' */
+  const char *pp = router->prefix + 1;
   const char *rp = path;
   if (*rp == '/') rp++;
 
   if (*pp == '\0') {
-    /* Degenerate "/" prefix: matches only the exact root path "/"; see the
-     * "/" prefix edge case documented on chttpsvr_subrouter in
-     * include/chttpserver.h. */
     if (*rp != '\0') return 0;
     *sub_path_out = "/";
     return 1;
@@ -735,7 +1132,7 @@ static int _prefix_matches(const char *path, chttpsvr_router *router,
 
     const char *re = strchr(rp, '/');
     size_t rlen = re ? (size_t)(re - rp) : strlen(rp);
-    if (rlen == 0) return 0; /* path ran out of segments */
+    if (rlen == 0) return 0;
 
     char pseg_buf[256];
     char *pseg = pseg_buf;
@@ -764,16 +1161,11 @@ static int _prefix_matches(const char *path, chttpsvr_router *router,
 
 static match_result_t _find_route(struct chttpserver *srv, const char *path,
                                   chttp_method_t method) {
-  /* Track whether any route matched the path with the wrong method.  We must
-   * exhaust all routers and routes before concluding 405, because a later
-   * entry may match BOTH path and method (e.g. GET and POST registered on
-   * the same path, or a sub-router shadowing a root-router route). */
   bool method_mismatch_seen = false;
 
   for (size_t ri = 0; ri < srv->router_count; ri++) {
     chttpsvr_router *router = srv->routers[ri];
 
-    /* Determine the sub-path relative to this router's prefix. */
     const char *sub_path;
     if (router->prefix_len == 0) {
       sub_path = path;
@@ -786,22 +1178,14 @@ static match_result_t _find_route(struct chttpserver *srv, const char *path,
     for (size_t i = 0; i < router->route_count; i++) {
       chttpsvr_route_t *route = router->routes[i];
 
-      /* Single-pass strategy: pass &pv to capture param values only when the
-       * method also matches; pass NULL otherwise.  For non-matching paths the
-       * return is 0 with zero allocation.  For path-match / method-mismatch
-       * the dry-run (NULL pv_out) also allocates nothing.  Only a full
-       * (path + method) hit pays for the param capture. */
       char **pv = NULL;
       bool method_ok = (route->method == CHTTP_ANY || route->method == method);
       int ms = _match_segments(sub_path, route, method_ok ? &pv : NULL,
                                srv->m_procs);
       if (ms == -1) return (match_result_t){NULL, NULL, NULL, ROUTE_MATCH_OOM};
-      if (ms == 0) continue; /* path structure did not match */
+      if (ms == 0) continue;
 
-      /* Path matched. */
       if (!method_ok) {
-        /* Record the mismatch and keep searching; a later route or router
-         * may still produce a full match. */
         method_mismatch_seen = true;
         continue;
       }
@@ -868,33 +1252,147 @@ static void _destroy_req_qparams(chttpsvr_req *req) {
   if (req->_qresult) _mem_free(mp, req->_qresult);
 }
 
-static void _finalize_response(http_s *h, chttpsvr_resp *resp) {
-  h->status = (resp->status_code >= 100 && resp->status_code <= 999)
-                  ? (uintptr_t)resp->status_code
-                  : (uintptr_t)500;
+static const char *_status_reason(int status) {
+  switch (status) {
+    case 200:
+      return "OK";
+    case 201:
+      return "Created";
+    case 202:
+      return "Accepted";
+    case 204:
+      return "No Content";
+    case 206:
+      return "Partial Content";
+    case 301:
+      return "Moved Permanently";
+    case 302:
+      return "Found";
+    case 304:
+      return "Not Modified";
+    case 307:
+      return "Temporary Redirect";
+    case 308:
+      return "Permanent Redirect";
+    case 400:
+      return "Bad Request";
+    case 401:
+      return "Unauthorized";
+    case 403:
+      return "Forbidden";
+    case 404:
+      return "Not Found";
+    case 405:
+      return "Method Not Allowed";
+    case 406:
+      return "Not Acceptable";
+    case 408:
+      return "Request Timeout";
+    case 409:
+      return "Conflict";
+    case 410:
+      return "Gone";
+    case 413:
+      return "Payload Too Large";
+    case 415:
+      return "Unsupported Media Type";
+    case 417:
+      return "Expectation Failed";
+    case 422:
+      return "Unprocessable Entity";
+    case 429:
+      return "Too Many Requests";
+    case 500:
+      return "Internal Server Error";
+    case 501:
+      return "Not Implemented";
+    case 502:
+      return "Bad Gateway";
+    case 503:
+      return "Service Unavailable";
+    case 504:
+      return "Gateway Timeout";
+    default:
+      return "Unknown";
+  }
+}
 
-  /* Set response headers.
-   * http_set_header2 copies the name and value strings into internal FIOBJ
-   * string objects synchronously before returning, so resp->headers may be
-   * freed immediately after this loop (same contract as http_send_body). */
-  for (size_t _hi = 0; _hi < resp->header_count; _hi++) {
-    fio_str_info_s name_info = {.capa = 0,
-                                .len = strlen(resp->headers[_hi].name),
-                                .data = resp->headers[_hi].name};
-    fio_str_info_s val_info = {.capa = 0,
-                               .len = strlen(resp->headers[_hi].value),
-                               .data = resp->headers[_hi].value};
-    http_set_header2(h, name_info, val_info);
+/* Serializes resp into a raw HTTP/1.1 response and writes it to stream,
+ * bounded by response_write_timeout_ms. Replaces facio's http_set_header2 +
+ * http_send_body/http_finish. Always sets Content-Length explicitly (this
+ * server never uses chunked transfer-encoding for its own responses) and a
+ * Connection header reflecting keep_alive. Returns false on a write
+ * error/timeout (caller must then treat the connection as unusable and
+ * close it). */
+static bool _send_response(chttp1_stream_t *stream, chttpsvr_resp *resp,
+                           bool keep_alive, unsigned timeout_ms) {
+  char head[4096];
+  int status = (resp->status_code >= 100 && resp->status_code <= 999)
+                   ? resp->status_code
+                   : 500;
+  int n = snprintf(head, sizeof(head), "HTTP/1.1 %d %s\r\n", status,
+                   _status_reason(status));
+  if (n < 0) return false;
+  size_t hlen = (size_t)n;
+
+  bool have_content_length = false, have_connection = false;
+  for (size_t i = 0; i < resp->header_count; i++) {
+    if (strcasecmp(resp->headers[i].name, "content-length") == 0)
+      have_content_length = true;
+    if (strcasecmp(resp->headers[i].name, "connection") == 0)
+      have_connection = true;
   }
 
-  /* Send body or finish headers-only.
-   * http_send_body copies resp->body into an internal facil.io buffer before
-   * returning, so it is safe to free resp->body immediately afterward. */
-  if (resp->body && resp->body_len > 0) {
-    http_send_body(h, resp->body, (uintptr_t)resp->body_len);
-  } else {
-    http_finish(h);
+  for (size_t i = 0; i < resp->header_count; i++) {
+    /* No space after the colon: matches facio's own write_header()
+     * (third_party/facio/http1.c) byte for byte, which this test suite's
+     * raw-socket assertions (e.g. strstr(buf, "connection:close")) were
+     * originally written against. */
+    int hn =
+        snprintf(head + hlen, sizeof(head) > hlen ? sizeof(head) - hlen : 0,
+                 "%s:%s\r\n", resp->headers[i].name, resp->headers[i].value);
+    if (hn < 0) return false;
+    if ((size_t)hn >= (hlen < sizeof(head) ? sizeof(head) - hlen : 0)) {
+      /* Header block overflowed the fixed stack buffer (very large/many
+       * response headers, an unusual case for a handler-authored response);
+       * fail closed rather than truncate/corrupt the response. */
+      return false;
+    }
+    hlen += (size_t)hn;
   }
+
+  if (!have_content_length) {
+    int cn = snprintf(head + hlen, sizeof(head) - hlen,
+                      "content-length:%zu\r\n", resp->body_len);
+    if (cn < 0 || (size_t)cn >= sizeof(head) - hlen) return false;
+    hlen += (size_t)cn;
+  }
+  if (!have_connection) {
+    const char *cval = keep_alive ? "keep-alive" : "close";
+    int cn =
+        snprintf(head + hlen, sizeof(head) - hlen, "connection:%s\r\n", cval);
+    if (cn < 0 || (size_t)cn >= sizeof(head) - hlen) return false;
+    hlen += (size_t)cn;
+  }
+  if (hlen + 2 >= sizeof(head)) return false;
+  head[hlen++] = '\r';
+  head[hlen++] = '\n';
+
+  size_t sent = 0;
+  while (sent < hlen) {
+    ssize_t n2 =
+        chttp1_stream_write(stream, head + sent, hlen - sent, (int)timeout_ms);
+    if (n2 <= 0) return false;
+    sent += (size_t)n2;
+  }
+  sent = 0;
+  while (sent < resp->body_len) {
+    ssize_t n3 = chttp1_stream_write(stream, resp->body + sent,
+                                     resp->body_len - sent, (int)timeout_ms);
+    if (n3 <= 0) return false;
+    sent += (size_t)n3;
+  }
+  return true;
 }
 
 /* ========================================================================== */
@@ -902,7 +1400,7 @@ static void _finalize_response(http_s *h, chttpsvr_resp *resp) {
 /* ========================================================================== */
 
 static void _chttpsvr_next(chttpsvr_req *req, chttpsvr_resp *resp) {
-  dispatch_ctx_t *ctx = req->_dispatch;
+  dispatch_ctx_t *ctx = &req->conn->dispatch;
   if (ctx->mw_idx < ctx->mw_count) {
     _mw_entry_t entry = ctx->mw_snap[ctx->mw_idx++];
     entry.fn(req, resp, entry.ctx, _chttpsvr_next);
@@ -912,173 +1410,595 @@ static void _chttpsvr_next(chttpsvr_req *req, chttpsvr_resp *resp) {
 }
 
 /* ========================================================================== */
-/*                         STREAMING HELPERS                                  */
+/*                    CONNECTION LIFECYCLE                                    */
 /* ========================================================================== */
 
-/* Header extraction callback for streaming mode. */
-typedef struct {
-  char **names;
-  char **values;
-  size_t count;
-  size_t cap;
-  ccol_memmgmt_procs_t *mp;
-  bool oom;
-} hdr_extract_t;
-
-static int _extract_hdr_cb(FIOBJ val, void *arg) {
-  hdr_extract_t *he = (hdr_extract_t *)arg;
-  FIOBJ key = fiobj_hash_key_in_loop();
-  if (!key) return 0; /* skip null FIOBJ (internal sentinel entries) */
-  fio_str_info_s key_info = fiobj_obj2cstr(key);
-  if (!key_info.data || key_info.len == 0) return 0;
-
-  fio_str_info_s val_info;
-  if (FIOBJ_TYPE_IS(val, FIOBJ_T_ARRAY)) {
-    FIOBJ last = fiobj_ary_index(val, -1);
-    if (!last)
-      return 0; /* empty multi-value array; skip, matching _find_hdr_cb */
-    val_info = fiobj_obj2cstr(last);
-  } else {
-    val_info = fiobj_obj2cstr(val);
+static void _conn_reset_for_request(chttpsvr_conn_t *conn) {
+  ccol_memmgmt_procs_t *mp = conn->m_procs;
+  _mem_free(mp, conn->path);
+  conn->path = NULL;
+  _mem_free(mp, conn->decoded_path);
+  conn->decoded_path = NULL;
+  _mem_free(mp, conn->raw_query);
+  conn->raw_query = NULL;
+  for (size_t i = 0; i < conn->hdr_count; i++) {
+    _mem_free(mp, conn->hdr_names[i]);
+    _mem_free(mp, conn->hdr_values[i]);
   }
-  /* FIOBJ types that are not strings return NULL data from obj2cstr. */
-  if (!val_info.data) {
-    val_info.data = (char *)"";
-    val_info.len = 0;
-  }
+  _mem_free(mp, conn->hdr_names);
+  _mem_free(mp, conn->hdr_values);
+  conn->hdr_names = conn->hdr_values = NULL;
+  conn->hdr_count = conn->hdr_cap = 0;
+  /* Free the just-finished request's matched param values before nulling
+   * the pointer -- _conn_free (final teardown) already does this correctly
+   * for the LAST request on a connection, but a keep-alive connection
+   * reaches this reset function between every request, and previously
+   * nulled the pointer here with no free at all, leaking every param-value
+   * array except the final one (caught by valgrind as "definitely lost"
+   * blocks traced to _match_segments' pv calloc, plus their "indirectly
+   * lost" decoded string contents). */
+  _free_param_values(conn->matched_param_values,
+                     conn->matched_route ? conn->matched_route->param_count : 0,
+                     mp);
+  conn->matched_router = NULL;
+  conn->matched_route = NULL;
+  conn->matched_param_values = NULL;
+  memset(&conn->dispatch, 0, sizeof(conn->dispatch));
+  _destroy_resp(&conn->resp, mp);
+  conn->resp.status_code = CHTTP_STATUS_OK;
+  conn->resp.m_procs = mp;
+  conn->req_rejected = false;
+  conn->reject_status = 500;
+  conn->expects_continue = false;
+  _mem_free(mp, conn->body.buf);
+  memset(&conn->body, 0, sizeof(conn->body));
+  conn->body_bytes_seen = 0;
+  conn->body_too_large = false;
+  conn->read_deadline_set = false;
+  conn->deadline_exceeded = false;
 
-  if (he->count >= he->cap) {
-    size_t new_cap = he->cap * 2 + 8;
-    char **nn =
-        (char **)_mem_realloc(he->mp, he->names, new_cap * sizeof(char *));
-    if (!nn) {
-      he->oom = true;
-      return -1;
-    }
-    char **nv =
-        (char **)_mem_realloc(he->mp, he->values, new_cap * sizeof(char *));
-    if (!nv) {
-      /* nn is the new (larger) allocation for he->names.  Update he->names
-       * now so the cleanup loop in _on_headers_complete frees the live
-       * allocation.
-       * he->cap stays at the old value; cleanup iterates he->count (not
-       * he->cap), so the temporarily mismatched capacities are harmless. */
-      he->names = nn;
-      he->oom = true;
-      return -1;
-    }
-    he->names = nn;
-    he->values = nv;
-    he->cap = new_cap;
+  chttp1_parser_t parser;
+  chttp1_parser_init_request(&parser, conn->parser.settings);
+  parser.data = conn;
+  if (conn->srv->max_header_bytes) {
+    parser.max_header_count_override = 0;
+    parser.max_total_header_bytes_override = conn->srv->max_header_bytes;
   }
+  conn->parser = parser;
+}
 
-  char *hdr_name = ccol_strdup(he->mp, key_info.data);
-  char *hdr_val = ccol_strdup(he->mp, val_info.data);
-  if (!hdr_name || !hdr_val) {
-    _mem_free(he->mp, hdr_name);
-    _mem_free(he->mp, hdr_val);
-    he->oom = true;
-    return -1;
+static chttpsvr_conn_t *_conn_create(struct chttpserver *srv, int fd,
+                                     const chttp1_settings_t *settings) {
+  chttpsvr_conn_t *conn =
+      (chttpsvr_conn_t *)_mem_calloc(srv->m_procs, 1, sizeof(*conn));
+  if (!conn) return NULL;
+  conn->fd = fd;
+  conn->srv = srv;
+  conn->m_procs = srv->m_procs;
+  chttp1_parser_init_request(&conn->parser, settings);
+  conn->parser.data = conn;
+  clock_gettime(CLOCK_MONOTONIC, &conn->last_activity);
+  /* _conn_reset_for_request() establishes every per-request default this
+   * connection needs before its first request too (resp.status_code,
+   * resp.m_procs, reject_status, the header-size override, ...) -- a freshly
+   * calloc'd conn has resp.status_code == 0, which _send_response() would
+   * otherwise treat as an unset/invalid status and silently map to 500 for
+   * a connection's very first request (subsequent keep-alive requests never
+   * showed this, since they already go through this same reset call). All
+   * of the frees this performs are no-ops here (every freed field is still
+   * NULL/0 from calloc). */
+  _conn_reset_for_request(conn);
+  return conn;
+}
+
+static void _conn_free(chttpsvr_conn_t *conn) {
+  if (!conn) return;
+  ccol_memmgmt_procs_t *mp = conn->m_procs;
+  _idle_list_remove(conn);
+  if (conn->tls) ctls_conn_destroy(conn->tls);
+  if (conn->fd >= 0) close(conn->fd);
+  atomic_fetch_sub(&conn->srv->current_connections, 1);
+  _mem_free(mp, conn->path);
+  _mem_free(mp, conn->decoded_path);
+  _mem_free(mp, conn->raw_query);
+  for (size_t i = 0; i < conn->hdr_count; i++) {
+    _mem_free(mp, conn->hdr_names[i]);
+    _mem_free(mp, conn->hdr_values[i]);
   }
-  he->names[he->count] = hdr_name;
-  he->values[he->count] = hdr_val;
-  he->count++;
+  _mem_free(mp, conn->hdr_names);
+  _mem_free(mp, conn->hdr_values);
+  _free_param_values(conn->matched_param_values,
+                     conn->matched_route ? conn->matched_route->param_count : 0,
+                     mp);
+  _destroy_resp(&conn->resp, mp);
+  _mem_free(mp, conn->body.buf);
+  _mem_free(mp, conn);
+}
+
+static void _conn_close(chttpsvr_conn_t *conn) {
+  if (conn->reg) {
+    event_loop_remove(g_reactor, conn->reg);
+    conn->reg = NULL;
+  }
+  conn->state = CONN_ST_CLOSING;
+  _conn_free(conn);
+}
+
+/* ========================================================================== */
+/*                    PARSER CALLBACKS (reactor-thread side)                  */
+/* ========================================================================== */
+
+static int _on_request_line(chttp1_parser_t *p, const char *method,
+                            size_t method_len, const char *target,
+                            size_t target_len) {
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)p->data;
+  conn->method = _parse_method(method, method_len);
+
+  const char *qmark = (const char *)memchr(target, '?', target_len);
+  size_t path_raw_len = qmark ? (size_t)(qmark - target) : target_len;
+
+  /* Stored RAW (still percent-encoded) -- see conn->path's own doc comment
+   * for why this must not be decoded here. */
+  char *path_raw = (char *)_mem_alloc(conn->m_procs, path_raw_len + 1);
+  if (!path_raw) return 1;
+  memcpy(path_raw, target, path_raw_len);
+  path_raw[path_raw_len] = '\0';
+  conn->path = path_raw;
+
+  if (qmark) {
+    size_t qlen = target_len - path_raw_len - 1;
+    conn->raw_query = (char *)_mem_alloc(conn->m_procs, qlen + 1);
+    if (!conn->raw_query) return 1;
+    memcpy(conn->raw_query, qmark + 1, qlen);
+    conn->raw_query[qlen] = '\0';
+  }
   return 0;
 }
 
-static void _free_task_ctx(streaming_ctx_t *sctx) {
-  ccol_memmgmt_procs_t *mp = sctx->m_procs;
-  _mem_free(mp, sctx->path);
-  _mem_free(mp, sctx->raw_query);
-  for (size_t i = 0; i < sctx->hdr_count; i++) {
-    _mem_free(mp, sctx->hdr_names[i]);
-    _mem_free(mp, sctx->hdr_values[i]);
+static int _on_header(chttp1_parser_t *p, const char *name, size_t name_len,
+                      const char *value, size_t value_len) {
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)p->data;
+  if (conn->hdr_count >= conn->hdr_cap) {
+    size_t new_cap = conn->hdr_cap ? conn->hdr_cap * 2 : 8;
+    char **nn = (char **)_mem_realloc(conn->m_procs, conn->hdr_names,
+                                      new_cap * sizeof(char *));
+    if (!nn) return 1;
+    conn->hdr_names = nn;
+    char **nv = (char **)_mem_realloc(conn->m_procs, conn->hdr_values,
+                                      new_cap * sizeof(char *));
+    if (!nv) return 1;
+    conn->hdr_values = nv;
+    conn->hdr_cap = new_cap;
   }
-  _mem_free(mp, sctx->hdr_names);
-  _mem_free(mp, sctx->hdr_values);
-  _free_param_values(sctx->param_values, sctx->param_count, mp);
-  _destroy_resp(&sctx->resp, mp);
-  _mem_free(mp, sctx);
+  char *n = (char *)_mem_alloc(conn->m_procs, name_len + 1);
+  char *v = (char *)_mem_alloc(conn->m_procs, value_len + 1);
+  if (!n || !v) {
+    _mem_free(conn->m_procs, n);
+    _mem_free(conn->m_procs, v);
+    return 1;
+  }
+  memcpy(n, name, name_len);
+  n[name_len] = '\0';
+  memcpy(v, value, value_len);
+  v[value_len] = '\0';
+  conn->hdr_names[conn->hdr_count] = n;
+  conn->hdr_values[conn->hdr_count] = v;
+  conn->hdr_count++;
+  return 0;
 }
 
-static void _task_pause_cb(http_pause_handle_s *ph) {
-  streaming_ctx_t *sctx = (streaming_ctx_t *)http_paused_udata_get(ph);
-  sctx->ph = ph;
+static int _on_headers_complete(chttp1_parser_t *p) {
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)p->data;
+  if (conn->req_rejected) return -1; /* already decided in _on_request_line */
 
-  /* in_flight_requests was already incremented in _on_headers_complete,
-   * before http_pause was called; see the comment there. Both the success
-   * and failure paths below end with exactly one http_resume call,
-   * guaranteeing that either _task_send_response or _task_cleanup fires;
-   * both decrement in_flight_requests under the mutex. */
-  mutex_lock(sctx->srv->mutex);
-  ctpool pool = sctx->srv->worker_pool;
-  mutex_unlock(sctx->srv->mutex);
+  struct chttpserver *srv = conn->srv;
+  rw_lock_rdlock(srv->routes_lock);
+  match_result_t mr = _find_route(srv, conn->path, conn->method);
+  if (mr.result == ROUTE_MATCH_NONE) {
+    rw_lock_unlock(srv->routes_lock);
+    conn->req_rejected = true;
+    conn->reject_status = CHTTP_STATUS_NOT_FOUND;
+    return -1;
+  }
+  if (mr.result == ROUTE_MATCH_METHOD) {
+    rw_lock_unlock(srv->routes_lock);
+    conn->req_rejected = true;
+    conn->reject_status = CHTTP_STATUS_METHOD_NOT_ALLOWED;
+    return -1;
+  }
+  if (mr.result == ROUTE_MATCH_OOM) {
+    rw_lock_unlock(srv->routes_lock);
+    conn->req_rejected = true;
+    conn->reject_status = CHTTP_STATUS_INTERNAL_ERROR;
+    return -1;
+  }
 
-  if (ctpool_try_submit(pool, _task_worker, sctx, NULL) != ccol_success) {
-    /* No worker will ever call http1_stream_read/http1_stream_release for
-     * this message now; release it here so http1_destroy doesn't defer
-     * forever waiting for a release that will never come. */
-    http1_stream_release((http_s *)sctx->h);
-    sctx->resp.status_code = CHTTP_STATUS_SERVICE_UNAVAILABLE;
-    http_resume(ph, _task_send_response, _task_cleanup);
+  dispatch_ctx_t *dispatch = &conn->dispatch;
+  dispatch->srv = srv;
+  dispatch->router = mr.router;
+  dispatch->route = mr.route;
+  dispatch->mw_idx = 0;
+  {
+    int mc = 0;
+    chttpsvr_mw_node_t *n;
+    for (n = srv->routers[0]->mw_head; n && mc < _CHTTPSVR_MAX_MW; n = n->next)
+      dispatch->mw_snap[mc++] = (_mw_entry_t){n->fn, n->ctx};
+    bool overflow = (n != NULL);
+    if (!overflow && mr.router != srv->routers[0]) {
+      for (n = mr.router->mw_head; n && mc < _CHTTPSVR_MAX_MW; n = n->next)
+        dispatch->mw_snap[mc++] = (_mw_entry_t){n->fn, n->ctx};
+      overflow = (n != NULL);
+    }
+    dispatch->mw_count = mc;
+    if (overflow) {
+      rw_lock_unlock(srv->routes_lock);
+      _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
+      conn->req_rejected = true;
+      conn->reject_status = CHTTP_STATUS_INTERNAL_ERROR;
+      return -1;
+    }
+  }
+  rw_lock_unlock(srv->routes_lock);
+
+  conn->matched_router = mr.router;
+  conn->matched_route = mr.route;
+  conn->matched_param_values = mr.param_values;
+  conn->expects_continue = chttp1_expects_continue(p);
+
+  /* A successful match already proved every segment of conn->path (RAW,
+   * still percent-encoded) decodes cleanly -- _match_segments/
+   * _seg_matches_literal treat any decode failure as a non-match, which
+   * would have taken the ROUTE_MATCH_NONE/ROUTE_MATCH_METHOD branch above
+   * instead of reaching here. Decoding the whole path now, for the public
+   * chttpsvr_req_path() accessor, therefore cannot fail on malformed input;
+   * only a real allocation failure can. */
+  size_t plen = strlen(conn->path);
+  char *dp = (char *)_mem_alloc(srv->m_procs, plen + 1);
+  if (dp) {
+    ssize_t dlen = _decode_path_unsafe(dp, conn->path);
+    if (dlen >= 0) {
+      dp[(size_t)dlen] = '\0';
+      conn->decoded_path = dp;
+    } else {
+      _mem_free(srv->m_procs, dp);
+    }
+  }
+
+  /* Always divert: every matched route (buffered or streaming) is handed to
+   * the worker pool regardless of body size, exactly matching this
+   * module's existing documented threading model. chttp1_parser itself
+   * downgrades this to an ordinary immediate completion when there turns
+   * out to be no body to divert (see CHTTP1_HEADERS_DIVERT_BODY's own doc
+   * comment) -- either way, the header-read callback below submits to the
+   * worker pool once execute() returns CHTTP1_HEADERS_ONLY or CHTTP1_PAUSED. */
+  return CHTTP1_HEADERS_DIVERT_BODY;
+}
+
+/* Buffered-route body accumulation, and streaming-route "pending, not yet
+ * delivered to chttpsvr_req_read" body accumulation, share this one
+ * callback and one growbuf_t: max_body_size is enforced here, uniformly,
+ * for both route kinds (facio enforced it inside its own body-chunk parser;
+ * this parser has no built-in notion of it, so the caller -- here -- must). */
+static int _on_body(chttp1_parser_t *p, const char *at, size_t len) {
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)p->data;
+  conn->body_bytes_seen += len;
+  if (conn->body_bytes_seen > conn->srv->max_body_size) {
+    conn->body_too_large = true;
+    return 1;
+  }
+  growbuf_t *b = &conn->body;
+  if (!conn->matched_route->is_streaming && b->pos == b->len) {
+    /* Buffered route: never drained via pos (chttpsvr_req_read is not used),
+     * so pos always stays 0; nothing to compact. */
+  } else if (conn->matched_route->is_streaming && b->pos == b->len &&
+             b->pos > 0) {
+    b->pos = b->len = 0; /* compact: fully drained by a prior req_read call */
+  }
+  if (b->len + len > b->cap) {
+    size_t new_cap = b->cap ? b->cap * 2 : 8192;
+    while (new_cap < b->len + len) new_cap *= 2;
+    char *nb = (char *)_mem_realloc(conn->m_procs, b->buf, new_cap);
+    if (!nb) return 1;
+    b->buf = nb;
+    b->cap = new_cap;
+  }
+  memcpy(b->buf + b->len, at, len);
+  b->len += len;
+  return 0;
+}
+
+static int _on_message_complete(chttp1_parser_t *p) {
+  (void)p;
+  return 0;
+}
+
+static chttp1_settings_t g_parser_settings;
+static once_flag_t g_parser_settings_once = ONCE_INIT;
+
+static void _init_parser_settings(void) {
+  chttp1_settings_init(&g_parser_settings);
+  g_parser_settings.on_request_line = _on_request_line;
+  g_parser_settings.on_header = _on_header;
+  g_parser_settings.on_headers_complete = _on_headers_complete;
+  g_parser_settings.on_body = _on_body;
+  g_parser_settings.on_message_complete = _on_message_complete;
+}
+
+/* ========================================================================== */
+/*                    REACTOR-THREAD READ/HANDSHAKE CALLBACKS                 */
+/* ========================================================================== */
+
+static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
+                                 size_t leftover_len) {
+  _idle_list_remove(conn);
+  if (conn->reg) {
+    event_loop_remove(g_reactor, conn->reg);
+    conn->reg = NULL;
+  }
+  conn->state = CONN_ST_DIVERTED;
+
+  mutex_lock(conn->srv->mutex);
+  conn->srv->in_flight_requests++;
+  ctpool pool = conn->srv->worker_pool;
+  mutex_unlock(conn->srv->mutex);
+
+  /* Copy leftover now: it points into the reactor's own stack read buffer,
+   * which is about to go out of scope the moment this callback returns.
+   * _task_worker re-derives nothing from chttp1_parser_consumed() itself --
+   * that value is only meaningful relative to the exact buffer/length pair
+   * passed to the execute() call that produced it, which is the reactor's
+   * own stack buffer, gone by the time the worker runs. Passing the
+   * already-copied carry bytes directly avoids that lifetime hazard
+   * entirely. */
+  char *carry = NULL;
+  if (leftover_len > 0) {
+    carry = (char *)_mem_alloc(conn->m_procs, leftover_len);
+    if (carry) memcpy(carry, leftover, leftover_len);
+  }
+  /* Publish carry/_carry_over_len BEFORE submitting to the pool, not after:
+   * ctpool_try_submit can hand this task to an already-idle worker thread
+   * that starts running _task_worker(conn) immediately, concurrently with
+   * the rest of this function. Setting these fields after the submit call
+   * raced that worker thread reading conn->_carry_over -- it would see
+   * NULL (this field's steady-state value between requests, since
+   * _task_worker always frees-and-nulls it once consumed), silently
+   * dropping the real leftover bytes for this request, and by the time
+   * this function got around to the (now too late) assignment, nothing
+   * would ever free that already-orphaned buffer -- both a data-loss bug
+   * and the exact leak valgrind caught. */
+  conn->_carry_over = carry;
+  conn->_carry_over_len = leftover_len;
+
+  if (!pool ||
+      ctpool_try_submit(pool, _task_worker, conn, NULL) != ccol_success) {
+    _mem_free(conn->m_procs, carry);
+    conn->_carry_over = NULL;
+    conn->_carry_over_len = 0;
+    mutex_lock(conn->srv->mutex);
+    if (--conn->srv->in_flight_requests == 0)
+      cond_var_broadcast(conn->srv->requests_done_cv);
+    mutex_unlock(conn->srv->mutex);
+    /* The worker pool is at capacity (ctpool_try_submit returns
+     * ccol_container_full rather than blocking, matching this module's
+     * documented "never block the reactor thread" contract) -- this is a
+     * real, if transient, server condition the client should be told about
+     * via a synchronous 503, not a bare connection reset (see
+     * bounded_pool_full_returns_503 in tests.c). */
+    conn->req_rejected = true;
+    conn->reject_status = CHTTP_STATUS_SERVICE_UNAVAILABLE;
+    _conn_reject_and_close(conn);
     return;
   }
-  /* On successful submit the worker holds the reference; the decrement
-   * happens in _task_send_response or _task_cleanup. */
 }
 
-/* Translate the reason http1_stream_read most recently failed for `h` into
- * this library's error code space. */
-static ccol_retval_t _stream_err_to_retval(http_s *h) {
-  switch (http1_stream_last_error(h)) {
-    case HTTP1_STREAM_ERR_TIMEOUT:
-      return ccol_timed_out;
-    case HTTP1_STREAM_ERR_TOO_LARGE:
-      return ccol_msg_too_large;
-    case HTTP1_STREAM_ERR_CLOSED:
-    case HTTP1_STREAM_ERR_PROTOCOL:
-    case HTTP1_STREAM_ERR_NONE:
-    default:
-      return ccol_http_transfer_aborted;
+static void _conn_reject_and_close(chttpsvr_conn_t *conn) {
+  chttpsvr_resp resp;
+  memset(&resp, 0, sizeof(resp));
+  resp.status_code = conn->reject_status;
+  resp.m_procs = conn->m_procs;
+  chttp1_stream_t stream;
+  if (conn->tls)
+    chttp1_stream_prepare_tls(&stream, conn->fd, conn->tls, NULL, 0);
+  else
+    chttp1_stream_prepare(&stream, conn->fd, NULL, 0);
+  _send_response(&stream, &resp, false, 2000);
+  chttp1_stream_release(&stream);
+  _destroy_resp(&resp, conn->m_procs);
+  _conn_close(conn);
+}
+
+/* Drives the reactor-owned portion of one connection: TLS handshake (if
+ * any), then header parsing until a request is either rejected (sent
+ * synchronously and the connection closed) or diverted to a worker. */
+static void _conn_pump(chttpsvr_conn_t *conn) {
+  if (conn->state == CONN_ST_TLS_HANDSHAKE) {
+    ctls_handshake_result_t r = ctls_conn_handshake_step(conn->tls);
+    if (r == CTLS_HANDSHAKE_ERROR) {
+      clog el = _engine_logger_get();
+      if (el) log_warn(el, "TLS handshake failed fd=%d", conn->fd);
+      _conn_close(conn);
+      return;
+    }
+    if (r == CTLS_HANDSHAKE_WANT_READ || r == CTLS_HANDSHAKE_WANT_WRITE) {
+      ccol_select_dir want = (r == CTLS_HANDSHAKE_WANT_WRITE)
+                                 ? ccol_select_write
+                                 : ccol_select_read;
+      if (conn->reg) {
+        event_loop_modify(g_reactor, conn->reg, want);
+      } else {
+        char *err = NULL;
+        conn->reg =
+            event_loop_add(g_reactor, selectable_from_fd(conn->fd, want),
+                           (event_handlers_t){.on_readable = _conn_on_readable,
+                                              .on_writable = _conn_on_writable,
+                                              .on_error = _conn_on_error},
+                           conn, &err);
+        if (!conn->reg) {
+          _conn_close(conn);
+          return;
+        }
+      }
+      /* Re-add to the idle list before returning: this thread is done with
+       * conn for now (waiting on the next handshake step's readiness), and
+       * a future dispatch must be able to _idle_list_try_claim it back out
+       * again. Without this, a mid-handshake connection was never in the
+       * idle list at all between steps, invisible to (and therefore never
+       * closed by) the idle-timeout sweep or a server destroy's own
+       * idle-connection cleanup. */
+      _idle_list_add(conn);
+      return;
+    }
+    /* CTLS_HANDSHAKE_DONE */
+    conn->state = CONN_ST_READING_HEADERS;
+    if (conn->reg && conn->reg != NULL) {
+      event_loop_modify(g_reactor, conn->reg, ccol_select_read);
+    }
+  }
+
+  for (;;) {
+    char buf[8192];
+    ssize_t n;
+    if (conn->tls)
+      n = ctls_conn_read(conn->tls, buf, sizeof(buf));
+    else
+      n = read(conn->fd, buf, sizeof(buf));
+
+    if (n < 0) {
+      if (errno == EWOULDBLOCK || errno == EAGAIN) {
+        if (!conn->reg) {
+          char *err = NULL;
+          conn->reg = event_loop_add(
+              g_reactor, selectable_from_fd(conn->fd, ccol_select_read),
+              (event_handlers_t){.on_readable = _conn_on_readable,
+                                 .on_error = _conn_on_error},
+              conn, &err);
+          if (!conn->reg) {
+            _conn_close(conn);
+            return;
+          }
+        }
+        _idle_list_add(conn);
+        return;
+      }
+      _conn_close(conn);
+      return;
+    }
+    if (n == 0) {
+      _conn_close(conn);
+      return;
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &conn->last_activity);
+    chttp1_errno_t r = chttp1_parser_execute(&conn->parser, buf, (size_t)n);
+
+    if (r == CHTTP1_OK) continue; /* need more header bytes; loop for more */
+
+    if (r == CHTTP1_HEADERS_ONLY || r == CHTTP1_PAUSED) {
+      size_t consumed = chttp1_parser_consumed(&conn->parser);
+      const char *leftover = buf + consumed;
+      size_t leftover_len = (size_t)n - consumed;
+
+      if (conn->expects_continue && !conn->req_rejected) {
+        const char *cont = "HTTP/1.1 100 Continue\r\n\r\n";
+        chttp1_stream_t s;
+        if (conn->tls)
+          chttp1_stream_prepare_tls(&s, conn->fd, conn->tls, NULL, 0);
+        else
+          chttp1_stream_prepare(&s, conn->fd, NULL, 0);
+        chttp1_stream_write(&s, cont, strlen(cont), 2000);
+        chttp1_stream_release(&s);
+      }
+      _conn_start_diverted(conn, leftover, leftover_len);
+      return;
+    }
+
+    /* CHTTP1_USER: an unmatched/rejected route, decided by our own
+     * _on_headers_complete (conn->req_rejected already set to a specific
+     * status). The route itself was identified, so send a graceful
+     * synchronous error response (the body, if any, is never read -- the
+     * connection is then closed rather than kept alive, since the client's
+     * still-arriving body would otherwise be misread as a pipelined
+     * request).
+     *
+     * CHTTP1_ERROR: a syntax-level problem the parser itself rejected before
+     * routing ever ran (a malformed request line, a negative Content-Length,
+     * chunked not last in a Transfer-Encoding list, a too-long header,
+     * ...). This matches every other pre-routing parse error in this
+     * parser: an outright connection close with NO response at all, not a
+     * graceful error page -- see negative_content_length_rejected and
+     * chunked_not_last_in_transfer_encoding_list_rejected in tests.c, which
+     * assert exactly that. */
+    if (conn->req_rejected) {
+      _conn_reject_and_close(conn);
+    } else {
+      _conn_close(conn);
+    }
+    return;
   }
 }
 
-/* Caps *timeout_ms_inout so a single http1_stream_read call cannot block
- * past req's overall max_body_read_duration_ms deadline (lazily computed on
- * the first call), and returns false once that deadline has already passed
- * ; in which case req->_deadline_exceeded is set and the caller must not
- * call http1_stream_read again (chttpsvr_req_stream_error /
- * _ingest_buffered_body's caller report ccol_timed_out from that flag
- * directly, without ever consulting http1_stream_last_error).
- *
- * stream_read_timeout_ms alone only bounds each individual gap between
- * batches of bytes, so a client that trickles a byte or two just before
- * every such gap expires can otherwise pin a worker thread indefinitely;
- * this closes that loophole. A max_body_read_duration_ms of 0 disables the
- * check entirely (the default), leaving existing behavior unchanged. */
-static bool _check_read_deadline(chttpsvr_req *req,
+/* Every reactor-dispatched entry point into a live (already-registered)
+ * connection must claim it out of the idle list first -- see
+ * _idle_list_try_claim's own doc comment for the use-after-free this
+ * prevents (a concurrent idle-timeout/destroy-time closer freeing the same
+ * connection, including its TLS state, while a dispatch is using it). A
+ * failed claim is not an error: it means a closer already has exclusive
+ * ownership (or, harmlessly, that this connection's own _idle_list_add
+ * call for the registration that just fired hasn't executed yet -- see
+ * that same doc comment for why level-triggered epoll makes this
+ * self-healing) -- either way, the correct action is to touch nothing and
+ * return. */
+static void _conn_on_readable(event_loop loop, ccol_selectable *sel,
+                              void *arg) {
+  (void)loop;
+  (void)sel;
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)arg;
+  if (!_idle_list_try_claim(conn)) return;
+  _conn_pump(conn);
+}
+
+static void _conn_on_writable(event_loop loop, ccol_selectable *sel,
+                              void *arg) {
+  (void)loop;
+  (void)sel;
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)arg;
+  if (!_idle_list_try_claim(conn)) return;
+  _conn_pump(conn);
+}
+
+static void _conn_on_error(event_loop loop, ccol_selectable *sel, void *arg) {
+  (void)loop;
+  (void)sel;
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)arg;
+  if (!_idle_list_try_claim(conn)) return;
+  _conn_close(conn);
+}
+
+/* ========================================================================== */
+/*                    WORKER THREAD: BODY READ + HANDLER + RESPONSE           */
+/* ========================================================================== */
+
+static bool _check_read_deadline(chttpsvr_conn_t *conn,
                                  unsigned *timeout_ms_inout) {
-  unsigned max_dur =
-      req->_dispatch ? req->_dispatch->srv->max_body_read_duration_ms : 0;
+  unsigned max_dur = atomic_load(&conn->srv->max_body_read_duration_ms);
   if (!max_dur) return true;
 
   struct timespec now;
   clock_gettime(CLOCK_MONOTONIC, &now);
-  if (!req->_read_deadline_set) {
-    req->_read_deadline = now;
-    req->_read_deadline.tv_sec += (time_t)(max_dur / 1000);
-    req->_read_deadline.tv_nsec += (long)(max_dur % 1000) * 1000000L;
-    if (req->_read_deadline.tv_nsec >= 1000000000L) {
-      req->_read_deadline.tv_nsec -= 1000000000L;
-      req->_read_deadline.tv_sec += 1;
+  if (!conn->read_deadline_set) {
+    conn->read_deadline = now;
+    conn->read_deadline.tv_sec += (time_t)(max_dur / 1000);
+    conn->read_deadline.tv_nsec += (long)(max_dur % 1000) * 1000000L;
+    if (conn->read_deadline.tv_nsec >= 1000000000L) {
+      conn->read_deadline.tv_nsec -= 1000000000L;
+      conn->read_deadline.tv_sec += 1;
     }
-    req->_read_deadline_set = true;
+    conn->read_deadline_set = true;
   }
-
-  long remaining_ms = (long)(req->_read_deadline.tv_sec - now.tv_sec) * 1000 +
-                      (req->_read_deadline.tv_nsec - now.tv_nsec) / 1000000L;
+  long remaining_ms = (long)(conn->read_deadline.tv_sec - now.tv_sec) * 1000 +
+                      (conn->read_deadline.tv_nsec - now.tv_nsec) / 1000000L;
   if (remaining_ms <= 0) {
-    req->_deadline_exceeded = true;
+    conn->deadline_exceeded = true;
     return false;
   }
   if (!*timeout_ms_inout || (unsigned)remaining_ms < *timeout_ms_inout)
@@ -1086,379 +2006,332 @@ static bool _check_read_deadline(chttpsvr_req *req,
   return true;
 }
 
-/* Reads the entire request body into one growable heap buffer before a
- * buffered handler is invoked. max_body_size is already enforced by the
- * same parser logic that would enforce it for a streaming route (see
- * http1_on_body_chunk); http1_stream_read simply reports the failure. */
-static ccol_retval_t _ingest_buffered_body(streaming_ctx_t *sctx,
-                                           chttpsvr_req *req) {
-  http_s *h = (http_s *)sctx->h;
-  ccol_memmgmt_procs_t *mp = sctx->m_procs;
-  unsigned configured_timeout_ms = sctx->srv->stream_read_timeout_ms;
-  size_t cap = 0, len = 0;
-  char *buf = NULL;
+/* Drains body bytes (for a buffered route, all of them; for a streaming
+ * route, the message-complete tail only, since chttpsvr_req_read already
+ * pulled the rest) via chttp1_stream_read + chttp1_parser_execute, both
+ * driven by the calling worker thread. Returns ccol_success, or a specific
+ * failure the caller maps to a status code. */
+static ccol_retval_t _drain_body(chttpsvr_conn_t *conn,
+                                 chttp1_stream_t *stream) {
+  for (;;) {
+    if (chttp1_parser_message_complete(&conn->parser)) break;
+    unsigned timeout_ms = atomic_load(&conn->srv->stream_read_timeout_ms);
+    if (!_check_read_deadline(conn, &timeout_ms)) return ccol_timed_out;
+    char raw[8192];
+    ssize_t n = chttp1_stream_read(stream, raw, sizeof(raw), (int)timeout_ms);
+    if (n < 0) {
+      if (chttp1_stream_timed_out(stream)) return ccol_timed_out;
+      return ccol_http_transfer_aborted;
+    }
+    if (n == 0) return ccol_http_transfer_aborted; /* truncated body */
+    chttp1_errno_t r = chttp1_parser_execute(&conn->parser, raw, (size_t)n);
+    if (r == CHTTP1_PAUSED) break;
+    if (r == CHTTP1_USER || r == CHTTP1_ERROR) {
+      return conn->body_too_large ? ccol_msg_too_large
+                                  : ccol_http_transfer_aborted;
+    }
+  }
+  return ccol_success;
+}
+
+ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
+  if (!req) return -1;
+  if (buflen == 0) return 0;
+  if (!buf) return -1;
+  chttpsvr_conn_t *conn = req->conn;
+  if (!conn->matched_route->is_streaming) return -1;
+  if (!req->stream) return -1;
 
   for (;;) {
-    if (len == cap) {
-      /* Overflow-safe doubling, mirroring chttpsvr_resp_write's growth
-       * guard: max_body_size already bounds how large this buffer can
-       * legitimately grow (enforced by http1_on_body_chunk), so this is
-       * defense-in-depth against a caller-supplied max_body_size near
-       * SIZE_MAX rather than a normally reachable path. */
-      if (cap > (SIZE_MAX - 16384) / 2) {
-        _mem_free(mp, buf);
-        return ccol_not_enough_memory;
-      }
-      size_t new_cap = cap ? cap * 2 : 16384;
-      char *nb = (char *)_mem_realloc(mp, buf, new_cap);
-      if (!nb) {
-        _mem_free(mp, buf);
-        return ccol_not_enough_memory;
-      }
-      buf = nb;
-      cap = new_cap;
+    growbuf_t *b = &conn->body;
+    if (b->pos < b->len) {
+      size_t avail = b->len - b->pos;
+      size_t take = avail < buflen ? avail : buflen;
+      memcpy(buf, b->buf + b->pos, take);
+      b->pos += take;
+      return (ssize_t)take;
     }
-    unsigned timeout_ms = configured_timeout_ms;
-    if (!_check_read_deadline(req, &timeout_ms)) {
-      _mem_free(mp, buf);
-      return ccol_timed_out;
-    }
-    ssize_t n = http1_stream_read(h, buf + len, cap - len, timeout_ms);
-    if (n > 0) {
-      len += (size_t)n;
-      continue;
-    }
-    if (n == 0) break;
-    ccol_retval_t err = _stream_err_to_retval(h);
-    _mem_free(mp, buf);
-    return err;
-  }
+    if (chttp1_parser_message_complete(&conn->parser)) return 0;
 
-  req->body_data = buf;
-  req->body_len = len;
-  req->_body_owned = buf;
+    unsigned timeout_ms = atomic_load(&conn->srv->stream_read_timeout_ms);
+    if (!_check_read_deadline(conn, &timeout_ms)) return -1;
+    char raw[8192];
+    ssize_t n =
+        chttp1_stream_read(req->stream, raw, sizeof(raw), (int)timeout_ms);
+    if (n < 0) {
+      /* Either stream_read_timeout_ms's own per-call poll(2) timed out, or
+       * max_body_read_duration_ms's deadline was folded into this call's
+       * timeout by _check_read_deadline above and expired mid-poll instead
+       * of being caught by that function's own up-front check on the NEXT
+       * call (which never happens, since chttpsvr_req_read returns here
+       * immediately). Either way this is a real timeout, not a hard I/O
+       * error -- report it the same way _drain_body already does for the
+       * buffered-route path, via the same conn->deadline_exceeded flag
+       * chttpsvr_req_stream_error() reads, so both caps collapse to the
+       * identical ccol_timed_out result (see max_body_read_duration_exceeded_
+       * reports_ccol_timed_out / stream_read_timeout_reports_ccol_timed_out
+       * in tests.c). */
+      if (chttp1_stream_timed_out(req->stream)) conn->deadline_exceeded = true;
+      return -1;
+    }
+    if (n == 0) return -1; /* truncated body: framing wasn't done yet */
+    chttp1_errno_t r = chttp1_parser_execute(&conn->parser, raw, (size_t)n);
+    if (r == CHTTP1_USER || r == CHTTP1_ERROR) return -1;
+    /* CHTTP1_OK or CHTTP1_PAUSED: loop back to drain whatever _on_body just
+     * appended to conn->body. */
+  }
+}
+
+ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req) {
+  if (!req || !req->conn) return ccol_unexpected_failure;
+  chttpsvr_conn_t *conn = req->conn;
+  if (conn->deadline_exceeded) return ccol_timed_out;
+  if (conn->body_too_large) return ccol_msg_too_large;
   return ccol_success;
 }
 
 static void _task_worker(void *arg) {
-  streaming_ctx_t *sctx = (streaming_ctx_t *)arg;
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)arg;
+  struct chttpserver *srv = conn->srv;
+
+  chttp1_stream_t stream;
+  bool prepared;
+  if (conn->tls)
+    prepared = chttp1_stream_prepare_tls(
+        &stream, conn->fd, conn->tls, conn->_carry_over, conn->_carry_over_len);
+  else
+    prepared = chttp1_stream_prepare(&stream, conn->fd, conn->_carry_over,
+                                     conn->_carry_over_len);
+  _mem_free(conn->m_procs, conn->_carry_over);
+  conn->_carry_over = NULL;
+  conn->_carry_over_len = 0;
 
   chttpsvr_req req;
   memset(&req, 0, sizeof(req));
-  req.method = sctx->method;
-  req.path = sctx->path;
-  req.raw_query = sctx->raw_query;
-  req.is_streaming = sctx->route->is_streaming;
-  req._h = sctx->h;
-  req._hdr_names = sctx->hdr_names;
-  req._hdr_values = sctx->hdr_values;
-  req._hdr_count = sctx->hdr_count;
-  req.param_names = (const char **)sctx->route->param_names;
-  req.param_values = sctx->param_values;
-  req.param_count = sctx->param_count;
-  req._dispatch = &sctx->dispatch;
-  req.m_procs = sctx->m_procs;
+  req.conn = conn;
+  req.stream = prepared ? &stream : NULL;
+  req.param_names = (const char **)conn->matched_route->param_names;
+  req.m_procs = conn->m_procs;
 
-  if (!sctx->route->is_streaming) {
-    ccol_retval_t ing = _ingest_buffered_body(sctx, &req);
-    if (ing != ccol_success) {
-      http1_stream_release((http_s *)sctx->h);
-      sctx->resp.status_code =
-          (ing == ccol_msg_too_large) ? CHTTP_STATUS_PAYLOAD_TOO_LARGE
-          : (ing == ccol_timed_out)   ? CHTTP_STATUS_REQUEST_TIMEOUT
-                                      : CHTTP_STATUS_INTERNAL_ERROR;
-      _destroy_req_qparams(&req);
-      http_resume(sctx->ph, _task_send_response, _task_cleanup);
-      return;
+  ccol_retval_t body_err = ccol_success;
+  if (prepared) {
+    if (!conn->matched_route->is_streaming) {
+      body_err = _drain_body(conn, &stream);
     }
+    /* Streaming routes: the handler pulls the body itself via
+     * chttpsvr_req_read(); nothing to pre-drain here. */
+  } else {
+    body_err = ccol_not_enough_memory;
   }
 
-  _chttpsvr_next(&req, &sctx->resp);
+  bool aborted = false;
+  if (body_err != ccol_success && !conn->matched_route->is_streaming) {
+    conn->resp.status_code =
+        (body_err == ccol_msg_too_large) ? CHTTP_STATUS_PAYLOAD_TOO_LARGE
+        : (body_err == ccol_timed_out)   ? CHTTP_STATUS_REQUEST_TIMEOUT
+                                         : CHTTP_STATUS_INTERNAL_ERROR;
+    aborted = true;
+  } else {
+    _chttpsvr_next(&req, &conn->resp);
+    /* A streaming handler may have stopped reading before the body's own
+     * natural end (or hit its own error via chttpsvr_req_read returning
+     * -1); either way, nothing further to drain -- the connection's fate
+     * (keep-alive vs close) below already accounts for a not-fully-drained
+     * body via chttp1_should_keep_alive's message-completion check. */
+  }
 
-  /* Streaming handlers may stop reading before EOF; buffered ingestion
-   * above always runs to completion or an error. Either way, release
-   * exactly once, before resuming, whether or not http1_stream_read ever
-   * naturally reached end-of-body. */
-  http1_stream_release((http_s *)sctx->h);
+  bool msg_fully_parsed =
+      prepared && chttp1_parser_message_complete(&conn->parser);
+  bool keep_alive = prepared && !aborted && msg_fully_parsed &&
+                    chttp1_should_keep_alive(&conn->parser) &&
+                    !conn->body_too_large;
 
-  _mem_free(sctx->m_procs, req._body_owned);
+  unsigned write_timeout_ms = atomic_load(&srv->response_write_timeout_ms);
+  bool sent = prepared && _send_response(&stream, &conn->resp, keep_alive,
+                                         write_timeout_ms);
+  if (!sent) keep_alive = false;
+
+  if (prepared) chttp1_stream_release(&stream);
   _destroy_req_qparams(&req);
 
-  http_resume(sctx->ph, _task_send_response, _task_cleanup);
-}
-
-static void _task_send_response(http_s *h) {
-  streaming_ctx_t *sctx = (streaming_ctx_t *)h->udata;
-  struct chttpserver *srv = sctx->srv; /* save before sctx is freed */
-  _finalize_response(h, &sctx->resp);
-  /* _finalize_response transfers all header strings and body to facil.io
-   * synchronously; sctx and the embedded resp may be freed now. */
-  _free_task_ctx(sctx);
   mutex_lock(srv->mutex);
   if (--srv->in_flight_requests == 0) cond_var_broadcast(srv->requests_done_cv);
   mutex_unlock(srv->mutex);
-}
 
-static void _task_cleanup(void *udata) {
-  /* Connection was closed before we could send; just free resources. */
-  streaming_ctx_t *sctx = (streaming_ctx_t *)udata;
-  struct chttpserver *srv = sctx->srv; /* save before sctx is freed */
-  _free_task_ctx(sctx);
-  mutex_lock(srv->mutex);
-  if (--srv->in_flight_requests == 0) cond_var_broadcast(srv->requests_done_cv);
-  mutex_unlock(srv->mutex);
+  if (!keep_alive) {
+    _conn_close(conn);
+    return;
+  }
+
+  /* Keep-alive: reset per-request state and hand the connection back to the
+   * reactor to read the next request's headers. */
+  _conn_reset_for_request(conn);
+  conn->state = CONN_ST_READING_HEADERS;
+  char *err = NULL;
+  conn->reg =
+      event_loop_add(g_reactor, selectable_from_fd(conn->fd, ccol_select_read),
+                     (event_handlers_t){.on_readable = _conn_on_readable,
+                                        .on_error = _conn_on_error},
+                     conn, &err);
+  if (!conn->reg) {
+    _conn_close(conn);
+    return;
+  }
+  _idle_list_add(conn);
 }
 
 /* ========================================================================== */
-/*                         MAIN REQUEST HANDLER                               */
+/*                    LISTENER: ACCEPT + SOCKET OPTIONS                       */
 /* ========================================================================== */
 
-/**
- * http_listen() hard-requires .on_request to be set (it calls exit() at
- * startup otherwise); but _on_headers_complete below always returns 1
- * (handled) for every request that reaches it, which stops http1.c from
- * ever calling on_request. This is therefore unreachable in practice and
- * exists only to satisfy that startup check.
- */
-static void _on_request_unreachable(http_s *h) { http_send_error(h, 500); }
+static void _apply_accepted_socket_options(int fd, bool is_unix,
+                                           bool enable_keepalive) {
+  int one = 1;
+  fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+  if (is_unix) return;
+  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+  if (enable_keepalive)
+    setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
+  int bufsz = 131072;
+  int cur = 0;
+  socklen_t cur_len = sizeof(cur);
+  if (getsockopt(fd, SOL_SOCKET, SO_SNDBUF, &cur, &cur_len) != 0 || cur < bufsz)
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bufsz, sizeof(bufsz));
+  cur_len = sizeof(cur);
+  if (getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &cur, &cur_len) != 0 || cur < bufsz)
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufsz, sizeof(bufsz));
+}
 
-/**
- * Called by http1.c right after headers are parsed, before any body byte is
- * read (see http_settings_s.on_headers_complete). Routing happens here now
- * (not after the body arrives) so an unmatched route is rejected without
- * ever reading a body it's about to discard, and a matched route is hand
- * off to a worker immediately regardless of body size, freeing the reactor
- * thread. The worker (see _task_worker) reads the body itself via
- * http1_stream_read, batch by batch, whether the route is buffered or
- * streaming.
- *
- * Returns 1 if the request was paused and handed to the worker pool (the
- * only outcome for a matched route), or 0 if an error response was already
- * sent synchronously (no match, wrong method, or OOM); in the 0 case
- * http1.c forces the connection closed afterward, since the client's
- * still-arriving body would otherwise be misread as the start of a new
- * pipelined request.
- */
-static int _on_headers_complete(http_s *h) {
-  struct chttpserver *srv = (struct chttpserver *)http_settings(h)->udata;
+static void _listener_on_readable(event_loop loop, ccol_selectable *sel,
+                                  void *arg) {
+  (void)loop;
+  (void)sel;
+  struct chttpserver *srv = (struct chttpserver *)arg;
 
-  /* Extract path (server-side: h->path is the path only, not query). */
-  fio_str_info_s path_fi = fiobj_obj2cstr(h->path);
-  if (!path_fi.data) {
-    http_send_error(h, 400);
-    return 0;
-  }
-
-  /* Copy to NUL-terminated buffer; use stack for short paths. */
-  char path_stk[512];
-  char *path = path_stk;
-  bool path_heap = false;
-  if (path_fi.len + 1 > sizeof(path_stk)) {
-    path = (char *)_mem_alloc(srv->m_procs, path_fi.len + 1);
-    if (!path) {
-      http_send_error(h, 500);
-      return 0;
+  for (;;) {
+    size_t cap = atomic_load(&srv->max_connections);
+    if (cap && atomic_load(&srv->current_connections) >= cap) {
+      /* At capacity: leave the pending connection in the kernel backlog.
+       * The listener fd remains level-triggered-ready as long as the
+       * backlog is non-empty, so this is naturally retried on a later
+       * epoll_wait batch once a slot frees up -- no extra bookkeeping
+       * needed to "wake up" again. */
+      return;
     }
-    path_heap = true;
-  }
-  memcpy(path, path_fi.data, path_fi.len);
-  path[path_fi.len] = '\0';
 
-  /* Extract method. */
-  fio_str_info_s method_fi = fiobj_obj2cstr(h->method);
-  if (!method_fi.data) {
-    if (path_heap) _mem_free(srv->m_procs, path);
-    http_send_error(h, 400);
-    return 0;
-  }
-  chttp_method_t method = _parse_method(method_fi.data, method_fi.len);
-
-  if (method == _CHTTP_METHOD_UNKNOWN) {
-    if (path_heap) _mem_free(srv->m_procs, path);
-    http_send_error(h, 501);
-    return 0;
-  }
-
-  /* Route lookup and middleware snapshot under the routes read lock.
-   * The read lock prevents _router_add_route / _router_add_mw /
-   * chttpsvr_subrouter from mutating the routing tables while we read them. The
-   * lock is held only long enough to find the route and snapshot the middleware
-   * head pointers; handler dispatch runs without it.
-   *
-   * Note: _find_route calls _mem_calloc while this read lock is held.  For the
-   * default allocator (malloc) this is safe.  Custom allocators passed via
-   * create_chttpsvr_mp must not acquire any lock that _router_add_route,
-   * _router_add_mw, or chttpsvr_subrouter also hold; otherwise deadlock is
-   * possible. */
-  rw_lock_rdlock(srv->routes_lock);
-  match_result_t mr = _find_route(srv, path, method);
-  if (mr.result == ROUTE_MATCH_NONE) {
-    rw_lock_unlock(srv->routes_lock);
-    if (path_heap) _mem_free(srv->m_procs, path);
-    http_send_error(h, 404);
-    return 0;
-  }
-  if (mr.result == ROUTE_MATCH_METHOD) {
-    rw_lock_unlock(srv->routes_lock);
-    if (path_heap) _mem_free(srv->m_procs, path);
-    http_send_error(h, 405);
-    return 0;
-  }
-  if (mr.result == ROUTE_MATCH_OOM) {
-    rw_lock_unlock(srv->routes_lock);
-    if (path_heap) _mem_free(srv->m_procs, path);
-    http_send_error(h, 500);
-    return 0;
-  }
-  /* Build a snapshot of the middleware chain while the read lock is still
-   * held.  Walking the list here (rather than after releasing the lock)
-   * guarantees the snapshot is consistent with the route found by _find_route
-   * and cannot include middleware appended by a concurrent writer after the
-   * lock is released.  Global middleware is snapshotted first, then any
-   * router-specific middleware. */
-  dispatch_ctx_t dispatch;
-  memset(&dispatch, 0, sizeof(dispatch));
-  dispatch.srv = srv;
-  dispatch.router = mr.router;
-  dispatch.route = mr.route;
-  dispatch.mw_idx = 0;
-  {
-    int mc = 0;
-    chttpsvr_mw_node_t *n;
-    for (n = srv->routers[0]->mw_head; n && mc < _CHTTPSVR_MAX_MW; n = n->next)
-      dispatch.mw_snap[mc++] = (_mw_entry_t){n->fn, n->ctx};
-    bool overflow =
-        (n != NULL); /* stopped because cap was reached, not list end */
-    if (!overflow && mr.router != srv->routers[0]) {
-      for (n = mr.router->mw_head; n && mc < _CHTTPSVR_MAX_MW; n = n->next)
-        dispatch.mw_snap[mc++] = (_mw_entry_t){n->fn, n->ctx};
-      overflow = (n != NULL);
+    struct sockaddr_storage ss;
+    socklen_t slen = sizeof(ss);
+    int cfd = accept(srv->listen_fd, (struct sockaddr *)&ss, &slen);
+    if (cfd < 0) {
+      if (errno == EWOULDBLOCK || errno == EAGAIN) return;
+      if (errno == EINTR) continue;
+      return;
     }
-    dispatch.mw_count = mc;
-    if (overflow) {
-      rw_lock_unlock(srv->routes_lock);
-      _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
-      if (path_heap) _mem_free(srv->m_procs, path);
-      http_send_error(h, 500);
-      return 0;
+    atomic_fetch_add(&srv->current_connections, 1);
+    _apply_accepted_socket_options(cfd, srv->is_unix_socket,
+                                   srv->enable_keepalive);
+
+    call_once(g_parser_settings_once, _init_parser_settings);
+    chttpsvr_conn_t *conn = _conn_create(srv, cfd, &g_parser_settings);
+    if (!conn) {
+      close(cfd);
+      atomic_fetch_sub(&srv->current_connections, 1);
+      continue;
     }
-  }
-  rw_lock_unlock(srv->routes_lock);
 
-  /* URL-decode the path in-place now that routing is done.
-   * The raw (encoded) path was needed for segment comparison; the user-facing
-   * chttpsvr_req_path() API is documented to return the decoded path.
-   * http_decode_path_unsafe output is always <= input length, so in-place is
-   * safe: the write pointer never overtakes the read pointer.
-   * Failure (-1) means malformed percent-encoding; return 400.  This is a
-   * defensive check: current segment matching also decodes with hex2byte and
-   * would reject any bad encoding before reaching this point, but future
-   * routing extensions (wildcards, catch-alls) might not. */
-  {
-    ssize_t _dlen = http_decode_path_unsafe(path, path);
-    if (_dlen < 0) {
-      _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
-      if (path_heap) _mem_free(srv->m_procs, path);
-      http_send_error(h, 400);
-      return 0;
-    }
-    path[(size_t)_dlen] = '\0';
-  }
-
-  /* Extract raw query string. Populated from the request line, which is
-   * parsed well before headers complete, so this is available here exactly
-   * as it was when this extraction ran after the full body previously. */
-  const char *raw_query = NULL;
-  fio_str_info_s query_fi;
-  memset(&query_fi, 0, sizeof(query_fi));
-  if (h->query) {
-    query_fi = fiobj_obj2cstr(h->query);
-    if (query_fi.len > 0) raw_query = query_fi.data;
-  }
-
-  /* --- ALL REQUESTS dispatched through server ctpool via http_pause --- */
-  streaming_ctx_t *sctx =
-      (streaming_ctx_t *)_mem_calloc(srv->m_procs, 1, sizeof(streaming_ctx_t));
-  if (!sctx) {
-    _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
-    if (path_heap) _mem_free(srv->m_procs, path);
-    http_send_error(h, 500);
-    return 0;
-  }
-  sctx->m_procs = srv->m_procs;
-  sctx->srv = srv;
-  sctx->router = mr.router;
-  sctx->route = mr.route;
-  sctx->method = method;
-  sctx->h = h;
-  sctx->param_values = mr.param_values;
-  sctx->param_count = mr.route->param_count;
-  sctx->resp.status_code = CHTTP_STATUS_OK;
-  sctx->resp.m_procs = srv->m_procs;
-  sctx->dispatch = dispatch;
-
-  /* Copy path. */
-  sctx->path = ccol_strdup(srv->m_procs, path);
-  if (!sctx->path) goto task_oom;
-
-  /* Copy raw query. */
-  if (raw_query) {
-    sctx->raw_query = ccol_strdup(srv->m_procs, raw_query);
-    if (!sctx->raw_query) goto task_oom;
-  }
-
-  /* Extract all request headers before http_pause so the reactor thread
-   * does not need to touch the FIOBJ after the pause. */
-  if (h->headers) {
-    hdr_extract_t he;
-    memset(&he, 0, sizeof(he));
-    he.mp = srv->m_procs;
-    fiobj_each2(h->headers, _extract_hdr_cb, &he);
-    if (he.oom) {
-      for (size_t i = 0; i < he.count; i++) {
-        _mem_free(srv->m_procs, he.names[i]);
-        _mem_free(srv->m_procs, he.values[i]);
+    if (srv->tls_ctx) {
+      conn->tls = ctls_conn_create_server(srv->tls_ctx, cfd, conn, NULL);
+      if (!conn->tls) {
+        close(cfd);
+        atomic_fetch_sub(&srv->current_connections, 1);
+        _mem_free(srv->m_procs, conn);
+        continue;
       }
-      _mem_free(srv->m_procs, he.names);
-      _mem_free(srv->m_procs, he.values);
-      goto task_oom;
+      conn->state = CONN_ST_TLS_HANDSHAKE;
+    } else {
+      conn->state = CONN_ST_READING_HEADERS;
     }
-    sctx->hdr_names = he.names;
-    sctx->hdr_values = he.values;
-    sctx->hdr_count = he.count;
+    _conn_pump(conn);
+  }
+}
+
+/* ========================================================================== */
+/*                    LISTEN SOCKET SETUP (TCP + Unix)                        */
+/* ========================================================================== */
+
+#define _CHTTPSVR_UNIX_PREFIX "unix://"
+
+static int _make_listen_socket(const char *host, uint16_t port,
+                               bool enable_reuseport, bool ipv6_only,
+                               bool *is_unix, char **unix_path_out) {
+  *is_unix = host && strncmp(host, _CHTTPSVR_UNIX_PREFIX,
+                             strlen(_CHTTPSVR_UNIX_PREFIX)) == 0;
+
+  if (*is_unix) {
+    const char *path = host + strlen(_CHTTPSVR_UNIX_PREFIX);
+    if (!*path || strlen(path) >= sizeof(((struct sockaddr_un *)0)->sun_path))
+      return -1;
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
+    if (fd < 0) return -1;
+    struct sockaddr_un addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    unlink(path); /* best-effort: remove a stale socket file at this path */
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+      close(fd);
+      return -1;
+    }
+    if (listen(fd, SOMAXCONN) != 0) {
+      close(fd);
+      unlink(path);
+      return -1;
+    }
+    *unix_path_out = strdup(path);
+    return fd;
   }
 
-  if (path_heap) _mem_free(srv->m_procs, path);
-  h->udata = sctx;
+  struct addrinfo hints, *res = NULL;
+  memset(&hints, 0, sizeof(hints));
+  hints.ai_family = AF_UNSPEC;
+  hints.ai_socktype = SOCK_STREAM;
+  hints.ai_flags = AI_PASSIVE;
+  char port_str[8];
+  snprintf(port_str, sizeof(port_str), "%u", port);
+  const char *bind_host = (!host || strcmp(host, "0.0.0.0") == 0) ? NULL : host;
+  if (getaddrinfo(bind_host, port_str, &hints, &res) != 0 || !res) return -1;
 
-  /* Increment in_flight_requests BEFORE calling http_pause, not inside the
-   * deferred _task_pause_cb. http_pause() only queues _task_pause_cb via
-   * fio_defer (it does not run it synchronously) so incrementing inside
-   * _task_pause_cb would leave a window, between this call returning and the
-   * deferred callback actually running, where __chttpsvr_destroy could
-   * observe in_flight_requests == 0 and free the server while this request
-   * is still (invisibly) in flight. Incrementing here, before the request
-   * can be un-tracked by any code path, closes that window entirely. */
-  mutex_lock(srv->mutex);
-  srv->in_flight_requests++;
-  mutex_unlock(srv->mutex);
-
-  /* Must run before http_pause: http_pause defers the actual handoff via
-   * fio_defer, and a worker thread may start running http1_stream_read on
-   * another core the moment that deferred task is queued; possibly before
-   * this function even returns. http1_stream_prepare establishes every
-   * piece of state that worker depends on (diversion flags, the zero-body
-   * short-circuit) synchronously, right here, so none of it is still being
-   * set up after the handoff has already begun. */
-  http1_stream_prepare(h);
-  http_pause(h, _task_pause_cb);
-  return 1;
-
-task_oom:
-  _free_task_ctx(sctx);
-  if (path_heap) _mem_free(srv->m_procs, path);
-  http_send_error(h, 500);
-  return 0;
+  int fd = -1;
+  for (struct addrinfo *rp = res; rp; rp = rp->ai_next) {
+    fd =
+        socket(rp->ai_family, rp->ai_socktype | SOCK_NONBLOCK, rp->ai_protocol);
+    if (fd < 0) continue;
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+#ifdef SO_REUSEPORT
+    if (enable_reuseport)
+      setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
+#endif
+#ifdef IPV6_V6ONLY
+    if (ipv6_only && rp->ai_family == AF_INET6)
+      setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one));
+#endif
+#ifdef TCP_FASTOPEN
+    int qlen = 128;
+    setsockopt(fd, IPPROTO_TCP, TCP_FASTOPEN, &qlen, sizeof(qlen));
+#endif
+    if (bind(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+    close(fd);
+    fd = -1;
+  }
+  freeaddrinfo(res);
+  if (fd < 0) return -1;
+  if (listen(fd, SOMAXCONN) != 0) {
+    close(fd);
+    return -1;
+  }
+  *unix_path_out = NULL;
+  return fd;
 }
 
 /* ========================================================================== */
@@ -1476,9 +2349,6 @@ static chttpsvr_router *_create_router(struct chttpserver *srv,
     _mem_free(mp, r);
     return NULL;
   }
-  /* Strip trailing slashes so "/api/v1/" and "/api/v1" route identically.
-   * The root router's empty prefix and the degenerate single-char "/" are
-   * left unchanged (the loop condition plen > 1 guards both). */
   size_t plen = strlen(r->prefix);
   while (plen > 1 && r->prefix[plen - 1] == '/') r->prefix[--plen] = '\0';
   r->prefix_len = plen;
@@ -1488,16 +2358,12 @@ static chttpsvr_router *_create_router(struct chttpserver *srv,
 }
 
 static void _destroy_router(chttpsvr_router *r, ccol_memmgmt_procs_t *mp) {
-  /* Free middleware nodes.  Destroy is called only after all in-flight
-   * streams have drained (__chttpsvr_destroy guarantees this), so plain
-   * pointer access is safe here. */
   chttpsvr_mw_node_t *mw = r->mw_head;
   while (mw) {
     chttpsvr_mw_node_t *next = mw->next;
     _mem_free(mp, mw);
     mw = next;
   }
-  /* Free routes (each entry is an individual allocation). */
   for (size_t i = 0; i < r->route_count; i++) {
     _free_route_data(r->routes[i], mp);
     _mem_free(mp, r->routes[i]);
@@ -1516,8 +2382,6 @@ static ccol_retval_t _router_add_route(chttpsvr_router *router,
 
   ccol_memmgmt_procs_t *mp = router->m_procs;
 
-  /* Allocate and fully initialise the route BEFORE taking the write lock so
-   * that readers never observe a partially-constructed entry. */
   chttpsvr_route_t *rt =
       (chttpsvr_route_t *)_mem_alloc(mp, sizeof(chttpsvr_route_t));
   if (!rt) return ccol_not_enough_memory;
@@ -1534,7 +2398,6 @@ static ccol_retval_t _router_add_route(chttpsvr_router *router,
     return rv;
   }
 
-  /* Publish the fully-initialised route pointer under the write lock. */
   rw_lock_wrlock(router->srv->routes_lock);
   if (router->route_count >= router->route_cap) {
     size_t new_cap = router->route_cap * 2 + 4;
@@ -1558,7 +2421,6 @@ static ccol_retval_t _router_add_mw(chttpsvr_router *router,
                                     chttpsvr_middleware_fn fn, void *ctx) {
   if (!router || !fn) return ccol_invalid_args;
   ccol_memmgmt_procs_t *mp = router->m_procs;
-  /* Allocate the node before taking the write lock. */
   chttpsvr_mw_node_t *node =
       (chttpsvr_mw_node_t *)_mem_alloc(mp, sizeof(chttpsvr_mw_node_t));
   if (!node) return ccol_not_enough_memory;
@@ -1566,8 +2428,6 @@ static ccol_retval_t _router_add_mw(chttpsvr_router *router,
   node->ctx = ctx;
   node->next = NULL;
 
-  /* Append under the write lock.  The lock provides the ordering needed to
-   * make the new node visible to snapshot readers under the read-lock. */
   rw_lock_wrlock(router->srv->routes_lock);
   if (router->mw_count >= _CHTTPSVR_MAX_MW) {
     rw_lock_unlock(router->srv->routes_lock);
@@ -1599,7 +2459,6 @@ static ccol_retval_t _parse_qparams(const char *raw_query,
 
   const char *p = raw_query;
   while (p && *p) {
-    /* Find end of this pair. */
     const char *amp = strchr(p, '&');
     size_t pair_len = amp ? (size_t)(amp - p) : strlen(p);
     const char *eq = (const char *)memchr(p, '=', pair_len);
@@ -1608,7 +2467,6 @@ static ccol_retval_t _parse_qparams(const char *raw_query,
     const char *val_raw = eq ? eq + 1 : NULL;
     size_t val_raw_len = eq ? pair_len - key_raw_len - 1 : 0;
 
-    /* Decode key. */
     char key_src[512];
     char *key_sp = key_src;
     bool kh = false;
@@ -1618,17 +2476,13 @@ static ccol_retval_t _parse_qparams(const char *raw_query,
       if (!key_sp) goto oom;
     }
     memcpy(key_sp, p, key_raw_len);
-    /* URL query uses + for space. */
-    for (size_t i = 0; i < key_raw_len; i++) {
-      if (key_sp[i] == '+') key_sp[i] = ' ';
-    }
     key_sp[key_raw_len] = '\0';
     char *key_decoded = (char *)_mem_alloc(mp, key_raw_len + 1);
     if (!key_decoded) {
       if (kh) _mem_free(mp, key_sp);
       goto oom;
     }
-    ssize_t kl = http_decode_url_unsafe(key_decoded, key_sp);
+    ssize_t kl = _decode_url_unsafe(key_decoded, key_sp);
     if (kh) _mem_free(mp, key_sp);
     if (kl < 0) {
       _mem_free(mp, key_decoded);
@@ -1636,7 +2490,6 @@ static ccol_retval_t _parse_qparams(const char *raw_query,
     }
     key_decoded[(size_t)kl] = '\0';
 
-    /* Decode value. */
     char *val_decoded = NULL;
     if (val_raw) {
       char val_src[512];
@@ -1651,9 +2504,6 @@ static ccol_retval_t _parse_qparams(const char *raw_query,
         }
       }
       memcpy(val_sp, val_raw, val_raw_len);
-      for (size_t i = 0; i < val_raw_len; i++) {
-        if (val_sp[i] == '+') val_sp[i] = ' ';
-      }
       val_sp[val_raw_len] = '\0';
       val_decoded = (char *)_mem_alloc(mp, val_raw_len + 1);
       if (!val_decoded) {
@@ -1661,7 +2511,7 @@ static ccol_retval_t _parse_qparams(const char *raw_query,
         _mem_free(mp, key_decoded);
         goto oom;
       }
-      ssize_t vl = http_decode_url_unsafe(val_decoded, val_sp);
+      ssize_t vl = _decode_url_unsafe(val_decoded, val_sp);
       if (vh) _mem_free(mp, val_sp);
       if (vl < 0) {
         _mem_free(mp, val_decoded);
@@ -1677,7 +2527,6 @@ static ccol_retval_t _parse_qparams(const char *raw_query,
       }
     }
 
-    /* Grow arrays if needed. */
     if (qp->count >= qp->cap) {
       size_t nc = qp->cap * 2 + 8;
       char **nk = (char **)_mem_realloc(mp, qp->keys, nc * sizeof(char *));
@@ -1689,12 +2538,6 @@ static ccol_retval_t _parse_qparams(const char *raw_query,
       qp->keys = nk;
       char **nv = (char **)_mem_realloc(mp, qp->values, nc * sizeof(char *));
       if (!nv) {
-        /* qp->keys already points to nk (updated above).  qp->cap is
-         * intentionally NOT updated here: it now understates the actual
-         * keys-array capacity but remains consistent with the values-array
-         * capacity.  The oom cleanup path iterates by qp->count (not
-         * qp->cap) for individual string entries, then frees each array
-         * pointer once; both arrays are released correctly. */
         _mem_free(mp, key_decoded);
         _mem_free(mp, val_decoded);
         goto oom;
@@ -1725,15 +2568,12 @@ oom:
 }
 
 static chttpsvr_qparams_t *_ensure_qparams(chttpsvr_req *req) {
+  chttpsvr_conn_t *conn = req->conn;
   if (req->_qparams) return req->_qparams;
-  /* _qparams_attempted guards against retrying a failed allocation on every
-   * subsequent query call.  Once set, any path that leaves _qparams NULL (both
-   * the empty-query sentinel calloc failure and the parse OOM path) returns
-   * NULL immediately rather than spinning in a tight OOM retry loop. */
   if (req->_qparams_attempted) return NULL;
   req->_qparams_attempted = true;
 
-  if (!req->raw_query || !*req->raw_query) {
+  if (!conn->raw_query || !*conn->raw_query) {
     chttpsvr_qparams_t *qp = (chttpsvr_qparams_t *)_mem_calloc(
         req->m_procs, 1, sizeof(chttpsvr_qparams_t));
     if (!qp) return NULL;
@@ -1741,16 +2581,9 @@ static chttpsvr_qparams_t *_ensure_qparams(chttpsvr_req *req) {
     req->_qparams = qp;
     return qp;
   }
-  if (_parse_qparams(req->raw_query, &req->_qparams, req->m_procs) !=
+  if (_parse_qparams(conn->raw_query, &req->_qparams, req->m_procs) !=
       ccol_success) {
-    /* OOM during parse.  Record it so that chttpsvr_req_query_one can
-     * distinguish a parse failure from a genuine key-absent result (both
-     * would otherwise surface as an empty param set). */
     req->_qparams_parse_oom = true;
-    /* Install an empty sentinel so that subsequent calls take the fast path
-     * (_qparams non-NULL) and _destroy_req_qparams has a valid struct to
-     * clean up.  If the sentinel allocation also fails, return NULL; the
-     * OOM flag is already set regardless. */
     chttpsvr_qparams_t *qp = (chttpsvr_qparams_t *)_mem_calloc(
         req->m_procs, 1, sizeof(chttpsvr_qparams_t));
     if (qp) {
@@ -1789,11 +2622,6 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     memcpy(srv->m_procs, mprocs, sizeof(ccol_memmgmt_procs_t));
   }
 
-  /* Set up the server-owned logger.  cl == NULL: create a minimal internal
-   * logger that writes only FATAL messages to stderr.  cl != NULL: derive a
-   * new logger from it (tagged component=http-server) that this server will
-   * manage; the caller's handle is never stored directly and is left
-   * untouched (and still owned by the caller). */
   clog logger = cl ? clog_derive(cl) : clog_open_fd_mp(2, CLOG_FATAL, mprocs);
   if (logger && cl) clog_set_field(logger, "component", "http-server");
   if (!logger) {
@@ -1810,18 +2638,32 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     if (err_str) *err_str = CCOL_ERR_STR("mutex_init failed");
     return NULL;
   }
+  if (mutex_init(srv->idle_mutex) != 0) {
+    mutex_destroy(srv->mutex);
+    clog_close(logger);
+    _mem_free(mprocs, srv->m_procs);
+    _mem_free(mprocs, srv);
+    if (err_str) *err_str = CCOL_ERR_STR("mutex_init failed");
+    return NULL;
+  }
 
   {
-    cond_var_attr_t _cv_attr;
-    int _cv_rc = 0;
-    if (cond_var_attr_init(_cv_attr) == 0) {
-      cond_var_attr_setclock(_cv_attr, CLOCK_MONOTONIC);
-      _cv_rc = cond_var_init_ca(srv->requests_done_cv, _cv_attr);
-      cond_var_attr_destroy(_cv_attr);
+    /* CLOCK_MONOTONIC to match _wait_and_detach_worker_pool's own
+     * clock_gettime(CLOCK_MONOTONIC, ...)-based deadline -- cond_var_init's
+     * default clock (CLOCK_REALTIME) would make that deadline comparison
+     * wrong (comparing a monotonic-clock timespec against a condvar
+     * internally using the wall clock). */
+    cond_var_attr_t cv_attr;
+    int cv_rc = 0;
+    if (cond_var_attr_init(cv_attr) == 0) {
+      cond_var_attr_setclock(cv_attr, CLOCK_MONOTONIC);
+      cv_rc = cond_var_init_ca(srv->requests_done_cv, cv_attr);
+      cond_var_attr_destroy(cv_attr);
     } else {
-      _cv_rc = 1;
+      cv_rc = 1;
     }
-    if (_cv_rc != 0) {
+    if (cv_rc != 0) {
+      mutex_destroy(srv->idle_mutex);
       mutex_destroy(srv->mutex);
       clog_close(logger);
       _mem_free(mprocs, srv->m_procs);
@@ -1833,6 +2675,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
 
   if (rw_lock_init(srv->routes_lock) != 0) {
     cond_var_destroy(srv->requests_done_cv);
+    mutex_destroy(srv->idle_mutex);
     mutex_destroy(srv->mutex);
     clog_close(logger);
     _mem_free(mprocs, srv->m_procs);
@@ -1841,11 +2684,11 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     return NULL;
   }
 
-  /* Create the root router (prefix = ""). */
   chttpsvr_router *root = _create_router(srv, "", srv->m_procs);
   if (!root) {
     rw_lock_destroy(srv->routes_lock);
     cond_var_destroy(srv->requests_done_cv);
+    mutex_destroy(srv->idle_mutex);
     mutex_destroy(srv->mutex);
     clog_close(logger);
     _mem_free(mprocs, srv->m_procs);
@@ -1860,6 +2703,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     _destroy_router(root, srv->m_procs);
     rw_lock_destroy(srv->routes_lock);
     cond_var_destroy(srv->requests_done_cv);
+    mutex_destroy(srv->idle_mutex);
     mutex_destroy(srv->mutex);
     clog_close(logger);
     _mem_free(mprocs, srv->m_procs);
@@ -1871,33 +2715,11 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
   srv->router_count = 1;
   srv->router_cap = 1;
   srv->cl = logger;
-  srv->listen_uuid = -1;
+  srv->listen_fd = -1;
   srv->started = false;
   return srv;
 }
 
-/* Waits (bounded by a 30-second safety-net timeout: a permanent hang is
- * worse than a potential use-after-free in that degenerate edge case) for
- * every already-dispatched request to finish, then atomically detaches
- * srv->worker_pool (NULLing it under srv->mutex) and returns the detached
- * pool so the caller can drain and destroy it outside the lock.
- *
- * Waiting first is what makes the detach-then-destroy safe: in_flight_requests
- * spans exactly the window from http_pause (in _on_headers_complete, before
- * _task_pause_cb ever reads worker_pool) through the matching http_resume, so
- * once it reaches zero no _task_pause_cb call can be mid-flight holding a
- * stale local copy of the pool pointer this function is about to hand to
- * ctpool_shutdown_drain/ctpool_destroy. This matters because an
- * already-accepted keep-alive connection's _on_headers_complete does not
- * check srv->started, so it (and the _task_pause_cb it triggers) can still
- * fire while chttpsvr_start is mid-restart or __chttpsvr_destroy is tearing
- * the server down.
- *
- * Used by both __chttpsvr_destroy and chttpsvr_start (leftover-pool cleanup
- * on a restart, and every failure-path teardown after the pool has already
- * been assigned to srv->worker_pool), so a pool is never destroyed while a
- * concurrent request could still be about to submit to it. Caller must hold
- * no lock on entry. */
 static ctpool _wait_and_detach_worker_pool(chttpsvr srv) {
   mutex_lock(srv->mutex);
   if (srv->in_flight_requests > 0) {
@@ -1916,33 +2738,60 @@ static ctpool _wait_and_detach_worker_pool(chttpsvr srv) {
   return old_pool;
 }
 
+/* __chttpsvr_destroy's own variant of the wait above: additionally closes
+ * every still-idle connection, atomically with respect to
+ * _conn_start_diverted (the only place that increments in_flight_requests
+ * and reads worker_pool), by holding srv->mutex continuously from the
+ * moment in-flight work is observed to have drained all the way through
+ * the idle-close pass. Without this, a keep-alive connection whose request
+ * finished (landing back in the idle list) right as the in-flight wait
+ * below completed, but which then received a further pipelined request
+ * before an separately-locked idle-close pass got to it, could be silently
+ * re-diverted -- escaping that pass entirely and leaking once this
+ * function goes on to release the engine/reactor out from under it (a
+ * real, if rare, leak valgrind caught: one orphaned chttpsvr_conn_t after
+ * a full 176-case run). Any request that still manages to arrive after
+ * this function has already closed a connection, or while it holds
+ * srv->mutex, either hits an already-removed event_loop registration (a
+ * safe no-op, the same dispatch-time liveness check this codebase already
+ * relies on elsewhere) or observes worker_pool == NULL once it finally
+ * acquires the lock and gets the ordinary graceful 503 _conn_start_diverted
+ * already sends for "no pool available" -- never a leak or a crash. */
+static ctpool _drain_and_close_all_connections(struct chttpserver *srv) {
+  mutex_lock(srv->mutex);
+  if (srv->in_flight_requests > 0) {
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
+    deadline.tv_sec += 30;
+    while (srv->in_flight_requests > 0) {
+      if (cond_var_timedwait(srv->requests_done_cv, srv->mutex, deadline) ==
+          ETIMEDOUT)
+        break;
+    }
+  }
+  ctpool old_pool = srv->worker_pool;
+  srv->worker_pool = NULL;
+  _close_all_idle_connections(srv);
+  mutex_unlock(srv->mutex);
+  return old_pool;
+}
+
 void __chttpsvr_destroy(chttpsvr srv) {
   if (!srv) return;
 
-  /* Atomically close the listener and claim the stop. */
-  mutex_lock(srv->mutex);
-  bool was_started = srv->started;
-  intptr_t uuid = srv->listen_uuid;
-  if (was_started) {
-    srv->started = false;
-    srv->listen_uuid = -1;
-  }
-  mutex_unlock(srv->mutex);
-  if (was_started) fio_close(uuid);
+  chttpsvr_stop(srv);
+  _servers_unregister(srv);
 
-  /* Release this server's single shared-engine reference (acquired once, in
-   * chttpsvr_start, for this server's entire lifetime) exactly once, only if
-   * it was ever actually acquired. Guarded by srv->mutex, not a global lock;
-   * contributed_to_engine is purely this server's own state now that the
-   * shared reference count itself lives in cfio_engine.c.
-   *
-   * _cfio_engine_release() hands the actual reactor stop-and-join off to a
-   * detached reaper thread rather than performing it inline when this is the
-   * last reference (see cfio_engine.h); so, unlike the old per-module
-   * engine, dropping the last reference here does NOT guarantee the shared
-   * reactor has fully stopped by the time this function returns. A caller
-   * that needs that guarantee (e.g. before reusing the just-freed port, or
-   * before process exit) must call chttpsvr_engine_wait() afterward. */
+  /* Drain in-flight work and close every remaining idle connection BEFORE
+   * releasing this server's engine reference below: _engine_release() can
+   * be the one that drops the shared reactor's ref count to zero (if srv
+   * happens to be the last contributing server), which hands
+   * event_loop_destroy(g_reactor) off to an async reaper thread -- racing
+   * this function's own event_loop_remove() calls (inside
+   * _drain_and_close_all_connections -> _conn_close) if they ran after
+   * releasing instead of before. */
+  ctpool old_pool = _drain_and_close_all_connections(srv);
+
   bool should_release_engine = false;
   mutex_lock(srv->mutex);
   if (srv->contributed_to_engine) {
@@ -1950,34 +2799,16 @@ void __chttpsvr_destroy(chttpsvr srv) {
     should_release_engine = true;
   }
   mutex_unlock(srv->mutex);
-  if (should_release_engine) _cfio_engine_release();
+  if (should_release_engine) _engine_release();
 
-  /* Block until every in-flight task has called http_resume and its
-   * send/cleanup callback has completed, then drain and destroy the
-   * server-owned worker pool. All handlers now run through the server's
-   * ctpool, so in_flight_requests tracks all dispatched work.
-   *
-   * For the last reference: _cfio_engine_release() above triggers fio_stop()
-   * on its reaper thread momentarily, which signals the reactor to drain;
-   * the reactor fires all pending http_resume callbacks as it winds down.
-   * For non-last references: the reactor keeps running for other servers (or
-   * for chttpclient's async engine), so http_resume callbacks fire
-   * naturally regardless. Either way this wait does not depend on the exact
-   * timing of the reaper's fio_stop() call; a worker thread calls
-   * http_resume when it finishes regardless of engine-stop state.
-   *
-   * See _wait_and_detach_worker_pool's own comment for why waiting for
-   * in_flight_requests to drain before touching worker_pool is required, not
-   * just a nice-to-have. */
-  ctpool old_pool = _wait_and_detach_worker_pool(srv);
   if (old_pool) {
     ctpool_shutdown_drain(old_pool);
     ctpool_destroy(old_pool);
   }
 
-  if (srv->tls) {
-    fio_tls_destroy(srv->tls);
-    srv->tls = NULL;
+  if (srv->tls_ctx) {
+    ctls_ctx_release(srv->tls_ctx);
+    srv->tls_ctx = NULL;
   }
 
   for (size_t i = 0; i < srv->router_count; i++) {
@@ -1985,6 +2816,7 @@ void __chttpsvr_destroy(chttpsvr srv) {
   }
   _mem_free(srv->m_procs, srv->routers);
   mutex_destroy(srv->mutex);
+  mutex_destroy(srv->idle_mutex);
   cond_var_destroy(srv->requests_done_cv);
   rw_lock_destroy(srv->routes_lock);
 
@@ -1998,22 +2830,14 @@ void __chttpsvr_destroy(chttpsvr srv) {
 
 ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   if (!srv) return ccol_invalid_args;
-  if (cfg && cfg->port == 0) return ccol_invalid_args;
+  if (cfg && cfg->port == 0 &&
+      !(cfg->host && strncmp(cfg->host, _CHTTPSVR_UNIX_PREFIX,
+                             strlen(_CHTTPSVR_UNIX_PREFIX)) == 0))
+    return ccol_invalid_args;
 
-  static const chttpsvr_config_t default_cfg = {
-      .host = "0.0.0.0",
-      .port = 8080,
-      .max_body_size = (4U * 1024U * 1024U),
-      .read_timeout_ms = 0,
-      .idle_timeout_ms = 0,
-      .stream_read_timeout_ms = 30000,
-      .tls = NULL,
-      .worker_thread_count = 0,
-      .worker_queue_capacity = 0,
-  };
+  chttpsvr_config_t default_cfg = CHTTPSVR_CONFIG_DEFAULT;
   if (!cfg) cfg = &default_cfg;
 
-  /* Guard against double-start on the same server instance. */
   mutex_lock(srv->mutex);
   if (srv->started) {
     mutex_unlock(srv->mutex);
@@ -2021,12 +2845,6 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   }
   mutex_unlock(srv->mutex);
 
-  /* Drain and destroy any pool left over from a previous start/stop cycle.
-   * chttpsvr_stop only closes the listener; already-accepted keep-alive
-   * connections keep running and their _on_headers_complete does not check
-   * srv->started, so one can still be dispatching through the leftover pool
-   * right up until _wait_and_detach_worker_pool's in_flight_requests wait
-   * confirms otherwise. See that helper's comment for the full reasoning. */
   {
     ctpool leftover_pool = _wait_and_detach_worker_pool(srv);
     if (leftover_pool) {
@@ -2035,7 +2853,6 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
     }
   }
 
-  /* Determine worker thread count and queue capacity. */
   int nthreads = cfg->worker_thread_count;
   if (nthreads <= 0) {
     long cpus = sysconf(_SC_NPROCESSORS_ONLN);
@@ -2043,9 +2860,9 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   }
   size_t queue_cap;
   if (cfg->worker_queue_capacity == CHTTPSVR_QUEUE_UNBOUNDED) {
-    queue_cap = 0; /* ctpool: 0 means unbounded */
+    queue_cap = 0;
   } else if (cfg->worker_queue_capacity == 0) {
-    queue_cap = (size_t)1024 * (size_t)nthreads; /* library default */
+    queue_cap = (size_t)1024 * (size_t)nthreads;
   } else {
     queue_cap = cfg->worker_queue_capacity;
   }
@@ -2058,46 +2875,39 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   srv->worker_pool = new_pool;
   mutex_unlock(srv->mutex);
 
-  srv->stream_read_timeout_ms = cfg->stream_read_timeout_ms;
-  srv->max_body_read_duration_ms = cfg->max_body_read_duration_ms;
-
-  /* Compute timeout in seconds (facil.io uses uint8_t seconds).
-   *
-   * idle_timeout_ms, when non-zero, overrides read_timeout_ms as the
-   * connection timeout.  Both map to the single facil.io timeout parameter;
-   * idle_timeout_ms takes precedence because it more directly describes the
-   * keep-alive idle semantics that facil.io enforces on quiescent
-   * connections. */
-  uint8_t timeout_sec = 0;
+  atomic_store(&srv->stream_read_timeout_ms, cfg->stream_read_timeout_ms);
+  atomic_store(&srv->max_body_read_duration_ms, cfg->max_body_read_duration_ms);
+  atomic_store(&srv->response_write_timeout_ms,
+               cfg->response_write_timeout_ms ? cfg->response_write_timeout_ms
+                                              : cfg->stream_read_timeout_ms);
   {
-    long _eff_ms = (cfg->idle_timeout_ms > 0) ? cfg->idle_timeout_ms
-                                              : cfg->read_timeout_ms;
-    if (_eff_ms > 0) {
-      long sec = _eff_ms / 1000;
-      timeout_sec = (sec > 255) ? 255 : (sec == 0 ? 1 : (uint8_t)sec);
-    }
+    long eff_idle_ms = (cfg->idle_timeout_ms > 0) ? cfg->idle_timeout_ms
+                                                  : cfg->read_timeout_ms;
+    atomic_store(&srv->idle_timeout_ms,
+                 (unsigned)(eff_idle_ms > 0 ? eff_idle_ms : 0));
   }
+  srv->max_body_size = cfg->max_body_size;
+  srv->max_header_bytes = cfg->max_header_bytes;
+  atomic_store(&srv->max_connections, cfg->max_connections);
+  srv->enable_keepalive = cfg->enable_keepalive;
 
-  /* Build port string. */
-  char port_str[8];
-  snprintf(port_str, sizeof(port_str), "%u", cfg->port);
-
-  /* Release any TLS context left over from a previous start/stop cycle.
-   * fio_tls_s is reference-counted: fio_tls_new starts at ref=1 and
-   * http_listen calls fio_tls_dup (ref=2).  After chttpsvr_stop the
-   * listener is scheduled for close asynchronously; facil.io still holds
-   * its reference.  Our fio_tls_destroy here only decrements our own ref;
-   * the memory is freed when facil.io releases the last reference. */
-  if (srv->tls) {
-    fio_tls_destroy(srv->tls);
-    srv->tls = NULL;
+  if (srv->tls_ctx) {
+    ctls_ctx_release(srv->tls_ctx);
+    srv->tls_ctx = NULL;
   }
-
-  /* Configure TLS if requested. */
-  fio_tls_s *tls = NULL;
   if (cfg->tls && cfg->tls->cert_path && cfg->tls->key_path) {
-    tls = fio_tls_new(cfg->host, cfg->tls->cert_path, cfg->tls->key_path, NULL);
-    if (!tls) {
+    ctls_ctx_t *tls_ctx = ctls_ctx_new_mp(srv->m_procs, NULL);
+    if (!tls_ctx) {
+      ctpool failed_pool = _wait_and_detach_worker_pool(srv);
+      if (failed_pool) {
+        ctpool_shutdown_drain(failed_pool);
+        ctpool_destroy(failed_pool);
+      }
+      return ccol_not_enough_memory;
+    }
+    if (ctls_ctx_cert_add(tls_ctx, NULL, cfg->tls->cert_path,
+                          cfg->tls->key_path, NULL, NULL) != ccol_success) {
+      ctls_ctx_release(tls_ctx);
       ctpool failed_pool = _wait_and_detach_worker_pool(srv);
       if (failed_pool) {
         ctpool_shutdown_drain(failed_pool);
@@ -2105,16 +2915,11 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
       }
       return ccol_unexpected_failure;
     }
-    if (cfg->tls->ca_bundle_path) fio_tls_trust(tls, cfg->tls->ca_bundle_path);
+    if (cfg->tls->ca_bundle_path)
+      ctls_ctx_trust(tls_ctx, cfg->tls->ca_bundle_path, NULL);
+    srv->tls_ctx = tls_ctx;
   }
 
-  /* Acquire this server's single shared-engine reference, once for its
-   * entire lifetime (across any number of start/stop/restart cycles);
-   * guarded by srv->mutex, atomically claiming the "first start of this
-   * server" slot before actually acquiring, and rolling the claim back if
-   * the acquire itself fails. On a restart (stop + start again on the same
-   * srv) contributed_to_engine is already true, so this is skipped entirely
-   * and the reference from the original start is reused. */
   bool need_acquire;
   mutex_lock(srv->mutex);
   need_acquire = !srv->contributed_to_engine;
@@ -2122,94 +2927,100 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   mutex_unlock(srv->mutex);
 
   if (need_acquire) {
-    /* Install a minimal default engine logger if the caller has not already
-     * set one via chttpsvr_set_engine_logger(); see
-     * _install_default_engine_logger's own comment for why this runs on
-     * every server's first start rather than being a one-shot,
-     * process-lifetime guard. */
-    _install_default_engine_logger();
-
-    ccol_retval_t engine_rc = _cfio_engine_acquire();
+    ccol_retval_t engine_rc = _engine_acquire();
     if (engine_rc != ccol_success) {
       mutex_lock(srv->mutex);
-      srv->contributed_to_engine = false; /* roll back; nothing was acquired */
+      srv->contributed_to_engine = false;
       mutex_unlock(srv->mutex);
-      if (tls) fio_tls_destroy(tls);
-      {
-        ctpool failed_pool = _wait_and_detach_worker_pool(srv);
-        if (failed_pool) {
-          ctpool_shutdown_drain(failed_pool);
-          ctpool_destroy(failed_pool);
-        }
+      if (srv->tls_ctx) {
+        ctls_ctx_release(srv->tls_ctx);
+        srv->tls_ctx = NULL;
       }
-      return engine_rc;
-    }
-  }
-
-  /* The shared reactor is now confirmed running (per _cfio_engine_acquire's
-   * contract: it always blocks until the reactor has entered its event
-   * loop before returning success); http_listen always takes its
-   * fio_attach-immediately path (fio_is_running() is true), never the
-   * FIO_CALL_ON_START-deferred path. Verified via direct read of
-   * fio_listen() in fio.c: the socket bind itself (fio_socket()) is
-   * unconditional; only attachment timing depends on fio_is_running(), so
-   * there is no first-vs-subsequent-start branching left to do here; this
-   * single call covers both cases. */
-  intptr_t uuid = http_listen(
-      port_str, cfg->host, .on_request = _on_request_unreachable,
-      .on_headers_complete = _on_headers_complete, .udata = srv,
-      .max_body_size = cfg->max_body_size, .timeout = timeout_sec, .tls = tls);
-  if (uuid < 0) {
-    /* Deliberately do NOT release the engine reference here (whether just
-     * acquired above, or already held from an earlier start of this same
-     * srv): contributed_to_engine stays true and __chttpsvr_destroy will
-     * release it later, mirroring this module's pre-unification behavior
-     * for this exact failure path. */
-    if (tls) fio_tls_destroy(tls);
-    {
       ctpool failed_pool = _wait_and_detach_worker_pool(srv);
       if (failed_pool) {
         ctpool_shutdown_drain(failed_pool);
         ctpool_destroy(failed_pool);
       }
+      return engine_rc;
+    }
+  }
+  _idle_sweep_start_if_needed();
+
+  bool is_unix = false;
+  char *unix_path = NULL;
+  int lfd = _make_listen_socket(cfg->host, cfg->port, cfg->enable_reuseport,
+                                cfg->ipv6_only, &is_unix, &unix_path);
+  if (lfd < 0) {
+    clog el = _engine_logger_get();
+    if (el)
+      log_error(el, "listen socket setup failed host=%s port=%u",
+                cfg->host ? cfg->host : "0.0.0.0", (unsigned)cfg->port);
+    if (srv->tls_ctx) {
+      ctls_ctx_release(srv->tls_ctx);
+      srv->tls_ctx = NULL;
+    }
+    ctpool failed_pool = _wait_and_detach_worker_pool(srv);
+    if (failed_pool) {
+      ctpool_shutdown_drain(failed_pool);
+      ctpool_destroy(failed_pool);
     }
     return ccol_unexpected_failure;
   }
 
-  /* Store the TLS reference so __chttpsvr_destroy can release it when the
-   * server is torn down.  facil.io's reference (from fio_tls_dup inside
-   * http_listen) keeps the context alive for ongoing TLS handshakes.
-   *
-   * Committed under the mutex so a concurrent chttpsvr_stop cannot read a
-   * torn/stale view of these three fields: chttpsvr_stop reads `started`
-   * and `listen_uuid` under the same lock, and without it a stop racing the
-   * tail end of a start could see the pre-start state (started == false)
-   * and silently no-op, even though this call is about to (or just did)
-   * mark the server started; the caller's stop would then be lost. */
+  call_once(g_parser_settings_once, _init_parser_settings);
+  char *reg_err = NULL;
+  event_reg *lreg = event_loop_add(
+      g_reactor, selectable_from_fd(lfd, ccol_select_read),
+      (event_handlers_t){.on_readable = _listener_on_readable}, srv, &reg_err);
+  if (!lreg) {
+    close(lfd);
+    if (is_unix) unlink(unix_path);
+    free(unix_path);
+    if (srv->tls_ctx) {
+      ctls_ctx_release(srv->tls_ctx);
+      srv->tls_ctx = NULL;
+    }
+    ctpool failed_pool = _wait_and_detach_worker_pool(srv);
+    if (failed_pool) {
+      ctpool_shutdown_drain(failed_pool);
+      ctpool_destroy(failed_pool);
+    }
+    return ccol_unexpected_failure;
+  }
+
   mutex_lock(srv->mutex);
-  srv->tls = tls;
-  srv->listen_uuid = uuid;
+  srv->listen_fd = lfd;
+  srv->is_unix_socket = is_unix;
+  srv->unix_socket_path = unix_path;
+  srv->listen_reg = lreg;
   srv->started = true;
   mutex_unlock(srv->mutex);
 
+  _servers_register(srv);
   return ccol_success;
 }
 
 void chttpsvr_stop(chttpsvr srv) {
   if (!srv) return;
-  /* Atomically claim the stop to prevent concurrent callers from issuing
-   * multiple fio_close calls on the same uuid. */
   mutex_lock(srv->mutex);
   bool was_started = srv->started;
-  intptr_t uuid = srv->listen_uuid;
+  int lfd = srv->listen_fd;
+  event_reg *lreg = srv->listen_reg;
+  bool is_unix = srv->is_unix_socket;
+  char *unix_path = srv->unix_socket_path;
   if (was_started) {
     srv->started = false;
-    srv->listen_uuid = -1;
+    srv->listen_fd = -1;
+    srv->listen_reg = NULL;
+    srv->unix_socket_path = NULL;
   }
   mutex_unlock(srv->mutex);
-  /* fio_close schedules the listener socket for close on the reactor; the
-   * shared engine and all other registered listeners are unaffected. */
-  if (was_started) fio_close(uuid);
+  if (!was_started) return;
+
+  if (lreg) event_loop_remove(g_reactor, lreg);
+  close(lfd);
+  if (is_unix && unix_path) unlink(unix_path);
+  free(unix_path);
 }
 
 ccol_retval_t chttpsvr_set_engine_logger(clog cl) {
@@ -2217,38 +3028,37 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl) {
   clog derived = clog_derive(cl);
   if (!derived) return ccol_not_enough_memory;
   clog_set_field(derived, "component", "http-engine");
-  /* fio_set_logger takes ownership of derived: it closes the previous logger
-   * (if any) after swapping the pointer under the write lock. */
-  fio_set_logger(derived);
+  call_once(g_engine_once, _engine_globals_init);
+  mutex_lock(g_engine_mutex);
+  clog old = g_engine_logger;
+  g_engine_logger = derived;
+  mutex_unlock(g_engine_mutex);
+  if (old) clog_close(old);
   return ccol_success;
 }
 
 ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp) {
   if (mp && (!mp->malloc || !mp->free || !mp->calloc || !mp->realloc))
     return ccol_invalid_args;
-  if (_cfio_engine_running()) return ccol_not_permitted;
-  fio_set_mem_mgmt_procs((const struct ccol_memmgmt_procs_t *)mp);
+  call_once(g_engine_once, _engine_globals_init);
+  mutex_lock(g_engine_mutex);
+  if (g_reactor) {
+    mutex_unlock(g_engine_mutex);
+    return ccol_not_permitted;
+  }
+  if (mp) {
+    g_engine_mp_storage = *mp;
+    g_engine_mp = &g_engine_mp_storage;
+  } else {
+    g_engine_mp = NULL;
+  }
+  mutex_unlock(g_engine_mutex);
   return ccol_success;
 }
 
-/*
- * Now that the reactor is shared with chttpclient's async engine, forcing it
- * down also tears down any in-flight chttpclient async work in the same
- * process; an inherent, correct consequence of sharing one process-wide
- * reactor for what is meant to be process-shutdown-driven use (this
- * function's documented contract, unchanged: async-signal-safe, non-blocking,
- * safe to call from a SIGINT/SIGTERM handler), not a defect.
- */
-void chttpsvr_engine_stop(void) { _cfio_engine_force_stop(); }
+void chttpsvr_engine_stop(void) { _engine_force_stop(); }
 
-void chttpsvr_engine_wait(void) {
-  _cfio_engine_wait_until_stopped();
-  /* fio_lib_destroy (registered via atexit as part of the shared engine's
-   * one-time global init) fires after all other cleanup and calls logging
-   * functions.  Clear g_fio_logger now so those calls hit the null-guard in
-   * _fio_vlog and do not access a freed handle. */
-  fio_set_logger(NULL);
-}
+void chttpsvr_engine_wait(void) { _engine_wait_until_stopped(); }
 
 ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
                                         const char *pattern,
@@ -2273,21 +3083,11 @@ ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx) {
 
 chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix) {
   if (!srv || !prefix || prefix[0] != '/') return NULL;
-
-  /* Reject prefixes that contain consecutive slashes (e.g. "//api" or
-   * "/api//v1").  Such prefixes can never match a valid HTTP path (the router
-   * matching code checks path[prefix_len] == '/' || '\0', which requires the
-   * prefix itself to be a clean path segment sequence) and would silently
-   * create an unreachable router. */
   if (strstr(prefix, "//")) return NULL;
 
-  /* Create the router object outside the write lock (no shared-state access).
-   */
   chttpsvr_router *r = _create_router(srv, prefix, srv->m_procs);
   if (!r) return NULL;
 
-  /* Publish under the write lock so _find_route readers never see a
-   * partially-updated routers array. */
   rw_lock_wrlock(srv->routes_lock);
   if (srv->router_count >= srv->router_cap) {
     size_t nc = srv->router_cap * 2 + 2;
@@ -2333,19 +3133,24 @@ ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
 
 chttp_method_t chttpsvr_req_method(const chttpsvr_req *req) {
   if (!req) return CHTTP_GET;
-  return req->method;
+  return req->conn->method;
 }
 
 const char *chttpsvr_req_path(const chttpsvr_req *req) {
   if (!req) return NULL;
-  return req->path;
+  return req->conn->decoded_path;
 }
 
 const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name) {
   if (!req || !name) return NULL;
-  /* All requests are dispatched through ctpool with pre-extracted headers. */
-  for (size_t i = 0; i < req->_hdr_count; i++) {
-    if (strcasecmp(req->_hdr_names[i], name) == 0) return req->_hdr_values[i];
+  chttpsvr_conn_t *conn = req->conn;
+  /* A repeated header name keeps every occurrence, in arrival order, in
+   * conn->hdr_names/hdr_values -- scan backward so the LAST occurrence wins,
+   * matching this module's pre-existing documented behavior for a
+   * duplicated header (facio's own FIOBJ_T_ARRAY handling picked the last
+   * value too; see streaming_repeated_header in tests.c). */
+  for (size_t i = conn->hdr_count; i-- > 0;) {
+    if (strcasecmp(conn->hdr_names[i], name) == 0) return conn->hdr_values[i];
   }
   return NULL;
 }
@@ -2355,44 +3160,17 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out) {
     if (len_out) *len_out = 0;
     return NULL;
   }
-  if (len_out) *len_out = req->body_len;
-  return req->body_data;
-}
-
-ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
-  if (!req) return -1;
-  if (buflen == 0) return 0; /* read zero bytes: valid no-op, not an error */
-  if (!buf) return -1;
-  if (!req->is_streaming) return -1;
-  if (!req->_h) return -1;
-  unsigned timeout_ms =
-      req->_dispatch ? req->_dispatch->srv->stream_read_timeout_ms : 0;
-  if (!_check_read_deadline(req, &timeout_ms)) return -1;
-  return http1_stream_read((http_s *)req->_h, buf, buflen, timeout_ms);
-}
-
-ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req) {
-  if (!req || !req->_h) return ccol_unexpected_failure;
-  if (req->_deadline_exceeded) return ccol_timed_out;
-  switch (http1_stream_last_error((http_s *)req->_h)) {
-    case HTTP1_STREAM_ERR_TIMEOUT:
-      return ccol_timed_out;
-    case HTTP1_STREAM_ERR_TOO_LARGE:
-      return ccol_msg_too_large;
-    case HTTP1_STREAM_ERR_CLOSED:
-    case HTTP1_STREAM_ERR_PROTOCOL:
-      return ccol_http_transfer_aborted;
-    case HTTP1_STREAM_ERR_NONE:
-    default:
-      return ccol_success;
-  }
+  if (len_out) *len_out = req->conn->body.len;
+  return req->conn->body.buf;
 }
 
 const char *chttpsvr_req_param(const chttpsvr_req *req, const char *name) {
   if (!req || !name) return NULL;
-  for (int i = 0; i < req->param_count; i++) {
+  chttpsvr_conn_t *conn = req->conn;
+  int count = conn->matched_route->param_count;
+  for (int i = 0; i < count; i++) {
     if (req->param_names[i] && strcmp(req->param_names[i], name) == 0) {
-      return req->param_values[i];
+      return conn->matched_param_values[i];
     }
   }
   return NULL;
@@ -2411,7 +3189,6 @@ const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
     return NULL;
   }
 
-  /* Count matching pairs. */
   size_t n = 0;
   for (size_t i = 0; i < qp->count; i++) {
     if (strcmp(qp->keys[i], key) == 0) n++;
@@ -2421,7 +3198,6 @@ const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
     return NULL;
   }
 
-  /* Build result array (NULL-terminated). */
   if (n + 1 > req->_qresult_cap) {
     const char **nr = (const char **)_mem_realloc(req->m_procs, req->_qresult,
                                                   (n + 1) * sizeof(char *));
@@ -2446,14 +3222,8 @@ ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req, const char *key,
                                      const char **val_out) {
   if (!req || !key) return ccol_invalid_args;
 
-  /* Go directly to the parsed parameter store so OOM is distinguishable from
-   * "key absent": chttpsvr_req_query returns (NULL, count=0) for both cases,
-   * making them indistinguishable at that level. */
   chttpsvr_qparams_t *qp = _ensure_qparams(req);
   if (!qp) return ccol_not_enough_memory;
-  /* Even when a fallback sentinel was installed (qp != NULL), the underlying
-   * parse may have failed with OOM.  Propagate the error so the caller is not
-   * misled into thinking the key was simply absent from the query string. */
   if (req->_qparams_parse_oom) return ccol_not_enough_memory;
 
   size_t n = 0;
@@ -2478,7 +3248,7 @@ ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req, const char *key,
 
 const char *chttpsvr_req_raw_query(const chttpsvr_req *req) {
   if (!req) return NULL;
-  return req->raw_query;
+  return req->conn->raw_query;
 }
 
 bool chttpsvr_req_query_oom(const chttpsvr_req *req) {
@@ -2499,12 +3269,6 @@ ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
   if (!resp || !name || !value) return ccol_invalid_args;
   ccol_memmgmt_procs_t *mp = resp->m_procs;
 
-  /* Case-insensitive scan for an existing entry.  When a duplicate is found
-   * the stored value is replaced in-place; the stored name retains the casing
-   * from the FIRST call (HTTP header names are case-insensitive per RFC 7230,
-   * so this does not affect wire-level correctness).  The flat-array layout
-   * keeps this O(n) scan cache-friendly for the typical response header count
-   * of fewer than ~20 entries. */
   for (size_t i = 0; i < resp->header_count; i++) {
     if (strcasecmp(resp->headers[i].name, name) == 0) {
       char *new_val = ccol_strdup(mp, value);
@@ -2515,7 +3279,6 @@ ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
     }
   }
 
-  /* New header; grow the flat array if needed. */
   if (resp->header_count >= resp->header_cap) {
     if (resp->header_cap > (SIZE_MAX - 8) / 2) return ccol_not_enough_memory;
     size_t new_cap = resp->header_cap * 2 + 8;
@@ -2548,17 +3311,10 @@ ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
 
   ccol_memmgmt_procs_t *mp = resp->m_procs;
 
-  /* Grow buffer if needed.  Use subtraction-based check (body_len <= body_cap
-   * is a class invariant) to avoid the addition overflow that would occur with
-   * the naive body_len + len > body_cap form. */
   if (len > resp->body_cap - resp->body_len) {
-    /* Guard against len + body_len wrapping before we compute min_cap. */
     if (len > SIZE_MAX - resp->body_len) return ccol_not_enough_memory;
     size_t min_cap = resp->body_len + len;
     size_t new_cap = min_cap;
-    /* Double the current cap (plus a small constant) as long as the doubling
-     * itself doesn't overflow size_t.  The guard uses (SIZE_MAX-256)/2 rather
-     * than SIZE_MAX/2 so that the +256 addend never wraps either. */
     if (resp->body_cap <= (SIZE_MAX - 256) / 2) {
       size_t doubled = resp->body_cap * 2 + 256;
       if (doubled > new_cap) new_cap = doubled;
@@ -2618,11 +3374,6 @@ ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...) {
 ccol_retval_t chttpsvr_resp_write_json(chttpsvr_resp *resp, const char *json,
                                        size_t len) {
   if (!resp || !json || len == 0) return ccol_invalid_args;
-  /* Write the body first so that a body-OOM leaves resp completely unchanged
-   * (no header is set, no bytes are appended).  The header string is tiny and
-   * far less likely to fail, so if the body succeeds and the header then fails
-   * the caller receives ccol_not_enough_memory with the body bytes already
-   * buffered; an unlikely but documented partial-state scenario. */
   ccol_retval_t rv = chttpsvr_resp_write(resp, json, len);
   if (rv != ccol_success) return rv;
   return chttpsvr_resp_set_header(resp, "content-type", "application/json");

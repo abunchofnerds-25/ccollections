@@ -35,13 +35,37 @@ resent on every hop that stays on the same origin (scheme, host,
 and port) and is dropped permanently the first time a hop changes
 origin.
 
-The request URL accepts http:// and https:// only.  Both a plain
-hostname/IPv4 literal and a bracketed IPv6 literal
-("https://[::1]:8443/path") are accepted.  A URL may embed
-credentials ("http://user:pass@host/path"); they are turned into an
+The request URL accepts http://, https://, and http+unix:// (Unix
+domain socket support is identical across every tier; the
+encoded-socket-path form is "http+unix://%2Fpath%2Fto%2Fsock/path",
+matching Python's requests-unixsocket convention).  Both a plain
+hostname/IPv4 literal
+and a bracketed IPv6 literal ("https://[::1]:8443/path") are accepted
+for the network forms.  A URL may embed credentials
+("http://user:pass@host/path"); they are turned into an
 Authorization: Basic ... header automatically unless the request
-already sets its own Authorization header.  A trailing "#fragment"
-is recognized and discarded (fragments are never sent to a server).
+already sets its own Authorization header (not applicable to
+http+unix://, which has no userinfo convention).  A trailing
+"#fragment" is recognized and discarded (fragments are never sent to
+a server).
+
+If req->expect_continue is true and the request has a body, only the
+request's headers are sent first, followed by up to a one second
+wait for the server's response:
+
+  - If the server sends a "100 Continue" interim response, the body
+    is sent and the real final response is read normally.
+  - If the server answers with a final status directly instead
+    (e.g. to reject the request without wanting the body), that
+    response is delivered to the caller as-is and the body is never
+    sent.
+  - If the one second wait elapses with no response at all, the
+    body is sent anyway and the final response is read normally
+    (the server is assumed not to support the mechanism).
+
+expect_continue has no effect on a request with no body, and is
+currently honored only by chttpclient_do and chttpclient_do_streaming
+(Tier 1); chttpclient_do_async and everything built on it ignore it.
 .fi
 .SH PARAMETERS
 .nf
@@ -67,15 +91,18 @@ ccol_not_permitted
        Client is being destroyed; no new requests are accepted.
 
 ccol_http_invalid_url
-       URL is malformed, uses an unsupported scheme (only http:// and
-       https:// are supported), or has a missing/invalid host,
-       port, or userinfo component.
+       URL is malformed, uses an unsupported scheme (only http://,
+       https://, and http+unix:// are supported), has a missing/
+       invalid host, port, or userinfo component, or (for
+       http+unix://) names a socket path too long to fit
+       sockaddr_un.sun_path.
 
 ccol_http_host_resolution_failed
-       DNS resolution failed for the target host.
+       DNS resolution failed for the target host (never returned for
+       http+unix://, which has no DNS step).
 
 ccol_http_connection_failed
-       The TCP connection could not be established (e.g. connection
+       The connection could not be established (e.g. connection
        refused).
 
 ccol_http_too_many_redirects

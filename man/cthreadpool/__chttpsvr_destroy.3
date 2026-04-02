@@ -11,19 +11,21 @@ void __chttpsvr_destroy(chttpsvr srv);
 .fi
 .SH DESCRIPTION
 .nf
-Releases this server's reference to the shared facil.io engine (shared
-with chttpclient's async engine), then drains all in-flight requests
-for this server (up to 30 seconds), then frees all routers, routes,
-middleware nodes, the server's owned ctpool, and the server struct
-itself.
+Stops this server's listener, drains all in-flight requests for this
+server (up to 30 seconds) and closes every connection of this server's
+still sitting idle, releases this server's reference to the shared
+reactor, then frees all routers, routes, middleware nodes, the
+server's owned ctpool, and the server struct itself.
 
-If this was the last reference to the shared engine (from either this
-server or any other chttpsvr instance, or from chttpclient's async
-engine), the engine's actual teardown happens asynchronously on a
-separate thread and is NOT guaranteed complete by the time this
-function returns.  Call chttpsvr_engine_wait() afterward for a
-synchronous guarantee (e.g. before reusing the port this server was
-listening on, or before process exit).
+If this was the last reference to the shared reactor (from any
+chttpsvr instance in the process), its actual teardown happens
+asynchronously on a separate thread and is NOT guaranteed complete by
+the time this function returns.  Call chttpsvr_engine_wait() afterward
+for a synchronous guarantee (e.g. before reusing the port this server
+was listening on, or before process exit).  This reactor is
+independent of chttpclient's own engine, so destroying the last
+chttpsvr has no effect on any chttpclient async work in the same
+process.
 
 Also calls clog_close on the server's own logger (the internal
 stderr/FATAL-only logger, or the logger derived from the cl passed to

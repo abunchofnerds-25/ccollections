@@ -17,7 +17,7 @@ ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
 Like chttpsvr_register_handler but marks the route as streaming, which
 makes chttpsvr_req_read available to the handler for sequential body
 consumption.  The handler runs on the server's owned ctpool worker
-thread (not on the facil.io reactor thread) (exactly as all handlers
+thread (not on the reactor thread) (exactly as all handlers
 do in this implementation) but chttpsvr_req_read returns -1 on
 non-streaming routes, so the streaming flag controls the API contract.
 

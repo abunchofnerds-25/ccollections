@@ -23,14 +23,11 @@ first call to chttpclient_do_async or chttpclient_do_async_streaming
 anywhere in the process and stops automatically once no request is
 in flight and no connection remains in any chttpcli's async idle
 pool.  It is entirely separate from chttpclient_do's synchronous
-connection handling.  It shares its underlying reactor with
-chttpserver's own engine (both acquire/release references to the
-same lazily-started, process-wide facio reactor), so a process may
-freely run chttpserver and chttpclient_do_async/_streaming at the
-same time.  One consequence of that sharing: chttpsvr_engine_stop()
-tears down the shared reactor for both modules at once, aborting
-any in-flight chttpclient async work along with every chttpsvr
-listener.
+connection handling.  This engine is independent of chttpserver's own
+event_loop-based reactor; a process may freely run chttpserver and
+chttpclient_do_async/_streaming at the same time, and stopping either
+one's engine (chttpsvr_engine_stop(), or this engine's own automatic
+teardown) has no effect on the other.
 
 Unlike chttpclient_do, req need not remain valid after this call
 returns; everything needed is copied or serialised internally
@@ -56,5 +53,7 @@ ctpool_future_free.
 .BR chttpclient_do_pooled (3),
 .BR chttpclient_async_result_get (3),
 .BR chttpclient_async_result_free (3),
+.BR chttpcli_set_engine_logger (3),
+.BR chttpcli_set_engine_mem_mgmt_procs (3),
 .BR ctpool_future_get (3),
 .BR ctpool_future_free (3)

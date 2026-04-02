@@ -7,7 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cthreadcomm.h>
 
-event_loop_create(max_events_per_wait, num_lock_stripes, err_str);
+event_loop_create(max_events_per_wait, num_lock_stripes,
+                  num_reactor_threads, err_str);
 .fi
 .SH DESCRIPTION
 .nf
@@ -16,16 +17,22 @@ mmgmt_procs = NULL (standard malloc/free).
 .fi
 .SH PARAMETERS
 .nf
-max_events_per_wait  Size of the epoll_wait batch buffer (must be >= 1).
-                      Bounds how many ready events the reactor thread
-                      drains per epoll_wait call, not the number of
-                      registrations the loop can hold.
+max_events_per_wait  Size of the epoll_wait batch buffer each reactor
+                      thread uses (must be >= 1).  Bounds how many ready
+                      events a single epoll_wait call drains, not the
+                      number of registrations the loop can hold.
 num_lock_stripes     Number of independent lock stripes for the fd/entry
                       registry (must be >= 1).  1 matches the original
                       single-lock behavior; pass a larger value to reduce
                       event_loop_add/event_loop_remove/event_loop_modify
                       contention across many different fds/registrations
                       under concurrent use.
+num_reactor_threads  Number of background reactor threads that call
+                      epoll_wait on the shared epoll instance (must be
+                      >= 1).  1 matches this module's original
+                      single-thread behavior exactly; see
+                      event_loop_create_with_mprocs(3)'s NOTES for the
+                      measured performance tradeoffs of a higher value.
 err_str               Optional pointer to receive an error string on
                       failure (pass NULL to ignore).
 .fi
@@ -37,9 +44,9 @@ epoll_create1/eventfd/pthread_create failure).
 .fi
 .SH NOTES
 .nf
-The returned event_loop's background reactor thread is already running
-by the time this call returns.  Destroy with event_loop_destroy() when
-done.
+Every one of the returned event_loop's background reactor threads is
+already running by the time this call returns.  Destroy with
+event_loop_destroy() when done.
 .fi
 .SH "SEE ALSO"
 .BR event_loop_create_with_mprocs (3),

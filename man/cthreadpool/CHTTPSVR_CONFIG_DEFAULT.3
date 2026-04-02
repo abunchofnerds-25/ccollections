@@ -17,13 +17,32 @@ with the following defaults:
   host                  = "0.0.0.0"
   port                  = 8080
   max_body_size         = 4 MiB
-  read_timeout_ms       = 0   (no timeout; use facil.io default ~40 s)
+  read_timeout_ms       = 0   (no idle timeout; see below)
   idle_timeout_ms       = 0   (0 = fall back to read_timeout_ms)
   stream_read_timeout_ms = 30000   (30 s; 0 = wait indefinitely)
   max_body_read_duration_ms = 0   (disabled; no cap on total read time)
+  response_write_timeout_ms = 0   (0 = use stream_read_timeout_ms's value)
+  max_header_bytes     = 0   (0 = library default, 64 KiB)
+  max_connections       = 0   (0 = unlimited)
+  enable_keepalive      = false
+  enable_reuseport      = false
+  ipv6_only             = false
   tls                   = NULL
   worker_thread_count   = 0   (0 = CPU core count)
   worker_queue_capacity = 0   (0 = 1024 * worker_thread_count)
+
+host may also be a "unix://path/to/socket" string, which binds a Unix
+domain socket at that path instead of a TCP listener (port is then
+ignored); a stale socket file already at that path is removed
+automatically before binding.
+
+read_timeout_ms/idle_timeout_ms are enforced by a module-local,
+process-wide idle-timeout sweep thread (shared by every chttpsvr
+instance), not by any per-connection OS timer: they bound how long a
+connection may sit idle between requests (awaiting the next
+pipelined/keep-alive request's headers), not how long a request
+already being handled by a worker thread may take (see
+max_body_read_duration_ms for that).
 
 stream_read_timeout_ms bounds how long a worker thread will wait for
 the *next* batch of body bytes while reading a request body (buffered
@@ -42,6 +61,34 @@ regardless of how many individual gaps it took to get there.  It is
 disabled (0) by default so existing deployments are unaffected unless
 they opt in.  On expiry it reports the same ccol_timed_out outcome as
 a stream_read_timeout_ms expiry.
+
+response_write_timeout_ms bounds how long a worker thread will wait,
+per write(2)-equivalent call, while sending one response to a
+slow-reading client; this protects the same limited worker-pool
+resource on the write side that stream_read_timeout_ms protects on the
+read side.
+
+max_header_bytes bounds the combined size (request line plus every
+header line) of one request's header block; a request whose headers
+exceed this is rejected by closing the connection outright (the header
+block could not be parsed far enough to send a well-formed error
+response), matching every other pre-routing parse error this module's
+request parser reports.
+
+max_connections bounds how many connections this listener may have
+open simultaneously; once at capacity, new connections are simply left
+pending in the kernel's own listen backlog (accept(2) is not called
+again until a connection closes and frees a slot) rather than accepted
+and immediately rejected.
+
+enable_keepalive sets SO_KEEPALIVE on every accepted connection.
+enable_reuseport sets SO_REUSEPORT on the listening socket, letting
+multiple chttpsvr instances (e.g. one per worker process) bind the
+identical host:port for kernel-load-balanced accept. ipv6_only sets
+IPV6_V6ONLY on an AF_INET6 listener, so it does not also implicitly
+accept IPv4-mapped connections. All three are applied best-effort (a
+setsockopt failure does not fail chttpsvr_start) and have no effect on
+a Unix domain socket listener.
 
 Use CHTTPSVR_QUEUE_UNBOUNDED for worker_queue_capacity to create a pool
 with no capacity limit.

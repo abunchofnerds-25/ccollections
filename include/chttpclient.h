@@ -26,6 +26,7 @@ SOFTWARE.
 
 #include <chttp.h>
 #include <citerators.h>
+#include <clogger.h>
 #include <common.h>
 #include <cthreadpool.h>
 
@@ -33,8 +34,8 @@ SOFTWARE.
  * @file chttpclient.h
  * @brief Hand-rolled HTTP/1.1 client: an internal chttp1_parser drives
  *        request/response framing over raw sockets, with TLS provided by
- *        the same vendored facil.io ("facio") OpenSSL layer that backs
- *        chttpserver.
+ *        ctls (the same reactor-agnostic OpenSSL wrapper chttpserver uses
+ *        for its own TLS) and Tier 2/3's reactor provided by event_loop.
  *
  * ### Connection pool
  *
@@ -122,10 +123,10 @@ typedef size_t (*chttpcli_write_fn)(const void *data, size_t len, void *ctx);
 /**
  * @brief HTTP request (partially transparent).
  *
- * The fields method, url, and body are public and may be read directly.
- * Headers are internal; use chttp_request_set_header / get_header /
- * headers_begin. url and body.data (and body.content_type, if set) are
- * owned copies allocated by chttp_request_new_mp and freed by
+ * The fields method, url, body, and expect_continue are public and may be
+ * read/written directly. Headers are internal; use chttp_request_set_header
+ * / get_header / headers_begin. url and body.data (and body.content_type,
+ * if set) are owned copies allocated by chttp_request_new_mp and freed by
  * chttp_request_free.
  */
 typedef struct chttp_request {
@@ -134,6 +135,17 @@ typedef struct chttp_request {
   chttp_request_body_t body; /* body.data is an owned copy */
   chmap_declare(headers, char *, char *);
   ccol_memmgmt_procs_t *_m_procs;
+  /** Set to true (after construction, e.g. req->expect_continue = true) to
+   *  send "Expect: 100-continue" and wait for the server's interim response
+   *  before sending the body; see chttpclient_do's own doc comment for the
+   *  full protocol. Has no effect if the request has no body, or the
+   *  caller already set an explicit "Expect" header. Default false
+   *  (chttp_request_new_mp zero-initializes this field). Tier 1
+   *  (chttpclient_do/chttpclient_do_streaming) only; Tier 2/3
+   *  (chttpclient_do_async and everything built on it) silently ignore
+   *  this field for now and send the body immediately, exactly as if it
+   *  were false. */
+  bool expect_continue;
 } chttp_request_t;
 
 /* ========================================================================== */
@@ -323,6 +335,76 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, long ms);
  * @return ccol_success or ccol_invalid_args.
  */
 ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
+
+/* ========================================================================== */
+/*                         ENGINE LOGGER                                      */
+/* ========================================================================== */
+
+/**
+ * @brief Install a custom logger for chttpclient's own async-engine (Tier
+ *        2/3) reactor-level events.
+ *
+ * chttpclient_do_async/_streaming and the pooled-sync wrappers built on top
+ * of them (chttpclient_do_pooled/_streaming) share one lazily-started,
+ * process-wide event_loop reactor across every chttpcli instance (including
+ * the default client). This engine logger captures that reactor's own
+ * diagnostics (TLS handshake failures, connect errors); it is separate from
+ * the per-client logger, and separate from chttpsvr_set_engine_logger's own
+ * reactor (chttpserver and chttpclient each own a fully independent static
+ * reactor; a process may freely run both at once).
+ *
+ * Call this before the first chttpclient_do_async/_streaming call anywhere
+ * in the process if you want a custom engine logger. If no logger has been
+ * installed when the engine first starts, diagnostics are simply skipped:
+ * unlike the vendored facio layer this engine replaces, there is no internal
+ * logging of its own that needs somewhere to go by default.
+ *
+ * Internally this function derives a logger from cl via clog_derive(), adds
+ * the field component=http-client-engine, and installs the derived logger.
+ * The previously installed engine logger (if any) is closed. The caller
+ * retains ownership of cl and must keep it alive for as long as any
+ * chttpcli's async engine may be running.
+ *
+ * @param cl  Parent logger to derive from; must not be NULL.
+ * @return ccol_success or ccol_invalid_args (cl is NULL).
+ */
+ccol_retval_t chttpcli_set_engine_logger(clog cl);
+
+/* ========================================================================== */
+/*                    ENGINE MEMORY MANAGEMENT                                */
+/* ========================================================================== */
+
+/**
+ * @brief Install custom memory management procs for chttpclient's own
+ *        async-engine (Tier 2/3) reactor-level allocations.
+ *
+ * By default, the event_loop reactor shared by every chttpcli instance's
+ * Tier 2/3 work in this process allocates its own memory (the registration
+ * table, per-connection dispatch state, and so on) using the default
+ * allocator. Calling this function with a non-NULL mp redirects all of that
+ * to the supplied procs instead, exactly like the memory management procs
+ * accepted by every other module in this library. Passing NULL reverts to
+ * the default behavior.
+ *
+ * This configures only the shared reactor's own construction; it has no
+ * effect on any individual chttpcli instance's own allocator, which is
+ * configured independently via create_chttpclient_mp, exactly as before.
+ *
+ * May only be called before the reactor has ever started in this process
+ * (i.e. before the first chttpclient_do_async/_streaming call anywhere), or
+ * after the engine has fully stopped (every chttpcli async user has
+ * released its reference and the automatic teardown has completed; there is
+ * no explicit chttpcli_engine_wait(); the engine starts and stops on its own
+ * as Tier 2/3 usage comes and goes, unlike chttpserver's typically
+ * process-lifetime-long reactor).
+ *
+ * @param mp  Custom memory management procs, or NULL to revert to the
+ *            default. If non-NULL, all four function pointers must be set.
+ * @return ccol_success, ccol_invalid_args (mp is non-NULL but has a NULL
+ *         function pointer), or ccol_not_permitted (the engine is currently
+ *         running; wait for it to fully stop first).
+ */
+ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 
 /* ========================================================================== */
 /*                    CLIENT DESTRUCTION */
@@ -554,13 +636,12 @@ typedef struct chttpcli_async_result {
  * to offload DNS resolution and connect() off of reactor threads. The engine
  * is reference-counted and stops automatically once no request is in flight
  * and no connection remains in any chttpcli's async idle pool; it restarts
- * transparently on the next call. This engine is entirely separate from
- * chttpserver's own facil.io-based engine and from chttpclient_do's
- * synchronous connection handling; a process may freely use
- * chttpclient_do and chttpclient_do_async/_streaming together, but must not
- * run chttpserver in the same process as chttpclient_do_async/_streaming
- * (both would independently believe they own the one process-wide facio
- * reactor).
+ * transparently on the next call. This engine owns its own static reactor,
+ * entirely separate from chttpserver's own (independent) reactor and from
+ * chttpclient_do's synchronous connection handling; a process may freely
+ * run chttpserver and chttpclient_do_async/_streaming together, or use
+ * chttpclient_do and chttpclient_do_async/_streaming together, with no
+ * restrictions (the two engines share no state at all).
  */
 ctpool_future *chttpclient_do_async(chttpcli cli, const chttp_request_t *req);
 

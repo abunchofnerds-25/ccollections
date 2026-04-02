@@ -23,9 +23,14 @@ SOFTWARE.
 */
 
 #include <chttp1_parser.h>
+#include <ctls.h>
+#include <errno.h>
+#include <poll.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <unistd.h>
 
 /* ========================================================================== */
 /*                         PRIVATE CONSTANTS                                  */
@@ -44,6 +49,7 @@ SOFTWARE.
 #define F_TRANSFER_ENCODING 0x04u
 #define F_CONNECTION_CLOSE 0x08u
 #define F_CONNECTION_KEEP_ALIVE 0x10u
+#define F_EXPECT_100_CONTINUE 0x20u
 
 /* ========================================================================== */
 /*                         SMALL CHARACTER HELPERS                            */
@@ -196,6 +202,11 @@ static line_result_t accumulate_line(chttp1_parser_t *parser, const char **pp,
   return LINE_NEED_MORE;
 }
 
+/* Shared by parse_request_line() and process_header_line() below (both need
+ * to distinguish a malformed-input rejection from an application callback's
+ * own reported error). */
+typedef enum { PH_OK, PH_ERROR, PH_USER } ph_result_t;
+
 /* ========================================================================== */
 /*                         STATUS LINE                                        */
 /* ========================================================================== */
@@ -277,6 +288,91 @@ static bool parse_status_line(chttp1_parser_t *parser) {
   return true;
 }
 
+/*
+ * request-line = method SP request-target SP HTTP-version CRLF
+ *
+ * method is validated as a tchar-only token (the same character class
+ * header field names use, per RFC 7230 SS3.1.1/SS3.2.6) but not matched
+ * against any specific set of known method names -- an unrecognized method
+ * is the caller's own routing concern (e.g. surfaced as an ordinary 405),
+ * not this parser's to reject. request-target is validated only for the
+ * absence of control characters; this parser does not distinguish
+ * origin-form from absolute-form/authority-form/asterisk-form, matching
+ * chttpserver's own scope as an origin server with no CONNECT/proxy
+ * support. HTTP-version uses the identical grammar/validation as
+ * parse_status_line's own version field.
+ */
+static ph_result_t parse_request_line(chttp1_parser_t *parser) {
+  const char *s = parser->line_buf;
+  size_t len = parser->line_len;
+
+  size_t i = 0;
+  while (i < len && s[i] != ' ') i++;
+  if (i == 0 || i >= len) {
+    parser->reason = "Invalid request line";
+    return PH_ERROR;
+  }
+  const char *method = s;
+  size_t method_len = i;
+  for (size_t j = 0; j < method_len; j++) {
+    if (!is_tchar((unsigned char)method[j])) {
+      parser->reason = "Invalid method";
+      return PH_ERROR;
+    }
+  }
+  i++;
+
+  size_t target_start = i;
+  while (i < len && s[i] != ' ') i++;
+  if (i == target_start || i >= len) {
+    parser->reason = "Invalid request line";
+    return PH_ERROR;
+  }
+  const char *target = s + target_start;
+  size_t target_len = i - target_start;
+  for (size_t j = 0; j < target_len; j++) {
+    if (is_invalid_value_byte((unsigned char)target[j])) {
+      parser->reason = "Invalid character in request target";
+      return PH_ERROR;
+    }
+  }
+  i++;
+
+  if (len - i < 8 || memcmp(s + i, "HTTP/", 5) != 0) {
+    parser->reason = "Invalid HTTP version";
+    return PH_ERROR;
+  }
+  i += 5;
+  if (!is_digit((unsigned char)s[i])) {
+    parser->reason = "Invalid HTTP version";
+    return PH_ERROR;
+  }
+  parser->http_major = (uint8_t)(s[i] - '0');
+  i++;
+  if (s[i] != '.') {
+    parser->reason = "Invalid HTTP version";
+    return PH_ERROR;
+  }
+  i++;
+  if (!is_digit((unsigned char)s[i])) {
+    parser->reason = "Invalid HTTP version";
+    return PH_ERROR;
+  }
+  parser->http_minor = (uint8_t)(s[i] - '0');
+  i++;
+  if (i != len) {
+    parser->reason = "Invalid request line";
+    return PH_ERROR;
+  }
+
+  if (parser->settings && parser->settings->on_request_line) {
+    int err = parser->settings->on_request_line(parser, method, method_len,
+                                                target, target_len);
+    if (err != 0) return PH_USER;
+  }
+  return PH_OK;
+}
+
 /* ========================================================================== */
 /*                         HEADER / TRAILER LINES                             */
 /* ========================================================================== */
@@ -288,11 +384,10 @@ static bool header_name_is(const char *name, size_t name_len,
 }
 
 /* Whether the (already OWS-trimmed) Transfer-Encoding value's LAST
- * comma-separated token is "chunked" -- the only thing this parser needs to
- * know about Transfer-Encoding, since chttpclient.c never wires a callback
- * that would need to see individual encodings, and (per RFC 7230 SS3.3.3,
- * see _decide_body_framing's own comment) a non-final "chunked" only matters
- * for requests, which this parser never parses. */
+ * comma-separated token is "chunked" -- the only thing this parser's
+ * response-parsing side needs to know about Transfer-Encoding, since
+ * chttpclient.c never wires a callback that would need to see individual
+ * encodings. */
 static bool value_ends_with_chunked(const char *v, size_t len) {
   size_t tok_end = len;
   size_t tok_start = len;
@@ -301,6 +396,34 @@ static bool value_ends_with_chunked(const char *v, size_t len) {
     tok_start++;
   size_t tok_len = tok_end - tok_start;
   return tok_len == 7 && strncasecmp(v + tok_start, "chunked", 7) == 0;
+}
+
+/* RFC 7230 SS3.3.1: "chunked" MUST be the final transfer-coding in a
+ * Transfer-Encoding list. This only matters for REQUESTS (a response's
+ * framing that ignores this rule is this parser's own, pre-existing,
+ * documented scope reduction -- see value_ends_with_chunked's own doc
+ * comment; chttpclient.c only ever parses responses, so this check is
+ * gated to CHTTP1_PARSE_REQUEST call sites only). Returns true iff
+ * "chunked" (case-insensitive) appears as some comma-separated token that
+ * is NOT the last one -- the request-smuggling-shaped case a front/back
+ * server disagreement could otherwise arise from (see
+ * chunked_not_last_in_transfer_encoding_list_rejected in tests.c). */
+static bool transfer_encoding_has_nonfinal_chunked(const char *v, size_t len) {
+  size_t i = 0;
+  while (i < len) {
+    size_t start = i;
+    while (i < len && v[i] != ',') i++;
+    size_t tok_end = i;
+    bool is_last_token = (i >= len);
+    while (tok_end > start && is_ows((unsigned char)v[tok_end - 1])) tok_end--;
+    size_t ts = start;
+    while (ts < tok_end && is_ows((unsigned char)v[ts])) ts++;
+    size_t tok_len = tok_end - ts;
+    if (!is_last_token && tok_len == 7 && strncasecmp(v + ts, "chunked", 7) == 0)
+      return true;
+    if (i < len) i++; /* skip the comma */
+  }
+  return false;
 }
 
 /* Sets F_CONNECTION_CLOSE/F_CONNECTION_KEEP_ALIVE from a comma-separated
@@ -326,8 +449,6 @@ static void parse_connection_tokens(chttp1_parser_t *parser, const char *v,
   }
 }
 
-typedef enum { PH_OK, PH_ERROR, PH_USER } ph_result_t;
-
 /*
  * Parses parser->line_buf[0..line_len) as one header/trailer line ("name:
  * value"), validates it (including the three size caps -- see
@@ -343,12 +464,17 @@ typedef enum { PH_OK, PH_ERROR, PH_USER } ph_result_t;
 static ph_result_t process_header_line(chttp1_parser_t *parser) {
   size_t contribution =
       parser->line_len + 2; /* +2: the CRLF accumulate_line stripped */
-  if (parser->header_count + 1 > CHTTP1_MAX_HEADER_COUNT) {
+  size_t max_count = parser->max_header_count_override
+                         ? parser->max_header_count_override
+                         : CHTTP1_MAX_HEADER_COUNT;
+  size_t max_bytes = parser->max_total_header_bytes_override
+                         ? parser->max_total_header_bytes_override
+                         : CHTTP1_MAX_TOTAL_HEADER_BYTES;
+  if (parser->header_count + 1 > max_count) {
     parser->reason = "Too many headers";
     return PH_ERROR;
   }
-  if (parser->total_header_bytes + contribution >
-      CHTTP1_MAX_TOTAL_HEADER_BYTES) {
+  if (parser->total_header_bytes + contribution > max_bytes) {
     parser->reason = "Header block too large";
     return PH_ERROR;
   }
@@ -395,9 +521,22 @@ static ph_result_t process_header_line(chttp1_parser_t *parser) {
     parser->content_length = v;
   } else if (header_name_is(name, name_len, "transfer-encoding")) {
     parser->flags |= F_TRANSFER_ENCODING;
-    if (value_ends_with_chunked(vstart, value_len)) parser->flags |= F_CHUNKED;
+    if (value_ends_with_chunked(vstart, value_len)) {
+      parser->flags |= F_CHUNKED;
+    } else if (parser->type == CHTTP1_PARSE_REQUEST &&
+              transfer_encoding_has_nonfinal_chunked(vstart, value_len)) {
+      parser->reason = "chunked must be the last Transfer-Encoding token";
+      return PH_ERROR;
+    }
   } else if (header_name_is(name, name_len, "connection")) {
     parse_connection_tokens(parser, vstart, value_len);
+  } else if (header_name_is(name, name_len, "expect")) {
+    /* RFC 7231 SS5.1.1's only defined expectation value; see
+     * chttp1_expects_continue()'s own doc comment for the full contract
+     * (detection only -- this parser performs no I/O and does not itself
+     * send an interim "100 Continue" response). */
+    if (value_len == 12 && strncasecmp(vstart, "100-continue", 12) == 0)
+      parser->flags |= F_EXPECT_100_CONTINUE;
   }
 
   if ((parser->flags & F_CONTENT_LENGTH) && (parser->flags & F_CHUNKED)) {
@@ -496,12 +635,24 @@ void chttp1_settings_init(chttp1_settings_t *settings) {
   memset(settings, 0, sizeof(*settings));
 }
 
-void chttp1_parser_init(chttp1_parser_t *parser,
-                        const chttp1_settings_t *settings) {
+static void parser_init_common(chttp1_parser_t *parser,
+                               const chttp1_settings_t *settings,
+                               chttp1_parser_type_t type) {
   memset(parser, 0, sizeof(*parser));
-  parser->state = CHTTP1_ST_STATUS_LINE;
+  parser->type = type;
+  parser->state = CHTTP1_ST_FIRST_LINE;
   parser->finish_state = CHTTP1_FINISH_UNSAFE;
   parser->settings = settings;
+}
+
+void chttp1_parser_init(chttp1_parser_t *parser,
+                        const chttp1_settings_t *settings) {
+  parser_init_common(parser, settings, CHTTP1_PARSE_RESPONSE);
+}
+
+void chttp1_parser_init_request(chttp1_parser_t *parser,
+                                const chttp1_settings_t *settings) {
+  parser_init_common(parser, settings, CHTTP1_PARSE_REQUEST);
 }
 
 /* ========================================================================== */
@@ -519,12 +670,21 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
 
   while (p < end) {
     switch (parser->state) {
-      case CHTTP1_ST_STATUS_LINE: {
+      case CHTTP1_ST_FIRST_LINE: {
         line_result_t lr = accumulate_line(parser, &p, end);
         if (lr == LINE_NEED_MORE) break;
-        if (lr == LINE_TOO_LONG) return fail(parser, "Status line too long");
+        if (lr == LINE_TOO_LONG)
+          return fail(parser, parser->type == CHTTP1_PARSE_REQUEST
+                                  ? "Request line too long"
+                                  : "Status line too long");
         if (lr == LINE_BAD_EOL) return fail(parser, "Expected CRLF");
-        if (!parse_status_line(parser)) return fail_already_set(parser);
+        if (parser->type == CHTTP1_PARSE_REQUEST) {
+          ph_result_t plr = parse_request_line(parser);
+          if (plr == PH_ERROR) return fail_already_set(parser);
+          if (plr == PH_USER) return user_error(parser);
+        } else {
+          if (!parse_status_line(parser)) return fail_already_set(parser);
+        }
         parser->line_len = 0;
         parser->finish_state = CHTTP1_FINISH_UNSAFE;
         parser->state = CHTTP1_ST_HEADERS;
@@ -539,13 +699,18 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
 
         if (parser->line_len == 0) {
           /* Blank line: header block is done. */
-          int hint = 0;
+          int hint = CHTTP1_HEADERS_HAS_BODY;
           if (parser->settings && parser->settings->on_headers_complete)
             hint = parser->settings->on_headers_complete(parser);
-          if (hint != 0 && hint != 1) return user_error(parser);
+          bool want_divert =
+              (hint == CHTTP1_HEADERS_DIVERT_BODY &&
+               parser->type == CHTTP1_PARSE_REQUEST);
+          if (hint != CHTTP1_HEADERS_HAS_BODY &&
+              hint != CHTTP1_HEADERS_NO_BODY && !want_divert)
+            return user_error(parser);
 
-          bool no_body = (hint == 1);
-          if (!no_body &&
+          bool no_body = (hint == CHTTP1_HEADERS_NO_BODY);
+          if (!no_body && parser->type == CHTTP1_PARSE_RESPONSE &&
               ((parser->status_code >= 100 && parser->status_code < 200) ||
                parser->status_code == 204 || parser->status_code == 304)) {
             /* RFC 7230 SS3.3: 1xx/204/304 never have a body. (100 Continue,
@@ -557,7 +722,9 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
              * 100-continue" and has no code path that would know what to do
              * with a second, later message on the same hop, so that
              * behaviour would be untested, unused complexity; a conscious
-             * scope reduction, not an oversight.) */
+             * scope reduction, not an oversight. See chttp1_expects_continue's
+             * own doc comment for why the server side of this same feature
+             * is handled differently now.) */
             no_body = true;
           }
 
@@ -573,6 +740,10 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
              * chunk, the peer disconnecting early is never a valid way to
              * end it. */
             parser->finish_state = CHTTP1_FINISH_UNSAFE;
+            if (want_divert) {
+              parser->consumed = (size_t)(p - data);
+              return CHTTP1_HEADERS_ONLY;
+            }
           } else if (parser->flags & F_CONTENT_LENGTH) {
             if (parser->content_length == 0) {
               parser->finish_state = CHTTP1_FINISH_SAFE;
@@ -582,11 +753,23 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
             /* Likewise: an EOF before exactly content_length bytes have
              * arrived is a truncation, not a valid completion. */
             parser->finish_state = CHTTP1_FINISH_UNSAFE;
+            if (want_divert) {
+              parser->consumed = (size_t)(p - data);
+              return CHTTP1_HEADERS_ONLY;
+            }
+          } else if (parser->type == CHTTP1_PARSE_REQUEST) {
+            /* RFC 7230 SS3.3: unlike a response, a request with neither
+             * Content-Length nor chunked Transfer-Encoding simply has no
+             * body at all -- there is no EOF-delimited framing mode for
+             * requests (the connection isn't even closing; the client is
+             * the one sending). Nothing to divert either way. */
+            parser->finish_state = CHTTP1_FINISH_SAFE;
+            return complete_message(parser, p, data);
           } else {
             /* Neither Content-Length nor chunked: either an explicit
              * Transfer-Encoding whose last token isn't "chunked" (RFC 7230
-             * SS3.3.3: for a response -- never a request, which this parser
-             * never parses -- the body length is then determined by
+             * SS3.3.3: for a response -- never a request, handled in the
+             * branch above instead -- the body length is then determined by
              * reading until the connection closes) or no framing at all
              * (same EOF-delimited outcome). This is the ONE body-framing
              * mode where EOF is itself the valid, expected way to end the
@@ -744,6 +927,10 @@ size_t chttp1_parser_consumed(const chttp1_parser_t *parser) {
   return parser->consumed;
 }
 
+bool chttp1_parser_message_complete(const chttp1_parser_t *parser) {
+  return parser->state == CHTTP1_ST_MESSAGE_DONE;
+}
+
 bool chttp1_should_keep_alive(const chttp1_parser_t *parser) {
   if (parser->http_major > 0 && parser->http_minor > 0) {
     /* HTTP/1.1 (or later): keep-alive by default unless Connection: close
@@ -766,4 +953,190 @@ bool chttp1_should_keep_alive(const chttp1_parser_t *parser) {
    * here. */
   bool needs_eof = (parser->finish_state == CHTTP1_FINISH_SAFE_WITH_CB);
   return !needs_eof;
+}
+
+bool chttp1_expects_continue(const chttp1_parser_t *parser) {
+  return (parser->flags & F_EXPECT_100_CONTINUE) != 0;
+}
+
+/* ========================================================================== */
+/*                    WORKER-PULL BODY/RESPONSE STREAMING                     */
+/* ========================================================================== */
+
+static bool _stream_prepare_common(chttp1_stream_t *stream, int fd,
+                                   void *tls_conn, const char *leftover,
+                                   size_t leftover_len) {
+  memset(stream, 0, sizeof(*stream));
+  stream->fd = fd;
+  stream->tls = tls_conn;
+  stream->prepared = true;
+  if (leftover_len == 0) return true;
+
+  char *copy = (char *)malloc(leftover_len);
+  if (!copy) return false;
+  memcpy(copy, leftover, leftover_len);
+  stream->carry = copy;
+  stream->carry_len = leftover_len;
+  stream->carry_pos = 0;
+  return true;
+}
+
+bool chttp1_stream_prepare(chttp1_stream_t *stream, int fd,
+                          const char *leftover, size_t leftover_len) {
+  return _stream_prepare_common(stream, fd, NULL, leftover, leftover_len);
+}
+
+bool chttp1_stream_prepare_tls(chttp1_stream_t *stream, int fd, void *tls_conn,
+                               const char *leftover, size_t leftover_len) {
+  return _stream_prepare_common(stream, fd, tls_conn, leftover, leftover_len);
+}
+
+/* Shared by chttp1_stream_read/_write: blocks via poll(2) until fd is ready
+ * for the requested direction, or the deadline elapses, or a signal
+ * interrupts the wait (retried transparently -- an interrupted poll(2) is
+ * not a real timeout or error and must not be reported as either). Returns
+ * true if fd is ready to proceed, false if the deadline elapsed (check
+ * stream->timed_out, already set by this function) or a real poll(2) error
+ * occurred (stream->last_errno already set). */
+static bool wait_for_ready(chttp1_stream_t *stream, short events,
+                          int timeout_ms) {
+  struct pollfd pfd = {.fd = stream->fd, .events = events, .revents = 0};
+  for (;;) {
+    int rv = poll(&pfd, 1, timeout_ms);
+    if (rv > 0) return true;
+    if (rv == 0) {
+      stream->timed_out = true;
+      return false;
+    }
+    if (errno == EINTR) continue;
+    stream->last_errno = errno;
+    return false;
+  }
+}
+
+/* Recomputes the remaining milliseconds until deadline (only meaningful
+ * when has_deadline is true), clamped to >= 0; the caller treats <= 0 as
+ * "already expired". Needed because a TLS stream's single logical read/
+ * write may require several poll+attempt iterations (a partial TLS record,
+ * or a renegotiation/key-update message OpenSSL consumes internally,
+ * neither of which produces application bytes immediately), and each
+ * iteration must wait no longer than what's left of the ORIGINAL timeout_ms
+ * budget, not a fresh timeout_ms each time. */
+static long _remaining_ms(const struct timespec *deadline) {
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (long)(deadline->tv_sec - now.tv_sec) * 1000 +
+         (deadline->tv_nsec - now.tv_nsec) / 1000000L;
+}
+
+static void _compute_deadline(struct timespec *deadline, int timeout_ms) {
+  clock_gettime(CLOCK_MONOTONIC, deadline);
+  deadline->tv_sec += timeout_ms / 1000;
+  deadline->tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if (deadline->tv_nsec >= 1000000000L) {
+    deadline->tv_nsec -= 1000000000L;
+    deadline->tv_sec += 1;
+  }
+}
+
+ssize_t chttp1_stream_read(chttp1_stream_t *stream, char *buf, size_t buflen,
+                          int timeout_ms) {
+  stream->timed_out = false;
+  stream->last_errno = 0;
+
+  if (stream->carry_pos < stream->carry_len) {
+    size_t avail = stream->carry_len - stream->carry_pos;
+    size_t take = avail < buflen ? avail : buflen;
+    if (take > 0) memcpy(buf, stream->carry + stream->carry_pos, take);
+    stream->carry_pos += take;
+    if (stream->carry_pos == stream->carry_len) {
+      free(stream->carry);
+      stream->carry = NULL;
+      stream->carry_len = 0;
+      stream->carry_pos = 0;
+    }
+    return (ssize_t)take;
+  }
+
+  bool has_deadline = timeout_ms >= 0;
+  struct timespec deadline;
+  if (has_deadline) _compute_deadline(&deadline, timeout_ms);
+
+  for (;;) {
+    int this_timeout = timeout_ms;
+    if (has_deadline) {
+      long rem = _remaining_ms(&deadline);
+      if (rem <= 0) {
+        stream->timed_out = true;
+        return -1;
+      }
+      this_timeout = (int)rem;
+    }
+    if (!wait_for_ready(stream, POLLIN, this_timeout)) return -1;
+
+    if (stream->tls) {
+      ssize_t got = ctls_conn_read((ctls_conn_t *)stream->tls, buf, buflen);
+      if (got >= 0) return got;
+      if (errno == EWOULDBLOCK || errno == EAGAIN) continue;
+      stream->last_errno = errno;
+      return -1;
+    }
+
+    ssize_t got = read(stream->fd, buf, buflen);
+    if (got < 0) stream->last_errno = errno;
+    return got;
+  }
+}
+
+ssize_t chttp1_stream_write(chttp1_stream_t *stream, const char *buf,
+                           size_t len, int timeout_ms) {
+  stream->timed_out = false;
+  stream->last_errno = 0;
+
+  bool has_deadline = timeout_ms >= 0;
+  struct timespec deadline;
+  if (has_deadline) _compute_deadline(&deadline, timeout_ms);
+
+  for (;;) {
+    int this_timeout = timeout_ms;
+    if (has_deadline) {
+      long rem = _remaining_ms(&deadline);
+      if (rem <= 0) {
+        stream->timed_out = true;
+        return -1;
+      }
+      this_timeout = (int)rem;
+    }
+    if (!wait_for_ready(stream, POLLOUT, this_timeout)) return -1;
+
+    if (stream->tls) {
+      ssize_t written = ctls_conn_write((ctls_conn_t *)stream->tls, buf, len);
+      if (written >= 0) return written;
+      if (errno == EWOULDBLOCK || errno == EAGAIN) continue;
+      stream->last_errno = errno;
+      return -1;
+    }
+
+    ssize_t written = write(stream->fd, buf, len);
+    if (written < 0) stream->last_errno = errno;
+    return written;
+  }
+}
+
+bool chttp1_stream_timed_out(const chttp1_stream_t *stream) {
+  return stream->timed_out;
+}
+
+int chttp1_stream_last_error(const chttp1_stream_t *stream) {
+  return stream->last_errno;
+}
+
+void chttp1_stream_release(chttp1_stream_t *stream) {
+  if (stream->carry) {
+    free(stream->carry);
+    stream->carry = NULL;
+  }
+  stream->carry_len = 0;
+  stream->carry_pos = 0;
+  stream->released = true;
 }

@@ -150,7 +150,7 @@ struct ctls_ctx {
   size_t alpn_cap;
 
   SSL_CTX
-      *ctx_default; /* built from the fields above; NULL until first build */
+  *ctx_default; /* built from the fields above; NULL until first build */
 };
 
 struct ctls_conn {

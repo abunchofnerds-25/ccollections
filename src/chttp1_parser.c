@@ -419,7 +419,8 @@ static bool transfer_encoding_has_nonfinal_chunked(const char *v, size_t len) {
     size_t ts = start;
     while (ts < tok_end && is_ows((unsigned char)v[ts])) ts++;
     size_t tok_len = tok_end - ts;
-    if (!is_last_token && tok_len == 7 && strncasecmp(v + ts, "chunked", 7) == 0)
+    if (!is_last_token && tok_len == 7 &&
+        strncasecmp(v + ts, "chunked", 7) == 0)
       return true;
     if (i < len) i++; /* skip the comma */
   }
@@ -524,7 +525,7 @@ static ph_result_t process_header_line(chttp1_parser_t *parser) {
     if (value_ends_with_chunked(vstart, value_len)) {
       parser->flags |= F_CHUNKED;
     } else if (parser->type == CHTTP1_PARSE_REQUEST &&
-              transfer_encoding_has_nonfinal_chunked(vstart, value_len)) {
+               transfer_encoding_has_nonfinal_chunked(vstart, value_len)) {
       parser->reason = "chunked must be the last Transfer-Encoding token";
       return PH_ERROR;
     }
@@ -702,9 +703,8 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
           int hint = CHTTP1_HEADERS_HAS_BODY;
           if (parser->settings && parser->settings->on_headers_complete)
             hint = parser->settings->on_headers_complete(parser);
-          bool want_divert =
-              (hint == CHTTP1_HEADERS_DIVERT_BODY &&
-               parser->type == CHTTP1_PARSE_REQUEST);
+          bool want_divert = (hint == CHTTP1_HEADERS_DIVERT_BODY &&
+                              parser->type == CHTTP1_PARSE_REQUEST);
           if (hint != CHTTP1_HEADERS_HAS_BODY &&
               hint != CHTTP1_HEADERS_NO_BODY && !want_divert)
             return user_error(parser);
@@ -982,7 +982,7 @@ static bool _stream_prepare_common(chttp1_stream_t *stream, int fd,
 }
 
 bool chttp1_stream_prepare(chttp1_stream_t *stream, int fd,
-                          const char *leftover, size_t leftover_len) {
+                           const char *leftover, size_t leftover_len) {
   return _stream_prepare_common(stream, fd, NULL, leftover, leftover_len);
 }
 
@@ -999,7 +999,7 @@ bool chttp1_stream_prepare_tls(chttp1_stream_t *stream, int fd, void *tls_conn,
  * stream->timed_out, already set by this function) or a real poll(2) error
  * occurred (stream->last_errno already set). */
 static bool wait_for_ready(chttp1_stream_t *stream, short events,
-                          int timeout_ms) {
+                           int timeout_ms) {
   struct pollfd pfd = {.fd = stream->fd, .events = events, .revents = 0};
   for (;;) {
     int rv = poll(&pfd, 1, timeout_ms);
@@ -1040,7 +1040,7 @@ static void _compute_deadline(struct timespec *deadline, int timeout_ms) {
 }
 
 ssize_t chttp1_stream_read(chttp1_stream_t *stream, char *buf, size_t buflen,
-                          int timeout_ms) {
+                           int timeout_ms) {
   stream->timed_out = false;
   stream->last_errno = 0;
 
@@ -1089,7 +1089,7 @@ ssize_t chttp1_stream_read(chttp1_stream_t *stream, char *buf, size_t buflen,
 }
 
 ssize_t chttp1_stream_write(chttp1_stream_t *stream, const char *buf,
-                           size_t len, int timeout_ms) {
+                            size_t len, int timeout_ms) {
   stream->timed_out = false;
   stream->last_errno = 0;
 

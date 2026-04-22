@@ -1,13 +1,12 @@
 CC = gcc
 
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
+DEFINITIONS = -DRUNNING_UNIT_TESTS
 
-# Our source files (compiled with strict flags + -Werror). As of Phase 2 of
-# the facio-replacement roadmap, chttpclient.c owns its own static
-# event_loop reactor (cthreadcomm.c) and uses ctls.c for TLS instead of the
-# vendored facio TLS layer -- no more third_party/facio or cfio_engine.c
-# dependency at all. clogger.c is needed for chttpcli_set_engine_logger.
+# Our source files (compiled with strict flags + -Werror). chttpclient.c owns
+# its own static event_loop reactor (cthreadcomm.c) and uses ctls.c for TLS;
+# no third_party/facio dependency at all (deleted). clogger.c is needed for
+# chttpcli_set_engine_logger.
 # cthreadpool.c is a transitive dependency of the async engine's DNS/connect
 # worker pool (g_client_dns_pool).
 #

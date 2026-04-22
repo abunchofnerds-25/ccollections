@@ -2333,9 +2333,9 @@ TEST(event_loop, fd_on_readable_fires) {
     event_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
     char *err = NULL;
-    event_reg *reg = event_loop_add(
-        loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
+    event_reg *reg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, &ctx, &err);
     REQUIRE_NE((void *)reg, NULL);
     REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
 
@@ -2427,12 +2427,11 @@ TEST(event_loop, fd_both_directions_combine_and_recombine) {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
     event_reg *rreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
-        &err);
+        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
     REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
-        &err);
+    event_reg *wreg =
+        event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
+                       &write_ctx, &err);
     REQUIRE_NE((void *)wreg, NULL);
     REQUIRE_EQ(event_loop_reg_count(loop), (size_t)2);
 
@@ -2480,12 +2479,11 @@ TEST(event_loop, fd_simultaneous_readable_and_writable) {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
     event_reg *rreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
-        &err);
+        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
     REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
-        &err);
+    event_reg *wreg =
+        event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
+                       &write_ctx, &err);
     REQUIRE_NE((void *)wreg, NULL);
 
     /* Drain the initial "immediately writable" dispatch before writing data,
@@ -2532,12 +2530,11 @@ TEST(event_loop, fd_on_error_fires_for_both_directions) {
         .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
     char *err = NULL;
     event_reg *rreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
-        &err);
+        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
     REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
-        &err);
+    event_reg *wreg =
+        event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
+                       &write_ctx, &err);
     REQUIRE_NE((void *)wreg, NULL);
 
     close(sv[1]); /* peer hangs up */
@@ -2625,9 +2622,9 @@ TEST(event_loop, fd_modify_flips_direction_and_updates_sel) {
                                  .on_writable = evl_on_writable,
                                  .on_error = NULL};
     char *err = NULL;
-    event_reg *reg = event_loop_add(loop,
-                                    selectable_from_fd(sv[0], ccol_select_write),
-                                    handlers, &ctx, &err);
+    event_reg *reg =
+        event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write),
+                       handlers, &ctx, &err);
     REQUIRE_NE((void *)reg, NULL);
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
 
@@ -2981,8 +2978,9 @@ TEST(event_loop, remove_from_different_thread_concurrent_with_dispatch) {
       evl_sync_ctx *ctx = malloc(sizeof(*ctx));
       evl_sync_ctx_init(ctx);
       ctx_log[ctx_log_count++] = ctx;
-      event_handlers_t handlers = {
-          .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+      event_handlers_t handlers = {.on_readable = evl_on_readable,
+                                   .on_writable = NULL,
+                                   .on_error = NULL};
       char *err = NULL;
       event_reg *reg =
           event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
@@ -3224,12 +3222,11 @@ TEST(event_loop, fd_both_directions_combine_and_recombine_multi_stripe) {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
     event_reg *rreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx,
-        &err);
+        loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
     REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &write_ctx,
-        &err);
+    event_reg *wreg =
+        event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
+                       &write_ctx, &err);
     REQUIRE_NE((void *)wreg, NULL);
     REQUIRE_EQ(event_loop_reg_count(loop), (size_t)2);
 
@@ -3321,9 +3318,9 @@ static void *evl_stripe_stress_fd_worker(void *arg) {
     evl_sync_ctx *ctx = malloc(sizeof(*ctx));
     evl_sync_ctx_init(ctx);
     char *err = NULL;
-    event_reg *reg = event_loop_add(
-        a->loop, selectable_from_fd(a->pfd[0], ccol_select_read), handlers,
-        ctx, &err);
+    event_reg *reg =
+        event_loop_add(a->loop, selectable_from_fd(a->pfd[0], ccol_select_read),
+                       handlers, ctx, &err);
     if (reg) {
       a->ctx_log[a->ctx_log_count++] = ctx;
       int val = a->thread_id;
@@ -3369,8 +3366,7 @@ TEST(event_loop, multi_threaded_multi_fd_stress_with_stripes) {
     event_loop_construct_scoped(loop, 32, 16, 1);
     for (int i = 0; i < n_threads; i++) {
       args[i].loop = loop;
-      pthread_create(&threads[i], NULL, evl_stripe_stress_fd_worker,
-                     &args[i]);
+      pthread_create(&threads[i], NULL, evl_stripe_stress_fd_worker, &args[i]);
     }
     for (int i = 0; i < n_threads; i++) {
       pthread_join(threads[i], NULL);
@@ -3508,9 +3504,9 @@ TEST(event_loop, multi_thread_basic_smoke) {
     event_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
     char *err = NULL;
-    event_reg *reg = event_loop_add(
-        loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
+    event_reg *reg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, &ctx, &err);
     REQUIRE_NE((void *)reg, NULL);
 
     int val = 7;
@@ -3613,9 +3609,9 @@ TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
         .on_writable = NULL,
         .on_error = NULL};
     char *err = NULL;
-    event_reg *reg = event_loop_add(
-        loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
+    event_reg *reg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, &ctx, &err);
     REQUIRE_NE((void *)reg, NULL);
 
     evl_feeder_args feeder_args = {.write_fd = pfd[1], .iterations = 4000};
@@ -3628,8 +3624,8 @@ TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
      * total_calls approach feeder_args.iterations before the assertion
      * below, not relied on for safety (the nested block's join is what
      * provides that). */
-    for (int spins = 0; spins < 400 &&
-                        atomic_load(&ctx.total_calls) < feeder_args.iterations;
+    for (int spins = 0;
+         spins < 400 && atomic_load(&ctx.total_calls) < feeder_args.iterations;
          spins++) {
       struct timespec ts = {0, 2000000}; /* 2ms */
       nanosleep(&ts, NULL);
@@ -3729,22 +3725,20 @@ TEST(event_loop, multi_thread_cross_direction_serialization) {
      * avoids. */
     event_loop_construct_scoped(loop, 8, 4, 12);
 
-    event_handlers_t read_handlers = {
-        .on_readable = evl_cross_dir_on_readable,
-        .on_writable = NULL,
-        .on_error = NULL};
-    event_handlers_t write_handlers = {
-        .on_readable = NULL,
-        .on_writable = evl_cross_dir_on_writable,
-        .on_error = NULL};
+    event_handlers_t read_handlers = {.on_readable = evl_cross_dir_on_readable,
+                                      .on_writable = NULL,
+                                      .on_error = NULL};
+    event_handlers_t write_handlers = {.on_readable = NULL,
+                                       .on_writable = evl_cross_dir_on_writable,
+                                       .on_error = NULL};
     char *err = NULL;
-    event_reg *rreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_read), read_handlers,
-        &ctx, &err);
+    event_reg *rreg =
+        event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_read),
+                       read_handlers, &ctx, &err);
     REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg = event_loop_add(
-        loop, selectable_from_fd(sv[0], ccol_select_write), write_handlers,
-        &ctx, &err);
+    event_reg *wreg =
+        event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write),
+                       write_handlers, &ctx, &err);
     REQUIRE_NE((void *)wreg, NULL);
 
     evl_feeder_args feeder_args = {.write_fd = sv[1], .iterations = 4000};
@@ -3837,16 +3831,17 @@ typedef struct evl_reuse_driver_args {
 
 static void *evl_reuse_driver_thread(void *arg) {
   evl_reuse_driver_args *a = (evl_reuse_driver_args *)arg;
-  event_handlers_t handlers = {
-      .on_readable = evl_reuse_on_readable, .on_writable = NULL, .on_error = NULL};
+  event_handlers_t handlers = {.on_readable = evl_reuse_on_readable,
+                               .on_writable = NULL,
+                               .on_error = NULL};
 
   for (int i = 0; i < a->iterations; i++) {
     evl_reuse_ctx *ctx = malloc(sizeof(*ctx));
     memset(ctx, 0, sizeof(*ctx));
     char *err = NULL;
-    event_reg *reg = event_loop_add(
-        a->loop, selectable_from_fd(a->pfd[0], ccol_select_read), handlers,
-        ctx, &err);
+    event_reg *reg =
+        event_loop_add(a->loop, selectable_from_fd(a->pfd[0], ccol_select_read),
+                       handlers, ctx, &err);
     if (!reg) {
       free(ctx);
       continue;
@@ -3859,8 +3854,8 @@ static void *evl_reuse_driver_thread(void *arg) {
     ssize_t wn = write(a->pfd[1], &val, sizeof(val));
     (void)wn;
 
-    for (int spins = 0;
-         spins < 500 && atomic_load(&ctx->call_count) == 0; spins++) {
+    for (int spins = 0; spins < 500 && atomic_load(&ctx->call_count) == 0;
+         spins++) {
       struct timespec ts = {0, 500000};
       nanosleep(&ts, NULL);
     }
@@ -3936,18 +3931,21 @@ TEST(event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
   REQUIRE_EQ(total_mismatches, 0);
 }
 
-TEST(event_loop, multi_thread_shutdown_wakes_all_idle_threads) {
-  /* Many reactor threads, nothing ever registered -- every one of them is
-   * blocked in epoll_wait on just the shutdown eventfd for the whole test.
-   * event_loop_shutdown's single write() must still wake and join every
-   * one of them: epoll's default (non-EPOLLEXCLUSIVE) semantics wake every
-   * thread blocked on the same epfd when a watched fd becomes ready, not
-   * just one, and every thread re-checks shutting_down at the top of its
-   * own loop regardless. Bounds how long shutdown is allowed to take,
+TEST(event_loop, multi_thread_shutdown_joins_poller_promptly) {
+  /* Many reactor threads configured, nothing ever registered. Unlike before
+   * the poller/dispatch_pool split, only ONE thread (poller_thread) is ever
+   * actually blocked in epoll_wait here -- the rest are idle ctpool workers
+   * with nothing queued (see multi_thread_shutdown_drains_idle_dispatch_
+   * pool_promptly below for that half). event_loop_shutdown's single
+   * write() to shutdown_efd must still wake and join poller_thread
+   * promptly: shutdown_efd is deliberately never drained (see
+   * event_loop_shutdown's own comment for the real hang an earlier version
+   * of this code hit by draining it), so poller_thread's epoll_wait call
+   * keeps seeing it ready, however long it takes to actually return and
+   * observe shutting_down. Bounds how long shutdown is allowed to take,
    * rather than merely asserting it eventually returns, so a regression
-   * that only wakes one thread (leaving the rest to eventually notice via
-   * some unrelated timeout, or never) would show up as a slow/hung test,
-   * not a silent pass. */
+   * that leaves poller_thread stuck would show up as a slow/hung test, not
+   * a silent pass. */
   char *err = NULL;
   event_loop loop = event_loop_create(8, 4, 16, &err);
   REQUIRE_NE((void *)loop, NULL);
@@ -3962,6 +3960,125 @@ TEST(event_loop, multi_thread_shutdown_wakes_all_idle_threads) {
   REQUIRE_LT(elapsed_ms, 2000.0);
 
   event_loop_destroy(loop);
+}
+
+TEST(event_loop, multi_thread_shutdown_drains_idle_dispatch_pool_promptly) {
+  /* The other half of the shutdown story the poller/dispatch_pool split
+   * introduced: with num_reactor_threads > 1, event_loop_shutdown also
+   * calls ctpool_shutdown_drain on dispatch_pool, a completely different
+   * mechanism (a condvar broadcast waking idle ctpool workers, not an
+   * epoll_wait wakeup) from the poller-wake path covered above. Bounds how
+   * long that call takes with a large, entirely idle worker pool, the same
+   * way the test above bounds the poller half -- a regression that left
+   * some idle worker un-woken would show up here as a slow/hung test. */
+  char *err = NULL;
+  event_loop loop = event_loop_create(8, 4, 16, &err);
+  REQUIRE_NE((void *)loop, NULL);
+
+  struct timespec start, end;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+  REQUIRE_EQ(event_loop_shutdown(loop), ccol_success);
+  clock_gettime(CLOCK_MONOTONIC, &end);
+
+  double elapsed_ms = (double)(end.tv_sec - start.tv_sec) * 1000.0 +
+                      (double)(end.tv_nsec - start.tv_nsec) / 1e6;
+  REQUIRE_LT(elapsed_ms, 2000.0);
+
+  event_loop_destroy(loop);
+}
+
+typedef struct evl_shutdown_drain_ctx {
+  pthread_mutex_t mtx;
+  pthread_cond_t cond;
+  bool started;
+  bool finished;
+} evl_shutdown_drain_ctx;
+
+/* Signals "started" as soon as this callback begins running, then sleeps
+ * before signaling "finished" -- giving the test driver a reliable way to
+ * call event_loop_shutdown while this job is provably still in flight,
+ * rather than racing shutdown against the poller ever noticing the
+ * triggering write at all. */
+static void evl_shutdown_drain_on_readable(event_loop loop,
+                                           ccol_selectable *sel, void *arg) {
+  (void)loop;
+  evl_shutdown_drain_ctx *c = (evl_shutdown_drain_ctx *)arg;
+  char buf[8];
+  ssize_t n = read(sel->fd, buf, sizeof(buf));
+  (void)n;
+
+  pthread_mutex_lock(&c->mtx);
+  c->started = true;
+  pthread_cond_broadcast(&c->cond);
+  pthread_mutex_unlock(&c->mtx);
+
+  struct timespec ts = {0, 100000000}; /* 100ms */
+  nanosleep(&ts, NULL);
+
+  pthread_mutex_lock(&c->mtx);
+  c->finished = true;
+  pthread_cond_broadcast(&c->cond);
+  pthread_mutex_unlock(&c->mtx);
+}
+
+TEST(event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
+  /* Unlike the two tests above (idle pool), this one puts a real job in
+   * flight -- a callback deliberately sleeping, synchronized so the test
+   * driver knows it has genuinely started before calling
+   * event_loop_shutdown -- directly exercising ctpool_shutdown_drain's
+   * "finish in-flight work" contract (chosen over ctpool_shutdown_immediate
+   * specifically to preserve event_loop_shutdown's own documented "no
+   * dispatch can be in flight once this returns" guarantee -- see that
+   * function's own comment). Asserts the callback actually completed (not
+   * merely that shutdown returned), which immediate-cancel semantics would
+   * not guarantee. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  evl_set_nonblocking(pfd[0]);
+
+  evl_shutdown_drain_ctx ctx;
+  memset(&ctx, 0, sizeof(ctx));
+  pthread_mutex_init(&ctx.mtx, NULL);
+  pthread_cond_init(&ctx.cond, NULL);
+
+  event_loop loop = event_loop_create(8, 4, 4, NULL);
+  REQUIRE_NE((void *)loop, NULL);
+
+  event_handlers_t handlers = {.on_readable = evl_shutdown_drain_on_readable,
+                               .on_writable = NULL,
+                               .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  int val = 7;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+
+  struct timespec deadline;
+  clock_gettime(CLOCK_REALTIME, &deadline);
+  deadline.tv_sec += 2;
+  pthread_mutex_lock(&ctx.mtx);
+  while (!ctx.started) {
+    if (pthread_cond_timedwait(&ctx.cond, &ctx.mtx, &deadline) == ETIMEDOUT)
+      break;
+  }
+  bool started = ctx.started;
+  pthread_mutex_unlock(&ctx.mtx);
+  REQUIRE_TRUE(started);
+
+  REQUIRE_EQ(event_loop_shutdown(loop), ccol_success);
+
+  pthread_mutex_lock(&ctx.mtx);
+  bool finished = ctx.finished;
+  pthread_mutex_unlock(&ctx.mtx);
+  REQUIRE_TRUE(finished);
+
+  event_loop_destroy(loop);
+  pthread_mutex_destroy(&ctx.mtx);
+  pthread_cond_destroy(&ctx.cond);
+  close(pfd[0]);
+  close(pfd[1]);
 }
 
 TEST(event_loop, reg_generation_semantics) {
@@ -3991,18 +4108,18 @@ TEST(event_loop, reg_generation_semantics) {
     char *err = NULL;
 
     /* Both directions on the same fd share one generation. */
-    event_reg *rreg = event_loop_add(
-        loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx,
-        &err);
+    event_reg *rreg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, &ctx, &err);
     REQUIRE_NE((void *)rreg, NULL);
     uint64_t rgen = event_loop_reg_generation(rreg);
     REQUIRE_GT(rgen, (uint64_t)0);
 
     event_handlers_t write_handlers = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
-    event_reg *wreg = event_loop_add(
-        loop, selectable_from_fd(pfd[0], ccol_select_write), write_handlers,
-        &ctx, &err);
+    event_reg *wreg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_write),
+                       write_handlers, &ctx, &err);
     REQUIRE_NE((void *)wreg, NULL);
     REQUIRE_EQ(event_loop_reg_generation(wreg), rgen);
 
@@ -4014,9 +4131,9 @@ TEST(event_loop, reg_generation_semantics) {
     REQUIRE_EQ(event_loop_modify(loop, rreg, ccol_select_read), ccol_success);
 
     /* A different fd gets a different generation. */
-    event_reg *reg2 = event_loop_add(
-        loop, selectable_from_fd(pfd2[0], ccol_select_read), handlers, &ctx,
-        &err);
+    event_reg *reg2 =
+        event_loop_add(loop, selectable_from_fd(pfd2[0], ccol_select_read),
+                       handlers, &ctx, &err);
     REQUIRE_NE((void *)reg2, NULL);
     REQUIRE_NE(event_loop_reg_generation(reg2), rgen);
 
@@ -4029,4 +4146,319 @@ TEST(event_loop, reg_generation_semantics) {
   close(pfd[1]);
   close(pfd2[0]);
   close(pfd2[1]);
+}
+
+typedef struct evl_bounded_ctx {
+  _Atomic size_t calls;
+} evl_bounded_ctx;
+
+/* Deliberately slower than a continuously-refilling feeder can keep up
+ * with, maximizing the poller's own chances to loop back to epoll_wait
+ * while a dispatch job for this exact fd is still queued or executing --
+ * precisely the scenario that would mint an unbounded stream of redundant
+ * dispatch jobs without EPOLLONESHOT's re-arm-after-dispatch fix (see
+ * _event_loop_poller_collect's own comment in cthreadcomm.c). */
+static void evl_bounded_hot_fd_on_readable(event_loop loop,
+                                           ccol_selectable *sel, void *arg) {
+  (void)loop;
+  evl_bounded_ctx *c = (evl_bounded_ctx *)arg;
+  char buf[64];
+  ssize_t n;
+  do {
+    n = read(sel->fd, buf, sizeof(buf));
+  } while (n > 0);
+  struct timespec ts = {0, 500000}; /* 0.5ms */
+  nanosleep(&ts, NULL);
+  atomic_fetch_add(&c->calls, 1);
+}
+
+static void *evl_bounded_feeder_thread(void *arg) {
+  evl_feeder_args *a = (evl_feeder_args *)arg;
+  char byte = 'x';
+  for (int i = 0; i < a->iterations; i++) {
+    ssize_t n = write(a->write_fd, &byte, 1);
+    (void)n;
+  }
+  return NULL;
+}
+
+TEST(event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
+  /* Direct regression test for the EPOLLONESHOT re-arm fix: with collection
+   * (poller_thread) decoupled from dispatch (a ctpool worker), a still-
+   * ready fd not yet re-armed must never be re-collected -- if it were,
+   * dispatch_pool's own pending-job count would grow without bound for the
+   * whole duration a slow callback lags behind a fast feeder. Samples
+   * event_loop_dispatch_pool_pending_count_for_tests while a feeder thread
+   * writes continuously and asserts it never exceeds a small bound (well
+   * under num_reactor_threads - 1 workers plus one more queued -- the
+   * livelock this test guards against would blow far past that, not
+   * merely nudge over it). */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  evl_set_nonblocking(pfd[0]);
+
+  evl_bounded_ctx ctx;
+  atomic_init(&ctx.calls, (size_t)0);
+
+  size_t max_pending = 0;
+  {
+    event_loop_construct_scoped(loop, 8, 4, 8);
+
+    event_handlers_t handlers = {.on_readable = evl_bounded_hot_fd_on_readable,
+                                 .on_writable = NULL,
+                                 .on_error = NULL};
+    char *err = NULL;
+    event_reg *reg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, &ctx, &err);
+    REQUIRE_NE((void *)reg, NULL);
+
+    /* Deliberately modest: at ~0.5ms/dispatch this fully drains within the
+     * grace period below, matching multi_thread_no_double_dispatch_same_
+     * fd's own established pattern -- the sampling window while the feeder
+     * is still running is what actually stresses the mechanism, not the
+     * total byte count. */
+    evl_feeder_args feeder_args = {.write_fd = pfd[1], .iterations = 1000};
+    pthread_t feeder;
+    pthread_create(&feeder, NULL, evl_bounded_feeder_thread, &feeder_args);
+
+    for (int i = 0; i < 200; i++) {
+      size_t pending = event_loop_dispatch_pool_pending_count_for_tests(loop);
+      if (pending > max_pending) max_pending = pending;
+      struct timespec ts = {0, 1000000}; /* 1ms */
+      nanosleep(&ts, NULL);
+    }
+
+    pthread_join(feeder, NULL);
+
+    /* Brief, best-effort settle time before tearing anything down -- purely
+     * test hygiene (nothing here asserts on leftover unread pipe bytes,
+     * unlike circular_queue_destroy in the queue version of this test
+     * below), not relied on for the max_pending assertion itself; kept
+     * short since a full drain isn't needed and isn't worth this test's
+     * wall-clock time. */
+    for (int spins = 0; spins < 100 && atomic_load(&ctx.calls) <
+                                           (size_t)feeder_args.iterations;
+         spins++) {
+      struct timespec ts = {0, 2000000}; /* 2ms */
+      nanosleep(&ts, NULL);
+    }
+
+    event_loop_remove(loop, reg);
+  }
+
+  REQUIRE_LT(max_pending, (size_t)10);
+}
+
+typedef struct evl_bounded_queue_feeder_args {
+  circular_queue *cq;
+  int iterations;
+} evl_bounded_queue_feeder_args;
+
+static void *evl_bounded_queue_feeder_thread(void *arg) {
+  evl_bounded_queue_feeder_args *a = (evl_bounded_queue_feeder_args *)arg;
+  for (int i = 0; i < a->iterations; i++) {
+    c_message_t msg = {.data = NULL, .size = 0};
+    /* Blocking, not circq_try_send_zc: a full queue should throttle this
+     * feeder exactly like a full pipe buffer already throttles
+     * evl_bounded_feeder_thread's plain write() above, giving both tests
+     * the same "every iteration eventually gets delivered" guarantee
+     * rather than silently dropping sends past capacity (which would make
+     * ctx.calls never reliably reach iterations below). */
+    (void)circq_send_zc(a->cq, &msg);
+  }
+  return NULL;
+}
+
+/* Same slow-callback shape as evl_bounded_hot_fd_on_readable, for the
+ * bridge-eventfd/queue-selectable path -- the design note in
+ * _event_loop_dispatch_job_fn flags this case as having had NO natural
+ * throttle at all before the EPOLLONESHOT fix (a bridge eventfd has no
+ * finite kernel buffer the way a pipe does), so this is the higher-value
+ * of the two regression tests, not a redundant mirror of the fd one. */
+static void evl_bounded_hot_queue_on_readable(event_loop loop,
+                                              ccol_selectable *sel, void *arg) {
+  (void)loop;
+  evl_bounded_ctx *c = (evl_bounded_ctx *)arg;
+  c_message_t msg = {.data = NULL, .size = 0};
+  (void)circq_try_recv_zc(sel->cq, &msg);
+  struct timespec ts = {0, 500000}; /* 0.5ms */
+  nanosleep(&ts, NULL);
+  atomic_fetch_add(&c->calls, 1);
+}
+
+TEST(event_loop, multi_thread_hot_queue_dispatch_pool_pending_stays_bounded) {
+  circular_queue *cq = circular_queue_create(64, NULL);
+  REQUIRE_NE((void *)cq, NULL);
+
+  evl_bounded_ctx ctx;
+  atomic_init(&ctx.calls, (size_t)0);
+
+  size_t max_pending = 0;
+  {
+    event_loop_construct_scoped(loop, 8, 4, 8);
+
+    event_handlers_t handlers = {
+        .on_readable = evl_bounded_hot_queue_on_readable,
+        .on_writable = NULL,
+        .on_error = NULL};
+    char *err = NULL;
+    event_reg *reg =
+        event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
+                       handlers, &ctx, &err);
+    REQUIRE_NE((void *)reg, NULL);
+
+    evl_bounded_queue_feeder_args feeder_args = {.cq = cq, .iterations = 1000};
+    pthread_t feeder;
+    pthread_create(&feeder, NULL, evl_bounded_queue_feeder_thread,
+                   &feeder_args);
+
+    for (int i = 0; i < 200; i++) {
+      size_t pending = event_loop_dispatch_pool_pending_count_for_tests(loop);
+      if (pending > max_pending) max_pending = pending;
+      struct timespec ts = {0, 1000000}; /* 1ms */
+      nanosleep(&ts, NULL);
+    }
+
+    pthread_join(feeder, NULL);
+
+    /* Best-effort grace period, not asserted on: confirmed (by direct
+     * comparison against num_reactor_threads == 1, the unmodified code
+     * path) that a queue reader with only ONE registration can legitimately
+     * finish with a handful of messages still unconsumed once the feeder
+     * stops sending -- a pre-existing characteristic of the bridge
+     * eventfd's own notify-on-send coalescing, unrelated to this test's own
+     * EPOLLONESHOT regression coverage. Draining directly below (after the
+     * registration is removed) is what actually guarantees
+     * circular_queue_destroy never asserts, not this loop. */
+    for (int spins = 0; spins < 500 && atomic_load(&ctx.calls) <
+                                           (size_t)feeder_args.iterations;
+         spins++) {
+      struct timespec ts = {0, 2000000}; /* 2ms */
+      nanosleep(&ts, NULL);
+    }
+
+    event_loop_remove(loop, reg);
+  }
+
+  /* Drain whatever the event_loop-driven consumption above didn't get to
+   * (see the grace-period loop's own comment) directly, now that reg has
+   * been removed and the loop's own scope has closed -- circular_queue_
+   * destroy asserts on any remaining message (see its own comment in
+   * cthreadcomm.c), so this is required for a clean teardown, not
+   * optional hygiene. */
+  c_message_t leftover = {.data = NULL, .size = 0};
+  while (circq_try_recv_zc(cq, &leftover) == ccol_success) {
+    /* nothing to free: every sent message here has data == NULL */
+  }
+
+  circular_queue_destroy(cq);
+  REQUIRE_LT(max_pending, (size_t)10);
+}
+
+/* on_readable that never returns on its own -- used only to hold a job
+ * in flight on a dispatch_pool worker (or, for num_reactor_threads == 1,
+ * to occupy the sole thread) long enough for the test driver to reliably
+ * call event_loop_shutdown from within it. */
+typedef struct evl_self_shutdown_ctx {
+  event_loop loop;
+  _Atomic int observed_rv; /* holds a ccol_retval_t; _Atomic since the test
+                            * driver polls this from the main thread while
+                            * the callback (poller_thread or a dispatch_pool
+                            * worker) writes it with no other synchronization
+                            * between them -- a real, TSan-caught race in an
+                            * earlier version of this test that used a plain
+                            * ccol_retval_t field here. */
+} evl_self_shutdown_ctx;
+
+static void evl_self_shutdown_on_readable(event_loop loop, ccol_selectable *sel,
+                                          void *arg) {
+  (void)sel;
+  evl_self_shutdown_ctx *c = (evl_self_shutdown_ctx *)arg;
+  atomic_store(&c->observed_rv, (int)event_loop_shutdown(loop));
+}
+
+TEST(event_loop,
+     shutdown_from_within_callback_returns_not_permitted_single_thread) {
+  /* num_reactor_threads == 1: the sole thread both polls and dispatches, so
+   * a self-call here would join itself (EDEADLK) without the guard. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  evl_set_nonblocking(pfd[0]);
+
+  evl_self_shutdown_ctx ctx;
+  atomic_init(&ctx.observed_rv, (int)ccol_unexpected_failure);
+
+  event_loop loop = event_loop_create(8, 1, 1, NULL);
+  REQUIRE_NE((void *)loop, NULL);
+  ctx.loop = loop;
+
+  event_handlers_t handlers = {.on_readable = evl_self_shutdown_on_readable,
+                               .on_writable = NULL,
+                               .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  int val = 7;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+
+  /* Bounded poll instead of evl_wait_for: this ctx has no mutex/condvar of
+   * its own (deliberately minimal), and observed_rv's default sentinel
+   * value is what's being waited on. */
+  for (int i = 0;
+       i < 500 && atomic_load(&ctx.observed_rv) == (int)ccol_unexpected_failure;
+       i++) {
+    struct timespec ts = {0, 2000000}; /* 2ms */
+    nanosleep(&ts, NULL);
+  }
+  REQUIRE_EQ(atomic_load(&ctx.observed_rv), (int)ccol_not_permitted);
+
+  event_loop_remove(loop, reg);
+  event_loop_destroy(loop);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop,
+     shutdown_from_within_callback_returns_not_permitted_multi_thread) {
+  /* num_reactor_threads > 1: the callback runs on a dispatch_pool worker,
+   * not poller_thread -- a self-call here would call
+   * ctpool_shutdown_drain from within one of the pool's own workers
+   * (thread_join'ing itself) without the guard. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  evl_set_nonblocking(pfd[0]);
+
+  evl_self_shutdown_ctx ctx;
+  atomic_init(&ctx.observed_rv, (int)ccol_unexpected_failure);
+
+  event_loop loop = event_loop_create(8, 4, 4, NULL);
+  REQUIRE_NE((void *)loop, NULL);
+  ctx.loop = loop;
+
+  event_handlers_t handlers = {.on_readable = evl_self_shutdown_on_readable,
+                               .on_writable = NULL,
+                               .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  int val = 7;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+
+  for (int i = 0;
+       i < 500 && atomic_load(&ctx.observed_rv) == (int)ccol_unexpected_failure;
+       i++) {
+    struct timespec ts = {0, 2000000}; /* 2ms */
+    nanosleep(&ts, NULL);
+  }
+  REQUIRE_EQ(atomic_load(&ctx.observed_rv), (int)ccol_not_permitted);
+
+  event_loop_remove(loop, reg);
+  event_loop_destroy(loop);
+  close(pfd[0]);
+  close(pfd[1]);
 }

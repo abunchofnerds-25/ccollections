@@ -27,6 +27,7 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
@@ -204,6 +205,21 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
    * (which used to exist here, targeting FIOBJ hash growth specifically)
    * was removed rather than built around an artificial trigger. */
   REQUIRE_GT(g_mm_malloc_count + g_mm_calloc_count, (size_t)0);
+
+  /* g_mm_free_count's own source is the server noticing _setup()'s client
+   * connection has gone away (chttpclient_destroy closes it) and freeing its
+   * own chttpsvr_conn_t in response -- an event the server's reactor must
+   * still observe and dispatch asynchronously, not something guaranteed to
+   * have already happened the instant _setup()'s constructor returns.
+   * Bounded retry rather than an immediate single check: this dispatch now
+   * goes through the poller-to-ctpool-worker handoff described in
+   * cthreadcomm's own history (a real, if small and bounded, added latency
+   * versus the single-thread design's near-synchronous inline dispatch),
+   * which made a bare immediate assertion here measurably flaky where it
+   * previously was not. */
+  for (int attempt = 0; g_mm_free_count == 0 && attempt < 50; attempt++) {
+    usleep(20000);
+  }
   REQUIRE_GT(g_mm_free_count, (size_t)0);
 }
 
@@ -266,10 +282,9 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
    * after the restart can require real forward progress rather than just
    * "still nonzero from before" (which would pass even if the reinstall
    * silently did nothing). */
-  size_t malloc_calloc_before = __atomic_load_n(&g_mm_malloc_count,
-                                                __ATOMIC_RELAXED) +
-                                __atomic_load_n(&g_mm_calloc_count,
-                                                __ATOMIC_RELAXED);
+  size_t malloc_calloc_before =
+      __atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
+      __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED);
 
   ccol_memmgmt_procs_t procs = {
       .malloc = _counting_malloc,
@@ -282,9 +297,8 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   char *err = NULL;
   chttpsvr new_srv = create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(new_srv != NULL);
-  ccol_retval_t rv =
-      chttpsvr_register_handler(new_srv, CHTTP_GET, "/hello", _hello_handler,
-                                NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(new_srv, CHTTP_GET, "/hello",
+                                               _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -304,8 +318,8 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
    * from, so a fresh malloc/calloc call through the just-reinstalled procs
    * is guaranteed, not merely likely. */
   REQUIRE_GT(__atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
-                __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED),
-            malloc_calloc_before);
+                 __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED),
+             malloc_calloc_before);
 
   chttpcli cli = create_chttpclient(NULL);
   REQUIRE_TRUE(cli != NULL);

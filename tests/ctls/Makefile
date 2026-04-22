@@ -1,6 +1,6 @@
 CC = gcc
-INCLUDES = -I.. -I../../include -I../../third_party/facio
-DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
+INCLUDES = -I.. -I../../include
+DEFINITIONS = -DRUNNING_UNIT_TESTS
 SRC_FILE_PREFIX = ctls
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)

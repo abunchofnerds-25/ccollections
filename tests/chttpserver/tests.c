@@ -4638,7 +4638,8 @@ TEST(chttpserver, unix_socket_listen_and_round_trip) {
   REQUIRE_EQ(connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
 
   const char *req =
-      "GET /unix-hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+      "GET /unix-hello HTTP/1.1\r\nHost: localhost\r\nConnection: "
+      "close\r\n\r\n";
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
 
   char buf[1024] = {0};
@@ -4687,7 +4688,8 @@ TEST(chttpserver, unix_socket_stale_file_replaced_on_start) {
   REQUIRE_EQ(connect(fd, (struct sockaddr *)&addr, sizeof(addr)), 0);
 
   const char *req =
-      "GET /stale-hello HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+      "GET /stale-hello HTTP/1.1\r\nHost: localhost\r\nConnection: "
+      "close\r\n\r\n";
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
   char buf[1024] = {0};
   int status = _read_one_http_response(fd, buf, sizeof(buf));
@@ -4720,8 +4722,8 @@ TEST(chttpserver, max_connections_enforced) {
      served) until the first connection closes and frees the one slot. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != NULL);
-  ccol_retval_t rv = chttpsvr_register_handler(
-      srv, CHTTP_GET, "/maxconn-hello", _hello_handler, NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/maxconn-hello",
+                                               _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -4775,8 +4777,8 @@ TEST(chttpserver, max_connections_enforced) {
 TEST(chttpserver, max_header_bytes_within_limit_succeeds) {
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != NULL);
-  ccol_retval_t rv = chttpsvr_register_handler(
-      srv, CHTTP_GET, "/hdrcap-hello", _hello_handler, NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdrcap-hello",
+                                               _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -4804,8 +4806,8 @@ TEST(chttpserver, max_header_bytes_exceeded_closes_connection) {
      negative_content_length_rejected above). */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != NULL);
-  ccol_retval_t rv = chttpsvr_register_handler(
-      srv, CHTTP_GET, "/hdrcap-hello2", _hello_handler, NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdrcap-hello2",
+                                               _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
@@ -4903,7 +4905,8 @@ TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
 
   char buf[65536];
   ssize_t r;
-  while ((r = read(fd, buf, sizeof(buf))) > 0) { /* drain whatever got through */
+  while ((r = read(fd, buf, sizeof(buf))) >
+         0) { /* drain whatever got through */
   }
   REQUIRE_EQ(r, 0); /* EOF: server closed the connection */
 
@@ -5049,8 +5052,8 @@ TEST(chttpserver, ipv6_only_listener_still_serves_ipv6_traffic) {
   if (chttpsvr_start(srv, &cfg) != ccol_success) {
     __chttpsvr_destroy(srv);
     fprintf(stderr,
-           "[SKIP] ipv6_only_listener_still_serves_ipv6_traffic: no IPv6 "
-           "stack available in this environment\n");
+            "[SKIP] ipv6_only_listener_still_serves_ipv6_traffic: no IPv6 "
+            "stack available in this environment\n");
     return;
   }
 
@@ -5062,8 +5065,9 @@ TEST(chttpserver, ipv6_only_listener_still_serves_ipv6_traffic) {
   sa.sin6_port = htons((uint16_t)(TEST_PORT + 16));
   REQUIRE_EQ(inet_pton(AF_INET6, "::1", &sa.sin6_addr), 1);
   REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
-  const char *req = "GET /v6only-hello HTTP/1.1\r\nHost: [::1]\r\n"
-                    "Connection: close\r\n\r\n";
+  const char *req =
+      "GET /v6only-hello HTTP/1.1\r\nHost: [::1]\r\n"
+      "Connection: close\r\n\r\n";
   REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
   char buf[512] = {0};
   ssize_t n = read(fd, buf, sizeof(buf) - 1);

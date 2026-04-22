@@ -1,14 +1,11 @@
 CC = gcc
 
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS -DHAVE_OPENSSL=1
+DEFINITIONS = -DRUNNING_UNIT_TESTS
 
-# Our source files (compiled with strict flags + -Werror). As of Phase 3 of
-# the facio-replacement roadmap, no binary in this directory depends on
-# third_party/facio at all any more: chttpserver.c and chttpclient.c each
-# own a fully independent static event_loop reactor (Phases 1/2), and
-# tests_mem_mgmt.c's own two facio-specific assertions were rewritten to
-# check the new event_loop-backed engine's real behavior instead.
+# Our source files (compiled with strict flags + -Werror). chttpserver.c and
+# chttpclient.c each own a fully independent static event_loop reactor; no
+# binary in this directory depends on third_party/facio (deleted) at all.
 #
 # Three binaries are built from this shared source set:
 #   tests            (tests.c) - the main suite.

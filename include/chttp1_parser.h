@@ -169,7 +169,10 @@ typedef enum {
  *        chttp1_parser_init_request() (CHTTP1_PARSE_REQUEST); read-only
  *        afterward.
  */
-typedef enum { CHTTP1_PARSE_RESPONSE = 0, CHTTP1_PARSE_REQUEST } chttp1_parser_type_t;
+typedef enum {
+  CHTTP1_PARSE_RESPONSE = 0,
+  CHTTP1_PARSE_REQUEST
+} chttp1_parser_type_t;
 
 /**
  * @brief settings->on_headers_complete return-value constants.
@@ -195,10 +198,10 @@ typedef enum { CHTTP1_PARSE_RESPONSE = 0, CHTTP1_PARSE_REQUEST } chttp1_parser_t
  * only because chttp1_parser_t must be a complete, stack-embeddable type. */
 typedef enum {
   CHTTP1_ST_FIRST_LINE = 0, /* status line (response mode) or request line
-                            * (request mode) -- which grammar applies is
-                            * decided by parser->type, not by two separate
-                            * states, since every other state after this one
-                            * is already fully shared between both modes. */
+                             * (request mode) -- which grammar applies is
+                             * decided by parser->type, not by two separate
+                             * states, since every other state after this one
+                             * is already fully shared between both modes. */
   CHTTP1_ST_HEADERS,
   CHTTP1_ST_BODY_CONTENT_LENGTH,
   CHTTP1_ST_BODY_CHUNK_SIZE,
@@ -680,11 +683,11 @@ typedef struct chttp1_stream {
   size_t carry_len;
   size_t carry_pos;
 
-  int last_errno;   /* errno from the most recent failed read/write, or 0 */
-  bool timed_out;   /* true if the most recent read/write failed because its
-                     * deadline elapsed (poll(2) returned 0), not a real I/O
-                     * error -- mutually exclusive with last_errno being
-                     * meaningful for that same call */
+  int last_errno; /* errno from the most recent failed read/write, or 0 */
+  bool timed_out; /* true if the most recent read/write failed because its
+                   * deadline elapsed (poll(2) returned 0), not a real I/O
+                   * error -- mutually exclusive with last_errno being
+                   * meaningful for that same call */
   bool prepared;
   bool released;
 } chttp1_stream_t;
@@ -712,7 +715,7 @@ typedef struct chttp1_stream {
  *         harmless) to call on it.
  */
 bool chttp1_stream_prepare(chttp1_stream_t *stream, int fd,
-                          const char *leftover, size_t leftover_len);
+                           const char *leftover, size_t leftover_len);
 
 /**
  * @brief Prepares stream for worker-pull reads/writes on a TLS connection.
@@ -765,7 +768,7 @@ bool chttp1_stream_prepare_tls(chttp1_stream_t *stream, int fd, void *tls_conn,
  *         distinguish the two.
  */
 ssize_t chttp1_stream_read(chttp1_stream_t *stream, char *buf, size_t buflen,
-                          int timeout_ms);
+                           int timeout_ms);
 
 /**
  * @brief Writes up to len bytes from buf to stream's fd (or, for a TLS
@@ -784,7 +787,7 @@ ssize_t chttp1_stream_read(chttp1_stream_t *stream, char *buf, size_t buflen,
  *         loop), or -1 on error or timeout.
  */
 ssize_t chttp1_stream_write(chttp1_stream_t *stream, const char *buf,
-                           size_t len, int timeout_ms);
+                            size_t len, int timeout_ms);
 
 /**
  * @brief True if the most recent chttp1_stream_read/_write call returned -1

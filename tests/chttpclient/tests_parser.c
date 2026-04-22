@@ -511,7 +511,8 @@ TEST(headers, max_header_count_override_allows_up_to_the_override) {
   parser.max_header_count_override = 4; /* X-A/X-B/X-C plus Content-Length */
 
   const char *msg =
-      "HTTP/1.1 200 OK\r\nX-A: 1\r\nX-B: 2\r\nX-C: 3\r\nContent-Length: 0\r\n\r\n";
+      "HTTP/1.1 200 OK\r\nX-A: 1\r\nX-B: 2\r\nX-C: 3\r\nContent-Length: "
+      "0\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
 }
 
@@ -1121,7 +1122,8 @@ TEST(request_body_framing, chunked_request_body) {
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
   const char *msg =
-      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: "
+      "chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_EQ(ctx.body_len, (size_t)5);
   REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
@@ -1152,14 +1154,13 @@ TEST(divert, content_length_body_diverts_before_consuming) {
   ctx.want_divert = true;
   const char *headers = "POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
-            CHTTP1_HEADERS_ONLY);
+             CHTTP1_HEADERS_ONLY);
   REQUIRE_EQ(chttp1_parser_consumed(&parser), strlen(headers));
   REQUIRE_FALSE(ctx.message_complete_called);
   REQUIRE_EQ(ctx.body_len, (size_t)0);
 
   const char *body = "hello";
-  REQUIRE_EQ(chttp1_parser_execute(&parser, body, strlen(body)),
-            CHTTP1_PAUSED);
+  REQUIRE_EQ(chttp1_parser_execute(&parser, body, strlen(body)), CHTTP1_PAUSED);
   REQUIRE_EQ(ctx.body_len, (size_t)5);
   REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
 }
@@ -1177,7 +1178,7 @@ TEST(divert, body_already_in_same_buffer_is_not_consumed_by_divert) {
   const char *headers = "POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\n";
   const char *whole = "POST /x HTTP/1.1\r\nContent-Length: 5\r\n\r\nhello";
   REQUIRE_EQ(chttp1_parser_execute(&parser, whole, strlen(whole)),
-            CHTTP1_HEADERS_ONLY);
+             CHTTP1_HEADERS_ONLY);
   REQUIRE_EQ(chttp1_parser_consumed(&parser), strlen(headers));
   REQUIRE_FALSE(ctx.message_complete_called);
   REQUIRE_EQ(ctx.body_len, (size_t)0);
@@ -1187,7 +1188,7 @@ TEST(divert, body_already_in_same_buffer_is_not_consumed_by_divert) {
   size_t leftover_len = strlen(whole) - consumed;
   REQUIRE_EQ(leftover_len, (size_t)5);
   REQUIRE_EQ(chttp1_parser_execute(&parser, leftover, leftover_len),
-            CHTTP1_PAUSED);
+             CHTTP1_PAUSED);
   REQUIRE_EQ(ctx.body_len, (size_t)5);
   REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
 }
@@ -1200,12 +1201,11 @@ TEST(divert, chunked_body_diverts_before_consuming) {
   const char *headers =
       "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
-            CHTTP1_HEADERS_ONLY);
+             CHTTP1_HEADERS_ONLY);
   REQUIRE_EQ(chttp1_parser_consumed(&parser), strlen(headers));
 
   const char *rest = "5\r\nhello\r\n0\r\n\r\n";
-  REQUIRE_EQ(chttp1_parser_execute(&parser, rest, strlen(rest)),
-            CHTTP1_PAUSED);
+  REQUIRE_EQ(chttp1_parser_execute(&parser, rest, strlen(rest)), CHTTP1_PAUSED);
   REQUIRE_EQ(ctx.body_len, (size_t)5);
   REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
 }
@@ -1289,7 +1289,7 @@ TEST(expect_continue, works_with_divert) {
   const char *headers =
       "POST /x HTTP/1.1\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
-            CHTTP1_HEADERS_ONLY);
+             CHTTP1_HEADERS_ONLY);
   REQUIRE_TRUE(chttp1_expects_continue(&parser));
 }
 
@@ -1473,7 +1473,7 @@ static bool tls_drive_handshake(ctls_conn_t *a, ctls_conn_t *b) {
 TEST(stream_tls, read_over_real_tls_connection) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
-            ccol_success);
+             ccol_success);
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
@@ -1507,7 +1507,7 @@ TEST(stream_tls, read_over_real_tls_connection) {
 TEST(stream_tls, write_over_real_tls_connection) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
-            ccol_success);
+             ccol_success);
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
@@ -1545,7 +1545,7 @@ TEST(stream_tls, leftover_decrypted_bytes_drained_before_ctls_conn_read) {
    * chttp1_stream_prepare_tls's leftover argument is never raw wire bytes. */
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
-            ccol_success);
+             ccol_success);
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];

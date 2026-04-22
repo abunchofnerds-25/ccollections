@@ -1086,12 +1086,19 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
 /**
  * @brief Opaque event_loop structure
  *
- * A persistent, incrementally-mutable epoll(7)-based reactor: one or more
- * long-lived background reactor threads (see num_reactor_threads on
- * event_loop_create_with_mprocs) sharing one epoll instance created once at
- * construction and mutated (EPOLL_CTL_ADD/MOD/DEL) as registrations come and
- * go, rather than ccol_select's per-call fresh epoll instance that waits for
- * exactly one ready selectable and tears everything down before returning.
+ * A persistent, incrementally-mutable epoll(7)-based reactor. Exactly ONE
+ * dedicated poller thread ever calls epoll_wait, for every configuration --
+ * this is a deliberate design property, not an implementation detail: with
+ * more than one thread independently calling epoll_wait on a shared epoll
+ * instance (an earlier design this module used), a single ready event wakes
+ * every blocked thread (a genuine kernel-level thundering herd, confirmed
+ * against real epoll(7) behavior; the non-obvious part is that
+ * EPOLLEXCLUSIVE does NOT help here -- it governs the same target fd
+ * registered across multiple SEPARATE epoll instances, not many threads
+ * sharing one), which measurably hurt tail latency for low-concurrency
+ * workloads. See num_reactor_threads on event_loop_create_with_mprocs for
+ * how multi-threaded DISPATCH throughput is still provided despite only one
+ * thread ever polling.
  *
  * Registrations are built from the same ccol_selectable type ccol_select
  * uses (selectable_from_fd, selectable_from_circq, selectable_from_dynq,
@@ -1100,7 +1107,8 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
  * performs its own read()/recv()/circq_try_recv_zc()/dynmq_try_recv_zc()
  * from inside the callback (see event_loop_add's documentation).
  *
- * With more than one reactor thread, two correctness properties hold that a
+ * With num_reactor_threads > 1 (callbacks running on separate worker
+ * threads, not the poller), two correctness properties hold that a
  * single-threaded reactor gets for free from having only one caller:
  *  - A single registration's callback(s) are never invoked concurrently with
  *    themselves, and -- stricter than a bare "no self-concurrency" guarantee
@@ -1109,12 +1117,17 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
  *    that shares state across both directions on one fd (e.g. one TLS
  *    connection object) needs no additional locking of its own.
  *  - Removing a registration and reusing its underlying fd number for an
- *    unrelated new registration is safe even while other reactor threads
- *    may still be mid-processing an already-fetched, now-stale epoll_wait
- *    batch that referenced the old registration: dispatch always validates
- *    liveness immediately before invoking a callback, so a stale batch entry
- *    for an already-removed registration is a safe no-op, never a
- *    use-after-free or a misdirected callback on the new registration.
+ *    unrelated new registration is safe even while a worker thread may
+ *    still be mid-processing a dispatch that referenced the old
+ *    registration: dispatch always validates liveness immediately before
+ *    invoking a callback, so a stale reference to an already-removed
+ *    registration is a safe no-op, never a use-after-free or a misdirected
+ *    callback on the new registration. A second registration for the same
+ *    entry is never collected while an earlier one is still in flight
+ *    (queued or executing) either, for the identical reason -- application
+ *    code that calls event_loop_modify from within an in-flight callback
+ *    (a supported, commonly-used pattern) does not race a second,
+ *    concurrently-collected dispatch for that same registration.
  * See event_loop_reg_generation() for the caller-visible identity token this
  * makes available for a registration's own defensive bookkeeping across fd
  * reuse -- a separate, additional concern from the two guarantees above,
@@ -1197,12 +1210,36 @@ typedef struct event_handlers {
 /**
  * @brief Create an event_loop with custom memory management
  *
- * Creates a persistent epoll instance and immediately spawns
- * num_reactor_threads background reactor threads that drive it (every
- * thread is ready to dispatch events as soon as this call returns,
- * mirroring create_cthread_pool's "ready to work the moment you get the
- * handle" ergonomics). Passing 1 reproduces this module's original
- * single-thread behavior exactly.
+ * Creates a persistent epoll instance and immediately spawns the threads
+ * that drive it (every thread is ready to dispatch events as soon as this
+ * call returns, mirroring create_cthread_pool's "ready to work the moment
+ * you get the handle" ergonomics).
+ *
+ * num_reactor_threads == 1 reproduces this module's original single-thread
+ * design exactly, byte-for-byte: that one thread both calls epoll_wait AND
+ * runs every callback inline. num_reactor_threads > 1 spawns exactly ONE
+ * dedicated thread that calls epoll_wait (never more -- see the event_loop
+ * struct's own doc comment for why) plus (num_reactor_threads - 1) worker
+ * threads that actually execute callbacks, so total OS thread count for a
+ * given num_reactor_threads is always exactly that value, preserving the
+ * parameter's resource-usage meaning across both configurations. A
+ * registration's callback runs on the poller thread for the first
+ * configuration, or on one of the worker threads for the second -- this is
+ * transparent to callback code (event_readable_fn/event_writable_fn/
+ * event_error_fn have no way to observe which), except that
+ * event_loop_shutdown must not be called from within a callback running on
+ * EITHER kind of thread (self-join hazard; see event_loop_shutdown's own
+ * doc comment).
+ *
+ * Benchmarked, not assumed (per this project's standing performance-
+ * regression-is-a-bug rule): num_reactor_threads == 1 measures byte-for-
+ * byte identical to the pre-poller-split single-thread design, as expected
+ * from the unchanged code path. With more than one thread, this design
+ * closes a real, measured tail-latency regression the original "N threads
+ * all call epoll_wait" design had at low concurrency (a genuine kernel
+ * thundering herd, not specific to this module's own code -- see the
+ * event_loop struct's own doc comment) while preserving aggregate
+ * multi-threaded dispatch throughput under real concurrent load.
  *
  * The fd/entry registry is lock-striped: num_lock_stripes independent
  * (mutex, chmap) pairs, each guarding a disjoint subset of registrations
@@ -1216,17 +1253,19 @@ typedef struct event_handlers {
  * num_reactor_threads: the stripe count controls registry contention, the
  * thread count controls dispatch concurrency.
  *
- * @param max_events_per_wait Size of the epoll_wait batch buffer each
- * reactor thread uses (must be >= 1); bounds how many ready events a single
+ * @param max_events_per_wait Size of the epoll_wait batch buffer the poller
+ * thread uses (must be >= 1); bounds how many ready events a single
  * epoll_wait call drains, not the number of registrations the loop can hold
  * @param num_lock_stripes Number of independent lock stripes for the fd/
  * entry registry (must be >= 1). 1 matches this module's original
  * single-lock behavior; pass a larger value to reduce
  * event_loop_add/_remove/_modify contention across many different fds/
  * registrations under concurrent use. No upper bound is enforced.
- * @param num_reactor_threads Number of background reactor threads that call
- * epoll_wait on the shared epoll instance (must be >= 1). 1 matches this
- * module's original single-thread behavior exactly. See the event_loop
+ * @param num_reactor_threads Total OS thread count devoted to this loop's
+ * own polling and dispatch (must be >= 1). 1 matches this module's original
+ * single-thread behavior exactly (one thread polls and dispatches inline);
+ * any larger value means exactly one dedicated polling thread plus
+ * (num_reactor_threads - 1) dispatch worker threads. See the event_loop
  * struct's own doc comment for the two correctness guarantees that hold
  * regardless of this value.
  * @param mmgmt_procs Custom memory management procedures, or NULL to use
@@ -1252,11 +1291,10 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
  * Convenience macro equivalent to event_loop_create_with_mprocs with
  * mmgmt_procs = NULL.
  */
-#define event_loop_create(max_events_per_wait, num_lock_stripes,      \
-                          num_reactor_threads, err_str)               \
-  event_loop_create_with_mprocs(                                     \
-      (max_events_per_wait), (num_lock_stripes), (num_reactor_threads), \
-      NULL, (err_str))
+#define event_loop_create(max_events_per_wait, num_lock_stripes,           \
+                          num_reactor_threads, err_str)                    \
+  event_loop_create_with_mprocs((max_events_per_wait), (num_lock_stripes), \
+                                (num_reactor_threads), NULL, (err_str))
 
 /**
  * @brief Register a selectable with the event loop
@@ -1362,7 +1400,12 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
  * removed (self-removal on error is a common pattern) as well as from any
  * other thread, including concurrently with an in-flight dispatch for the
  * same registration; teardown is deferred until any in-progress callback
- * returns.
+ * returns. No further callback for this registration is ever invoked after
+ * this call returns, even one already collected (e.g. sitting queued for a
+ * dispatch worker thread with num_reactor_threads > 1) but not yet actually
+ * started -- callers may free whatever the registration's own arg points to
+ * immediately after this call returns without racing a stale callback
+ * invocation.
  *
  * Does not close an fd or affect a queue's own lifetime; only the
  * event_loop's registration bookkeeping is released, mirroring
@@ -1391,22 +1434,30 @@ ccol_retval_t event_loop_remove(event_loop loop, event_reg *reg);
 size_t event_loop_reg_count(event_loop loop);
 
 /**
- * @brief Stop the reactor thread
+ * @brief Stop the reactor's poller thread and dispatch worker threads (if
+ *        any)
  *
  * Idempotent: safe to call more than once, or not at all before
  * event_loop_destroy (which calls this internally if needed). Blocks until
- * the reactor thread has been joined; no dispatch can be in flight once
- * this returns.
+ * the poller thread has been joined and, for num_reactor_threads > 1, until
+ * every dispatch worker has finished its current job and been joined too
+ * (a graceful drain, not a cancel: no dispatch can be in flight once this
+ * returns, matching num_reactor_threads == 1's own guarantee).
  *
  * @param loop event_loop to shut down
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if loop is NULL
+ * @return ccol_not_permitted if called from within a callback running on
+ * any of this loop's own threads (the poller, or -- for num_reactor_threads
+ * > 1 -- a dispatch worker); see the warning below
  *
- * @warning Must not be called from within a callback running on loop's own
- * reactor thread: internally this joins that thread, and a thread cannot
- * join itself (undefined behavior / EDEADLK). Defer shutdown to another
- * thread, or to after the callback returns, instead.
+ * @warning Calling this from within a callback running on one of this
+ * loop's own threads would otherwise join that thread from itself
+ * (undefined behavior / EDEADLK) -- detected and rejected with
+ * ccol_not_permitted rather than left as caller-triggerable undefined
+ * behavior. Defer shutdown to another thread, or to after the callback
+ * returns, instead.
  */
 ccol_retval_t event_loop_shutdown(event_loop loop);
 
@@ -1483,7 +1534,7 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  *                           behavior)
  */
 #define event_loop_construct(name, max_events_per_wait, num_lock_stripes, \
-                             num_reactor_threads)                        \
+                             num_reactor_threads)                         \
   event_loop name = NULL;                                                 \
   do {                                                                    \
     char *_evl_err = NULL;                                                \
@@ -1509,15 +1560,36 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  *                           >= 1; 1 matches the original single-thread
  *                           behavior)
  */
-#define event_loop_construct_scoped(name, max_events_per_wait,            \
+#define event_loop_construct_scoped(name, max_events_per_wait,             \
                                     num_lock_stripes, num_reactor_threads) \
-  event_loop name _ccol_destructor(___event_loop_destroy) = NULL;         \
-  do {                                                                    \
-    char *_evl_err = NULL;                                                \
-    (name) = event_loop_create((max_events_per_wait), (num_lock_stripes), \
-                               (num_reactor_threads), &_evl_err);         \
-    if (!(name)) {                                                        \
-      fatal_err("event_loop_construct_scoped('%s'): %s", #name,           \
-                _evl_err ? _evl_err : "unknown error");                   \
-    }                                                                     \
+  event_loop name _ccol_destructor(___event_loop_destroy) = NULL;          \
+  do {                                                                     \
+    char *_evl_err = NULL;                                                 \
+    (name) = event_loop_create((max_events_per_wait), (num_lock_stripes),  \
+                               (num_reactor_threads), &_evl_err);          \
+    if (!(name)) {                                                         \
+      fatal_err("event_loop_construct_scoped('%s'): %s", #name,            \
+                _evl_err ? _evl_err : "unknown error");                    \
+    }                                                                      \
   } while (0)
+
+/* ========================================================================== */
+/*                         UNIT TEST INTERNALS                                */
+/* ========================================================================== */
+
+#ifdef RUNNING_UNIT_TESTS
+/**
+ * @brief Expose the number of dispatch jobs currently queued or executing
+ *        on loop's own dispatch_pool, for testing
+ *
+ * Returns 0 for a NULL loop or a loop constructed with num_reactor_threads
+ * == 1 (no dispatch_pool exists in that configuration). The direct
+ * regression check for the EPOLLONESHOT re-arm mechanism: a continuously-
+ * ready fd or queue selectable must not cause this count to grow without
+ * bound while dispatch_pool's own workers are still catching up.
+ *
+ * @param loop  event_loop to query
+ * @return      Number of pending/in-flight dispatch jobs
+ */
+size_t event_loop_dispatch_pool_pending_count_for_tests(event_loop loop);
+#endif

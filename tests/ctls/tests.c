@@ -68,15 +68,15 @@ static int _openssl_selfsigned(const char *key_path, const char *cert_path,
   int n;
   if (san) {
     n = snprintf(cmd, sizeof(cmd),
-                "openssl req -x509 -newkey rsa:2048 -nodes -keyout '%s' "
-                "-out '%s' -days 1 -subj '/CN=%s' -addext "
-                "'subjectAltName=%s' >/dev/null 2>&1",
-                key_path, cert_path, cn, san);
+                 "openssl req -x509 -newkey rsa:2048 -nodes -keyout '%s' "
+                 "-out '%s' -days 1 -subj '/CN=%s' -addext "
+                 "'subjectAltName=%s' >/dev/null 2>&1",
+                 key_path, cert_path, cn, san);
   } else {
     n = snprintf(cmd, sizeof(cmd),
-                "openssl req -x509 -newkey rsa:2048 -nodes -keyout '%s' "
-                "-out '%s' -days 1 -subj '/CN=%s' >/dev/null 2>&1",
-                key_path, cert_path, cn);
+                 "openssl req -x509 -newkey rsa:2048 -nodes -keyout '%s' "
+                 "-out '%s' -days 1 -subj '/CN=%s' >/dev/null 2>&1",
+                 key_path, cert_path, cn);
   }
   if (n < 0 || (size_t)n >= sizeof(cmd)) return -1;
   if (system(cmd) != 0) return -1;
@@ -92,7 +92,7 @@ static int _generate_all_certs(void) {
   snprintf(g_client_cert, sizeof(g_client_cert), "%s/client.pem", g_cert_dir);
   snprintf(g_client_key, sizeof(g_client_key), "%s/client_key.pem", g_cert_dir);
   if (_openssl_selfsigned(g_server_key, g_server_cert, "127.0.0.1",
-                         "IP:127.0.0.1") != 0)
+                          "IP:127.0.0.1") != 0)
     return -1;
   if (_openssl_selfsigned(g_client_key, g_client_cert, "test-client", NULL) !=
       0)
@@ -239,16 +239,16 @@ TEST(ctls_ctx, cert_add_only_cert_path_is_invalid) {
 
 TEST(ctls_ctx, cert_add_missing_file_reports_load_failure) {
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ccol_retval_t rv = ctls_ctx_cert_add(
-      ctx, NULL, "/nonexistent/cert.pem", "/nonexistent/key.pem", NULL, NULL);
+  ccol_retval_t rv = ctls_ctx_cert_add(ctx, NULL, "/nonexistent/cert.pem",
+                                       "/nonexistent/key.pem", NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_tls_cert_load_failed);
   ctls_ctx_release(ctx);
 }
 
 TEST(ctls_ctx, cert_add_self_signed_default_succeeds) {
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
-  ccol_retval_t rv = ctls_ctx_cert_add(ctx, "self-signed.test", NULL, NULL,
-                                      NULL, NULL);
+  ccol_retval_t rv =
+      ctls_ctx_cert_add(ctx, "self-signed.test", NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   ctls_ctx_release(ctx);
 }
@@ -282,18 +282,16 @@ TEST(ctls_ctx, trust_system_no_crash) {
   ctls_ctx_release(ctx);
 }
 
-static void _alpn_cleanup_marker(void *udata) {
-  *(bool *)udata = true;
-}
+static void _alpn_cleanup_marker(void *udata) { *(bool *)udata = true; }
 
 TEST(ctls_ctx, alpn_add_invalid_args) {
   REQUIRE_EQ(ctls_ctx_alpn_add(NULL, "http/1.1", NULL, NULL, NULL, NULL),
-            ccol_invalid_args);
+             ccol_invalid_args);
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_alpn_add(ctx, NULL, NULL, NULL, NULL, NULL),
-            ccol_invalid_args);
+             ccol_invalid_args);
   REQUIRE_EQ(ctls_ctx_alpn_add(ctx, "", NULL, NULL, NULL, NULL),
-            ccol_invalid_args);
+             ccol_invalid_args);
   ctls_ctx_release(ctx);
 }
 
@@ -301,7 +299,7 @@ TEST(ctls_ctx, alpn_add_and_count_and_cleanup_fires_on_release) {
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
   bool cleaned_up = false;
   ccol_retval_t rv = ctls_ctx_alpn_add(ctx, "http/1.1", NULL, &cleaned_up,
-                                      _alpn_cleanup_marker, NULL);
+                                       _alpn_cleanup_marker, NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ(ctls_ctx_alpn_count(ctx), (size_t)1);
   ctls_ctx_release(ctx);
@@ -312,8 +310,8 @@ TEST(ctls_ctx, retain_release_keeps_ctx_alive) {
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
   ctls_ctx_retain(ctx);
   ctls_ctx_release(ctx); /* still one reference (the one below) left */
-  ccol_retval_t rv = ctls_ctx_cert_add(ctx, "still-alive.test", NULL, NULL,
-                                      NULL, NULL);
+  ccol_retval_t rv =
+      ctls_ctx_cert_add(ctx, "still-alive.test", NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   ctls_ctx_release(ctx);
 }
@@ -327,7 +325,7 @@ TEST(ctls_ctx, release_null_is_noop) { ctls_ctx_release(NULL); }
 TEST(ctls_handshake, self_signed_no_verify_completes) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
-            ccol_success);
+             ccol_success);
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
@@ -354,7 +352,7 @@ TEST(ctls_handshake, self_signed_no_verify_completes) {
 TEST(ctls_handshake, read_write_roundtrip_after_handshake) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
-            ccol_success);
+             ccol_success);
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
 
   int fds[2];
@@ -399,7 +397,7 @@ TEST(ctls_handshake, hostname_verify_success_with_matching_ip_san) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
-            ccol_success);
+             ccol_success);
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
   /* The server cert is self-signed; trust it directly as its own CA so
    * chain verification (triggered by verify_host implying verify_peer, per
@@ -411,8 +409,8 @@ TEST(ctls_handshake, hostname_verify_success_with_matching_ip_san) {
   _make_nonblocking_pair(fds);
   ctls_conn_t *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn = ctls_conn_create_client(client_ctx, fds[1],
-                                                     "127.0.0.1", true, NULL);
+  ctls_conn_t *client_conn =
+      ctls_conn_create_client(client_ctx, fds[1], "127.0.0.1", true, NULL);
   REQUIRE_NE((void *)client_conn, (void *)NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
   REQUIRE_EQ(ctls_conn_verify_result(client_conn), 0L /* X509_V_OK */);
@@ -430,7 +428,7 @@ TEST(ctls_handshake, hostname_verify_failure_wrong_host) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
-            ccol_success);
+             ccol_success);
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_trust(client_ctx, g_server_cert, NULL), ccol_success);
 
@@ -460,14 +458,14 @@ TEST(ctls_handshake, mtls_client_presents_trusted_cert_succeeds) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
-            ccol_success);
+             ccol_success);
   /* Server trusts the client's own (self-signed) cert as its CA. */
   REQUIRE_EQ(ctls_ctx_trust(server_ctx, g_client_cert, NULL), ccol_success);
 
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(client_ctx, NULL, g_client_cert, g_client_key,
                                NULL, NULL),
-            ccol_success);
+             ccol_success);
 
   int fds[2];
   _make_nonblocking_pair(fds);
@@ -500,7 +498,7 @@ TEST(ctls_handshake, mtls_client_presents_no_cert_still_succeeds) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
-            ccol_success);
+             ccol_success);
   REQUIRE_EQ(ctls_ctx_trust(server_ctx, g_client_cert, NULL), ccol_success);
 
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL); /* no client cert configured */
@@ -526,7 +524,7 @@ TEST(ctls_handshake, mtls_client_presents_untrusted_cert_fails) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
-            ccol_success);
+             ccol_success);
   /* Server trusts ONLY the server cert itself as CA -- NOT the client
    * cert -- so a client presenting its own (self-signed, untrusted) cert
    * must fail verification. */
@@ -535,7 +533,7 @@ TEST(ctls_handshake, mtls_client_presents_untrusted_cert_fails) {
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(client_ctx, NULL, g_client_cert, g_client_key,
                                NULL, NULL),
-            ccol_success);
+             ccol_success);
 
   int fds[2];
   _make_nonblocking_pair(fds);
@@ -563,7 +561,7 @@ TEST(ctls_handshake, mtls_client_presents_untrusted_cert_fails) {
 TEST(ctls_sni, no_sni_uses_default_cert) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
-            ccol_success);
+             ccol_success);
   REQUIRE_EQ(
       ctls_ctx_cert_add(server_ctx, "alpha.test", NULL, NULL, NULL, NULL),
       ccol_success);
@@ -595,7 +593,7 @@ TEST(ctls_sni, no_sni_uses_default_cert) {
 TEST(ctls_sni, exact_name_match_selects_named_cert) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
-            ccol_success);
+             ccol_success);
   REQUIRE_EQ(
       ctls_ctx_cert_add(server_ctx, "alpha.test", NULL, NULL, NULL, NULL),
       ccol_success);
@@ -605,8 +603,8 @@ TEST(ctls_sni, exact_name_match_selects_named_cert) {
   _make_nonblocking_pair(fds);
   ctls_conn_t *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn = ctls_conn_create_client(client_ctx, fds[1],
-                                                     "alpha.test", false, NULL);
+  ctls_conn_t *client_conn =
+      ctls_conn_create_client(client_ctx, fds[1], "alpha.test", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
   SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
@@ -637,8 +635,8 @@ TEST(ctls_sni, one_level_wildcard_matches_subdomain) {
   _make_nonblocking_pair(fds);
   ctls_conn_t *server_conn =
       ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
-  ctls_conn_t *client_conn = ctls_conn_create_client(
-      client_ctx, fds[1], "foo.wild.test", false, NULL);
+  ctls_conn_t *client_conn =
+      ctls_conn_create_client(client_ctx, fds[1], "foo.wild.test", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
   SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
@@ -658,7 +656,7 @@ TEST(ctls_sni, one_level_wildcard_matches_subdomain) {
 TEST(ctls_sni, unmatched_name_falls_back_to_default) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
-            ccol_success);
+             ccol_success);
   REQUIRE_EQ(
       ctls_ctx_cert_add(server_ctx, "alpha.test", NULL, NULL, NULL, NULL),
       ccol_success);
@@ -697,7 +695,7 @@ typedef struct alpn_capture {
 } alpn_capture;
 
 static void _alpn_capture_cb(ctls_conn_t *conn, const char *name, size_t len,
-                            void *udata) {
+                             void *udata) {
   (void)conn;
   alpn_capture *cap = (alpn_capture *)udata;
   cap->fired = true;
@@ -708,18 +706,17 @@ static void _alpn_capture_cb(ctls_conn_t *conn, const char *name, size_t len,
 
 TEST(ctls_alpn, matching_protocol_is_selected_both_sides) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  REQUIRE_EQ(
-      ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
-      ccol_success);
+  REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
+             ccol_success);
   alpn_capture server_cap = {0}, client_cap = {0};
   REQUIRE_EQ(ctls_ctx_alpn_add(server_ctx, "http/1.1", _alpn_capture_cb,
                                &server_cap, NULL, NULL),
-            ccol_success);
+             ccol_success);
 
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_alpn_add(client_ctx, "http/1.1", _alpn_capture_cb,
                                &client_cap, NULL, NULL),
-            ccol_success);
+             ccol_success);
 
   int fds[2];
   _make_nonblocking_pair(fds);
@@ -750,19 +747,17 @@ TEST(ctls_alpn, matching_protocol_is_selected_both_sides) {
 
 TEST(ctls_alpn, no_overlap_falls_back_to_default_protocol) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
-  REQUIRE_EQ(
-      ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
-      ccol_success);
+  REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),
+             ccol_success);
   alpn_capture server_cap = {0};
   /* "spdy/1" is the server's only (hence default/fallback) protocol. */
   REQUIRE_EQ(ctls_ctx_alpn_add(server_ctx, "spdy/1", _alpn_capture_cb,
                                &server_cap, NULL, NULL),
-            ccol_success);
+             ccol_success);
 
   ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
-  REQUIRE_EQ(
-      ctls_ctx_alpn_add(client_ctx, "http/1.1", NULL, NULL, NULL, NULL),
-      ccol_success);
+  REQUIRE_EQ(ctls_ctx_alpn_add(client_ctx, "http/1.1", NULL, NULL, NULL, NULL),
+             ccol_success);
 
   int fds[2];
   _make_nonblocking_pair(fds);
@@ -838,7 +833,7 @@ TEST(ctls_conn, destroy_null_is_noop) { ctls_conn_destroy(NULL); }
 TEST(ctls_conn, udata_roundtrip) {
   ctls_ctx_t *ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(ctx, "srv.test", NULL, NULL, NULL, NULL),
-            ccol_success);
+             ccol_success);
   int fds[2];
   _make_nonblocking_pair(fds);
   int marker = 42;

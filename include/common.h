@@ -395,30 +395,30 @@ typedef enum ccollections_retval_t {
                                              could not be established */
   ccol_http_host_resolution_failed = -16, /**< DNS or hostname resolution
                                              failed */
-  ccol_http_tls_handshake_failed = -15, /**< TLS/SSL handshake with the server
-                                          failed */
+  ccol_http_tls_handshake_failed = -15,   /**< TLS/SSL handshake with the server
+                                            failed */
   ccol_http_tls_cert_verification_failed = -14, /**< Peer TLS certificate
                                                    could not be verified */
   ccol_http_tls_cert_load_failed = -13, /**< A local certificate/key/CA-bundle
                                           file could not be read or was
                                           malformed */
-  ccol_http_too_many_redirects = -12, /**< HTTP redirect limit was exceeded */
-  ccol_http_invalid_url = -11, /**< URL is malformed or uses an unsupported
-                                 scheme */
+  ccol_http_too_many_redirects = -12,   /**< HTTP redirect limit was exceeded */
+  ccol_http_invalid_url = -11,      /**< URL is malformed or uses an unsupported
+                                      scheme */
   ccol_http_transfer_aborted = -10, /**< Network send/receive error or
                                       streaming callback aborted */
-  ccol_msg_too_large = -9,   /**< Message data exceeded the configured size
-                               limit */
-  ccol_container_empty = -8, /**< Container has no elements */
-  ccol_container_full = -7,  /**< Container at maximum capacity */
-  ccol_timed_out = -6,       /**< Operation timed out */
-  ccol_not_permitted = -5,   /**< Operation not allowed in current state */
-  ccol_invalid_args = -4,    /**< Invalid arguments provided */
-  ccol_key_not_found = -3,   /**< Key does not exist in map */
+  ccol_msg_too_large = -9,       /**< Message data exceeded the configured size
+                                   limit */
+  ccol_container_empty = -8,     /**< Container has no elements */
+  ccol_container_full = -7,      /**< Container at maximum capacity */
+  ccol_timed_out = -6,           /**< Operation timed out */
+  ccol_not_permitted = -5,       /**< Operation not allowed in current state */
+  ccol_invalid_args = -4,        /**< Invalid arguments provided */
+  ccol_key_not_found = -3,       /**< Key does not exist in map */
   ccol_key_already_present = -2, /**< Key already exists (for update
                                     operations) */
   ccol_not_enough_memory = -1,   /**< Memory allocation failed */
-  ccol_success = 0                /**< Operation succeeded */
+  ccol_success = 0               /**< Operation succeeded */
 } ccol_retval_t;
 
 /** Returns a string literal for @p r, suitable for use in fatal_err() messages.

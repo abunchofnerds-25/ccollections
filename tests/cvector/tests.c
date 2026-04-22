@@ -1543,16 +1543,17 @@ TEST(cvectors, find_returns_first_occurrence) {
   cvec_destroy(vec);
 }
 
+int helper_cmp_int(const void *a, const void *b) {
+  return *(const int *)a - *(const int *)b;
+}
+
 TEST(cvectors, find_with_custom_comparator) {
-  int cmp_int(const void *a, const void *b) {
-    return *(const int *)a - *(const int *)b;
-  }
   cvec_construct(vec, int);
   cvec_push_rvalue(vec, 100);
   cvec_push_rvalue(vec, 200);
   cvec_push_rvalue(vec, 300);
-  REQUIRE_EQ(cvector_find(vec, &(int){200}, cmp_int), (size_t)1);
-  REQUIRE_EQ(cvector_find(vec, &(int){999}, cmp_int), ccol_invalid_size);
+  REQUIRE_EQ(cvector_find(vec, &(int){200}, helper_cmp_int), (size_t)1);
+  REQUIRE_EQ(cvector_find(vec, &(int){999}, helper_cmp_int), ccol_invalid_size);
   cvec_destroy(vec);
 }
 
@@ -1566,23 +1567,27 @@ TEST(cvectors, find_with_double_type) {
   cvec_destroy(vec);
 }
 
+typedef struct {
+  int x;
+  int y;
+} helper_point_t;
+
+int helper_cmp_point(const void *a, const void *b) {
+  const helper_point_t *pa = (const helper_point_t *)a;
+  const helper_point_t *pb = (const helper_point_t *)b;
+  if (pa->x != pb->x) return pa->x - pb->x;
+  return pa->y - pb->y;
+}
+
 TEST(cvectors, find_with_struct_type) {
-  typedef struct {
-    int x;
-    int y;
-  } point_t;
-  int cmp_point(const void *a, const void *b) {
-    const point_t *pa = (const point_t *)a;
-    const point_t *pb = (const point_t *)b;
-    if (pa->x != pb->x) return pa->x - pb->x;
-    return pa->y - pb->y;
-  }
-  cvec_construct(vec, point_t);
-  cvec_push(vec, ((point_t){1, 2}));
-  cvec_push(vec, ((point_t){3, 4}));
-  cvec_push(vec, ((point_t){5, 6}));
-  REQUIRE_EQ(cvector_find(vec, &(point_t){3, 4}, cmp_point), (size_t)1);
-  REQUIRE_EQ(cvector_find(vec, &(point_t){9, 9}, cmp_point), ccol_invalid_size);
+  cvec_construct(vec, helper_point_t);
+  cvec_push(vec, ((helper_point_t){1, 2}));
+  cvec_push(vec, ((helper_point_t){3, 4}));
+  cvec_push(vec, ((helper_point_t){5, 6}));
+  REQUIRE_EQ(cvector_find(vec, &(helper_point_t){3, 4}, helper_cmp_point),
+             (size_t)1);
+  REQUIRE_EQ(cvector_find(vec, &(helper_point_t){9, 9}, helper_cmp_point),
+             ccol_invalid_size);
   cvec_destroy(vec);
 }
 

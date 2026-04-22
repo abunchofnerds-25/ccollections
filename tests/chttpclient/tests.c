@@ -227,13 +227,13 @@ static ssize_t srv_read_headers(int fd, char *buf, size_t max,
  * without waiting" case, exercising chttp_do_internal's "server answered
  * directly -> that IS the final response, body never sent" path).
  */
-static bool srv_handle_expect_continue_route(int conn_fd, char *buf,
-                                             size_t max, size_t total,
-                                             size_t hdr_len, bool accept_body) {
+static bool srv_handle_expect_continue_route(int conn_fd, char *buf, size_t max,
+                                             size_t total, size_t hdr_len,
+                                             bool accept_body) {
   if (!accept_body) {
     const char *b = "expectation failed";
     srv_respond(conn_fd, 417, "Expectation Failed", "text/plain", NULL, b,
-               strlen(b), false);
+                strlen(b), false);
     return true;
   }
 
@@ -255,7 +255,7 @@ static bool srv_handle_expect_continue_route(int conn_fd, char *buf,
   const char *body = buf + hdr_len;
   size_t body_len = (cl > 0) ? (size_t)cl : 0;
   srv_respond(conn_fd, 200, "OK", "application/octet-stream", NULL, body,
-             body_len, false);
+              body_len, false);
   return true;
 }
 
@@ -614,7 +614,7 @@ static void *srv_conn_thread(void *arg) {
       if (srv_find_header(buf, "content-length", cl_str, sizeof(cl_str)))
         cl = atol(cl_str);
       while (cl > 0 && total - hdr_len < (size_t)cl &&
-            total < TEST_SERVER_BUF - 1) {
+             total < TEST_SERVER_BUF - 1) {
         ssize_t m = recv(conn_fd, buf + total, TEST_SERVER_BUF - 1 - total, 0);
         if (m <= 0) break;
         total += (size_t)m;
@@ -623,7 +623,8 @@ static void *srv_conn_thread(void *arg) {
 
       char *body = (cl > 0) ? buf + hdr_len : NULL;
       size_t body_len = (cl > 0) ? (size_t)cl : 0;
-      close_after = srv_handle_route(conn_fd, method, path, buf, body, body_len);
+      close_after =
+          srv_handle_route(conn_fd, method, path, buf, body, body_len);
     }
     if (close_after) break;
   }
@@ -799,9 +800,9 @@ static void start_test_server(void) {
      * format never actually fails this check in practice. */
     if (path_len < sizeof(addr_un.sun_path)) {
       memcpy(addr_un.sun_path, g_srv.unix_path, path_len + 1);
-      bound = (bind(fd_unix, (struct sockaddr *)&addr_un, sizeof(addr_un)) ==
-                   0 &&
-               listen(fd_unix, 64) == 0);
+      bound =
+          (bind(fd_unix, (struct sockaddr *)&addr_un, sizeof(addr_un)) == 0 &&
+           listen(fd_unix, 64) == 0);
     }
     if (bound) {
       g_srv.server_fd_unix = fd_unix;
@@ -2668,10 +2669,9 @@ TEST(url_parsing, ipv6_literal_no_port) {
   bool is_https = false, is_ipv6 = false;
   char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
   uint16_t port = 0;
-  ccol_retval_t rv =
-      _chttp_parse_url_for_tests("https://[::1]/path", &is_https, &is_ipv6,
-                                 &host, &port, &pq, &origin_key, &auth, NULL,
-                                 NULL);
+  ccol_retval_t rv = _chttp_parse_url_for_tests("https://[::1]/path", &is_https,
+                                                &is_ipv6, &host, &port, &pq,
+                                                &origin_key, &auth, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(is_https);
   REQUIRE_TRUE(is_ipv6);
@@ -2689,10 +2689,9 @@ TEST(url_parsing, ipv6_literal_with_port) {
   bool is_https = false, is_ipv6 = false;
   char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
   uint16_t port = 0;
-  ccol_retval_t rv =
-      _chttp_parse_url_for_tests("http://[::1]:8443/", &is_https, &is_ipv6,
-                                 &host, &port, &pq, &origin_key, &auth, NULL,
-                                 NULL);
+  ccol_retval_t rv = _chttp_parse_url_for_tests("http://[::1]:8443/", &is_https,
+                                                &is_ipv6, &host, &port, &pq,
+                                                &origin_key, &auth, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(is_ipv6);
   REQUIRE_STREQ(host, "::1");
@@ -2710,9 +2709,9 @@ TEST(url_parsing, ipv6_missing_closing_bracket_is_invalid) {
 }
 
 TEST(url_parsing, ipv6_garbage_after_bracket_is_invalid) {
-  ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http://[::1]x/path", NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-      NULL);
+  ccol_retval_t rv =
+      _chttp_parse_url_for_tests("http://[::1]x/path", NULL, NULL, NULL, NULL,
+                                 NULL, NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }
 
@@ -2807,9 +2806,9 @@ TEST(url_parsing, userinfo_percent_encoded_components) {
 }
 
 TEST(url_parsing, userinfo_malformed_percent_escape_is_invalid) {
-  ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http://user%zzpass@host/path", NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-      NULL, NULL);
+  ccol_retval_t rv =
+      _chttp_parse_url_for_tests("http://user%zzpass@host/path", NULL, NULL,
+                                 NULL, NULL, NULL, NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }
 
@@ -2817,10 +2816,9 @@ TEST(url_parsing, no_userinfo_means_no_auto_authorization) {
   bool dummy_https = false, dummy_ipv6 = false;
   char *host = NULL, *pq = NULL, *origin_key = NULL, *auth = NULL;
   uint16_t port = 0;
-  ccol_retval_t rv =
-      _chttp_parse_url_for_tests("http://host/path", &dummy_https, &dummy_ipv6,
-                                 &host, &port, &pq, &origin_key, &auth, NULL,
-                                 NULL);
+  ccol_retval_t rv = _chttp_parse_url_for_tests(
+      "http://host/path", &dummy_https, &dummy_ipv6, &host, &port, &pq,
+      &origin_key, &auth, NULL, NULL);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_EQ((void *)auth, NULL);
   free(host);
@@ -4922,8 +4920,8 @@ TEST(url_parsing, http_unix_scheme_no_path_defaults_to_root) {
   bool is_unix = false;
   char *pq = NULL, *origin_key = NULL, *unix_path = NULL;
   ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "http+unix://%2Ftmp%2Fapp.sock", NULL, NULL, NULL, NULL, &pq,
-      &origin_key, NULL, &is_unix, &unix_path);
+      "http+unix://%2Ftmp%2Fapp.sock", NULL, NULL, NULL, NULL, &pq, &origin_key,
+      NULL, &is_unix, &unix_path);
   REQUIRE_EQ(rv, ccol_success);
   REQUIRE_TRUE(is_unix);
   REQUIRE_STREQ(unix_path, "/tmp/app.sock");
@@ -4935,14 +4933,13 @@ TEST(url_parsing, http_unix_scheme_no_path_defaults_to_root) {
 
 TEST(url_parsing, https_unix_scheme_rejected) {
   ccol_retval_t rv = _chttp_parse_url_for_tests(
-      "https+unix://%2Ftmp%2Fapp.sock/api", NULL, NULL, NULL, NULL, NULL,
-      NULL, NULL, NULL, NULL);
+      "https+unix://%2Ftmp%2Fapp.sock/api", NULL, NULL, NULL, NULL, NULL, NULL,
+      NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }
 
 TEST(url_parsing, http_unix_scheme_empty_path_rejected) {
-  ccol_retval_t rv = _chttp_parse_url_for_tests("http+unix:///api", NULL,
-                                                NULL, NULL, NULL, NULL, NULL,
-                                                NULL, NULL, NULL);
+  ccol_retval_t rv = _chttp_parse_url_for_tests(
+      "http+unix:///api", NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
   REQUIRE_EQ(rv, ccol_http_invalid_url);
 }

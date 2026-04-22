@@ -15,7 +15,12 @@ Deregisters reg.  Safe to call from within a callback for the very
 registration being removed (self-removal on error is a common pattern),
 as well as from any other thread, including concurrently with an
 in-flight dispatch for the same registration; teardown is deferred until
-any in-progress callback returns.
+any in-progress callback returns.  No further callback for this
+registration is ever invoked after this call returns, even one already
+collected (e.g. sitting queued for a dispatch worker thread with
+num_reactor_threads > 1) but not yet actually started -- callers may free
+whatever the registration's own arg points to immediately after this
+call returns without racing a stale callback invocation.
 
 Does not close an fd or affect a queue's own lifetime; only the
 event_loop's registration bookkeeping is released, mirroring

@@ -491,9 +491,9 @@ TEST(ctls_handshake, mtls_client_presents_trusted_cert_succeeds) {
 
 TEST(ctls_handshake, mtls_client_presents_no_cert_still_succeeds) {
   /* Verbatim OpenSSL semantics for SSL_VERIFY_PEER with no
-   * SSL_VERIFY_FAIL_IF_NO_PEER_CERT (matching facio's own server-side
-   * behavior exactly): a client presenting no certificate at all is still
-   * accepted, since there is nothing to fail verification against. */
+   * SSL_VERIFY_FAIL_IF_NO_PEER_CERT: a client presenting no certificate at
+   * all is still accepted, since there is nothing to fail verification
+   * against. */
   if (!g_certs_ready) return;
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
@@ -767,9 +767,8 @@ TEST(ctls_alpn, no_overlap_falls_back_to_default_protocol) {
       ctls_conn_create_client(client_ctx, fds[1], "srv.test", false, NULL);
   REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
 
-  /* Fallback to the default entry's callback still fires, mirroring the
-   * facio behavior this replaces, even though the wire negotiation itself
-   * produced no overlap. */
+  /* Fallback to the default entry's callback still fires even though the
+   * wire negotiation itself produced no overlap. */
   REQUIRE_TRUE(server_cap.fired);
   REQUIRE_STREQ(server_cap.name, "spdy/1");
 

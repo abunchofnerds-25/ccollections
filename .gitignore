@@ -8,6 +8,7 @@ tests/chttpclient/tests_tls
 tests/chttpclient/tests_parser
 tests/chttpserver/tests_mem_mgmt
 tests/chttpserver/tests_tls
+tests/chttpserver/tests_engine_stop
 tests/cthreadcomm/tests_tsan
 tests/*/coverage/
 *.gcno

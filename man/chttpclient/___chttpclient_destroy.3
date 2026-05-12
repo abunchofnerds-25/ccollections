@@ -1,0 +1,33 @@
+.TH ___CHTTPCLIENT_DESTROY 3 "2026-07-14" "c_collections" "C Collections Library - Macros"
+.SH NAME
+___chttpclient_destroy \- RAII cleanup function for chttpcli
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+___chttpclient_destroy(chttpcli *pp);
+.fi
+.SH DESCRIPTION
+.nf
+Static inline function used as the cleanup callback in
+chttpcli_declare_scoped() and chttpcli_construct_scoped(). If *pp is
+non-NULL, calls __chttpclient_destroy(*pp) and sets *pp to NULL.
+
+This function is not intended to be called directly; use
+chttpcli_declare_scoped() or chttpcli_construct_scoped() instead.
+.fi
+.SH PARAMETERS
+.nf
+pp  Pointer to a chttpcli variable (must not be NULL).
+.fi
+.SH NOTES
+.nf
+Compatible with __attribute__((cleanup)) on GCC and Clang.
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_declare_scoped (3),
+.BR chttpcli_construct_scoped (3),
+.BR __chttpclient_destroy (3),
+.BR chttpclient_destroy (3)

@@ -445,10 +445,14 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
  * until a shutdown signal triggers engine exit, without destroying the server
  * handle first.
  *
- * Note: destroying the last running server (via chttpsvr_destroy) also blocks
- * until the engine exits; calling chttpsvr_engine_wait() separately is only
- * necessary when you need to perform teardown between the engine stop and the
- * server destruction.
+ * Note: destroying the last running server (via chttpsvr_destroy) synchronously
+ * quiesces that server (stops listening, drains in-flight requests, closes
+ * connections, releases its engine reference) but does NOT block until the
+ * shared reactor itself has fully exited -- that final teardown runs on a
+ * separate reaper thread. If the calling code needs a deterministic guarantee
+ * that the engine has fully exited (e.g. right before process exit, so an
+ * engine-installed logger via chttpsvr_set_engine_logger() is not still
+ * reachable), call chttpsvr_engine_wait() explicitly after chttpsvr_destroy().
  */
 void chttpsvr_engine_wait(void);
 

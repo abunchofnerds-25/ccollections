@@ -58,12 +58,11 @@ static EVP_PKEY *_ctls_get_root_key(void) {
   mutex_lock(g_ctls_root_key_mutex);
   if (!g_ctls_root_key) {
     /* EVP_RSA_gen (a thin macro over EVP_PKEY_Q_keygen) is the modern,
-     * non-deprecated OpenSSL 3.x replacement for the RSA_new/BN_new/
-     * RSA_generate_key_ex/EVP_PKEY_assign_RSA sequence facio's own
-     * fio_tls_make_root_key used; that sequence is deprecated as of
-     * OpenSSL 3.0 and would trip -Wdeprecated-declarations under this
-     * codebase's -Werror build (unlike third_party/facio, this is not
-     * vendored code built with relaxed warnings). */
+     * non-deprecated OpenSSL 3.x replacement for the older RSA_new/BN_new/
+     * RSA_generate_key_ex/EVP_PKEY_assign_RSA sequence; that sequence is
+     * deprecated as of OpenSSL 3.0 and would trip -Wdeprecated-declarations
+     * under this codebase's -Werror build, since this is not vendored code
+     * built with relaxed warnings. */
     g_ctls_root_key = EVP_RSA_gen(2048);
   }
   EVP_PKEY *key = g_ctls_root_key;
@@ -279,7 +278,7 @@ static X509 *_ctls_create_self_signed(const char *server_name) {
 /* Applies the three explicit settings this module's TLS session-resumption
  * behavior implicitly depends on, and nothing else: leaving OpenSSL's own
  * session-cache/ticket defaults untouched is what makes resumption "just
- * work", matching the facio layer this replaces exactly. */
+ * work". */
 static bool _ctls_apply_base_settings(SSL_CTX *ctx) {
   if (!ctx) return false;
   SSL_CTX_set_mode(ctx, SSL_MODE_ENABLE_PARTIAL_WRITE);
@@ -363,11 +362,11 @@ static bool _ctls_apply_trust(SSL_CTX *ctx, ctls_ctx_t *tls) {
   return true;
 }
 
-/* Synchronous ALPN selection callback (server mode): unlike facio's async
- * fio_defer-based dispatch, on_selected fires directly here, from within
- * the SSL_accept()/SSL_do_handshake() call that triggered it -- itself
- * already invoked synchronously by ctls_conn_handshake_step(). See the
- * design-notes doc comment at the top of ctls.h. */
+/* Synchronous ALPN selection callback (server mode): on_selected fires
+ * directly here, from within the SSL_accept()/SSL_do_handshake() call that
+ * triggered it; that call is itself already invoked synchronously by
+ * ctls_conn_handshake_step(). See the design-notes doc comment at the top
+ * of ctls.h. */
 static int _ctls_alpn_select_cb(SSL *ssl, const unsigned char **out,
                                 unsigned char *outlen, const unsigned char *in,
                                 unsigned int inlen, void *arg) {
@@ -396,9 +395,8 @@ static int _ctls_alpn_select_cb(SSL *ssl, const unsigned char **out,
     }
   }
   /* No overlap: fall back to the default (first-registered) protocol's
-   * callback anyway, mirroring facio's own fio_tls_alpn_selector_cb
-   * fallback behavior exactly, even though the wire negotiation itself
-   * reports NOACK. */
+   * callback anyway, even though the wire negotiation itself reports
+   * NOACK. */
   ctls_alpn_entry *def = &tls->alpn[0];
   if (conn) {
     conn->alpn_selected_name = def->name;
@@ -478,7 +476,7 @@ static int _ctls_servername_cb(SSL *ssl, int *ad, void *arg) {
 /* Builds one SSL_CTX from scratch, applying base settings, an (optional)
  * certificate, the shared trust store, and the shared ALPN configuration.
  * Used both for ctx_default and for every named (SNI) certificate's own
- * SSL_CTX -- each is a fully independent, fully configured context so that
+ * SSL_CTX; each is a fully independent, fully configured context so that
  * SSL_set_SSL_CTX() can swap onto it wholesale from the servername
  * callback. Returns NULL on failure (caller must not leave the ctx_t's
  * previous, still-valid SSL_CTX pointer overwritten until this succeeds). */
@@ -501,11 +499,11 @@ static SSL_CTX *_ctls_build_one_ctx(ctls_ctx_t *tls, const char *cert_pem,
 
 /* Rebuilds ctx_default and every named certificate's SSL_CTX from the
  * currently stored configuration. Called (under tls->lock) after every
- * mutating call (cert_add/trust/trust_system/alpn_add), mirroring facio's
- * fio_tls_build_context "always rebuild from scratch" approach. On failure,
- * the previous, still-valid SSL_CTX objects are left in place rather than
- * torn down, so a failed reconfiguration attempt cannot leave ctx in a
- * worse (unusable) state than before the call. */
+ * mutating call (cert_add/trust/trust_system/alpn_add), always rebuilding
+ * from scratch rather than patching the existing SSL_CTX objects in place.
+ * On failure, the previous, still-valid SSL_CTX objects are left in place
+ * rather than torn down, so a failed reconfiguration attempt cannot leave
+ * ctx in a worse (unusable) state than before the call. */
 static bool _ctls_ctx_rebuild_locked(ctls_ctx_t *tls) {
   SSL_CTX *new_default = _ctls_build_one_ctx(
       tls, tls->has_default_cert ? tls->default_cert_pem : NULL,
@@ -826,8 +824,8 @@ ccol_retval_t ctls_ctx_alpn_add(ctls_ctx_t *ctx, const char *protocol_name,
   if (!name_copy) return ccol_not_enough_memory;
 
   mutex_lock(ctx->lock);
-  /* Replace an existing registration with the same name, matching facio's
-   * own alpn_list_overwrite semantics. */
+  /* Replace an existing registration with the same name, rather than
+   * appending a duplicate entry. */
   for (size_t i = 0; i < ctx->alpn_count; ++i) {
     if (ctx->alpn[i].name_len == name_len &&
         memcmp(ctx->alpn[i].name, name_copy, name_len) == 0) {
@@ -918,7 +916,7 @@ void ctls_ctx_release(ctls_ctx_t *ctx) {
 
   mutex_destroy(ctx->lock);
   /* ctx->m_procs (when non-NULL) is a heap-allocated copy of the caller's
-   * procs, freed via its own contained free() function pointer -- so ctx
+   * procs, freed via its own contained free() function pointer; so ctx
    * itself must be freed FIRST while mp is still a live, dereferenceable
    * object; freeing mp (i.e. ctx->m_procs) before ctx would leave mp
    * dangling for the second _mem_free() call, reading mp->free from
@@ -1107,14 +1105,12 @@ ctls_handshake_result_t ctls_conn_handshake_step(ctls_conn_t *conn) {
   }
 }
 
-/* Shared classification logic for SSL_read/SSL_write results; see the
- * matching, already-hardened logic in third_party/facio/fio_tls_openssl.c's
- * own fio_tls_read/_write, ported here verbatim (same three documented
- * fixes: SSL_ERROR_SYSCALL must not busy-loop as EWOULDBLOCK,
- * SSL_ERROR_SSL is a fatal record-layer problem and not the same as a
- * clean close, ERR_clear_error() must run before every SSL_get_error()
- * classification on a codebase where many unrelated connections' TLS I/O
- * shares a small set of threads). */
+/* Shared classification logic for SSL_read/SSL_write results. Three
+ * hardening points are deliberately observed here: SSL_ERROR_SYSCALL must
+ * not busy-loop as EWOULDBLOCK, SSL_ERROR_SSL is a fatal record-layer
+ * problem and not the same as a clean close, and ERR_clear_error() must run
+ * before every SSL_get_error() classification on a codebase where many
+ * unrelated connections' TLS I/O shares a small set of threads. */
 static ssize_t _ctls_classify_io_result(SSL *ssl, int ret) {
   if (ret > 0) return ret;
   int err = SSL_get_error(ssl, ret);

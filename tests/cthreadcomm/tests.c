@@ -1931,7 +1931,7 @@ TEST(ccol_select, timed_fd_returns_timed_out) {
 }
 
 TEST(ccol_select, timed_poll_zero_ms_circq_empty) {
-  /* timeout_ms == 0: non-blocking poll; empty queue → immediate timed_out. */
+  /* timeout_ms == 0: non-blocking poll; empty queue -> immediate timed_out. */
   circular_queue *cq = circular_queue_create(4, NULL);
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_timed_va(&idx, 0,
@@ -3127,12 +3127,11 @@ TEST(event_loop, high_add_remove_churn_stress) {
 }
 
 TEST(event_loop, multiple_independent_instances) {
-  /* No shared global state between separate event_loop instances, unlike
-   * facio's process-wide singleton reactor -- including their lock-stripe
-   * arrays: loop_a uses 1 stripe (the original single-lock-equivalent
-   * behavior) and loop_b uses 8, deliberately different, to confirm
-   * num_lock_stripes is a genuinely per-instance setting with no
-   * cross-instance interference. */
+  /* No shared global state between separate event_loop instances, including
+   * their lock-stripe arrays: loop_a uses 1 stripe (the original
+   * single-lock-equivalent behavior) and loop_b uses 8, deliberately
+   * different, to confirm num_lock_stripes is a genuinely per-instance
+   * setting with no cross-instance interference. */
   int pfd_a[2], pfd_b[2];
   REQUIRE_EQ(pipe(pfd_a), 0);
   REQUIRE_EQ(pipe(pfd_b), 0);

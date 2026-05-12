@@ -1,0 +1,47 @@
+.TH CHTTP_RUN_QUERY 3 "2026-07-14" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttp_run_query \- execute a one-shot request with explicit headers via the default client
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttp_run_query(chttp_method_t method, const char *url,
+                              const chttp_request_body_t *body,
+                              chmap headers,
+                              chttpcli_response **resp_out);
+.fi
+.SH DESCRIPTION
+.nf
+Convenience wrapper: constructs a chttp_request_t internally, attaches
+headers to it without taking ownership, calls chttp_do, then frees the
+internal request object.  Unlike chttp_get/chttp_post/etc., this is the
+one default-client convenience function that lets the caller supply an
+arbitrary header set in one call, without building a chttp_request_t by
+hand via chttp_request_new plus repeated chttp_request_set_header calls.
+
+The caller retains full ownership of headers; it is only borrowed for
+the duration of this call and is never freed or modified by it.
+.fi
+.SH PARAMETERS
+.nf
+method     HTTP method.
+url        Target URL; must not be NULL.
+body       Request body, or NULL for a bodyless request.
+headers    chmap(char* -> char*) of request headers, or NULL for none.
+           Borrowed for the duration of the call; not consumed or freed.
+resp_out   On success, receives the response pointer.
+.fi
+.SH RETURN VALUE
+.nf
+Same codes as chttpclient_do, or ccol_not_enough_memory if the internal
+request object could not be allocated.
+.fi
+.SH "SEE ALSO"
+.BR chttp_do (3),
+.BR chttp_get (3),
+.BR chttp_post (3),
+.BR chttp_request_new (3),
+.BR chttp_request_set_header (3),
+.BR chttpclient_do (3)

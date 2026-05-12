@@ -41,8 +41,8 @@ TAU_MAIN()
 /*                                                                            */
 /* chttpsvr_set_engine_mem_mgmt_procs() may only be called before the first  */
 /* chttpsvr_start() in the process; a process-wide, set-once-ever            */
-/* requirement, exactly like the shared facio engine it configures. The rest */
-/* of the chttpserver test suite (tests.c, sharing this same directory)      */
+/* requirement, matching the shared reactor it configures. The rest of the   */
+/* chttpserver test suite (tests.c, sharing this same directory)             */
 /* already calls chttpsvr_start() during its own shared _setup(), so testing */
 /* the "install procs, then start" happy path there is impossible. This      */
 /* file is therefore compiled into its own binary, tests_mem_mgmt, separate  */
@@ -63,9 +63,10 @@ static size_t g_mm_free_count = 0;
 static size_t g_mm_calloc_count = 0;
 static size_t g_mm_realloc_count = 0;
 
-/* Counting wrappers around libc: prove that facio's internal allocations are
- * actually routed through the configured procs, without changing allocator
- * behavior (so the engine keeps working normally while we count). */
+/* Counting wrappers around libc: prove that the shared reactor's internal
+ * allocations are actually routed through the configured procs, without
+ * changing allocator behavior (so the engine keeps working normally while we
+ * count). */
 static void *_counting_malloc(size_t size) {
   __atomic_fetch_add(&g_mm_malloc_count, 1, __ATOMIC_RELAXED);
   return malloc(size);
@@ -167,14 +168,10 @@ __attribute__((constructor)) static void _setup(void) {
     chttpclient_destroy(cli);
   }
 
-  /* Registered after chttpsvr_start purely as a defensive habit carried over
-     from the old facio-backed design, which registered its own
-     atexit(fio_lib_destroy) during the first chttpsvr_start and therefore
-     needed _teardown registered afterward (atexit runs handlers in reverse
-     registration order) to guarantee it ran first. The new design registers
-     nothing via atexit of its own, so this ordering is no longer strictly
-     required, but there is no reason to disturb working setup/teardown
-     symmetry with the rest of this codebase's test suites. */
+  /* Registered after chttpsvr_start purely as a defensive habit; nothing in
+     this codebase registers its own atexit handler that this one would need
+     to run before or after, but there is no reason to disturb working
+     setup/teardown symmetry with the rest of this codebase's test suites. */
   atexit(_teardown);
 }
 
@@ -189,12 +186,10 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
    * per-connection dispatch state, and so on) were actually redirected to
    * the configured procs, malloc/calloc/free must all be nonzero by now.
    *
-   * realloc is deliberately not asserted on here (unlike the old facio-
-   * backed design, which had a real, distinct fio_realloc2 code path via
-   * FIOBJ hash growth worth a dedicated regression test): traced through
+   * realloc is deliberately not asserted on here: traced through
    * cthreadcomm.c directly, event_loop has no _mem_realloc call site at
    * all. Its own fd registry chooses open addressing (both key and value
-   * types are integral -- see chashmap.c's should_use_open_addressing),
+   * types are integral; see chashmap.c's should_use_open_addressing),
    * and open addressing's own growth path (oa_rehash) allocates a fresh,
    * larger slot array via calloc and frees the old one, rather than
    * reallocating in place. mp->realloc is still a hard requirement (see
@@ -307,16 +302,12 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   REQUIRE_EQ((int)chttpsvr_start(new_srv, &cfg), (int)ccol_success);
   g_srv = new_srv;
 
-  /* Unlike the old facio-backed design (whose own internal connection-state
-   * table and per-connection protocol structs were allocated once ever and
-   * then recycled across any number of stop/restart cycles in the same
-   * process, making a naive "malloc_count must increase" check genuinely
-   * flaky there), the shared event_loop reactor is a plain static variable,
-   * fully destroyed (event_loop_destroy) when the last reference is
-   * released above and fully reconstructed from scratch (event_loop_create_
-   * with_mprocs) by chttpsvr_start below -- there is no pool to recycle
-   * from, so a fresh malloc/calloc call through the just-reinstalled procs
-   * is guaranteed, not merely likely. */
+  /* The shared event_loop reactor is a plain static variable, fully
+   * destroyed (event_loop_destroy) when the last reference is released above
+   * and fully reconstructed from scratch (event_loop_create_with_mprocs) by
+   * chttpsvr_start below; there is no pool to recycle allocations from
+   * across a restart, so a fresh malloc/calloc call through the
+   * just-reinstalled procs is guaranteed, not merely likely. */
   REQUIRE_GT(__atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
                  __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED),
              malloc_calloc_before);

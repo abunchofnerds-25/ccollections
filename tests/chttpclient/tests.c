@@ -552,11 +552,9 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
      * no Transfer-Encoding -- whose end is signaled purely by the
      * connection closing, exactly like a real HTTP/1.0 (or
      * Connection: close, no explicit length) server response. Regression
-     * test for a bug where llhttp_finish's HTTP_FINISH_SAFE_WITH_CB case
-     * propagates on_message_complete's HPE_PAUSED return value as its own
-     * return value, which chttpclient.c's "fe != HPE_OK" check didn't
-     * originally account for, causing every such response to be reported
-     * as ccol_http_transfer_aborted. */
+     * test verifying that a valid EOF-terminated completion is reported as
+     * ccol_success (with the body delivered intact), not misreported as
+     * ccol_http_transfer_aborted. */
     const char *raw =
         "HTTP/1.0 200 OK\r\n"
         "Content-Type: text/plain\r\n"
@@ -3413,9 +3411,9 @@ TEST(expect_continue, ignored_for_bodyless_request) {
 
 /*
  * White-box tests for chttpclient's lazy, ref-counted, process-wide async
- * engine (chttpclient.c's g_client_async_*; this module's own DNS/connect
- * pool + deadline sweep, layered on top of the shared facio reactor
- * reference it acquires from src/cfio_engine.c, which backs
+ * engine (chttpclient.c's own static g_client_reactor, an event_loop
+ * instance fully independent of chttpserver's own reactor; this module's own
+ * DNS/connect pool + deadline sweep are layered on top of it, backing
  * chttpclient_do_async/pooled-sync). These helpers are compiled only under
  * RUNNING_UNIT_TESTS, matching the same white-box pattern tests/cvector uses
  * for cvector_get_capacity.
@@ -3428,17 +3426,18 @@ extern int _chttpclient_engine_ref_count_for_tests(void);
 extern bool _chttpclient_engine_running_for_tests(void);
 extern ccol_retval_t _chttpclient_engine_acquire_for_tests(void);
 extern void _chttpclient_engine_release_for_tests(void);
-/* _client_engine_release() hands the actual teardown (releasing the shared
- * cfio_engine reference, stopping the deadline sweep, destroying the DNS
- * pool) off to a detached reaper thread rather than blocking the caller;
- * necessary since release is routinely called from inside a facio callback
- * (on_close), where blocking would be unsafe (see chttpclient.c). That makes
- * g_client_async_running go false immediately but the actual teardown
+/* _client_engine_release() hands the actual teardown (event_loop_destroy of
+ * g_client_reactor, stopping the deadline sweep, destroying the DNS pool)
+ * off to a detached reaper thread rather than blocking the caller; necessary
+ * since release is routinely called from inside one of the engine's own
+ * dispatch callbacks (see the several _client_engine_release call sites in
+ * chttpclient.c), where blocking would be unsafe. That makes
+ * g_client_reactor_refs reach zero immediately but the actual teardown
  * asynchronous; every test below that triggers a stop calls this afterward
  * so the engine is guaranteed fully quiescent before the test returns;
  * otherwise a reaper thread could still be running when the process exits,
- * racing fio_lib_destroy's atexit-time teardown of fio_data itself (a crash
- * caught by valgrind during development of this suite). */
+ * racing process teardown (a crash caught by valgrind during development of
+ * this suite). */
 extern void _chttpclient_engine_wait_for_quiescence_for_tests(void);
 
 TEST(async_engine, starts_on_first_acquire_and_stops_at_zero_refcount) {
@@ -3538,21 +3537,22 @@ TEST(async_engine, concurrent_acquire_release_no_corruption) {
  * Functional tests for the Tier 2 async engine (chttpclient_do_async):
  * plain HTTP only (no TLS yet), no redirect-following, no idle-pool reuse;
  * every request opens and then closes a fresh connection. These exercise the
- * real facio reactor end to end against the same mock test server the
- * synchronous (Tier 1) tests use.
+ * real, shared event_loop reactor end to end against the same mock test
+ * server the synchronous (Tier 1) tests use.
  */
 
 /*
  * Waits for the async engine to go fully idle after a request completes.
- * The request's future is fulfilled by _async_fulfill *before* on_data goes
- * on to call fio_close()/fio_force_close(), and on_close (which is what
- * actually calls _client_engine_release()) only runs later, asynchronously
- * ; so ctpool_future_get() returning is not sufficient evidence that
- * release (and the quiescence it can be waited for) has even been triggered
- * yet. Poll for the ref count to reach 0 first, then wait for the reaper
- * that drop triggers to actually finish, so each test leaves the engine
- * fully torn down before returning (see the extern declarations above for
- * why that matters).
+ * The request's future is fulfilled by _async_fulfill *before* the dispatch
+ * callback goes on to tear the connection down, and the actual teardown
+ * (_async_ctx_teardown/_async_ctx_free, which is what actually calls
+ * _client_engine_release()) only runs later, asynchronously; so
+ * ctpool_future_get() returning is not sufficient evidence that release
+ * (and the quiescence it can be waited for) has even been triggered yet.
+ * Poll for the ref count to reach 0 first, then wait for the reaper that
+ * drop triggers to actually finish, so each test leaves the engine fully
+ * torn down before returning (see the extern declarations above for why
+ * that matters).
  */
 static void wait_for_async_engine_idle(void) {
   for (int i = 0; i < 2000 && _chttpclient_engine_ref_count_for_tests() > 0;
@@ -3592,10 +3592,10 @@ TEST(async_step_a, get_200) {
 }
 
 TEST(async_step_a, eof_delimited_body_without_content_length) {
-  /* Async-tier counterpart of http.eof_delimited_body_without_content_length
-   * -- same underlying bug (llhttp_finish's HTTP_FINISH_SAFE_WITH_CB case
-   * returning on_message_complete's HPE_PAUSED instead of HPE_OK), checked
-   * against _async_on_data's independent copy of the same fixed logic. */
+  /* Async-tier counterpart of http.eof_delimited_body_without_content_length:
+   * verifies a valid EOF-terminated completion is reported as ccol_success
+   * on this tier too, checked against the async dispatch path's own
+   * independent handling of the same completion logic. */
   chttpcli_construct(cli);
   char url[160];
   make_url(url, sizeof(url), "/eof-delimited-body");
@@ -4720,9 +4720,9 @@ TEST(pooled_streaming, bad_url_returns_specific_error_not_generic) {
 /* ========================================================================== */
 /*                     UNIX DOMAIN SOCKET TESTS (http+unix://)                */
 /*                                                                            */
-/* Phase 2 of the facio-replacement roadmap added real "http+unix://" support */
-/* to chttpclient (see _parse_chttp_unix_url/_unix_connect/_async_connect_   */
-/* task's is_unix branch in src/chttpclient.c). These exercise it end to end */
+/* chttpclient supports real "http+unix://" URLs (see                       */
+/* _parse_chttp_unix_url/_unix_connect/_async_connect_task's is_unix branch  */
+/* in src/chttpclient.c). These exercise it end to end                      */
 /* against the Unix-domain listener added to this file's own mock server     */
 /* (srv_accept_loop_unix), covering all three tiers, connection pooling      */
 /* keyed by the "unix://<path>" origin_key, and the URL-parsing/connect-time */

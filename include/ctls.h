@@ -39,69 +39,63 @@ SOFTWARE.
  * This is not a public collections module: it has no type-safe macros and is
  * never included by chttp.h/chttpclient.h/chttpserver.h or any other public
  * header. src/chttpclient.c and src/chttpserver.c are the only two files
- * meant to #include this header, replacing their use of
- * third_party/facio/fio_tls_openssl.c and fio_tls.h.
+ * meant to #include this header.
  *
  * Design notes, for anyone extending this module later:
  *
  * - Every function reports failure via a return value (NULL, or a
  *   ccol_retval_t); nothing in this module ever calls exit()/abort() on a
- *   caller-supplied bad configuration (e.g. an unreadable cert file), unlike
- *   the vendored facio TLS layer it replaces (which calls FIO_LOG_FATAL()
- *   and exit(-1) on exactly that case). This was a deliberate, confirmed
- *   design choice: a misconfigured TLS setup is the caller's own input error
- *   to detect and act on (log, refuse to start, retry with a different
- *   path, ...), not a reason for this library to kill the whole process out
- *   from under an application that may have other unrelated work in flight.
+ *   caller-supplied bad configuration (e.g. an unreadable cert file). This
+ *   was a deliberate, confirmed design choice: a misconfigured TLS setup is
+ *   the caller's own input error to detect and act on (log, refuse to
+ *   start, retry with a different path, ...), not a reason for this
+ *   library to kill the whole process out from under an application that
+ *   may have other unrelated work in flight.
  *
  * - ctls_ctx_t is a ref-counted, mutable, mutex-protected TLS configuration
- *   object shared by many ctls_conn_t connections (mirroring fio_tls_s).
- *   Every mutator (ctls_ctx_cert_add / ctls_ctx_trust / ctls_ctx_trust_system
- *   / ctls_ctx_alpn_add) triggers a full internal rebuild of the underlying
- *   OpenSSL SSL_CTX object(s) from the stored configuration, exactly
- *   mirroring fio_tls_build_context's own "always rebuild from scratch"
- *   approach; this keeps the invariant simple (the live SSL_CTX is always a
- *   pure function of the stored config) at the cost of a full rebuild per
- *   mutation, which is fine since these are one-time startup-configuration
- *   calls, never a per-connection cost.
+ *   object shared by many ctls_conn_t connections. Every mutator
+ *   (ctls_ctx_cert_add / ctls_ctx_trust / ctls_ctx_trust_system /
+ *   ctls_ctx_alpn_add) triggers a full internal rebuild of the underlying
+ *   OpenSSL SSL_CTX object(s) from the stored configuration, always
+ *   rebuilding from scratch rather than patching one in place; this keeps
+ *   the invariant simple (the live SSL_CTX is always a pure function of the
+ *   stored config) at the cost of a full rebuild per mutation, which is
+ *   fine since these are one-time startup-configuration calls, never a
+ *   per-connection cost.
  *
- * - Real per-hostname (SNI) certificate dispatch: unlike the facio TLS layer
- *   this replaces (whose "sni" certificate array never actually registered
- *   an SSL_CTX_set_tlsext_servername_callback at all -- a second
- *   SSL_CTX_use_certificate call on the same SSL_CTX just overwrites the
- *   same OpenSSL certificate-type slot, so facio never truly dispatched by
- *   hostname despite the naming, and nothing in this codebase ever added a
- *   second certificate to exercise it anyway), ctls_ctx_cert_add(server_name
- *   != NULL) genuinely dispatches by hostname: each named certificate gets
- *   its own fully-built SSL_CTX, and an SSL_CTX_set_tlsext_servername_
- *   callback installed once on the context's default SSL_CTX swaps the live
- *   SSL object onto the matching named SSL_CTX via SSL_set_SSL_CTX() the
- *   moment a ClientHello's SNI extension names it. This is new, additional
- *   capability confirmed with the user, not a straight port of prior
- *   behavior.
+ * - Real per-hostname (SNI) certificate dispatch: ctls_ctx_cert_add
+ *   (server_name != NULL) genuinely dispatches by hostname, rather than
+ *   merely calling SSL_CTX_use_certificate a second time on the same
+ *   SSL_CTX (which would just overwrite the same OpenSSL certificate-type
+ *   slot and never actually dispatch by hostname despite superficially
+ *   looking like per-name configuration). Each named certificate gets its
+ *   own fully-built SSL_CTX, and an SSL_CTX_set_tlsext_servername_callback
+ *   installed once on the context's default SSL_CTX swaps the live SSL
+ *   object onto the matching named SSL_CTX via SSL_set_SSL_CTX() the moment
+ *   a ClientHello's SNI extension names it. This is deliberate, confirmed
+ *   capability, not an incidental side effect of the certificate-storage
+ *   design.
  *
  * - ALPN protocol selection (ctls_ctx_alpn_add) fires its on_selected
  *   callback synchronously, from directly inside whatever call is already
- *   driving the handshake (ctls_conn_handshake_step()) -- unlike facio's
- *   async fio_defer()-based dispatch, which relied on a reactor task queue
- *   this reactor-agnostic module has no equivalent of and no need for
- *   (ctls_conn_handshake_step is already a synchronous call from the
- *   caller's own perspective, whether invoked from a blocking loop or from
- *   an event_loop on_readable/on_writable callback). Confirmed with the
- *   user as a deliberate simplification, not a functionality cut: the
- *   caller learns the selected protocol at the same logical point either
- *   way, and no application code in this codebase drove the async behavior
- *   in the first place (the only real ALPN use in the facio-backed code was
- *   internal HTTP-layer plumbing for a single hardcoded "http/1.1" string,
- *   invisible to and undrivable by chttpserver.c/chttpclient.c themselves).
+ *   driving the handshake (ctls_conn_handshake_step()), rather than
+ *   deferring it onto a reactor task queue: this reactor-agnostic module
+ *   has no such queue and no need for one, since ctls_conn_handshake_step
+ *   is already a synchronous call from the caller's own perspective,
+ *   whether invoked from a blocking loop or from an event_loop
+ *   on_readable/on_writable callback. This is a deliberate simplification,
+ *   not a functionality cut: the caller learns the selected protocol at the
+ *   same logical point either way, and no application code in this
+ *   codebase currently drives ALPN selection asynchronously in the first
+ *   place.
  *
  * - Session resumption (OpenSSL's session cache and TLS 1.3 tickets) and
  *   mutual TLS (a configured trust store implies SSL_VERIFY_PEER, requiring
- *   a peer certificate) both work exactly as they did under facio, since
- *   both are just unmodified OpenSSL default behavior once the same three
- *   explicit settings facio always made are replicated
+ *   a peer certificate) both work as unmodified OpenSSL default behavior:
+ *   only three explicit settings are applied on top
  *   (SSL_MODE_ENABLE_PARTIAL_WRITE, SSL_CTX_set_min_proto_version
- *   (TLS1_2_VERSION), SSL_OP_NO_COMPRESSION) and otherwise left alone.
+ *   (TLS1_2_VERSION), SSL_OP_NO_COMPRESSION) and everything else is left
+ *   alone.
  */
 
 /** @brief Opaque, ref-counted TLS configuration object (certs/trust/ALPN). */
@@ -126,7 +120,7 @@ typedef enum ctls_handshake_result {
  *        matched and this is the default (first-registered) entry acting as
  *        a fallback; client mode: the server selected this protocol, or, if
  *        the server didn't select one at all, the default entry again acts
- *        as a fallback -- mirrors the facio behavior this replaces exactly).
+ *        as a fallback).
  *
  * @param conn           The connection the protocol was selected for. Use
  *                        ctls_conn_udata() to retrieve any per-connection
@@ -200,7 +194,7 @@ static inline __attribute__((always_inline)) ctls_ctx_t *ctls_ctx_new(
  *   certificate's subject (and, per the SNI dispatch rules above, also
  *   registers it as a named entry); if server_name is NULL/"", a generic
  *   fixed subject name is used instead, since the default slot itself
- *   carries no name of its own to borrow one from -- this is how to get a
+ *   carries no name of its own to borrow one from; this is how to get a
  *   self-signed DEFAULT certificate (used when no SNI name matches).
  *
  * @param ctx          Context to modify.
@@ -226,18 +220,17 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
  * For a client-mode context: verifies the server's certificate chain
  * against this bundle. For a server-mode context: additionally requests a
  * client certificate and, if one is presented, verifies it against this
- * same bundle -- this is what enables mutual TLS on the server side.
+ * same bundle; this is what enables mutual TLS on the server side.
  * Verbatim OpenSSL semantics for plain SSL_VERIFY_PEER with no
- * SSL_VERIFY_FAIL_IF_NO_PEER_CERT (which this module, matching the facio
- * layer it replaces, does not set): a client that presents NO certificate
- * at all is still accepted (there is nothing to fail verification on); a
- * client that DOES present one must have it verify successfully against
- * ctx's trust store, or the handshake fails. In other words, this is
- * already a request-but-don't-strictly-require mode by construction, not
- * (as an earlier draft of this comment claimed) an unconditional
- * requirement -- a caller wanting to reject anonymous (no-certificate)
- * clients outright needs a stricter mode this module does not currently
- * provide.
+ * SSL_VERIFY_FAIL_IF_NO_PEER_CERT (which this module does not set): a
+ * client that presents NO certificate at all is still accepted (there is
+ * nothing to fail verification on); a client that DOES present one must
+ * have it verify successfully against ctx's trust store, or the handshake
+ * fails. In other words, this is already a request-but-don't-strictly-
+ * require mode by construction, not (as an earlier draft of this comment
+ * claimed) an unconditional requirement; a caller wanting to reject
+ * anonymous (no-certificate) clients outright needs a stricter mode this
+ * module does not currently provide.
  *
  * May be called more than once; each call adds to the trust store rather
  * than replacing it.
@@ -327,7 +320,7 @@ void ctls_ctx_release(ctls_ctx_t *ctx);
  *                      verification ctx's trust store configuration
  *                      implies; hostname verification with no chain trust
  *                      configured at all gives no real security guarantee,
- *                      since the certificate could be entirely forged --
+ *                      since the certificate could be entirely forged;
  *                      callers should generally pair this with
  *                      ctls_ctx_trust()/ctls_ctx_trust_system()).
  * @param err_str      Optional: receives a static diagnostic string on
@@ -407,7 +400,7 @@ ssize_t ctls_conn_write(ctls_conn_t *conn, const void *buf, size_t len);
  *
  * Meaningful to call once the handshake has failed and the caller wants to
  * distinguish "certificate verification failed" from some other handshake
- * error, mirroring how facio's fio_tls_connection_verify_result() was used.
+ * error.
  */
 long ctls_conn_verify_result(const ctls_conn_t *conn);
 

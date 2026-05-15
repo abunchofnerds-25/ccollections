@@ -40,16 +40,17 @@ TAU_MAIN()
 /*     REAL TLS HANDSHAKE COVERAGE (dedicated binary; see Makefile)         */
 /*                                                                            */
 /* tests/chttpserver/tests.c only covers TLS *argument validation* (see       */
-/* serve_tls_zero_port_rejected_before_tls_init there), because a real        */
-/* handshake needs a valid certificate/key pair: the vendored facio TLS      */
-/* layer calls FIO_LOG_FATAL (aborts the process) when the configured cert   */
-/* files are missing or invalid.  This suite generates a real, throwaway     */
-/* self-signed cert/key pair via the `openssl` CLI at startup, starts a real */
-/* TLS chttpsvr listener, and drives an actual HTTPS request through it via  */
-/* chttpclient. This file is compiled into its own binary, tests_tls,        */
-/* separate from tests.c's tests binary (see the Makefile in this same       */
-/* directory) so a broken openssl CLI or a bad cert only fails this suite,   */
-/* not the rest of the chttpserver tests.                                    */
+/* serve_tls_zero_port_rejected_before_tls_init there); a real handshake     */
+/* needs a valid certificate/key pair. This suite generates a real,          */
+/* throwaway self-signed cert/key pair via the `openssl` CLI at startup,     */
+/* starts a real TLS chttpsvr listener, and drives an actual HTTPS request   */
+/* through it via chttpclient. This file is compiled into its own binary,    */
+/* tests_tls, separate from tests.c's tests binary (see the Makefile in      */
+/* this same directory) so a broken openssl CLI or a bad cert only fails     */
+/* this suite, not the rest of the chttpserver tests; ctls itself never      */
+/* aborts the process on bad TLS input, so this split is purely for that     */
+/* organizational isolation now, not to contain a process-abort failure      */
+/* mode.                                                                     */
 /* ========================================================================== */
 
 #define TLS_TEST_PORT 18790
@@ -156,14 +157,13 @@ static void _teardown(void) {
     __chttpsvr_destroy(g_tls_srv);
     g_tls_srv = NULL;
   }
-  /* __chttpsvr_destroy releases this server's shared-engine reference but no
-   * longer synchronously waits for the shared facio reactor (shared with
-   * chttpclient's async engine; see cfio_engine.h) to actually stop;
-   * chttpsvr_engine_wait() blocks until it has, which is required here so
-   * the engine-installed default logger (see chttpserver.c's
-   * _install_default_engine_logger) is guaranteed reclaimed before this
-   * atexit handler returns. A no-op if TLS cert generation failed above and
-   * no server was ever started. */
+  /* __chttpsvr_destroy releases this server's shared-engine reference but
+   * does not synchronously wait for chttpserver's own shared event_loop
+   * reactor to actually stop; chttpsvr_engine_wait() blocks until it has,
+   * which is required here so the engine-installed logger (g_engine_logger
+   * in chttpserver.c, set via chttpsvr_set_engine_logger) is guaranteed
+   * reclaimed before this atexit handler returns. A no-op if TLS cert
+   * generation failed above and no server was ever started. */
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);

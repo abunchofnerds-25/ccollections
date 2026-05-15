@@ -1,4 +1,4 @@
-.TH __CHTTPSVR_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH __CHTTPSVR_DESTROY 3 "2026-07-14" "c_collections" "C Collections Library - Functions"
 .SH NAME
 __chttpsvr_destroy \- free an HTTP server
 .SH LIBRARY
@@ -37,6 +37,16 @@ For clean multi-server teardown, call chttpsvr_stop on all servers
 first to close their listeners, then call __chttpsvr_destroy on each
 handle in any order.
 
+Safe to call on a server that was already force-stopped by
+chttpsvr_engine_stop() while still running: that function quiesces
+(stops listening, drains in-flight requests, closes connections,
+releases the engine reference for) every chttpsvr instance still
+registered in the process before the shared reactor is actually torn
+down, so calling this function afterward on the same handle only frees
+the remaining per-server memory (routers, routes, the server struct
+itself); it never double-closes the listener, double-releases the
+engine reference, or otherwise repeats work already done.
+
 Does not set the caller's pointer to NULL; use the chttpsvr_destroy
 macro for that.
 
@@ -44,5 +54,7 @@ Safe to call with NULL.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_destroy (3),
+.BR ___chttpsvr_destroy (3),
 .BR chttpsvr_stop (3),
+.BR chttpsvr_engine_stop (3),
 .BR chttpsvr_engine_wait (3)

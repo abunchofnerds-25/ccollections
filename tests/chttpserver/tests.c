@@ -726,15 +726,15 @@ static void _teardown(void) {
   if (g_srv2) chttpsvr_stop(g_srv2);
 
   /* Destroy each server: drains in-flight requests and releases this
-   * server's single shared-engine reference. The shared facio reactor is
-   * now stopped asynchronously (a detached reaper thread, shared with
-   * chttpclient's async engine; see cfio_engine.h) rather than being
-   * joined inline by the last destroy, so chttpsvr_engine_wait() below is
-   * required to deterministically block until it has actually finished
-   * before this function (an atexit handler) returns; otherwise the
-   * engine-installed logger (g_test_logger, routed via
-   * chttpsvr_set_engine_logger in _setup) would still be reachable from
-   * fio's global logger slot when the process exits. */
+   * server's single shared-engine reference. chttpserver's own shared
+   * event_loop reactor is stopped asynchronously (a joinable reaper thread,
+   * fully independent of chttpclient's own engine) rather than being joined
+   * inline by the last destroy, so chttpsvr_engine_wait() below is required
+   * to deterministically block until it has actually finished before this
+   * function (an atexit handler) returns; otherwise the engine-installed
+   * logger (g_test_logger, routed via chttpsvr_set_engine_logger in
+   * _setup) could still be in use by a reactor thread when this function
+   * closes it just below. */
   if (g_bounded_srv) {
     __chttpsvr_destroy(g_bounded_srv);
     g_bounded_srv = NULL;
@@ -2290,28 +2290,6 @@ TEST(chttpserver, unmatched_route_rejected_without_reading_body) {
                             "Content-Length: 100000000\r\n", buf, sizeof(buf));
   REQUIRE_EQ(status, 404);
 }
-
-/* NOTE on the duplicate-`Upgrade:`-header NULL-deref fix
- * (http_on_request_handler______internal in http_internal.c): no test was
- * added for it here. http_on_request_handler______internal is only ever
- * reached from http1_on_request when !stream_diverted, but
- * http1_on_headers_complete (the http1.c wrapper chttpserver's
- * _on_headers_complete is installed as) unconditionally returns 1 to
- * http1_parse regardless of whether the inner hook diverted the request or
- * rejected it synchronously (see the "hc>0 ... message handed off
- * elsewhere; stop parsing it here" branch), so http1_parse always stops
- * right after headers complete and never reaches the body-consumption /
- * on_request dispatch within that same call, for either a matched or an
- * unmatched route. Confirmed empirically, not just by reading the code: a
- * raw-socket request with two Upgrade: header lines was sent against a
- * deliberately un-reverted build (this fix backed out, old unguarded
- * fiobj_obj2cstr call restored) targeting both a matched and an unmatched
- * route, and neither reached the vulnerable code path or crashed the
- * process. The bug is real and the fix is correct (it is still reachable
- * by any other caller of http.c/http1.c that uses on_request without
- * chttpserver's on_headers_complete-based routing, i.e. plain facio-http
- * usage), but chttpserver's own routes cannot currently exercise it, so
- * there is no meaningful black-box regression test to add for it here. */
 
 TEST(chttpserver, pipelined_bytes_after_rejected_route_not_misparsed) {
   /* http1_on_headers_complete's "not diverted" branch (route rejected
@@ -3981,18 +3959,17 @@ TEST(chttpserver, streaming_max_body_size_exceeded_reported) {
 
 TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
   /* The 413/ccol_msg_too_large tests above are the only other exercise in
-     this file of the "diverted parse errors do not force-close the socket
-     synchronously" mechanism: http1_on_error special-cases a diverted
-     connection by setting p->close=1 and returning, instead of calling
-     fio_close immediately (which would destroy the connection before the
-     worker's own error response could ever be written), so headers2str
-     forces Connection: close into the response that is about to go out and
-     the socket closes gracefully only after that response is flushed. This
-     test exercises a distinct parse-error class hitting that same path:
-     malformed chunk-size framing in a Transfer-Encoding: chunked body
-     (caught by http1_on_body_chunk's own chunk-size decoder, part of the
-     vendored facio http1.c parser this server is built on -- chttpserver
-     never uses llhttp at all), not a max_body_size/declared-length check. */
+     this file of the "a body error found while draining a diverted request
+     does not force-close the socket synchronously" mechanism: _drain_body
+     reports the failure back to _task_worker as a ccol_retval_t, which maps
+     it to a graceful synchronous status response (rather than tearing the
+     connection down immediately, which would destroy the connection before
+     the worker's own error response could ever be written); the connection
+     then closes only after that response is flushed, via the ordinary
+     keep-alive/close decision downstream. This test exercises a distinct
+     parse-error class hitting that same path: malformed chunk-size framing
+     in a Transfer-Encoding: chunked body, caught by chttp1_parser's own
+     chunk-size decoder, not a max_body_size/declared-length check. */
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -4290,18 +4267,17 @@ static void *_drip_body_bg_thread(void *arg) {
 }
 
 TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
-  /* Regression test: __chttpsvr_destroy used to close the listener (freeing
-   * the shared http_settings_s via facio's http_on_finish) before waiting for
-   * in_flight_requests to drain. A ctpool worker still blocked inside
-   * chttpsvr_req_read for a slow/dripped body on another connection would
-   * then dereference settings fields (max_body_size, udata) through freed
-   * memory. The fix ties settings' lifetime to a connection-count refcount
-   * (http.h's http_settings_s.reserved1) instead of the listener socket
-   * alone. This test doesn't assert on a return value; the bug is a
-   * use-after-free, so the real verification is `make memtest` (valgrind)
-   * running this test clean; a debug build would also abort/crash outright
-   * under the old code once the race actually landed. Uses its own
-   * short-lived server so it cannot disturb the shared test fixture. */
+  /* Regression/coverage test: __chttpsvr_destroy must not free any
+   * server-owned state a ctpool worker could still be dereferencing (e.g.
+   * srv->max_body_size, read via chttpsvr_req_read) while that worker is
+   * still blocked reading a slow/dripped body on another connection.
+   * chttpsvr_stop's own _drain_and_close_all_connections waits for
+   * in_flight_requests to reach zero before the server's own memory is
+   * freed, which is what this test exercises. This test doesn't assert on a
+   * return value; a use-after-free here would show up under `make memtest`
+   * (valgrind) or as an outright abort/crash in a debug build, which is the
+   * real verification. Uses its own short-lived server so it cannot disturb
+   * the shared test fixture. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
   REQUIRE_TRUE(srv != NULL);
   ccol_retval_t rv =

@@ -1,0 +1,33 @@
+.TH ___CHTTPSVR_DESTROY 3 "2026-07-14" "c_collections" "C Collections Library - Macros"
+.SH NAME
+___chttpsvr_destroy \- RAII cleanup function for chttpsvr
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+___chttpsvr_destroy(chttpsvr *pp);
+.fi
+.SH DESCRIPTION
+.nf
+Static inline function used as the cleanup callback in
+chttpsvr_declare_scoped() and chttpsvr_construct_scoped(). If *pp is
+non-NULL, calls __chttpsvr_destroy(*pp) and sets *pp to NULL.
+
+This function is not intended to be called directly; use
+chttpsvr_declare_scoped() or chttpsvr_construct_scoped() instead.
+.fi
+.SH PARAMETERS
+.nf
+pp  Pointer to a chttpsvr variable (must not be NULL).
+.fi
+.SH NOTES
+.nf
+Compatible with __attribute__((cleanup)) on GCC and Clang.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_declare_scoped (3),
+.BR chttpsvr_construct_scoped (3),
+.BR __chttpsvr_destroy (3),
+.BR chttpsvr_destroy (3)

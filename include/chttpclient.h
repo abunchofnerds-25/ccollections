@@ -355,9 +355,9 @@ ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
  *
  * Call this before the first chttpclient_do_async/_streaming call anywhere
  * in the process if you want a custom engine logger. If no logger has been
- * installed when the engine first starts, diagnostics are simply skipped:
- * unlike the vendored facio layer this engine replaces, there is no internal
- * logging of its own that needs somewhere to go by default.
+ * installed when the engine first starts, diagnostics are simply skipped: this
+ * engine has no internal logging of its own that needs somewhere to go by
+ * default.
  *
  * Internally this function derives a logger from cl via clog_derive(), adds
  * the field component=http-client-engine, and installs the derived logger.

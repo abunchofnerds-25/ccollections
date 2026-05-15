@@ -4,9 +4,8 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS
 
 # Our source files (compiled with strict flags + -Werror). chttpclient.c owns
-# its own static event_loop reactor (cthreadcomm.c) and uses ctls.c for TLS;
-# no third_party/facio dependency at all (deleted). clogger.c is needed for
-# chttpcli_set_engine_logger.
+# its own static event_loop reactor (cthreadcomm.c) and uses ctls.c for TLS.
+# clogger.c is needed for chttpcli_set_engine_logger.
 # cthreadpool.c is a transitive dependency of the async engine's DNS/connect
 # worker pool (g_client_dns_pool).
 #
@@ -16,7 +15,7 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS
 # at test-startup via the `openssl` CLI. tests_tls remains its own SEPARATE
 # BINARY, matching this project's established precedent for a TLS-handshake-
 # focused suite, even though ctls.c itself never aborts the process on bad
-# input (unlike the vendored facio TLS layer this module replaced).
+# input.
 COMMON_SRC_FILES = ../../src/chttpclient.c \
 	../../src/chttp1_parser.c \
 	../../src/chttp.c \

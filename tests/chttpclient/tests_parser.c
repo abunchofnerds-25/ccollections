@@ -133,10 +133,9 @@ static int t_on_message_complete(chttp1_parser_t *p) {
 }
 
 /* Static storage duration: chttp1_parser_init only borrows the settings
- * pointer (per its own documented "settings must outlive parser" contract,
- * exactly like llhttp_init's identical contract for its own settings
- * pointer) rather than copying it, so a stack-local here would leave every
- * parser's ->settings dangling the moment init_test() returns. */
+ * pointer (per its own documented "settings must outlive parser" contract)
+ * rather than copying it, so a stack-local here would leave every parser's
+ * ->settings dangling the moment init_test() returns. */
 static const chttp1_settings_t g_test_settings = {
     .on_header = t_on_header,
     .on_headers_complete = t_on_headers_complete,
@@ -206,8 +205,9 @@ TEST(status_line, any_major_minor_digit_accepted) {
 }
 
 TEST(status_line, nonstandard_but_wellformed_code_accepted) {
-  /* No magnitude restriction: this project's own llhttp.h HTTP_STATUS_MAP
-   * lists real, in-use nonstandard codes up to 599. */
+  /* No magnitude restriction: real, in-use nonstandard status codes exist
+   * up to 599 (e.g. 599 Network Connect Timeout Error, used by some
+   * load balancers/proxies), so the parser accepts any 3-digit code. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1130,9 +1130,9 @@ TEST(request_body_framing, chunked_request_body) {
 }
 
 TEST(request_body_framing, trailer_name_not_whitelisted) {
-  /* Confirmed decision: no facio-style x-/server-timing trailer whitelist
-   * for requests -- any trailer name is accepted, matching the client
-   * parser's own pre-existing, unrestricted trailer handling. */
+  /* Confirmed decision: no trailer-name whitelist for requests; any
+   * trailer name is accepted, matching the client parser's own
+   * pre-existing, unrestricted trailer handling. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);

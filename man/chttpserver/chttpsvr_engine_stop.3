@@ -1,0 +1,56 @@
+.TH CHTTPSVR_ENGINE_STOP 3 "2026-07-14" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_engine_stop \- signal the engine to stop
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+void chttpsvr_engine_stop(void);
+.fi
+.SH DESCRIPTION
+.nf
+Signals chttpserver's own shared reactor (and its companion
+idle-timeout sweep thread) to stop, forcing it down even if other
+chttpsvr instances in the same process still hold a reference and are
+still fully started.  This reactor is independent of chttpclient's own
+engine, so calling this function has no effect on any chttpclient
+async work (chttpclient_do_async/_streaming,
+chttpclient_do_pooled/_streaming) in the same process.  Returns
+immediately; use chttpsvr_engine_wait() to block until the stop
+completes.
+
+Before the shared reactor is actually torn down, every chttpsvr
+instance still registered in the process (regardless of whether it is
+still started) is quiesced exactly as chttpsvr_destroy() would quiesce
+it on its own: listener closed, in-flight requests drained, idle
+connections closed, worker pool shut down, and the instance's own
+reference to the engine released.  This makes the documented
+signal-handler shutdown pattern below safe even though
+chttpsvr_destroy(srv) is called after the engine has already been torn
+down: __chttpsvr_destroy is idempotent per server (see its own
+documentation), so it only frees the remaining per-server memory at
+that point rather than repeating any teardown work.
+
+    static void on_signal(int sig) { (void)sig; chttpsvr_engine_stop(); }
+    /* ... */
+    chttpsvr_start(srv, &cfg);
+    chttpsvr_engine_wait();   /* returns once on_signal fires */
+    chttpsvr_destroy(srv);    /* safe: srv was already quiesced above */
+
+Non-blocking and async-signal-safe: it is safe to call this function
+directly from a POSIX signal handler (e.g. SIGINT, SIGTERM).
+
+The library does not install any signal handlers.  Applications are
+responsible for wiring this function into whatever signal or shutdown
+mechanism they use.
+
+Safe to call before the reactor has ever started (no-op).
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_engine_wait (3),
+.BR chttpsvr_stop (3),
+.BR chttpsvr_start (3),
+.BR __chttpsvr_destroy (3),
+.BR chttpsvr_destroy (3)

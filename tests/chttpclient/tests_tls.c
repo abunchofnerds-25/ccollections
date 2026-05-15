@@ -59,13 +59,12 @@ TAU_MAIN()
 /* reusing chttpserver.c purely for simplicity, keeping this TLS-handshake-  */
 /* focused suite free of chttpserver's routing/dispatch machinery; not       */
 /* because of any per-process engine restriction (chttpserver and           */
-/* chttpclient's async engine safely share one process-wide reactor via     */
-/* cfio_engine.c). This file is compiled into its own binary, tests_tls,     */
-/* separate from tests.c's tests binary (see the Makefile in this same      */
-/* directory) so a missing/broken openssl CLI or an invalid cert file,      */
-/* either of which makes the vendored facio TLS layer call FIO_LOG_FATAL     */
-/* and abort the whole process, cannot take the rest of the chttpclient      */
-/* test suite down with it.                                                  */
+/* chttpclient's async engine each own a fully independent, independently   */
+/* startable/stoppable reactor, so a process may freely run both at once).  */
+/* This file is compiled into its own binary, tests_tls, separate from      */
+/* tests.c's tests binary (see the Makefile in this same directory) so a    */
+/* missing/broken openssl CLI or an invalid cert file cannot take the rest  */
+/* of the chttpclient test suite down with it.                              */
 /* ========================================================================== */
 
 /* White-box entry points into chttpclient's async engine internals (the

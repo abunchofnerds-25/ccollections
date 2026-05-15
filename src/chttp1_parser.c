@@ -97,10 +97,8 @@ static bool is_invalid_value_byte(unsigned char c) {
 /*                         OVERFLOW-CHECKED INTEGER PARSING */
 /* ========================================================================== */
 
-/* Same two-step (multiply-then-add, each checked) overflow-guard shape
- * verified correct in the vendored llhttp.c this module replaces; reimplemented
- * from first principles here (it is a standard, obvious technique, not an
- * llhttp-specific expression), for both radices this parser ever needs. */
+/* A standard two-step (multiply-then-add, each checked) overflow-guard
+ * shape, used for both radices this parser ever needs. */
 
 static bool parse_uint64_decimal(const char *s, size_t len, uint64_t *out) {
   if (len == 0) return false;
@@ -168,9 +166,9 @@ typedef enum {
  * Any '\n' not immediately preceded by '\r' is LINE_BAD_EOL -- this rejects
  * both a bare LF used as a line terminator and a bare LF embedded mid-line
  * (e.g. unfolded multi-line header content), which is exactly the strict
- * (this parser's only mode) behaviour: neither llhttp lenient flag that
- * would relax either case (LENIENT_OPTIONAL_LF_AFTER_CR,
- * LENIENT_OPTIONAL_CR_BEFORE_LF) is ever enabled anywhere in this codebase.
+ * (this parser's only mode) behaviour: there is no lenient mode anywhere in
+ * this codebase that would relax either case (e.g. by accepting a bare LF,
+ * or a CR not immediately followed by LF, as a valid line terminator).
  * A bare CR that is NOT immediately followed by LF is deliberately not
  * specially rejected here -- it simply becomes ordinary line content, which
  * is then caught by the caller's own control-character validation of that
@@ -216,13 +214,12 @@ typedef enum { PH_OK, PH_ERROR, PH_USER } ph_result_t;
  * HTTP-version = "HTTP/" DIGIT "." DIGIT
  *
  * Accepts any single-digit major/minor (not hard-coded to 1.x: this parser
- * doesn't restrict it beyond the grammar, matching llhttp, since
- * chttp1_should_keep_alive already needs to compare arbitrary major/minor
- * values correctly regardless) and exactly 3 decimal digits for the status
- * code with no numeric-range restriction (this project's own llhttp.h
- * HTTP_STATUS_MAP lists real, in-use nonstandard codes up to 599 and does
- * not claim that list is exhaustive; validate digit-count only and let the
- * caller judge magnitude, exactly as before).
+ * doesn't restrict it beyond the grammar, since chttp1_should_keep_alive
+ * already needs to compare arbitrary major/minor values correctly
+ * regardless) and exactly 3 decimal digits for the status code with no
+ * numeric-range restriction (real, in-use nonstandard status codes go up to
+ * 599 and there is no claim that is exhaustive; validate digit-count only
+ * and let the caller judge magnitude).
  *
  * The reason phrase, and the single space before it, are BOTH optional:
  * RFC 7230's ABNF technically requires a trailing SP even for an empty
@@ -428,10 +425,10 @@ static bool transfer_encoding_has_nonfinal_chunked(const char *v, size_t len) {
 }
 
 /* Sets F_CONNECTION_CLOSE/F_CONNECTION_KEEP_ALIVE from a comma-separated
- * Connection header value. "upgrade" (the third token llhttp itself
- * recognised here) is deliberately not checked: this parser has no upgrade
- * handling at all (chttpclient.c never sends CONNECT or Upgrade requests),
- * so there would be nothing to do with that flag even if set. */
+ * Connection header value. A possible "upgrade" token is deliberately not
+ * checked: this parser has no upgrade handling at all (chttpclient.c never
+ * sends CONNECT or Upgrade requests), so there would be nothing to do with
+ * that flag even if set. */
 static void parse_connection_tokens(chttp1_parser_t *parser, const char *v,
                                     size_t len) {
   size_t i = 0;
@@ -565,13 +562,11 @@ static ph_result_t process_header_line(chttp1_parser_t *parser) {
  * chunk-size line = 1*HEXDIG [ ";" chunk-ext ] ; chunk-ext is opaque here
  *
  * Everything from the first ';' to the line's CRLF is treated as an
- * unvalidated, discarded span: chttpclient.c never wired
- * on_chunk_extension_name/value (llhttp had callbacks for them; this parser
- * doesn't), so there is nothing to validate those bytes for. This is
- * deliberately more lenient than upstream llhttp, which does validate
- * extension token/quoted-string grammar -- a conscious, low-risk scope
- * reduction, not an oversight (the discarded bytes are never consumed
- * either way).
+ * unvalidated, discarded span: chttpclient.c has no need to inspect chunk
+ * extensions, so there is nothing to validate those bytes for. This parser
+ * deliberately does not validate extension token/quoted-string grammar at
+ * all -- a conscious, low-risk scope reduction, not an oversight (the
+ * discarded bytes are never consumed either way).
  */
 static bool parse_chunk_size_line(chttp1_parser_t *parser) {
   const char *s = parser->line_buf;
@@ -715,16 +710,16 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
                parser->status_code == 204 || parser->status_code == 304)) {
             /* RFC 7230 SS3.3: 1xx/204/304 never have a body. (100 Continue,
              * specifically: this parser reports it as the complete message,
-             * same as any other no-body response, rather than replicating
-             * llhttp's "silently restart and keep parsing a second message
-             * on the same parser instance" handling for interim 1xx
-             * responses -- chttpclient.c never sends "Expect:
-             * 100-continue" and has no code path that would know what to do
-             * with a second, later message on the same hop, so that
-             * behaviour would be untested, unused complexity; a conscious
-             * scope reduction, not an oversight. See chttp1_expects_continue's
-             * own doc comment for why the server side of this same feature
-             * is handled differently now.) */
+             * same as any other no-body response, rather than automatically
+             * restarting to keep parsing a second message on the same
+             * parser instance for an interim 1xx response -- chttpclient.c
+             * never sends "Expect: 100-continue" and has no code path that
+             * would know what to do with a second, later message on the
+             * same hop, so that behaviour would be untested, unused
+             * complexity; a conscious scope reduction, not an oversight.
+             * See chttp1_expects_continue's own doc comment for why the
+             * server side of this same feature is handled differently
+             * now.) */
             no_body = true;
           }
 

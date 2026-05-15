@@ -266,6 +266,14 @@ struct chttpserver {
   event_reg *listen_reg;
   bool started;
   bool contributed_to_engine;
+  /* Set once this server's listener/connections/worker pool/engine reference
+   * have been torn down for good, whether that happened via chttpsvr_destroy()
+   * or via the shared engine's own force-stop quiesce pass (see
+   * _engine_force_stop_quiesce_all); makes that teardown idempotent regardless
+   * of which of the two callers reaches it first. Reset to false at the top
+   * of chttpsvr_start() so a server that is legitimately restarted after a
+   * stop is not permanently treated as already torn down. */
+  bool teardown_started;
 
   _Atomic unsigned stream_read_timeout_ms;
   _Atomic unsigned max_body_read_duration_ms;
@@ -294,14 +302,12 @@ struct chttpserver {
 
 /*
  * One static, process-wide event_loop reactor shared by every chttpsvr
- * instance in the process -- confirmed via AskUserQuestion as one of two
+ * instance in the process; confirmed via AskUserQuestion as one of two
  * separate, independent reactors (the other belongs to chttpclient, its own
- * analogous static event_loop; see chttpclient.c). Unlike the old
- * facio-backed design (coordinated via the now-deleted cfio_engine.c),
- * chttpserver and chttpclient no longer share a single process-wide
- * reactor, so this lifecycle wrapper needs no cross-module coordination at
- * all, only ref-counting across chttpsvr instances (mirroring the
- * acquire/release/reaper-thread shape cfio_engine.c originally established,
+ * analogous static event_loop; see chttpclient.c). chttpserver and
+ * chttpclient do not share a single process-wide reactor, so this lifecycle
+ * wrapper needs no cross-module coordination at all, only ref-counting
+ * across chttpsvr instances (an acquire/release/reaper-thread shape,
  * simplified: no atexit safety net cross-module ordering concern, since
  * there is nothing else in the process racing to bring this specific
  * reactor up first).
@@ -317,18 +323,17 @@ static bool g_reaper_joinable = false;
 static ccol_memmgmt_procs_t g_engine_mp_storage;
 static ccol_memmgmt_procs_t *g_engine_mp = NULL;
 
-/* Repurposed "engine logger" (confirmed via AskUserQuestion): the new
- * event_loop reactor has no internal logging of its own to forward, unlike
- * facio's own unconditional FIO_LOG_* calls -- so this now captures
- * chttpserver's OWN reactor-thread diagnostics (TLS handshake failures,
- * listener bind errors, idle-timeout closes) across every chttpsvr instance
- * sharing the one process-wide reactor. NULL (the default) means
+/* Repurposed "engine logger" (confirmed via AskUserQuestion): the
+ * event_loop reactor has no internal logging of its own to forward, so this
+ * captures chttpserver's OWN reactor-thread diagnostics (TLS handshake
+ * failures, listener bind errors, idle-timeout closes) across every chttpsvr
+ * instance sharing the one process-wide reactor. NULL (the default) means
  * diagnostics are simply skipped; there is no default logger installed any
  * more, since there is nothing generating log-worthy events until the
  * caller opts in via chttpsvr_set_engine_logger(). Guarded by
  * g_engine_mutex purely against a torn pointer read/write racing a
- * concurrent chttpsvr_set_engine_logger() call -- clog itself is already
- * thread-safe for concurrent logging calls through one handle. */
+ * concurrent chttpsvr_set_engine_logger() call (clog itself is already
+ * thread-safe for concurrent logging calls through one handle). */
 static clog g_engine_logger = NULL;
 
 /* Idle-timeout sweep thread: one per process, shared by every chttpsvr
@@ -342,6 +347,51 @@ static struct chttpserver **g_servers = NULL;
 static size_t g_servers_count = 0, g_servers_cap = 0;
 
 static void _idle_sweep_stop_if_running(void);
+static void _quiesce_server_once(struct chttpserver *srv);
+
+/* Called only from the engine reaper (_engine_reaper_fn), before the shared
+ * reactor is actually torn down: quiesces (stops listening, drains in-flight
+ * requests, closes idle connections, shuts down and destroys the worker
+ * pool, releases the engine reference) every chttpsvr instance still
+ * registered in g_servers, regardless of whether this reaper run was
+ * triggered by chttpsvr_engine_stop() (servers may still be fully live and
+ * started) or by the graceful ref-count-reaches-zero path (every registered
+ * server has, by construction, already quiesced and unregistered itself, so
+ * this is an immediate no-op there). Without this, a forced engine stop
+ * would tear down g_reactor and free g_servers out from under still-started
+ * servers whose own listen_reg/conn->reg registrations point into it,
+ * leaving those servers' next chttpsvr_destroy() call to dereference
+ * already-freed state.
+ *
+ * Repeatedly re-peeks g_servers[0] rather than snapshotting the whole list
+ * up front, since _quiesce_server_once -> _servers_unregister removes the
+ * entry it just processed (or, if a concurrent chttpsvr_destroy() on another
+ * thread is already quiescing that exact same server, leaves it in place
+ * until that other call finishes) -- either way this loop always converges
+ * on g_servers_count == 0 once every legitimately in-progress teardown
+ * completes. */
+static void _engine_force_stop_quiesce_all(void) {
+  struct chttpserver *prev_unremoved = NULL;
+  for (;;) {
+    mutex_lock(g_servers_mutex);
+    if (g_servers_count == 0) {
+      mutex_unlock(g_servers_mutex);
+      return;
+    }
+    struct chttpserver *srv = g_servers[0];
+    mutex_unlock(g_servers_mutex);
+
+    if (srv == prev_unremoved) {
+      /* A concurrent chttpsvr_destroy(srv) on another thread already won the
+       * race to quiesce this exact server and hasn't unregistered it yet;
+       * avoid a tight spin while it finishes. */
+      struct timespec ts = {0, 1000000L};
+      nanosleep(&ts, NULL);
+    }
+    prev_unremoved = srv;
+    _quiesce_server_once(srv);
+  }
+}
 
 static void _engine_globals_init(void) {
   mutex_init(g_engine_mutex);
@@ -352,8 +402,7 @@ static void _engine_globals_init(void) {
    * is still mid-write on the response, and chttp1_stream_write's raw
    * write()/send() has no per-call SIGNONE suppression of its own. Without
    * this, that write raises SIGPIPE, whose default disposition kills the
-   * whole process -- exactly the behavior facio's own fio.c already
-   * documents and installs this same global handler for. */
+   * whole process. */
   signal(SIGPIPE, SIG_IGN);
 }
 
@@ -378,21 +427,38 @@ static void *_engine_reaper_fn(void *arg) {
   mutex_lock(g_engine_mutex);
   loop_to_destroy = g_reactor;
   mutex_unlock(g_engine_mutex);
+  /* Quiesce every still-registered server BEFORE touching the idle sweep
+   * thread or the reactor itself: chttpsvr_engine_stop() (the forced path)
+   * may run this reaper while one or more servers are still fully started,
+   * with live listen_reg/conn->reg registrations into g_reactor -- tearing
+   * the reactor down first would leave those registrations dangling the
+   * moment the owning server's own chttpsvr_stop()/_conn_close() next tried
+   * to use them. The graceful ref-count-reaches-zero path already
+   * guarantees every registered server has quiesced and unregistered itself
+   * by the time it gets here, so this is a fast no-op in that case. */
+  _engine_force_stop_quiesce_all();
   /* Stop the idle sweep thread before tearing down the reactor it calls
    * into (_conn_close -> event_loop_remove) -- see
    * _idle_sweep_stop_if_running's own doc comment. */
   _idle_sweep_stop_if_running();
   if (loop_to_destroy) event_loop_destroy(loop_to_destroy);
   /* g_servers' backing array is a plain realloc'd buffer, not itself tied to
-   * any one server's lifetime -- every server that ever contributed a ref
-   * to this engine has already been unregistered (and destroyed) by the
-   * time the ref count could reach zero and get here, so g_servers_count is
-   * always 0 at this point; free the now-empty array itself so it doesn't
-   * show up as a still-reachable allocation for the rest of the process. */
+   * any one server's lifetime -- every server that ever contributed a ref to
+   * this engine has already been unregistered (via
+   * _engine_force_stop_quiesce_all above, or, in the graceful path, by its own
+   * chttpsvr_destroy() call before the ref count could ever reach zero) by the
+   * time we get here, so g_servers_count is always 0 at this point;
+   * g_servers_count is reset explicitly anyway as a defensive belt-and-braces
+   * measure, not merely assumed, given this exact assumption previously went
+   * unenforced and caused a real use-after-free (see
+   * _engine_force_stop_quiesce_all's own doc comment). Free the now-empty array
+   * itself so it doesn't show up as a still-reachable allocation for the rest
+   * of the process. */
   mutex_lock(g_servers_mutex);
   free(g_servers);
   g_servers = NULL;
   g_servers_cap = 0;
+  g_servers_count = 0;
   mutex_unlock(g_servers_mutex);
   mutex_lock(g_engine_mutex);
   g_reactor = NULL;
@@ -453,7 +519,17 @@ static void _engine_release(void) {
   bool should_reap = false;
   mutex_lock(g_engine_mutex);
   if (g_reactor_refs > 0) g_reactor_refs--;
-  if (g_reactor_refs == 0 && g_reactor) {
+  /* The !g_engine_stopping guard matters for a case that did not exist
+   * before _engine_force_stop_quiesce_all: that function calls
+   * _quiesce_server_once, which calls this function, for every server it
+   * quiesces, WHILE a reaper spawned by chttpsvr_engine_stop() is already
+   * running with g_engine_stopping already true and g_reactor still
+   * non-NULL (it hasn't been destroyed yet at that point). Without this
+   * guard, releasing the last ref during that pass would look identical to
+   * the ordinary graceful "last server just released its ref" case and
+   * spawn a second, redundant reaper thread racing the one already tearing
+   * this same reactor down. */
+  if (g_reactor_refs == 0 && g_reactor && !g_engine_stopping) {
     g_engine_stopping = true;
     should_reap = true;
   }
@@ -751,12 +827,11 @@ static void _close_all_idle_connections(struct chttpserver *srv) {
 /*                         PERCENT-DECODE HELPERS                             */
 /* ========================================================================== */
 
-/* Replaces facio's http_decode_path_unsafe()/http_decode_url_unsafe(): plain
- * RFC 3986 %XX decoding, with '+' either left literal (path semantics) or
- * turned into a space (query-string semantics). Safe for in-place decoding
- * (dst == src): the write index never overtakes the read index. Returns the
- * decoded length, or -1 on malformed percent-encoding (a '%' not followed by
- * two hex digits) -- matching both replaced functions' contracts exactly. */
+/* Plain RFC 3986 %XX decoding, with '+' either left literal (path semantics)
+ * or turned into a space (query-string semantics). Safe for in-place
+ * decoding (dst == src): the write index never overtakes the read index.
+ * Returns the decoded length, or -1 on malformed percent-encoding (a '%' not
+ * followed by two hex digits). */
 static int _hex_nibble(char c) {
   if (c >= '0' && c <= '9') return c - '0';
   if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -1318,12 +1393,11 @@ static const char *_status_reason(int status) {
 }
 
 /* Serializes resp into a raw HTTP/1.1 response and writes it to stream,
- * bounded by response_write_timeout_ms. Replaces facio's http_set_header2 +
- * http_send_body/http_finish. Always sets Content-Length explicitly (this
- * server never uses chunked transfer-encoding for its own responses) and a
- * Connection header reflecting keep_alive. Returns false on a write
- * error/timeout (caller must then treat the connection as unusable and
- * close it). */
+ * bounded by response_write_timeout_ms. Always sets Content-Length
+ * explicitly (this server never uses chunked transfer-encoding for its own
+ * responses) and a Connection header reflecting keep_alive. Returns false on
+ * a write error/timeout (caller must then treat the connection as unusable
+ * and close it). */
 static bool _send_response(chttp1_stream_t *stream, chttpsvr_resp *resp,
                            bool keep_alive, unsigned timeout_ms) {
   char head[4096];
@@ -1344,10 +1418,9 @@ static bool _send_response(chttp1_stream_t *stream, chttpsvr_resp *resp,
   }
 
   for (size_t i = 0; i < resp->header_count; i++) {
-    /* No space after the colon: matches facio's own write_header()
-     * (third_party/facio/http1.c) byte for byte, which this test suite's
-     * raw-socket assertions (e.g. strstr(buf, "connection:close")) were
-     * originally written against. */
+    /* No space after the colon: this test suite's raw-socket assertions
+     * (e.g. strstr(buf, "connection:close")) assert on this exact wire
+     * format directly, so the format must be produced byte for byte. */
     int hn =
         snprintf(head + hlen, sizeof(head) > hlen ? sizeof(head) - hlen : 0,
                  "%s:%s\r\n", resp->headers[i].name, resp->headers[i].value);
@@ -1677,8 +1750,8 @@ static int _on_headers_complete(chttp1_parser_t *p) {
 /* Buffered-route body accumulation, and streaming-route "pending, not yet
  * delivered to chttpsvr_req_read" body accumulation, share this one
  * callback and one growbuf_t: max_body_size is enforced here, uniformly,
- * for both route kinds (facio enforced it inside its own body-chunk parser;
- * this parser has no built-in notion of it, so the caller -- here -- must). */
+ * for both route kinds, since chttp1_parser has no built-in notion of it
+ * and leaves that enforcement to the caller. */
 static int _on_body(chttp1_parser_t *p, const char *at, size_t len) {
   chttpsvr_conn_t *conn = (chttpsvr_conn_t *)p->data;
   conn->body_bytes_seen += len;
@@ -2776,8 +2849,26 @@ static ctpool _drain_and_close_all_connections(struct chttpserver *srv) {
   return old_pool;
 }
 
-void __chttpsvr_destroy(chttpsvr srv) {
-  if (!srv) return;
+/* Stops listening, unregisters from g_servers, drains in-flight requests,
+ * closes idle connections, shuts down and destroys the worker pool, and
+ * releases this server's engine reference -- everything __chttpsvr_destroy
+ * used to do inline. Factored out and guarded by srv->teardown_started so
+ * it can also be driven, exactly once, from the engine's own
+ * _engine_force_stop_quiesce_all pass (chttpsvr_engine_stop() may run that
+ * pass while srv is still fully started, well before the application ever
+ * calls chttpsvr_destroy(srv)); whichever of the two callers reaches a given
+ * srv first does the real work, the other is a safe no-op. See
+ * _engine_force_stop_quiesce_all's own doc comment for why this ordering
+ * (stop -> unregister -> drain -> release engine ref -> destroy pool) must
+ * run to completion before the shared reactor can be torn down. */
+static void _quiesce_server_once(struct chttpserver *srv) {
+  mutex_lock(srv->mutex);
+  if (srv->teardown_started) {
+    mutex_unlock(srv->mutex);
+    return;
+  }
+  srv->teardown_started = true;
+  mutex_unlock(srv->mutex);
 
   chttpsvr_stop(srv);
   _servers_unregister(srv);
@@ -2805,6 +2896,12 @@ void __chttpsvr_destroy(chttpsvr srv) {
     ctpool_shutdown_drain(old_pool);
     ctpool_destroy(old_pool);
   }
+}
+
+void __chttpsvr_destroy(chttpsvr srv) {
+  if (!srv) return;
+
+  _quiesce_server_once(srv);
 
   if (srv->tls_ctx) {
     ctls_ctx_release(srv->tls_ctx);
@@ -2843,6 +2940,13 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
     mutex_unlock(srv->mutex);
     return ccol_not_permitted;
   }
+  /* A prior stop/quiesce cycle (whether via chttpsvr_stop()+chttpsvr_start()
+   * restart, or a chttpsvr_engine_stop() force-stop this server happened to
+   * survive without being chttpsvr_destroy()'d) may have left
+   * teardown_started set; this server is legitimately starting fresh again,
+   * so _quiesce_server_once must be willing to run its real teardown work
+   * again the next time this server actually is destroyed. */
+  srv->teardown_started = false;
   mutex_unlock(srv->mutex);
 
   {
@@ -3145,10 +3249,9 @@ const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name) {
   if (!req || !name) return NULL;
   chttpsvr_conn_t *conn = req->conn;
   /* A repeated header name keeps every occurrence, in arrival order, in
-   * conn->hdr_names/hdr_values -- scan backward so the LAST occurrence wins,
-   * matching this module's pre-existing documented behavior for a
-   * duplicated header (facio's own FIOBJ_T_ARRAY handling picked the last
-   * value too; see streaming_repeated_header in tests.c). */
+   * conn->hdr_names/hdr_values; scan backward so the LAST occurrence wins,
+   * matching this module's documented behavior for a duplicated header (see
+   * streaming_repeated_header in tests.c). */
   for (size_t i = conn->hdr_count; i-- > 0;) {
     if (strcasecmp(conn->hdr_names[i], name) == 0) return conn->hdr_values[i];
   }

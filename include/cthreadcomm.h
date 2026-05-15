@@ -1344,16 +1344,15 @@ event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
  * registration on the same fd (both share one generation, since they
  * represent one logical connection).
  *
- * This exists for a caller's own defensive bookkeeping across fd reuse
- * (mirroring what facio's uuid gave callers in this codebase's HTTP
- * modules): a caller holding onto a connection object across several async
- * steps can stamp it with the generation it read right after event_loop_add
- * returned, and later compare against a fresh read to detect whether it's
- * still reasoning about the same logical connection. It is not required for
- * basic correctness -- event_loop's own dispatch already validates a
- * registration's liveness before invoking any callback, unconditionally,
- * whether or not a caller ever calls this function at all (see the
- * event_loop struct's own doc comment).
+ * This exists for a caller's own defensive bookkeeping across fd reuse: a
+ * caller holding onto a connection object across several async steps can
+ * stamp it with the generation it read right after event_loop_add returned,
+ * and later compare against a fresh read to detect whether it's still
+ * reasoning about the same logical connection. It is not required for basic
+ * correctness; event_loop's own dispatch already validates a registration's
+ * liveness before invoking any callback, unconditionally, whether or not a
+ * caller ever calls this function at all (see the event_loop struct's own
+ * doc comment).
  *
  * Safe to call even on an already-removed reg: like event_loop_reg_count's
  * sibling accessors, this reads a field set once at registration and never

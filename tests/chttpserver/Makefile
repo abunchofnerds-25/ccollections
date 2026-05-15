@@ -4,10 +4,9 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS
 
 # Our source files (compiled with strict flags + -Werror). chttpserver.c and
-# chttpclient.c each own a fully independent static event_loop reactor; no
-# binary in this directory depends on third_party/facio (deleted) at all.
+# chttpclient.c each own a fully independent static event_loop reactor.
 #
-# Three binaries are built from this shared source set:
+# Four binaries are built from this shared source set:
 #   tests            (tests.c) - the main suite.
 #   tests_tls        (tests_tls.c) - drives a real TLS handshake against a
 #                     genuine self-signed cert generated at test-startup via
@@ -22,6 +21,16 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS
 #                     then start" happy path can only be exercised in a
 #                     process where nothing else has started the engine
 #                     first -- hence its own SEPARATE BINARY.
+#   tests_engine_stop (tests_engine_stop.c) - exercises chttpsvr_engine_stop()
+#                     (the forced, signal-handler-driven engine shutdown
+#                     path), which tears down the one shared, process-wide
+#                     event_loop reactor out from under every currently
+#                     started chttpsvr instance. tests.c's own g_srv/g_srv2/...
+#                     stay started across its entire run, so force-stopping
+#                     the shared engine there would yank the reactor out from
+#                     under them and fail unrelated tests -- hence its own
+#                     SEPARATE BINARY, matching the same isolation reasoning
+#                     as tests_tls/tests_mem_mgmt above.
 COMMON_SRC_FILES = ../../src/chttpserver.c \
 	../../src/chttpclient.c \
 	../../src/chttp1_parser.c \
@@ -48,18 +57,24 @@ build_tls:
 build_mem_mgmt:
 	$(CC) $(CFLAGS) tests_mem_mgmt.c $(COMMON_SRC_FILES) -o tests_mem_mgmt $(LFLAGS)
 
-test: build build_tls build_mem_mgmt
+build_engine_stop:
+	$(CC) $(CFLAGS) tests_engine_stop.c $(COMMON_SRC_FILES) -o tests_engine_stop $(LFLAGS)
+
+test: build build_tls build_mem_mgmt build_engine_stop
 	./tests
 	./tests_tls
 	./tests_mem_mgmt
+	./tests_engine_stop
 
-memtest: build build_tls build_mem_mgmt
+memtest: build build_tls build_mem_mgmt build_engine_stop
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests_tls
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests_mem_mgmt
+	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
+		--error-exitcode=1 ./tests_engine_stop
 
 generate_coverage_report:
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests.c $(COMMON_SRC_FILES) \
@@ -89,10 +104,19 @@ generate_coverage_report:
 	genhtml --ignore-errors inconsistent -s chttpserver_mem_mgmt.c.info \
 		--output-directory coverage/tests_mem_mgmt && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests_mem_mgmt
+	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_engine_stop.c $(COMMON_SRC_FILES) \
+		-o tests_engine_stop $(LFLAGS) && \
+	./tests_engine_stop && \
+	gcov -d -w tests_engine_stop-chttpserver && \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent \
+		--capture --directory . --output-file chttpserver_engine_stop.c.info && \
+	genhtml --ignore-errors inconsistent -s chttpserver_engine_stop.c.info \
+		--output-directory coverage/tests_engine_stop && \
+	rm -rf *.gcno *.gcda *.gcov *.c.info tests_engine_stop
 
-all: build build_tls build_mem_mgmt test memtest generate_coverage_report
+all: build build_tls build_mem_mgmt build_engine_stop test memtest generate_coverage_report
 
 clean:
-	rm -rf tests tests_tls tests_mem_mgmt third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
+	rm -rf tests tests_tls tests_mem_mgmt tests_engine_stop third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
 
-default: build build_tls build_mem_mgmt
+default: build build_tls build_mem_mgmt build_engine_stop

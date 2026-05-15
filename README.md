@@ -3818,7 +3818,7 @@ cfg.tls = &tls;
 |---|---|
 | `create_chttpsvr(cl, err)` | Create a server with the default allocator; `cl` may be NULL (an internal stderr/FATAL-only logger is used) or a parent logger to derive this server's logger from (tagged `component=http-server`); returns NULL on failure |
 | `create_chttpsvr_mp(mp, cl, err)` | Create a server with a custom allocator; same `cl` semantics as `create_chttpsvr` |
-| `__chttpsvr_destroy(srv)` | Destroy and free the server, including closing the server's own logger (`clog_close`); does not NULL the pointer; call only after engine is stopped |
+| `__chttpsvr_destroy(srv)` | Destroy and free the server, including closing the server's own logger (`clog_close`); does not NULL the pointer. Safe to call regardless of whether the shared engine is still running (releases this server's own reference, possibly triggering an asynchronous engine stop if it was the last one) or was already force-stopped via `chttpsvr_engine_stop()` while `srv` was still started (the server's own listener/connections/worker pool are quiesced exactly once either way) |
 | `chttpsvr_destroy(srv)` | Macro: calls `__chttpsvr_destroy` then sets pointer to NULL |
 
 **Engine Lifecycle (shared, process-level, independent of `chttpclient`'s own engine)**

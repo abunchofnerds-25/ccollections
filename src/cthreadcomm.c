@@ -1739,22 +1739,19 @@ struct event_entry {
   /* Per-entry dispatch lock: with more than one reactor thread, epoll's
    * default (non-EPOLLEXCLUSIVE) level-triggered semantics mean two threads
    * genuinely can each receive this same still-ready entry from their own
-   * concurrent epoll_wait call (the classic "thundering herd") -- nothing
+   * concurrent epoll_wait call (the classic "thundering herd"); nothing
    * about epoll itself prevents that. Held across the entire dispatch of
    * this entry (both the read_reg/write_reg collection under the stripe
    * lock below AND the callback invocation itself, unlike the stripe lock
    * which is only ever held for collection), this is what actually
    * guarantees a single registration's callback is never invoked
-   * concurrently with itself, and -- since both directions on one fd share
-   * this same entry -- that a read and a write registration on the same fd
-   * never run concurrently with each other either. This is a materially
-   * stricter guarantee than facio's own FIO_PR_LOCK_TASK/FIO_PR_LOCK_WRITE
-   * (which only serializes on_data against itself and on_ready against
-   * itself, not against each other), deliberately, so a caller layering a
+   * concurrently with itself, and, since both directions on one fd share
+   * this same entry, that a read and a write registration on the same fd
+   * never run concurrently with each other either. This is deliberately a
+   * strict guarantee (serializing not just each direction against itself,
+   * but both directions against each other too), so a caller layering a
    * single shared resource (e.g. one TLS connection object) across both
-   * directions of one fd never needs an ad-hoc lock of its own the way this
-   * codebase's own chttpclient.c tls_lock had to be added after the fact to
-   * compensate for facio's lack of that exact guarantee.
+   * directions of one fd never needs an ad-hoc lock of its own for that.
    *
    * NOT the same lock as the stripe lock: the stripe lock protects the
    * registry (read_reg/write_reg slots, the fd_index chmap) against
@@ -2801,19 +2798,19 @@ static void _event_loop_release_after_dispatch(struct event_loop_s *loop,
  * independently calling epoll_wait on the same shared epoll instance,
  * genuinely receiving the same still-ready entry more than once, and
  * without this lock both passing the collection step below for the SAME
- * reg and invoking its callback concurrently -- a real double-dispatch, not
+ * reg and invoking its callback concurrently; a real double-dispatch, not
  * a memory-safety bug, but a serialization bug this lock existed
  * specifically to close) no longer applies to this exact function post-
  * split, since only ever one thread calls it now regardless of
  * num_reactor_threads; that hazard's replacement for num_reactor_threads >
  * 1 is instead closed by _event_loop_dispatch_job_fn's own use of this
- * same lock, moved to the ctpool worker that actually runs a job -- see
+ * same lock, moved to the ctpool worker that actually runs a job; see
  * that function's own comment. Because dispatch_lock lives on the entry
  * (shared by both directions), it also gives read_reg and write_reg
  * callbacks on the same fd mutual exclusion against each other, not just
- * self-exclusion, in both configurations -- see the entry's own
- * dispatch_lock field comment for why that's a deliberately stricter
- * guarantee than facio's equivalent. */
+ * self-exclusion, in both configurations; see the entry's own
+ * dispatch_lock field comment for why that's a deliberately strict
+ * guarantee. */
 static void _event_loop_handle_event(struct event_loop_s *loop,
                                      struct epoll_event *ev) {
   event_entry *entry = (event_entry *)ev->data.ptr;

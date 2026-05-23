@@ -183,11 +183,13 @@ struct chttpclient {
 };
 
 /* ========================================================================== */
-/*                         GLOBAL STATE                                       */
+/*                         DEFAULT CLIENT                                     */
 /* ========================================================================== */
 
-static chttpcli g_default_client = NULL;
-static once_flag_t g_default_client_once = ONCE_INIT;
+static struct {
+  chttpcli client;
+  once_flag_t once;
+} default_client_bundler = {0};
 
 /* ========================================================================== */
 /*                         URL PARSING                                        */
@@ -1777,15 +1779,19 @@ static int _on_message_complete(chttp1_parser_t *p) {
   return 0;
 }
 
-static chttp1_settings_t g_chttp1_settings;
-static once_flag_t g_chttp1_settings_once = ONCE_INIT;
+static struct {
+  chttp1_settings_t settings;
+  once_flag_t once;
+} client_http1_settings_bundler = {0};
 
 static void _init_chttp1_settings(void) {
-  chttp1_settings_init(&g_chttp1_settings);
-  g_chttp1_settings.on_header = _on_header;
-  g_chttp1_settings.on_headers_complete = _on_headers_complete;
-  g_chttp1_settings.on_body = _on_body;
-  g_chttp1_settings.on_message_complete = _on_message_complete;
+  chttp1_settings_init(&client_http1_settings_bundler.settings);
+  client_http1_settings_bundler.settings.on_header = _on_header;
+  client_http1_settings_bundler.settings.on_headers_complete =
+      _on_headers_complete;
+  client_http1_settings_bundler.settings.on_body = _on_body;
+  client_http1_settings_bundler.settings.on_message_complete =
+      _on_message_complete;
 }
 
 static void _parse_ctx_free_fields(chttp_parse_ctx_t *ctx) {
@@ -1858,10 +1864,10 @@ static ccol_retval_t _chttp_read_message(
     chttp_conn_t *conn, chttp_parse_ctx_t *pctx, chttp_deadline_t *overall,
     const char *carry_in, size_t carry_in_len, bool *keep_alive_out,
     bool *any_bytes_read_out, char **leftover_out, size_t *leftover_len_out) {
-  call_once(g_chttp1_settings_once, _init_chttp1_settings);
+  call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
 
   chttp1_parser_t parser;
-  chttp1_parser_init(&parser, &g_chttp1_settings);
+  chttp1_parser_init(&parser, &client_http1_settings_bundler.settings);
   parser.data = pctx;
 
   *leftover_out = NULL;
@@ -2057,47 +2063,63 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
 /*
  * One static, process-wide event_loop reactor shared by every chttpcli
  * instance in the process (including the lazily-created default client);
- * confirmed via AskUserQuestion as one of two separate, independent reactors
- * (the other belongs to chttpserver; see chttpserver.c's own identical
- * lifecycle wrapper). chttpclient does not share a process-wide singleton
- * with chttpserver, so this lifecycle wrapper needs no cross-module ordering
- * at all, only ref-counting across Tier 2/3 callers; it mirrors
- * chttpserver.c's own g_reactor acquire/release/reaper-thread shape exactly,
- * with chttpclient's own additional resources (g_client_dns_pool, the
- * deadline sweep) layered on top and torn down in lockstep with it.
+ * One of two separate, independent reactors (the other belongs to chttpserver;
+ * see chttpserver.c's own identical lifecycle wrapper). chttpclient does not
+ * share a process-wide singleton with chttpserver, so this lifecycle wrapper
+ * needs no cross-module ordering at all, only ref-counting across Tier 2/3
+ * callers; it mirrors chttpserver.c's own g_reactor
+ * acquire/release/reaper-thread shape exactly, with chttpclient's own
+ * additional resources (cli_engine_bundler.dns_pool, the deadline sweep)
+ * layered on top and torn down in lockstep with it.
  */
-static event_loop g_client_reactor = NULL;
-static size_t g_client_reactor_refs = 0;
-static mutex_t g_client_engine_mutex;
-static cond_var_t g_client_engine_stopped_cv;
-static once_flag_t g_client_engine_once = ONCE_INIT;
-static bool g_client_engine_stopping = false;
-static thread_id_t g_client_reaper_thread;
-static bool g_client_reaper_joinable = false;
-static ccol_memmgmt_procs_t g_client_engine_mp_storage;
-static ccol_memmgmt_procs_t *g_client_engine_mp = NULL;
+static struct {
+  event_loop reactor;
+  size_t reactor_refs;
+  mutex_t mutex;
+  cond_var_t stopped_cv;
+  once_flag_t once;
+  bool stopping;
+  thread_id_t reaper_thread;
+  bool reaper_joinable;
+  ccol_memmgmt_procs_t mprocs_storage;
+  ccol_memmgmt_procs_t *mprocs;
 
-/* Diagnostics logger for chttpclient's own reactor-thread events (TLS
- * handshake failures, connect errors). NULL (the default) means diagnostics
- * are simply skipped; there is no default logger installed, since this
- * event_loop reactor has no internal logging of its own to forward. Guarded
- * by g_client_engine_mutex purely against a torn pointer read/write racing a
- * concurrent chttpcli_set_engine_logger() call (clog itself is already
- * thread-safe for concurrent logging calls through one handle). */
-static clog g_client_engine_logger = NULL;
+  /* 0 = auto-detect via sysconf(_SC_NPROCESSORS_ONLN), this module's
+   * original, still-default behavior. A positive value pins the reactor to
+   * exactly that many OS threads instead; see
+   * chttpcli_set_engine_num_reactor_threads's own doc comment. Baked into
+   * the reactor at construction time, same "before first start, or after a
+   * full stop" restriction as mprocs above. */
+  size_t num_reactor_threads;
+  /* The value actually passed to event_loop_create_with_mprocs the last time
+   * the reactor was created (auto-detected or explicit); for test
+   * instrumentation only, see
+   * _chttpclient_engine_num_reactor_threads_for_tests below. */
+  size_t last_resolved_num_reactor_threads;
 
-/* Offloads the (potentially blocking) DNS-resolve-and-connect step off of
- * caller threads. Lives and dies with the reactor itself (created/destroyed
- * alongside it, guarded by g_client_engine_mutex) rather than being a
- * separate lazy singleton, since nothing needs it once the reactor is down. */
-static ctpool g_client_dns_pool = NULL;
+  /* Diagnostics logger for chttpclient's own reactor-thread events (TLS
+   * handshake failures, connect errors). NULL (the default) means diagnostics
+   * are simply skipped; there is no default logger installed, since this
+   * event_loop reactor has no internal logging of its own to forward. Guarded
+   * by cli_engine_bundler.mutex purely against a torn pointer read/write racing
+   * a concurrent chttpcli_set_engine_logger() call (clog itself is already
+   * thread-safe for concurrent logging calls through one handle). */
+  clog logger;
+
+  /* Offloads the (potentially blocking) DNS-resolve-and-connect step off of
+   * caller threads. Lives and dies with the reactor itself (created/destroyed
+   * alongside it, guarded by cli_engine_bundler.mutex) rather than being a
+   * separate lazy singleton, since nothing needs it once the reactor is down.
+   */
+  ctpool dns_pool;
+} cli_engine_bundler = {0};
 
 static ccol_retval_t _client_deadline_sweep_start(void);
 static void _client_deadline_sweep_stop_and_join(void);
 
 static void _client_engine_globals_init(void) {
-  mutex_init(g_client_engine_mutex);
-  cond_var_init(g_client_engine_stopped_cv);
+  mutex_init(cli_engine_bundler.mutex);
+  cond_var_init(cli_engine_bundler.stopped_cv);
   /* Belt-and-suspenders: Tier 1 already passes MSG_NOSIGNAL to every send(),
    * and Tier 2/3's own raw writes do the same (see _async_on_writable), so
    * this is not load-bearing the way chttpserver.c's identical call is for
@@ -2108,17 +2130,17 @@ static void _client_engine_globals_init(void) {
 }
 
 static clog _client_engine_logger_get(void) {
-  call_once(g_client_engine_once, _client_engine_globals_init);
-  mutex_lock(g_client_engine_mutex);
-  clog l = g_client_engine_logger;
-  mutex_unlock(g_client_engine_mutex);
+  call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  mutex_lock(cli_engine_bundler.mutex);
+  clog l = cli_engine_bundler.logger;
+  mutex_unlock(cli_engine_bundler.mutex);
   return l;
 }
 
 static void _client_engine_join_reaper_if_needed_locked(void) {
-  if (g_client_reaper_joinable) {
-    thread_join(g_client_reaper_thread);
-    g_client_reaper_joinable = false;
+  if (cli_engine_bundler.reaper_joinable) {
+    thread_join(cli_engine_bundler.reaper_thread);
+    cli_engine_bundler.reaper_joinable = false;
   }
 }
 
@@ -2127,16 +2149,16 @@ static void _client_engine_join_reaper_if_needed_locked(void) {
  * dropped the last reference -- that thread is routinely a reactor callback
  * thread itself, e.g. _async_on_error tearing down the last live ctx, and
  * must never block on joining the deadline sweep or draining
- * g_client_dns_pool). Tears down the deadline sweep and g_client_dns_pool,
- * destroys the reactor, then clears g_client_engine_stopping so a waiting
- * acquirer can proceed.
+ * cli_engine_bundler.dns_pool). Tears down the deadline sweep and
+ * cli_engine_bundler.dns_pool, destroys the reactor, then clears
+ * cli_engine_bundler.stopping so a waiting acquirer can proceed.
  */
 static void *_client_engine_reaper_fn(void *arg) {
   (void)arg;
   event_loop loop_to_destroy;
-  mutex_lock(g_client_engine_mutex);
-  loop_to_destroy = g_client_reactor;
-  mutex_unlock(g_client_engine_mutex);
+  mutex_lock(cli_engine_bundler.mutex);
+  loop_to_destroy = cli_engine_bundler.reactor;
+  mutex_unlock(cli_engine_bundler.mutex);
 
   /* Stop the deadline sweep before tearing down the reactor and DNS pool it
    * may still be referencing (a sweep tick closes a fd/removes a
@@ -2144,15 +2166,17 @@ static void *_client_engine_reaper_fn(void *arg) {
   _client_deadline_sweep_stop_and_join();
   if (loop_to_destroy) event_loop_destroy(loop_to_destroy);
 
-  mutex_lock(g_client_engine_mutex);
-  ctpool_destroy(g_client_dns_pool); /* implicit drain shutdown */
-  g_client_dns_pool = NULL;
-  g_client_reactor = NULL;
-  g_client_engine_stopping = false;
-  clog old_logger = g_client_engine_logger;
-  g_client_engine_logger = NULL;
-  cond_var_broadcast(g_client_engine_stopped_cv);
-  mutex_unlock(g_client_engine_mutex);
+  mutex_lock(cli_engine_bundler.mutex);
+  ctpool_destroy(cli_engine_bundler.dns_pool); /* implicit drain shutdown */
+  cli_engine_bundler.dns_pool = NULL;
+  cli_engine_bundler.reactor = NULL;
+  cli_engine_bundler.stopping = false;
+  log_info(cli_engine_bundler.logger,
+           "The http client reactor engine has been destroyed");
+  clog old_logger = cli_engine_bundler.logger;
+  cli_engine_bundler.logger = NULL;
+  cond_var_broadcast(cli_engine_bundler.stopped_cv);
+  mutex_unlock(cli_engine_bundler.mutex);
   if (old_logger) clog_close(old_logger);
   return NULL;
 }
@@ -2165,78 +2189,96 @@ static void _client_engine_spawn_reaper(void) {
     _client_engine_reaper_fn(NULL);
     return;
   }
-  mutex_lock(g_client_engine_mutex);
-  g_client_reaper_thread = reaper;
-  g_client_reaper_joinable = true;
-  mutex_unlock(g_client_engine_mutex);
+  mutex_lock(cli_engine_bundler.mutex);
+  cli_engine_bundler.reaper_thread = reaper;
+  cli_engine_bundler.reaper_joinable = true;
+  mutex_unlock(cli_engine_bundler.mutex);
 }
 
 /*
  * Acquires a reference to chttpclient's own reactor, lazily creating it (and
- * g_client_dns_pool, and starting the deadline sweep) on the first call.
- * Subsequent calls just bump g_client_reactor_refs. Must be paired with
- * exactly one _client_engine_release() call.
+ * cli_engine_bundler.dns_pool, and starting the deadline sweep) on the first
+ * call. Subsequent calls just bump cli_engine_bundler.reactor_refs. Must be
+ * paired with exactly one _client_engine_release() call.
  */
 static ccol_retval_t _client_engine_acquire(void) {
-  call_once(g_client_engine_once, _client_engine_globals_init);
-  mutex_lock(g_client_engine_mutex);
-  while (g_client_engine_stopping)
-    cond_var_wait(g_client_engine_stopped_cv, g_client_engine_mutex);
+  call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  mutex_lock(cli_engine_bundler.mutex);
+  while (cli_engine_bundler.stopping)
+    cond_var_wait(cli_engine_bundler.stopped_cv, cli_engine_bundler.mutex);
   _client_engine_join_reaper_if_needed_locked();
 
-  if (!g_client_reactor) {
-    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    size_t nthreads = (cpus > 0) ? (size_t)cpus : 1;
+  if (!cli_engine_bundler.reactor) {
+    size_t nthreads = cli_engine_bundler.num_reactor_threads;
+    if (nthreads == 0) {
+      long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+      nthreads = (cpus > 0) ? (size_t)cpus : 1;
+    }
+    cli_engine_bundler.last_resolved_num_reactor_threads = nthreads;
     char *err = NULL;
-    g_client_reactor = event_loop_create_with_mprocs(256, 4, nthreads,
-                                                     g_client_engine_mp, &err);
-    if (!g_client_reactor) {
-      mutex_unlock(g_client_engine_mutex);
+    cli_engine_bundler.reactor = event_loop_create_with_mprocs(
+        256, 4, nthreads, cli_engine_bundler.mprocs, &err);
+    if (!cli_engine_bundler.reactor) {
+      mutex_unlock(cli_engine_bundler.mutex);
       return ccol_not_enough_memory;
     }
 
     char *dns_err = NULL;
-    g_client_dns_pool = create_cthread_pool(nthreads, 0, &dns_err);
-    if (!g_client_dns_pool) {
-      event_loop_destroy(g_client_reactor);
-      g_client_reactor = NULL;
-      mutex_unlock(g_client_engine_mutex);
+    cli_engine_bundler.dns_pool = create_cthread_pool(nthreads, 0, &dns_err);
+    if (!cli_engine_bundler.dns_pool) {
+      event_loop_destroy(cli_engine_bundler.reactor);
+      cli_engine_bundler.reactor = NULL;
+      mutex_unlock(cli_engine_bundler.mutex);
       return ccol_not_enough_memory;
     }
 
     if (_client_deadline_sweep_start() != ccol_success) {
-      ctpool_destroy(g_client_dns_pool);
-      g_client_dns_pool = NULL;
-      event_loop_destroy(g_client_reactor);
-      g_client_reactor = NULL;
-      mutex_unlock(g_client_engine_mutex);
+      ctpool_destroy(cli_engine_bundler.dns_pool);
+      cli_engine_bundler.dns_pool = NULL;
+      event_loop_destroy(cli_engine_bundler.reactor);
+      cli_engine_bundler.reactor = NULL;
+      mutex_unlock(cli_engine_bundler.mutex);
       return ccol_unexpected_failure;
     }
+
+    if (!cli_engine_bundler.logger) {
+      cli_engine_bundler.logger =
+          clog_open_fd_mp(2, CLOG_FATAL, cli_engine_bundler.mprocs);
+      if (!cli_engine_bundler.logger) {
+        mutex_unlock(cli_engine_bundler.mutex);
+        return ccol_not_enough_memory;
+      }
+      clog_set_field(cli_engine_bundler.logger, "component",
+                     "http-client-engine");
+    }
+
+    log_info(cli_engine_bundler.logger,
+             "New http client reactor engine has been created");
   }
-  g_client_reactor_refs++;
-  mutex_unlock(g_client_engine_mutex);
+  cli_engine_bundler.reactor_refs++;
+  mutex_unlock(cli_engine_bundler.mutex);
   return ccol_success;
 }
 
 /*
  * Releases a reference acquired via _client_engine_acquire(). Once
- * g_client_reactor_refs returns to zero, hands the actual teardown off to a
- * freshly spawned reaper thread rather than performing it inline -- this is
- * essential, not just a style choice, since this is routinely called from
- * inside a reactor callback thread itself (_async_on_error tearing down the
- * last live ctx), which must never block joining the deadline sweep or
- * draining g_client_dns_pool (a real hang, caught in testing, in the
+ * cli_engine_bundler.reactor_refs returns to zero, hands the actual teardown
+ * off to a freshly spawned reaper thread rather than performing it inline --
+ * this is essential, not just a style choice, since this is routinely called
+ * from inside a reactor callback thread itself (_async_on_error tearing down
+ * the last live ctx), which must never block joining the deadline sweep or
+ * draining cli_engine_bundler.dns_pool (a real hang, caught in testing, in the
  * single-owner predecessor of this exact design).
  */
 static void _client_engine_release(void) {
   bool should_reap = false;
-  mutex_lock(g_client_engine_mutex);
-  if (g_client_reactor_refs > 0) g_client_reactor_refs--;
-  if (g_client_reactor_refs == 0 && g_client_reactor) {
-    g_client_engine_stopping = true;
+  mutex_lock(cli_engine_bundler.mutex);
+  if (cli_engine_bundler.reactor_refs > 0) cli_engine_bundler.reactor_refs--;
+  if (cli_engine_bundler.reactor_refs == 0 && cli_engine_bundler.reactor) {
+    cli_engine_bundler.stopping = true;
     should_reap = true;
   }
-  mutex_unlock(g_client_engine_mutex);
+  mutex_unlock(cli_engine_bundler.mutex);
   if (should_reap) _client_engine_spawn_reaper();
 }
 
@@ -2260,12 +2302,12 @@ static void _client_engine_release(void) {
  */
 #ifdef RUNNING_UNIT_TESTS
 static void _client_engine_wait_for_quiescence(void) {
-  call_once(g_client_engine_once, _client_engine_globals_init);
-  mutex_lock(g_client_engine_mutex);
-  while (g_client_engine_stopping)
-    cond_var_wait(g_client_engine_stopped_cv, g_client_engine_mutex);
+  call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  mutex_lock(cli_engine_bundler.mutex);
+  while (cli_engine_bundler.stopping)
+    cond_var_wait(cli_engine_bundler.stopped_cv, cli_engine_bundler.mutex);
   _client_engine_join_reaper_if_needed_locked();
-  mutex_unlock(g_client_engine_mutex);
+  mutex_unlock(cli_engine_bundler.mutex);
 }
 #endif /* RUNNING_UNIT_TESTS */
 
@@ -2274,11 +2316,11 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl) {
   clog derived = clog_derive(cl);
   if (!derived) return ccol_not_enough_memory;
   clog_set_field(derived, "component", "http-client-engine");
-  call_once(g_client_engine_once, _client_engine_globals_init);
-  mutex_lock(g_client_engine_mutex);
-  clog old = g_client_engine_logger;
-  g_client_engine_logger = derived;
-  mutex_unlock(g_client_engine_mutex);
+  call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  mutex_lock(cli_engine_bundler.mutex);
+  clog old = cli_engine_bundler.logger;
+  cli_engine_bundler.logger = derived;
+  mutex_unlock(cli_engine_bundler.mutex);
   if (old) clog_close(old);
   return ccol_success;
 }
@@ -2286,19 +2328,31 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl) {
 ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp) {
   if (mp && (!mp->malloc || !mp->free || !mp->calloc || !mp->realloc))
     return ccol_invalid_args;
-  call_once(g_client_engine_once, _client_engine_globals_init);
-  mutex_lock(g_client_engine_mutex);
-  if (g_client_reactor) {
-    mutex_unlock(g_client_engine_mutex);
+  call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  mutex_lock(cli_engine_bundler.mutex);
+  if (cli_engine_bundler.reactor) {
+    mutex_unlock(cli_engine_bundler.mutex);
     return ccol_not_permitted;
   }
   if (mp) {
-    g_client_engine_mp_storage = *mp;
-    g_client_engine_mp = &g_client_engine_mp_storage;
+    cli_engine_bundler.mprocs_storage = *mp;
+    cli_engine_bundler.mprocs = &cli_engine_bundler.mprocs_storage;
   } else {
-    g_client_engine_mp = NULL;
+    cli_engine_bundler.mprocs = NULL;
   }
-  mutex_unlock(g_client_engine_mutex);
+  mutex_unlock(cli_engine_bundler.mutex);
+  return ccol_success;
+}
+
+ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads) {
+  call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  mutex_lock(cli_engine_bundler.mutex);
+  if (cli_engine_bundler.reactor) {
+    mutex_unlock(cli_engine_bundler.mutex);
+    return ccol_not_permitted;
+  }
+  cli_engine_bundler.num_reactor_threads = num_threads;
+  mutex_unlock(cli_engine_bundler.mutex);
   return ccol_success;
 }
 
@@ -2648,15 +2702,15 @@ typedef struct chttp_async_ctx_s {
                                       * the "ASYNC DEADLINE SWEEP" section. */
   mutex_t deadline_lock; /* Guards overall_deadline below ONLY -- a small,
                           * dedicated leaf lock, never held while trying to
-                          * acquire idle_lock or g_client_deadline_lock (so
-                          * it introduces no new lock-ordering cycle with
+                          * acquire idle_lock or client_deadline_bundle.mutex
+                          * (so it introduces no new lock-ordering cycle with
                           * either), taken briefly by both the writer
                           * (_async_idle_pool_take/_async_submit_hop/
                           * _async_retry_hop, all of which may already be
                           * holding idle_lock at the point they need to
                           * write overall_deadline) and the reader (the
                           * deadline sweep, which already holds
-                          * g_client_deadline_lock for its whole registry
+                          * client_deadline_bundle.mutex for its whole registry
                           * walk). A first version of overall_deadline
                           * relied on ctx->chain's own _Atomic-ness as a
                           * publication barrier (matching connect_deadline's
@@ -2708,7 +2762,7 @@ typedef struct chttp_async_ctx_s {
                              * benefit). _Atomic for the same reason
                              * state/chain/fd are, above. */
   bool deadline_registered; /* True once this ctx has been linked into
-                             * g_client_deadline_head at least once.
+                             * client_deadline_bundle.head at least once.
                              * Registration is idempotent and, once made,
                              * persists for ctx's whole lifetime (including
                              * every idle-pool cycle); see
@@ -2716,7 +2770,7 @@ typedef struct chttp_async_ctx_s {
   struct chttp_async_ctx_s *deadline_prev,
       *deadline_next; /* Intrusive
                        * doubly-linked membership in the process-wide deadline
-                       * registry, guarded by g_client_deadline_lock (a
+                       * registry, guarded by client_deadline_bundle.mutex (a
                        * different lock than idle_lock above; see that
                        * global's own comment for the lock-ordering contract
                        * between the two). */
@@ -2742,7 +2796,7 @@ typedef struct chttp_async_ctx_s {
  * alongside them (see _client_deadline_sweep_start/_stop_and_join, called
  * from _client_engine_acquire/_client_engine_reaper_fn above).
  *
- * g_client_deadline_lock serialises three things: (1) the intrusive
+ * client_deadline_bundle.mutex serialises three things: (1) the intrusive
  * doubly-linked registry list itself (ctx->deadline_prev/deadline_next),
  * (2) the sweep thread's own sleep/wake condvar, and (3); the reason a
  * ctx is never explicitly unregistered except from within _async_ctx_free,
@@ -2761,7 +2815,7 @@ typedef struct chttp_async_ctx_s {
  * explicitly unregistering on every idle-pool-offer and re-registering on
  * every reuse.
  *
- * Lock ordering: g_client_deadline_lock is only ever taken OUTSIDE of any
+ * Lock ordering: client_deadline_bundle.mutex is only ever taken OUTSIDE of any
  * ctx->idle_lock (never the reverse); _client_deadline_register/
  * _unregister are never called while idle_lock is held (see their call
  * sites), and the sweep itself never touches idle_lock at all (see
@@ -2779,7 +2833,7 @@ typedef struct chttp_async_ctx_s {
  * _client_deadline_unregister (which requires this same lock) strictly
  * BEFORE closing ctx->fd, so any ctx still linked into this registry is
  * guaranteed to not have had its fd closed yet. This sweep therefore calls
- * shutdown(fd, SHUT_RDWR) directly, still holding g_client_deadline_lock,
+ * shutdown(fd, SHUT_RDWR) directly, still holding client_deadline_bundle.mutex,
  * with no separate collect-then-act-outside-the-lock phase needed at all:
  * shutdown() is a plain kernel-level operation with no synchronous
  * application callback, so there is no reentrancy risk in calling it here.
@@ -2790,24 +2844,27 @@ typedef struct chttp_async_ctx_s {
  * (_async_on_readable/_on_writable/_on_error) takes it from there once the
  * reactor observes it, exactly like any other organic connection failure.
  */
-static mutex_t g_client_deadline_lock;
-static cond_var_t g_client_deadline_cv;
-/* g_client_deadline_lock/_cv used to carry static
- * PTHREAD_MUTEX_INITIALIZER/PTHREAD_COND_INITIALIZER initializers; converted
- * to lazy, call_once-guarded runtime init (see _client_deadline_init_globals),
- * independent of the async engine pair's own once-guard above, for the same
- * reason: a non-pthread backend's equivalent primitive may need real setup
- * work a compile-time constant can't provide. Every function below that
- * touches either global calls
- * call_once(g_client_deadline_globals_once, ...) as its first statement. */
-static once_flag_t g_client_deadline_globals_once = ONCE_INIT;
+struct {
+  mutex_t mutex;
+  cond_var_t cond_var;
+  /* client_deadline_bundle.mutex/_cv used to carry static
+   * PTHREAD_MUTEX_INITIALIZER/PTHREAD_COND_INITIALIZER initializers; converted
+   * to lazy, call_once-guarded runtime init (see
+   * _client_deadline_init_globals), independent of the async engine pair's own
+   * once-guard above, for the same reason: a non-pthread backend's equivalent
+   * primitive may need real setup work a compile-time constant can't provide.
+   * Every function below that touches either global calls
+   * call_once(client_deadline_bundle.once, ...) as its first statement. */
+  once_flag_t once;
+  chttp_async_ctx_t *head;
+  thread_id_t thread;
+  bool stop;
+} client_deadline_bundle = {0};
+
 static void _client_deadline_init_globals(void) {
-  mutex_init(g_client_deadline_lock);
-  cond_var_init(g_client_deadline_cv);
+  mutex_init(client_deadline_bundle.mutex);
+  cond_var_init(client_deadline_bundle.cond_var);
 }
-static chttp_async_ctx_t *g_client_deadline_head = NULL;
-static thread_id_t g_client_deadline_thread;
-static bool g_client_deadline_stop = false;
 
 #define CHTTP_DEADLINE_SWEEP_INTERVAL_MS 100
 /* Soft cap on how many expired connections one sweep tick shuts down.
@@ -2824,40 +2881,41 @@ static bool g_client_deadline_stop = false;
  * with ctx->idle_lock NOT held (see the lock-ordering note above).
  */
 static void _client_deadline_register(chttp_async_ctx_t *ctx) {
-  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
-  mutex_lock(g_client_deadline_lock);
+  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  mutex_lock(client_deadline_bundle.mutex);
   if (!ctx->deadline_registered) {
     ctx->deadline_prev = NULL;
-    ctx->deadline_next = g_client_deadline_head;
-    if (g_client_deadline_head) g_client_deadline_head->deadline_prev = ctx;
-    g_client_deadline_head = ctx;
+    ctx->deadline_next = client_deadline_bundle.head;
+    if (client_deadline_bundle.head)
+      client_deadline_bundle.head->deadline_prev = ctx;
+    client_deadline_bundle.head = ctx;
     ctx->deadline_registered = true;
   }
-  mutex_unlock(g_client_deadline_lock);
+  mutex_unlock(client_deadline_bundle.mutex);
 }
 
 /* Removes ctx from the deadline registry if present. Called exactly once,
  * as the first thing _async_ctx_free does; see that function's own
  * comment for why that is the single correct place for this. */
 static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
-  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
-  mutex_lock(g_client_deadline_lock);
+  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  mutex_lock(client_deadline_bundle.mutex);
   if (ctx->deadline_registered) {
     if (ctx->deadline_prev) {
       ctx->deadline_prev->deadline_next = ctx->deadline_next;
     } else {
-      g_client_deadline_head = ctx->deadline_next;
+      client_deadline_bundle.head = ctx->deadline_next;
     }
     if (ctx->deadline_next)
       ctx->deadline_next->deadline_prev = ctx->deadline_prev;
     ctx->deadline_prev = ctx->deadline_next = NULL;
     ctx->deadline_registered = false;
   }
-  mutex_unlock(g_client_deadline_lock);
+  mutex_unlock(client_deadline_bundle.mutex);
 }
 
 /*
- * One sweep pass: walks the whole registry under g_client_deadline_lock,
+ * One sweep pass: walks the whole registry under client_deadline_bundle.mutex,
  * checking each ctx's connect_deadline (only while it is actually in a
  * connecting phase) and its chain's overall_deadline (whenever it has a
  * live chain at all), and shuts down the fd of any newly-expired connection
@@ -2868,11 +2926,11 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
  * individually race-free) loads here; deliberately NOT under the ctx's own
  * idle_lock (see the lock-ordering note above for why: some call paths
  * legitimately hold a ctx's idle_lock while also needing
- * g_client_deadline_lock, e.g. _async_submit_hop's reused-connection-write-
- * failure branch calling _async_retry_hop -> _client_deadline_register; this
- * sweep must never acquire idle_lock itself while holding
- * g_client_deadline_lock, or that becomes a classic AB-BA lock-order
- * inversion).
+ * client_deadline_bundle.mutex, e.g. _async_submit_hop's
+ * reused-connection-write- failure branch calling _async_retry_hop ->
+ * _client_deadline_register; this sweep must never acquire idle_lock itself
+ * while holding client_deadline_bundle.mutex, or that becomes a classic AB-BA
+ * lock-order inversion).
  *
  * This is safe without idle_lock's stronger *compound* (state-and-chain-
  * together) consistency guarantee specifically because of what this
@@ -2899,9 +2957,9 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
  * teardown from an earlier tick's shutdown() call.
  */
 static void _client_deadline_sweep_once(void) {
-  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
-  mutex_lock(g_client_deadline_lock);
-  chttp_async_ctx_t *node = g_client_deadline_head;
+  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  mutex_lock(client_deadline_bundle.mutex);
+  chttp_async_ctx_t *node = client_deadline_bundle.head;
   size_t n_shutdown = 0;
   while (node && n_shutdown < CHTTP_DEADLINE_SWEEP_BATCH) {
     chttp_async_ctx_t *next = node->deadline_next;
@@ -2940,7 +2998,7 @@ static void _client_deadline_sweep_once(void) {
     }
     node = next;
   }
-  mutex_unlock(g_client_deadline_lock);
+  mutex_unlock(client_deadline_bundle.mutex);
 
   if (n_shutdown > 0) {
     clog el = _client_engine_logger_get();
@@ -2951,9 +3009,9 @@ static void _client_deadline_sweep_once(void) {
 
 static void *_client_deadline_sweep_fn(void *arg) {
   (void)arg;
-  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
-  mutex_lock(g_client_deadline_lock);
-  while (!g_client_deadline_stop) {
+  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  mutex_lock(client_deadline_bundle.mutex);
+  while (!client_deadline_bundle.stop) {
     struct timespec wake;
     clock_gettime(CLOCK_MONOTONIC, &wake);
     wake.tv_nsec += CHTTP_DEADLINE_SWEEP_INTERVAL_MS * 1000000L;
@@ -2961,13 +3019,14 @@ static void *_client_deadline_sweep_fn(void *arg) {
       wake.tv_nsec -= 1000000000L;
       wake.tv_sec += 1;
     }
-    cond_var_timedwait(g_client_deadline_cv, g_client_deadline_lock, wake);
-    if (g_client_deadline_stop) break;
-    mutex_unlock(g_client_deadline_lock);
+    cond_var_timedwait(client_deadline_bundle.cond_var,
+                       client_deadline_bundle.mutex, wake);
+    if (client_deadline_bundle.stop) break;
+    mutex_unlock(client_deadline_bundle.mutex);
     _client_deadline_sweep_once();
-    mutex_lock(g_client_deadline_lock);
+    mutex_lock(client_deadline_bundle.mutex);
   }
-  mutex_unlock(g_client_deadline_lock);
+  mutex_unlock(client_deadline_bundle.mutex);
   return NULL;
 }
 
@@ -2975,9 +3034,9 @@ static void *_client_deadline_sweep_fn(void *arg) {
  * spawning the engine's own reactor thread; see that function for
  * rollback-on-failure handling. */
 static ccol_retval_t _client_deadline_sweep_start(void) {
-  g_client_deadline_stop = false;
-  int rc =
-      thread_create(g_client_deadline_thread, _client_deadline_sweep_fn, NULL);
+  client_deadline_bundle.stop = false;
+  int rc = thread_create(client_deadline_bundle.thread,
+                         _client_deadline_sweep_fn, NULL);
   return (rc == 0) ? ccol_success : ccol_unexpected_failure;
 }
 
@@ -2986,12 +3045,12 @@ static ccol_retval_t _client_deadline_sweep_start(void) {
  * own comment for why teardown always happens on a dedicated reaper thread,
  * never inline from a reactor callback. */
 static void _client_deadline_sweep_stop_and_join(void) {
-  call_once(g_client_deadline_globals_once, _client_deadline_init_globals);
-  mutex_lock(g_client_deadline_lock);
-  g_client_deadline_stop = true;
-  cond_var_broadcast(g_client_deadline_cv);
-  mutex_unlock(g_client_deadline_lock);
-  thread_join(g_client_deadline_thread);
+  call_once(client_deadline_bundle.once, _client_deadline_init_globals);
+  mutex_lock(client_deadline_bundle.mutex);
+  client_deadline_bundle.stop = true;
+  cond_var_broadcast(client_deadline_bundle.cond_var);
+  mutex_unlock(client_deadline_bundle.mutex);
+  thread_join(client_deadline_bundle.thread);
 }
 
 /* Deep-copies a chmap(char* -> char*) header map; used to give a redirect
@@ -3176,7 +3235,7 @@ static void _async_ctx_free(chttp_async_ctx_t *ctx) {
   mutex_unlock(ctx->idle_lock);
   _client_deadline_unregister(ctx); /* no-op if never registered; MUST run
                                      * before the close() below */
-  if (ctx->reg) event_loop_remove(g_client_reactor, ctx->reg);
+  if (ctx->reg) event_loop_remove(cli_engine_bundler.reactor, ctx->reg);
   if (ctx->tls) ctls_conn_destroy(ctx->tls);
   if (ctx->fd >= 0) close(ctx->fd);
   mutex_destroy(ctx->idle_lock);
@@ -3734,8 +3793,8 @@ static void _async_tls_advance(chttp_async_ctx_t *ctx) {
   ctls_handshake_result_t r = ctls_conn_handshake_step(ctx->tls);
   if (r == CTLS_HANDSHAKE_DONE) {
     ctx->state = CHTTP_ASYNC_WRITING;
-    if (event_loop_modify(g_client_reactor, ctx->reg, ccol_select_write) !=
-        ccol_success) {
+    if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                          ccol_select_write) != ccol_success) {
       _async_ctx_finish(ctx);
       return;
     }
@@ -3759,7 +3818,7 @@ static void _async_tls_advance(chttp_async_ctx_t *ctx) {
   }
   ccol_select_dir want =
       (r == CTLS_HANDSHAKE_WANT_WRITE) ? ccol_select_write : ccol_select_read;
-  event_loop_modify(g_client_reactor, ctx->reg, want);
+  event_loop_modify(cli_engine_bundler.reactor, ctx->reg, want);
 }
 
 /*
@@ -3815,8 +3874,8 @@ static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
     ctx->wire_len = ctx->wire_sent = 0;
   }
   ctx->state = CHTTP_ASYNC_READING;
-  if (event_loop_modify(g_client_reactor, ctx->reg, ccol_select_read) !=
-      ccol_success) {
+  if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                        ccol_select_read) != ccol_success) {
     _async_ctx_finish(ctx);
   }
 }
@@ -3852,8 +3911,8 @@ static void _async_plain_try_write(chttp_async_ctx_t *ctx) {
     ctx->wire_len = ctx->wire_sent = 0;
   }
   ctx->state = CHTTP_ASYNC_READING;
-  if (event_loop_modify(g_client_reactor, ctx->reg, ccol_select_read) !=
-      ccol_success) {
+  if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                        ccol_select_read) != ccol_success) {
     _async_ctx_finish(ctx);
   }
 }
@@ -4160,8 +4219,8 @@ static void _async_on_error(event_loop loop, ccol_selectable *sel, void *arg) {
 }
 
 /*
- * Runs on a g_client_dns_pool worker: resolves DNS (TCP) or builds the
- * sockaddr_un (unix), then issues ONE non-blocking connect() and registers
+ * Runs on a cli_engine_bundler.dns_pool worker: resolves DNS (TCP) or builds
+ * the sockaddr_un (unix), then issues ONE non-blocking connect() and registers
  * the resulting fd with the reactor for write-readiness; never blocks the
  * worker waiting for the connect to actually complete. This division of
  * labor (synchronous DNS resolution plus a single non-blocking connect
@@ -4240,8 +4299,8 @@ static void _async_connect_task(void *arg) {
    * ever submitted here (see _async_submit_hop), which can run at any time,
    * including concurrently with this exact assignment. This also covers the
    * case where connect_timeout_ms already expired while this task merely
-   * sat queued on g_client_dns_pool (e.g. a saturated pool): the sweep
-   * cannot shut down an fd that doesn't exist yet, so on that path it can
+   * sat queued on cli_engine_bundler.dns_pool (e.g. a saturated pool): the
+   * sweep cannot shut down an fd that doesn't exist yet, so on that path it can
    * only mark ctx->timed_out and wait; checked here, the moment a real fd
    * finally exists. */
   ctx->fd = fd;
@@ -4278,7 +4337,7 @@ static void _async_connect_task(void *arg) {
    * field comment: a NULL read there is already handled as a harmless,
    * self-healing no-op), so this adds no new contention on that side. */
   mutex_lock(ctx->idle_lock);
-  ctx->reg = event_loop_add(g_client_reactor,
+  ctx->reg = event_loop_add(cli_engine_bundler.reactor,
                             selectable_from_fd(fd, ccol_select_write), handlers,
                             ctx, &err);
   bool reg_failed = !ctx->reg;
@@ -4381,8 +4440,8 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
    * continues to apply unchanged across the retry. */
   ctx->connect_deadline = _deadline_make(chain->connect_timeout_ms);
 
-  call_once(g_chttp1_settings_once, _init_chttp1_settings);
-  chttp1_parser_init(&ctx->parser, &g_chttp1_settings);
+  call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+  chttp1_parser_init(&ctx->parser, &client_http1_settings_bundler.settings);
   ctx->parser.data = &ctx->pctx;
 
   /* Registered BEFORE submitting; see _async_submit_hop's identical
@@ -4390,8 +4449,8 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
    * and free ctx before this thread registers it). */
   _client_deadline_register(ctx);
 
-  ccol_retval_t sr =
-      ctpool_submit(g_client_dns_pool, _async_connect_task, ctx, NULL);
+  ccol_retval_t sr = ctpool_submit(cli_engine_bundler.dns_pool,
+                                   _async_connect_task, ctx, NULL);
   if (sr != ccol_success) {
     _async_fulfill_chain(chain, ccol_not_enough_memory, NULL);
     _async_ctx_free(ctx); /* unregisters ctx too */
@@ -4625,8 +4684,8 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
   }
   _url_free(chain->mp, &url);
 
-  call_once(g_chttp1_settings_once, _init_chttp1_settings);
-  chttp1_parser_init(&ctx->parser, &g_chttp1_settings);
+  call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+  chttp1_parser_init(&ctx->parser, &client_http1_settings_bundler.settings);
   ctx->parser.data = &ctx->pctx;
 
   if (reused) {
@@ -4652,8 +4711,8 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
      * reproducible hang in async_idle_pool.sequential_requests_reuse_
      * connection, found via gdb thread backtraces on the hung process
      * rather than assumed from code inspection alone. */
-    if (event_loop_modify(g_client_reactor, ctx->reg, ccol_select_write) !=
-        ccol_success) {
+    if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                          ccol_select_write) != ccol_success) {
       _async_retry_hop(ctx);
       mutex_unlock(ctx->idle_lock);
       _async_ctx_teardown(ctx);
@@ -4684,8 +4743,8 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
    * for the entire time any other thread can possibly touch it. */
   _client_deadline_register(ctx);
 
-  ccol_retval_t sr =
-      ctpool_submit(g_client_dns_pool, _async_connect_task, ctx, NULL);
+  ccol_retval_t sr = ctpool_submit(cli_engine_bundler.dns_pool,
+                                   _async_connect_task, ctx, NULL);
   if (sr != ccol_success) {
     _async_fulfill_chain(chain, ccol_not_enough_memory, NULL);
     _async_ctx_teardown(ctx); /* unregisters ctx too, via _async_ctx_free */
@@ -4925,18 +4984,18 @@ static ctpool_future *_chttp_do_async_internal(chttpcli cli,
  * but these five functions exist purely for test instrumentation). */
 #ifdef RUNNING_UNIT_TESTS
 int _chttpclient_engine_ref_count_for_tests(void) {
-  call_once(g_client_engine_once, _client_engine_globals_init);
-  mutex_lock(g_client_engine_mutex);
-  int n = (int)g_client_reactor_refs;
-  mutex_unlock(g_client_engine_mutex);
+  call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  mutex_lock(cli_engine_bundler.mutex);
+  int n = (int)cli_engine_bundler.reactor_refs;
+  mutex_unlock(cli_engine_bundler.mutex);
   return n;
 }
 
 bool _chttpclient_engine_running_for_tests(void) {
-  call_once(g_client_engine_once, _client_engine_globals_init);
-  mutex_lock(g_client_engine_mutex);
-  bool running = (g_client_reactor != NULL);
-  mutex_unlock(g_client_engine_mutex);
+  call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  mutex_lock(cli_engine_bundler.mutex);
+  bool running = (cli_engine_bundler.reactor != NULL);
+  mutex_unlock(cli_engine_bundler.mutex);
   return running;
 }
 
@@ -4948,6 +5007,14 @@ void _chttpclient_engine_release_for_tests(void) { _client_engine_release(); }
 
 void _chttpclient_engine_wait_for_quiescence_for_tests(void) {
   _client_engine_wait_for_quiescence();
+}
+
+size_t _chttpclient_engine_num_reactor_threads_for_tests(void) {
+  call_once(cli_engine_bundler.once, _client_engine_globals_init);
+  mutex_lock(cli_engine_bundler.mutex);
+  size_t n = cli_engine_bundler.last_resolved_num_reactor_threads;
+  mutex_unlock(cli_engine_bundler.mutex);
+  return n;
 }
 #endif /* RUNNING_UNIT_TESTS */
 
@@ -5673,18 +5740,18 @@ ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
 /* ========================================================================== */
 
 static void _init_default_client(void) {
-  g_default_client = create_chttpclient(NULL);
+  default_client_bundler.client = create_chttpclient(NULL);
 }
 
 chttpcli chttp_default_client(void) {
-  call_once(g_default_client_once, _init_default_client);
-  return g_default_client;
+  call_once(default_client_bundler.once, _init_default_client);
+  return default_client_bundler.client;
 }
 
 __attribute__((destructor)) static void _cleanup_default_client(void) {
-  if (g_default_client) {
-    __chttpclient_destroy(g_default_client);
-    g_default_client = NULL;
+  if (default_client_bundler.client) {
+    __chttpclient_destroy(default_client_bundler.client);
+    default_client_bundler.client = NULL;
   }
 }
 

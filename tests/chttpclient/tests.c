@@ -3439,6 +3439,7 @@ extern void _chttpclient_engine_release_for_tests(void);
  * racing process teardown (a crash caught by valgrind during development of
  * this suite). */
 extern void _chttpclient_engine_wait_for_quiescence_for_tests(void);
+extern size_t _chttpclient_engine_num_reactor_threads_for_tests(void);
 
 TEST(async_engine, starts_on_first_acquire_and_stops_at_zero_refcount) {
   REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
@@ -3527,6 +3528,45 @@ TEST(async_engine, concurrent_acquire_release_no_corruption) {
   REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 0);
   _chttpclient_engine_wait_for_quiescence_for_tests();
   REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
+}
+
+TEST(async_engine, num_reactor_threads_defaults_to_cpu_count) {
+  /* Never configured (or configured with 0, its own "restore the default"
+   * sentinel) in this test's own context: the reactor must size itself to
+   * sysconf(_SC_NPROCESSORS_ONLN), falling back to 1 if that query fails,
+   * exactly like chttpsvr_set_engine_num_reactor_threads's sibling default. */
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(0), ccol_success);
+  REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
+
+  long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  size_t expected = (cpus > 0) ? (size_t)cpus : 1;
+  REQUIRE_EQ(_chttpclient_engine_num_reactor_threads_for_tests(), expected);
+
+  _chttpclient_engine_release_for_tests();
+  _chttpclient_engine_wait_for_quiescence_for_tests();
+}
+
+TEST(async_engine, num_reactor_threads_explicit_value_is_wired_in) {
+  /* A positive override must be the exact value event_loop_create_with_mprocs
+   * actually receives, not merely accepted and then silently ignored. */
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(3), ccol_success);
+  REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
+  REQUIRE_EQ(_chttpclient_engine_num_reactor_threads_for_tests(), (size_t)3);
+  _chttpclient_engine_release_for_tests();
+  _chttpclient_engine_wait_for_quiescence_for_tests();
+
+  /* Restore the default for every test declared after this one. */
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(0), ccol_success);
+}
+
+TEST(async_engine, num_reactor_threads_rejected_while_running) {
+  REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(2), ccol_not_permitted);
+  /* 0 (revert-to-default) is also subject to the "not while running" rule:
+   * it is still a live thread-count swap for the next reactor creation. */
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(0), ccol_not_permitted);
+  _chttpclient_engine_release_for_tests();
+  _chttpclient_engine_wait_for_quiescence_for_tests();
 }
 
 /* ========================================================================== */

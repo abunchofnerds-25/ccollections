@@ -2973,11 +2973,13 @@ static void _event_loop_dispatch_job_fn(void *arg);
  * destruction -- matches this codebase's own established pattern for
  * process-wide lazily-created statics (e.g. chttpclient.c's
  * g_chttp1_settings_once) that live for the process's lifetime. */
-static thread_ls_key_t g_event_loop_job_key;
-static once_flag_t g_event_loop_job_key_once = ONCE_INIT;
+static struct {
+  thread_ls_key_t key;
+  once_flag_t once;
+} event_loop_job_key_bundle = {0};
 
 static void _event_loop_init_job_key(void) {
-  thread_ls_key_create(g_event_loop_job_key, NULL);
+  thread_ls_key_create(event_loop_job_key_bundle.key, NULL);
 }
 
 /* N>1 poller path: collects dispatch items for entry under the entry's
@@ -3178,8 +3180,8 @@ static void _event_loop_dispatch_job_fn(void *arg) {
   struct event_loop_s *loop = job->loop;
   event_entry *entry = job->entry;
 
-  call_once(g_event_loop_job_key_once, _event_loop_init_job_key);
-  thread_ls_set(g_event_loop_job_key, (void *)loop);
+  call_once(event_loop_job_key_bundle.once, _event_loop_init_job_key);
+  thread_ls_set(event_loop_job_key_bundle.key, (void *)loop);
 
   mutex_lock(entry->dispatch_lock);
   for (size_t i = 0; i < job->n_items; i++) {
@@ -3211,7 +3213,7 @@ static void _event_loop_dispatch_job_fn(void *arg) {
   atomic_fetch_sub(&entry->refcount, 1);
   mutex_unlock(stripe->lock);
 
-  thread_ls_set(g_event_loop_job_key, NULL);
+  thread_ls_set(event_loop_job_key_bundle.key, NULL);
   _mem_free(loop->m_procs, job);
 }
 
@@ -3459,9 +3461,9 @@ ccol_retval_t event_loop_shutdown(event_loop loop) {
    * silent deadlock this codebase's history already paid for once (see
    * this function's own historical comment on the shutdown_efd-draining
    * bug below) rather than a comparable one. */
-  call_once(g_event_loop_job_key_once, _event_loop_init_job_key);
+  call_once(event_loop_job_key_bundle.once, _event_loop_init_job_key);
   if (get_thread_id() == loop->poller_thread ||
-      thread_ls_get(g_event_loop_job_key) == (void *)loop) {
+      thread_ls_get(event_loop_job_key_bundle.key) == (void *)loop) {
     return ccol_not_permitted;
   }
 

@@ -302,49 +302,67 @@ struct chttpserver {
 
 /*
  * One static, process-wide event_loop reactor shared by every chttpsvr
- * instance in the process; confirmed via AskUserQuestion as one of two
- * separate, independent reactors (the other belongs to chttpclient, its own
- * analogous static event_loop; see chttpclient.c). chttpserver and
- * chttpclient do not share a single process-wide reactor, so this lifecycle
- * wrapper needs no cross-module coordination at all, only ref-counting
- * across chttpsvr instances (an acquire/release/reaper-thread shape,
- * simplified: no atexit safety net cross-module ordering concern, since
- * there is nothing else in the process racing to bring this specific
- * reactor up first).
+ * instance in the process; one of two separate, independent reactors
+ * (the other belongs to chttpclient, its own analogous static event_loop;
+ * see chttpclient.c). chttpserver and chttpclient do not share a single
+ * process-wide reactor, so this lifecycle wrapper needs no cross-module
+ * coordination at all, only ref-counting across chttpsvr instances (an
+ * acquire/release/reaper-thread shape, simplified: no atexit safety net
+ * cross-module ordering concern, since there is nothing else in the process
+ * racing to bring this specific reactor up first).
  */
-static event_loop g_reactor = NULL;
-static size_t g_reactor_refs = 0;
-static mutex_t g_engine_mutex;
-static cond_var_t g_engine_stopped_cv;
-static once_flag_t g_engine_once = ONCE_INIT;
-static bool g_engine_stopping = false;
-static thread_id_t g_reaper_thread;
-static bool g_reaper_joinable = false;
-static ccol_memmgmt_procs_t g_engine_mp_storage;
-static ccol_memmgmt_procs_t *g_engine_mp = NULL;
-
-/* Repurposed "engine logger" (confirmed via AskUserQuestion): the
- * event_loop reactor has no internal logging of its own to forward, so this
- * captures chttpserver's OWN reactor-thread diagnostics (TLS handshake
- * failures, listener bind errors, idle-timeout closes) across every chttpsvr
- * instance sharing the one process-wide reactor. NULL (the default) means
- * diagnostics are simply skipped; there is no default logger installed any
- * more, since there is nothing generating log-worthy events until the
- * caller opts in via chttpsvr_set_engine_logger(). Guarded by
- * g_engine_mutex purely against a torn pointer read/write racing a
- * concurrent chttpsvr_set_engine_logger() call (clog itself is already
- * thread-safe for concurrent logging calls through one handle). */
-static clog g_engine_logger = NULL;
+static struct {
+  event_loop reactor;
+  size_t reactor_refs;
+  mutex_t mutex;
+  cond_var_t stopped_cv;
+  once_flag_t once;
+  bool stopping;
+  thread_id_t reaper_thread;
+  bool reaper_joinable;
+  ccol_memmgmt_procs_t mprocs_storage;
+  ccol_memmgmt_procs_t *mprocs;
+  /* 0 = auto-detect via sysconf(_SC_NPROCESSORS_ONLN), this module's
+   * original, still-default behavior. A positive value pins the reactor to
+   * exactly that many OS threads instead; see
+   * chttpsvr_set_engine_num_reactor_threads's own doc comment. Baked into
+   * the reactor at construction time, same "before first start, or after a
+   * full stop" restriction as mprocs above. */
+  size_t num_reactor_threads;
+  /* The value actually passed to event_loop_create_with_mprocs the last time
+   * the reactor was created (auto-detected or explicit); for test
+   * instrumentation only, see _chttpsvr_engine_num_reactor_threads_for_tests
+   * below. */
+  size_t last_resolved_num_reactor_threads;
+  /* Repurposed "engine logger": The event_loop reactor has no internal logging
+   * of its own to forward, so this captures chttpserver's OWN reactor-thread
+   * diagnostics (TLS handshake failures, listener bind errors, idle-timeout
+   * closes) across every chttpsvr instance sharing the one process-wide
+   * reactor. NULL (the default) means diagnostics are simply skipped; there is
+   * no default logger installed any more, since there is nothing generating
+   * log-worthy events until the caller opts in via
+   * chttpsvr_set_engine_logger(). Guarded by srv_engine_bundler.mutex purely
+   * against a torn pointer read/write racing a concurrent
+   * chttpsvr_set_engine_logger() call (clog itself is already thread-safe for
+   * concurrent logging calls through one handle). */
+  clog log;
+} srv_engine_bundler = {0};
 
 /* Idle-timeout sweep thread: one per process, shared by every chttpsvr
  * instance's idle-connection registry (each server has its own
  * srv->idle_head/tail list; the sweep just walks every started server). */
-static thread_id_t g_idle_sweep_thread;
-static bool g_idle_sweep_running = false;
-static bool g_idle_sweep_stop_flag = false;
-static mutex_t g_servers_mutex;
-static struct chttpserver **g_servers = NULL;
-static size_t g_servers_count = 0, g_servers_cap = 0;
+static struct {
+  thread_id_t thread;
+  bool running;
+  bool stop_flag;
+} idle_sweep_bundler = {0};
+
+static struct {
+  mutex_t mutex;
+  struct chttpserver **servers;
+  size_t count;
+  size_t capacity;
+} servers_bundler = {0};
 
 static void _idle_sweep_stop_if_running(void);
 static void _quiesce_server_once(struct chttpserver *srv);
@@ -353,33 +371,33 @@ static void _quiesce_server_once(struct chttpserver *srv);
  * reactor is actually torn down: quiesces (stops listening, drains in-flight
  * requests, closes idle connections, shuts down and destroys the worker
  * pool, releases the engine reference) every chttpsvr instance still
- * registered in g_servers, regardless of whether this reaper run was
- * triggered by chttpsvr_engine_stop() (servers may still be fully live and
- * started) or by the graceful ref-count-reaches-zero path (every registered
+ * registered in servers_bundler.servers, regardless of whether this reaper
+ * run was triggered by chttpsvr_engine_stop() (servers may still be fully live
+ * and started) or by the graceful ref-count-reaches-zero path (every registered
  * server has, by construction, already quiesced and unregistered itself, so
  * this is an immediate no-op there). Without this, a forced engine stop
- * would tear down g_reactor and free g_servers out from under still-started
- * servers whose own listen_reg/conn->reg registrations point into it,
- * leaving those servers' next chttpsvr_destroy() call to dereference
- * already-freed state.
+ * would tear down srv_engine_bundler.reactor and free
+ * servers_bundler.servers out from under still-started servers whose own
+ * listen_reg/conn->reg registrations point into it, leaving those servers' next
+ * chttpsvr_destroy() call to dereference already-freed state.
  *
- * Repeatedly re-peeks g_servers[0] rather than snapshotting the whole list
- * up front, since _quiesce_server_once -> _servers_unregister removes the
- * entry it just processed (or, if a concurrent chttpsvr_destroy() on another
- * thread is already quiescing that exact same server, leaves it in place
- * until that other call finishes) -- either way this loop always converges
- * on g_servers_count == 0 once every legitimately in-progress teardown
- * completes. */
+ * Repeatedly re-peeks servers_bundler.servers[0] rather than snapshotting
+ * the whole list up front, since _quiesce_server_once -> _servers_unregister
+ * removes the entry it just processed (or, if a concurrent chttpsvr_destroy()
+ * on another thread is already quiescing that exact same server, leaves it in
+ * place until that other call finishes) -- either way this loop always
+ * converges on servers_bundler.count == 0 once every legitimately
+ * in-progress teardown completes. */
 static void _engine_force_stop_quiesce_all(void) {
   struct chttpserver *prev_unremoved = NULL;
   for (;;) {
-    mutex_lock(g_servers_mutex);
-    if (g_servers_count == 0) {
-      mutex_unlock(g_servers_mutex);
+    mutex_lock(servers_bundler.mutex);
+    if (servers_bundler.count == 0) {
+      mutex_unlock(servers_bundler.mutex);
       return;
     }
-    struct chttpserver *srv = g_servers[0];
-    mutex_unlock(g_servers_mutex);
+    struct chttpserver *srv = servers_bundler.servers[0];
+    mutex_unlock(servers_bundler.mutex);
 
     if (srv == prev_unremoved) {
       /* A concurrent chttpsvr_destroy(srv) on another thread already won the
@@ -394,9 +412,9 @@ static void _engine_force_stop_quiesce_all(void) {
 }
 
 static void _engine_globals_init(void) {
-  mutex_init(g_engine_mutex);
-  cond_var_init(g_engine_stopped_cv);
-  mutex_init(g_servers_mutex);
+  mutex_init(srv_engine_bundler.mutex);
+  cond_var_init(srv_engine_bundler.stopped_cv);
+  mutex_init(servers_bundler.mutex);
   /* SIGPIPE must be suppressed for all TCP servers, unconditionally: a
    * client can close its read side (or the whole connection) while a worker
    * is still mid-write on the response, and chttp1_stream_write's raw
@@ -407,62 +425,63 @@ static void _engine_globals_init(void) {
 }
 
 static clog _engine_logger_get(void) {
-  call_once(g_engine_once, _engine_globals_init);
-  mutex_lock(g_engine_mutex);
-  clog l = g_engine_logger;
-  mutex_unlock(g_engine_mutex);
+  call_once(srv_engine_bundler.once, _engine_globals_init);
+  mutex_lock(srv_engine_bundler.mutex);
+  clog l = srv_engine_bundler.log;
+  mutex_unlock(srv_engine_bundler.mutex);
   return l;
 }
 
 static void _join_reaper_if_needed_locked(void) {
-  if (g_reaper_joinable) {
-    thread_join(g_reaper_thread);
-    g_reaper_joinable = false;
+  if (srv_engine_bundler.reaper_joinable) {
+    thread_join(srv_engine_bundler.reaper_thread);
+    srv_engine_bundler.reaper_joinable = false;
   }
 }
 
 static void *_engine_reaper_fn(void *arg) {
   (void)arg;
   event_loop loop_to_destroy;
-  mutex_lock(g_engine_mutex);
-  loop_to_destroy = g_reactor;
-  mutex_unlock(g_engine_mutex);
+  mutex_lock(srv_engine_bundler.mutex);
+  loop_to_destroy = srv_engine_bundler.reactor;
+  mutex_unlock(srv_engine_bundler.mutex);
   /* Quiesce every still-registered server BEFORE touching the idle sweep
    * thread or the reactor itself: chttpsvr_engine_stop() (the forced path)
    * may run this reaper while one or more servers are still fully started,
-   * with live listen_reg/conn->reg registrations into g_reactor -- tearing
-   * the reactor down first would leave those registrations dangling the
-   * moment the owning server's own chttpsvr_stop()/_conn_close() next tried
-   * to use them. The graceful ref-count-reaches-zero path already
-   * guarantees every registered server has quiesced and unregistered itself
-   * by the time it gets here, so this is a fast no-op in that case. */
+   * with live listen_reg/conn->reg registrations into
+   * srv_engine_bundler.reactor -- tearing the reactor down first would leave
+   * those registrations dangling the moment the owning server's own
+   * chttpsvr_stop()/_conn_close() next tried to use them. The graceful
+   * ref-count-reaches-zero path already guarantees every registered server has
+   * quiesced and unregistered itself by the time it gets here, so this is a
+   * fast no-op in that case. */
   _engine_force_stop_quiesce_all();
   /* Stop the idle sweep thread before tearing down the reactor it calls
    * into (_conn_close -> event_loop_remove) -- see
    * _idle_sweep_stop_if_running's own doc comment. */
   _idle_sweep_stop_if_running();
   if (loop_to_destroy) event_loop_destroy(loop_to_destroy);
-  /* g_servers' backing array is a plain realloc'd buffer, not itself tied to
-   * any one server's lifetime -- every server that ever contributed a ref to
-   * this engine has already been unregistered (via
+  /* servers_bundler.servers' backing array is a plain realloc'd buffer, not
+   * itself tied to any one server's lifetime -- every server that ever
+   * contributed a ref to this engine has already been unregistered (via
    * _engine_force_stop_quiesce_all above, or, in the graceful path, by its own
    * chttpsvr_destroy() call before the ref count could ever reach zero) by the
-   * time we get here, so g_servers_count is always 0 at this point;
-   * g_servers_count is reset explicitly anyway as a defensive belt-and-braces
-   * measure, not merely assumed, given this exact assumption previously went
-   * unenforced and caused a real use-after-free (see
+   * time we get here, so servers_bundler.count is always 0 at this
+   * point; servers_bundler.count is reset explicitly anyway as a
+   * defensive belt-and-braces measure, not merely assumed, given this exact
+   * assumption previously went unenforced and caused a real use-after-free (see
    * _engine_force_stop_quiesce_all's own doc comment). Free the now-empty array
    * itself so it doesn't show up as a still-reachable allocation for the rest
    * of the process. */
-  mutex_lock(g_servers_mutex);
-  free(g_servers);
-  g_servers = NULL;
-  g_servers_cap = 0;
-  g_servers_count = 0;
-  mutex_unlock(g_servers_mutex);
-  mutex_lock(g_engine_mutex);
-  g_reactor = NULL;
-  g_engine_stopping = false;
+  mutex_lock(servers_bundler.mutex);
+  free(servers_bundler.servers);
+  servers_bundler.servers = NULL;
+  servers_bundler.capacity = 0;
+  servers_bundler.count = 0;
+  mutex_unlock(servers_bundler.mutex);
+  mutex_lock(srv_engine_bundler.mutex);
+  srv_engine_bundler.reactor = NULL;
+  srv_engine_bundler.stopping = false;
   /* The engine-wide diagnostics logger (chttpsvr_set_engine_logger) is
    * scoped to this reactor's own lifetime, same as the reactor itself:
    * closed here so a full engine stop doesn't leave it dangling as a
@@ -471,10 +490,12 @@ static void *_engine_reaper_fn(void *arg) {
    * logging is wanted after that, chttpsvr_set_engine_logger() must be
    * called again, exactly like the "no logger configured" default already
    * documented for a fresh process. */
-  clog old_logger = g_engine_logger;
-  g_engine_logger = NULL;
-  cond_var_broadcast(g_engine_stopped_cv);
-  mutex_unlock(g_engine_mutex);
+  log_info(srv_engine_bundler.log,
+           "The http server reactor engine has been destroyed");
+  clog old_logger = srv_engine_bundler.log;
+  srv_engine_bundler.log = NULL;
+  cond_var_broadcast(srv_engine_bundler.stopped_cv);
+  mutex_unlock(srv_engine_bundler.mutex);
   if (old_logger) clog_close(old_logger);
   return NULL;
 }
@@ -487,75 +508,94 @@ static void _spawn_reaper(void) {
     _engine_reaper_fn(NULL);
     return;
   }
-  mutex_lock(g_engine_mutex);
-  g_reaper_thread = reaper;
-  g_reaper_joinable = true;
-  mutex_unlock(g_engine_mutex);
+  mutex_lock(srv_engine_bundler.mutex);
+  srv_engine_bundler.reaper_thread = reaper;
+  srv_engine_bundler.reaper_joinable = true;
+  mutex_unlock(srv_engine_bundler.mutex);
 }
 
 static ccol_retval_t _engine_acquire(void) {
-  call_once(g_engine_once, _engine_globals_init);
-  mutex_lock(g_engine_mutex);
-  while (g_engine_stopping) cond_var_wait(g_engine_stopped_cv, g_engine_mutex);
+  call_once(srv_engine_bundler.once, _engine_globals_init);
+  mutex_lock(srv_engine_bundler.mutex);
+  while (srv_engine_bundler.stopping)
+    cond_var_wait(srv_engine_bundler.stopped_cv, srv_engine_bundler.mutex);
   _join_reaper_if_needed_locked();
 
-  if (!g_reactor) {
-    long cpus = sysconf(_SC_NPROCESSORS_ONLN);
-    size_t nthreads = (cpus > 0) ? (size_t)cpus : 1;
+  if (!srv_engine_bundler.reactor) {
+    size_t nthreads = srv_engine_bundler.num_reactor_threads;
+    if (nthreads == 0) {
+      long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+      nthreads = (cpus > 0) ? (size_t)cpus : 1;
+    }
+    srv_engine_bundler.last_resolved_num_reactor_threads = nthreads;
     char *err = NULL;
-    g_reactor =
-        event_loop_create_with_mprocs(256, 4, nthreads, g_engine_mp, &err);
-    if (!g_reactor) {
-      mutex_unlock(g_engine_mutex);
+    srv_engine_bundler.reactor = event_loop_create_with_mprocs(
+        256, 4, nthreads, srv_engine_bundler.mprocs, &err);
+    if (!srv_engine_bundler.reactor) {
+      mutex_unlock(srv_engine_bundler.mutex);
       return ccol_not_enough_memory;
     }
+
+    if (!srv_engine_bundler.log) {
+      srv_engine_bundler.log =
+          clog_open_fd_mp(2, CLOG_FATAL, srv_engine_bundler.mprocs);
+      if (!srv_engine_bundler.log) {
+        mutex_unlock(srv_engine_bundler.mutex);
+        return ccol_not_enough_memory;
+      }
+      clog_set_field(srv_engine_bundler.log, "component", "http-server-engine");
+    }
+
+    log_info(srv_engine_bundler.log,
+             "New http server reactor engine has been created");
   }
-  g_reactor_refs++;
-  mutex_unlock(g_engine_mutex);
+  srv_engine_bundler.reactor_refs++;
+  mutex_unlock(srv_engine_bundler.mutex);
   return ccol_success;
 }
 
 static void _engine_release(void) {
   bool should_reap = false;
-  mutex_lock(g_engine_mutex);
-  if (g_reactor_refs > 0) g_reactor_refs--;
-  /* The !g_engine_stopping guard matters for a case that did not exist
-   * before _engine_force_stop_quiesce_all: that function calls
+  mutex_lock(srv_engine_bundler.mutex);
+  if (srv_engine_bundler.reactor_refs > 0) srv_engine_bundler.reactor_refs--;
+  /* The !srv_engine_bundler.stopping guard matters for a case that did
+   * not exist before _engine_force_stop_quiesce_all: that function calls
    * _quiesce_server_once, which calls this function, for every server it
    * quiesces, WHILE a reaper spawned by chttpsvr_engine_stop() is already
-   * running with g_engine_stopping already true and g_reactor still
-   * non-NULL (it hasn't been destroyed yet at that point). Without this
-   * guard, releasing the last ref during that pass would look identical to
-   * the ordinary graceful "last server just released its ref" case and
-   * spawn a second, redundant reaper thread racing the one already tearing
-   * this same reactor down. */
-  if (g_reactor_refs == 0 && g_reactor && !g_engine_stopping) {
-    g_engine_stopping = true;
+   * running with srv_engine_bundler.stopping already true and
+   * srv_engine_bundler.reactor still non-NULL (it hasn't been destroyed yet at
+   * that point). Without this guard, releasing the last ref during that pass
+   * would look identical to the ordinary graceful "last server just released
+   * its ref" case and spawn a second, redundant reaper thread racing the one
+   * already tearing this same reactor down. */
+  if (srv_engine_bundler.reactor_refs == 0 && srv_engine_bundler.reactor &&
+      !srv_engine_bundler.stopping) {
+    srv_engine_bundler.stopping = true;
     should_reap = true;
   }
-  mutex_unlock(g_engine_mutex);
+  mutex_unlock(srv_engine_bundler.mutex);
   if (should_reap) _spawn_reaper();
 }
 
 static void _engine_wait_until_stopped(void) {
-  call_once(g_engine_once, _engine_globals_init);
-  mutex_lock(g_engine_mutex);
-  while (g_reactor || g_engine_stopping)
-    cond_var_wait(g_engine_stopped_cv, g_engine_mutex);
+  call_once(srv_engine_bundler.once, _engine_globals_init);
+  mutex_lock(srv_engine_bundler.mutex);
+  while (srv_engine_bundler.reactor || srv_engine_bundler.stopping)
+    cond_var_wait(srv_engine_bundler.stopped_cv, srv_engine_bundler.mutex);
   _join_reaper_if_needed_locked();
-  mutex_unlock(g_engine_mutex);
+  mutex_unlock(srv_engine_bundler.mutex);
 }
 
 static void _engine_force_stop(void) {
-  call_once(g_engine_once, _engine_globals_init);
+  call_once(srv_engine_bundler.once, _engine_globals_init);
   bool should_reap = false;
-  mutex_lock(g_engine_mutex);
-  if (g_reactor) {
-    g_reactor_refs = 0;
-    g_engine_stopping = true;
+  mutex_lock(srv_engine_bundler.mutex);
+  if (srv_engine_bundler.reactor) {
+    srv_engine_bundler.reactor_refs = 0;
+    srv_engine_bundler.stopping = true;
     should_reap = true;
   }
-  mutex_unlock(g_engine_mutex);
+  mutex_unlock(srv_engine_bundler.mutex);
   if (should_reap) _spawn_reaper();
 }
 
@@ -570,63 +610,66 @@ static void _conn_reject_and_close(chttpsvr_conn_t *conn);
  * list too. Called from chttpsvr_start -- which runs not just once per
  * server but again on every stop/start restart cycle -- so this must be
  * idempotent: skip the add if srv is already present. Without this check,
- * a srv that goes through N restart cycles ends up in g_servers N+1 times,
- * and _servers_unregister's single-occurrence removal (see below) would
- * leave N stale, dangling pointers behind after __chttpsvr_destroy frees
- * srv -- a real use-after-free the idle sweep thread would read on its very
- * next pass, caught by valgrind via
+ * a srv that goes through N restart cycles ends up in
+ * servers_bundler.servers N+1 times, and _servers_unregister's
+ * single-occurrence removal (see below) would leave N stale, dangling pointers
+ * behind after __chttpsvr_destroy frees srv -- a real use-after-free the idle
+ * sweep thread would read on its very next pass, caught by valgrind via
  * restart_races_live_keep_alive_connection_is_safe (which restarts one srv
  * 5 times before destroying it). */
 static void _servers_register(struct chttpserver *srv) {
-  mutex_lock(g_servers_mutex);
-  for (size_t i = 0; i < g_servers_count; i++) {
-    if (g_servers[i] == srv) {
-      mutex_unlock(g_servers_mutex);
+  mutex_lock(servers_bundler.mutex);
+  for (size_t i = 0; i < servers_bundler.count; i++) {
+    if (servers_bundler.servers[i] == srv) {
+      mutex_unlock(servers_bundler.mutex);
       return;
     }
   }
-  if (g_servers_count == g_servers_cap) {
-    size_t new_cap = g_servers_cap ? g_servers_cap * 2 : 8;
+  if (servers_bundler.count == servers_bundler.capacity) {
+    size_t new_cap =
+        servers_bundler.capacity ? servers_bundler.capacity * 2 : 8;
     struct chttpserver **nn = (struct chttpserver **)realloc(
-        g_servers, new_cap * sizeof(struct chttpserver *));
+        servers_bundler.servers, new_cap * sizeof(struct chttpserver *));
     if (nn) {
-      g_servers = nn;
-      g_servers_cap = new_cap;
+      servers_bundler.servers = nn;
+      servers_bundler.capacity = new_cap;
     }
   }
-  if (g_servers_count < g_servers_cap) g_servers[g_servers_count++] = srv;
-  mutex_unlock(g_servers_mutex);
+  if (servers_bundler.count < servers_bundler.capacity)
+    servers_bundler.servers[servers_bundler.count++] = srv;
+  mutex_unlock(servers_bundler.mutex);
 }
 
 static void _servers_unregister(struct chttpserver *srv) {
-  mutex_lock(g_servers_mutex);
-  for (size_t i = 0; i < g_servers_count; i++) {
-    if (g_servers[i] == srv) {
-      g_servers[i] = g_servers[g_servers_count - 1];
-      g_servers_count--;
+  mutex_lock(servers_bundler.mutex);
+  for (size_t i = 0; i < servers_bundler.count; i++) {
+    if (servers_bundler.servers[i] == srv) {
+      servers_bundler.servers[i] =
+          servers_bundler.servers[servers_bundler.count - 1];
+      servers_bundler.count--;
       break;
     }
   }
-  mutex_unlock(g_servers_mutex);
+  mutex_unlock(servers_bundler.mutex);
 }
 
 #define _CHTTPSVR_IDLE_SWEEP_INTERVAL_MS 1000
 
 static void *_idle_sweep_fn(void *arg) {
   (void)arg;
-  while (!g_idle_sweep_stop_flag) {
+  while (!idle_sweep_bundler.stop_flag) {
     struct timespec ts = {
         .tv_sec = _CHTTPSVR_IDLE_SWEEP_INTERVAL_MS / 1000,
         .tv_nsec = (_CHTTPSVR_IDLE_SWEEP_INTERVAL_MS % 1000) * 1000000L};
     nanosleep(&ts, NULL);
-    if (g_idle_sweep_stop_flag) break;
+    if (idle_sweep_bundler.stop_flag) break;
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
 
-    mutex_lock(g_servers_mutex);
-    for (size_t i = 0; i < g_servers_count; i++) {
-      struct chttpserver *srv = g_servers[i];
+    mutex_lock(servers_bundler.mutex);
+    for (size_t i = 0; i < servers_bundler.count; i++) {
+      struct chttpserver *srv = servers_bundler.servers[i];
       unsigned idle_ms = atomic_load(&srv->idle_timeout_ms);
       if (!idle_ms) continue;
 
@@ -668,19 +711,19 @@ static void *_idle_sweep_fn(void *arg) {
       }
       for (size_t j = 0; j < to_close_n; j++) _conn_close(to_close[j]);
     }
-    mutex_unlock(g_servers_mutex);
+    mutex_unlock(servers_bundler.mutex);
   }
   return NULL;
 }
 
 static void _idle_sweep_start_if_needed(void) {
-  mutex_lock(g_servers_mutex);
-  if (!g_idle_sweep_running) {
-    g_idle_sweep_stop_flag = false;
-    if (thread_create(g_idle_sweep_thread, _idle_sweep_fn, NULL) == 0)
-      g_idle_sweep_running = true;
+  mutex_lock(servers_bundler.mutex);
+  if (!idle_sweep_bundler.running) {
+    idle_sweep_bundler.stop_flag = false;
+    if (thread_create(idle_sweep_bundler.thread, _idle_sweep_fn, NULL) == 0)
+      idle_sweep_bundler.running = true;
   }
-  mutex_unlock(g_servers_mutex);
+  mutex_unlock(servers_bundler.mutex);
 }
 
 /* Stops and joins the idle sweep thread, if one is running. Tied to the
@@ -694,14 +737,14 @@ static void _idle_sweep_start_if_needed(void) {
 static void _idle_sweep_stop_if_running(void) {
   bool was_running = false;
   thread_id_t t = {0};
-  mutex_lock(g_servers_mutex);
-  if (g_idle_sweep_running) {
-    g_idle_sweep_stop_flag = true;
-    t = g_idle_sweep_thread;
+  mutex_lock(servers_bundler.mutex);
+  if (idle_sweep_bundler.running) {
+    idle_sweep_bundler.stop_flag = true;
+    t = idle_sweep_bundler.thread;
     was_running = true;
-    g_idle_sweep_running = false;
+    idle_sweep_bundler.running = false;
   }
-  mutex_unlock(g_servers_mutex);
+  mutex_unlock(servers_bundler.mutex);
   if (was_running) thread_join(t);
 }
 
@@ -1590,7 +1633,7 @@ static void _conn_free(chttpsvr_conn_t *conn) {
 
 static void _conn_close(chttpsvr_conn_t *conn) {
   if (conn->reg) {
-    event_loop_remove(g_reactor, conn->reg);
+    event_loop_remove(srv_engine_bundler.reactor, conn->reg);
     conn->reg = NULL;
   }
   conn->state = CONN_ST_CLOSING;
@@ -1785,16 +1828,18 @@ static int _on_message_complete(chttp1_parser_t *p) {
   return 0;
 }
 
-static chttp1_settings_t g_parser_settings;
-static once_flag_t g_parser_settings_once = ONCE_INIT;
+static struct {
+  chttp1_settings_t settings;
+  once_flag_t once;
+} srv_parser_bundler = {0};
 
 static void _init_parser_settings(void) {
-  chttp1_settings_init(&g_parser_settings);
-  g_parser_settings.on_request_line = _on_request_line;
-  g_parser_settings.on_header = _on_header;
-  g_parser_settings.on_headers_complete = _on_headers_complete;
-  g_parser_settings.on_body = _on_body;
-  g_parser_settings.on_message_complete = _on_message_complete;
+  chttp1_settings_init(&srv_parser_bundler.settings);
+  srv_parser_bundler.settings.on_request_line = _on_request_line;
+  srv_parser_bundler.settings.on_header = _on_header;
+  srv_parser_bundler.settings.on_headers_complete = _on_headers_complete;
+  srv_parser_bundler.settings.on_body = _on_body;
+  srv_parser_bundler.settings.on_message_complete = _on_message_complete;
 }
 
 /* ========================================================================== */
@@ -1805,7 +1850,7 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
                                  size_t leftover_len) {
   _idle_list_remove(conn);
   if (conn->reg) {
-    event_loop_remove(g_reactor, conn->reg);
+    event_loop_remove(srv_engine_bundler.reactor, conn->reg);
     conn->reg = NULL;
   }
   conn->state = CONN_ST_DIVERTED;
@@ -1897,15 +1942,15 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
                                  ? ccol_select_write
                                  : ccol_select_read;
       if (conn->reg) {
-        event_loop_modify(g_reactor, conn->reg, want);
+        event_loop_modify(srv_engine_bundler.reactor, conn->reg, want);
       } else {
         char *err = NULL;
-        conn->reg =
-            event_loop_add(g_reactor, selectable_from_fd(conn->fd, want),
-                           (event_handlers_t){.on_readable = _conn_on_readable,
-                                              .on_writable = _conn_on_writable,
-                                              .on_error = _conn_on_error},
-                           conn, &err);
+        conn->reg = event_loop_add(
+            srv_engine_bundler.reactor, selectable_from_fd(conn->fd, want),
+            (event_handlers_t){.on_readable = _conn_on_readable,
+                               .on_writable = _conn_on_writable,
+                               .on_error = _conn_on_error},
+            conn, &err);
         if (!conn->reg) {
           _conn_close(conn);
           return;
@@ -1924,7 +1969,8 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
     /* CTLS_HANDSHAKE_DONE */
     conn->state = CONN_ST_READING_HEADERS;
     if (conn->reg && conn->reg != NULL) {
-      event_loop_modify(g_reactor, conn->reg, ccol_select_read);
+      event_loop_modify(srv_engine_bundler.reactor, conn->reg,
+                        ccol_select_read);
     }
   }
 
@@ -1941,7 +1987,8 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
         if (!conn->reg) {
           char *err = NULL;
           conn->reg = event_loop_add(
-              g_reactor, selectable_from_fd(conn->fd, ccol_select_read),
+              srv_engine_bundler.reactor,
+              selectable_from_fd(conn->fd, ccol_select_read),
               (event_handlers_t){.on_readable = _conn_on_readable,
                                  .on_error = _conn_on_error},
               conn, &err);
@@ -2242,7 +2289,8 @@ static void _task_worker(void *arg) {
   conn->state = CONN_ST_READING_HEADERS;
   char *err = NULL;
   conn->reg =
-      event_loop_add(g_reactor, selectable_from_fd(conn->fd, ccol_select_read),
+      event_loop_add(srv_engine_bundler.reactor,
+                     selectable_from_fd(conn->fd, ccol_select_read),
                      (event_handlers_t){.on_readable = _conn_on_readable,
                                         .on_error = _conn_on_error},
                      conn, &err);
@@ -2304,8 +2352,9 @@ static void _listener_on_readable(event_loop loop, ccol_selectable *sel,
     _apply_accepted_socket_options(cfd, srv->is_unix_socket,
                                    srv->enable_keepalive);
 
-    call_once(g_parser_settings_once, _init_parser_settings);
-    chttpsvr_conn_t *conn = _conn_create(srv, cfd, &g_parser_settings);
+    call_once(srv_parser_bundler.once, _init_parser_settings);
+    chttpsvr_conn_t *conn =
+        _conn_create(srv, cfd, &srv_parser_bundler.settings);
     if (!conn) {
       close(cfd);
       atomic_fetch_sub(&srv->current_connections, 1);
@@ -2849,15 +2898,15 @@ static ctpool _drain_and_close_all_connections(struct chttpserver *srv) {
   return old_pool;
 }
 
-/* Stops listening, unregisters from g_servers, drains in-flight requests,
- * closes idle connections, shuts down and destroys the worker pool, and
- * releases this server's engine reference -- everything __chttpsvr_destroy
- * used to do inline. Factored out and guarded by srv->teardown_started so
- * it can also be driven, exactly once, from the engine's own
- * _engine_force_stop_quiesce_all pass (chttpsvr_engine_stop() may run that
- * pass while srv is still fully started, well before the application ever
- * calls chttpsvr_destroy(srv)); whichever of the two callers reaches a given
- * srv first does the real work, the other is a safe no-op. See
+/* Stops listening, unregisters from servers_bundler.servers, drains
+ * in-flight requests, closes idle connections, shuts down and destroys the
+ * worker pool, and releases this server's engine reference -- everything
+ * __chttpsvr_destroy used to do inline. Factored out and guarded by
+ * srv->teardown_started so it can also be driven, exactly once, from the
+ * engine's own _engine_force_stop_quiesce_all pass (chttpsvr_engine_stop() may
+ * run that pass while srv is still fully started, well before the application
+ * ever calls chttpsvr_destroy(srv)); whichever of the two callers reaches a
+ * given srv first does the real work, the other is a safe no-op. See
  * _engine_force_stop_quiesce_all's own doc comment for why this ordering
  * (stop -> unregister -> drain -> release engine ref -> destroy pool) must
  * run to completion before the shared reactor can be torn down. */
@@ -2877,8 +2926,8 @@ static void _quiesce_server_once(struct chttpserver *srv) {
    * releasing this server's engine reference below: _engine_release() can
    * be the one that drops the shared reactor's ref count to zero (if srv
    * happens to be the last contributing server), which hands
-   * event_loop_destroy(g_reactor) off to an async reaper thread -- racing
-   * this function's own event_loop_remove() calls (inside
+   * event_loop_destroy(srv_engine_bundler.reactor) off to an async reaper
+   * thread -- racing this function's own event_loop_remove() calls (inside
    * _drain_and_close_all_connections -> _conn_close) if they ran after
    * releasing instead of before. */
   ctpool old_pool = _drain_and_close_all_connections(srv);
@@ -3071,10 +3120,10 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
     return ccol_unexpected_failure;
   }
 
-  call_once(g_parser_settings_once, _init_parser_settings);
+  call_once(srv_parser_bundler.once, _init_parser_settings);
   char *reg_err = NULL;
   event_reg *lreg = event_loop_add(
-      g_reactor, selectable_from_fd(lfd, ccol_select_read),
+      srv_engine_bundler.reactor, selectable_from_fd(lfd, ccol_select_read),
       (event_handlers_t){.on_readable = _listener_on_readable}, srv, &reg_err);
   if (!lreg) {
     close(lfd);
@@ -3121,7 +3170,7 @@ void chttpsvr_stop(chttpsvr srv) {
   mutex_unlock(srv->mutex);
   if (!was_started) return;
 
-  if (lreg) event_loop_remove(g_reactor, lreg);
+  if (lreg) event_loop_remove(srv_engine_bundler.reactor, lreg);
   close(lfd);
   if (is_unix && unix_path) unlink(unix_path);
   free(unix_path);
@@ -3131,12 +3180,12 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl) {
   if (!cl) return ccol_invalid_args;
   clog derived = clog_derive(cl);
   if (!derived) return ccol_not_enough_memory;
-  clog_set_field(derived, "component", "http-engine");
-  call_once(g_engine_once, _engine_globals_init);
-  mutex_lock(g_engine_mutex);
-  clog old = g_engine_logger;
-  g_engine_logger = derived;
-  mutex_unlock(g_engine_mutex);
+  clog_set_field(derived, "component", "http-server-engine");
+  call_once(srv_engine_bundler.once, _engine_globals_init);
+  mutex_lock(srv_engine_bundler.mutex);
+  clog old = srv_engine_bundler.log;
+  srv_engine_bundler.log = derived;
+  mutex_unlock(srv_engine_bundler.mutex);
   if (old) clog_close(old);
   return ccol_success;
 }
@@ -3144,21 +3193,48 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl) {
 ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp) {
   if (mp && (!mp->malloc || !mp->free || !mp->calloc || !mp->realloc))
     return ccol_invalid_args;
-  call_once(g_engine_once, _engine_globals_init);
-  mutex_lock(g_engine_mutex);
-  if (g_reactor) {
-    mutex_unlock(g_engine_mutex);
+  call_once(srv_engine_bundler.once, _engine_globals_init);
+  mutex_lock(srv_engine_bundler.mutex);
+  if (srv_engine_bundler.reactor) {
+    mutex_unlock(srv_engine_bundler.mutex);
     return ccol_not_permitted;
   }
   if (mp) {
-    g_engine_mp_storage = *mp;
-    g_engine_mp = &g_engine_mp_storage;
+    srv_engine_bundler.mprocs_storage = *mp;
+    srv_engine_bundler.mprocs = &srv_engine_bundler.mprocs_storage;
   } else {
-    g_engine_mp = NULL;
+    srv_engine_bundler.mprocs = NULL;
   }
-  mutex_unlock(g_engine_mutex);
+  mutex_unlock(srv_engine_bundler.mutex);
   return ccol_success;
 }
+
+ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads) {
+  call_once(srv_engine_bundler.once, _engine_globals_init);
+  mutex_lock(srv_engine_bundler.mutex);
+  if (srv_engine_bundler.reactor) {
+    mutex_unlock(srv_engine_bundler.mutex);
+    return ccol_not_permitted;
+  }
+  srv_engine_bundler.num_reactor_threads = num_threads;
+  mutex_unlock(srv_engine_bundler.mutex);
+  return ccol_success;
+}
+
+/* White-box test helper exposing the reactor thread count actually wired
+ * into the last-created reactor. Not part of the public API; gated so this
+ * symbol does not leak into a production build of libccollections.so,
+ * matching the identical convention chttpclient.c already established for
+ * its own engine-internal-state test helpers. */
+#ifdef RUNNING_UNIT_TESTS
+size_t _chttpsvr_engine_num_reactor_threads_for_tests(void) {
+  call_once(srv_engine_bundler.once, _engine_globals_init);
+  mutex_lock(srv_engine_bundler.mutex);
+  size_t n = srv_engine_bundler.last_resolved_num_reactor_threads;
+  mutex_unlock(srv_engine_bundler.mutex);
+  return n;
+}
+#endif /* RUNNING_UNIT_TESTS */
 
 void chttpsvr_engine_stop(void) { _engine_force_stop(); }
 

@@ -1,0 +1,45 @@
+.TH CHTTPSVR_SET_ENGINE_NUM_REACTOR_THREADS 3 "2026-07-17" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpsvr_set_engine_num_reactor_threads \- set the OS thread count for the shared engine's reactor
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpserver.h>
+
+ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
+.fi
+.SH DESCRIPTION
+.nf
+Configures how many OS threads the shared event_loop reactor devotes
+to its own polling and dispatch, per event_loop_create_with_mprocs's
+own num_reactor_threads parameter (see cthreadcomm.h): 1 means a
+single thread both polls and dispatches inline; any larger value means
+one dedicated polling thread plus (num_threads - 1) dispatch worker
+threads.
+
+By default (never having called this function, or having called it
+with num_threads == 0), the reactor sizes itself to
+sysconf(_SC_NPROCESSORS_ONLN), falling back to 1 if that query fails.
+Passing a positive num_threads overrides that auto-detection and pins
+the reactor to exactly that many threads instead; passing 0 restores
+the default auto-detected sizing.
+
+Like chttpsvr_set_engine_mem_mgmt_procs, this configures a value baked
+into the reactor at construction time: it may only be called before
+the first chttpsvr_start call in the process, or again after the
+reactor has fully stopped (chttpsvr_engine_wait has returned), before
+the next chttpsvr_start.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_not_permitted if the reactor is already running; stop it first.
+.fi
+.SH "SEE ALSO"
+.BR chttpsvr_set_engine_mem_mgmt_procs (3),
+.BR chttpsvr_set_engine_logger (3),
+.BR chttpsvr_start (3),
+.BR chttpsvr_engine_stop (3),
+.BR chttpsvr_engine_wait (3),
+.BR chttpcli_set_engine_num_reactor_threads (3)

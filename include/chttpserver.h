@@ -433,6 +433,38 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 
 /* ========================================================================== */
+/*                    ENGINE REACTOR THREAD COUNT                             */
+/* ========================================================================== */
+
+/**
+ * @brief Configure how many OS threads the shared event_loop engine devotes
+ *        to its own polling and dispatch.
+ *
+ * By default (never having called this function, or having called it with
+ * num_threads == 0), the shared reactor sizes itself to
+ * sysconf(_SC_NPROCESSORS_ONLN) (falling back to 1 if that query fails),
+ * matching this library's long-standing default behavior. Calling this
+ * function with a positive num_threads overrides that auto-detection and
+ * pins the reactor to exactly that many OS threads instead, following
+ * event_loop_create_with_mprocs's own num_reactor_threads semantics
+ * (cthreadcomm.h): 1 means a single thread both polls and dispatches
+ * inline; any larger value means one dedicated polling thread plus
+ * (num_threads - 1) dispatch worker threads.
+ *
+ * Like chttpsvr_set_engine_mem_mgmt_procs, this configures a value baked
+ * into the reactor at construction time: it may only be called before the
+ * first chttpsvr_start() in the process, or again after the engine has
+ * fully stopped (chttpsvr_engine_wait() has returned), before the next
+ * chttpsvr_start().
+ *
+ * @param num_threads  Desired reactor OS thread count, or 0 to restore the
+ *                      default auto-detected sizing.
+ * @return ccol_success, or ccol_not_permitted (the engine is already
+ *         running; stop it first).
+ */
+ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
+
+/* ========================================================================== */
 /*                         ENGINE WAIT                                        */
 /* ========================================================================== */
 

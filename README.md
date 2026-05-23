@@ -3101,7 +3101,7 @@ ctpool_future_free(f);
 chttpclient_destroy(cli);
 ```
 
-The engine (a small pool of `event_loop` reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. This engine owns its own static, process-wide `event_loop` instance, fully independent of `chttpserver`'s own (separate) `event_loop` instance; the two modules share no reactor, so stopping/starting one has no effect on the other. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`. `chttpcli_set_engine_logger`/`chttpcli_set_engine_mem_mgmt_procs` configure this reactor's diagnostics logger and allocator respectively, and must be called before this engine's first lazy construction (mirroring `chttpserver`'s identical pair of functions for its own reactor).
+The engine (a small pool of `event_loop` reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count by default) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. This engine owns its own static, process-wide `event_loop` instance, fully independent of `chttpserver`'s own (separate) `event_loop` instance; the two modules share no reactor, so stopping/starting one has no effect on the other. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`. `chttpcli_set_engine_logger`/`chttpcli_set_engine_mem_mgmt_procs`/`chttpcli_set_engine_num_reactor_threads` configure this reactor's diagnostics logger, allocator, and OS thread count respectively, and must be called before this engine's first lazy construction (mirroring `chttpserver`'s identical trio of functions for its own reactor).
 
 `chttpclient_do_async_streaming` delivers the response body via a `chttpcli_write_fn` callback, exactly like `chttpclient_do_streaming`:
 
@@ -3145,7 +3145,13 @@ ccol_memmgmt_procs_t mp = {
 chttpcli_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default */
 ```
 
-This is independent of the allocator each individual `chttpcli` instance uses for its own requests/connections (configured via `create_chttpclient_mp`); this setter only affects the one shared engine's own construction. Both functions mirror `chttpserver`'s identical `chttpsvr_set_engine_logger`/`chttpsvr_set_engine_mem_mgmt_procs` pair for its own, fully independent reactor.
+This is independent of the allocator each individual `chttpcli` instance uses for its own requests/connections (configured via `create_chttpclient_mp`); this setter only affects the one shared engine's own construction. To override how many OS threads the shared reactor devotes to its own polling and dispatch (by default it auto-detects `sysconf(_SC_NPROCESSORS_ONLN)`, falling back to 1), call `chttpcli_set_engine_num_reactor_threads` under the same "before first start, or after a full stop" restriction:
+
+```c
+chttpcli_set_engine_num_reactor_threads(4);   /* optional; 0 restores auto-detected sizing */
+```
+
+All three functions mirror `chttpserver`'s identical `chttpsvr_set_engine_logger`/`chttpsvr_set_engine_mem_mgmt_procs`/`chttpsvr_set_engine_num_reactor_threads` trio for its own, fully independent reactor.
 
 ### TLS Configuration
 
@@ -3359,6 +3365,7 @@ Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn
 |---|---|
 | `chttpcli_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` that receives the shared reactor's own diagnostics; call before the first Tier 2/3 use in the process |
 | `chttpcli_set_engine_mem_mgmt_procs(mp)` | Redirect the shared reactor's own internal memory management to `mp`, or to the default allocator if `mp` is NULL; call before the engine's first start, or after it has fully stopped |
+| `chttpcli_set_engine_num_reactor_threads(n)` | Pin the shared reactor to `n` OS threads, or restore auto-detected sizing (`sysconf(_SC_NPROCESSORS_ONLN)`, falling back to 1) if `n` is 0; call before the engine's first start, or after it has fully stopped |
 
 **Request Execution**
 
@@ -3429,7 +3436,7 @@ The module is split across two headers: `chttp.h` declares shared types (`chttp_
 
 ### Engine Lifecycle
 
-`chttpserver` maintains one static, process-wide `event_loop` reactor (internally multi-threaded, sized to the CPU count) shared by every `chttpsvr` instance in the process, plus one idle-connection-timeout sweep thread shared the same way. Both are lazily started on the first `chttpsvr_start` call and torn down once the last server releases its reference (i.e. every started `chttpsvr` has been destroyed); no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the reactor has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
+`chttpserver` maintains one static, process-wide `event_loop` reactor (internally multi-threaded, sized to the CPU count by default; see `chttpsvr_set_engine_num_reactor_threads` below to override) shared by every `chttpsvr` instance in the process, plus one idle-connection-timeout sweep thread shared the same way. Both are lazily started on the first `chttpsvr_start` call and torn down once the last server releases its reference (i.e. every started `chttpsvr` has been destroyed); no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the reactor has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
 
 This reactor is entirely independent of `chttpclient`'s own engine (`chttpclient_do_async`/`_streaming`/`chttpclient_do_pooled`/`_streaming`); each module owns its own reactor, so stopping one never affects the other.
 
@@ -3475,6 +3482,12 @@ chttpsvr_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default 
 ```
 
 This may only be called before the first `chttpsvr_start` in the process (it returns `ccol_not_permitted` afterward): swapping allocators once the reactor has already allocated memory with the previous one would produce mismatched malloc/free pairs. Passing NULL later (also before the first start, or after the reactor has fully stopped) reverts to the default allocator. Note this is independent of the allocator each individual `chttpsvr` instance uses for its own connections/requests (configured via `create_chttpsvr_mp`, following the usual `_mp` convention); this setter only affects the one shared reactor's own construction.
+
+By default the reactor sizes itself to `sysconf(_SC_NPROCESSORS_ONLN)` OS threads (falling back to 1 if that query fails). To pin it to a specific thread count instead, call `chttpsvr_set_engine_num_reactor_threads` under the same "before the first `chttpsvr_start`, or after a full stop" restriction as the allocator setter above:
+
+```c
+chttpsvr_set_engine_num_reactor_threads(4);   /* optional; 0 restores auto-detected sizing */
+```
 
 ### Quick Start
 
@@ -3827,6 +3840,7 @@ cfg.tls = &tls;
 |---|---|
 | `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-engine`) that receives the reactor's own diagnostics (TLS handshake failures, listen-socket bind failures, idle-timeout closures); may be called at any time, including after a full stop/restart cycle; returns `ccol_invalid_args` if `cl` is NULL |
 | `chttpsvr_set_engine_mem_mgmt_procs(mp)` | Redirect the reactor's own internal memory management to `mp`, or to the default allocator if `mp` is NULL; must be called before the first `chttpsvr_start` (may be called again once the reactor has fully stopped); returns `ccol_invalid_args` if `mp` is non-NULL but has a NULL function pointer, or `ccol_not_permitted` if the reactor is already running |
+| `chttpsvr_set_engine_num_reactor_threads(n)` | Pin the reactor to `n` OS threads, or restore auto-detected sizing (`sysconf(_SC_NPROCESSORS_ONLN)`, falling back to 1) if `n` is 0; must be called before the first `chttpsvr_start` (may be called again once the reactor has fully stopped); returns `ccol_not_permitted` if the reactor is already running |
 | `chttpsvr_engine_stop()` | Signal the shared reactor to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler. Has no effect on `chttpclient`'s own, independent engine |
 | `chttpsvr_engine_wait()` | Block until the shared reactor has fully stopped; use as an escape hatch when you need a synchronous guarantee (e.g. after an external shutdown signal, or before reusing a just-freed port) |
 

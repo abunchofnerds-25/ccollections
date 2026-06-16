@@ -4633,7 +4633,7 @@ TEST(chttpserver, unix_socket_listen_and_round_trip) {
 TEST(chttpserver, unix_socket_stale_file_replaced_on_start) {
   /* A leftover file (regular file, not even a socket) already sitting at
      the configured path must be removed automatically rather than causing
-     bind() to fail -- the documented "a stale socket file already at that
+     bind() to fail; the documented "a stale socket file already at that
      path is removed automatically before binding" behavior. */
   char sock_path[64];
   snprintf(sock_path, sizeof(sock_path), "/tmp/chttpsvr_test_stale_%d.sock",
@@ -4777,7 +4777,7 @@ TEST(chttpserver, max_header_bytes_within_limit_succeeds) {
 
 TEST(chttpserver, max_header_bytes_exceeded_closes_connection) {
   /* A header block exceeding the configured cap must be rejected before
-     routing -- an outright connection close with no HTTP response at all,
+     routing; an outright connection close with no HTTP response at all,
      matching every other pre-routing parse error in this parser (see
      negative_content_length_rejected above). */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
@@ -4873,7 +4873,7 @@ TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
      response_write_timeout_ms, and force the connection closed rather than
      pinning the worker thread forever. Sleep well past the configured
      timeout before ever touching the socket, so the server has already
-     made its close-or-succeed decision by the time we look -- reading (or
+     made its close-or-succeed decision by the time we look; reading (or
      even polling for readability) any earlier risks a false "ready" signal
      from data the server already buffered successfully before stalling. */
   struct timespec wait_past_timeout = {0, 600000000L}; /* 600ms > 200ms cfg */

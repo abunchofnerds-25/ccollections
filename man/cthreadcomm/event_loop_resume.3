@@ -1,0 +1,54 @@
+.TH EVENT_LOOP_RESUME 3 "2026-07-18" "c_collections" "C Collections Library - Functions"
+.SH NAME
+event_loop_resume \- resume event delivery for a registration previously paused by event_loop_pause
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t event_loop_resume(event_loop loop, event_reg *reg);
+.fi
+.SH DESCRIPTION
+.nf
+fd-only: called on a registration built from a queue/channel selectable,
+returns ccol_invalid_args, same restriction as event_loop_modify.
+
+Recomputes the fd's combined epoll interest mask, via a single
+EPOLL_CTL_MOD call, to include reg again.  reg's direction, generation,
+and event_loop_reg_count contribution are all unchanged from before the
+pause; this call only reverses what event_loop_pause did to the
+interest mask.
+
+Resuming a reg that is not currently paused (never paused, or already
+resumed) is a no-op success.  This deliberately mirrors
+event_loop_modify's own "already in the requested state" idempotence
+rather than treating it as an error.
+.fi
+.SH PARAMETERS
+.nf
+loop  event_loop the registration belongs to.
+reg   Registration to resume.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        Resumed (or was not paused to begin with).
+ccol_invalid_args   loop or reg is NULL; reg is a queue/channel
+                    registration; or reg was concurrently removed
+                    (e.g. the connection was closed while the caller
+                    still thought it owned a paused registration to
+                    resume).
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call concurrently with event_loop_remove() and from within a
+callback running on one of the reactor threads.  Commonly called from
+a different thread than the one that paused reg; see
+event_loop_pause(3)'s own EXAMPLES.
+.fi
+.SH "SEE ALSO"
+.BR event_loop_pause (3),
+.BR event_loop_add (3),
+.BR event_loop_remove (3),
+.BR event_loop_modify (3),
+.BR event_loop_reg_generation (3)

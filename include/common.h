@@ -386,7 +386,7 @@ typedef enum ccollections_retval_t {
    * (some check "== 0" directly rather than always spelling out
    * ccol_success), and an implicit-value list silently renumbers every
    * later entry (including ccol_success itself) the moment a new
-   * enumerator is inserted anywhere but the very end -- exactly the
+   * enumerator is inserted anywhere but the very end; exactly the
    * regression that occurred here once, caught via a cbstmap test
    * failure that had nothing to do with cbstmap at all. Pin every value
    * explicitly so a future addition cannot reintroduce that class of bug. */

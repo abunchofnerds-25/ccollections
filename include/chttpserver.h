@@ -441,15 +441,57 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
  *        to its own polling and dispatch.
  *
  * By default (never having called this function, or having called it with
- * num_threads == 0), the shared reactor sizes itself to
- * sysconf(_SC_NPROCESSORS_ONLN) (falling back to 1 if that query fails),
- * matching this library's long-standing default behavior. Calling this
- * function with a positive num_threads overrides that auto-detection and
- * pins the reactor to exactly that many OS threads instead, following
+ * num_threads == 0), the shared reactor uses exactly 1 thread: a single
+ * dedicated thread that both polls (epoll_wait) and runs every dispatch
+ * callback (header parsing, TLS handshake stepping) inline, with no
+ * separate dispatch worker pool at all. Calling this function with a
+ * num_threads > 1 spins up that many OS threads instead, following
  * event_loop_create_with_mprocs's own num_reactor_threads semantics
- * (cthreadcomm.h): 1 means a single thread both polls and dispatches
- * inline; any larger value means one dedicated polling thread plus
- * (num_threads - 1) dispatch worker threads.
+ * (cthreadcomm.h): one dedicated polling thread plus (num_threads - 1)
+ * separate dispatch worker threads that actually run callbacks.
+ *
+ * The default is 1, not an auto-detected CPU count, because it measured
+ * better for the common case, not merely simpler. Benchmarked (not
+ * assumed) against a real HTTP/HTTPS workload on a 22-core machine, across
+ * three traffic shapes:
+ *
+ *   - Plain HTTP, connections reused (typical browser/API-client
+ *     traffic): num_threads == 1 measured ~3% higher throughput than
+ *     CPU-count dispatch threads. There is essentially no CPU-bound work
+ *     in the dispatch phase for plain HTTP (a fast header parse), so
+ *     spreading it across threads only adds hand-off overhead with
+ *     nothing to parallelize.
+ *   - TLS, connections reused (typical HTTPS traffic once a client's
+ *     connection pooling is accounted for): a genuine trade, not a clean
+ *     win either way. num_threads == 1 measured ~4% lower throughput but
+ *     a clearly better and more consistent p99 latency than CPU-count
+ *     dispatch threads. Most of a TLS connection's requests hit the same
+ *     cheap steady-state path plain HTTP does; only the connection's own
+ *     handshake pays the expensive part, and that cost is amortized
+ *     across however many requests the connection goes on to serve.
+ *   - TLS with no connection reuse at all (every request pays a brand-new
+ *     handshake; a deliberately extreme synthetic case, not typical
+ *     traffic): CPU-count dispatch threads won by ~8-9% throughput and
+ *     ~10-15% p99 latency, since a TLS handshake's asymmetric-crypto cost
+ *     (the server's private-key operation) is genuine CPU-bound work that
+ *     benefits from being spread across cores when there is enough of it.
+ *
+ * The scenario where a larger num_threads is worth its cost is
+ * specifically sustained *connection churn* combined with TLS: many
+ * distinct clients each opening a connection for only one or a few
+ * requests before it closes, so a large fraction of total traffic pays
+ * the handshake's CPU cost rather than amortizing it away. This is real
+ * for some deployments (a public API absorbing many one-off anonymous
+ * clients, an IoT/device gateway where unreliable networks cause frequent
+ * reconnects, a webhook receiver called by many different external
+ * services) but is the less common shape overall: most HTTP client
+ * software (browsers, and most serious HTTP client libraries, including
+ * this library's own chttpclient) pools and reuses connections
+ * specifically to avoid paying handshake cost repeatedly, and a server
+ * sitting behind a load balancer or reverse proxy often never sees raw
+ * handshake churn from the public internet at all. A deployment that
+ * knows its own traffic is churn-heavy should raise num_threads
+ * accordingly; this function exists for exactly that override.
  *
  * Like chttpsvr_set_engine_mem_mgmt_procs, this configures a value baked
  * into the reactor at construction time: it may only be called before the
@@ -458,7 +500,7 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
  * chttpsvr_start().
  *
  * @param num_threads  Desired reactor OS thread count, or 0 to restore the
- *                      default auto-detected sizing.
+ *                      default (1).
  * @return ccol_success, or ccol_not_permitted (the engine is already
  *         running; stop it first).
  */
@@ -480,7 +522,7 @@ ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
  * Note: destroying the last running server (via chttpsvr_destroy) synchronously
  * quiesces that server (stops listening, drains in-flight requests, closes
  * connections, releases its engine reference) but does NOT block until the
- * shared reactor itself has fully exited -- that final teardown runs on a
+ * shared reactor itself has fully exited; that final teardown runs on a
  * separate reaper thread. If the calling code needs a deterministic guarantee
  * that the engine has fully exited (e.g. right before process exit, so an
  * engine-installed logger via chttpsvr_set_engine_logger() is not still

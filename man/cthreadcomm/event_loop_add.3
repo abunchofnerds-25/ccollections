@@ -53,7 +53,7 @@ With more than one reactor thread configured (see
 event_loop_create_with_mprocs(3)'s num_reactor_threads), a single
 registration's callback is still never invoked concurrently with
 itself, and a read registration and a write registration sharing the
-same fd are never invoked concurrently with each other either -- a
+same fd are never invoked concurrently with each other either; a
 callback pair that shares state across both directions of one fd (e.g.
 one TLS connection object) needs no additional locking of its own on
 that account. This does not extend to two entirely different fds:
@@ -98,6 +98,8 @@ event_reg *reg = event_loop_add(loop, selectable_from_circq(jobs, ccol_select_re
 .SH "SEE ALSO"
 .BR event_loop_create (3),
 .BR event_loop_modify (3),
+.BR event_loop_pause (3),
+.BR event_loop_resume (3),
 .BR event_loop_remove (3),
 .BR event_loop_reg_generation (3),
 .BR selectable_from_fd (3),

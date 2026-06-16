@@ -1,0 +1,77 @@
+.TH EVENT_LOOP_PAUSE 3 "2026-07-18" "c_collections" "C Collections Library - Functions"
+.SH NAME
+event_loop_pause \- temporarily stop delivering events for an fd registration, without destroying it
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t event_loop_pause(event_loop loop, event_reg *reg);
+.fi
+.SH DESCRIPTION
+.nf
+fd-only: called on a registration built from a queue/channel selectable,
+returns ccol_invalid_args, same restriction as event_loop_modify.
+
+Unlike event_loop_remove (which fully unregisters reg and defers it
+for freeing), event_loop_pause leaves reg fully intact: it still
+occupies its slot on the underlying fd's shared epoll entry, still
+counts toward event_loop_reg_count, and still carries the same
+event_loop_reg_generation.  Only the fd's combined epoll interest mask
+is recomputed, via a single EPOLL_CTL_MOD call, to exclude reg.  No
+on_readable/on_writable/on_error callback fires for reg while paused;
+the other direction on the same fd (if any) is unaffected.
+
+This is the cheap alternative to an event_loop_remove immediately
+followed by a later event_loop_add, for a caller pattern where the
+same logical registration is going to come back; for example a
+connection handed off to a worker thread for blocking body I/O, then
+handed back to the reactor for its next request.  Avoided entirely:
+the heap allocation/free a fresh event_loop_add/event_loop_remove pair
+costs, and the fd-registry chmap churn that comes with it.
+
+With more than one reactor thread (num_reactor_threads > 1, where
+EPOLLONESHOT is in play), a dispatch worker's own post-callback
+re-arm still runs once more after a paused callback returns.  This is
+harmless: event_loop's internal re-arm helper always recomputes the
+epoll mask fresh from live state, so the redundant re-arm reapplies
+the same excluding mask rather than reintroducing a race.  Pause/
+resume still avoids the allocation and registry churn in that
+configuration too.
+
+Pausing an already-paused reg is a no-op success.
+.fi
+.SH PARAMETERS
+.nf
+loop  event_loop the registration belongs to.
+reg   Registration to pause.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        Paused (or already paused).
+ccol_invalid_args   loop or reg is NULL; reg is a queue/channel
+                    registration; or reg was concurrently removed.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call concurrently with event_loop_remove() and from within a
+callback running on one of the reactor threads.
+.fi
+.SH EXAMPLES
+.nf
+/* Inside an on_readable callback, once a full request's headers have
+   been parsed and the connection is about to be handed to a worker
+   thread for its own direct, blocking body I/O: */
+event_loop_pause(loop, conn->reg);
+ctpool_submit(worker_pool, process_request, conn, NULL);
+/* ... later, on the worker thread, once the response has been sent
+   and the connection is ready for its next request: */
+event_loop_resume(loop, conn->reg);
+.fi
+.SH "SEE ALSO"
+.BR event_loop_resume (3),
+.BR event_loop_add (3),
+.BR event_loop_remove (3),
+.BR event_loop_modify (3),
+.BR event_loop_reg_generation (3)

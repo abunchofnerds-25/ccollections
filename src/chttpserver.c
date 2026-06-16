@@ -154,7 +154,11 @@ typedef struct {
 typedef enum {
   CONN_ST_TLS_HANDSHAKE,
   CONN_ST_READING_HEADERS,
-  CONN_ST_DIVERTED, /* worker thread owns fd; no reactor registration */
+  CONN_ST_DIVERTED, /* worker thread owns fd; reactor registration (if any)
+                     * is paused (event_loop_pause), not removed: no
+                     * events fire, but the registration is kept alive and
+                     * cheaply resumed (event_loop_resume) for the next
+                     * request instead of being rebuilt from scratch */
   CONN_ST_CLOSING
 } conn_state_t;
 
@@ -162,7 +166,7 @@ typedef enum {
  * connection; per-request scratch fields (method/path/headers/route/
  * dispatch/resp/body buffers) are reset by _conn_reset_for_request() before
  * each new request begins. Heap-allocated; owned by whichever of (the
- * reactor's event_reg, a worker's ctpool task) currently holds it -- never
+ * reactor's event_reg, a worker's ctpool task) currently holds it; never
  * both at once (see the header-read callback and _task_worker for the
  * handoff points). */
 typedef struct chttpsvr_conn {
@@ -176,21 +180,21 @@ typedef struct chttpsvr_conn {
   /* Per-request scratch. */
   chttp_method_t method;
   /* owned, RAW (still percent-encoded): route matching must operate on this
-   * exact form -- _match_segments/_seg_matches_literal split on a literal
+   * exact form; _match_segments/_seg_matches_literal split on a literal
    * '/' and decode each segment individually, which is the only way to tell
    * an actual path separator from a %2F encoded one inside a {param}
    * segment. Decoding the whole path eagerly here (as an earlier version of
    * this function did) would turn %2F into a real '/' before segmentation,
    * silently splitting one param segment into two path segments, and would
    * also have to rejects the entire request on any malformed %XX anywhere
-   * in the path -- this module's own tests document that a malformed
+   * in the path; this module's own tests document that a malformed
    * encoding in one segment must fall out as an ordinary route mismatch
    * (404), not a 400, since _decode_seg_alloc/_seg_matches_literal already
    * treat a decode failure as "this segment doesn't match" further down. */
   char *path;
   /* owned, fully URL-decoded; populated by _on_headers_complete() once a
    * route has actually matched (decoding is then guaranteed to succeed,
-   * since a match already proved every segment decodes cleanly) -- this is
+   * since a match already proved every segment decodes cleanly); this is
    * what chttpsvr_req_path() returns. */
   char *decoded_path;
   char *raw_query; /* owned, or NULL */
@@ -322,12 +326,13 @@ static struct {
   bool reaper_joinable;
   ccol_memmgmt_procs_t mprocs_storage;
   ccol_memmgmt_procs_t *mprocs;
-  /* 0 = auto-detect via sysconf(_SC_NPROCESSORS_ONLN), this module's
-   * original, still-default behavior. A positive value pins the reactor to
-   * exactly that many OS threads instead; see
-   * chttpsvr_set_engine_num_reactor_threads's own doc comment. Baked into
-   * the reactor at construction time, same "before first start, or after a
-   * full stop" restriction as mprocs above. */
+  /* 0 = default (single dedicated reactor thread, num_reactor_threads == 1
+   * under the hood); benchmarked, not assumed, to be the better choice for
+   * the common case; see chttpsvr_set_engine_num_reactor_threads's own
+   * doc comment for the full comparison. A positive value pins the reactor
+   * to exactly that many OS threads instead. Baked into the reactor at
+   * construction time, same "before first start, or after a full stop"
+   * restriction as mprocs above. */
   size_t num_reactor_threads;
   /* The value actually passed to event_loop_create_with_mprocs the last time
    * the reactor was created (auto-detected or explicit); for test
@@ -385,7 +390,7 @@ static void _quiesce_server_once(struct chttpserver *srv);
  * the whole list up front, since _quiesce_server_once -> _servers_unregister
  * removes the entry it just processed (or, if a concurrent chttpsvr_destroy()
  * on another thread is already quiescing that exact same server, leaves it in
- * place until that other call finishes) -- either way this loop always
+ * place until that other call finishes); either way this loop always
  * converges on servers_bundler.count == 0 once every legitimately
  * in-progress teardown completes. */
 static void _engine_force_stop_quiesce_all(void) {
@@ -449,7 +454,7 @@ static void *_engine_reaper_fn(void *arg) {
    * thread or the reactor itself: chttpsvr_engine_stop() (the forced path)
    * may run this reaper while one or more servers are still fully started,
    * with live listen_reg/conn->reg registrations into
-   * srv_engine_bundler.reactor -- tearing the reactor down first would leave
+   * srv_engine_bundler.reactor; tearing the reactor down first would leave
    * those registrations dangling the moment the owning server's own
    * chttpsvr_stop()/_conn_close() next tried to use them. The graceful
    * ref-count-reaches-zero path already guarantees every registered server has
@@ -457,12 +462,13 @@ static void *_engine_reaper_fn(void *arg) {
    * fast no-op in that case. */
   _engine_force_stop_quiesce_all();
   /* Stop the idle sweep thread before tearing down the reactor it calls
-   * into (_conn_close -> event_loop_remove) -- see
+   * into (_conn_close -> event_loop_remove); see
    * _idle_sweep_stop_if_running's own doc comment. */
   _idle_sweep_stop_if_running();
   if (loop_to_destroy) event_loop_destroy(loop_to_destroy);
+
   /* servers_bundler.servers' backing array is a plain realloc'd buffer, not
-   * itself tied to any one server's lifetime -- every server that ever
+   * itself tied to any one server's lifetime; every server that ever
    * contributed a ref to this engine has already been unregistered (via
    * _engine_force_stop_quiesce_all above, or, in the graceful path, by its own
    * chttpsvr_destroy() call before the ref count could ever reach zero) by the
@@ -479,6 +485,7 @@ static void *_engine_reaper_fn(void *arg) {
   servers_bundler.capacity = 0;
   servers_bundler.count = 0;
   mutex_unlock(servers_bundler.mutex);
+
   mutex_lock(srv_engine_bundler.mutex);
   srv_engine_bundler.reactor = NULL;
   srv_engine_bundler.stopping = false;
@@ -496,6 +503,7 @@ static void *_engine_reaper_fn(void *arg) {
   srv_engine_bundler.log = NULL;
   cond_var_broadcast(srv_engine_bundler.stopped_cv);
   mutex_unlock(srv_engine_bundler.mutex);
+
   if (old_logger) clog_close(old_logger);
   return NULL;
 }
@@ -522,11 +530,18 @@ static ccol_retval_t _engine_acquire(void) {
   _join_reaper_if_needed_locked();
 
   if (!srv_engine_bundler.reactor) {
+    /* Default 1 (not an auto-detected CPU count): benchmarked, not assumed,
+     * against a real HTTP workload; see chttpsvr_set_engine_num_reactor_
+     * threads's own doc comment for the full comparison and reasoning. A
+     * single dedicated poller thread that also runs every callback inline
+     * measured faster and more latency-consistent than CPU-count dispatch
+     * threads for both plain HTTP and TLS-with-connection-reuse traffic (the
+     * common case for a well-behaved client population); multi-threaded
+     * dispatch only pulled ahead under a synthetic TLS handshake-storm
+     * workload (every request a brand-new connection, no reuse at all), and
+     * even there by a moderate, not dramatic, margin. */
     size_t nthreads = srv_engine_bundler.num_reactor_threads;
-    if (nthreads == 0) {
-      long cpus = sysconf(_SC_NPROCESSORS_ONLN);
-      nthreads = (cpus > 0) ? (size_t)cpus : 1;
-    }
+    if (nthreads == 0) nthreads = 1;
     srv_engine_bundler.last_resolved_num_reactor_threads = nthreads;
     char *err = NULL;
     srv_engine_bundler.reactor = event_loop_create_with_mprocs(
@@ -607,13 +622,13 @@ static void _conn_close(chttpsvr_conn_t *conn);
 static void _conn_reject_and_close(chttpsvr_conn_t *conn);
 
 /* Registers a server so the idle sweep thread walks its idle-connection
- * list too. Called from chttpsvr_start -- which runs not just once per
- * server but again on every stop/start restart cycle -- so this must be
+ * list too. Called from chttpsvr_start (which runs not just once per
+ * server but again on every stop/start restart cycle) so this must be
  * idempotent: skip the add if srv is already present. Without this check,
  * a srv that goes through N restart cycles ends up in
  * servers_bundler.servers N+1 times, and _servers_unregister's
  * single-occurrence removal (see below) would leave N stale, dangling pointers
- * behind after __chttpsvr_destroy frees srv -- a real use-after-free the idle
+ * behind after __chttpsvr_destroy frees srv; a real use-after-free the idle
  * sweep thread would read on its very next pass, caught by valgrind via
  * restart_races_live_keep_alive_connection_is_safe (which restarts one srv
  * 5 times before destroying it). */
@@ -678,8 +693,8 @@ static void *_idle_sweep_fn(void *arg) {
        * pointer out, then close them outside the lock: _conn_close
        * ultimately calls event_loop_remove, which must not run while
        * holding a lock a callback dispatched from that same removal could
-       * also need. Claiming at collection time -- not just after, in a
-       * separately-locked pass -- is what stops a connection from being
+       * also need. Claiming at collection time (not just after, in a
+       * separately-locked pass) is what stops a connection from being
        * simultaneously "found here" and dispatched to _conn_pump on a
        * reactor thread; see _idle_list_try_claim's own doc comment for the
        * real use-after-free (a freed SSL* read concurrently by
@@ -729,7 +744,7 @@ static void _idle_sweep_start_if_needed(void) {
 /* Stops and joins the idle sweep thread, if one is running. Tied to the
  * shared engine's own lifetime (called from the engine reaper, alongside
  * event_loop_destroy) rather than to any single server's stop/destroy,
- * since the sweep thread walks every registered server, not one -- an
+ * since the sweep thread walks every registered server, not one; an
  * unjoined sweep thread still running at process exit is exactly the class
  * of "possibly lost" glibc TLS (allocate_dtv) false positive this
  * codebase's other reaper threads are already documented to close (see
@@ -779,9 +794,9 @@ static void _idle_list_remove(chttpsvr_conn_t *conn) {
 
 /* Attempts to atomically claim conn out of the idle list for exclusive
  * processing (either dispatching a real I/O event for it, or closing it).
- * Returns true if conn was idle and has now been removed -- the caller has
+ * Returns true if conn was idle and has now been removed; the caller has
  * sole ownership and may safely read/free conn. Returns false if conn was
- * NOT in the idle list -- someone else (another dispatch, or a concurrent
+ * NOT in the idle list; someone else (another dispatch, or a concurrent
  * closer) already claimed it, and the caller must not touch conn at all.
  *
  * This is the one piece of synchronization that makes it safe for
@@ -791,7 +806,7 @@ static void _idle_list_remove(chttpsvr_conn_t *conn) {
  * dispatched to _conn_pump on a reactor thread (new data having arrived in
  * the same instant), and the closer's _conn_free (which for a TLS
  * connection calls ctls_conn_destroy -> SSL_free) could run concurrently
- * with _conn_pump's ctls_conn_read on the very same SSL* -- a real
+ * with _conn_pump's ctls_conn_read on the very same SSL*; a real
  * use-after-free valgrind caught (a segfault deep in libcrypto's BIO code,
  * reproduced only against tests_tls.c, since the plaintext path's
  * equivalent race is a same-shape but much less immediately fatal
@@ -800,14 +815,14 @@ static void _idle_list_remove(chttpsvr_conn_t *conn) {
  * A connection is only ever added to the idle list AFTER the corresponding
  * event_loop_add/_modify call that makes it dispatchable has already
  * returned (see _conn_pump's handshake-wait branch and the main read
- * loop's EWOULDBLOCK branch, and _task_worker's keep-alive re-arm) -- so a
+ * loop's EWOULDBLOCK branch, and _task_worker's keep-alive re-arm); so a
  * dispatch can, in a narrow window, fire before the idle-list add has
  * happened yet and see try_claim fail here. That is harmless, not a bug:
  * this module always uses level-triggered epoll, so a spurious "not idle
  * yet" claim failure just means the same readiness is reported again on
  * the very next epoll_wait, by which point the add has long since
  * completed (a handful of instructions on the same thread, no I/O in
- * between) -- never a dropped or hung request. */
+ * between); never a dropped or hung request. */
 static bool _idle_list_try_claim(chttpsvr_conn_t *conn) {
   struct chttpserver *srv = conn->srv;
   bool claimed = false;
@@ -827,19 +842,19 @@ static bool _idle_list_try_claim(chttpsvr_conn_t *conn) {
 
 /* Closes and frees every connection of srv's still sitting idle (reactor-
  * owned, awaiting its next pipelined request or simply an open keep-alive
- * connection nothing has used again yet) -- called from __chttpsvr_destroy,
+ * connection nothing has used again yet); called from __chttpsvr_destroy,
  * after chttpsvr_stop() has closed the listener so no new connection can
  * arrive. Without this, a keep-alive connection a test client never
  * explicitly closed (the common case: chttpclient's own idle pool keeps a
  * connection open after a response, not closed) outlives the server that
  * accepted it, leaking its chttpsvr_conn_t (and everything it owns: path,
- * headers, route match state, ...) for the rest of the process's life --
+ * headers, route match state, ...) for the rest of the process's life;
  * caught by valgrind as a real "definitely lost" block traced back to
  * _conn_create/_listener_on_readable, not a false positive.
  *
  * Each candidate is claimed (removed from the idle list) at collection
- * time, under idle_mutex, via _idle_list_try_claim -- not merely copied
- * out and closed afterward -- so a connection can never be simultaneously
+ * time, under idle_mutex, via _idle_list_try_claim (not merely copied
+ * out and closed afterward) so a connection can never be simultaneously
  * "found here" and "dispatched to _conn_pump on a reactor thread"; see
  * _idle_list_try_claim's own doc comment for the use-after-free this
  * closes. */
@@ -1546,7 +1561,7 @@ static void _conn_reset_for_request(chttpsvr_conn_t *conn) {
   conn->hdr_names = conn->hdr_values = NULL;
   conn->hdr_count = conn->hdr_cap = 0;
   /* Free the just-finished request's matched param values before nulling
-   * the pointer -- _conn_free (final teardown) already does this correctly
+   * the pointer; _conn_free (final teardown) already does this correctly
    * for the LAST request on a connection, but a keep-alive connection
    * reaches this reset function between every request, and previously
    * nulled the pointer here with no free at all, leaking every param-value
@@ -1596,7 +1611,7 @@ static chttpsvr_conn_t *_conn_create(struct chttpserver *srv, int fd,
   clock_gettime(CLOCK_MONOTONIC, &conn->last_activity);
   /* _conn_reset_for_request() establishes every per-request default this
    * connection needs before its first request too (resp.status_code,
-   * resp.m_procs, reject_status, the header-size override, ...) -- a freshly
+   * resp.m_procs, reject_status, the header-size override, ...); a freshly
    * calloc'd conn has resp.status_code == 0, which _send_response() would
    * otherwise treat as an unset/invalid status and silently map to 500 for
    * a connection's very first request (subsequent keep-alive requests never
@@ -1653,7 +1668,7 @@ static int _on_request_line(chttp1_parser_t *p, const char *method,
   const char *qmark = (const char *)memchr(target, '?', target_len);
   size_t path_raw_len = qmark ? (size_t)(qmark - target) : target_len;
 
-  /* Stored RAW (still percent-encoded) -- see conn->path's own doc comment
+  /* Stored RAW (still percent-encoded); see conn->path's own doc comment
    * for why this must not be decoded here. */
   char *path_raw = (char *)_mem_alloc(conn->m_procs, path_raw_len + 1);
   if (!path_raw) return 1;
@@ -1762,7 +1777,7 @@ static int _on_headers_complete(chttp1_parser_t *p) {
   conn->expects_continue = chttp1_expects_continue(p);
 
   /* A successful match already proved every segment of conn->path (RAW,
-   * still percent-encoded) decodes cleanly -- _match_segments/
+   * still percent-encoded) decodes cleanly; _match_segments/
    * _seg_matches_literal treat any decode failure as a non-match, which
    * would have taken the ROUTE_MATCH_NONE/ROUTE_MATCH_METHOD branch above
    * instead of reaching here. Decoding the whole path now, for the public
@@ -1785,7 +1800,7 @@ static int _on_headers_complete(chttp1_parser_t *p) {
    * module's existing documented threading model. chttp1_parser itself
    * downgrades this to an ordinary immediate completion when there turns
    * out to be no body to divert (see CHTTP1_HEADERS_DIVERT_BODY's own doc
-   * comment) -- either way, the header-read callback below submits to the
+   * comment); either way, the header-read callback below submits to the
    * worker pool once execute() returns CHTTP1_HEADERS_ONLY or CHTTP1_PAUSED. */
   return CHTTP1_HEADERS_DIVERT_BODY;
 }
@@ -1849,8 +1864,17 @@ static void _init_parser_settings(void) {
 static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
                                  size_t leftover_len) {
   _idle_list_remove(conn);
-  if (conn->reg) {
-    event_loop_remove(srv_engine_bundler.reactor, conn->reg);
+  /* Pause rather than remove: the registration is cheaply resumed
+   * (event_loop_resume) once the worker finishes this request and the
+   * connection goes back to waiting for the next one, avoiding a full
+   * event_entry allocation/free and fd-registry chmap churn on every
+   * keep-alive request cycle. A failed pause (should not happen in
+   * practice: nothing else touches this connection's reg while the
+   * reactor still owns it) is treated the same as never having had a live
+   * registration, so _task_worker's own keep-alive tail correctly falls
+   * back to closing the connection instead of resuming a stale reg. */
+  if (conn->reg &&
+      event_loop_pause(srv_engine_bundler.reactor, conn->reg) != ccol_success) {
     conn->reg = NULL;
   }
   conn->state = CONN_ST_DIVERTED;
@@ -1862,7 +1886,7 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
 
   /* Copy leftover now: it points into the reactor's own stack read buffer,
    * which is about to go out of scope the moment this callback returns.
-   * _task_worker re-derives nothing from chttp1_parser_consumed() itself --
+   * _task_worker re-derives nothing from chttp1_parser_consumed() itself;
    * that value is only meaningful relative to the exact buffer/length pair
    * passed to the execute() call that produced it, which is the reactor's
    * own stack buffer, gone by the time the worker runs. Passing the
@@ -1877,12 +1901,12 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
    * ctpool_try_submit can hand this task to an already-idle worker thread
    * that starts running _task_worker(conn) immediately, concurrently with
    * the rest of this function. Setting these fields after the submit call
-   * raced that worker thread reading conn->_carry_over -- it would see
+   * raced that worker thread reading conn->_carry_over; it would see
    * NULL (this field's steady-state value between requests, since
    * _task_worker always frees-and-nulls it once consumed), silently
    * dropping the real leftover bytes for this request, and by the time
    * this function got around to the (now too late) assignment, nothing
-   * would ever free that already-orphaned buffer -- both a data-loss bug
+   * would ever free that already-orphaned buffer; both a data-loss bug
    * and the exact leak valgrind caught. */
   conn->_carry_over = carry;
   conn->_carry_over_len = leftover_len;
@@ -1898,7 +1922,7 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
     mutex_unlock(conn->srv->mutex);
     /* The worker pool is at capacity (ctpool_try_submit returns
      * ccol_container_full rather than blocking, matching this module's
-     * documented "never block the reactor thread" contract) -- this is a
+     * documented "never block the reactor thread" contract); this is a
      * real, if transient, server condition the client should be told about
      * via a synchronous 503, not a bare connection reset (see
      * bounded_pool_full_returns_503 in tests.c). */
@@ -2035,7 +2059,7 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
     /* CHTTP1_USER: an unmatched/rejected route, decided by our own
      * _on_headers_complete (conn->req_rejected already set to a specific
      * status). The route itself was identified, so send a graceful
-     * synchronous error response (the body, if any, is never read -- the
+     * synchronous error response (the body, if any, is never read; the
      * connection is then closed rather than kept alive, since the client's
      * still-arriving body would otherwise be misread as a pipelined
      * request).
@@ -2045,7 +2069,7 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
      * chunked not last in a Transfer-Encoding list, a too-long header,
      * ...). This matches every other pre-routing parse error in this
      * parser: an outright connection close with NO response at all, not a
-     * graceful error page -- see negative_content_length_rejected and
+     * graceful error page; see negative_content_length_rejected and
      * chunked_not_last_in_transfer_encoding_list_rejected in tests.c, which
      * assert exactly that. */
     if (conn->req_rejected) {
@@ -2058,15 +2082,15 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
 }
 
 /* Every reactor-dispatched entry point into a live (already-registered)
- * connection must claim it out of the idle list first -- see
+ * connection must claim it out of the idle list first; see
  * _idle_list_try_claim's own doc comment for the use-after-free this
  * prevents (a concurrent idle-timeout/destroy-time closer freeing the same
  * connection, including its TLS state, while a dispatch is using it). A
  * failed claim is not an error: it means a closer already has exclusive
  * ownership (or, harmlessly, that this connection's own _idle_list_add
- * call for the registration that just fired hasn't executed yet -- see
+ * call for the registration that just fired hasn't executed yet; see
  * that same doc comment for why level-triggered epoll makes this
- * self-healing) -- either way, the correct action is to touch nothing and
+ * self-healing); either way, the correct action is to touch nothing and
  * return. */
 static void _conn_on_readable(event_loop loop, ccol_selectable *sel,
                               void *arg) {
@@ -2185,7 +2209,7 @@ ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
        * of being caught by that function's own up-front check on the NEXT
        * call (which never happens, since chttpsvr_req_read returns here
        * immediately). Either way this is a real timeout, not a hard I/O
-       * error -- report it the same way _drain_body already does for the
+       * error; report it the same way _drain_body already does for the
        * buffered-route path, via the same conn->deadline_exceeded flag
        * chttpsvr_req_stream_error() reads, so both caps collapse to the
        * identical ccol_timed_out result (see max_body_read_duration_exceeded_
@@ -2255,7 +2279,7 @@ static void _task_worker(void *arg) {
     _chttpsvr_next(&req, &conn->resp);
     /* A streaming handler may have stopped reading before the body's own
      * natural end (or hit its own error via chttpsvr_req_read returning
-     * -1); either way, nothing further to drain -- the connection's fate
+     * -1); either way, nothing further to drain; the connection's fate
      * (keep-alive vs close) below already accounts for a not-fully-drained
      * body via chttp1_should_keep_alive's message-completion check. */
   }
@@ -2284,19 +2308,48 @@ static void _task_worker(void *arg) {
   }
 
   /* Keep-alive: reset per-request state and hand the connection back to the
-   * reactor to read the next request's headers. */
+   * reactor to read the next request's headers.
+   *
+   * conn->reg is non-NULL here only if this request actually went through a
+   * live event_loop registration that _conn_start_diverted then paused (see
+   * that function's own comment); resuming it is far cheaper than a fresh
+   * event_loop_add, since the underlying event_entry, fd-registry chmap
+   * entry, and epoll_ctl(ADD) were never torn down in the first place; only
+   * the combined epoll interest mask is recomputed.
+   *
+   * conn->reg is NULL here in two cases that must be told apart: a genuinely
+   * failed pause (see _conn_start_diverted's comment; treated as fatal,
+   * below), or, far more common, this connection's headers (and
+   * sometimes several requests' worth of pipelined bytes) were read
+   * synchronously by _conn_pump's own optimistic first read, right after
+   * accept, before this connection was ever registered with the reactor at
+   * all (_listener_on_readable calls _conn_pump directly, with no
+   * event_loop_add in between). Both this branch's own "no registration
+   * ever existed" case and _conn_start_diverted's "pause failed" case
+   * collapse to the identical NULL value, and are indistinguishable from
+   * here by design; both need the exact same fresh event_loop_add
+   * fallback the original always-add design already used, so this is not a
+   * gap, just two paths sharing one outcome. */
   _conn_reset_for_request(conn);
   conn->state = CONN_ST_READING_HEADERS;
-  char *err = NULL;
-  conn->reg =
-      event_loop_add(srv_engine_bundler.reactor,
-                     selectable_from_fd(conn->fd, ccol_select_read),
-                     (event_handlers_t){.on_readable = _conn_on_readable,
-                                        .on_error = _conn_on_error},
-                     conn, &err);
-  if (!conn->reg) {
-    _conn_close(conn);
-    return;
+  if (conn->reg) {
+    if (event_loop_resume(srv_engine_bundler.reactor, conn->reg) !=
+        ccol_success) {
+      _conn_close(conn);
+      return;
+    }
+  } else {
+    char *err = NULL;
+    conn->reg =
+        event_loop_add(srv_engine_bundler.reactor,
+                       selectable_from_fd(conn->fd, ccol_select_read),
+                       (event_handlers_t){.on_readable = _conn_on_readable,
+                                          .on_error = _conn_on_error},
+                       conn, &err);
+    if (!conn->reg) {
+      _conn_close(conn);
+      return;
+    }
   }
   _idle_list_add(conn);
 }
@@ -2335,7 +2388,7 @@ static void _listener_on_readable(event_loop loop, ccol_selectable *sel,
       /* At capacity: leave the pending connection in the kernel backlog.
        * The listener fd remains level-triggered-ready as long as the
        * backlog is non-empty, so this is naturally retried on a later
-       * epoll_wait batch once a slot frees up -- no extra bookkeeping
+       * epoll_wait batch once a slot frees up; no extra bookkeeping
        * needed to "wake up" again. */
       return;
     }
@@ -2771,7 +2824,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
 
   {
     /* CLOCK_MONOTONIC to match _wait_and_detach_worker_pool's own
-     * clock_gettime(CLOCK_MONOTONIC, ...)-based deadline -- cond_var_init's
+     * clock_gettime(CLOCK_MONOTONIC, ...)-based deadline; cond_var_init's
      * default clock (CLOCK_REALTIME) would make that deadline comparison
      * wrong (comparing a monotonic-clock timespec against a condvar
      * internally using the wall clock). */
@@ -2869,7 +2922,7 @@ static ctpool _wait_and_detach_worker_pool(chttpsvr srv) {
  * finished (landing back in the idle list) right as the in-flight wait
  * below completed, but which then received a further pipelined request
  * before an separately-locked idle-close pass got to it, could be silently
- * re-diverted -- escaping that pass entirely and leaking once this
+ * re-diverted; escaping that pass entirely and leaking once this
  * function goes on to release the engine/reactor out from under it (a
  * real, if rare, leak valgrind caught: one orphaned chttpsvr_conn_t after
  * a full 176-case run). Any request that still manages to arrive after
@@ -2878,7 +2931,7 @@ static ctpool _wait_and_detach_worker_pool(chttpsvr srv) {
  * safe no-op, the same dispatch-time liveness check this codebase already
  * relies on elsewhere) or observes worker_pool == NULL once it finally
  * acquires the lock and gets the ordinary graceful 503 _conn_start_diverted
- * already sends for "no pool available" -- never a leak or a crash. */
+ * already sends for "no pool available"; never a leak or a crash. */
 static ctpool _drain_and_close_all_connections(struct chttpserver *srv) {
   mutex_lock(srv->mutex);
   if (srv->in_flight_requests > 0) {
@@ -2900,7 +2953,7 @@ static ctpool _drain_and_close_all_connections(struct chttpserver *srv) {
 
 /* Stops listening, unregisters from servers_bundler.servers, drains
  * in-flight requests, closes idle connections, shuts down and destroys the
- * worker pool, and releases this server's engine reference -- everything
+ * worker pool, and releases this server's engine reference; everything
  * __chttpsvr_destroy used to do inline. Factored out and guarded by
  * srv->teardown_started so it can also be driven, exactly once, from the
  * engine's own _engine_force_stop_quiesce_all pass (chttpsvr_engine_stop() may
@@ -2927,7 +2980,7 @@ static void _quiesce_server_once(struct chttpserver *srv) {
    * be the one that drops the shared reactor's ref count to zero (if srv
    * happens to be the last contributing server), which hands
    * event_loop_destroy(srv_engine_bundler.reactor) off to an async reaper
-   * thread -- racing this function's own event_loop_remove() calls (inside
+   * thread; racing this function's own event_loop_remove() calls (inside
    * _drain_and_close_all_connections -> _conn_close) if they ran after
    * releasing instead of before. */
   ctpool old_pool = _drain_and_close_all_connections(srv);

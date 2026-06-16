@@ -2121,7 +2121,7 @@ TEST(ccol_select,
   /* Regression test for the read-direction cascade: once ccol_select() stops
    * consuming internally (peek-only, mirroring the write-direction branch's
    * existing peek+forward-notify shape), a thread that finds itself ready
-   * must still forward the notify to the next waiter -- otherwise, with two
+   * must still forward the notify to the next waiter; otherwise, with two
    * threads simultaneously waiting to read from the same empty queue, only
    * the first ever wakes even though two messages are actually available. */
   circular_queue *cq = circular_queue_create(4, NULL);
@@ -2277,11 +2277,11 @@ static bool evl_wait_for(evl_sync_ctx *c, int *counter_field, int target,
  * how a real production callback behaves under genuinely concurrent
  * dispatch. That makes a *blocking* read unsafe: event_loop's own
  * documentation already warns a callback's receive call "may find nothing,
- * and must handle that gracefully" -- a plain blocking read() on an fd with
+ * and must handle that gracefully"; a plain blocking read() on an fd with
  * nothing left to read, and no writer left to ever produce more (e.g. once
  * every feeder/driver thread in a test has already finished), is not
  * graceful, it hangs the reactor thread that called it forever, which in
- * turn hangs event_loop_shutdown's join on that thread -- a real deadlock
+ * turn hangs event_loop_shutdown's join on that thread; a real deadlock
  * reproduced (via gdb thread-apply-all-bt on a stuck test process) during
  * this test suite's own development. Setting O_NONBLOCK makes "nothing
  * available" return -1/EAGAIN immediately instead. */
@@ -2322,7 +2322,7 @@ TEST(event_loop, fd_on_readable_fires) {
     /* Nested block: see the multi-thread tests' identical pattern (e.g.
      * fd_modify_flips_direction_and_updates_sel's own comment for the full
      * explanation). evl_on_readable never drains an fd selectable's data
-     * (by design -- the caller reads sel->fd itself, as this test does
+     * (by design; the caller reads sel->fd itself, as this test does
      * below), so once pfd[0] becomes readable it stays level-triggered-
      * ready and the reactor thread keeps re-dispatching indefinitely until
      * the registration is removed; ctx must not be destroyed, nor may this
@@ -2343,7 +2343,7 @@ TEST(event_loop, fd_on_readable_fires) {
     REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
 
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
-    /* Read under ctx.mtx, not unprotected -- see fd_modify_flips_direction_
+    /* Read under ctx.mtx, not unprotected; see fd_modify_flips_direction_
      * and_updates_sel's identical last_dir_seen fix for why. */
     pthread_mutex_lock(&ctx.mtx);
     last_msg_valid = ctx.last_msg_valid;
@@ -2357,10 +2357,10 @@ TEST(event_loop, fd_on_readable_fires) {
     event_loop_remove(loop, reg);
 
     /* loop shuts down and its one reactor thread is joined here, at block
-     * exit -- ctx is guaranteed quiescent from this point on. */
+     * exit; ctx is guaranteed quiescent from this point on. */
   }
 
-  /* fd selectables never get msg populated -- caller reads sel->fd itself. */
+  /* fd selectables never get msg populated; caller reads sel->fd itself. */
   REQUIRE_FALSE(last_msg_valid);
 
   evl_sync_ctx_destroy(&ctx);
@@ -2402,7 +2402,7 @@ TEST(event_loop, fd_on_writable_fires) {
 }
 
 TEST(event_loop, fd_both_directions_combine_and_recombine) {
-  /* A socketpair fd gives a genuinely bidirectional fd, unlike a pipe --
+  /* A socketpair fd gives a genuinely bidirectional fd, unlike a pipe;
    * needed to register both read and write interest on the SAME fd, which
    * exercises the EPOLL_CTL_ADD-then-MOD combining path (and MOD-back-down
    * on partial removal). */
@@ -2414,7 +2414,7 @@ TEST(event_loop, fd_both_directions_combine_and_recombine) {
   evl_sync_ctx_init(&write_ctx);
 
   {
-    /* Nested block: see fd_on_readable_fires's identical pattern/comment --
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment;
      * both directions here stay level-triggered-ready indefinitely (sv[0]'s
      * read side is never drained by evl_on_readable; its write side never
      * fills up), so both ctx's must outlive every reactor thread, not just
@@ -2458,7 +2458,7 @@ TEST(event_loop, fd_both_directions_combine_and_recombine) {
 
 TEST(event_loop, fd_simultaneous_readable_and_writable) {
   /* Both directions registered on the same fd; write from the peer so sv[0]
-   * becomes readable while it is still writable -- both callbacks must fire
+   * becomes readable while it is still writable; both callbacks must fire
    * for the SAME epoll_wait batch. An earlier version of the dispatch design
    * stored a bare event_reg* in ev.data.ptr instead of the shared
    * event_entry, which would have silently delivered only one of the two. */
@@ -2517,7 +2517,7 @@ TEST(event_loop, fd_on_error_fires_for_both_directions) {
   evl_sync_ctx_init(&write_ctx);
 
   {
-    /* Nested block: see fd_on_readable_fires's identical pattern/comment --
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment;
      * an EPOLLHUP/ERR condition from a hung-up peer persists (level-
      * triggered) until the fd is removed, exactly like an undrained
      * readable/writable fd, so the reactor thread keeps re-dispatching
@@ -2612,7 +2612,7 @@ TEST(event_loop, fd_modify_flips_direction_and_updates_sel) {
      * evl_on_readable never drains sv[0] for this fd selectable (nothing in
      * this test reads it), so once sv[0] becomes readable it stays
      * level-triggered-ready and the reactor thread keeps re-dispatching
-     * indefinitely until the registration is removed -- ctx must not be
+     * indefinitely until the registration is removed; ctx must not be
      * destroyed, nor may this function return (freeing ctx's stack slot),
      * until that's guaranteed to have actually stopped, which only this
      * block's join guarantees. */
@@ -2639,7 +2639,7 @@ TEST(event_loop, fd_modify_flips_direction_and_updates_sel) {
      * drains sv[0] here, will) keep re-writing last_dir_seen for as long as
      * the registration stays live and the reactor thread keeps
      * re-dispatching, so a plain unprotected read immediately after
-     * evl_wait_for returns races those ongoing writes -- a real,
+     * evl_wait_for returns races those ongoing writes; a real,
      * pre-existing bug ThreadSanitizer caught here despite
      * num_reactor_threads == 1 (this has nothing to do with multi-threaded
      * dispatch; a single reactor thread re-dispatching a never-drained
@@ -2651,7 +2651,7 @@ TEST(event_loop, fd_modify_flips_direction_and_updates_sel) {
     event_loop_remove(loop, reg);
 
     /* loop shuts down and its one reactor thread is joined here, at block
-     * exit -- ctx is guaranteed quiescent from this point on. */
+     * exit; ctx is guaranteed quiescent from this point on. */
   }
 
   REQUIRE_EQ((int)last_dir_seen, (int)ccol_select_read);
@@ -2729,7 +2729,7 @@ TEST(event_loop, queue_circq_writable_fires_without_consuming) {
   REQUIRE_NE((void *)reg, NULL);
 
   /* Free the slot; on_writable must fire, but must NOT have consumed
-   * anything (queue still has room, not a message) -- the callback itself
+   * anything (queue still has room, not a message); the callback itself
    * is responsible for the actual send. */
   c_message_t recvd;
   REQUIRE_EQ(circq_recv_zc(cq, &recvd), ccol_success);
@@ -2791,7 +2791,7 @@ static void *evl_chan_sender_thread(void *arg) {
   *payload = a->value;
   c_message_t msg = {.data = payload, .size = sizeof(int)};
   /* Called from a spawned thread, so get_thread_id() differs from the
-   * channel's owner (the test thread that called channel_create) -- this
+   * channel's owner (the test thread that called channel_create); this
    * routes to workers_to_owner_cq, exactly what the owner-side
    * ccol_select_read registration below watches. */
   chan_send_zc(a->ch, &msg);
@@ -2860,7 +2860,7 @@ TEST(event_loop, queue_persistent_across_multiple_cycles) {
 
 TEST(event_loop, queue_already_pending_message_at_registration_time) {
   /* A message sent BEFORE event_loop_add is called must still be delivered
-   * -- the bridge eventfd has no prior notify to rely on, so event_loop_add
+   *; the bridge eventfd has no prior notify to rely on, so event_loop_add
    * must self-trigger when the queue is already in the target state at
    * registration time. */
   event_loop_construct_scoped(loop, 8, 1, 1);
@@ -2950,22 +2950,22 @@ TEST(event_loop, remove_from_different_thread_concurrent_with_dispatch) {
    * inline: event_loop_remove is documented to return while an in-flight
    * dispatch for the removed reg may still be running (it defers only the
    * library's OWN memory reclamation, not how long the callback itself
-   * takes) -- so the remover thread joining does not, by itself, prove
+   * takes); so the remover thread joining does not, by itself, prove
    * evl_on_readable has finished touching ctx. Destroying ctx.mtx (or
    * reusing its stack slot next iteration, before this fix) could race
-   * that still-in-flight callback -- a real bug ThreadSanitizer caught
+   * that still-in-flight callback; a real bug ThreadSanitizer caught
    * here despite num_reactor_threads == 1: this hazard has nothing to do
    * with multi-threaded dispatch, it's inherent to event_loop_remove's own
    * documented contract and was already present before this feature. Every
-   * logged ctx is freed only after the whole loop -- and the one reactor
-   * thread that could still be mid-callback -- has been joined, at this
+   * logged ctx is freed only after the whole loop (and the one reactor
+   * thread that could still be mid-callback) has been joined, at this
    * test's own nested block below. cq itself has the identical hazard and
    * fix: the ORIGINAL version of this test called circular_queue_destroy(cq)
    * before the scoped loop's own automatic destructor (which only runs at
    * this function's closing brace) had joined the reactor thread, meaning a
    * stale, already-collected dispatch for the last iteration's just-removed
    * reg could still call circq_try_recv_zc(sel->cq, ...) on an
-   * already-freed queue -- a real, pre-existing use-after-free hazard this
+   * already-freed queue; a real, pre-existing use-after-free hazard this
    * fix also closes, not merely the ctx one. */
   evl_sync_ctx *ctx_log[50];
   int ctx_log_count = 0;
@@ -3010,7 +3010,7 @@ TEST(event_loop, remove_from_different_thread_concurrent_with_dispatch) {
     REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
 
     /* loop shuts down and its one reactor thread is joined here, at block
-     * exit -- cq and every logged ctx are guaranteed quiescent from this
+     * exit; cq and every logged ctx are guaranteed quiescent from this
      * point on. */
   }
 
@@ -3047,7 +3047,7 @@ TEST(event_loop, destroy_while_queue_registration_pending_queue_outlives_loop) {
   /* Regression test for the destroy-path fix: freeing a queue-backed
    * event_reg without first unlinking its waiter_node from the queue's own
    * waiter list would leave the queue holding a dangling pointer, a
-   * use-after-free the next time anyone sends/receives on it -- especially
+   * use-after-free the next time anyone sends/receives on it; especially
    * dangerous here since the queue is intentionally NOT destroyed until
    * after the event_loop is. */
   circular_queue *cq = circular_queue_create(4, NULL);
@@ -3062,7 +3062,7 @@ TEST(event_loop, destroy_while_queue_registration_pending_queue_outlives_loop) {
       loop, selectable_from_circq(cq, ccol_select_read), handlers, NULL, &err);
   REQUIRE_NE((void *)reg, NULL);
 
-  /* Destroy the loop with the registration still pending -- must unlink
+  /* Destroy the loop with the registration still pending; must unlink
    * from cq's waiter list before freeing, not after. */
   event_loop_destroy(loop);
 
@@ -3141,7 +3141,7 @@ TEST(event_loop, multiple_independent_instances) {
   evl_sync_ctx_init(&ctx_b);
 
   {
-    /* Nested block: see fd_on_readable_fires's identical pattern/comment --
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment;
      * both fds here stay level-triggered-ready (evl_on_readable never
      * drains an fd selectable), so both loops' reactor threads must be
      * joined before either ctx is destroyed. */
@@ -3166,7 +3166,7 @@ TEST(event_loop, multiple_independent_instances) {
     /* loop_b's registration must not have fired for loop_a's fd. Safe to
      * read unprotected: nothing has ever been written to pfd_b at this
      * point, so there is no possible concurrent writer of ctx_b.
-     * readable_count to race -- that's precisely the property being
+     * readable_count to race; that's precisely the property being
      * tested. */
     REQUIRE_EQ(ctx_b.readable_count, 0);
 
@@ -3177,7 +3177,7 @@ TEST(event_loop, multiple_independent_instances) {
     event_loop_remove(loop_b, reg_b);
 
     /* both loops shut down and their reactor threads are joined here, at
-     * block exit -- ctx_a/ctx_b are guaranteed quiescent from this point
+     * block exit; ctx_a/ctx_b are guaranteed quiescent from this point
      * on. */
   }
 
@@ -3258,12 +3258,12 @@ TEST(event_loop, fd_modify_after_remove_returns_invalid_args_multi_stripe) {
    * actually be freed before calling modify (e.g. by forcing several
    * reactor drain cycles to elapse first): reg is only guaranteed to
    * remain valid, stale, memory across the *short* window before the next
-   * drain claims it (see _event_loop_defer_reg_free's doc comment) --
+   * drain claims it (see _event_loop_defer_reg_free's doc comment);
    * forcing extra drain cycles here would let that window close and make
    * reg itself genuinely freed, which is no longer "gracefully handled
    * stale reg*" territory but real, out-of-contract use-after-free. An
    * earlier draft of this test tried exactly that and was caught by
-   * valgrind flagging a real UAF -- correctly so, since the bug was in the
+   * valgrind flagging a real UAF; correctly so, since the bug was in the
    * test's own premise, not in event_loop_modify/_remove. */
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -3284,11 +3284,320 @@ TEST(event_loop, fd_modify_after_remove_returns_invalid_args_multi_stripe) {
   close(pfd[1]);
 }
 
+/* ========================================================================== */
+/*                    event_loop_pause / event_loop_resume                    */
+/* ========================================================================== */
+
+TEST(event_loop, pause_stops_delivery_then_resume_restores_it) {
+  /* Pauses BEFORE the fd is ever made ready, deliberately, rather than
+   * waiting for one delivery and then racing a pause call against it: a
+   * plain pipe read end, once made ready, stays ready until drained, and
+   * (with num_reactor_threads > 1, where EPOLLONESHOT is in play) the
+   * dispatch job's own post-callback re-arm runs on a totally separate
+   * thread from the one calling event_loop_pause, with no synchronization
+   * between "callback observed to have run once" and "pause has taken
+   * effect before the next re-arm"; an earlier draft of this test tried
+   * exactly that ordering and was genuinely racy (failed intermittently,
+   * not deterministically). Pausing first sidesteps the race entirely: no
+   * delivery can happen before pause takes effect, because none has
+   * happened yet. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 2);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
+
+  /* Now make the fd genuinely ready while paused; no on_readable callback
+   * must fire no matter how long we wait; a bounded wait standing in for
+   * "never", per this file's own established convention for asserting a
+   * negative. */
+  int val = 1;
+  REQUIRE_EQ(write(pfd[1], &val, sizeof(val)), (ssize_t)sizeof(val));
+  REQUIRE_FALSE(evl_wait_for(&ctx, &ctx.readable_count, 1, 300));
+
+  REQUIRE_EQ(event_loop_resume(loop, reg), ccol_success);
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, pause_write_direction) {
+  /* Same "pause before anything can fire" shape as
+   * pause_stops_delivery_then_resume_restores_it above, for the identical
+   * race-avoidance reason; doubly necessary here, since a pipe's write
+   * end never stops being writable on its own, so waiting for one delivery
+   * and then trying to pause before a second would be racing an
+   * unboundedly-fast-refiring condition, not a one-shot event.
+   *
+   * A pipe's write end is writable from the instant it exists, including
+   * during the brief window between event_loop_add returning and this
+   * test's own very next line calling event_loop_pause (unlike the read
+   * side above, genuinely not ready until this test's own later write()
+   * call), so a dispatch racing ahead of the pause call here is a real,
+   * if narrow, possibility, not just a theoretical one. The assertions
+   * below are baseline-relative (count must not advance past whatever it
+   * already was the instant pause() returned) specifically so this test
+   * passes deterministically either way, rather than assuming the count is
+   * exactly 0 at that point. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 2);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+  char *err = NULL;
+  /* A pipe's write end is writable the moment it has room, which it does
+   * immediately; no priming needed, unlike the circq_writable test above
+   * (which had to fill the queue first to make write-readiness meaningful). */
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[1], ccol_select_write), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
+
+  pthread_mutex_lock(&ctx.mtx);
+  int baseline = ctx.writable_count;
+  pthread_mutex_unlock(&ctx.mtx);
+  REQUIRE_FALSE(evl_wait_for(&ctx, &ctx.writable_count, baseline + 1, 300));
+
+  REQUIRE_EQ(event_loop_resume(loop, reg), ccol_success);
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, baseline + 1, 2000));
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, pause_is_idempotent) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 1);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
+
+  event_loop_remove(loop, reg);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, resume_never_paused_is_idempotent_and_harmless) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 1);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  /* Never paused; must succeed as a no-op and not disturb delivery. */
+  REQUIRE_EQ(event_loop_resume(loop, reg), ccol_success);
+
+  int val = 1;
+  REQUIRE_EQ(write(pfd[1], &val, sizeof(val)), (ssize_t)sizeof(val));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, pause_and_resume_reject_queue_selectable) {
+  event_loop_construct_scoped(loop, 8, 1, 1);
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_circq(cq, ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  /* Same fd-only restriction as event_loop_modify: a queue/channel
+   * registration's bridge eventfd has no "temporarily stop caring, but keep
+   * the registration" use case worth exposing today. */
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_invalid_args);
+  REQUIRE_EQ(event_loop_resume(loop, reg), ccol_invalid_args);
+
+  event_loop_remove(loop, reg);
+  circular_queue_destroy(cq);
+}
+
+TEST(event_loop, pause_and_resume_null_args_rejected) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 1, 1);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  REQUIRE_EQ(event_loop_pause(NULL, reg), ccol_invalid_args);
+  REQUIRE_EQ(event_loop_pause(loop, NULL), ccol_invalid_args);
+  REQUIRE_EQ(event_loop_resume(NULL, reg), ccol_invalid_args);
+  REQUIRE_EQ(event_loop_resume(loop, NULL), ccol_invalid_args);
+
+  event_loop_remove(loop, reg);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, resume_after_remove_returns_invalid_args) {
+  /* Mirrors fd_modify_after_remove_returns_invalid_args_multi_stripe's own
+   * timing exactly (remove immediately followed by the operation under
+   * test, no drain-forcing): reg is only guaranteed to remain valid, stale
+   * memory across the short window before the next reclamation drain
+   * claims it, so event_loop_resume must key its stripe lookup off reg's
+   * own stripe_idx and gracefully report ccol_invalid_args, never crash. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 1);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(event_loop_resume(loop, reg), ccol_invalid_args);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, pause_resume_preserve_reg_count_and_generation) {
+  /* Pause/resume must never look like a remove-then-add to any external
+   * observer: the whole point is that the registration itself never goes
+   * away, so both of these caller-visible identities must stay exactly the
+   * same across a pause/resume cycle. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 1);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE((void *)reg, NULL);
+
+  size_t count_before = event_loop_reg_count(loop);
+  uint64_t gen_before = event_loop_reg_generation(reg);
+
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
+  REQUIRE_EQ(event_loop_reg_count(loop), count_before);
+  REQUIRE_EQ(event_loop_reg_generation(reg), gen_before);
+
+  REQUIRE_EQ(event_loop_resume(loop, reg), ccol_success);
+  REQUIRE_EQ(event_loop_reg_count(loop), count_before);
+  REQUIRE_EQ(event_loop_reg_generation(reg), gen_before);
+
+  event_loop_remove(loop, reg);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+typedef struct {
+  evl_sync_ctx *ctx;
+  event_loop loop;
+  event_reg *reg;
+} evl_pause_from_callback_args;
+
+/* Pauses its own registration from inside the callback, exactly matching
+ * chttpserver.c's own _conn_start_diverted -> event_loop_pause call site
+ * (called synchronously from within an in-flight on_readable dispatch). */
+static void evl_on_readable_pause_self(event_loop loop, ccol_selectable *sel,
+                                       void *arg) {
+  evl_pause_from_callback_args *a = (evl_pause_from_callback_args *)arg;
+  REQUIRE_EQ(event_loop_pause(a->loop, a->reg), ccol_success);
+  evl_on_readable(loop, sel, a->ctx);
+}
+
+TEST(event_loop, pause_from_within_callback_then_resume_from_another_thread) {
+  /* The exact pattern chttpserver.c relies on: on_readable pauses its own
+   * registration synchronously from within the dispatch callback (mirroring
+   * _conn_start_diverted), then a completely separate thread (mirroring
+   * chttpserver's own worker_pool, distinct from event_loop's internal
+   * reactor/dispatch threads) resumes it later. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 2);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  evl_pause_from_callback_args cb_args = {.ctx = &ctx, .loop = loop};
+  event_handlers_t handlers = {.on_readable = evl_on_readable_pause_self,
+                               .on_writable = NULL,
+                               .on_error = NULL};
+  char *err = NULL;
+  event_reg *reg =
+      event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                     handlers, &cb_args, &err);
+  REQUIRE_NE((void *)reg, NULL);
+  cb_args.reg = reg;
+
+  int val = 1;
+  REQUIRE_EQ(write(pfd[1], &val, sizeof(val)), (ssize_t)sizeof(val));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+
+  /* Paused inside the callback above; drain and write again to prove no
+   * further delivery happens while paused, exactly like the single-thread
+   * pause test. */
+  int drain;
+  REQUIRE_EQ(read(pfd[0], &drain, sizeof(drain)), (ssize_t)sizeof(drain));
+  REQUIRE_EQ(write(pfd[1], &val, sizeof(val)), (ssize_t)sizeof(val));
+  REQUIRE_FALSE(evl_wait_for(&ctx, &ctx.readable_count, 2, 300));
+
+  /* Resume from the TEST's own thread; neither of event_loop's own
+   * internal threads (the poller or a dispatch_pool worker). */
+  REQUIRE_EQ(event_loop_resume(loop, reg), ccol_success);
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 2, 2000));
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
 typedef struct {
   event_loop loop;
   int thread_id;
   int iterations;
-  /* Opened once before this worker's loop, closed once after -- not per
+  /* Opened once before this worker's loop, closed once after; not per
    * iteration. Closing per iteration, while the loop (and its other 7
    * concurrently-running workers) stays alive, raced a legitimate
    * thundering-herd-adjacent stale dispatch's read() against this worker's
@@ -3301,7 +3610,7 @@ typedef struct {
    * event_loop_remove can return while an in-flight callback for the
    * removed reg is still running, so destroying ctx.mtx (or reusing its
    * stack slot next iteration) immediately after remove() returns can race
-   * that callback -- a real, pre-existing bug (present even with a single
+   * that callback; a real, pre-existing bug (present even with a single
    * reactor thread; nothing about it is specific to multi-threaded
    * dispatch) ThreadSanitizer caught here. Freed by the TEST function only
    * after the whole loop, and every worker thread, has been joined. */
@@ -3337,7 +3646,7 @@ static void *evl_stripe_stress_fd_worker(void *arg) {
 TEST(event_loop, multi_threaded_multi_fd_stress_with_stripes) {
   /* Many threads, many DISTINCT fds (unlike high_add_remove_churn_stress,
    * which is single-threaded and stripe-count 1), num_lock_stripes well
-   * above 1 -- exercises genuinely concurrent event_loop_add/_remove/
+   * above 1; exercises genuinely concurrent event_loop_add/_remove/
    * dispatch across different stripes running in parallel, not just churn
    * on a single lock. */
   const int n_threads = 8;
@@ -3347,7 +3656,7 @@ TEST(event_loop, multi_threaded_multi_fd_stress_with_stripes) {
 
   for (int i = 0; i < n_threads; i++) {
     REQUIRE_EQ(pipe(args[i].pfd), 0);
-    /* Non-blocking: see evl_set_nonblocking's own comment -- a legitimate
+    /* Non-blocking: see evl_set_nonblocking's own comment; a legitimate
      * duplicate/stale dispatch reading this fd after this worker's own
      * feeding has moved on to a later iteration must not block forever. */
     evl_set_nonblocking(args[i].pfd[0]);
@@ -3358,7 +3667,7 @@ TEST(event_loop, multi_threaded_multi_fd_stress_with_stripes) {
   }
 
   {
-    /* Nested block: see the other multi-thread tests' identical pattern --
+    /* Nested block: see the other multi-thread tests' identical pattern;
      * this loop's destructor joins every reactor thread at this block's
      * closing brace, which is what makes freeing every logged ctx
      * afterward, below, actually safe. */
@@ -3413,8 +3722,8 @@ static void *evl_stripe_stress_queue_worker(void *arg) {
 
 TEST(event_loop, multi_threaded_multi_queue_stress_with_stripes) {
   /* Queue-selectable equivalent of the fd stress test above: many distinct
-   * queues -- hence many distinct bridge_efds, each round-robin-assigned to
-   * a stripe via loop->next_queue_stripe -- registered/removed concurrently
+   * queues (hence many distinct bridge_efds, each round-robin-assigned to
+   * a stripe via loop->next_queue_stripe) registered/removed concurrently
    * across threads. */
   event_loop_construct_scoped(loop, 32, 16, 1);
   const int n_threads = 8;
@@ -3438,7 +3747,7 @@ TEST(event_loop, multi_threaded_multi_queue_stress_with_stripes) {
 TEST(event_loop, destroy_frees_registrations_across_multiple_stripes) {
   /* Registers enough distinct fds and queues, with num_lock_stripes > 1, to
    * spread live registrations across multiple stripes, then destroys the
-   * loop WITHOUT removing them first -- exercises __event_loop_destroy's
+   * loop WITHOUT removing them first; exercises __event_loop_destroy's
    * per-stripe walk (fd_index chmap + queue_regs_head unlinking) for every
    * stripe, not just stripe 0. */
   const int n = 20;
@@ -3482,7 +3791,7 @@ TEST(event_loop, destroy_frees_registrations_across_multiple_stripes) {
 
 TEST(event_loop, multi_thread_basic_smoke) {
   /* Plain single-fd readable dispatch, but with several reactor threads
-   * sharing the epoll instance -- confirms ordinary dispatch still works
+   * sharing the epoll instance; confirms ordinary dispatch still works
    * correctly (not just "doesn't crash") once more than one thread is
    * calling epoll_wait on the same epfd. */
   int pfd[2];
@@ -3494,7 +3803,7 @@ TEST(event_loop, multi_thread_basic_smoke) {
   {
     /* Nested block, same reasoning as the other multi-thread tests below:
      * evl_sync_ctx_destroy (like every other caller of it in this file)
-     * assumes no callback can still be touching ctx by the time it runs --
+     * assumes no callback can still be touching ctx by the time it runs;
      * true by construction with the single-reactor-thread tests elsewhere
      * in this file, but only an assumption here with 6 reactor threads
      * unless this block's join actually guarantees it. */
@@ -3529,7 +3838,7 @@ typedef struct evl_no_double_dispatch_ctx {
 
 /* Deliberately holds entry->dispatch_lock's protected region open for a
  * moment (usleep) after checking/updating `active`, widening the window in
- * which a second reactor thread -- if dispatch_lock were broken or absent --
+ * which a second reactor thread (if dispatch_lock were broken or absent)
  * could receive this same still-ready fd from its own concurrent epoll_wait
  * call (epoll's default level-triggered, non-EPOLLEXCLUSIVE semantics
  * genuinely allow this) and enter this callback concurrently. */
@@ -3575,7 +3884,7 @@ static void *evl_feeder_thread(void *arg) {
 }
 
 TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
-  /* Many reactor threads, ONE hot fd continuously fed by a writer thread --
+  /* Many reactor threads, ONE hot fd continuously fed by a writer thread;
    * exactly the thundering-herd scenario entry->dispatch_lock exists to
    * close (see its own field comment in cthreadcomm.c). Without that lock,
    * this test reliably catches active > 1 under stress; with it, active
@@ -3587,7 +3896,7 @@ TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
    * mimic real usage under genuinely concurrent dispatch), and once the
    * feeder thread stops writing, a legitimate thundering-herd duplicate
    * dispatch reading an already-drained, permanently-quiet pipe would
-   * otherwise block forever on a blocking read -- a real, reproduced
+   * otherwise block forever on a blocking read; a real, reproduced
    * deadlock; see evl_set_nonblocking's own comment. */
   evl_set_nonblocking(pfd[0]);
 
@@ -3597,7 +3906,7 @@ TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
 
   {
     /* Nested block: see multi_thread_cross_direction_serialization's
-     * identical pattern and comment -- ctx must not be destroyed, and pfd
+     * identical pattern and comment; ctx must not be destroyed, and pfd
      * must not be closed, until every reactor thread has actually been
      * joined (this block's closing brace), not merely after a heuristic
      * grace period. */
@@ -3619,7 +3928,7 @@ TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
     pthread_join(feeder, NULL);
 
     /* Give the reactor threads a brief grace period to finish draining
-     * whatever's left in the pipe after the feeder stops -- purely to let
+     * whatever's left in the pipe after the feeder stops; purely to let
      * total_calls approach feeder_args.iterations before the assertion
      * below, not relied on for safety (the nested block's join is what
      * provides that). */
@@ -3633,7 +3942,7 @@ TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
     event_loop_remove(loop, reg);
 
     /* loop shuts down and every reactor thread is joined here, at block
-     * exit -- ctx and pfd are guaranteed quiescent from this point on. */
+     * exit; ctx and pfd are guaranteed quiescent from this point on. */
   }
 
   REQUIRE_FALSE(ctx.violation);
@@ -3693,12 +4002,12 @@ TEST(event_loop, multi_thread_cross_direction_serialization) {
    * live: sv[0]'s write direction stays ready indefinitely (nothing ever
    * fills its send buffer, since nothing here writes from sv[0] to sv[1]),
    * while a peer thread continuously feeds sv[1] to keep sv[0]'s read
-   * direction ready too -- both directions genuinely, concurrently
+   * direction ready too; both directions genuinely, concurrently
    * dispatchable across many reactor threads for the whole test. */
   int sv[2];
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
   /* Non-blocking for the same reason as multi_thread_no_double_dispatch_
-   * same_fd's pfd[0] -- see evl_set_nonblocking's own comment. */
+   * same_fd's pfd[0]; see evl_set_nonblocking's own comment. */
   evl_set_nonblocking(sv[0]);
 
   evl_no_double_dispatch_ctx ctx;
@@ -3710,15 +4019,15 @@ TEST(event_loop, multi_thread_cross_direction_serialization) {
      * block's closing brace, which shuts down AND JOINS every reactor
      * thread before control leaves it. That join is a real, non-heuristic
      * guarantee that no callback referencing ctx can possibly still be
-     * running afterward -- unlike a fixed nanosleep-based grace period
+     * running afterward; unlike a fixed nanosleep-based grace period
      * (which an earlier version of this test used and which ThreadSanitizer
      * still caught a real race through: event_loop_remove's own documented
      * contract only guarantees an in-flight callback for the reg being
      * removed will finish, not that no OTHER, independently-collected
-     * dispatch for the same still-live entry -- a legitimate, expected
+     * dispatch for the same still-live entry, a legitimate, expected
      * thundering-herd duplicate, exactly the scenario
      * multi_thread_no_double_dispatch_same_fd exists to prove is
-     * lock-serialized, not eliminated -- won't still be running). Destroying
+     * lock-serialized, not eliminated, won't still be running). Destroying
      * ctx.mtx or letting this function return (freeing ctx's stack slot)
      * before that join happened is exactly the bug this restructuring
      * avoids. */
@@ -3755,7 +4064,7 @@ TEST(event_loop, multi_thread_cross_direction_serialization) {
     event_loop_remove(loop, wreg);
 
     /* loop shuts down and every reactor thread is joined here, at block
-     * exit -- ctx is guaranteed quiescent from this point on. */
+     * exit; ctx is guaranteed quiescent from this point on. */
   }
 
   REQUIRE_FALSE(ctx.violation);
@@ -3796,20 +4105,20 @@ typedef struct evl_reuse_driver_args {
   /* Every iteration's ctx is logged here instead of freed inline:
    * event_loop_remove's own documented contract is "safe to call
    * concurrently with an in-flight dispatch; teardown is deferred until any
-   * in-progress callback returns" -- it does NOT promise that no more
+   * in-progress callback returns"; it does NOT promise that no more
    * callback invocations for this reg can possibly still be in flight (e.g.
    * a second reactor thread that independently collected this same
    * still-registered entry from its own epoll_wait batch, via the
    * documented thundering-herd behavior other tests in this file also
    * exercise) by the time remove() returns. Freeing ctx inline, or reusing
    * its memory on the next iteration, would race a stale, still-running
-   * callback's reads/writes against this iteration's own writes/frees -- a
+   * callback's reads/writes against this iteration's own writes/frees; a
    * real bug an earlier version of this test had, caught by valgrind
    * (definitely-lost, from a first fix's deliberate never-free) and then
    * ThreadSanitizer (an actual use-after-free once that leak was
    * reasonably closed with a fixed-duration grace-period sleep instead of a
    * real join-based guarantee). The test function frees every logged ctx
-   * only after the whole event_loop -- every reactor thread -- has been
+   * only after the whole event_loop (every reactor thread) has been
    * shut down and joined; see its own nested-block comment for why that's
    * a real guarantee and a sleep never was. */
   evl_reuse_ctx **ctx_log;
@@ -3819,11 +4128,11 @@ typedef struct evl_reuse_driver_args {
    * still mints a fresh event_entry and hence a fresh generation each time
    * (event_loop_remove deletes the fd's registry entry before returning,
    * so a subsequent event_loop_add on that same fd number always takes the
-   * new-entry path) -- enough to exercise this module's core generation
+   * new-entry path); enough to exercise this module's core generation
    * guarantee under heavy concurrent add/remove/dispatch/reclaim churn
    * across drivers sharing one event_loop, without ALSO needing to close()
    * a fd that a legitimate (if rare) thundering-herd duplicate dispatch
-   * might still be reading -- the exact close()-vs-read() race
+   * might still be reading; the exact close()-vs-read() race
    * ThreadSanitizer caught when this test did close per iteration. */
   int pfd[2];
 } evl_reuse_driver_args;
@@ -3869,16 +4178,16 @@ static void *evl_reuse_driver_thread(void *arg) {
 TEST(event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
   /* Several driver threads, each rapidly re-registering/writing/removing
    * against its own fd in a tight loop, concurrently, sharing one
-   * event_loop -- exactly the kind of high-churn add/remove/dispatch/
+   * event_loop; exactly the kind of high-churn add/remove/dispatch/
    * reclaim workload under which a fresh generation must be minted (and
    * observed correctly) every single time, the core guarantee
    * event_loop_reg_generation exists to make safe by construction (see its
-   * own doc comment; this is the same bug CLASS -- stale identity confusion
-   * across a fd's registration lifecycle -- that historically bit this
+   * own doc comment; this is the same bug CLASS (stale identity confusion
+   * across a fd's registration lifecycle) that historically bit this
    * codebase's fd-reuse-across-a-redirect-hand-off scenario, exercised
    * here as repeated same-fd re-registration under concurrent load rather
    * than an actual OS-level close+reopen, specifically to avoid racing a
-   * legitimate thundering-herd duplicate dispatch against a close() call --
+   * legitimate thundering-herd duplicate dispatch against a close() call;
    * see evl_reuse_driver_args's own comment). Asserts every dispatch
    * observed its OWN registration's generation, never a stale/mismatched
    * one. */
@@ -3890,7 +4199,7 @@ TEST(event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
   for (int i = 0; i < n_drivers; i++) {
     REQUIRE_EQ(pipe(args[i].pfd), 0);
     /* Non-blocking for the same reason as multi_thread_no_double_dispatch_
-     * same_fd's pfd[0] -- see evl_set_nonblocking's own comment; here it
+     * same_fd's pfd[0]; see evl_set_nonblocking's own comment; here it
      * additionally covers the window after a driver's last iteration
      * removes its registration but before the whole loop is torn down. */
     evl_set_nonblocking(args[i].pfd[0]);
@@ -3902,7 +4211,7 @@ TEST(event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
 
   {
     /* Nested block: see multi_thread_cross_direction_serialization's
-     * identical pattern and comment -- this loop's destructor shuts down
+     * identical pattern and comment; this loop's destructor shuts down
      * and joins every reactor thread at this block's closing brace, which
      * is what makes freeing every logged ctx afterward, below, actually
      * safe rather than a timing guess. */
@@ -3933,7 +4242,7 @@ TEST(event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
 TEST(event_loop, multi_thread_shutdown_joins_poller_promptly) {
   /* Many reactor threads configured, nothing ever registered. Unlike before
    * the poller/dispatch_pool split, only ONE thread (poller_thread) is ever
-   * actually blocked in epoll_wait here -- the rest are idle ctpool workers
+   * actually blocked in epoll_wait here; the rest are idle ctpool workers
    * with nothing queued (see multi_thread_shutdown_drains_idle_dispatch_
    * pool_promptly below for that half). event_loop_shutdown's single
    * write() to shutdown_efd must still wake and join poller_thread
@@ -3968,7 +4277,7 @@ TEST(event_loop, multi_thread_shutdown_drains_idle_dispatch_pool_promptly) {
    * mechanism (a condvar broadcast waking idle ctpool workers, not an
    * epoll_wait wakeup) from the poller-wake path covered above. Bounds how
    * long that call takes with a large, entirely idle worker pool, the same
-   * way the test above bounds the poller half -- a regression that left
+   * way the test above bounds the poller half; a regression that left
    * some idle worker un-woken would show up here as a slow/hung test. */
   char *err = NULL;
   event_loop loop = event_loop_create(8, 4, 16, &err);
@@ -3994,7 +4303,7 @@ typedef struct evl_shutdown_drain_ctx {
 } evl_shutdown_drain_ctx;
 
 /* Signals "started" as soon as this callback begins running, then sleeps
- * before signaling "finished" -- giving the test driver a reliable way to
+ * before signaling "finished"; giving the test driver a reliable way to
  * call event_loop_shutdown while this job is provably still in flight,
  * rather than racing shutdown against the poller ever noticing the
  * triggering write at all. */
@@ -4022,12 +4331,12 @@ static void evl_shutdown_drain_on_readable(event_loop loop,
 
 TEST(event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
   /* Unlike the two tests above (idle pool), this one puts a real job in
-   * flight -- a callback deliberately sleeping, synchronized so the test
+   * flight (a callback deliberately sleeping, synchronized so the test
    * driver knows it has genuinely started before calling
-   * event_loop_shutdown -- directly exercising ctpool_shutdown_drain's
+   * event_loop_shutdown) directly exercising ctpool_shutdown_drain's
    * "finish in-flight work" contract (chosen over ctpool_shutdown_immediate
    * specifically to preserve event_loop_shutdown's own documented "no
-   * dispatch can be in flight once this returns" guarantee -- see that
+   * dispatch can be in flight once this returns" guarantee; see that
    * function's own comment). Asserts the callback actually completed (not
    * merely that shutdown returned), which immediate-cancel semantics would
    * not guarantee. */
@@ -4097,8 +4406,8 @@ TEST(event_loop, reg_generation_semantics) {
     /* Nested block, same reasoning as the other multi-thread tests in this
      * file: wreg's write direction dispatches almost immediately (a fresh
      * pipe write end is always writable), and with 4 reactor threads
-     * evl_sync_ctx_destroy must not run -- nor may this function return,
-     * freeing ctx's stack slot -- until that dispatch (and any other one
+     * evl_sync_ctx_destroy must not run (nor may this function return,
+     * freeing ctx's stack slot) until that dispatch (and any other one
      * still in flight) is guaranteed finished, which only this block's
      * join actually guarantees. */
     event_loop_construct_scoped(loop, 8, 1, 4);
@@ -4122,7 +4431,7 @@ TEST(event_loop, reg_generation_semantics) {
     REQUIRE_NE((void *)wreg, NULL);
     REQUIRE_EQ(event_loop_reg_generation(wreg), rgen);
 
-    /* event_loop_modify (direction flip) keeps the same generation -- it's
+    /* event_loop_modify (direction flip) keeps the same generation; it's
      * the same underlying fd/connection, just a different direction. */
     event_loop_remove(loop, wreg);
     REQUIRE_EQ(event_loop_modify(loop, rreg, ccol_select_write), ccol_success);
@@ -4153,7 +4462,7 @@ typedef struct evl_bounded_ctx {
 
 /* Deliberately slower than a continuously-refilling feeder can keep up
  * with, maximizing the poller's own chances to loop back to epoll_wait
- * while a dispatch job for this exact fd is still queued or executing --
+ * while a dispatch job for this exact fd is still queued or executing;
  * precisely the scenario that would mint an unbounded stream of redundant
  * dispatch jobs without EPOLLONESHOT's re-arm-after-dispatch fix (see
  * _event_loop_poller_collect's own comment in cthreadcomm.c). */
@@ -4184,12 +4493,12 @@ static void *evl_bounded_feeder_thread(void *arg) {
 TEST(event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
   /* Direct regression test for the EPOLLONESHOT re-arm fix: with collection
    * (poller_thread) decoupled from dispatch (a ctpool worker), a still-
-   * ready fd not yet re-armed must never be re-collected -- if it were,
+   * ready fd not yet re-armed must never be re-collected; if it were,
    * dispatch_pool's own pending-job count would grow without bound for the
    * whole duration a slow callback lags behind a fast feeder. Samples
    * event_loop_dispatch_pool_pending_count_for_tests while a feeder thread
    * writes continuously and asserts it never exceeds a small bound (well
-   * under num_reactor_threads - 1 workers plus one more queued -- the
+   * under num_reactor_threads - 1 workers plus one more queued; the
    * livelock this test guards against would blow far past that, not
    * merely nudge over it). */
   int pfd[2];
@@ -4214,7 +4523,7 @@ TEST(event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
 
     /* Deliberately modest: at ~0.5ms/dispatch this fully drains within the
      * grace period below, matching multi_thread_no_double_dispatch_same_
-     * fd's own established pattern -- the sampling window while the feeder
+     * fd's own established pattern; the sampling window while the feeder
      * is still running is what actually stresses the mechanism, not the
      * total byte count. */
     evl_feeder_args feeder_args = {.write_fd = pfd[1], .iterations = 1000};
@@ -4230,7 +4539,7 @@ TEST(event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
 
     pthread_join(feeder, NULL);
 
-    /* Brief, best-effort settle time before tearing anything down -- purely
+    /* Brief, best-effort settle time before tearing anything down; purely
      * test hygiene (nothing here asserts on leftover unread pipe bytes,
      * unlike circular_queue_destroy in the queue version of this test
      * below), not relied on for the max_pending assertion itself; kept
@@ -4270,7 +4579,7 @@ static void *evl_bounded_queue_feeder_thread(void *arg) {
 }
 
 /* Same slow-callback shape as evl_bounded_hot_fd_on_readable, for the
- * bridge-eventfd/queue-selectable path -- the design note in
+ * bridge-eventfd/queue-selectable path; the design note in
  * _event_loop_dispatch_job_fn flags this case as having had NO natural
  * throttle at all before the EPOLLONESHOT fix (a bridge eventfd has no
  * finite kernel buffer the way a pipe does), so this is the higher-value
@@ -4325,7 +4634,7 @@ TEST(event_loop, multi_thread_hot_queue_dispatch_pool_pending_stays_bounded) {
      * comparison against num_reactor_threads == 1, the unmodified code
      * path) that a queue reader with only ONE registration can legitimately
      * finish with a handful of messages still unconsumed once the feeder
-     * stops sending -- a pre-existing characteristic of the bridge
+     * stops sending; a pre-existing characteristic of the bridge
      * eventfd's own notify-on-send coalescing, unrelated to this test's own
      * EPOLLONESHOT regression coverage. Draining directly below (after the
      * registration is removed) is what actually guarantees
@@ -4342,7 +4651,7 @@ TEST(event_loop, multi_thread_hot_queue_dispatch_pool_pending_stays_bounded) {
 
   /* Drain whatever the event_loop-driven consumption above didn't get to
    * (see the grace-period loop's own comment) directly, now that reg has
-   * been removed and the loop's own scope has closed -- circular_queue_
+   * been removed and the loop's own scope has closed; circular_queue_
    * destroy asserts on any remaining message (see its own comment in
    * cthreadcomm.c), so this is required for a clean teardown, not
    * optional hygiene. */
@@ -4355,7 +4664,7 @@ TEST(event_loop, multi_thread_hot_queue_dispatch_pool_pending_stays_bounded) {
   REQUIRE_LT(max_pending, (size_t)10);
 }
 
-/* on_readable that never returns on its own -- used only to hold a job
+/* on_readable that never returns on its own; used only to hold a job
  * in flight on a dispatch_pool worker (or, for num_reactor_threads == 1,
  * to occupy the sole thread) long enough for the test driver to reliably
  * call event_loop_shutdown from within it. */
@@ -4365,7 +4674,7 @@ typedef struct evl_self_shutdown_ctx {
                             * driver polls this from the main thread while
                             * the callback (poller_thread or a dispatch_pool
                             * worker) writes it with no other synchronization
-                            * between them -- a real, TSan-caught race in an
+                            * between them; a real, TSan-caught race in an
                             * earlier version of this test that used a plain
                             * ccol_retval_t field here. */
 } evl_self_shutdown_ctx;
@@ -4423,7 +4732,7 @@ TEST(event_loop,
 TEST(event_loop,
      shutdown_from_within_callback_returns_not_permitted_multi_thread) {
   /* num_reactor_threads > 1: the callback runs on a dispatch_pool worker,
-   * not poller_thread -- a self-call here would call
+   * not poller_thread; a self-call here would call
    * ctpool_shutdown_drain from within one of the pool's own workers
    * (thread_join'ing itself) without the guard. */
   int pfd[2];

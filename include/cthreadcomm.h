@@ -1087,13 +1087,13 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
  * @brief Opaque event_loop structure
  *
  * A persistent, incrementally-mutable epoll(7)-based reactor. Exactly ONE
- * dedicated poller thread ever calls epoll_wait, for every configuration --
+ * dedicated poller thread ever calls epoll_wait, for every configuration;
  * this is a deliberate design property, not an implementation detail: with
  * more than one thread independently calling epoll_wait on a shared epoll
  * instance (an earlier design this module used), a single ready event wakes
  * every blocked thread (a genuine kernel-level thundering herd, confirmed
  * against real epoll(7) behavior; the non-obvious part is that
- * EPOLLEXCLUSIVE does NOT help here -- it governs the same target fd
+ * EPOLLEXCLUSIVE does NOT help here; it governs the same target fd
  * registered across multiple SEPARATE epoll instances, not many threads
  * sharing one), which measurably hurt tail latency for low-concurrency
  * workloads. See num_reactor_threads on event_loop_create_with_mprocs for
@@ -1111,8 +1111,8 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
  * threads, not the poller), two correctness properties hold that a
  * single-threaded reactor gets for free from having only one caller:
  *  - A single registration's callback(s) are never invoked concurrently with
- *    themselves, and -- stricter than a bare "no self-concurrency" guarantee
- *    -- a read registration and a write registration sharing the same fd
+ *    themselves, and (stricter than a bare "no self-concurrency" guarantee)
+ *    a read registration and a write registration sharing the same fd
  *    never run concurrently with *each other* either, so a callback pair
  *    that shares state across both directions on one fd (e.g. one TLS
  *    connection object) needs no additional locking of its own.
@@ -1124,13 +1124,13 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
  *    registration is a safe no-op, never a use-after-free or a misdirected
  *    callback on the new registration. A second registration for the same
  *    entry is never collected while an earlier one is still in flight
- *    (queued or executing) either, for the identical reason -- application
+ *    (queued or executing) either, for the identical reason; application
  *    code that calls event_loop_modify from within an in-flight callback
  *    (a supported, commonly-used pattern) does not race a second,
  *    concurrently-collected dispatch for that same registration.
  * See event_loop_reg_generation() for the caller-visible identity token this
  * makes available for a registration's own defensive bookkeeping across fd
- * reuse -- a separate, additional concern from the two guarantees above,
+ * reuse; a separate, additional concern from the two guarantees above,
  * which hold unconditionally whether or not a caller ever inspects it.
  */
 typedef struct event_loop_s event_loop_s;
@@ -1218,13 +1218,13 @@ typedef struct event_handlers {
  * num_reactor_threads == 1 reproduces this module's original single-thread
  * design exactly, byte-for-byte: that one thread both calls epoll_wait AND
  * runs every callback inline. num_reactor_threads > 1 spawns exactly ONE
- * dedicated thread that calls epoll_wait (never more -- see the event_loop
+ * dedicated thread that calls epoll_wait (never more; see the event_loop
  * struct's own doc comment for why) plus (num_reactor_threads - 1) worker
  * threads that actually execute callbacks, so total OS thread count for a
  * given num_reactor_threads is always exactly that value, preserving the
  * parameter's resource-usage meaning across both configurations. A
  * registration's callback runs on the poller thread for the first
- * configuration, or on one of the worker threads for the second -- this is
+ * configuration, or on one of the worker threads for the second; this is
  * transparent to callback code (event_readable_fn/event_writable_fn/
  * event_error_fn have no way to observe which), except that
  * event_loop_shutdown must not be called from within a callback running on
@@ -1237,14 +1237,14 @@ typedef struct event_handlers {
  * from the unchanged code path. With more than one thread, this design
  * closes a real, measured tail-latency regression the original "N threads
  * all call epoll_wait" design had at low concurrency (a genuine kernel
- * thundering herd, not specific to this module's own code -- see the
+ * thundering herd, not specific to this module's own code; see the
  * event_loop struct's own doc comment) while preserving aggregate
  * multi-threaded dispatch throughput under real concurrent load.
  *
  * The fd/entry registry is lock-striped: num_lock_stripes independent
  * (mutex, chmap) pairs, each guarding a disjoint subset of registrations
  * (one real fd, or one queue/channel registration's private bridge fd, is
- * always handled by exactly one stripe -- never split across two). Passing
+ * always handled by exactly one stripe; never split across two). Passing
  * 1 reproduces the original single-lock design exactly, just with one
  * extra array indirection; passing more lets event_loop_add/_remove/_modify
  * calls for different fds/registrations proceed concurrently instead of
@@ -1338,7 +1338,7 @@ event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
  * A monotonically increasing value, unique loop-wide, minted once when the
  * fd (or queue/channel bridge) reg belongs to is first registered
  * (event_loop_add's new-entry path) and shared by every registration on
- * that same fd for as long as it lives -- including across
+ * that same fd for as long as it lives, including across
  * event_loop_modify (a direction flip is the same underlying fd/connection,
  * so it keeps the same generation) and across both a read and a write
  * registration on the same fd (both share one generation, since they
@@ -1393,6 +1393,76 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
                                 ccol_select_dir new_dir);
 
 /**
+ * @brief Temporarily stop delivering events for an fd registration, without
+ *        destroying it
+ *
+ * fd-only, same restriction as event_loop_modify. Unlike event_loop_remove
+ * (which fully unregisters reg and defers it for freeing), event_loop_pause
+ * leaves reg fully intact (still occupying its slot on the underlying
+ * fd's entry, still counting toward event_loop_reg_count, still carrying
+ * the same event_loop_reg_generation) and only recomputes the fd's
+ * combined epoll interest mask to exclude it. No on_readable/on_writable/
+ * on_error callback fires for reg while paused, exactly as if it had been
+ * removed; the other direction on the same fd (if any) is unaffected.
+ *
+ * This is the cheap alternative to an event_loop_remove immediately
+ * followed by a later event_loop_add for a caller pattern where the same
+ * logical registration is going to come back; e.g. a connection handed
+ * off to a worker thread for blocking body I/O, then handed back to the
+ * reactor for its next request: no heap allocation/free, no fd-registry
+ * chmap churn, and (with a single reactor thread, i.e.
+ * num_reactor_threads == 1) one epoll_ctl call instead of the two (DEL,
+ * then ADD) a remove-then-add pair costs. With more than one reactor
+ * thread, the dispatch worker's own post-callback EPOLLONESHOT re-arm
+ * still runs once more after a paused callback returns (harmless:
+ * event_loop's internal re-arm helper always recomputes the mask fresh
+ * from live state, so a redundant re-arm reapplies the same excluding mask
+ * rather than reintroducing a race) but pause/resume still avoids the
+ * allocation and registry churn in that configuration too.
+ *
+ * Pausing an already-paused reg is a no-op success.
+ *
+ * @param loop event_loop the registration belongs to
+ * @param reg  Registration to pause
+ *
+ * @return ccol_success on success
+ * @return ccol_invalid_args if loop/reg is NULL, reg is a queue/channel
+ * registration, or reg was concurrently removed
+ *
+ * @note Thread-safe; may be called concurrently with event_loop_remove and
+ *       from within a callback running on the reactor thread
+ *
+ * @see event_loop_resume
+ * @see event_loop_remove
+ */
+ccol_retval_t event_loop_pause(event_loop loop, event_reg *reg);
+
+/**
+ * @brief Resume event delivery for a registration previously paused by
+ *        event_loop_pause
+ *
+ * Recomputes the fd's combined epoll interest mask to include reg again.
+ * Resuming a reg that is not currently paused (never paused, or already
+ * resumed) is a no-op success. This deliberately mirrors
+ * event_loop_modify's own "already in the requested state" idempotence.
+ *
+ * @param loop event_loop the registration belongs to
+ * @param reg  Registration to resume
+ *
+ * @return ccol_success on success
+ * @return ccol_invalid_args if loop/reg is NULL, reg is a queue/channel
+ * registration, or reg was concurrently removed (e.g. the connection was
+ * closed while the caller still thought it owned a paused registration to
+ * resume)
+ *
+ * @note Thread-safe; may be called concurrently with event_loop_remove and
+ *       from within a callback running on the reactor thread
+ *
+ * @see event_loop_pause
+ */
+ccol_retval_t event_loop_resume(event_loop loop, event_reg *reg);
+
+/**
  * @brief Deregister a selectable from the event loop
  *
  * Safe to call from within a callback for the very registration being
@@ -1402,7 +1472,7 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
  * returns. No further callback for this registration is ever invoked after
  * this call returns, even one already collected (e.g. sitting queued for a
  * dispatch worker thread with num_reactor_threads > 1) but not yet actually
- * started -- callers may free whatever the registration's own arg points to
+ * started; callers may free whatever the registration's own arg points to
  * immediately after this call returns without racing a stale callback
  * invocation.
  *
@@ -1448,12 +1518,12 @@ size_t event_loop_reg_count(event_loop loop);
  * @return ccol_success on success
  * @return ccol_invalid_args if loop is NULL
  * @return ccol_not_permitted if called from within a callback running on
- * any of this loop's own threads (the poller, or -- for num_reactor_threads
- * > 1 -- a dispatch worker); see the warning below
+ * any of this loop's own threads (the poller, or, for num_reactor_threads
+ * > 1, a dispatch worker); see the warning below
  *
  * @warning Calling this from within a callback running on one of this
  * loop's own threads would otherwise join that thread from itself
- * (undefined behavior / EDEADLK) -- detected and rejected with
+ * (undefined behavior / EDEADLK); detected and rejected with
  * ccol_not_permitted rather than left as caller-triggerable undefined
  * behavior. Defer shutdown to another thread, or to after the callback
  * returns, instead.

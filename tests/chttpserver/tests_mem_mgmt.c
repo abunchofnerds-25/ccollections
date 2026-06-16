@@ -203,7 +203,7 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
 
   /* g_mm_free_count's own source is the server noticing _setup()'s client
    * connection has gone away (chttpclient_destroy closes it) and freeing its
-   * own chttpsvr_conn_t in response -- an event the server's reactor must
+   * own chttpsvr_conn_t in response; an event the server's reactor must
    * still observe and dispatch asynchronously, not something guaranteed to
    * have already happened the instant _setup()'s constructor returns.
    * Bounded retry rather than an immediate single check: this dispatch now
@@ -220,14 +220,13 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
 
 extern size_t _chttpsvr_engine_num_reactor_threads_for_tests(void);
 
-TEST(chttpserver_mem_mgmt, num_reactor_threads_defaults_to_cpu_count_when_unconfigured) {
+TEST(chttpserver_mem_mgmt, num_reactor_threads_defaults_to_one_when_unconfigured) {
   /* _setup() never called chttpsvr_set_engine_num_reactor_threads before
-   * starting g_srv, so the reactor must have auto-detected via
-   * sysconf(_SC_NPROCESSORS_ONLN) (falling back to 1 on failure), matching
-   * chttpsvr_set_engine_num_reactor_threads's own documented default. */
-  long cpus = sysconf(_SC_NPROCESSORS_ONLN);
-  size_t expected = (cpus > 0) ? (size_t)cpus : 1;
-  REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), expected);
+   * starting g_srv, so the reactor must have used the default of 1 (a
+   * single dedicated thread, not an auto-detected CPU count), matching
+   * chttpsvr_set_engine_num_reactor_threads's own documented, benchmarked
+   * default. */
+  REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), (size_t)1);
 }
 
 TEST(chttpserver_mem_mgmt, null_function_pointer_rejected) {

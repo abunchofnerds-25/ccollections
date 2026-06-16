@@ -1806,7 +1806,7 @@ static void _parse_ctx_free_fields(chttp_parse_ctx_t *ctx) {
  * Continue" interim response the same ctx was just used to parse. Mirrors
  * chttp_do_internal's own "fresh state per hop" convention (a fresh
  * chttp_parse_ctx_t per redirect hop) at the sub-hop granularity this one
- * connection's two-message exchange needs -- the interim response's own
+ * connection's two-message exchange needs; the interim response's own
  * (rare, but legal) headers must never leak into the final response's
  * header map. is_head_request/redirects_still_allowed are left untouched
  * (properties of the request, not of any one parsed message);
@@ -1834,7 +1834,7 @@ static ccol_retval_t _parse_ctx_reset_for_continue(chttp_parse_ctx_t *ctx) {
 
 /*
  * Reads and parses exactly one HTTP/1.1 message from `conn`, starting with
- * whatever bytes are already available in `carry_in` (if any -- fed to the
+ * whatever bytes are already available in `carry_in` (if any; fed to the
  * parser before ever touching the socket) and falling back to ordinary
  * deadline-bounded socket reads once carry_in is exhausted. On
  * ccol_success, *keep_alive_out reflects chttp1_parser's own keep-alive
@@ -1844,7 +1844,7 @@ static ccol_retval_t _parse_ctx_reset_for_continue(chttp_parse_ctx_t *ctx) {
  *
  * Unlike treating any bytes past the message boundary as trailing garbage
  * outright, this function reports them via leftover_out/leftover_len_out
- * (heap-allocated with pctx->mp; NULL/0 when there is none) instead --
+ * (heap-allocated with pctx->mp; NULL/0 when there is none) instead;
  * needed so chttp_do_internal's Expect: 100-continue handling can carry a
  * fast server's real final-response bytes forward into a second parse, if
  * they happened to arrive in the same read as the "100 Continue" interim
@@ -2123,7 +2123,7 @@ static void _client_engine_globals_init(void) {
   /* Belt-and-suspenders: Tier 1 already passes MSG_NOSIGNAL to every send(),
    * and Tier 2/3's own raw writes do the same (see _async_on_writable), so
    * this is not load-bearing the way chttpserver.c's identical call is for
-   * its own worker-thread writes -- but it costs nothing and protects any
+   * its own worker-thread writes; but it costs nothing and protects any
    * future raw write path in this file from an unexpected process-killing
    * SIGPIPE regardless. */
   signal(SIGPIPE, SIG_IGN);
@@ -2146,7 +2146,7 @@ static void _client_engine_join_reaper_if_needed_locked(void) {
 
 /*
  * Runs on a freshly spawned thread (never inline on the calling thread that
- * dropped the last reference -- that thread is routinely a reactor callback
+ * dropped the last reference; that thread is routinely a reactor callback
  * thread itself, e.g. _async_on_error tearing down the last live ctx, and
  * must never block on joining the deadline sweep or draining
  * cli_engine_bundler.dns_pool). Tears down the deadline sweep and
@@ -2263,7 +2263,7 @@ static ccol_retval_t _client_engine_acquire(void) {
 /*
  * Releases a reference acquired via _client_engine_acquire(). Once
  * cli_engine_bundler.reactor_refs returns to zero, hands the actual teardown
- * off to a freshly spawned reaper thread rather than performing it inline --
+ * off to a freshly spawned reaper thread rather than performing it inline;
  * this is essential, not just a style choice, since this is routinely called
  * from inside a reactor callback thread itself (_async_on_error tearing down
  * the last live ctx), which must never block joining the deadline sweep or
@@ -2286,7 +2286,7 @@ static void _client_engine_release(void) {
  * Blocks until any in-flight reaper thread (see _client_engine_release) has
  * fully finished tearing this module's resources down. A no-op if not
  * currently stopping (including if not running at all, or running and
- * staying up because other Tier 2/3 references remain) -- this is
+ * staying up because other Tier 2/3 references remain); this is
  * deliberately NOT "block until the engine eventually stops on its own"
  * (that would hang forever against a healthy, still-referenced engine);
  * callers use this only to wait for a teardown they know they just
@@ -2295,7 +2295,7 @@ static void _client_engine_release(void) {
  * Gated behind RUNNING_UNIT_TESTS: unlike chttpsvr_engine_wait() on the
  * server side, this module exposes no public equivalent (the engine starts
  * and stops on its own as Tier 2/3 usage comes and goes, with no atexit
- * safety net needing to wait on it either -- see the "SHARED STATIC
+ * safety net needing to wait on it either; see the "SHARED STATIC
  * REACTOR" section above), so this primitive's only caller in a production
  * build would otherwise be none at all; it exists purely for
  * _chttpclient_engine_wait_for_quiescence_for_tests below.
@@ -2556,14 +2556,14 @@ typedef struct chttp_async_ctx_s {
             * pool, or while idle-pooled with no direction of
             * interest yet needed). Set exactly once, by
             * _async_connect_task, right after event_loop_add
-            * returns -- and _Atomic specifically because that
+            * returns; and _Atomic specifically because that
             * assignment is NOT safe to treat as "invisible until a
             * dispatch could care": event_loop_add's own internal
             * registration goes live (dispatchable by another
             * reactor thread) as part of the call itself, which can
             * complete and hand a callback to a DIFFERENT thread
             * before this thread's own `ctx->reg = event_loop_add(
-            * ...)` assignment has finished executing -- especially
+            * ...)` assignment has finished executing; especially
             * likely for a loopback connect, which is often already
             * writable the instant it's registered. A plain
             * (non-atomic) pointer here was a real, TSan-caught data
@@ -2631,11 +2631,11 @@ typedef struct chttp_async_ctx_s {
                       * of this field, which assumed event_loop's own
                       * dispatch_lock was sufficient protection) because
                       * it is also written directly by _async_submit_hop's
-                      * reused-connection path -- ordinary application
+                      * reused-connection path (ordinary application
                       * code running on whatever thread called
                       * chttpclient_do_async, not a dispatch callback, and
                       * therefore NOT covered by event_loop's dispatch_lock
-                      * at all -- while a concurrent dispatch for this
+                      * at all) while a concurrent dispatch for this
                       * same, already-registered ctx can legitimately be
                       * in flight at the same time. A real, TSan-caught
                       * data race, found chasing down an intermittent
@@ -2700,7 +2700,7 @@ typedef struct chttp_async_ctx_s {
                                       * fully-initialised value with no
                                       * separate synchronisation needed. See
                                       * the "ASYNC DEADLINE SWEEP" section. */
-  mutex_t deadline_lock; /* Guards overall_deadline below ONLY -- a small,
+  mutex_t deadline_lock; /* Guards overall_deadline below ONLY; a small,
                           * dedicated leaf lock, never held while trying to
                           * acquire idle_lock or client_deadline_bundle.mutex
                           * (so it introduces no new lock-ordering cycle with
@@ -3215,7 +3215,7 @@ static chttp_async_ctx_t *_async_ctx_create(ccol_memmgmt_procs_t *mp) {
  * done so: this mirrors ctx->tls/ctx->wire's own "always safe to free here
  * regardless of what the caller already did" treatment. _client_deadline_
  * unregister is called FIRST, strictly before close(ctx->fd): this ordering
- * is load-bearing, not incidental -- see the "ASYNC DEADLINE SWEEP"
+ * is load-bearing, not incidental; see the "ASYNC DEADLINE SWEEP"
  * section's own comment for why the deadline sweep's fd-based shutdown()
  * call is only safe from an fd-reuse race because every teardown path
  * unregisters from that registry before its fd can be closed and
@@ -3731,7 +3731,7 @@ static void _async_ctx_finish(chttp_async_ctx_t *ctx) {
  *
  * Only actually tears ctx down if THIS call is the one that successfully
  * removes it from the pool's cvec (cli->lock is the true, sole arbiter of
- * exclusive ownership here -- see _async_idle_remove_locked's own bool
+ * exclusive ownership here; see _async_idle_remove_locked's own bool
  * return). If the removal finds nothing (already removed by a concurrent
  * caller), this returns immediately without touching ctx again.
  *
@@ -3746,7 +3746,7 @@ static void _async_ctx_finish(chttp_async_ctx_t *ctx) {
  * _async_ctx_free/_client_engine_release regardless of whether the removal
  * above actually found anything (the old comment even said "a no-op if
  * some other path already removed it" while the code below it was NOT,
- * in fact, a no-op) -- a real double-free, caught via valgrind and a
+ * in fact, a no-op); a real double-free, caught via valgrind and a
  * flaky-test repro loop against async_idle_pool.dead_connection_detected_
  * and_retried specifically because that test's second request is exactly
  * what makes the first request's pooled connection genuinely, persistently
@@ -3844,7 +3844,7 @@ static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
   }
   /* A REUSED ctx's wire buffer must survive a "successful" write (accepted
    * by the local socket buffer, which does NOT guarantee the peer is
-   * actually still alive to respond) -- see _async_retry_hop, which can run
+   * actually still alive to respond); see _async_retry_hop, which can run
    * against THIS ctx later if the subsequent read side discovers the
    * connection was already dead, and needs the ORIGINAL request bytes to
    * resend on a fresh connection. Freeing wire here unconditionally was a
@@ -3855,7 +3855,7 @@ static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
    * send ZERO bytes (its own write loop's `wire_sent < wire_len` check is
    * immediately false), so the retry's connection sat open while the real
    * server-side mock waited out its own 5-second read timeout before
-   * closing it -- caught via async_idle_pool.dead_connection_detected_and_
+   * closing it; caught via async_idle_pool.dead_connection_detected_and_
    * retried failing intermittently under full-suite load (never in
    * isolation, since it needs enough concurrent connections for a write to
    * a reused-but-already-peer-closed socket to actually succeed locally
@@ -4695,7 +4695,7 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
      * before any of the other per-hop fields below were touched. The
      * registration's direction must be flipped from read (its steady
      * idle-pooled state) to write; the actual write attempt is deliberately
-     * NOT made here, on this (non-reactor) calling thread -- it is left
+     * NOT made here, on this (non-reactor) calling thread; it is left
      * entirely to _async_on_writable's own dispatch, exactly like a fresh
      * connection's first write already works. This is not just simpler; it
      * is required for correctness: the moment event_loop_modify flips this
@@ -4707,7 +4707,7 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
      * function racing a dispatch it just made possible). An earlier version
      * of this function attempted the write here directly, which both raced
      * that concurrent dispatch and separately failed to transition
-     * ctx->state/direction to READING on a fully-completed write -- a real,
+     * ctx->state/direction to READING on a fully-completed write; a real,
      * reproducible hang in async_idle_pool.sequential_requests_reuse_
      * connection, found via gdb thread backtraces on the hung process
      * rather than assumed from code inspection alone. */
@@ -4769,7 +4769,7 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
  * connect() call runs on a completely different ctpool worker thread and,
  * on a loopback redirect chain that opens and closes a fresh fd every hop
  * in quick succession, can be handed back the EXACT SAME fd number the
- * kernel just freed -- but only once that worker thread actually gets to
+ * kernel just freed; but only once that worker thread actually gets to
  * run, which cannot happen until ctpool_submit for the next hop is called.
  * Finishing the connection unconditionally FIRST (so the old fd is fully
  * closed, and its event_loop registration fully removed, before
@@ -5366,7 +5366,7 @@ void __chttpclient_destroy(chttpcli cli) {
 
 /*
  * Sends `wire` (the fully serialized request, `wire_len` bytes, with the
- * body -- if any -- appended verbatim at the end, exactly `body_len` bytes)
+ * body (if any) appended verbatim at the end, exactly `body_len` bytes)
  * and reads the response, honoring chttp_request_t.expect_continue when
  * `use_100_continue` is true (the caller has already confirmed this hop
  * genuinely has a body to hold back: body_carrying_method && body.data &&
@@ -5380,7 +5380,7 @@ void __chttpclient_destroy(chttpcli cli) {
  * CHTTP_100_CONTINUE_WAIT_MS (bounded by whatever is left of `overall`) for
  * either:
  *   - a "100 Continue" interim response: pctx is reset (a fresh header map,
- *     matching this codebase's "fresh state per message" convention -- the
+ *     matching this codebase's "fresh state per message" convention; the
  *     interim response's own headers must never leak into the final one),
  *     the body is sent, and the real final response is read, carrying
  *     forward any bytes a fast/optimistic server already sent past the
@@ -5389,7 +5389,7 @@ void __chttpclient_destroy(chttpcli cli) {
  *     it must not be silently dropped as garbage);
  *   - the server answering directly without a "100 Continue" at all (RFC
  *     7231 SS5.1.1 explicitly permits this, e.g. to reject a request
- *     without wanting the body) -- that response IS the final response, and
+ *     without wanting the body); that response IS the final response, and
  *     the body is never sent;
  *   - a timeout: the body is sent anyway and the final response is read
  *     normally, matching curl's own CURLOPT_EXPECT_100_TIMEOUT_MS behavior.
@@ -5417,7 +5417,7 @@ static ccol_retval_t _chttp_send_and_read(
   prv = _chttp_read_message(conn, pctx, &wait_dl, NULL, 0, keep_alive_out,
                             any_bytes_read_out, &leftover, &leftover_len);
   if (prv == ccol_timed_out) {
-    /* No interim response within the wait window -- but the abandoned
+    /* No interim response within the wait window; but the abandoned
      * interim parse attempt may still have left partial state on pctx (a
      * status line parsed without ever reaching CHTTP1_PAUSED, in the
      * pathological case of a server splitting even the interim response's

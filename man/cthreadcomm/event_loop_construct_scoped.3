@@ -37,7 +37,7 @@ Calls fatal_err() on failure.  A caller relying on no callback still
 being able to reference anything reachable through this loop's scope
 (e.g. a mutex or buffer a callback's arg points at) must ensure that
 reliance holds up to and including the scope-exit join, not just an
-explicit event_loop_remove(3) call beforehand -- see
+explicit event_loop_remove(3) call beforehand; see
 event_loop_remove(3)'s own notes on a callback outliving that call's
 return, which this scope's implicit shutdown is equally subject to.
 .fi

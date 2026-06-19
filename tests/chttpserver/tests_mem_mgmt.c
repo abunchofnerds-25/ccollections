@@ -203,7 +203,7 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
 
   /* g_mm_free_count's own source is the server noticing _setup()'s client
    * connection has gone away (chttpclient_destroy closes it) and freeing its
-   * own chttpsvr_conn_t in response -- an event the server's reactor must
+   * own chttpsvr_conn_t in response; an event the server's reactor must
    * still observe and dispatch asynchronously, not something guaranteed to
    * have already happened the instant _setup()'s constructor returns.
    * Bounded retry rather than an immediate single check: this dispatch now
@@ -216,6 +216,17 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
     usleep(20000);
   }
   REQUIRE_GT(g_mm_free_count, (size_t)0);
+}
+
+extern size_t _chttpsvr_engine_num_reactor_threads_for_tests(void);
+
+TEST(chttpserver_mem_mgmt, num_reactor_threads_defaults_to_one_when_unconfigured) {
+  /* _setup() never called chttpsvr_set_engine_num_reactor_threads before
+   * starting g_srv, so the reactor must have used the default of 1 (a
+   * single dedicated thread, not an auto-detected CPU count), matching
+   * chttpsvr_set_engine_num_reactor_threads's own documented, benchmarked
+   * default. */
+  REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), (size_t)1);
 }
 
 TEST(chttpserver_mem_mgmt, null_function_pointer_rejected) {
@@ -248,6 +259,14 @@ TEST(chttpserver_mem_mgmt, null_procs_reverts_rejected_while_running) {
   /* NULL (revert-to-default) is also subject to the "not while running"
    * rule; it is still a live allocator swap. */
   REQUIRE_EQ(chttpsvr_set_engine_mem_mgmt_procs(NULL), ccol_not_permitted);
+}
+
+TEST(chttpserver_mem_mgmt, num_reactor_threads_rejected_while_running) {
+  /* Same "baked into the reactor at construction time" restriction as
+   * chttpsvr_set_engine_mem_mgmt_procs above, including the 0
+   * (revert-to-default) sentinel. */
+  REQUIRE_EQ(chttpsvr_set_engine_num_reactor_threads(2), ccol_not_permitted);
+  REQUIRE_EQ(chttpsvr_set_engine_num_reactor_threads(0), ccol_not_permitted);
 }
 
 TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
@@ -289,6 +308,14 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   };
   REQUIRE_EQ(chttpsvr_set_engine_mem_mgmt_procs(&procs), ccol_success);
 
+  /* Exercise chttpsvr_set_engine_num_reactor_threads's own "after a full
+   * stop, before the next chttpsvr_start" reinstall path in the same
+   * restart cycle, since this is the only one this file performs; a
+   * dedicated explicit value must be the exact one wired into the freshly
+   * (re)created reactor below, not merely accepted and then silently
+   * ignored. */
+  REQUIRE_EQ(chttpsvr_set_engine_num_reactor_threads(3), ccol_success);
+
   char *err = NULL;
   chttpsvr new_srv = create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(new_srv != NULL);
@@ -311,6 +338,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   REQUIRE_GT(__atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
                  __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED),
              malloc_calloc_before);
+  REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), (size_t)3);
 
   chttpcli cli = create_chttpclient(NULL);
   REQUIRE_TRUE(cli != NULL);

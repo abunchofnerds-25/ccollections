@@ -14,7 +14,7 @@ uint64_t event_loop_reg_generation(const event_reg *reg);
 Returns a monotonically increasing value, unique loop-wide, minted once
 when the fd (or queue/channel bridge) reg belongs to is first
 registered (event_loop_add()'s new-entry path) and shared by every
-registration on that same fd for as long as it lives -- including
+registration on that same fd for as long as it lives; including
 across event_loop_modify() (a direction flip is the same underlying
 fd/connection, so it keeps the same generation) and across both a read
 and a write registration on the same fd (both share one generation,
@@ -49,7 +49,7 @@ reg  Registration to query.
 .nf
 Returns the generation value.
 Returns 0 if reg is NULL (0 is never a valid generation for a real
-registration -- the counter starts at 1).
+registration; the counter starts at 1).
 .fi
 .SH NOTES
 .nf

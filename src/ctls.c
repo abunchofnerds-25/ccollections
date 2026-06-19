@@ -45,28 +45,30 @@ SOFTWARE.
  * This is genuinely process-global state (not tied to any one ctls_ctx_t
  * instance), so it is guarded by a once_flag_t rather than an instance-level
  * mutex. */
-static EVP_PKEY *g_ctls_root_key = NULL;
-static mutex_t g_ctls_root_key_mutex;
-static once_flag_t g_ctls_root_key_once = ONCE_INIT;
+static struct {
+  EVP_PKEY *key;
+  mutex_t mutex;
+  once_flag_t once;
+} ctls_root_key_bundle = {0};
 
 static void _ctls_root_key_globals_init(void) {
-  mutex_init(g_ctls_root_key_mutex);
+  mutex_init(ctls_root_key_bundle.mutex);
 }
 
 static EVP_PKEY *_ctls_get_root_key(void) {
-  call_once(g_ctls_root_key_once, _ctls_root_key_globals_init);
-  mutex_lock(g_ctls_root_key_mutex);
-  if (!g_ctls_root_key) {
+  call_once(ctls_root_key_bundle.once, _ctls_root_key_globals_init);
+  mutex_lock(ctls_root_key_bundle.mutex);
+  if (!ctls_root_key_bundle.key) {
     /* EVP_RSA_gen (a thin macro over EVP_PKEY_Q_keygen) is the modern,
      * non-deprecated OpenSSL 3.x replacement for the older RSA_new/BN_new/
      * RSA_generate_key_ex/EVP_PKEY_assign_RSA sequence; that sequence is
      * deprecated as of OpenSSL 3.0 and would trip -Wdeprecated-declarations
      * under this codebase's -Werror build, since this is not vendored code
      * built with relaxed warnings. */
-    g_ctls_root_key = EVP_RSA_gen(2048);
+    ctls_root_key_bundle.key = EVP_RSA_gen(2048);
   }
-  EVP_PKEY *key = g_ctls_root_key;
-  mutex_unlock(g_ctls_root_key_mutex);
+  EVP_PKEY *key = ctls_root_key_bundle.key;
+  mutex_unlock(ctls_root_key_bundle.mutex);
   return key;
 }
 
@@ -74,19 +76,24 @@ static EVP_PKEY *_ctls_get_root_key(void) {
 /*                       ALPN EX-DATA INDEX (SSL* -> ctls_conn_t*) */
 /* ========================================================================== */
 
-static int g_ctls_conn_ex_idx = -1;
-static mutex_t g_ctls_ex_idx_mutex;
-static once_flag_t g_ctls_ex_idx_once = ONCE_INIT;
+static struct {
+  int idx;
+  mutex_t mutex;
+  once_flag_t once;
+} ctls_conn_ex_idx_bundle = {0};
 
-static void _ctls_ex_idx_globals_init(void) { mutex_init(g_ctls_ex_idx_mutex); }
+static void _ctls_ex_idx_globals_init(void) {
+  mutex_init(ctls_conn_ex_idx_bundle.mutex);
+}
 
 static int _ctls_conn_ex_idx(void) {
-  call_once(g_ctls_ex_idx_once, _ctls_ex_idx_globals_init);
-  mutex_lock(g_ctls_ex_idx_mutex);
-  if (g_ctls_conn_ex_idx < 0)
-    g_ctls_conn_ex_idx = SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
-  int idx = g_ctls_conn_ex_idx;
-  mutex_unlock(g_ctls_ex_idx_mutex);
+  call_once(ctls_conn_ex_idx_bundle.once, _ctls_ex_idx_globals_init);
+  mutex_lock(ctls_conn_ex_idx_bundle.mutex);
+  if (ctls_conn_ex_idx_bundle.idx < 0)
+    ctls_conn_ex_idx_bundle.idx =
+        SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
+  int idx = ctls_conn_ex_idx_bundle.idx;
+  mutex_unlock(ctls_conn_ex_idx_bundle.mutex);
   return idx;
 }
 

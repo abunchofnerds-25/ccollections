@@ -111,7 +111,7 @@ static chttpsvr _start_server(const char *port_str, uint16_t port) {
  * or chttpsvr_destroy()'d first). Before the fix, the reaper this spawns
  * freed g_servers' backing array without resetting g_servers_count, so a
  * later chttpsvr_destroy(srv) -> _servers_unregister(srv) dereferenced a
- * NULL g_servers[0] -- a guaranteed, deterministic SIGSEGV, not a rare race.
+ * NULL g_servers[0]; a guaranteed, deterministic SIGSEGV, not a rare race.
  * A clean run of this test (especially under valgrind's memtest target) is
  * the direct proof the crash is gone and nothing was leaked or
  * double-freed along the way. */
@@ -198,7 +198,7 @@ static void _slow_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 /* chttpsvr_engine_stop() must still drain genuinely in-flight requests
  * (_drain_and_close_all_connections's own documented contract) before the
  * reactor is actually torn down, exactly like a graceful chttpsvr_destroy()
- * already does -- the forced path is not supposed to abandon or corrupt a
+ * already does; the forced path is not supposed to abandon or corrupt a
  * request that is already being handled by a worker thread at the moment the
  * signal fires. */
 TEST(engine_stop, force_stop_drains_in_flight_request_before_reactor_teardown) {
@@ -220,7 +220,7 @@ TEST(engine_stop, force_stop_drains_in_flight_request_before_reactor_teardown) {
 
   /* Wait for confirmation the request actually reached the worker thread and
    * is blocking inside _slow_handler (i.e. genuinely in-flight) before we
-   * force-stop the engine -- a fixed sleep here would be a flaky proxy for
+   * force-stop the engine; a fixed sleep here would be a flaky proxy for
    * this under a slow/loaded environment (e.g. under valgrind, where the
    * accept/parse/dispatch path can easily take longer than a "should be
    * plenty" fixed delay), so wait on the handler's own entry signal instead,

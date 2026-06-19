@@ -1,0 +1,50 @@
+.TH CHTTPCLI_SET_ENGINE_NUM_REACTOR_THREADS 3 "2026-07-17" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpcli_set_engine_num_reactor_threads \- set the OS thread count for chttpclient's async-engine reactor
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads);
+.fi
+.SH DESCRIPTION
+.nf
+Configures how many OS threads the shared Tier 2/3 async-engine
+event_loop reactor devotes to its own polling and dispatch, per
+event_loop_create_with_mprocs's own num_reactor_threads parameter (see
+cthreadcomm.h): 1 means a single thread both polls and dispatches
+inline; any larger value means one dedicated polling thread plus
+(num_threads - 1) dispatch worker threads.
+
+By default (never having called this function, or having called it
+with num_threads == 0), the reactor sizes itself to
+sysconf(_SC_NPROCESSORS_ONLN), falling back to 1 if that query fails.
+Passing a positive num_threads overrides that auto-detection and pins
+the reactor to exactly that many threads instead; passing 0 restores
+the default auto-detected sizing.  This configures only the shared
+reactor's own construction, independent of any individual chttpcli
+instance's own settings.
+
+May only be called before the reactor has ever started in this process
+(i.e. before the first chttpclient_do_async/_streaming call anywhere),
+or after the engine has fully stopped (every chttpcli async user has
+released its reference and the automatic teardown has completed).
+Unlike chttpsvr_set_engine_num_reactor_threads's typically
+process-lifetime reactor, this engine starts and stops on its own as
+Tier 2/3 usage comes and goes, so this window recurs naturally rather
+than being a one-shot process-startup opportunity.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success on success.
+ccol_not_permitted if the engine is currently running; wait for it to
+    fully stop first.
+.fi
+.SH "SEE ALSO"
+.BR chttpcli_set_engine_mem_mgmt_procs (3),
+.BR chttpcli_set_engine_logger (3),
+.BR chttpclient_do_async (3),
+.BR chttpclient_do_pooled (3),
+.BR chttpsvr_set_engine_num_reactor_threads (3)

@@ -163,14 +163,14 @@ typedef enum {
  * left as whatever was accumulated so far (including, on LINE_TOO_LONG, the
  * full CHTTP1_MAX_LINE_LEN).
  *
- * Any '\n' not immediately preceded by '\r' is LINE_BAD_EOL -- this rejects
+ * Any '\n' not immediately preceded by '\r' is LINE_BAD_EOL; this rejects
  * both a bare LF used as a line terminator and a bare LF embedded mid-line
  * (e.g. unfolded multi-line header content), which is exactly the strict
  * (this parser's only mode) behaviour: there is no lenient mode anywhere in
  * this codebase that would relax either case (e.g. by accepting a bare LF,
  * or a CR not immediately followed by LF, as a valid line terminator).
  * A bare CR that is NOT immediately followed by LF is deliberately not
- * specially rejected here -- it simply becomes ordinary line content, which
+ * specially rejected here; it simply becomes ordinary line content, which
  * is then caught by the caller's own control-character validation of that
  * content (is_invalid_value_byte, or the reason-phrase scan in
  * _parse_status_line) rather than duplicating that check at this layer.
@@ -290,7 +290,7 @@ static bool parse_status_line(chttp1_parser_t *parser) {
  *
  * method is validated as a tchar-only token (the same character class
  * header field names use, per RFC 7230 SS3.1.1/SS3.2.6) but not matched
- * against any specific set of known method names -- an unrecognized method
+ * against any specific set of known method names; an unrecognized method
  * is the caller's own routing concern (e.g. surfaced as an ordinary 405),
  * not this parser's to reject. request-target is validated only for the
  * absence of control characters; this parser does not distinguish
@@ -381,7 +381,7 @@ static bool header_name_is(const char *name, size_t name_len,
 }
 
 /* Whether the (already OWS-trimmed) Transfer-Encoding value's LAST
- * comma-separated token is "chunked" -- the only thing this parser's
+ * comma-separated token is "chunked"; the only thing this parser's
  * response-parsing side needs to know about Transfer-Encoding, since
  * chttpclient.c never wires a callback that would need to see individual
  * encodings. */
@@ -398,11 +398,11 @@ static bool value_ends_with_chunked(const char *v, size_t len) {
 /* RFC 7230 SS3.3.1: "chunked" MUST be the final transfer-coding in a
  * Transfer-Encoding list. This only matters for REQUESTS (a response's
  * framing that ignores this rule is this parser's own, pre-existing,
- * documented scope reduction -- see value_ends_with_chunked's own doc
+ * documented scope reduction; see value_ends_with_chunked's own doc
  * comment; chttpclient.c only ever parses responses, so this check is
  * gated to CHTTP1_PARSE_REQUEST call sites only). Returns true iff
  * "chunked" (case-insensitive) appears as some comma-separated token that
- * is NOT the last one -- the request-smuggling-shaped case a front/back
+ * is NOT the last one; the request-smuggling-shaped case a front/back
  * server disagreement could otherwise arise from (see
  * chunked_not_last_in_transfer_encoding_list_rejected in tests.c). */
 static bool transfer_encoding_has_nonfinal_chunked(const char *v, size_t len) {
@@ -449,13 +449,13 @@ static void parse_connection_tokens(chttp1_parser_t *parser, const char *v,
 
 /*
  * Parses parser->line_buf[0..line_len) as one header/trailer line ("name:
- * value"), validates it (including the three size caps -- see
- * chttp1_parser.h's file-level doc comment -- and the framing-relevant
+ * value"), validates it (including the three size caps; see
+ * chttp1_parser.h's file-level doc comment; and the framing-relevant
  * checks: duplicate Content-Length, Content-Length+chunked conflict,
  * Content-Length decimal overflow), updates framing flags for the three
  * header names this parser cares about, and invokes settings->on_header.
  * Shared verbatim between CHTTP1_ST_HEADERS and CHTTP1_ST_BODY_CHUNK_TRAILERS
- * -- there is no regular-vs-trailer distinction at this layer, matching
+ *; there is no regular-vs-trailer distinction at this layer, matching
  * chttpclient.c's own existing behaviour of inserting both into the same
  * headers map.
  */
@@ -531,7 +531,7 @@ static ph_result_t process_header_line(chttp1_parser_t *parser) {
   } else if (header_name_is(name, name_len, "expect")) {
     /* RFC 7231 SS5.1.1's only defined expectation value; see
      * chttp1_expects_continue()'s own doc comment for the full contract
-     * (detection only -- this parser performs no I/O and does not itself
+     * (detection only; this parser performs no I/O and does not itself
      * send an interim "100 Continue" response). */
     if (value_len == 12 && strncasecmp(vstart, "100-continue", 12) == 0)
       parser->flags |= F_EXPECT_100_CONTINUE;
@@ -565,7 +565,7 @@ static ph_result_t process_header_line(chttp1_parser_t *parser) {
  * unvalidated, discarded span: chttpclient.c has no need to inspect chunk
  * extensions, so there is nothing to validate those bytes for. This parser
  * deliberately does not validate extension token/quoted-string grammar at
- * all -- a conscious, low-risk scope reduction, not an oversight (the
+ * all; a conscious, low-risk scope reduction, not an oversight (the
  * discarded bytes are never consumed either way).
  */
 static bool parse_chunk_size_line(chttp1_parser_t *parser) {
@@ -712,7 +712,7 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
              * specifically: this parser reports it as the complete message,
              * same as any other no-body response, rather than automatically
              * restarting to keep parsing a second message on the same
-             * parser instance for an interim 1xx response -- chttpclient.c
+             * parser instance for an interim 1xx response; chttpclient.c
              * never sends "Expect: 100-continue" and has no code path that
              * would know what to do with a second, later message on the
              * same hop, so that behaviour would be untested, unused
@@ -755,7 +755,7 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
           } else if (parser->type == CHTTP1_PARSE_REQUEST) {
             /* RFC 7230 SS3.3: unlike a response, a request with neither
              * Content-Length nor chunked Transfer-Encoding simply has no
-             * body at all -- there is no EOF-delimited framing mode for
+             * body at all; there is no EOF-delimited framing mode for
              * requests (the connection isn't even closing; the client is
              * the one sending). Nothing to divert either way. */
             parser->finish_state = CHTTP1_FINISH_SAFE;
@@ -763,12 +763,12 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
           } else {
             /* Neither Content-Length nor chunked: either an explicit
              * Transfer-Encoding whose last token isn't "chunked" (RFC 7230
-             * SS3.3.3: for a response -- never a request, handled in the
-             * branch above instead -- the body length is then determined by
+             * SS3.3.3: for a response (never a request, handled in the
+             * branch above instead) the body length is then determined by
              * reading until the connection closes) or no framing at all
              * (same EOF-delimited outcome). This is the ONE body-framing
              * mode where EOF is itself the valid, expected way to end the
-             * message -- see chttp1_should_keep_alive's needs_eof check,
+             * message; see chttp1_should_keep_alive's needs_eof check,
              * which relies on finish_state staying CHTTP1_FINISH_SAFE_WITH_CB
              * for exactly this case and no other. */
             parser->state = CHTTP1_ST_BODY_EOF;
@@ -883,7 +883,7 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
         /* Unreachable in practice: CHTTP1_ST_MESSAGE_DONE and CHTTP1_ST_DEAD
          * are both already handled by the early-return check at the top of
          * this function (the hard "never call execute() again after
-         * CHTTP1_PAUSED/an error" contract -- see chttp1_parser.h). Defensive
+         * CHTTP1_PAUSED/an error" contract; see chttp1_parser.h). Defensive
          * only. */
         return CHTTP1_ERROR;
     }
@@ -940,10 +940,10 @@ bool chttp1_should_keep_alive(const chttp1_parser_t *parser) {
   /* An EOF-delimited body is never keep-alive eligible regardless of any
    * Connection header value: ending the body already required ending the
    * connection. finish_state is set to CHTTP1_FINISH_SAFE_WITH_CB in
-   * exactly (and only) that one body-framing mode, and -- unlike
+   * exactly (and only) that one body-framing mode, and (unlike
    * parser->state, which has already moved on to CHTTP1_ST_MESSAGE_DONE by
-   * the time this is ever meaningfully called (see this function's own doc
-   * comment: only meaningful once the message is complete) -- stays that
+   * the time this is ever meaningfully called; see this function's own doc
+   * comment: only meaningful once the message is complete) stays that
    * value all the way through message completion, so it alone is sufficient
    * here. */
   bool needs_eof = (parser->finish_state == CHTTP1_FINISH_SAFE_WITH_CB);
@@ -988,7 +988,7 @@ bool chttp1_stream_prepare_tls(chttp1_stream_t *stream, int fd, void *tls_conn,
 
 /* Shared by chttp1_stream_read/_write: blocks via poll(2) until fd is ready
  * for the requested direction, or the deadline elapses, or a signal
- * interrupts the wait (retried transparently -- an interrupted poll(2) is
+ * interrupts the wait (retried transparently; an interrupted poll(2) is
  * not a real timeout or error and must not be reported as either). Returns
  * true if fd is ready to proceed, false if the deadline elapsed (check
  * stream->timed_out, already set by this function) or a real poll(2) error

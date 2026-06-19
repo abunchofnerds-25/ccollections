@@ -1618,7 +1618,7 @@ if (rc == ccol_timed_out) {
 
 **Key properties:**
 
-- Readiness only, for every selectable type: a queue win means a message is (probably) available to claim via `circq_try_recv_zc`/`dynmq_try_recv_zc`; a file descriptor read win means `read(2)`/`recv(2)` will (probably) return data. Either explicit call may still find nothing if a concurrent consumer/producer won the race first (TOCTOU, the same contract POSIX `select(2)` itself has) -- the call must be non-blocking and its result checked.
+- Readiness only, for every selectable type: a queue win means a message is (probably) available to claim via `circq_try_recv_zc`/`dynmq_try_recv_zc`; a file descriptor read win means `read(2)`/`recv(2)` will (probably) return data. Either explicit call may still find nothing if a concurrent consumer/producer won the race first (TOCTOU, the same contract POSIX `select(2)` itself has); the call must be non-blocking and its result checked.
 - Queue-only selectable sets use a condition variable path with no `epoll` overhead. Any file descriptor in the set switches the implementation to `epoll(7)` automatically.
 
 ---
@@ -1633,7 +1633,7 @@ The fd/registration registry is lock-striped: `num_lock_stripes` independent (mu
 
 Only one thread ever calls `epoll_wait` (for every `num_reactor_threads` value) specifically because, in an earlier version of this design, every one of `num_reactor_threads` threads called `epoll_wait` independently on the shared `epoll` instance; a single ready event genuinely wakes every thread blocked on the same `epoll` instance (a real kernel-level thundering herd; `EPOLLEXCLUSIVE` does not help here, since it governs the same fd registered across multiple *separate* `epoll` instances, not many threads sharing one), which measurably hurt single-connection tail latency the moment more than one reactor thread was configured at all, even for an otherwise-uncontended connection. The current design eliminates that cost structurally while still providing multi-threaded dispatch throughput under real concurrent load via the separate worker pool; `num_reactor_threads == 1` measures byte-for-byte identical to the original single-thread design.
 
-`event_loop_reg_generation(reg)` returns a monotonically increasing, loop-wide-unique identity token minted once per fd when it is first registered (shared by both directions on the same fd, and preserved across `event_loop_modify`), for a caller's own defensive bookkeeping across fd reuse -- a direct analogue of what facil.io's uuid gave callers in this library's own HTTP modules. It is not required for basic correctness: dispatch already validates a registration's liveness before invoking any callback unconditionally, so a stale, already-fetched batch entry for an already-removed (or fd-reused) registration is always a safe no-op regardless of whether a caller ever inspects the generation itself.
+`event_loop_reg_generation(reg)` returns a monotonically increasing, loop-wide-unique identity token minted once per fd when it is first registered (shared by both directions on the same fd, and preserved across `event_loop_modify`), for a caller's own defensive bookkeeping across fd reuse; a direct analogue of what facil.io's uuid gave callers in this library's own HTTP modules. It is not required for basic correctness: dispatch already validates a registration's liveness before invoking any callback unconditionally, so a stale, already-fetched batch entry for an already-removed (or fd-reused) registration is always a safe no-op regardless of whether a caller ever inspects the generation itself.
 
 ```c
 event_loop_construct(loop, /*max_events_per_wait=*/32, /*num_lock_stripes=*/1,
@@ -1701,11 +1701,20 @@ ctx->reg = event_loop_add(loop, selectable_from_fd(client_fd, ccol_select_read),
 
 Both directions may be registered on the same fd at once (e.g. a full-duplex socket being read and written concurrently) by calling `event_loop_add` twice, once per direction; each call returns an independent `event_reg *`. Flipping a single registration's direction over time instead (e.g. a non-blocking connect: write-interest until the connect completes, then read-interest afterward) uses one registration plus `event_loop_modify`.
 
+For a caller pattern where an fd registration needs to temporarily stop receiving events and later come back (e.g. a connection handed off to a worker thread for blocking body I/O, then handed back to the reactor for its next request), `event_loop_pause`/`event_loop_resume` are far cheaper than an `event_loop_remove` immediately followed by a later `event_loop_add`: the registration stays fully intact (no heap allocation/free, no fd-registry chmap churn) and only the fd's combined epoll interest mask is recomputed to exclude/include it:
+
+```c
+event_loop_pause(loop, reg);    /* no more callbacks for reg until resumed */
+/* ... a worker thread does its own blocking I/O on the fd directly ... */
+event_loop_resume(loop, reg);   /* interest restored; same reg, same generation */
+```
+
 **Key properties:**
 
 - `num_reactor_threads` total background threads per `event_loop` (one dedicated polling thread, plus `num_reactor_threads - 1` dispatch worker threads when greater than 1), spawned at creation and all joined at `event_loop_shutdown` / `event_loop_destroy`; multiple independent instances share no global state.
 - A single registration's callback is never invoked concurrently with itself, and a read and a write registration sharing the same fd are never invoked concurrently with each other, regardless of how many reactor threads are configured.
 - `event_loop_reg_generation` gives every fd registration a loop-wide-unique, monotonically increasing identity token, stable across `event_loop_modify` and shared by both directions on the same fd, for detecting fd reuse from application code; dispatch itself already validates a registration's liveness unconditionally, so this is for the caller's own bookkeeping, not required for internal correctness.
+- `event_loop_pause`/`event_loop_resume` are fd-only (same restriction as `event_loop_modify`) and never change `event_loop_reg_count` or `event_loop_reg_generation`; pausing an already-paused registration, or resuming one that isn't paused, is a no-op success.
 - `event_loop_remove` is safe to call from within a registration's own callback (self-removal on error is a common pattern) as well as from any other thread, including concurrently with an in-flight dispatch for the same registration.
 - Removing an fd registration or destroying the loop never closes the fd itself, and never destroys a registered queue; ownership stays exactly where `selectable_from_fd`/`selectable_from_circq`/etc. already put it.
 
@@ -3101,7 +3110,7 @@ ctpool_future_free(f);
 chttpclient_destroy(cli);
 ```
 
-The engine (a small pool of `event_loop` reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. This engine owns its own static, process-wide `event_loop` instance, fully independent of `chttpserver`'s own (separate) `event_loop` instance; the two modules share no reactor, so stopping/starting one has no effect on the other. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`. `chttpcli_set_engine_logger`/`chttpcli_set_engine_mem_mgmt_procs` configure this reactor's diagnostics logger and allocator respectively, and must be called before this engine's first lazy construction (mirroring `chttpserver`'s identical pair of functions for its own reactor).
+The engine (a small pool of `event_loop` reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count by default) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. This engine owns its own static, process-wide `event_loop` instance, fully independent of `chttpserver`'s own (separate) `event_loop` instance; the two modules share no reactor, so stopping/starting one has no effect on the other. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`. `chttpcli_set_engine_logger`/`chttpcli_set_engine_mem_mgmt_procs`/`chttpcli_set_engine_num_reactor_threads` configure this reactor's diagnostics logger, allocator, and OS thread count respectively, and must be called before this engine's first lazy construction (mirroring `chttpserver`'s identical trio of functions for its own reactor).
 
 `chttpclient_do_async_streaming` delivers the response body via a `chttpcli_write_fn` callback, exactly like `chttpclient_do_streaming`:
 
@@ -3145,7 +3154,13 @@ ccol_memmgmt_procs_t mp = {
 chttpcli_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default */
 ```
 
-This is independent of the allocator each individual `chttpcli` instance uses for its own requests/connections (configured via `create_chttpclient_mp`); this setter only affects the one shared engine's own construction. Both functions mirror `chttpserver`'s identical `chttpsvr_set_engine_logger`/`chttpsvr_set_engine_mem_mgmt_procs` pair for its own, fully independent reactor.
+This is independent of the allocator each individual `chttpcli` instance uses for its own requests/connections (configured via `create_chttpclient_mp`); this setter only affects the one shared engine's own construction. To override how many OS threads the shared reactor devotes to its own polling and dispatch (by default it auto-detects `sysconf(_SC_NPROCESSORS_ONLN)`, falling back to 1), call `chttpcli_set_engine_num_reactor_threads` under the same "before first start, or after a full stop" restriction:
+
+```c
+chttpcli_set_engine_num_reactor_threads(4);   /* optional; 0 restores auto-detected sizing */
+```
+
+All three functions mirror `chttpserver`'s identical `chttpsvr_set_engine_logger`/`chttpsvr_set_engine_mem_mgmt_procs`/`chttpsvr_set_engine_num_reactor_threads` trio for its own, fully independent reactor.
 
 ### TLS Configuration
 
@@ -3359,6 +3374,7 @@ Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn
 |---|---|
 | `chttpcli_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` that receives the shared reactor's own diagnostics; call before the first Tier 2/3 use in the process |
 | `chttpcli_set_engine_mem_mgmt_procs(mp)` | Redirect the shared reactor's own internal memory management to `mp`, or to the default allocator if `mp` is NULL; call before the engine's first start, or after it has fully stopped |
+| `chttpcli_set_engine_num_reactor_threads(n)` | Pin the shared reactor to `n` OS threads, or restore auto-detected sizing (`sysconf(_SC_NPROCESSORS_ONLN)`, falling back to 1) if `n` is 0; call before the engine's first start, or after it has fully stopped |
 
 **Request Execution**
 
@@ -3429,7 +3445,7 @@ The module is split across two headers: `chttp.h` declares shared types (`chttp_
 
 ### Engine Lifecycle
 
-`chttpserver` maintains one static, process-wide `event_loop` reactor (internally multi-threaded, sized to the CPU count) shared by every `chttpsvr` instance in the process, plus one idle-connection-timeout sweep thread shared the same way. Both are lazily started on the first `chttpsvr_start` call and torn down once the last server releases its reference (i.e. every started `chttpsvr` has been destroyed); no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the reactor has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
+`chttpserver` maintains one static, process-wide `event_loop` reactor (a single dedicated thread by default; see `chttpsvr_set_engine_num_reactor_threads` below to configure more) shared by every `chttpsvr` instance in the process, plus one idle-connection-timeout sweep thread shared the same way. Both are lazily started on the first `chttpsvr_start` call and torn down once the last server releases its reference (i.e. every started `chttpsvr` has been destroyed); no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the reactor has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
 
 This reactor is entirely independent of `chttpclient`'s own engine (`chttpclient_do_async`/`_streaming`/`chttpclient_do_pooled`/`_streaming`); each module owns its own reactor, so stopping one never affects the other.
 
@@ -3475,6 +3491,12 @@ chttpsvr_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default 
 ```
 
 This may only be called before the first `chttpsvr_start` in the process (it returns `ccol_not_permitted` afterward): swapping allocators once the reactor has already allocated memory with the previous one would produce mismatched malloc/free pairs. Passing NULL later (also before the first start, or after the reactor has fully stopped) reverts to the default allocator. Note this is independent of the allocator each individual `chttpsvr` instance uses for its own connections/requests (configured via `create_chttpsvr_mp`, following the usual `_mp` convention); this setter only affects the one shared reactor's own construction.
+
+By default the reactor uses exactly 1 thread: a single dedicated thread that both polls and dispatches every callback inline. This is a benchmarked, not assumed, default: measured faster and more latency-consistent than multiple dispatch threads for both plain HTTP and TLS-with-connection-reuse traffic (the common case for a well-behaved client population). Multiple dispatch threads only pull ahead under sustained *connection churn* combined with TLS (many distinct clients each opening a connection for only one or a few requests, so a large fraction of traffic pays a fresh handshake's CPU cost instead of amortizing it away); real for some deployments (a public API absorbing many one-off anonymous clients, an IoT/device gateway with frequent reconnects, a webhook receiver) but not the typical shape, since most HTTP client software pools and reuses connections specifically to avoid this cost. See `chttpsvr_set_engine_num_reactor_threads(3)` for the full measurements. To raise the thread count for a deployment that knows its own traffic is churn-heavy, call it under the same "before the first `chttpsvr_start`, or after a full stop" restriction as the allocator setter above:
+
+```c
+chttpsvr_set_engine_num_reactor_threads(4);   /* optional; 0 restores the default (1) */
+```
 
 ### Quick Start
 
@@ -3529,48 +3551,48 @@ chttpsvr srv  = create_chttpsvr(logger, NULL);         /* default allocator; der
 chttpsvr srv  = create_chttpsvr_mp(mp, logger, &err);  /* custom allocator; derives from logger */
 chttpsvr srv2 = create_chttpsvr(NULL, NULL);           /* internal stderr/FATAL-only logger */
 
-chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
-cfg.host                 = "0.0.0.0";          /* listen address; or "unix:///path/to/socket"
+chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT; /* Has the values below that can be modified as needed */
+cfg.host                 = "0.0.0.0";            /* listen address; or "unix:///path/to/socket"
                                                     to bind a Unix domain socket instead (port
                                                     is then ignored); see Unix Domain Sockets below */
 cfg.port                 = 8080;
-cfg.max_body_size        = 4*1024*1024;         /* 4 MiB body limit; exceeding it
+cfg.max_body_size        = 4*1024*1024;          /* 4 MiB body limit; exceeding it
                                                     is a 413 (buffered) or a stream
                                                     error the handler observes via
                                                     chttpsvr_req_stream_error()
                                                     (streaming); either way the
                                                     connection closes afterward */
-cfg.read_timeout_ms      = 30000;               /* 30 s read timeout (baseline) */
-cfg.idle_timeout_ms      = 60000;               /* 60 s keep-alive idle timeout */
-cfg.stream_read_timeout_ms = 30000;             /* 30 s wait for the next body batch; 0 = unbounded */
-cfg.max_body_read_duration_ms = 0;              /* 0 = no cap (default); caps the *total* time spent
+cfg.read_timeout_ms      = 30000;                /* 30 s read timeout (baseline) */
+cfg.idle_timeout_ms      = 60000;                /* 60 s keep-alive idle timeout */
+cfg.stream_read_timeout_ms = 30000;              /* 30 s wait for the next body batch; 0 = unbounded */
+cfg.max_body_read_duration_ms = 0;               /* 0 = no cap (default); caps the *total* time spent
                                                     reading one request's body, closing the loophole a
                                                     client that trickles bytes just fast enough to always
                                                     beat stream_read_timeout_ms would otherwise leave open */
-cfg.response_write_timeout_ms = 0;              /* 0 = use stream_read_timeout_ms's value; bounds how
+cfg.response_write_timeout_ms = 0;               /* 0 = use stream_read_timeout_ms's value; bounds how
                                                     long a worker will wait per write(2)-equivalent call
                                                     while sending a response to a slow-reading client */
-cfg.max_header_bytes    = 0;                    /* 0 = library default (64 KiB); a request whose combined
+cfg.max_header_bytes    = 0;                     /* 0 = library default (64 KiB); a request whose combined
                                                     request-line + header block exceeds this is rejected
                                                     (connection reset, no HTTP response: the header
                                                     block itself couldn't be parsed far enough to answer) */
-cfg.max_connections     = 0;                    /* 0 = unlimited; once at capacity, new connections are
+cfg.max_connections     = 0;                     /* 0 = unlimited; once at capacity, new connections are
                                                     simply left pending in the kernel's own listen backlog
                                                     rather than accepted and immediately rejected */
-cfg.worker_thread_count  = 4;                   /* 0 = CPU core count */
-cfg.worker_queue_capacity = 128;                /* 0 = default (1024 * threads); CHTTPSVR_QUEUE_UNBOUNDED = no limit */
-cfg.enable_keepalive     = false;               /* SO_KEEPALIVE on every accepted connection; no effect on
+cfg.worker_thread_count  = 4;                    /* 0 = CPU core count */
+cfg.worker_queue_capacity = 128;                 /* 0 = default (1024 * threads); CHTTPSVR_QUEUE_UNBOUNDED = no limit */
+cfg.enable_keepalive     = false;                /* SO_KEEPALIVE on every accepted connection; no effect on
                                                     a Unix domain socket listener */
-cfg.enable_reuseport     = false;               /* SO_REUSEPORT on the listening socket, letting multiple
+cfg.enable_reuseport     = false;                /* SO_REUSEPORT on the listening socket, letting multiple
                                                     chttpsvr instances (e.g. one per worker process) bind
                                                     the identical host:port for kernel-load-balanced accept;
                                                     no effect on a Unix domain socket listener */
-cfg.ipv6_only            = false;               /* IPV6_V6ONLY on an AF_INET6 listener, so it does not also
+cfg.ipv6_only            = false;                /* IPV6_V6ONLY on an AF_INET6 listener, so it does not also
                                                     implicitly accept IPv4-mapped connections; no effect on
                                                     an IPv4 or Unix domain socket listener */
-cfg.tls                  = &tls_cfg;            /* optional TLS (chttp_tls_config_t) */
+cfg.tls                  = &tls_cfg;             /* optional TLS (chttp_tls_config_t) */
 
-ccol_retval_t rv = chttpsvr_start(srv, &cfg);   /* starts the engine on first call */
+ccol_retval_t rv = chttpsvr_start(srv, &cfg);    /* starts the engine on first call */
 /* Routes and middleware may be registered before or after chttpsvr_start. */
 
 chttpsvr_stop(srv);     /* close this server's listener (other servers are unaffected) */
@@ -3827,6 +3849,7 @@ cfg.tls = &tls;
 |---|---|
 | `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-engine`) that receives the reactor's own diagnostics (TLS handshake failures, listen-socket bind failures, idle-timeout closures); may be called at any time, including after a full stop/restart cycle; returns `ccol_invalid_args` if `cl` is NULL |
 | `chttpsvr_set_engine_mem_mgmt_procs(mp)` | Redirect the reactor's own internal memory management to `mp`, or to the default allocator if `mp` is NULL; must be called before the first `chttpsvr_start` (may be called again once the reactor has fully stopped); returns `ccol_invalid_args` if `mp` is non-NULL but has a NULL function pointer, or `ccol_not_permitted` if the reactor is already running |
+| `chttpsvr_set_engine_num_reactor_threads(n)` | Pin the reactor to `n` OS threads, or restore the default (1) if `n` is 0; must be called before the first `chttpsvr_start` (may be called again once the reactor has fully stopped); returns `ccol_not_permitted` if the reactor is already running |
 | `chttpsvr_engine_stop()` | Signal the shared reactor to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler. Has no effect on `chttpclient`'s own, independent engine |
 | `chttpsvr_engine_wait()` | Block until the shared reactor has fully stopped; use as an escape hatch when you need a synchronous guarantee (e.g. after an external shutdown signal, or before reusing a just-freed port) |
 

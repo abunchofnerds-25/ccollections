@@ -31,7 +31,7 @@ SOFTWARE.
  * coverage; this file is purely about the parser's own correctness in
  * isolation. The "stream" test group (chttp1_stream_t, added alongside
  * request-mode parsing) does use local AF_UNIX socketpairs, but only to
- * exercise its own read/write/poll logic directly -- no chttpclient.c, no
+ * exercise its own read/write/poll logic directly; no chttpclient.c, no
  * TLS, no real network traffic.
  */
 
@@ -391,7 +391,7 @@ TEST(headers, on_headers_complete_callback_error_reports_user) {
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_USER);
 }
 
-/* ---- size caps ---- */
+/* Size caps */
 
 static void build_header_line(char *buf, size_t buf_size, size_t value_len) {
   /* "X-Pad: " (7 bytes) + value_len 'a' bytes + CRLF */
@@ -571,7 +571,7 @@ TEST(framing, content_length_decimal_overflow_rejected) {
 TEST(framing, transfer_encoding_not_chunked_reads_until_eof) {
   /* RFC 7230 SS3.3.3: for a RESPONSE (never a request, which this parser
    * never parses), a Transfer-Encoding whose last token isn't "chunked"
-   * means the body is read until the connection closes -- not rejected. */
+   * means the body is read until the connection closes; not rejected. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -855,7 +855,7 @@ static void assert_fragmented_matches_oneshot(const char *msg, size_t len) {
      * int. */
     REQUIRE_EQ((int)chttp1_should_keep_alive(&parser), (int)ref_keep_alive);
     /* Hard contract: execute() never returns CHTTP1_OK with bytes left
-     * unconsumed -- rv1 == CHTTP1_OK above already implies the first call
+     * unconsumed; rv1 == CHTTP1_OK above already implies the first call
      * consumed all `split` bytes (nothing else to check here beyond having
      * reached this point at all). */
   }
@@ -923,7 +923,7 @@ TEST(finish_matrix, mid_chunk_is_unsafe) {
 TEST(finish_matrix, at_clean_boundary_is_safe_no_callback) {
   /* chttpclient.c itself never calls chttp1_parser_finish after execute()
    * already returned CHTTP1_PAUSED (it returns success immediately instead,
-   * per chttp1_parser_execute's own documented contract) -- this test calls
+   * per chttp1_parser_execute's own documented contract); this test calls
    * it anyway, purely to exercise the CHTTP1_FINISH_SAFE switch case
    * directly: a message that completed via a normal (non-EOF-delimited)
    * path leaves finish_state at CHTTP1_FINISH_SAFE, which finish() reports
@@ -1096,7 +1096,7 @@ TEST(request_line, split_across_every_byte_boundary) {
 
 TEST(request_body_framing, no_framing_headers_means_no_body_not_eof) {
   /* Unlike a response, a request with neither Content-Length nor chunked
-   * Transfer-Encoding has NO body at all -- the message completes
+   * Transfer-Encoding has NO body at all; the message completes
    * immediately after headers, it does not wait for EOF (there would be
    * nothing to wait for anyway; the connection isn't closing). */
   chttp1_parser_t parser;
@@ -1169,7 +1169,7 @@ TEST(divert, body_already_in_same_buffer_is_not_consumed_by_divert) {
   /* The critical carry-over case: header block AND body bytes arrive in
    * the SAME chttp1_parser_execute call. Diversion must still stop exactly
    * at the header boundary, leaving the body bytes unconsumed for the
-   * caller to hand off as carry-over -- not swallow them into on_body
+   * caller to hand off as carry-over; not swallow them into on_body
    * simply because they happened to already be available. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
@@ -1304,7 +1304,7 @@ static void make_pair(int fds[2]) {
 /* Non-blocking variant, required for the stream_tls tests below: a TLS
  * handshake driven by tls_drive_handshake()'s single-threaded ping-pong
  * loop (call one side's step, then the other's, repeat) deadlocks on a
- * blocking socketpair -- SSL_accept/SSL_connect's internal BIO_read can
+ * blocking socketpair; SSL_accept/SSL_connect's internal BIO_read can
  * itself block waiting for bytes the peer never gets a chance to send,
  * since driving that peer's own step is exactly what this thread would do
  * next, if it weren't already stuck. Confirmed via gdb (a real hang
@@ -1418,7 +1418,7 @@ TEST(stream, write_basic) {
 TEST(stream, read_error_on_bad_fd) {
   /* A negative fd is specially ignored by poll(2) itself (POSIX: an entry
    * with fd < 0 is never reported ready, so it would just silently time
-   * out here, not error) -- a real invalid-fd error needs a syntactically
+   * out here, not error); a real invalid-fd error needs a syntactically
    * valid but already-closed fd number instead, which poll(2) reports
    * ready with POLLNVAL for, and the subsequent read(2) then genuinely
    * fails with EBADF. */
@@ -1541,7 +1541,7 @@ TEST(stream_tls, write_over_real_tls_connection) {
 TEST(stream_tls, leftover_decrypted_bytes_drained_before_ctls_conn_read) {
   /* Mirrors the plaintext carry-over test: leftover bytes here represent
    * already-decrypted application bytes the reactor thread would have
-   * produced via ctls_conn_read() during its own header-parsing loop --
+   * produced via ctls_conn_read() during its own header-parsing loop;
    * chttp1_stream_prepare_tls's leftover argument is never raw wire bytes. */
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "srv.test", NULL, NULL, NULL, NULL),

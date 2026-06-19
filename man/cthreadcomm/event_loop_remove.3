@@ -18,7 +18,7 @@ in-flight dispatch for the same registration; teardown is deferred until
 any in-progress callback returns.  No further callback for this
 registration is ever invoked after this call returns, even one already
 collected (e.g. sitting queued for a dispatch worker thread with
-num_reactor_threads > 1) but not yet actually started -- callers may free
+num_reactor_threads > 1) but not yet actually started; callers may free
 whatever the registration's own arg points to immediately after this
 call returns without racing a stale callback invocation.
 
@@ -65,4 +65,6 @@ void on_readable(event_loop loop, ccol_selectable *sel, void *arg) {
 .fi
 .SH "SEE ALSO"
 .BR event_loop_add (3),
-.BR event_loop_modify (3)
+.BR event_loop_modify (3),
+.BR event_loop_pause (3),
+.BR event_loop_resume (3)

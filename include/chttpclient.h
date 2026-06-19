@@ -407,6 +407,43 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl);
 ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 
 /* ========================================================================== */
+/*                    ENGINE REACTOR THREAD COUNT                             */
+/* ========================================================================== */
+
+/**
+ * @brief Configure how many OS threads chttpclient's own async-engine (Tier
+ *        2/3) reactor devotes to its own polling and dispatch.
+ *
+ * By default (never having called this function, or having called it with
+ * num_threads == 0), the shared reactor sizes itself to
+ * sysconf(_SC_NPROCESSORS_ONLN) (falling back to 1 if that query fails),
+ * matching this library's long-standing default behavior. Calling this
+ * function with a positive num_threads overrides that auto-detection and
+ * pins the reactor to exactly that many OS threads instead, following
+ * event_loop_create_with_mprocs's own num_reactor_threads semantics
+ * (cthreadcomm.h): 1 means a single thread both polls and dispatches
+ * inline; any larger value means one dedicated polling thread plus
+ * (num_threads - 1) dispatch worker threads.
+ *
+ * This configures only the shared reactor's own construction, independent
+ * of any individual chttpcli instance's own settings.
+ *
+ * May only be called before the reactor has ever started in this process
+ * (i.e. before the first chttpclient_do_async/_streaming call anywhere), or
+ * after the engine has fully stopped (every chttpcli async user has
+ * released its reference and the automatic teardown has completed; there is
+ * no explicit chttpcli_engine_wait(); the engine starts and stops on its own
+ * as Tier 2/3 usage comes and goes, unlike chttpserver's typically
+ * process-lifetime-long reactor).
+ *
+ * @param num_threads  Desired reactor OS thread count, or 0 to restore the
+ *                      default auto-detected sizing.
+ * @return ccol_success, or ccol_not_permitted (the engine is currently
+ *         running; wait for it to fully stop first).
+ */
+ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads);
+
+/* ========================================================================== */
 /*                    CLIENT DESTRUCTION */
 /* ========================================================================== */
 

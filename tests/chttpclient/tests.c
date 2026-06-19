@@ -183,7 +183,7 @@ static void srv_parse_request_line(const char *buf, char *method, size_t mlen,
  * Split out from what used to be a single-shot "read headers, then keep
  * reading until content-length bytes of body have arrived" function
  * (srv_read_request) specifically so srv_conn_thread can react to an
- * "Expect: 100-continue" request header -- and decide the route -- before
+ * "Expect: 100-continue" request header (and decide the route) before
  * necessarily reading (or, for the reject route, ever reading) any body at
  * all; srv_conn_thread's own body-reading tail, used for every route that
  * isn't one of the two Expect: 100-continue-aware ones below, reproduces
@@ -548,8 +548,8 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
 
   if (strcmp(path, "/eof-delimited-body") == 0) {
     /* Deliberately raw (bypassing srv_respond, which always sets
-     * Content-Length): a genuinely EOF-delimited body -- no Content-Length,
-     * no Transfer-Encoding -- whose end is signaled purely by the
+     * Content-Length): a genuinely EOF-delimited body (no Content-Length,
+     * no Transfer-Encoding) whose end is signaled purely by the
      * connection closing, exactly like a real HTTP/1.0 (or
      * Connection: close, no explicit length) server response. Regression
      * test verifying that a valid EOF-terminated completion is reported as
@@ -3304,7 +3304,7 @@ TEST(http, delete_body_not_transmitted) {
 
 TEST(expect_continue, interim_100_then_body_sent) {
   /* /expect-continue-echo sends "100 Continue" first, then reads and echoes
-   * the body -- exercises _chttp_send_and_read's "interim 100 seen" branch,
+   * the body; exercises _chttp_send_and_read's "interim 100 seen" branch,
    * including _parse_ctx_reset_for_continue (the final response's own
    * headers/body must be exactly the real response, uncontaminated by the
    * interim message). */
@@ -3331,7 +3331,7 @@ TEST(expect_continue, interim_100_then_body_sent) {
 
 TEST(expect_continue, server_rejects_without_100) {
   /* /expect-continue-reject answers 417 directly, WITHOUT ever sending
-   * "100 Continue" or reading a body -- exercises _chttp_send_and_read's
+   * "100 Continue" or reading a body; exercises _chttp_send_and_read's
    * "server answered directly" branch: that response must be delivered to
    * the caller as-is (RFC 7231 SS5.1.1), and the body must never be sent. */
   char url[160];
@@ -3356,7 +3356,7 @@ TEST(expect_continue, server_rejects_without_100) {
 
 TEST(expect_continue, wait_times_out_body_sent_anyway) {
   /* /post is an ordinary route with no Expect: 100-continue awareness at
-   * all -- it simply waits to read the full body before responding.
+   * all; it simply waits to read the full body before responding.
    * Exercises _chttp_send_and_read's timeout branch: after
    * CHTTP_100_CONTINUE_WAIT_MS with no interim response, the body is sent
    * anyway and the real (and, here, only) response is read normally.
@@ -3384,7 +3384,7 @@ TEST(expect_continue, wait_times_out_body_sent_anyway) {
 
 TEST(expect_continue, ignored_for_bodyless_request) {
   /* GET has no body, so expect_continue must have no effect at all (per its
-   * own doc comment) -- no "expect:" header is emitted (_serialize_request's
+   * own doc comment); no "expect:" header is emitted (_serialize_request's
    * own condition already requires a body-carrying method with a non-empty
    * body), and the ordinary /get route (which knows nothing about
    * Expect: 100-continue) answers normally. */
@@ -3439,6 +3439,7 @@ extern void _chttpclient_engine_release_for_tests(void);
  * racing process teardown (a crash caught by valgrind during development of
  * this suite). */
 extern void _chttpclient_engine_wait_for_quiescence_for_tests(void);
+extern size_t _chttpclient_engine_num_reactor_threads_for_tests(void);
 
 TEST(async_engine, starts_on_first_acquire_and_stops_at_zero_refcount) {
   REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
@@ -3527,6 +3528,45 @@ TEST(async_engine, concurrent_acquire_release_no_corruption) {
   REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 0);
   _chttpclient_engine_wait_for_quiescence_for_tests();
   REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
+}
+
+TEST(async_engine, num_reactor_threads_defaults_to_cpu_count) {
+  /* Never configured (or configured with 0, its own "restore the default"
+   * sentinel) in this test's own context: the reactor must size itself to
+   * sysconf(_SC_NPROCESSORS_ONLN), falling back to 1 if that query fails,
+   * exactly like chttpsvr_set_engine_num_reactor_threads's sibling default. */
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(0), ccol_success);
+  REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
+
+  long cpus = sysconf(_SC_NPROCESSORS_ONLN);
+  size_t expected = (cpus > 0) ? (size_t)cpus : 1;
+  REQUIRE_EQ(_chttpclient_engine_num_reactor_threads_for_tests(), expected);
+
+  _chttpclient_engine_release_for_tests();
+  _chttpclient_engine_wait_for_quiescence_for_tests();
+}
+
+TEST(async_engine, num_reactor_threads_explicit_value_is_wired_in) {
+  /* A positive override must be the exact value event_loop_create_with_mprocs
+   * actually receives, not merely accepted and then silently ignored. */
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(3), ccol_success);
+  REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
+  REQUIRE_EQ(_chttpclient_engine_num_reactor_threads_for_tests(), (size_t)3);
+  _chttpclient_engine_release_for_tests();
+  _chttpclient_engine_wait_for_quiescence_for_tests();
+
+  /* Restore the default for every test declared after this one. */
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(0), ccol_success);
+}
+
+TEST(async_engine, num_reactor_threads_rejected_while_running) {
+  REQUIRE_EQ(_chttpclient_engine_acquire_for_tests(), ccol_success);
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(2), ccol_not_permitted);
+  /* 0 (revert-to-default) is also subject to the "not while running" rule:
+   * it is still a live thread-count swap for the next reactor creation. */
+  REQUIRE_EQ(chttpcli_set_engine_num_reactor_threads(0), ccol_not_permitted);
+  _chttpclient_engine_release_for_tests();
+  _chttpclient_engine_wait_for_quiescence_for_tests();
 }
 
 /* ========================================================================== */

@@ -51,7 +51,7 @@ extern SSL *_ctls_conn_ssl_for_tests(ctls_conn_t *conn);
 /* are produced once at startup via the openssl CLI, mirroring the same      */
 /* approach already established in tests/chttpclient/tests_tls.c and         */
 /* tests/chttpserver/tests_tls.c. Unlike those suites, ctls never aborts the */
-/* process on a bad/missing cert (a confirmed design decision -- see         */
+/* process on a bad/missing cert (a confirmed design decision; see          */
 /* ctls.h's own doc comments), so there is no need to isolate this into a    */
 /* separate binary purely for process-abort safety; a missing openssl CLI   */
 /* here simply fails the affected tests' setup with a clear message.        */
@@ -123,9 +123,9 @@ __attribute__((destructor)) static void _teardown(void) {
 
 /* Non-blocking AF_UNIX socketpair: real socket semantics (recv/send-based
  * BIOs work fine over it), no networking/port binding needed. hostname
- * verification is decoupled from the socket's real address family --
- * ctls_conn_create_client's hostname argument is purely a verification
- * target, not tied to the fd's actual peer -- so this is a faithful
+ * verification is decoupled from the socket's real address family
+ * (ctls_conn_create_client's hostname argument is purely a verification
+ * target, not tied to the fd's actual peer) so this is a faithful
  * substitute for a real TCP loopback pair in every test below. */
 static void _make_nonblocking_pair(int fds[2]) {
   REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, fds), 0);
@@ -525,8 +525,8 @@ TEST(ctls_handshake, mtls_client_presents_untrusted_cert_fails) {
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, g_server_cert, g_server_key,
                                NULL, NULL),
              ccol_success);
-  /* Server trusts ONLY the server cert itself as CA -- NOT the client
-   * cert -- so a client presenting its own (self-signed, untrusted) cert
+  /* Server trusts ONLY the server cert itself as CA (NOT the client
+   * cert) so a client presenting its own (self-signed, untrusted) cert
    * must fail verification. */
   REQUIRE_EQ(ctls_ctx_trust(server_ctx, g_server_cert, NULL), ccol_success);
 

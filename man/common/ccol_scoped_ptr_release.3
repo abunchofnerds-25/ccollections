@@ -1,0 +1,60 @@
+.TH CCOL_SCOPED_PTR_RELEASE 3 "2026-07-18" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_scoped_ptr_release \- release ownership of a scoped pointer, preventing its auto-free
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <common.h>
+
+released = ccol_scoped_ptr_release(name);
+.fi
+.SH DESCRIPTION
+.nf
+Returns name's current value and sets name to NULL, so the pending
+cleanup registered by ccol_scoped_ptr() or ccol_scoped_ptr_mp() becomes
+a no-op at scope exit. Use this to hand ownership of the pointer out of
+the enclosing scope (for example, as a function's return value) instead
+of having it freed there.
+
+The caller receiving the released value becomes responsible for freeing
+it eventually, with whichever allocator it was originally allocated
+with.
+.fi
+.SH PARAMETERS
+.nf
+name  A pointer previously declared with ccol_scoped_ptr() or
+      ccol_scoped_ptr_mp()
+.fi
+.SH RETURN VALUE
+.nf
+Returns name's value immediately prior to release (NULL if name was
+never assigned).
+.fi
+.SH NOTES
+.nf
+Requires GCC or Clang (the same requirement ccol_scoped_ptr()/
+ccol_scoped_ptr_mp() already have)
+
+Safe to call on a scoped pointer that was never assigned; returns NULL
+and leaves name at NULL.
+
+Calling this more than once on the same name is safe but pointless
+after the first call: name is already NULL, so every subsequent call
+simply returns NULL again.
+.fi
+.SH EXAMPLES
+.nf
+char *build(ccol_memmgmt_procs_t *mp) {
+  ccol_scoped_ptr_mp(buf, char, mp);
+  buf = _mem_alloc(mp, 128);
+  if (!buf) return NULL;
+
+  /* ... populate buf ... */
+
+  return ccol_scoped_ptr_release(buf);  /* caller now owns it */
+}
+.fi
+.SH "SEE ALSO"
+.BR ccol_scoped_ptr (3),
+.BR ccol_scoped_ptr_mp (3)

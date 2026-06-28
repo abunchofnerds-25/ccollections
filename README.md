@@ -19,6 +19,7 @@ Every public function and macro also has a real troff manual page under [`man/`]
    - [Container Lifecycle Macros](#32-container-lifecycle-macros)
    - [Cross-Scope Type Recovery](#33-cross-scope-type-recovery)
    - [Error Handling](#34-error-handling)
+   - [Scoped Raw Pointers](#35-scoped-raw-pointers)
 4. [Building and Linking](#4-building-and-linking)
 5. [Dynamic Array - `cvector`](#5-dynamic-array--cvector)
 6. [Dynamic String - `cstring`](#6-dynamic-string--cstring)
@@ -170,6 +171,49 @@ typedef enum {
 ```
 
 The convenience macros call `fatal_err()` on hard errors such as programming mistakes and resource exhaustion. When you need to recover from an expected failure condition, call the underlying functions directly and inspect the return value.
+
+### 3.5 Scoped Raw Pointers
+
+The `*_construct_scoped` macros in section 3.2 only cover the library's own container types. `include/common.h` provides an analogous, lighter-weight pair of macros for a plain heap-allocated pointer that is not one of those containers, using the exact same `__attribute__((cleanup(...)))` mechanism:
+
+| Macro | Purpose |
+|---|---|
+| `ccol_scoped_ptr(name, type)` | Declares `type *name`, initialised to `NULL`, freed via the default allocator at scope exit |
+| `ccol_scoped_ptr_mp(name, type, mmgmt_procs)` | Same, but frees `name`'s final value via `mmgmt_procs` (see [Custom Memory Management](#21-custom-memory-management)) |
+| `ccol_scoped_ptr_release(name)` | Returns `name`'s current value and sets `name` to `NULL`, cancelling the pending auto-free |
+
+Assign to the declared pointer normally; whatever value it holds when the enclosing scope ends is freed automatically:
+
+```c
+void process(void) {
+    ccol_scoped_ptr(buf, char);
+    buf = malloc(128);
+    if (!buf) return;
+
+    /* buf is used here */
+
+    /* Freed automatically when the function returns, regardless of which path is taken */
+}
+```
+
+Two things this does not try to solve, both consistent with what any other `__attribute__((cleanup(...)))`-based guard in C can offer:
+
+- Reassigning the pointer mid-scope only schedules its *final* value for the automatic free; an earlier value must still be freed manually before it is overwritten.
+- To hand ownership of the pointer out of the enclosing scope (for example, returning it from the function that allocated it) instead of having it freed there, call `ccol_scoped_ptr_release`:
+
+```c
+char *build(void) {
+    ccol_scoped_ptr(buf, char);
+    buf = malloc(128);
+    if (!buf) return NULL;
+
+    /* ... populate buf ... */
+
+    return ccol_scoped_ptr_release(buf); /* caller now owns it, buf itself is no longer freed */
+}
+```
+
+`mmgmt_procs` is stored by reference, not copied, so it must remain valid for at least as long as the scoped pointer's own enclosing scope; in practice this holds naturally, since the two are almost always declared in the same scope.
 
 ---
 
@@ -3316,10 +3360,11 @@ See `chttp.h` for the complete list.
 #include <chttp.h>
 
 /* Build a ready-to-send Authorization header VALUE (no "Authorization: " key part). */
-char *auth = chttp_basic_auth("Aladdin", "open sesame");
+ccol_scoped_ptr(auth, char);
+auth = chttp_basic_auth("Aladdin", "open sesame");
 /* auth == "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==" */
 chttp_request_set_header(req, "authorization", auth);
-free(auth);
+// free(auth); - // Shouldn't be called, since auth is declared as a scoped pointer
 
 /* Standalone base64 encode/decode of arbitrary binary data. */
 size_t enc_len = 0;
@@ -3327,8 +3372,8 @@ char *enc = chttp_base64_encode(data, data_len, &enc_len);
 
 size_t dec_len = 0;
 void *dec = chttp_base64_decode(enc, &dec_len); /* dec_len, not strlen(), is authoritative */
-free(enc);
-free(dec);
+free(enc); // As enc is a raw pointer, it should be freed
+free(dec); // As dec is a raw pointer, it should be freed
 ```
 
 `chttp_base64_decode`'s output is NUL-terminated as a convenience for text payloads, but the decoded bytes may legitimately contain embedded NULs; always trust the `out_len` out-parameter, never `strlen()`, to determine the real decoded size. Each function has an `_mp`-suffixed variant taking an explicit `ccol_memmgmt_procs_t *` for a custom allocator; the plain names shown above use the default `malloc`/`free`.

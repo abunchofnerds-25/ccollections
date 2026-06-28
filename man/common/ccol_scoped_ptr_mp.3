@@ -1,0 +1,72 @@
+.TH CCOL_SCOPED_PTR_MP 3 "2026-07-18" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_scoped_ptr_mp \- declare a raw pointer freed automatically at scope exit via a custom allocator
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <common.h>
+
+ccol_scoped_ptr_mp(name, type, mmgmt_procs);
+.fi
+.SH DESCRIPTION
+.nf
+Declares "type *name", initialised to NULL, and registers automatic
+cleanup via __attribute__((cleanup(...))). Assign to name normally (e.g.
+via _mem_alloc(mmgmt_procs, size)); whichever value it holds when the
+enclosing scope ends is freed via mmgmt_procs->free (or the default
+allocator, via mem_free(), if mmgmt_procs is NULL).
+
+This is the custom-allocator counterpart to ccol_scoped_ptr(); see that
+page for the default-allocator form and for the caveats shared by both
+(reassignment, and ownership release via ccol_scoped_ptr_release()).
+.fi
+.SH PARAMETERS
+.nf
+name          Name of the pointer variable to declare
+type          Pointee type (e.g. char, struct foo)
+mmgmt_procs   Custom allocator (ccol_memmgmt_procs_t *) used to free
+              name's final value, or NULL for the default allocator
+.fi
+.SH NOTES
+.nf
+Requires GCC or Clang (uses __attribute__((cleanup)))
+
+mmgmt_procs is stored by reference, not copied; it must remain valid
+for at least as long as name's own enclosing scope. This holds
+naturally whenever mmgmt_procs is itself a variable already in scope at
+the point of declaration, which is the common case.
+
+Passing the address of a local variable directly as mmgmt_procs (e.g.
+&some_local_procs) can trip -Waddress ("the address of X will always
+evaluate as true") under this library's own -Werror build flags, since
+_mem_alloc/_mem_free's internal NULL check becomes provably always-true
+at that call site. Store the address in a ccol_memmgmt_procs_t * variable
+first and pass that instead.
+
+Expands to two declarations, not one expression; use it as its own
+statement, the same constraint every *_construct_scoped macro in this
+library already has.
+.fi
+.SH THREAD SAFETY
+.nf
+The declared pointer itself has no synchronisation; it is a plain local
+variable and follows ordinary C scoping and thread-local storage rules.
+Thread safety of mmgmt_procs's own functions is the caller's
+responsibility, exactly as for every other _mp-suffixed API in this
+library.
+.fi
+.SH EXAMPLES
+.nf
+void process(ccol_memmgmt_procs_t *mp) {
+  ccol_scoped_ptr_mp(buf, char, mp);
+  buf = _mem_alloc(mp, 128);
+  if (!buf) return;
+
+  /* buf is used here */
+
+}  /* buf is freed via mp on every return path */
+.fi
+.SH "SEE ALSO"
+.BR ccol_scoped_ptr (3),
+.BR ccol_scoped_ptr_release (3)

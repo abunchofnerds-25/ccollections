@@ -711,6 +711,113 @@ typedef struct cmap_iterator {
     result;                                                        \
   })
 
+/**
+ * @brief Bookkeeping for ccol_scoped_ptr / ccol_scoped_ptr_mp
+ *
+ * Not meant to be constructed directly; every field is populated by the
+ * scoped_ptr macros themselves. Exists only so the cleanup callback can
+ * recover, at scope-exit time, both which allocator freed the pointer and
+ * the pointer's current value (which may have been reassigned after
+ * declaration, e.g. via a later _mem_alloc call).
+ */
+typedef struct ccol_scoped_ptr_ctx_t {
+  void **ptr_addr;               /**< Address of the guarded pointer var */
+  ccol_memmgmt_procs_t *m_procs; /**< Allocator to free it with, or NULL */
+} ccol_scoped_ptr_ctx_t;
+
+/**
+ * @brief Cleanup callback bound by ccol_scoped_ptr / ccol_scoped_ptr_mp
+ * @param ctx Address of the hidden companion variable the macros declare
+ */
+static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
+  if (ctx->ptr_addr && *ctx->ptr_addr) {
+    _mem_free(ctx->m_procs, *ctx->ptr_addr);
+    *ctx->ptr_addr = NULL;
+  }
+}
+
+/**
+ * @brief Declare a raw pointer that is freed automatically at scope exit
+ *
+ * Declares `type *name`, initialised to NULL. Assign to it normally (e.g.
+ * via _mem_alloc(mmgmt_procs, size), or plain malloc() if mmgmt_procs is
+ * NULL); whichever value name holds when the enclosing scope ends is freed
+ * with mmgmt_procs (or the default allocator, via mem_free(), if
+ * mmgmt_procs is NULL).
+ *
+ * @param name Name of the pointer variable to declare
+ * @param type Pointee type (e.g. char, struct foo)
+ * @param mmgmt_procs Custom allocator used to free name's final value, or
+ *                     NULL for the default allocator
+ *
+ * @note mmgmt_procs is stored by reference, not copied; it must remain
+ *       valid for at least as long as name's own enclosing scope, which
+ *       holds naturally whenever mmgmt_procs is itself a variable already
+ *       in scope at the point of declaration
+ * @note If name is reassigned mid-scope, only its final value is freed;
+ *       an earlier value must be freed manually before reassigning it,
+ *       exactly as with any other cleanup-attribute-based guard
+ * @note Expands to two declarations, not one expression; use it as its
+ *       own statement, the same constraint every *_construct_scoped macro
+ *       in this library already has
+ * @note Use ccol_scoped_ptr_release() to hand ownership out of the
+ *       enclosing scope instead of having name freed automatically
+ *
+ * Example:
+ * @code
+ * void process(ccol_memmgmt_procs_t *mp) {
+ *   ccol_scoped_ptr_mp(buf, char, mp);
+ *   buf = _mem_alloc(mp, 128);
+ *   if (!buf) return;
+ *   // buf is freed via mp on every return path below this point
+ * }
+ * @endcode
+ */
+#define ccol_scoped_ptr_mp(name, type, mmgmt_procs)               \
+  type *name = NULL;                                              \
+  ccol_scoped_ptr_ctx_t name##__ccol_scoped_ctx _ccol_destructor( \
+      _ccol_scoped_ptr_cleanup) = {(void **)&(name), (mmgmt_procs)}
+
+/**
+ * @brief Declare a raw pointer that is freed automatically at scope exit,
+ *        using the default allocator
+ *
+ * Equivalent to ccol_scoped_ptr_mp(name, type, NULL); see that macro for
+ * the full contract.
+ */
+#define ccol_scoped_ptr(name, type) ccol_scoped_ptr_mp(name, type, NULL)
+
+/**
+ * @brief Release ownership of a scoped pointer, preventing its auto-free
+ *
+ * Returns name's current value and sets name to NULL, so the pending
+ * cleanup registered by ccol_scoped_ptr / ccol_scoped_ptr_mp becomes a
+ * no-op at scope exit. Use this to hand ownership of the pointer out of
+ * the enclosing scope (for example, as a function's return value) instead
+ * of having it freed there.
+ *
+ * @param name A pointer previously declared with ccol_scoped_ptr /
+ *             ccol_scoped_ptr_mp
+ * @return name's value prior to release
+ *
+ * Example:
+ * @code
+ * char *build(ccol_memmgmt_procs_t *mp) {
+ *   ccol_scoped_ptr_mp(buf, char, mp);
+ *   buf = _mem_alloc(mp, 128);
+ *   if (!buf) return NULL;
+ *   // ... populate buf ...
+ *   return ccol_scoped_ptr_release(buf); // caller now owns it
+ * }
+ * @endcode
+ */
+#define ccol_scoped_ptr_release(name)          \
+  ({                                           \
+    typeof(name) __ccol_released_ptr = (name); \
+    (name) = NULL;                             \
+    __ccol_released_ptr;                       \
+  })
+
 /* ========================================================================== */
 /*                         TYPE INTROSPECTION                                 */
 /* ========================================================================== */

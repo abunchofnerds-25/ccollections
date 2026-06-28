@@ -83,7 +83,7 @@ LIBRARY_INSTALL_DIR = /usr/local/lib
 MAN_INSTALL_DIR = /usr/local/share/man
 
 # man/<module>/*.3 (functions and their companion type-safe macros, side by
-# side -- see man/README) install flat into one man3 dir; real symbol names
+# side, see man/README) install flat into one man3 dir; real symbol names
 # never collide across the two, so nothing is lost by flattening. man/<module>/*.7
 # are the module overview pages. Alias pages contain a ".so <module>/<symbol>.3"
 # redirect that is relative to the source tree layout, so it is rewritten to

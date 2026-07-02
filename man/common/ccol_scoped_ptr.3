@@ -1,0 +1,66 @@
+.TH CCOL_SCOPED_PTR 3 "2026-07-18" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_scoped_ptr \- declare a raw pointer that is freed automatically at scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <common.h>
+
+ccol_scoped_ptr(name, type);
+.fi
+.SH DESCRIPTION
+.nf
+Declares "type *name", initialised to NULL, and registers automatic
+cleanup via __attribute__((cleanup(...))). Assign to name normally (e.g.
+via a plain malloc()); whichever value it holds when the enclosing scope
+ends is freed with the default allocator (mem_free(), i.e. plain free()).
+
+Equivalent to ccol_scoped_ptr_mp(name, type, NULL). Use
+ccol_scoped_ptr_mp() instead when the pointer must be freed with a
+library-wide custom allocator rather than the default one.
+
+Unlike the *_construct_scoped macros the other containers in this
+library provide, this is not tied to any container type; it exists for a
+plain heap-allocated block that isn't one of chmap/cbmap/cvec/etc.
+.fi
+.SH PARAMETERS
+.nf
+name  Name of the pointer variable to declare
+type  Pointee type (e.g. char, struct foo)
+.fi
+.SH NOTES
+.nf
+Requires GCC or Clang (uses __attribute__((cleanup)))
+
+Expands to two declarations, not one expression; use it as its own
+statement, the same constraint every *_construct_scoped macro in this
+library already has.
+
+If name is reassigned mid-scope, only its final value is freed; an
+earlier value must be freed manually before reassigning it, exactly as
+with any other cleanup-attribute-based guard.
+
+Use ccol_scoped_ptr_release() to hand ownership of the pointer out of
+the enclosing scope (for example, as a function's return value) instead
+of having it freed there.
+.fi
+.SH THREAD SAFETY
+.nf
+The declared pointer itself has no synchronisation; it is a plain local
+variable and follows ordinary C scoping and thread-local storage rules.
+.fi
+.SH EXAMPLES
+.nf
+void process(void) {
+  ccol_scoped_ptr(buf, char);
+  buf = malloc(128);
+  if (!buf) return;
+
+  /* buf is used here */
+
+}  /* buf is freed automatically here, on every return path */
+.fi
+.SH "SEE ALSO"
+.BR ccol_scoped_ptr_mp (3),
+.BR ccol_scoped_ptr_release (3)

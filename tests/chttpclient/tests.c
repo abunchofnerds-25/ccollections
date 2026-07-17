@@ -260,6 +260,23 @@ static bool srv_handle_expect_continue_route(int conn_fd, char *buf, size_t max,
 }
 
 /*
+ * A third Expect: 100-continue-aware route, used only by
+ * expect_continue.reused_connection_dies_after_partial_interim_line_retries:
+ * writes a deliberately INCOMPLETE "100 Continue" status line fragment (no
+ * terminating CRLF at all), then sleeps well past
+ * CHTTP_100_CONTINUE_WAIT_MS while keeping the connection open (so the
+ * client's own wait genuinely times out, rather than observing an EOF), and
+ * finally closes without ever reading the body or sending a real response.
+ * Never returns false (always closes).
+ */
+static bool srv_handle_expect_continue_timeout_then_die_route(int conn_fd) {
+  const char *partial = "HTTP/1.1 100 Con";
+  send(conn_fd, partial, strlen(partial), 0);
+  usleep(1300000); /* > CHTTP_100_CONTINUE_WAIT_MS (1000ms) */
+  return true;
+}
+
+/*
  * Route the request and send a response. Returns true if the connection
  * should be closed after this response, false if the caller (srv_conn_thread)
  * should loop and read another request off the same fd (keep-alive).
@@ -466,6 +483,20 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
     return true;
   }
 
+  if (strcmp(path, "/redirect-empty-location") == 0) {
+    /* A redirect status with a present but EMPTY Location header value:
+     * legal to send (nothing requires a non-empty Location), and
+     * _on_headers_complete's own will_redirect condition only checks that
+     * the header is PRESENT, not non-empty, so this reaches
+     * _resolve_redirect_url with an empty string -- whose very first check
+     * ("if (!location || !*location) return NULL;") makes it fail
+     * immediately, exercising chttp_do_internal's "redirect resolution
+     * failed" path. */
+    srv_respond(conn_fd, 301, "Moved Permanently", "text/plain",
+                "Location: \r\n", NULL, 0, false);
+    return true;
+  }
+
   if (strcmp(path, "/nested/dir/redirect-relative-dotted") == 0) {
     /* Multi-level relative Location ("../../get"); exercises RFC 3986
      * SS5.3 merge + remove_dot_segments end-to-end (not just at the unit
@@ -602,6 +633,8 @@ static void *srv_conn_thread(void *arg) {
     } else if (strcmp(path, "/expect-continue-reject") == 0) {
       close_after = srv_handle_expect_continue_route(
           conn_fd, buf, TEST_SERVER_BUF, (size_t)n, hdr_len, false);
+    } else if (strcmp(path, "/expect-continue-timeout-then-die") == 0) {
+      close_after = srv_handle_expect_continue_timeout_then_die_route(conn_fd);
     } else {
       /* Ordinary route: read the rest of the body (if any) per
        * content-length, exactly reproducing the now-removed
@@ -1334,6 +1367,28 @@ TEST(http, redirect_does_not_leak_intermediate_headers) {
   REQUIRE_NE((void *)chttpclient_resp_header(resp, "content-type"), NULL);
 
   chttpclient_resp_free(resp);
+}
+
+TEST(http, redirect_with_empty_location_header_reported_cleanly) {
+  /* Regression test for a real double-free in chttp_do_internal: when a
+   * redirect hop's Location header is present but empty,
+   * _resolve_redirect_url returns NULL immediately (its very first check,
+   * "if (!location || !*location) return NULL;"), and the hop loop used to
+   * free cur_url once when starting the redirect handling, then free the
+   * SAME pointer (never reassigned, since resolution failed) a second time
+   * in the function's shared post-loop cleanup. Found by clang's static
+   * analyzer, not by any prior dynamic test (nothing previously sent a
+   * redirect with an empty Location). Remotely triggerable by any server
+   * this client talks to, not a theoretical OOM-only edge case. The
+   * correctness assertion below is secondary; the real verification is
+   * that this doesn't crash, in particular under valgrind. */
+  char url[160];
+  make_url(url, sizeof(url), "/redirect-empty-location");
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_get(url, &resp);
+  REQUIRE_EQ(rv, ccol_http_transfer_aborted);
+  REQUIRE_EQ((void *)resp, NULL);
 }
 
 TEST(http, default_client_convenience) {
@@ -3382,6 +3437,71 @@ TEST(expect_continue, wait_times_out_body_sent_anyway) {
   chttpclient_resp_free(resp);
 }
 
+TEST(expect_continue,
+     reused_connection_dies_after_partial_interim_line_retries) {
+  /* Regression test for a real bug in _chttp_send_and_read's timeout branch:
+   * *any_bytes_read_out could be left "true" by an abandoned interim-response
+   * read (a partial, never-completed "100 Continue" fragment) and that would
+   * leak into the SEPARATE, unrelated final-response read that follows a
+   * timeout, incorrectly suppressing chttp_do_internal's reused-connection
+   * retry-once safety net even though the final read itself never received a
+   * single byte of a real response.
+   *
+   * /expect-continue-timeout-then-die writes an incomplete "100 Con..."
+   * fragment (so any_bytes_read_out is set true inside the interim read),
+   * then sleeps past CHTTP_100_CONTINUE_WAIT_MS without ever completing it (a
+   * genuine timeout, not an EOF) and finally closes without ever answering
+   * the real request, so the post-timeout final read fails outright on a
+   * reused connection.
+   *
+   * The request as a whole still ends up failing here (the route behaves
+   * identically against the retry's fresh connection too), but the fix's own
+   * effect is directly observable via the server's accept count: with the
+   * fix, chttp_do_internal must open exactly one additional connection to
+   * attempt the safe retry; without it, the stuck any_bytes_read flag skips
+   * the retry entirely and no new connection is ever opened for this second
+   * request. Slow (~1.3s): this is the whole point of the test. */
+  char keepalive_url[160], timeout_url[160];
+  make_url(keepalive_url, sizeof(keepalive_url), "/keepalive");
+  make_url(timeout_url, sizeof(timeout_url),
+           "/expect-continue-timeout-then-die");
+
+  chttpcli_construct(cli);
+
+  /* Populate the idle pool with a reused-eligible connection to this
+   * origin. */
+  chttp_request_t *warm =
+      chttp_request_new(CHTTP_GET, keepalive_url, NULL, NULL);
+  REQUIRE_NE((void *)warm, NULL);
+  chttpcli_response *warm_resp = NULL;
+  ccol_retval_t warm_rv = chttpclient_do(cli, warm, &warm_resp);
+  chttp_request_free(warm);
+  REQUIRE_EQ(warm_rv, ccol_success);
+  REQUIRE_EQ(warm_resp->status_code, 200);
+  chttpclient_resp_free(warm_resp);
+
+  int accepts_before = test_server_accept_count();
+
+  const char *payload = "{\"n\":1}";
+  chttp_request_body_t body = CHTTP_JSON_BODY(payload, strlen(payload));
+  chttp_request_t *req =
+      chttp_request_new(CHTTP_POST, timeout_url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttp_request_free(req);
+  REQUIRE_NE(rv, ccol_success); /* the route never answers; always fails */
+  if (resp) chttpclient_resp_free(resp);
+
+  usleep(20000);
+  int accepts_after = test_server_accept_count();
+  REQUIRE_EQ(accepts_after - accepts_before, 1); /* the one safe retry */
+
+  chttpclient_destroy(cli);
+}
+
 TEST(expect_continue, ignored_for_bodyless_request) {
   /* GET has no body, so expect_continue must have no effect at all (per its
    * own doc comment); no "expect:" header is emitted (_serialize_request's
@@ -3440,6 +3560,18 @@ extern void _chttpclient_engine_release_for_tests(void);
  * this suite). */
 extern void _chttpclient_engine_wait_for_quiescence_for_tests(void);
 extern size_t _chttpclient_engine_num_reactor_threads_for_tests(void);
+/* Forces every currently-pooled Tier 2/3 idle connection to look older than
+ * CHTTP_IDLE_MAX_AGE_MS, so the next pop from that pool deterministically
+ * hits _async_idle_pool_take's staleness-eviction branch without a test
+ * actually waiting out the real 60 second window. See the
+ * async_idle_pool.stale_connection_eviction_releases_engine_reference test
+ * below for the one place this is used. */
+extern void _chttpclient_force_async_idle_stale_for_tests(chttpcli cli);
+/* Reads how many connections currently sit in Tier 2/3's async idle pool
+ * across every origin. See
+ * async_idle_pool.reused_hop_setup_failure_releases_engine_reference below
+ * for the one place this is used. */
+extern size_t _chttpclient_async_idle_total_count_for_tests(chttpcli cli);
 
 TEST(async_engine, starts_on_first_acquire_and_stops_at_zero_refcount) {
   REQUIRE_FALSE(_chttpclient_engine_running_for_tests());
@@ -3600,6 +3732,57 @@ static void wait_for_async_engine_idle(void) {
     usleep(1000);
   }
   _chttpclient_engine_wait_for_quiescence_for_tests();
+}
+
+TEST(async_engine, destroy_waits_for_in_flight_async_request) {
+  /* Regression test: __chttpclient_destroy used to only wait for Tier 1's
+   * in_flight_count and Tier 2/3's idle-pooled connection count, never an
+   * ACTIVE (in-flight, not yet idle-pooled) Tier 2/3 request -- so
+   * `f = chttpclient_do_async(cli, req); chttpclient_destroy(cli);`, with
+   * no wait on f in between, could free cli out from under a request still
+   * connecting/writing/reading on a reactor thread, since chain->cli/
+   * ctx->cli are dereferenced throughout that lifecycle. /slow sleeps
+   * 100ms server-side before responding, guaranteeing the request is
+   * still genuinely in flight (headers already sent, awaiting the
+   * response) at the moment chttpclient_destroy is called below; a real
+   * UAF here would also show up under valgrind independently of this
+   * timing assertion. */
+  char url[160];
+  make_url(url, sizeof(url), "/slow");
+
+  chttpcli_construct(cli);
+
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  chttp_request_free(req);
+  REQUIRE_NE((void *)f, NULL);
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  chttpclient_destroy(cli); /* must block until the /slow request finishes */
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+
+  long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+  /* Comfortably below /slow's 100ms sleep, so a destroy that returned
+   * near-instantly (the bug) fails this even accounting for scheduling
+   * jitter on a loaded CI machine. */
+  REQUIRE_GT(elapsed_ms, 50);
+
+  /* Stronger than just "eventually gettable": by the time destroy returned,
+   * the in-flight request must already have been fully torn down (that is
+   * exactly what the wait this test targets guarantees), so the future is
+   * already done, not merely about to become done. */
+  REQUIRE_TRUE(ctpool_future_done(f));
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  if (raw) {
+    if (raw->resp) chttpclient_resp_free(raw->resp);
+    chttpclient_async_result_free(raw);
+  }
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
 }
 
 TEST(async_step_a, get_200) {
@@ -4259,6 +4442,161 @@ TEST(async_idle_pool, dead_connection_detected_and_retried) {
   usleep(20000);
   int accepts_after = test_server_accept_count();
   REQUIRE_EQ(accepts_after - accepts_before, 2);
+
+  chttpclient_destroy(cli);
+  wait_for_async_engine_idle();
+}
+
+TEST(async_idle_pool, stale_connection_eviction_releases_engine_reference) {
+  /* Regression test: _async_idle_pool_take's staleness-eviction branch (a
+   * pooled connection popped and found older than CHTTP_IDLE_MAX_AGE_MS)
+   * used to tear the connection down without releasing the separate engine
+   * reference _async_idle_pool_offer had acquired for it while it sat in the
+   * pool, permanently leaking one engine reference per aged-out connection.
+   * Forces that branch deterministically via
+   * _chttpclient_force_async_idle_stale_for_tests instead of waiting out the
+   * real 60 second window, then checks the engine's own ref count directly
+   * rather than relying on any externally observable symptom of the leak
+   * (there isn't one short of running the process for a very long time). */
+  char url[160];
+  make_url(url, sizeof(url), "/keepalive");
+
+  chttpcli_construct(cli);
+
+  ctpool_future *f1 = async_get(cli, url);
+  REQUIRE_NE((void *)f1, NULL);
+  chttpcli_async_result_t *raw1 = chttpclient_async_result_get(f1);
+  REQUIRE_EQ(raw1->rv, ccol_success);
+  chttpclient_resp_free(raw1->resp);
+  chttpclient_async_result_free(raw1);
+  ctpool_future_free(f1);
+
+  /* Exactly one connection is now idle-pooled, holding exactly one engine
+   * reference of its own (the chain-scoped reference acquired for this call
+   * was already released when the chain's only hop detached to join the
+   * pool). */
+  REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 1);
+  _chttpclient_force_async_idle_stale_for_tests(cli);
+
+  ctpool_future *f2 = async_get(cli, url);
+  REQUIRE_NE((void *)f2, NULL);
+  chttpcli_async_result_t *raw2 = chttpclient_async_result_get(f2);
+  REQUIRE_EQ(raw2->rv, ccol_success);
+  chttpclient_resp_free(raw2->resp);
+  chttpclient_async_result_free(raw2);
+  ctpool_future_free(f2);
+
+  /* The stale connection popped above must have released its own engine
+   * reference on eviction; only the freshly-opened, now-repooled connection
+   * from this second request should still be holding one. Before the fix,
+   * the evicted connection's reference leaked and this observed 2. */
+  REQUIRE_EQ(_chttpclient_engine_ref_count_for_tests(), 1);
+
+  chttpclient_destroy(cli); /* drains the one still-pooled connection */
+  wait_for_async_engine_idle();
+}
+
+/* Fails exactly the g_hop_fail_at_call'th allocation call (any of malloc/
+ * calloc/realloc) made through this ccol_memmgmt_procs_t, then passes every
+ * other call through to the real allocator; -1 means "never fail". Used by
+ * async_idle_pool.reused_hop_setup_failure_releases_engine_reference below
+ * to sweep every allocation site inside a single reused-connection hop
+ * attempt, mirroring tests/chttp/tests.c's own
+ * oom.basic_auth_fails_at_every_allocation_site idiom. */
+static atomic_int g_hop_fail_call_index;
+static int g_hop_fail_at_call = -1;
+
+static void *hop_fail_malloc(size_t sz) {
+  int idx = atomic_fetch_add(&g_hop_fail_call_index, 1);
+  if (g_hop_fail_at_call >= 0 && idx == g_hop_fail_at_call) return NULL;
+  return malloc(sz);
+}
+static void *hop_fail_calloc(size_t n, size_t sz) {
+  int idx = atomic_fetch_add(&g_hop_fail_call_index, 1);
+  if (g_hop_fail_at_call >= 0 && idx == g_hop_fail_at_call) return NULL;
+  return calloc(n, sz);
+}
+static void *hop_fail_realloc(void *p, size_t sz) {
+  int idx = atomic_fetch_add(&g_hop_fail_call_index, 1);
+  if (g_hop_fail_at_call >= 0 && idx == g_hop_fail_at_call) return NULL;
+  return realloc(p, sz);
+}
+static void hop_fail_free(void *p) { free(p); }
+
+static ccol_memmgmt_procs_t g_hop_fail_mp = {.malloc = hop_fail_malloc,
+                                             .free = hop_fail_free,
+                                             .calloc = hop_fail_calloc,
+                                             .realloc = hop_fail_realloc};
+
+TEST(async_idle_pool, reused_hop_setup_failure_releases_engine_reference) {
+  /* Regression test for a leak in _async_submit_hop_fail's reused branch: a
+   * headers-map/serialisation/origin_key allocation failure occurring AFTER
+   * a pooled connection has already been popped from the idle pool used to
+   * leak the separate engine reference _async_idle_pool_offer had acquired
+   * for that pooled connection while it sat there (same root cause and fix
+   * as async_idle_pool.stale_connection_eviction_releases_engine_reference
+   * above; that test covers the staleness-eviction exit from the idle pool,
+   * this one covers the reused-hop-setup-failure exit).
+   *
+   * Rather than hardcoding which allocation ordinal inside _async_submit_hop
+   * happens to correspond to which internal call, this sweeps every
+   * allocation index across a second, reused-connection request and checks
+   * an invariant that holds regardless of exactly where the injected
+   * failure lands: whenever this client's async idle pool ends up with zero
+   * connections after the swept request (whether because the failure
+   * occurred after the pool had already been popped, or the request simply
+   * succeeded and repooled a connection that was later reused away), the
+   * engine's ref count must be zero too, matching live pool membership
+   * exactly. Before the fix, a failure landing after the pop left the pool
+   * empty while still holding 1 leaked reference. */
+  char url[160];
+  make_url(url, sizeof(url), "/keepalive");
+
+  char *cerr = NULL;
+  chttpcli cli = create_chttpclient_mp(&g_hop_fail_mp, &cerr);
+  REQUIRE_NE((void *)cli, NULL);
+
+  enum { SWEEP_UPPER = 40 };
+  for (int idx = 0; idx < SWEEP_UPPER; idx++) {
+    /* Re-warm: ensure a reused-eligible connection is pooled before each
+     * swept attempt (a prior iteration's failure, if it landed after the
+     * pool was popped, leaves the pool empty). */
+    g_hop_fail_at_call = -1;
+    ctpool_future *fw = async_get(cli, url);
+    REQUIRE_NE((void *)fw, NULL);
+    chttpcli_async_result_t *rw = chttpclient_async_result_get(fw);
+    REQUIRE_EQ(rw->rv, ccol_success);
+    chttpclient_resp_free(rw->resp);
+    chttpclient_async_result_free(rw);
+    ctpool_future_free(fw);
+
+    atomic_store(&g_hop_fail_call_index, 0);
+    g_hop_fail_at_call = idx;
+
+    /* An idx landing on one of the earliest allocations (preflight check,
+     * future creation, or chain creation itself, all before the idle pool
+     * is ever touched) can make chttpclient_do_async return NULL directly,
+     * or return a future whose result is itself NULL (_async_chain_create's
+     * own failure path fulfils with a NULL response rather than failing to
+     * return a future at all) -- both legitimate, documented outcomes this
+     * sweep must tolerate rather than assume away. */
+    ctpool_future *f2 = async_get(cli, url);
+    if (f2) {
+      chttpcli_async_result_t *raw2 = chttpclient_async_result_get(f2);
+      if (raw2) {
+        if (raw2->resp) chttpclient_resp_free(raw2->resp);
+        chttpclient_async_result_free(raw2);
+      }
+      ctpool_future_free(f2);
+    }
+    g_hop_fail_at_call = -1;
+
+    usleep(20000);
+
+    size_t pooled = _chttpclient_async_idle_total_count_for_tests(cli);
+    int refs = _chttpclient_engine_ref_count_for_tests();
+    REQUIRE_EQ(refs, (int)pooled);
+  }
 
   chttpclient_destroy(cli);
   wait_for_async_engine_idle();

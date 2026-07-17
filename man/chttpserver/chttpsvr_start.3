@@ -43,6 +43,13 @@ queue whose capacity is cfg->worker_queue_capacity (0 = 1024 * threads;
 CHTTPSVR_QUEUE_UNBOUNDED = no capacity limit).  The pool is owned by
 the server and destroyed in __chttpsvr_destroy.
 
+Route rejections: an unmatched/malformed route (404/405/500, decided
+before any body byte is read) and a matched route whose ctpool is at
+capacity (503) are both rejected with a courtesy error response whose
+write is carried out on a small dedicated pool of its own, never the
+sole reactor thread; a slow-reading client being told "no" therefore
+cannot delay dispatch for any other, unrelated connection.
+
 Body size limit: cfg->max_body_size caps the request body.  A buffered
 route whose body exceeds this is rejected with 413 before the handler
 ever runs; a streaming route's handler is always invoked, and

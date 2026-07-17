@@ -169,6 +169,29 @@ struct chttpclient {
   size_t idle_total_count_async;
   cond_var_t idle_async_drained;
 
+  /* Tracks active (not-yet-idle-pooled) Tier 2/3 async chains created for
+   * THIS client: incremented once per chain in _async_chain_create,
+   * decremented in _async_chain_release once a chain's refcount reaches
+   * zero (its last hop is torn down or joins the idle pool above).
+   * Independent of both in_flight_count above (Tier 1 only) and
+   * idle_total_count_async (idle-pooled connections are the OPPOSITE of
+   * in-flight). Guarded by a DEDICATED leaf lock/condvar, deliberately
+   * never cli->lock/available: _async_chain_release (the only place this is
+   * decremented) runs as often from inside an event_loop dispatch callback,
+   * already holding that registration's own dispatch_lock, as it does from
+   * a safe synchronous context; reusing cli->lock here would introduce a
+   * brand new dispatch_lock -> cli->lock ordering this module has otherwise
+   * never needed to reason about, for no benefit over a lock that is never
+   * held across any other call. __chttpclient_destroy waits on
+   * async_count_drained until this reaches zero before freeing cli, closing
+   * a real use-after-free: chain->cli/ctx->cli are dereferenced throughout
+   * an active hop's lifecycle (cli->lock, cli->idle_pools_async,
+   * cli->m_procs), well after chttpclient_do_async/_streaming has already
+   * returned to the caller. */
+  mutex_t async_count_lock;
+  cond_var_t async_count_drained;
+  size_t async_in_flight_count;
+
   long connect_timeout_ms;
   long request_timeout_ms;
   chttp_tls_config_t tls;
@@ -186,8 +209,15 @@ struct chttpclient {
 /*                         DEFAULT CLIENT                                     */
 /* ========================================================================== */
 
+/* client is _Atomic so __chttpclient_destroy can safely clear it via a
+ * compare-and-swap if the handle it's given happens to be this singleton
+ * (see __chttpclient_destroy's own comment on this); chttp_default_client
+ * reads it with a plain atomic_load, matching this file's existing
+ * _Atomic(event_reg *) precedent rather than adding a new lock for a single
+ * pointer. once never resets: this module never re-initialises the default
+ * client, deliberately (see chttp_default_client's own doc comment). */
 static struct {
-  chttpcli client;
+  _Atomic(chttpcli) client;
   once_flag_t once;
 } default_client_bundler = {0};
 
@@ -3123,6 +3153,16 @@ static chttp_async_chain_t *_async_chain_create(
     chain->body_content_type = ccol_strdup(mp, body_content_type);
     if (!chain->body_content_type) goto fail;
   }
+
+  /* This chain is now live and about to be handed to _async_submit_hop;
+   * count it against cli's own async in-flight total (see that field's own
+   * comment on struct chttpclient) so __chttpclient_destroy can wait for it.
+   * Matched by exactly one decrement in _async_chain_release, once this
+   * chain's refcount reaches zero. */
+  mutex_lock(cli->async_count_lock);
+  cli->async_in_flight_count++;
+  mutex_unlock(cli->async_count_lock);
+
   return chain;
 
 fail:
@@ -3164,6 +3204,8 @@ static void _async_chain_release(chttp_async_chain_t *chain) {
   mutex_unlock(chain->lock);
   if (remaining > 0) return;
 
+  struct chttpclient *cli = chain->cli;
+
   _async_fulfill_chain(chain, ccol_http_transfer_aborted, NULL);
   if (chain->tls_ctx) ctls_ctx_release(chain->tls_ctx);
   if (chain->req_headers) __chmap_destroy(chain->req_headers);
@@ -3174,6 +3216,16 @@ static void _async_chain_release(chttp_async_chain_t *chain) {
   mutex_destroy(chain->lock);
   _mem_free(chain->mp, chain);
   _client_engine_release();
+
+  /* Matches the increment in _async_chain_create; see cli's own
+   * async_in_flight_count field comment for why this uses a dedicated leaf
+   * lock rather than cli->lock (this function runs from inside event_loop
+   * dispatch callbacks as often as from a safe synchronous context). */
+  mutex_lock(cli->async_count_lock);
+  if (cli->async_in_flight_count > 0) cli->async_in_flight_count--;
+  if (cli->async_in_flight_count == 0)
+    cond_var_broadcast(cli->async_count_drained);
+  mutex_unlock(cli->async_count_lock);
 }
 
 static chttp_async_ctx_t *_async_ctx_create(ccol_memmgmt_procs_t *mp) {
@@ -3410,6 +3462,19 @@ static void _async_idle_count_dec_locked(struct chttpclient *cli) {
  * before its natural death was ALSO detected via the IDLE-state on_data/
  * on_close path; both sides are safe to call this unconditionally. Must be
  * called with cli->lock held. */
+/* Deliberately does NOT call _async_idle_count_dec_locked: that decrement
+ * (and the idle_async_drained broadcast it may trigger once the count
+ * reaches zero) is the caller's own responsibility, deferred until the ctx
+ * has ACTUALLY been freed. An earlier version of this function decremented
+ * right here, at removal time -- which let __chttpclient_destroy observe
+ * the count reach zero and proceed to free cli (and cli->m_procs) while
+ * _async_idle_ctx_finish, the only caller of this function, was still
+ * mid-teardown on a reactor worker thread, reading that same freed
+ * cli->m_procs through ctx->mp inside its own _async_ctx_free call: a real
+ * use-after-free, caught by ThreadSanitizer (not valgrind) via a stress
+ * test that cycles many connections through real, server-initiated death
+ * fast enough to make the window land. See _async_idle_ctx_finish's own
+ * comment for the corrected ordering. */
 static bool _async_idle_remove_locked(struct chttpclient *cli,
                                       chttp_async_ctx_t *target) {
   if (!cli->idle_pools_async || !target->origin_key) return false;
@@ -3433,7 +3498,6 @@ static bool _async_idle_remove_locked(struct chttpclient *cli,
       chttp_async_ctx_t **slot2 = (chttp_async_ctx_t **)cvector_at(list, i);
       *slot2 = last;
     }
-    _async_idle_count_dec_locked(cli);
     return true;
   }
   return false;
@@ -3540,6 +3604,16 @@ static bool _async_idle_pool_take(struct chttpclient *cli,
     _async_ctx_finish(ctx); /* hop_completed is already true, so this is a
                              * plain teardown, mirroring the same active-hop
                              * teardown path any other failed hop uses */
+    /* _async_ctx_finish/_async_ctx_teardown only release the chain
+     * reference; they know nothing about the SEPARATE engine reference
+     * _async_idle_pool_offer acquired for this ctx while it sat in the idle
+     * pool (ctx->chain is NULL/unrelated at that time). Every other exit
+     * from the idle pool (a successful reuse in _async_submit_hop, or
+     * organic death via _async_idle_ctx_finish) explicitly releases that
+     * reference; this staleness-eviction path was missing the matching
+     * release, permanently leaking one engine reference per aged-out
+     * connection. */
+    _client_engine_release();
     /* loop: try the next candidate (if any) for this origin */
   }
 }
@@ -3752,6 +3826,18 @@ static void _async_ctx_finish(chttp_async_ctx_t *ctx) {
  * what makes the first request's pooled connection genuinely, persistently
  * dead (the server closes its end), rather than merely racing a stale-but-
  * harmless spurious dispatch.
+ *
+ * idle_total_count_async is decremented (and idle_async_drained possibly
+ * broadcast) only in a THIRD, separate locked section, after both
+ * _async_ctx_free and _client_engine_release have already fully run below,
+ * not folded into the removal step above. __chttpclient_destroy treats the
+ * count reaching zero as its signal that every pooled connection has
+ * genuinely finished tearing down before it proceeds to free cli (and
+ * cli->m_procs, which ctx->mp still points at); decrementing at removal
+ * time let that signal fire while this function's own _async_ctx_free call
+ * was still using cli->m_procs on this thread, a real use-after-free
+ * ThreadSanitizer caught that valgrind alone had not (see
+ * _async_idle_remove_locked's own comment for the full account).
  */
 static void _async_idle_ctx_finish(chttp_async_ctx_t *ctx) {
   struct chttpclient *cli = ctx->cli;
@@ -3761,6 +3847,9 @@ static void _async_idle_ctx_finish(chttp_async_ctx_t *ctx) {
   if (!removed) return;
   _async_ctx_free(ctx);
   _client_engine_release();
+  mutex_lock(cli->lock);
+  _async_idle_count_dec_locked(cli);
+  mutex_unlock(cli->lock);
 }
 
 static void _async_finish_connection(chttp_async_ctx_t *ctx, bool reusable) {
@@ -4502,6 +4591,18 @@ static void _async_submit_hop_fail(chttp_async_ctx_t *ctx, ccol_retval_t rv) {
     ctx->hop_completed = true;
     mutex_unlock(ctx->idle_lock);
     _async_ctx_teardown(ctx);
+    /* _async_ctx_teardown only releases ctx's chain reference; it knows
+     * nothing about the SEPARATE engine reference _async_idle_pool_offer
+     * acquired for this ctx while it sat in the idle pool (same reasoning
+     * as _async_idle_pool_take's own staleness-eviction branch above, which
+     * has this exact fix already). This is a fourth exit from the idle
+     * pool this reference must be released on, alongside a successful
+     * reuse (below in _async_submit_hop), organic idle-connection death
+     * (_async_idle_ctx_finish), and staleness eviction
+     * (_async_idle_pool_take); missing it here leaked one engine reference
+     * per reused-connection setup failure (an allocation or serialisation
+     * failure occurring after a pooled connection was already popped). */
+    _client_engine_release();
   } else {
     _async_ctx_free(ctx);
     _async_chain_release(chain);
@@ -5016,6 +5117,43 @@ size_t _chttpclient_engine_num_reactor_threads_for_tests(void) {
   mutex_unlock(cli_engine_bundler.mutex);
   return n;
 }
+
+/* Rewrites every currently-pooled Tier 2/3 idle connection's last_used
+ * timestamp far enough into the past to make _async_idle_pool_take's own
+ * CHTTP_IDLE_MAX_AGE_MS staleness check treat it as aged-out on the very
+ * next pop, without a test actually waiting out the real 60-second window.
+ * Test-only: exists purely to make the staleness-eviction path in
+ * _async_idle_pool_take deterministically reachable. */
+void _chttpclient_force_async_idle_stale_for_tests(chttpcli cli) {
+  mutex_lock(cli->lock);
+  if (cli->idle_pools_async) {
+    cmap_iterator *it = chashmap_begin_iter(cli->idle_pools_async, NULL);
+    for (; it; it = it->_next_fn(it)) {
+      cvec list = _read_cvec(it->val_pair->ptr);
+      if (!list) continue;
+      size_t n = cvector_elem_count(list);
+      for (size_t i = 0; i < n; i++) {
+        chttp_async_ctx_t *actx = *(chttp_async_ctx_t **)cvector_at(list, i);
+        actx->last_used.tv_sec -= (CHTTP_IDLE_MAX_AGE_MS / 1000L) + 5;
+      }
+    }
+  }
+  mutex_unlock(cli->lock);
+}
+
+/* Reads cli->idle_total_count_async: how many connections are currently
+ * sitting in Tier 2/3's async idle pool, across every origin. Test-only:
+ * lets a test verify live pool membership directly instead of inferring it
+ * indirectly, needed to state an ordinal-independent invariant ("whenever
+ * this pool is empty, the engine's ref count contributed by it must be
+ * zero too") that holds regardless of exactly which internal allocation an
+ * injected OOM failure happens to land on. */
+size_t _chttpclient_async_idle_total_count_for_tests(chttpcli cli) {
+  mutex_lock(cli->lock);
+  size_t n = cli->idle_total_count_async;
+  mutex_unlock(cli->lock);
+  return n;
+}
 #endif /* RUNNING_UNIT_TESTS */
 
 ctpool_future *chttpclient_do_async(chttpcli cli, const chttp_request_t *req) {
@@ -5153,6 +5291,8 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
   mutex_init(cli->lock);
   cond_var_init(cli->available);
   cond_var_init(cli->idle_async_drained);
+  mutex_init(cli->async_count_lock);
+  cond_var_init(cli->async_count_drained);
 
   char *herr = NULL;
   cli->idle_pools =
@@ -5163,6 +5303,8 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     mutex_destroy(cli->lock);
     cond_var_destroy(cli->available);
     cond_var_destroy(cli->idle_async_drained);
+    mutex_destroy(cli->async_count_lock);
+    cond_var_destroy(cli->async_count_drained);
     _mem_free(mp, cli);
     if (mp) mp->free(mp);
     return NULL;
@@ -5178,6 +5320,8 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     mutex_destroy(cli->lock);
     cond_var_destroy(cli->available);
     cond_var_destroy(cli->idle_async_drained);
+    mutex_destroy(cli->async_count_lock);
+    cond_var_destroy(cli->async_count_drained);
     _mem_free(mp, cli);
     if (mp) mp->free(mp);
     return NULL;
@@ -5190,6 +5334,8 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
     mutex_destroy(cli->lock);
     cond_var_destroy(cli->available);
     cond_var_destroy(cli->idle_async_drained);
+    mutex_destroy(cli->async_count_lock);
+    cond_var_destroy(cli->async_count_drained);
     _mem_free(mp, cli);
     if (mp) mp->free(mp);
     return NULL;
@@ -5286,11 +5432,46 @@ oom:
 void __chttpclient_destroy(chttpcli cli) {
   if (!cli) return;
 
+  /* Defensive: if the caller passed the handle chttp_default_client()
+   * returns (its own doc comment invites passing it to chttpclient_set_*,
+   * and nothing stops a caller from also passing it here), clear the
+   * singleton's own copy of this pointer first. Without this,
+   * default_client_bundler.client would keep pointing at memory this call
+   * is about to free -- both handed straight back out by any later
+   * chttp_default_client()/chttp_do()/chttp_get() call in this process (a
+   * use-after-free, since default_client_bundler.once never re-fires to
+   * rebuild it), and destroyed a second time by this file's own
+   * process-exit destructor, an unconditional double-free. A no-op
+   * (compare-and-swap fails harmlessly) for any client actually created via
+   * create_chttpclient/_mp, which can never equal this singleton's pointer. */
+  chttpcli expected = cli;
+  atomic_compare_exchange_strong(&default_client_bundler.client, &expected,
+                                 NULL);
+
   mutex_lock(cli->lock);
   cli->destroying = true;
   cond_var_broadcast(cli->available);
   while (cli->in_flight_count > 0) cond_var_wait(cli->available, cli->lock);
   mutex_unlock(cli->lock);
+
+  /* Wait for every ACTIVE (not yet idle-pooled) Tier 2/3 async chain
+   * created for this client to finish before touching anything else below:
+   * an in-flight chain can still be connecting/handshaking/writing/reading
+   * on a reactor or DNS/connect-pool thread, dereferencing chain->cli/
+   * ctx->cli (cli->lock, cli->idle_pools_async, cli->m_procs) at essentially
+   * any point until it either tears down or joins the idle pool this
+   * function drains further below. Without this wait, a caller doing
+   * `f = chttpclient_do_async(cli, req); chttpclient_destroy(cli);` would
+   * free cli out from under a still-in-flight request; see this field's own
+   * comment on struct chttpclient for why a dedicated lock/condvar is used
+   * here rather than cli->lock/available. This must run before the idle-pool
+   * draining below: an active chain completing while this wait is still in
+   * progress is exactly what is expected to feed fresh entries into that
+   * pool, which the idle-pool draining logic then cleans up. */
+  mutex_lock(cli->async_count_lock);
+  while (cli->async_in_flight_count > 0)
+    cond_var_wait(cli->async_count_drained, cli->async_count_lock);
+  mutex_unlock(cli->async_count_lock);
 
   if (cli->idle_pools) {
     cmap_iterator *it = chashmap_begin_iter(cli->idle_pools, NULL);
@@ -5351,6 +5532,8 @@ void __chttpclient_destroy(chttpcli cli) {
   mutex_destroy(cli->lock);
   cond_var_destroy(cli->available);
   cond_var_destroy(cli->idle_async_drained);
+  mutex_destroy(cli->async_count_lock);
+  cond_var_destroy(cli->async_count_drained);
 
   ccol_memmgmt_procs_t *mp = cli->m_procs;
   _mem_free(mp, cli->owned_cert_path);
@@ -5428,6 +5611,15 @@ static ccol_retval_t _chttp_send_and_read(
     if (rrv != ccol_success) return rrv;
     prv = _chttp_send_all(conn, wire + header_len, body_len, overall);
     if (prv != ccol_success) return prv;
+    /* The abandoned interim read above may have already set
+     * *any_bytes_read_out true (a partial "100 Con..." fragment arrived
+     * before the wait window expired); that must not leak into the
+     * unrelated final response read below, or a genuinely failed final read
+     * on a reused connection would be mistaken for "some response bytes
+     * already handed to the caller" and skip the safe retry-once fallback.
+     * Mirrors the identical reset the "100 Continue seen" branch below
+     * already does before its own final read. */
+    *any_bytes_read_out = false;
     return _chttp_read_response(conn, pctx, overall, keep_alive_out,
                                 any_bytes_read_out);
   }
@@ -5671,6 +5863,18 @@ static ccol_retval_t chttp_do_internal(chttpcli cli, const chttp_request_t *req,
       _mem_free(mp, bb.buf);
       _url_free(mp, &url);
       _mem_free(mp, cur_url);
+      /* NULLed immediately after freeing (not just reassigned on the
+       * success path below): a redirect status with an empty or otherwise
+       * unresolvable Location header (RFC 3986 SS5.2/5.3 resolution
+       * failure, not just OOM -- _resolve_redirect_url's very first check
+       * is `if (!location || !*location) return NULL;`, trivially
+       * reachable via a plain server response, no malformed input needed)
+       * makes next_url NULL and falls through to the post-loop cleanup's
+       * own _mem_free(mp, cur_url) below with this pointer still holding
+       * the just-freed value; a real, remotely-triggerable double-free
+       * caught by clang's static analyzer, not by any dynamic test (no
+       * existing mock route sends a redirect with an empty Location). */
+      cur_url = NULL;
 
       if (!next_url) {
         result = ccol_http_transfer_aborted;
@@ -5740,19 +5944,23 @@ ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
 /* ========================================================================== */
 
 static void _init_default_client(void) {
-  default_client_bundler.client = create_chttpclient(NULL);
+  atomic_store(&default_client_bundler.client, create_chttpclient(NULL));
 }
 
 chttpcli chttp_default_client(void) {
   call_once(default_client_bundler.once, _init_default_client);
-  return default_client_bundler.client;
+  return atomic_load(&default_client_bundler.client);
 }
 
 __attribute__((destructor)) static void _cleanup_default_client(void) {
-  if (default_client_bundler.client) {
-    __chttpclient_destroy(default_client_bundler.client);
-    default_client_bundler.client = NULL;
-  }
+  /* Clear first, then destroy: __chttpclient_destroy's own defensive
+   * compare-and-swap (see its doc comment) would otherwise race this
+   * function's own read of the pointer in the vanishingly unlikely case
+   * another thread is concurrently destroying the same handle at process
+   * exit; clearing here first makes that CAS in __chttpclient_destroy a
+   * guaranteed no-op instead of a second racing writer. */
+  chttpcli cli = atomic_exchange(&default_client_bundler.client, NULL);
+  if (cli) __chttpclient_destroy(cli);
 }
 
 /* ========================================================================== */

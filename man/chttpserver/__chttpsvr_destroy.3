@@ -12,10 +12,16 @@ void __chttpsvr_destroy(chttpsvr srv);
 .SH DESCRIPTION
 .nf
 Stops this server's listener, drains all in-flight requests for this
-server (up to 30 seconds) and closes every connection of this server's
-still sitting idle, releases this server's reference to the shared
-reactor, then frees all routers, routes, middleware nodes, the
-server's owned ctpool, and the server struct itself.
+server (up to 30 seconds), then closes every remaining connection of
+this server (idle, mid-handshake, or otherwise still active) and waits
+for each to actually finish closing (up to a further 30 seconds),
+releases this server's reference to the shared reactor, then frees all
+routers, routes, middleware nodes, the server's owned ctpool, and the
+server struct itself. Both waits are bounded escape hatches for a
+pathologically stuck connection (e.g. one configured with no read
+timeout at all whose peer never sends anything); neither one is hit in
+ordinary operation, where every connection either completes or reaches
+one of its own configured timeouts well before 30 seconds.
 
 If this was the last reference to the shared reactor (from any
 chttpsvr instance in the process), its actual teardown happens

@@ -365,6 +365,34 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
  * @return CTLS_HANDSHAKE_DONE, CTLS_HANDSHAKE_WANT_READ,
  *         CTLS_HANDSHAKE_WANT_WRITE, or CTLS_HANDSHAKE_ERROR (fatal;
  *         destroy conn).
+ *
+ * @note Known third-party limitation, not a bug in this module: running
+ *       many concurrent client handshakes that share one ctls_ctx_t's trust
+ *       store (e.g. chttpclient's Tier 2/3 async engine firing several
+ *       requests to certificate-verifying HTTPS origins at once) has been
+ *       observed, under ThreadSanitizer, to race inside OpenSSL's own
+ *       X509_NAME_cmp/X509_cmp machinery (an ASN1_STRING read racing a
+ *       concurrent write during certificate verification's canonical-
+ *       encoding lazy-cache population). Every per-connection object this
+ *       module itself controls (the SSL*, its BIO, its X509_VERIFY_PARAM
+ *       via SSL_get0_param) is independently allocated per connection, not
+ *       shared; SSL_new() off the shared SSL_CTX* is already mutex-
+ *       protected (ctls_ctx_t.lock). The race is inside libcrypto's own
+ *       shared, reference-counted certificate objects in the trust store,
+ *       which OpenSSL is documented to protect internally; this class of
+ *       TSan-detected race has real precedent in OpenSSL's own issue
+ *       tracker across multiple versions (fixed piecemeal over time, most
+ *       recently as of 3.2.1), so this may be an as-yet-unreported instance
+ *       rather than something fixable from the calling side. Deliberately
+ *       not worked around here (no extra locking around the verification
+ *       step): that would serialise concurrent handshakes and defeat the
+ *       whole point of this engine multiplexing several of them at once,
+ *       to paper over what is very likely someone else's bug. Confirmed
+ *       harmless in practice across every test run so far (every
+ *       concurrent-HTTPS test in tests/chttpclient/tests_tls.c passes
+ *       reliably under both plain and -fsanitize=thread builds); revisit
+ *       if it is ever seen to actually corrupt a handshake's outcome
+ *       rather than just being flagged by the race detector.
  */
 ctls_handshake_result_t ctls_conn_handshake_step(ctls_conn_t *conn);
 

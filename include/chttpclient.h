@@ -810,6 +810,16 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
  * count, no timeouts, TLS verification on). It may be configured by passing
  * the returned handle to chttpclient_set_*.
  *
+ * Do NOT pass the returned handle to chttpclient_destroy: it is owned by
+ * this module, which destroys it automatically at process exit. Destroying
+ * it yourself is safe against crashing this specific call (the handle is
+ * recognised and the module's own reference to it is cleared), but every
+ * chttp_default_client/chttp_do/chttp_get/... call made afterward, by this
+ * process, for the rest of its lifetime, then has no default client to use
+ * and fails accordingly -- there is no way to rebuild it once destroyed
+ * this way. If you need a client with a bounded, caller-controlled
+ * lifetime, create your own via create_chttpclient/_mp instead.
+ *
  * @return Default client handle, or NULL if initialisation failed.
  */
 chttpcli chttp_default_client(void);

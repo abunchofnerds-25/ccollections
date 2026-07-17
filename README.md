@@ -2,7 +2,7 @@
 
 `c_collections` is a library of generic data structures and utilities for C. It provides what the C standard library leaves out: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, inter-thread communication primitives, a thread pool, a structured logger, a JSON parser, a YAML parser, an HTTP client, and an HTTP server; all under one consistent API.
 
-If you have used Python's `list` and `dict`, Java's `ArrayList` and `HashMap`, or C++'s `vector` and `map`, the containers here will feel familiar. The difference is that this library is plain C11; no code generators, no external build tools, no hidden runtime.
+If you have used C++'s `vector` and `map`, Java's `ArrayList` and `HashMap`, or Python's `list` and `dict`, the containers here will feel familiar. The difference is that this library is plain C11; no code generators, no external build tools, no hidden runtime.
 
 Every module follows the same naming conventions (`*_construct`, `*_destroy`, and optional `*_scoped` variants for automatic cleanup), so once you have learned how one container works, the others follow naturally. The library compiles cleanly under GCC and Clang at `-Wall -Wextra -Werror`, and each module ships with a test suite that runs under Valgrind.
 
@@ -46,7 +46,7 @@ Every public function and macro also has a real troff manual page under [`man/`]
 
 C gives you direct control over memory, near-zero runtime overhead, and programs that run on everything from microcontrollers to supercomputers. What it does not give you, unfortunately, is a standard library of generic containers.
 
-In Python, `scores = []` gives you a resizable list that grows on demand. In Java, `new ArrayList<Integer>()` gives you a typed dynamic array. In C, the closest built-in equivalent is a fixed-size array whose size you must know at compile time. Growing it means calling `realloc` yourself. A hash map means implementing one from scratch or tracking down a library. This is a valuable learning exercise, but in a real program you usually want to spend your energy on the problem you are actually solving, not on reimplementing containers you have already studied.
+In C++, `std::vector<int> scores;` gives you a resizable, typed dynamic array. In Java, `new ArrayList<Integer>()` gives you the same thing. In Python, `scores = []` gives you a resizable list that grows on demand. In C, the closest built-in equivalent is a fixed-size array whose size you must know at compile time. Growing it means calling `realloc` yourself. A hash map means implementing one from scratch or tracking down a library. This is a valuable learning exercise, but in a real program you usually want to spend your energy on the problem you are actually solving, not on reimplementing containers you have already studied.
 
 The challenge with generic containers in C is catching type mistakes at compile time. The classic approach passes everything as `void *` (a pointer to untyped memory) which works with any element type but means the compiler cannot warn you about a mismatch. A `double *` silently passed where an `int *` is expected compiles without a warning and produces garbage at runtime. This library uses a C11 feature called `_Generic` that lets a macro inspect the static type of its argument at compile time and dispatch to different code accordingly. The result is that accidental type mismatches (the kind you make by mistake rather than by deliberate cast) are caught at the call site before the program runs.
 
@@ -672,7 +672,7 @@ void load_config(const char *path, chmap config) {
 
 ## 7. Hash Map - `chashmap`
 
-A hash map stores key-value pairs and answers "what value is associated with this key?" in constant time on average (O(1)), regardless of how many pairs are stored. If you have used Python's `dict` or Java's `HashMap`, this is the same concept.
+A hash map stores key-value pairs and answers "what value is associated with this key?" in constant time on average (O(1)), regardless of how many pairs are stored. If you have used C++'s `std::unordered_map`, Java's `HashMap`, or Python's `dict`, this is the same concept.
 
 `chashmap` selects one of two internal strategies at construction time based on the key and value types, but the macro API is identical for both.
 
@@ -3007,6 +3007,8 @@ The module is split across two headers: `chttp.h` declares shared types (`chttp_
 
 The simplest path uses the process-level default client via the `chttp_get`, `chttp_post`, `chttp_put`, `chttp_delete`, and `chttp_patch` convenience functions. The default client is lazily initialized on the first call, uses the CPU count as the pool size, and has TLS peer and host verification enabled.
 
+Do not pass the handle returned by `chttp_default_client()` to `chttpclient_destroy`: it is owned by the library, which destroys it automatically at process exit. Doing so anyway will not crash that specific call, but the default client is never rebuilt afterward, so every later call to `chttp_default_client()` or any of the convenience functions above fails cleanly for the remainder of the process. If you need a client with a lifetime you control, create your own with `create_chttpclient`/`create_chttpclient_mp` instead.
+
 ```c
 chttpcli_response *resp = NULL;
 
@@ -3154,7 +3156,7 @@ ctpool_future_free(f);
 chttpclient_destroy(cli);
 ```
 
-The engine (a small pool of `event_loop` reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count by default) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. This engine owns its own static, process-wide `event_loop` instance, fully independent of `chttpserver`'s own (separate) `event_loop` instance; the two modules share no reactor, so stopping/starting one has no effect on the other. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`. `chttpcli_set_engine_logger`/`chttpcli_set_engine_mem_mgmt_procs`/`chttpcli_set_engine_num_reactor_threads` configure this reactor's diagnostics logger, allocator, and OS thread count respectively, and must be called before this engine's first lazy construction (mirroring `chttpserver`'s identical trio of functions for its own reactor).
+The engine (a small pool of `event_loop` reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count by default) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. `chttpclient_destroy` blocks until every Tier 2/3 request still in flight for that client completes, exactly like it already does for Tier 1; it is safe to call even if a future returned by `chttpclient_do_async`/`_streaming` has not been waited on yet, though the future itself remains valid to use afterward (its result was already available by the time `chttpclient_destroy` returned). This engine owns its own static, process-wide `event_loop` instance, fully independent of `chttpserver`'s own (separate) `event_loop` instance; the two modules share no reactor, so stopping/starting one has no effect on the other. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`. `chttpcli_set_engine_logger`/`chttpcli_set_engine_mem_mgmt_procs`/`chttpcli_set_engine_num_reactor_threads` configure this reactor's diagnostics logger, allocator, and OS thread count respectively, and must be called before this engine's first lazy construction (mirroring `chttpserver`'s identical trio of functions for its own reactor).
 
 `chttpclient_do_async_streaming` delivers the response body via a `chttpcli_write_fn` callback, exactly like `chttpclient_do_streaming`:
 
@@ -3226,6 +3228,8 @@ chttpclient_set_tls(cli, &tls2);
 Pass `NULL` to restore the defaults.
 
 `verify_host` always implies `verify_peer` in practice: hostname matching against a certificate whose chain was never validated gives no real security guarantee, since the certificate itself could be entirely forged. Setting `verify_peer = false, verify_host = true` does not get you "hostname-only checking with no chain trust"; it gets full verification (using the system CA store, or `ca_bundle_path` if set), the same as `verify_peer = true` would. To genuinely disable all server certificate checking, set both `verify_peer = false` and `verify_host = false`, as in the example above.
+
+Firing many concurrent HTTPS requests through Tier 2/3 (`chttpclient_do_async`/`_pooled`) to certificate-verifying origins that share one `chttpcli`'s trust store has been observed, under ThreadSanitizer, to race inside OpenSSL's own certificate-comparison internals (`X509_NAME_cmp`/`X509_cmp`'s canonical-encoding lazy cache) rather than in anything this library controls; every per-connection OpenSSL object this library allocates is independent per connection, and building the shared TLS context itself is already mutex-protected. This is a known, version-spanning class of issue in OpenSSL's own issue tracker, not something a caller can work around from the outside, and has not been observed to affect the outcome of any handshake in this library's own test suite. No functional workaround is applied here deliberately: doing so would mean serialising concurrent handshakes, defeating the point of a reactor built to multiplex several of them at once, to compensate for what is very likely a bug in a dependency outside this project's control.
 
 ### Connection Pool Behaviour
 
@@ -3737,7 +3741,7 @@ chttpsvr_register_handler(srv, CHTTP_ANY,  "/users/{id}", any_user,  NULL);
 
 ### Streaming Handlers
 
-Routing happens as soon as headers are parsed, before any body byte is read; an unmatched route is rejected immediately without ever reading the body it's about to discard, and a matched route (buffered or streaming) is handed to the server's `ctpool` right away, regardless of body size. The reactor thread's job is therefore O(1) per request: it never blocks reading a large or slow body. The worker thread that picks up the request reads the body itself, batch by batch, directly off the socket via the same Content-Length/chunked framing logic the reactor would otherwise use; there is no temp file and no whole-body pre-buffering anywhere in the path.
+Routing happens as soon as headers are parsed, before any body byte is read; an unmatched route is rejected immediately without ever reading the body it's about to discard, and a matched route (buffered or streaming) is handed to the server's `ctpool` right away, regardless of body size. The reactor thread's job is therefore O(1) per request: it never blocks reading a large or slow body, nor does it ever block writing a rejection response (404/405/500 for an unmatched/malformed route, or 503 when `ctpool` is at capacity) -- every rejection's courtesy write runs on a small dedicated pool of its own, never the reactor thread, so a slow-reading client being told "no" cannot delay dispatch for any other, unrelated connection. The worker thread that picks up a matched request reads the body itself, batch by batch, directly off the socket via the same Content-Length/chunked framing logic the reactor would otherwise use; there is no temp file and no whole-body pre-buffering anywhere in the path.
 
 For a **buffered** handler, the worker reads the entire body into one growable buffer before invoking the handler, so `chttpsvr_req_body` still returns the complete body in one call. For a **streaming** handler, the worker hands each batch to `chttpsvr_req_read` as it arrives, so the handler can act on data before the rest of the body has even reached the server:
 

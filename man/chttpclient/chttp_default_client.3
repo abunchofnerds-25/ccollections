@@ -22,7 +22,20 @@ same chttpclient_set_* functions as any other client.
 .nf
 Default client handle, or NULL if initialisation failed.
 .fi
+.SH WARNINGS
+.nf
+Do not pass the returned handle to chttpclient_destroy: it is owned
+by this module, which destroys it automatically at process exit.
+Destroying it yourself will not crash that specific call (the handle
+is recognised and this module's own reference to it is cleared), but
+the default client is never rebuilt afterward, so every later
+chttp_default_client/chttp_do/chttp_get/... call in the process then
+fails cleanly instead of performing a request, for the remainder of
+that process. If you need a client with a lifetime you control,
+create your own via create_chttpclient/create_chttpclient_mp instead.
+.fi
 .SH "SEE ALSO"
 .BR create_chttpclient (3),
+.BR chttpclient_destroy (3),
 .BR chttp_do (3),
 .BR chttp_get (3)

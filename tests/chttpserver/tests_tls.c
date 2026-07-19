@@ -80,8 +80,9 @@ static void _hello_tls_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    directory via the openssl CLI. Returns 0 on success, -1 on any failure
    (missing openssl binary, non-zero exit status, etc.); callers must treat
    -1 as "TLS integration could not be verified in this environment" rather
-   than crash, since fio_tls_cert_add's FIO_LOG_FATAL on a missing/invalid
-   cert file would abort the whole process. */
+   than assume a partial/invalid cert file handed to ctls_ctx_cert_add would
+   itself be fatal -- ctls never aborts the process on bad TLS input (see
+   the ctls module notes), it simply fails the handshake. */
 static int _openssl_selfsigned(const char *key_path, const char *cert_path,
                                const char *cn, const char *san) {
   char cmd[1024];
@@ -89,11 +90,11 @@ static int _openssl_selfsigned(const char *key_path, const char *cert_path,
   if (san) {
     /* A real IP-address certificate is secured via a subjectAltName
      * iPAddress entry, per RFC 6125; not the legacy CN-matching fallback,
-     * which fio_tls_openssl.c's connect-side verification (X509_check_ip,
-     * reached via X509_VERIFY_PARAM_set1_ip_asc for an IP-literal target)
-     * does not use. Without this, the hostname tests below would only ever
-     * be exercising CN string matching by coincidence, not genuine
-     * IP-address certificate validation. */
+     * which ctls.c's own connect-side verification (X509_VERIFY_PARAM_
+     * set1_ip_asc for an IP-literal target, X509_VERIFY_PARAM_set1_host
+     * otherwise) does not use for an IP-literal target. Without this, the
+     * hostname tests below would only ever be exercising CN string matching
+     * by coincidence, not genuine IP-address certificate validation. */
     cn_len = snprintf(cmd, sizeof(cmd),
                       "openssl req -x509 -newkey rsa:2048 -nodes "
                       "-keyout '%s' -out '%s' -days 1 -subj '/CN=%s' "
@@ -134,7 +135,7 @@ static int _generate_self_signed_cert(void) {
     return -1;
   /* Client identity cert for the mTLS smoke test; self-signed and never
    * actually trusted by the server in this suite; it only needs to be a
-   * well-formed cert/key pair so fio_tls_new's cert-loading path (real
+   * well-formed cert/key pair so ctls_ctx_cert_add's cert-loading path (real
    * files, not the fake nonexistent paths used by chttpclient's own
    * set_tls_deep_copies_strings test) is exercised end-to-end. */
   if (_openssl_selfsigned(g_client_key_path, g_client_cert_path,
@@ -187,9 +188,6 @@ __attribute__((constructor)) static void _setup(void) {
             "CLI; real TLS handshake tests will be skipped in this "
             "environment.\n");
     g_cert_ready = false;
-    /* No chttpsvr_start has run yet in this branch, so fio_lib_destroy has
-       not been registered via atexit; registration order relative to it
-       does not matter here. */
     atexit(_teardown);
     return;
   }
@@ -219,14 +217,12 @@ __attribute__((constructor)) static void _setup(void) {
     exit(1);
   }
 
-  /* Must be registered AFTER chttpsvr_start, not before: the first
-     chttpsvr_start call registers fio_lib_destroy via atexit (inside
-     _fio_global_init). atexit handlers run in reverse registration order, so
-     registering _teardown here (after) guarantees it runs BEFORE
-     fio_lib_destroy at process exit; stopping and joining the engine
-     first. Registering it earlier (before chttpsvr_start) would let
-     fio_lib_destroy free fio_data while the engine's own thread pool is
-     still running, a use-after-free that segfaults on exit. */
+  /* Registered here, after chttpsvr_start, purely so g_tls_srv is already
+     assigned by the time _teardown() (which stops and destroys it) can
+     possibly run; the shared event_loop engine itself has no atexit-based
+     teardown of its own to race (see chttpsvr_engine_wait()'s own doc
+     comment: teardown runs on an explicitly joined reaper thread, not a
+     process-exit hook). */
   atexit(_teardown);
 }
 
@@ -296,11 +292,11 @@ TEST(chttpserver_tls, handshake_fails_when_ca_is_untrusted) {
 TEST(chttpserver_tls, hostname_mismatch_rejected_when_verify_host_enabled) {
   /* Connects to the same server via "localhost"; which resolves to the
      same loopback address but does NOT match the cert's CN=127.0.0.1;
-     with verify_host left at its default (true). This exercises the new
-     client-side SNI/hostname-verification wiring (fio_tls_connect_create's
-     X509_VERIFY_PARAM_set1_host call) added specifically for the hand-rolled
-     client; the CA is trusted (ca_bundle_path), so any rejection here can
-     only be due to the hostname check, not an untrusted-issuer failure. */
+     with verify_host left at its default (true). This exercises ctls.c's
+     own client-side hostname-verification wiring (ctls_conn_create_client's
+     X509_VERIFY_PARAM_set1_host call); the CA is trusted (ca_bundle_path),
+     so any rejection here can only be due to the hostname check, not an
+     untrusted-issuer failure. */
   if (!g_cert_ready) {
     fprintf(stderr,
             "SKIP: no self-signed cert available in this "
@@ -370,7 +366,7 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
      The server in this suite does not require or verify a client
      certificate, so this does not prove server-side enforcement; it
      proves that chttpclient's cert_path/key_path plumbing through
-     fio_tls_new (a real cert+key pair, not the fake nonexistent paths
+     ctls_ctx_cert_add (a real cert+key pair, not the fake nonexistent paths
      used by chttpclient's own set_tls_deep_copies_strings test) loads
      correctly and does not break a normal handshake. */
   if (!g_cert_ready) {

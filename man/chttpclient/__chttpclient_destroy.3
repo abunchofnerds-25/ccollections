@@ -11,14 +11,24 @@ void __chttpclient_destroy(chttpcli cli);
 .fi
 .SH DESCRIPTION
 .nf
-Waits for all in-flight requests to complete, then closes all pooled
+Waits for all in-flight requests to complete (both a synchronous
+chttpclient_do/_streaming call still executing on another thread, and
+any Tier 2/3 chttpclient_do_async/_streaming or
+chttpclient_do_pooled/_streaming request submitted to the shared
+reactor engine that has not yet completed), then closes all pooled
 connections (both idle and TLS), frees the idle-connection pool,
 destroys the client's TLS context, frees synchronisation primitives,
 and frees the client struct.
+
+If cli is the handle returned by chttp_default_client(), this
+module's own reference to it is cleared first so a subsequent
+chttp_default_client() call returns NULL instead of the now-freed
+pointer; see chttp_default_client(3)'s own WARNINGS section.
 
 Do not call directly; use the chttpclient_destroy macro, which also
 sets the handle to NULL.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_destroy (3),
-.BR ___chttpclient_destroy (3)
+.BR ___chttpclient_destroy (3),
+.BR chttp_default_client (3)

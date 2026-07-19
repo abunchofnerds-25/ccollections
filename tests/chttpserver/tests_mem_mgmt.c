@@ -199,7 +199,9 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
    * allocations, so a dedicated procs_wired_into_engine_reallocations test
    * (which used to exist here, targeting FIOBJ hash growth specifically)
    * was removed rather than built around an artificial trigger. */
-  REQUIRE_GT(g_mm_malloc_count + g_mm_calloc_count, (size_t)0);
+  REQUIRE_GT(__atomic_load_n(&g_mm_malloc_count, __ATOMIC_RELAXED) +
+                 __atomic_load_n(&g_mm_calloc_count, __ATOMIC_RELAXED),
+             (size_t)0);
 
   /* g_mm_free_count's own source is the server noticing _setup()'s client
    * connection has gone away (chttpclient_destroy closes it) and freeing its
@@ -212,15 +214,18 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
    * versus the single-thread design's near-synchronous inline dispatch),
    * which made a bare immediate assertion here measurably flaky where it
    * previously was not. */
-  for (int attempt = 0; g_mm_free_count == 0 && attempt < 50; attempt++) {
+  for (int attempt = 0;
+       __atomic_load_n(&g_mm_free_count, __ATOMIC_RELAXED) == 0 && attempt < 50;
+       attempt++) {
     usleep(20000);
   }
-  REQUIRE_GT(g_mm_free_count, (size_t)0);
+  REQUIRE_GT(__atomic_load_n(&g_mm_free_count, __ATOMIC_RELAXED), (size_t)0);
 }
 
 extern size_t _chttpsvr_engine_num_reactor_threads_for_tests(void);
 
-TEST(chttpserver_mem_mgmt, num_reactor_threads_defaults_to_one_when_unconfigured) {
+TEST(chttpserver_mem_mgmt,
+     num_reactor_threads_defaults_to_one_when_unconfigured) {
   /* _setup() never called chttpsvr_set_engine_num_reactor_threads before
    * starting g_srv, so the reactor must have used the default of 1 (a
    * single dedicated thread, not an auto-detected CPU count), matching

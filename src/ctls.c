@@ -547,8 +547,21 @@ static bool _ctls_ctx_rebuild_locked(ctls_ctx_t *tls) {
     }
     char *err = NULL;
     cmap_iterator *it = chashmap_begin_iter(tls->named_certs, &err);
+    /* named_count > 0 guarantees tls->named_certs is non-empty (this
+     * function runs with ctx->lock held, so it cannot have changed since
+     * the count above was read), so chashmap_begin_iter returning NULL
+     * here can only mean it failed to allocate the iterator itself (OOM),
+     * not "nothing to iterate". ok must start false in that case: with it
+     * true unconditionally, the while loop below correctly never executes
+     * (it is NULL), but new_named_ctxs/new_named_entries -- allocated via
+     * _mem_alloc just above, not _mem_calloc, so still fully uninitialized
+     * -- would then be read as if fully populated by the commit loop
+     * further down, dereferencing garbage pointers. Found by clang's
+     * static analyzer, not by any dynamic test (needs an OOM injected
+     * exactly inside chashmap_begin_iter with named/SNI certs configured,
+     * a combination no existing test constructs). */
     size_t i = 0;
-    bool ok = true;
+    bool ok = (it != NULL);
     while (it && ok) {
       ctls_named_cert *nc;
       memcpy(&nc, it->val_pair->ptr, sizeof(nc));
@@ -780,16 +793,31 @@ ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
   mutex_lock(ctx->lock);
   if (ctx->trust_count == ctx->trust_cap) {
     size_t new_cap = ctx->trust_cap ? ctx->trust_cap * 2 : 4;
+    /* Committed to ctx->trust_pems immediately, not after also checking the
+     * second realloc below: on success, realloc may move (freeing the old
+     * block) or extend the original allocation, either way invalidating
+     * ctx->trust_pems's own copy of that pointer. Deferring the commit
+     * until both reallocs were known to succeed left ctx->trust_pems
+     * dangling whenever this first call succeeded (moving the block) but
+     * the second one failed -- a genuine use-after-free on this ctx's next
+     * access to trust_pems, on top of leaking new_pems itself, which
+     * clang's static analyzer caught (the leak; not the dangling-pointer
+     * half, which needed reading the realloc semantics by hand). */
     char **new_pems = (char **)_mem_realloc(ctx->m_procs, ctx->trust_pems,
                                             new_cap * sizeof(char *));
-    size_t *new_lens = (size_t *)_mem_realloc(ctx->m_procs, ctx->trust_lens,
-                                              new_cap * sizeof(size_t));
-    if (!new_pems || !new_lens) {
+    if (!new_pems) {
       _mem_free(ctx->m_procs, pem);
       mutex_unlock(ctx->lock);
       return ccol_not_enough_memory;
     }
     ctx->trust_pems = new_pems;
+    size_t *new_lens = (size_t *)_mem_realloc(ctx->m_procs, ctx->trust_lens,
+                                              new_cap * sizeof(size_t));
+    if (!new_lens) {
+      _mem_free(ctx->m_procs, pem);
+      mutex_unlock(ctx->lock);
+      return ccol_not_enough_memory;
+    }
     ctx->trust_lens = new_lens;
     ctx->trust_cap = new_cap;
   }
@@ -1096,6 +1124,12 @@ static void _ctls_record_client_alpn(ctls_conn_t *conn) {
 ctls_handshake_result_t ctls_conn_handshake_step(ctls_conn_t *conn) {
   if (!conn || !conn->ssl) return CTLS_HANDSHAKE_ERROR;
   ERR_clear_error();
+  /* SSL_accept/SSL_connect: see this function's own @note in ctls.h for a
+   * known, third-party-only ThreadSanitizer race inside OpenSSL's own
+   * X509_NAME_cmp/X509_cmp when many concurrent client handshakes verify
+   * certificates against one shared trust store; not something this call
+   * site can fix without serialising handshakes that are supposed to run
+   * concurrently. */
   int ri = conn->is_server ? SSL_accept(conn->ssl) : SSL_connect(conn->ssl);
   if (ri == 1) {
     conn->handshake_done = true;

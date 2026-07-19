@@ -29,6 +29,7 @@ SOFTWARE.
 #include <ctls.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -123,6 +124,48 @@ typedef struct chttpsvr_qparams {
  * Exceeding this limit causes the server to respond with 500. */
 #define _CHTTPSVR_MAX_MW 32
 
+/* Timeout for every courtesy reject-and-close response _conn_reject_and_close
+ * writes, regardless of which thread runs it: reject_pool's own dedicated
+ * threads (every rejection -- 404/405/500 unmatched/malformed routes and the
+ * pool-full 503 case alike -- is routed there; see _conn_reject_via_pool)
+ * or the last-resort synchronous fallback on the calling thread (reactor or
+ * worker) when reject_pool itself is unavailable or its own (bounded) queue
+ * is full. One shared constant, not a separate value per call site: none of
+ * these should be allowed to tie up their thread for long on a slow-reading
+ * peer, so there is no reason for any of them to be more generous than the
+ * others. */
+#define _CHTTPSVR_REJECT_WRITE_TIMEOUT_MS 100
+
+/* reject_pool's own worker thread count is not a fixed constant: it is
+ * max(_CHTTPSVR_REJECT_POOL_MIN_THREADS, worker_pool's own resolved thread
+ * count / 2), computed once in chttpsvr_start (see that function's own
+ * comment at the computation site). Every rejection response (see
+ * _conn_reject_via_pool) is routed here, not just the pool-full 503 case,
+ * so this is sized like a small dedicated pool rather than a single
+ * "good enough for an overload corner case" thread: a burst of unmatched-
+ * route requests (a very common, everyday shape, unlike a sustained
+ * worker_pool-full condition) now needs enough concurrency of its own to
+ * drain promptly rather than serializing behind one thread. Scaling with
+ * worker_pool's own size (rather than a fixed number) means a large,
+ * many-core deployment's reject_pool grows with it instead of staying
+ * pinned at whatever constant happened to be picked for a much smaller
+ * default configuration; the floor keeps a single- or few-worker server
+ * from regressing to the original one-thread bottleneck this pool was
+ * built to remove. */
+#define _CHTTPSVR_REJECT_POOL_MIN_THREADS 2
+
+/* reject_pool's own task queue capacity. Bounded (not
+ * CHTTPSVR_QUEUE_UNBOUNDED-style 0/unbounded) so a sustained flood of
+ * rejected connections can't grow reject_pool's backlog -- and therefore
+ * this process's memory, one queued chttpsvr_conn_t per pending reject-close
+ * -- without limit; once full, ctpool_try_submit fails and
+ * _conn_reject_via_pool falls back to a synchronous close on the calling
+ * thread instead (the same fallback already used when reject_pool is
+ * unavailable entirely, e.g. during shutdown). Sized larger than the
+ * original 256 now that every rejection path (not just pool-full 503) feeds
+ * this same queue. */
+#define _CHTTPSVR_REJECT_POOL_QUEUE_CAP 1024
+
 /* Snapshot entry for one middleware step. */
 typedef struct {
   chttpsvr_middleware_fn fn;
@@ -211,6 +254,16 @@ typedef struct chttpsvr_conn {
   growbuf_t body; /* buffered-route whole body, or streaming pending bytes */
   size_t body_bytes_seen; /* cumulative, for max_body_size enforcement */
   bool body_too_large;
+  /* Set when a streaming route's chttpsvr_req_read() hits a truncated body
+   * (peer EOF or a hard I/O error before the message finished framing) or a
+   * chttp1_parser-level CHTTP1_USER/CHTTP1_ERROR that isn't a max_body_size
+   * rejection (that case is reported via body_too_large instead, checked
+   * first by chttpsvr_req_stream_error() so its priority is unaffected).
+   * Read only by chttpsvr_req_stream_error(); the buffered-route path
+   * (_drain_body) has no equivalent need for this, since it reports
+   * ccol_http_transfer_aborted directly as its own return value instead of
+   * through a flag a caller reads back out of conn afterward. */
+  bool transfer_aborted;
 
   /* Leftover bytes from the reactor's own header-parsing read buffer, past
    * chttp1_parser_consumed(), copied out (see _conn_start_diverted) since
@@ -257,6 +310,23 @@ struct chttpserver {
   size_t router_count;
   size_t router_cap;
   ctpool worker_pool;
+  /* max(_CHTTPSVR_REJECT_POOL_MIN_THREADS, worker_pool's own resolved
+   * thread count / 2) dedicated threads (see that constant's own comment),
+   * bounded queue (_CHTTPSVR_REJECT_POOL_QUEUE_CAP), used for every
+   * _conn_reject_and_close call (the courtesy write-then-close a rejected
+   * connection gets, itself
+   * bounded to _CHTTPSVR_REJECT_WRITE_TIMEOUT_MS on one of this pool's own
+   * threads): an unmatched/malformed-route 404/405/500 discovered
+   * synchronously during header parsing, and worker_pool being already full
+   * (503) alike. Deliberately NOT worker_pool itself, even for the 503
+   * case: the whole point is to keep this write off the reactor thread
+   * without waiting on (or competing with) the exact pool that just
+   * rejected the request for being at capacity. Bounded, not unbounded, so
+   * a sustained flood of rejections can't grow this pool's own backlog
+   * without limit; once full, _conn_reject_via_pool falls back to a
+   * synchronous close on the calling thread instead. See that function's
+   * own comment on why this exists. */
+  ctpool reject_pool;
   ctls_ctx_t *tls_ctx; /* non-NULL when TLS configured */
   mutex_t mutex;
   cond_var_t requests_done_cv;
@@ -264,9 +334,22 @@ struct chttpserver {
   rw_lock_t routes_lock;
   clog cl;
 
-  int listen_fd; /* -1 when not started */
-  bool is_unix_socket;
-  char *unix_socket_path; /* owned; NULL for a TCP listener */
+  /* _Atomic, not merely written under srv->mutex, since _listener_on_
+   * readable (running on the reactor thread) reads both fields on every
+   * accept() call without ever taking srv->mutex; plain int/bool fields
+   * here are a genuine, TSan-confirmed data race against chttpsvr_start/
+   * _stop's mutex-protected writes. chttpsvr_start also assigns both of
+   * these BEFORE registering the listener with event_loop_add, not after:
+   * event_loop_add makes the registration immediately live, so a
+   * connection arriving in the window between registration and these
+   * fields being set could otherwise be dispatched to _listener_on_
+   * readable while it still observed listen_fd's pre-start default (-1). */
+  _Atomic int listen_fd; /* -1 when not started */
+  _Atomic bool is_unix_socket;
+  char *unix_socket_path; /* owned; NULL for a TCP listener; guarded by
+                           * srv->mutex; never read by _listener_on_readable,
+                           * only by chttpsvr_stop/_quiesce_server_once, so
+                           * it does not need the same _Atomic treatment. */
   event_reg *listen_reg;
   bool started;
   bool contributed_to_engine;
@@ -359,7 +442,17 @@ static struct {
 static struct {
   thread_id_t thread;
   bool running;
-  bool stop_flag;
+  /* _Atomic, not merely written under servers_bundler.mutex, since
+   * _idle_sweep_fn (running on its own dedicated thread) reads this in its
+   * own loop condition without ever taking that mutex; a plain bool here
+   * is a genuine, TSan-confirmed data race against
+   * _idle_sweep_stop_if_running's mutex-protected write, and -- unlike a
+   * torn read, which this specific field's single-byte size makes unlikely
+   * in practice -- is undefined behavior that gives the compiler license
+   * to cache the read across loop iterations and never observe the write
+   * at all, which would turn _idle_sweep_stop_if_running's thread_join
+   * into a real, indefinite hang. */
+  _Atomic bool stop_flag;
 } idle_sweep_bundler = {0};
 
 static struct {
@@ -619,7 +712,7 @@ static void _engine_force_stop(void) {
 /* ========================================================================== */
 
 static void _conn_close(chttpsvr_conn_t *conn);
-static void _conn_reject_and_close(chttpsvr_conn_t *conn);
+static void _conn_reject_and_close(chttpsvr_conn_t *conn, unsigned timeout_ms);
 
 /* Registers a server so the idle sweep thread walks its idle-connection
  * list too. Called from chttpsvr_start (which runs not just once per
@@ -672,12 +765,12 @@ static void _servers_unregister(struct chttpserver *srv) {
 
 static void *_idle_sweep_fn(void *arg) {
   (void)arg;
-  while (!idle_sweep_bundler.stop_flag) {
+  while (!atomic_load(&idle_sweep_bundler.stop_flag)) {
     struct timespec ts = {
         .tv_sec = _CHTTPSVR_IDLE_SWEEP_INTERVAL_MS / 1000,
         .tv_nsec = (_CHTTPSVR_IDLE_SWEEP_INTERVAL_MS % 1000) * 1000000L};
     nanosleep(&ts, NULL);
-    if (idle_sweep_bundler.stop_flag) break;
+    if (atomic_load(&idle_sweep_bundler.stop_flag)) break;
 
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -734,7 +827,7 @@ static void *_idle_sweep_fn(void *arg) {
 static void _idle_sweep_start_if_needed(void) {
   mutex_lock(servers_bundler.mutex);
   if (!idle_sweep_bundler.running) {
-    idle_sweep_bundler.stop_flag = false;
+    atomic_store(&idle_sweep_bundler.stop_flag, false);
     if (thread_create(idle_sweep_bundler.thread, _idle_sweep_fn, NULL) == 0)
       idle_sweep_bundler.running = true;
   }
@@ -754,7 +847,7 @@ static void _idle_sweep_stop_if_running(void) {
   thread_id_t t = {0};
   mutex_lock(servers_bundler.mutex);
   if (idle_sweep_bundler.running) {
-    idle_sweep_bundler.stop_flag = true;
+    atomic_store(&idle_sweep_bundler.stop_flag, true);
     t = idle_sweep_bundler.thread;
     was_running = true;
     idle_sweep_bundler.running = false;
@@ -940,6 +1033,7 @@ static ssize_t _decode_url_unsafe(char *dst, const char *src) {
 
 static void _chttpsvr_next(chttpsvr_req *req, chttpsvr_resp *resp);
 static void _task_worker(void *arg);
+static void _reject_task(void *arg);
 static void _destroy_resp(chttpsvr_resp *resp, ccol_memmgmt_procs_t *mp);
 static void _conn_on_readable(event_loop loop, ccol_selectable *sel, void *arg);
 static void _conn_on_writable(event_loop loop, ccol_selectable *sel, void *arg);
@@ -1450,6 +1544,47 @@ static const char *_status_reason(int status) {
   }
 }
 
+/* chttpsvr_config_t.stream_read_timeout_ms/response_write_timeout_ms are
+ * documented "0 = wait indefinitely", but chttp1_stream_read/_write follow
+ * poll(2)'s own convention instead: negative = block forever, 0 = a single
+ * non-blocking attempt (no waiting at all), positive = bounded in ms.
+ * Passing a configured 0 straight through as their own int timeout_ms
+ * therefore means the opposite of what was configured: not "forever", but
+ * "give up immediately, every single call, without even trying" (chttp1_
+ * stream_read/_write's own deadline computation calls clock_gettime() once
+ * to set a deadline of "now" for timeout_ms==0, then immediately
+ * re-checks elapsed time via a second clock_gettime() call before ever
+ * calling poll(); on a monotonic clock that second reading can only be >=
+ * the first, so the "already expired" branch fires unconditionally and
+ * poll()/the real read or write is never even attempted). Confirmed via a
+ * standalone repro against the built library: with stream_read_timeout_ms
+ * == 0, chttpsvr_req_read() returned -1 before the client's body bytes
+ * were ever sent, and even a bodyless GET never received a response at
+ * all, since response_write_timeout_ms's own "0 = use stream_read_timeout_
+ * ms's value" default silently inherited the same broken 0. Every timeout
+ * value sourced from this module's own config must be translated through
+ * this helper before reaching chttp1_stream_read/_write, or "wait
+ * indefinitely" silently becomes "never wait at all".
+ *
+ * Separately, a configured value > INT_MAX (chttp1_stream_read/_write's
+ * timeout_ms parameter, and poll(2)'s own, are both a plain int) would
+ * silently wrap to a negative value on the (int) cast below -- on every
+ * mainstream two's-complement target this codebase builds for, that
+ * negative value is itself poll(2)'s own "block forever" convention, so an
+ * implausible but not inherently invalid config value (e.g.
+ * stream_read_timeout_ms just over 24.8 days in ms) would silently become
+ * "wait indefinitely" instead of the finite, merely very long, wait that
+ * was actually configured. Clamped to INT_MAX instead: still the longest
+ * finite wait this API can express (chttp1_stream_read/_write have no wider
+ * type to hand a longer one through even if this helper computed it), and
+ * unlike the wraparound it does not collapse into the *other* documented
+ * sentinel this same function already treats specially (0 -> -1 above). */
+static int _to_stream_timeout_ms(unsigned configured_timeout_ms) {
+  if (configured_timeout_ms == 0) return -1;
+  if (configured_timeout_ms > (unsigned)INT_MAX) return INT_MAX;
+  return (int)configured_timeout_ms;
+}
+
 /* Serializes resp into a raw HTTP/1.1 response and writes it to stream,
  * bounded by response_write_timeout_ms. Always sets Content-Length
  * explicitly (this server never uses chunked transfer-encoding for its own
@@ -1509,17 +1644,18 @@ static bool _send_response(chttp1_stream_t *stream, chttpsvr_resp *resp,
   head[hlen++] = '\r';
   head[hlen++] = '\n';
 
+  int stream_timeout_ms = _to_stream_timeout_ms(timeout_ms);
   size_t sent = 0;
   while (sent < hlen) {
-    ssize_t n2 =
-        chttp1_stream_write(stream, head + sent, hlen - sent, (int)timeout_ms);
+    ssize_t n2 = chttp1_stream_write(stream, head + sent, hlen - sent,
+                                     stream_timeout_ms);
     if (n2 <= 0) return false;
     sent += (size_t)n2;
   }
   sent = 0;
   while (sent < resp->body_len) {
     ssize_t n3 = chttp1_stream_write(stream, resp->body + sent,
-                                     resp->body_len - sent, (int)timeout_ms);
+                                     resp->body_len - sent, stream_timeout_ms);
     if (n3 <= 0) return false;
     sent += (size_t)n3;
   }
@@ -1585,6 +1721,7 @@ static void _conn_reset_for_request(chttpsvr_conn_t *conn) {
   memset(&conn->body, 0, sizeof(conn->body));
   conn->body_bytes_seen = 0;
   conn->body_too_large = false;
+  conn->transfer_aborted = false;
   conn->read_deadline_set = false;
   conn->deadline_exceeded = false;
 
@@ -1861,6 +1998,86 @@ static void _init_parser_settings(void) {
 /*                    REACTOR-THREAD READ/HANDSHAKE CALLBACKS                 */
 /* ========================================================================== */
 
+/* Decrements srv->in_flight_requests and, if it reaches zero, wakes any
+ * thread waiting in _drain_and_close_all_connections/_wait_and_detach_pools.
+ * Every path that increments in_flight_requests (_conn_start_diverted) must
+ * call this exactly once, and -- critically -- only once the connection has
+ * reached a state _drain_and_close_all_connections can actually observe:
+ * fully closed via _conn_close (including via _conn_reject_and_close), or
+ * safely published back into the idle list via _idle_list_add. Calling this
+ * any earlier (e.g. before a keep-alive connection's registration has
+ * actually been resumed/re-added and idle-listed, or before a rejected
+ * connection's courtesy response has actually been written and the
+ * connection closed) opens a real window where the waiter can wake,
+ * observe in_flight_requests == 0, and let __chttpsvr_destroy proceed to
+ * free srv while this connection is still being finished on another
+ * thread -- a genuine use-after-free a ThreadSanitizer run over tests_tls
+ * caught. */
+static void _release_in_flight(struct chttpserver *srv) {
+  mutex_lock(srv->mutex);
+  if (--srv->in_flight_requests == 0) cond_var_broadcast(srv->requests_done_cv);
+  mutex_unlock(srv->mutex);
+}
+
+/* Submits conn (conn->reject_status already set) to reject_pool for its
+ * courtesy rejection response, so the blocking write never runs on the
+ * calling thread; falls back to a synchronous inline close on the calling
+ * thread if reject_pool is unavailable (server tearing down) or its own
+ * bounded queue (_CHTTPSVR_REJECT_POOL_QUEUE_CAP) is full. Shared by both
+ * rejection paths in this file: the pool-full 503 case in
+ * _conn_start_diverted (which has already incremented in_flight_requests
+ * and paused/removed conn->reg itself, since at that point the outcome --
+ * kept alive vs rejected -- was not yet known) and the reactor thread's own
+ * synchronous 404/405/500 rejection via _conn_dispatch_reject below. Every
+ * caller must have already incremented srv->in_flight_requests for this
+ * connection; this function releases it (via _release_in_flight) only once
+ * the close has actually completed, not merely once queued -- see that
+ * function's own comment on why releasing any earlier would be a real
+ * use-after-free. */
+static void _conn_reject_via_pool(chttpsvr_conn_t *conn) {
+  struct chttpserver *srv = conn->srv;
+  mutex_lock(srv->mutex);
+  ctpool reject_pool = srv->reject_pool;
+  mutex_unlock(srv->mutex);
+
+  if (reject_pool && ctpool_try_submit(reject_pool, _reject_task, conn, NULL) ==
+                         ccol_success) {
+    return;
+  }
+
+  /* Last-resort fallback: reject_pool is unavailable (server tearing down),
+   * its own bounded queue is full, or its submission otherwise failed (e.g.
+   * OOM). Falls back to a synchronous inline close on the calling thread,
+   * exactly as this codebase always did before reject_pool existed, bounded
+   * by the same _CHTTPSVR_REJECT_WRITE_TIMEOUT_MS as every other
+   * reject-and-close call site. srv was captured above, before
+   * _conn_reject_and_close, which frees conn internally (via _conn_close). */
+  _conn_reject_and_close(conn, _CHTTPSVR_REJECT_WRITE_TIMEOUT_MS);
+  _release_in_flight(srv);
+}
+
+/* Routes a connection whose route was rejected during synchronous header
+ * parsing on the reactor thread (404/405/500; conn->req_rejected/
+ * reject_status already set by _on_headers_complete) through reject_pool,
+ * exactly like the pool-full 503 case below, so a slow-reading client being
+ * told about a bad route can no longer stall the sole reactor thread
+ * either -- previously only the 503 overload case avoided this. Unlike
+ * _conn_start_diverted's own reg handling, this connection is never kept
+ * alive after a rejection, so there is no reason to pause a live
+ * registration (pausing exists purely to make a later event_loop_resume
+ * cheap, which never happens here); it is removed outright instead. */
+static void _conn_dispatch_reject(chttpsvr_conn_t *conn) {
+  _idle_list_remove(conn);
+  if (conn->reg) {
+    event_loop_remove(srv_engine_bundler.reactor, conn->reg);
+    conn->reg = NULL;
+  }
+  mutex_lock(conn->srv->mutex);
+  conn->srv->in_flight_requests++;
+  mutex_unlock(conn->srv->mutex);
+  _conn_reject_via_pool(conn);
+}
+
 static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
                                  size_t leftover_len) {
   _idle_list_remove(conn);
@@ -1870,11 +2087,19 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
    * event_entry allocation/free and fd-registry chmap churn on every
    * keep-alive request cycle. A failed pause (should not happen in
    * practice: nothing else touches this connection's reg while the
-   * reactor still owns it) is treated the same as never having had a live
-   * registration, so _task_worker's own keep-alive tail correctly falls
-   * back to closing the connection instead of resuming a stale reg. */
+   * reactor still owns it; event_loop_pause's own documented failure modes
+   * for a non-NULL fd reg all reduce to "reg was concurrently removed")
+   * is treated the same as never having had a live registration, so
+   * _task_worker's own keep-alive tail correctly falls back to closing the
+   * connection instead of resuming a stale reg. event_loop_remove is called
+   * defensively before dropping the pointer: if the failure really is
+   * "already removed", this is a safe, documented no-op (ccol_invalid_args,
+   * ignored); if pause somehow failed for any other reason while the
+   * registration was still genuinely live, this is what actually reclaims
+   * it instead of leaking the event_entry in the reactor's registry. */
   if (conn->reg &&
       event_loop_pause(srv_engine_bundler.reactor, conn->reg) != ccol_success) {
+    event_loop_remove(srv_engine_bundler.reactor, conn->reg);
     conn->reg = NULL;
   }
   conn->state = CONN_ST_DIVERTED;
@@ -1916,10 +2141,6 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
     _mem_free(conn->m_procs, carry);
     conn->_carry_over = NULL;
     conn->_carry_over_len = 0;
-    mutex_lock(conn->srv->mutex);
-    if (--conn->srv->in_flight_requests == 0)
-      cond_var_broadcast(conn->srv->requests_done_cv);
-    mutex_unlock(conn->srv->mutex);
     /* The worker pool is at capacity (ctpool_try_submit returns
      * ccol_container_full rather than blocking, matching this module's
      * documented "never block the reactor thread" contract); this is a
@@ -1928,12 +2149,19 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
      * bounded_pool_full_returns_503 in tests.c). */
     conn->req_rejected = true;
     conn->reject_status = CHTTP_STATUS_SERVICE_UNAVAILABLE;
-    _conn_reject_and_close(conn);
+
+    /* in_flight_requests was already incremented, and conn->reg already
+     * paused/removed, above (before it was known whether this connection
+     * would be diverted successfully or rejected); _conn_reject_via_pool
+     * takes it from here, specifically not resubmitting to `pool` itself --
+     * that is the exact pool that just rejected this request for being
+     * full. See that function's own comment for the rest. */
+    _conn_reject_via_pool(conn);
     return;
   }
 }
 
-static void _conn_reject_and_close(chttpsvr_conn_t *conn) {
+static void _conn_reject_and_close(chttpsvr_conn_t *conn, unsigned timeout_ms) {
   chttpsvr_resp resp;
   memset(&resp, 0, sizeof(resp));
   resp.status_code = conn->reject_status;
@@ -1943,10 +2171,41 @@ static void _conn_reject_and_close(chttpsvr_conn_t *conn) {
     chttp1_stream_prepare_tls(&stream, conn->fd, conn->tls, NULL, 0);
   else
     chttp1_stream_prepare(&stream, conn->fd, NULL, 0);
-  _send_response(&stream, &resp, false, 2000);
+  _send_response(&stream, &resp, false, timeout_ms);
   chttp1_stream_release(&stream);
   _destroy_resp(&resp, conn->m_procs);
   _conn_close(conn);
+}
+
+#ifdef RUNNING_UNIT_TESTS
+/* White-box test instrumentation only: counts how many rejections were
+ * actually carried out on a reject_pool thread (as opposed to the
+ * synchronous fallback in _conn_reject_via_pool, which never reaches
+ * _reject_task at all). Process-wide, not per-server, matching the same
+ * convention _chttpsvr_engine_num_reactor_threads_for_tests already
+ * established; a test reads the delta across its own window rather than an
+ * absolute value, since other tests in the same process may also exercise
+ * rejections. Gated so this symbol/counter does not exist at all in a
+ * production build. */
+static _Atomic size_t g_reject_task_run_count_for_tests = 0;
+#endif /* RUNNING_UNIT_TESTS */
+
+/* reject_pool's task function: runs _conn_reject_and_close on reject_pool's
+ * own dedicated thread instead of the reactor thread (see that field's own
+ * comment on struct chttpserver and _conn_start_diverted's comment on why),
+ * then releases this request's in_flight_requests slot -- mirroring
+ * _task_worker's own decrement -- only once the close has actually
+ * completed, not merely once this task was queued; see
+ * _release_in_flight's own comment for why that ordering matters. srv is
+ * captured before _conn_reject_and_close, which frees conn internally. */
+static void _reject_task(void *arg) {
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)arg;
+  struct chttpserver *srv = conn->srv;
+  _conn_reject_and_close(conn, _CHTTPSVR_REJECT_WRITE_TIMEOUT_MS);
+#ifdef RUNNING_UNIT_TESTS
+  atomic_fetch_add(&g_reject_task_run_count_for_tests, 1);
+#endif
+  _release_in_flight(srv);
 }
 
 /* Drives the reactor-owned portion of one connection: TLS handshake (if
@@ -2042,16 +2301,10 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
       const char *leftover = buf + consumed;
       size_t leftover_len = (size_t)n - consumed;
 
-      if (conn->expects_continue && !conn->req_rejected) {
-        const char *cont = "HTTP/1.1 100 Continue\r\n\r\n";
-        chttp1_stream_t s;
-        if (conn->tls)
-          chttp1_stream_prepare_tls(&s, conn->fd, conn->tls, NULL, 0);
-        else
-          chttp1_stream_prepare(&s, conn->fd, NULL, 0);
-        chttp1_stream_write(&s, cont, strlen(cont), 2000);
-        chttp1_stream_release(&s);
-      }
+      /* The Expect: 100-continue interim write (if conn->expects_continue)
+       * is sent by _task_worker on a worker thread instead of here, once
+       * this request has actually been diverted; see that function's own
+       * comment for why. */
       _conn_start_diverted(conn, leftover, leftover_len);
       return;
     }
@@ -2059,10 +2312,9 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
     /* CHTTP1_USER: an unmatched/rejected route, decided by our own
      * _on_headers_complete (conn->req_rejected already set to a specific
      * status). The route itself was identified, so send a graceful
-     * synchronous error response (the body, if any, is never read; the
-     * connection is then closed rather than kept alive, since the client's
-     * still-arriving body would otherwise be misread as a pipelined
-     * request).
+     * error response (the body, if any, is never read; the connection is
+     * then closed rather than kept alive, since the client's still-arriving
+     * body would otherwise be misread as a pipelined request).
      *
      * CHTTP1_ERROR: a syntax-level problem the parser itself rejected before
      * routing ever ran (a malformed request line, a negative Content-Length,
@@ -2073,7 +2325,11 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
      * chunked_not_last_in_transfer_encoding_list_rejected in tests.c, which
      * assert exactly that. */
     if (conn->req_rejected) {
-      _conn_reject_and_close(conn);
+      /* Routed through reject_pool (or its bounded synchronous fallback),
+       * exactly like the pool-full 503 case, so a slow-reading client being
+       * told 404/405/500 can no longer stall the sole reactor thread; see
+       * _conn_dispatch_reject/_conn_reject_via_pool's own comments. */
+      _conn_dispatch_reject(conn);
     } else {
       _conn_close(conn);
     }
@@ -2162,7 +2418,8 @@ static ccol_retval_t _drain_body(chttpsvr_conn_t *conn,
     unsigned timeout_ms = atomic_load(&conn->srv->stream_read_timeout_ms);
     if (!_check_read_deadline(conn, &timeout_ms)) return ccol_timed_out;
     char raw[8192];
-    ssize_t n = chttp1_stream_read(stream, raw, sizeof(raw), (int)timeout_ms);
+    ssize_t n = chttp1_stream_read(stream, raw, sizeof(raw),
+                                   _to_stream_timeout_ms(timeout_ms));
     if (n < 0) {
       if (chttp1_stream_timed_out(stream)) return ccol_timed_out;
       return ccol_http_transfer_aborted;
@@ -2200,27 +2457,55 @@ ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
     unsigned timeout_ms = atomic_load(&conn->srv->stream_read_timeout_ms);
     if (!_check_read_deadline(conn, &timeout_ms)) return -1;
     char raw[8192];
-    ssize_t n =
-        chttp1_stream_read(req->stream, raw, sizeof(raw), (int)timeout_ms);
+    ssize_t n = chttp1_stream_read(req->stream, raw, sizeof(raw),
+                                   _to_stream_timeout_ms(timeout_ms));
     if (n < 0) {
-      /* Either stream_read_timeout_ms's own per-call poll(2) timed out, or
-       * max_body_read_duration_ms's deadline was folded into this call's
-       * timeout by _check_read_deadline above and expired mid-poll instead
-       * of being caught by that function's own up-front check on the NEXT
-       * call (which never happens, since chttpsvr_req_read returns here
-       * immediately). Either way this is a real timeout, not a hard I/O
-       * error; report it the same way _drain_body already does for the
-       * buffered-route path, via the same conn->deadline_exceeded flag
-       * chttpsvr_req_stream_error() reads, so both caps collapse to the
-       * identical ccol_timed_out result (see max_body_read_duration_exceeded_
-       * reports_ccol_timed_out / stream_read_timeout_reports_ccol_timed_out
-       * in tests.c). */
-      if (chttp1_stream_timed_out(req->stream)) conn->deadline_exceeded = true;
+      if (chttp1_stream_timed_out(req->stream)) {
+        /* Either stream_read_timeout_ms's own per-call poll(2) timed out, or
+         * max_body_read_duration_ms's deadline was folded into this call's
+         * timeout by _check_read_deadline above and expired mid-poll instead
+         * of being caught by that function's own up-front check on the NEXT
+         * call (which never happens, since chttpsvr_req_read returns here
+         * immediately). Report it the same way _drain_body already does for
+         * the buffered-route path, via the same conn->deadline_exceeded flag
+         * chttpsvr_req_stream_error() reads, so both caps collapse to the
+         * identical ccol_timed_out result (see max_body_read_duration_exceeded_
+         * reports_ccol_timed_out / stream_read_timeout_reports_ccol_timed_out
+         * in tests.c). */
+        conn->deadline_exceeded = true;
+      } else {
+        /* A hard I/O error (not a timeout): the peer reset the connection,
+         * a raw read()/ctls_conn_read() failure, or similar. Same
+         * "connection closed or malformed framing" bucket the two branches
+         * below report via conn->transfer_aborted. */
+        conn->transfer_aborted = true;
+      }
       return -1;
     }
-    if (n == 0) return -1; /* truncated body: framing wasn't done yet */
+    if (n == 0) {
+      /* Peer closed its write side (or the whole connection) before the
+       * declared/chunked framing said the body was actually done; a
+       * genuinely truncated body, not the message's natural end (that case
+       * is chttp1_parser_message_complete() returning true above, handled
+       * separately). Without this flag chttpsvr_req_stream_error() had no
+       * way to report this and silently fell through to ccol_success,
+       * telling a streaming handler a truncated upload was a clean read;
+       * confirmed via a standalone repro (POST Content-Length: 100, send 20
+       * bytes, half-close): the handler observed chttpsvr_req_read()
+       * return -1 but chttpsvr_req_stream_error() report ccol_success. */
+      conn->transfer_aborted = true;
+      return -1;
+    }
     chttp1_errno_t r = chttp1_parser_execute(&conn->parser, raw, (size_t)n);
-    if (r == CHTTP1_USER || r == CHTTP1_ERROR) return -1;
+    if (r == CHTTP1_USER || r == CHTTP1_ERROR) {
+      /* Malformed framing (e.g. a bad chunk-size line) past the point
+       * max_body_size enforcement in _on_body could have already set
+       * body_too_large for this same CHTTP1_USER/CHTTP1_ERROR result;
+       * chttpsvr_req_stream_error() checks body_too_large first, so setting
+       * both here is harmless and preserves that existing priority. */
+      conn->transfer_aborted = true;
+      return -1;
+    }
     /* CHTTP1_OK or CHTTP1_PAUSED: loop back to drain whatever _on_body just
      * appended to conn->body. */
   }
@@ -2231,6 +2516,7 @@ ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req) {
   chttpsvr_conn_t *conn = req->conn;
   if (conn->deadline_exceeded) return ccol_timed_out;
   if (conn->body_too_large) return ccol_msg_too_large;
+  if (conn->transfer_aborted) return ccol_http_transfer_aborted;
   return ccol_success;
 }
 
@@ -2249,6 +2535,29 @@ static void _task_worker(void *arg) {
   _mem_free(conn->m_procs, conn->_carry_over);
   conn->_carry_over = NULL;
   conn->_carry_over_len = 0;
+
+  /* response_write_timeout_ms computed once, up front, since both this
+   * interim write and the real response send below (see chttp1_should_
+   * keep_alive/_send_response further down) need it. Sent here, on the
+   * worker thread, rather than from _conn_pump on the reactor thread where
+   * this write used to live: _task_worker is only ever reached for a
+   * request that already cleared _on_headers_complete's route match (a
+   * rejected route never diverts at all, going through
+   * _conn_dispatch_reject/_conn_reject_via_pool instead), so the old
+   * !conn->req_rejected guard is unconditionally true here and is dropped;
+   * a request that instead hits the pool-full 503 path never reaches
+   * _task_worker either, so no spurious "100 Continue" precedes a 503 the
+   * way it used to (_conn_pump sent this unconditionally as soon as headers
+   * finished, before ctpool_try_submit's own capacity check ever ran). This
+   * also moves a real (if normally tiny and fast) blocking write off the sole
+   * reactor thread and onto a worker thread, where blocking on I/O is the
+   * expected, designed-for behavior. */
+  unsigned write_timeout_ms = atomic_load(&srv->response_write_timeout_ms);
+  if (prepared && conn->expects_continue) {
+    const char *cont = "HTTP/1.1 100 Continue\r\n\r\n";
+    chttp1_stream_write(&stream, cont, strlen(cont),
+                        _to_stream_timeout_ms(write_timeout_ms));
+  }
 
   chttpsvr_req req;
   memset(&req, 0, sizeof(req));
@@ -2290,7 +2599,6 @@ static void _task_worker(void *arg) {
                     chttp1_should_keep_alive(&conn->parser) &&
                     !conn->body_too_large;
 
-  unsigned write_timeout_ms = atomic_load(&srv->response_write_timeout_ms);
   bool sent = prepared && _send_response(&stream, &conn->resp, keep_alive,
                                          write_timeout_ms);
   if (!sent) keep_alive = false;
@@ -2298,12 +2606,18 @@ static void _task_worker(void *arg) {
   if (prepared) chttp1_stream_release(&stream);
   _destroy_req_qparams(&req);
 
-  mutex_lock(srv->mutex);
-  if (--srv->in_flight_requests == 0) cond_var_broadcast(srv->requests_done_cv);
-  mutex_unlock(srv->mutex);
+  /* in_flight_requests is released (via _release_in_flight, at the bottom
+   * of every exit path below) only once this connection has reached a
+   * state _drain_and_close_all_connections can actually observe: fully
+   * closed via _conn_close, or safely published back into the idle list.
+   * Releasing it here, before that, would open the exact use-after-free
+   * window described in _release_in_flight's own comment: srv (a
+   * previously-captured local, still valid even after conn is freed below)
+   * is what every _release_in_flight call in this function uses. */
 
   if (!keep_alive) {
     _conn_close(conn);
+    _release_in_flight(srv);
     return;
   }
 
@@ -2336,6 +2650,7 @@ static void _task_worker(void *arg) {
     if (event_loop_resume(srv_engine_bundler.reactor, conn->reg) !=
         ccol_success) {
       _conn_close(conn);
+      _release_in_flight(srv);
       return;
     }
   } else {
@@ -2348,10 +2663,12 @@ static void _task_worker(void *arg) {
                        conn, &err);
     if (!conn->reg) {
       _conn_close(conn);
+      _release_in_flight(srv);
       return;
     }
   }
   _idle_list_add(conn);
+  _release_in_flight(srv);
 }
 
 /* ========================================================================== */
@@ -2395,14 +2712,15 @@ static void _listener_on_readable(event_loop loop, ccol_selectable *sel,
 
     struct sockaddr_storage ss;
     socklen_t slen = sizeof(ss);
-    int cfd = accept(srv->listen_fd, (struct sockaddr *)&ss, &slen);
+    int cfd =
+        accept(atomic_load(&srv->listen_fd), (struct sockaddr *)&ss, &slen);
     if (cfd < 0) {
       if (errno == EWOULDBLOCK || errno == EAGAIN) return;
       if (errno == EINTR) continue;
       return;
     }
     atomic_fetch_add(&srv->current_connections, 1);
-    _apply_accepted_socket_options(cfd, srv->is_unix_socket,
+    _apply_accepted_socket_options(cfd, atomic_load(&srv->is_unix_socket),
                                    srv->enable_keepalive);
 
     call_once(srv_parser_bundler.once, _init_parser_settings);
@@ -2823,7 +3141,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
   }
 
   {
-    /* CLOCK_MONOTONIC to match _wait_and_detach_worker_pool's own
+    /* CLOCK_MONOTONIC to match _wait_and_detach_pools' own
      * clock_gettime(CLOCK_MONOTONIC, ...)-based deadline; cond_var_init's
      * default clock (CLOCK_REALTIME) would make that deadline comparison
      * wrong (comparing a monotonic-clock timespec against a condvar
@@ -2890,12 +3208,22 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
   srv->router_count = 1;
   srv->router_cap = 1;
   srv->cl = logger;
-  srv->listen_fd = -1;
+  atomic_store(&srv->listen_fd, -1);
   srv->started = false;
   return srv;
 }
 
-static ctpool _wait_and_detach_worker_pool(chttpsvr srv) {
+/* Both of a server's pools (worker_pool and reject_pool) are always
+ * created/destroyed together (see chttpsvr_start/_quiesce_server_once), so
+ * every detach point needs both, not just worker_pool; bundled into one
+ * small return type rather than two separate detach functions so no call
+ * site can accidentally detach one and forget the other. */
+typedef struct {
+  ctpool worker;
+  ctpool reject;
+} _detached_pools_t;
+
+static _detached_pools_t _wait_and_detach_pools(chttpsvr srv) {
   mutex_lock(srv->mutex);
   if (srv->in_flight_requests > 0) {
     struct timespec deadline;
@@ -2907,18 +3235,31 @@ static ctpool _wait_and_detach_worker_pool(chttpsvr srv) {
         break;
     }
   }
-  ctpool old_pool = srv->worker_pool;
+  _detached_pools_t out = {srv->worker_pool, srv->reject_pool};
   srv->worker_pool = NULL;
+  srv->reject_pool = NULL;
   mutex_unlock(srv->mutex);
-  return old_pool;
+  return out;
+}
+
+static void _destroy_detached_pools(_detached_pools_t pools) {
+  if (pools.worker) {
+    ctpool_shutdown_drain(pools.worker);
+    ctpool_destroy(pools.worker);
+  }
+  if (pools.reject) {
+    ctpool_shutdown_drain(pools.reject);
+    ctpool_destroy(pools.reject);
+  }
 }
 
 /* __chttpsvr_destroy's own variant of the wait above: additionally closes
- * every still-idle connection, atomically with respect to
- * _conn_start_diverted (the only place that increments in_flight_requests
- * and reads worker_pool), by holding srv->mutex continuously from the
- * moment in-flight work is observed to have drained all the way through
- * the idle-close pass. Without this, a keep-alive connection whose request
+ * every still-idle connection, atomically with respect to every place that
+ * increments in_flight_requests and reads worker_pool/reject_pool
+ * (_conn_start_diverted, _conn_dispatch_reject, _conn_reject_via_pool), by
+ * holding srv->mutex continuously from the moment in-flight work is
+ * observed to have drained all the way through the idle-close pass.
+ * Without this, a keep-alive connection whose request
  * finished (landing back in the idle list) right as the in-flight wait
  * below completed, but which then received a further pipelined request
  * before an separately-locked idle-close pass got to it, could be silently
@@ -2929,10 +3270,12 @@ static ctpool _wait_and_detach_worker_pool(chttpsvr srv) {
  * this function has already closed a connection, or while it holds
  * srv->mutex, either hits an already-removed event_loop registration (a
  * safe no-op, the same dispatch-time liveness check this codebase already
- * relies on elsewhere) or observes worker_pool == NULL once it finally
- * acquires the lock and gets the ordinary graceful 503 _conn_start_diverted
- * already sends for "no pool available"; never a leak or a crash. */
-static ctpool _drain_and_close_all_connections(struct chttpserver *srv) {
+ * relies on elsewhere) or observes worker_pool == NULL (and, by the same
+ * reasoning, reject_pool == NULL) once it finally acquires the lock and
+ * falls all the way back to _conn_start_diverted's own synchronous,
+ * last-resort inline close; never a leak or a crash. */
+static _detached_pools_t _drain_and_close_all_connections(
+    struct chttpserver *srv) {
   mutex_lock(srv->mutex);
   if (srv->in_flight_requests > 0) {
     struct timespec deadline;
@@ -2944,11 +3287,51 @@ static ctpool _drain_and_close_all_connections(struct chttpserver *srv) {
         break;
     }
   }
-  ctpool old_pool = srv->worker_pool;
+  _detached_pools_t out = {srv->worker_pool, srv->reject_pool};
   srv->worker_pool = NULL;
+  srv->reject_pool = NULL;
   _close_all_idle_connections(srv);
   mutex_unlock(srv->mutex);
-  return old_pool;
+
+  /* A single _close_all_idle_connections pass above is not sufficient: a
+   * connection accepted moments ago (still mid TLS handshake or mid
+   * header-read on the reactor thread, not yet added to the idle list) or a
+   * connection some dispatch has already claimed out of the idle list for
+   * ordinary processing (e.g. discovering the peer closed, handled directly
+   * via _conn_pump -> _conn_close without ever being diverted to a worker,
+   * so in_flight_requests never even saw it) is invisible to that one pass
+   * -- a real use-after-free a ThreadSanitizer run over tests_tls caught:
+   * the reactor thread could still be inside _conn_pump/_conn_free for such
+   * a connection after this function had already returned and
+   * __chttpsvr_destroy went on to free srv. current_connections
+   * (incremented at accept, decremented in _conn_free) spans a connection's
+   * entire lifetime regardless of which path closes it, unlike
+   * in_flight_requests (worker-diverted requests only) or the idle list
+   * (only connections not currently claimed by some dispatch), so waiting
+   * for it to reach zero -- repeating the idle-close pass as still-active
+   * connections finish and land back in the idle list -- closes the gap
+   * completely instead of trusting a single snapshot.
+   *
+   * Polling rather than a dedicated condition variable, deliberately:
+   * broadcasting one from every _conn_free call (the hot per-connection-
+   * close path, for every connection ever served, not just during
+   * shutdown) would add permanent overhead to close a window that only
+   * matters on this cold, once-per-server-lifetime path. */
+  struct timespec poll_deadline;
+  clock_gettime(CLOCK_MONOTONIC, &poll_deadline);
+  poll_deadline.tv_sec += 30;
+  while (atomic_load(&srv->current_connections) > 0) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec > poll_deadline.tv_sec ||
+        (now.tv_sec == poll_deadline.tv_sec &&
+         now.tv_nsec >= poll_deadline.tv_nsec))
+      break;
+    struct timespec nap = {0, 1000000L}; /* 1ms */
+    nanosleep(&nap, NULL);
+    _close_all_idle_connections(srv);
+  }
+  return out;
 }
 
 /* Stops listening, unregisters from servers_bundler.servers, drains
@@ -2983,7 +3366,7 @@ static void _quiesce_server_once(struct chttpserver *srv) {
    * thread; racing this function's own event_loop_remove() calls (inside
    * _drain_and_close_all_connections -> _conn_close) if they ran after
    * releasing instead of before. */
-  ctpool old_pool = _drain_and_close_all_connections(srv);
+  _detached_pools_t old_pools = _drain_and_close_all_connections(srv);
 
   bool should_release_engine = false;
   mutex_lock(srv->mutex);
@@ -2994,10 +3377,7 @@ static void _quiesce_server_once(struct chttpserver *srv) {
   mutex_unlock(srv->mutex);
   if (should_release_engine) _engine_release();
 
-  if (old_pool) {
-    ctpool_shutdown_drain(old_pool);
-    ctpool_destroy(old_pool);
-  }
+  _destroy_detached_pools(old_pools);
 }
 
 void __chttpsvr_destroy(chttpsvr srv) {
@@ -3051,13 +3431,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   srv->teardown_started = false;
   mutex_unlock(srv->mutex);
 
-  {
-    ctpool leftover_pool = _wait_and_detach_worker_pool(srv);
-    if (leftover_pool) {
-      ctpool_shutdown_drain(leftover_pool);
-      ctpool_destroy(leftover_pool);
-    }
-  }
+  _destroy_detached_pools(_wait_and_detach_pools(srv));
 
   int nthreads = cfg->worker_thread_count;
   if (nthreads <= 0) {
@@ -3077,8 +3451,33 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   ctpool new_pool = create_cthread_pool_mp((size_t)nthreads, queue_cap,
                                            srv->m_procs, &pool_err);
   if (!new_pool) return ccol_not_enough_memory;
+
+  /* reject_pool's own thread count scales with worker_pool's own resolved
+   * size (nthreads, above -- already the CPU-count-resolved value when
+   * cfg->worker_thread_count <= 0, not the raw, possibly-<=0 config field)
+   * rather than a fixed constant, floored at _CHTTPSVR_REJECT_POOL_MIN_
+   * THREADS so a single- or few-worker server still gets real concurrency
+   * for its rejection traffic; see that constant's own comment for the
+   * reasoning. Bounded queue (_CHTTPSVR_REJECT_POOL_QUEUE_CAP; see
+   * reject_pool's own field comment and that constant's own comment for
+   * why); if this fails, new_pool above must be torn down too rather than
+   * leaked. */
+  int reject_nthreads = nthreads / 2;
+  if (reject_nthreads < _CHTTPSVR_REJECT_POOL_MIN_THREADS)
+    reject_nthreads = _CHTTPSVR_REJECT_POOL_MIN_THREADS;
+  char *reject_pool_err = NULL;
+  ctpool new_reject_pool = create_cthread_pool_mp(
+      (size_t)reject_nthreads, _CHTTPSVR_REJECT_POOL_QUEUE_CAP, srv->m_procs,
+      &reject_pool_err);
+  if (!new_reject_pool) {
+    ctpool_shutdown_drain(new_pool);
+    ctpool_destroy(new_pool);
+    return ccol_not_enough_memory;
+  }
+
   mutex_lock(srv->mutex);
   srv->worker_pool = new_pool;
+  srv->reject_pool = new_reject_pool;
   mutex_unlock(srv->mutex);
 
   atomic_store(&srv->stream_read_timeout_ms, cfg->stream_read_timeout_ms);
@@ -3104,21 +3503,13 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
   if (cfg->tls && cfg->tls->cert_path && cfg->tls->key_path) {
     ctls_ctx_t *tls_ctx = ctls_ctx_new_mp(srv->m_procs, NULL);
     if (!tls_ctx) {
-      ctpool failed_pool = _wait_and_detach_worker_pool(srv);
-      if (failed_pool) {
-        ctpool_shutdown_drain(failed_pool);
-        ctpool_destroy(failed_pool);
-      }
+      _destroy_detached_pools(_wait_and_detach_pools(srv));
       return ccol_not_enough_memory;
     }
     if (ctls_ctx_cert_add(tls_ctx, NULL, cfg->tls->cert_path,
                           cfg->tls->key_path, NULL, NULL) != ccol_success) {
       ctls_ctx_release(tls_ctx);
-      ctpool failed_pool = _wait_and_detach_worker_pool(srv);
-      if (failed_pool) {
-        ctpool_shutdown_drain(failed_pool);
-        ctpool_destroy(failed_pool);
-      }
+      _destroy_detached_pools(_wait_and_detach_pools(srv));
       return ccol_unexpected_failure;
     }
     if (cfg->tls->ca_bundle_path)
@@ -3142,11 +3533,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
         ctls_ctx_release(srv->tls_ctx);
         srv->tls_ctx = NULL;
       }
-      ctpool failed_pool = _wait_and_detach_worker_pool(srv);
-      if (failed_pool) {
-        ctpool_shutdown_drain(failed_pool);
-        ctpool_destroy(failed_pool);
-      }
+      _destroy_detached_pools(_wait_and_detach_pools(srv));
       return engine_rc;
     }
   }
@@ -3165,13 +3552,20 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
       ctls_ctx_release(srv->tls_ctx);
       srv->tls_ctx = NULL;
     }
-    ctpool failed_pool = _wait_and_detach_worker_pool(srv);
-    if (failed_pool) {
-      ctpool_shutdown_drain(failed_pool);
-      ctpool_destroy(failed_pool);
-    }
+    _destroy_detached_pools(_wait_and_detach_pools(srv));
     return ccol_unexpected_failure;
   }
+
+  /* Published BEFORE event_loop_add below, not after: event_loop_add makes
+   * the registration immediately live, so a connection arriving in the
+   * window between registration and these fields being set could
+   * otherwise be dispatched to _listener_on_readable while it still
+   * observed listen_fd's pre-start default (-1) (see listen_fd's own field
+   * comment on struct chttpserver). Reset back to -1 below if event_loop_add
+   * itself goes on to fail, so a failed start doesn't leave listen_fd
+   * pointing at an fd this function is about to close. */
+  atomic_store(&srv->listen_fd, lfd);
+  atomic_store(&srv->is_unix_socket, is_unix);
 
   call_once(srv_parser_bundler.once, _init_parser_settings);
   char *reg_err = NULL;
@@ -3179,6 +3573,7 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
       srv_engine_bundler.reactor, selectable_from_fd(lfd, ccol_select_read),
       (event_handlers_t){.on_readable = _listener_on_readable}, srv, &reg_err);
   if (!lreg) {
+    atomic_store(&srv->listen_fd, -1);
     close(lfd);
     if (is_unix) unlink(unix_path);
     free(unix_path);
@@ -3186,17 +3581,11 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
       ctls_ctx_release(srv->tls_ctx);
       srv->tls_ctx = NULL;
     }
-    ctpool failed_pool = _wait_and_detach_worker_pool(srv);
-    if (failed_pool) {
-      ctpool_shutdown_drain(failed_pool);
-      ctpool_destroy(failed_pool);
-    }
+    _destroy_detached_pools(_wait_and_detach_pools(srv));
     return ccol_unexpected_failure;
   }
 
   mutex_lock(srv->mutex);
-  srv->listen_fd = lfd;
-  srv->is_unix_socket = is_unix;
   srv->unix_socket_path = unix_path;
   srv->listen_reg = lreg;
   srv->started = true;
@@ -3210,19 +3599,23 @@ void chttpsvr_stop(chttpsvr srv) {
   if (!srv) return;
   mutex_lock(srv->mutex);
   bool was_started = srv->started;
-  int lfd = srv->listen_fd;
+  int lfd = atomic_load(&srv->listen_fd);
   event_reg *lreg = srv->listen_reg;
-  bool is_unix = srv->is_unix_socket;
+  bool is_unix = atomic_load(&srv->is_unix_socket);
   char *unix_path = srv->unix_socket_path;
   if (was_started) {
     srv->started = false;
-    srv->listen_fd = -1;
+    atomic_store(&srv->listen_fd, -1);
     srv->listen_reg = NULL;
     srv->unix_socket_path = NULL;
   }
   mutex_unlock(srv->mutex);
   if (!was_started) return;
 
+  /* event_loop_remove blocks until any in-progress _listener_on_readable
+   * call for lreg has returned and guarantees none will fire again
+   * afterward (see its own doc comment in cthreadcomm.h), so close(lfd)
+   * below can never race a concurrent accept() on this fd. */
   if (lreg) event_loop_remove(srv_engine_bundler.reactor, lreg);
   close(lfd);
   if (is_unix && unix_path) unlink(unix_path);
@@ -3286,6 +3679,22 @@ size_t _chttpsvr_engine_num_reactor_threads_for_tests(void) {
   size_t n = srv_engine_bundler.last_resolved_num_reactor_threads;
   mutex_unlock(srv_engine_bundler.mutex);
   return n;
+}
+#endif /* RUNNING_UNIT_TESTS */
+
+/* White-box test helper exposing g_reject_task_run_count_for_tests (see
+ * that variable's own comment): how many rejection responses have actually
+ * been carried out on a reject_pool thread, process-wide, since the
+ * counter's own zero-initialization. A test reads this before and after its
+ * own window and asserts on the delta, since other tests in the same
+ * process may also exercise rejections. Not part of the public API; gated
+ * so this symbol does not leak into a production build of
+ * libccollections.so, matching the identical convention
+ * _chttpsvr_engine_num_reactor_threads_for_tests already established just
+ * above. */
+#ifdef RUNNING_UNIT_TESTS
+size_t _chttpsvr_reject_pool_task_count_for_tests(void) {
+  return atomic_load(&g_reject_task_run_count_for_tests);
 }
 #endif /* RUNNING_UNIT_TESTS */
 

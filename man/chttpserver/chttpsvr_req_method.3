@@ -12,9 +12,18 @@ chttp_method_t chttpsvr_req_method(const chttpsvr_req *req);
 .SH DESCRIPTION
 .nf
 Returns the HTTP method of req as a chttp_method_t enum value.  The
-return value is always a concrete method (CHTTP_GET, CHTTP_POST, etc.);
-CHTTP_ANY is never returned, even when the matched route was registered
-with CHTTP_ANY.
+return value is always one of the seven concrete methods (CHTTP_GET,
+CHTTP_POST, CHTTP_PUT, CHTTP_DELETE, CHTTP_PATCH, CHTTP_HEAD,
+CHTTP_OPTIONS); CHTTP_ANY is never returned, even when the matched
+route was registered with CHTTP_ANY.
+
+A request whose method the server does not recognize at all (a WebDAV
+verb such as PROPFIND, TRACE, CONNECT, a custom verb, ...) never
+reaches any handler in the first place, including one registered with
+CHTTP_ANY: it is rejected with 501 Not Implemented before routing ever
+runs (see chttpsvr_register_handler(3)'s own notes on CHTTP_ANY).  This
+is what makes "always one of the seven concrete methods" an exhaustive
+guarantee rather than merely the common case.
 
 When req is NULL the function returns CHTTP_GET.  Unlike most other
 request accessors (which return NULL for a NULL req), chttp_method_t is

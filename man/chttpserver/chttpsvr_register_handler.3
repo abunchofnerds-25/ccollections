@@ -18,11 +18,21 @@ on the root router.  pattern uses forward-slash-separated segments;
 segments of the form {name} are named path parameters.
 
 Passing CHTTP_ANY for method registers a wildcard route that matches
-every HTTP method on the given pattern.  The handler can call
-chttpsvr_req_method to retrieve the actual incoming method.
-Registration order determines priority: a method-specific route
-registered before a CHTTP_ANY route on the same pattern wins for its
-method; the CHTTP_ANY route catches every other method.
+any of the seven concrete HTTP methods (CHTTP_GET, CHTTP_POST,
+CHTTP_PUT, CHTTP_DELETE, CHTTP_PATCH, CHTTP_HEAD, CHTTP_OPTIONS) on
+the given pattern.  The handler can call chttpsvr_req_method to
+retrieve the actual incoming method.  Registration order determines
+priority: a method-specific route registered before a CHTTP_ANY route
+on the same pattern wins for its method; the CHTTP_ANY route catches
+every other one of the seven.
+
+CHTTP_ANY is a registration-time placeholder only, never a real
+incoming request's method.  A request whose method the server does not
+recognize at all (a WebDAV verb such as PROPFIND, TRACE, CONNECT, a
+custom verb, ...) never reaches any handler, including one registered
+with CHTTP_ANY; it is rejected with 501 Not Implemented before routing
+(or even path parsing) ever runs.  See chttpsvr_req_method(3) for the
+resulting guarantee this gives handlers.
 
 pattern must begin with '/'.  Patterns that do not start with '/' are
 rejected immediately with ccol_invalid_args.
@@ -44,7 +54,10 @@ The router scans all registered routes looking for a path-and-method
 match.  Multiple methods may be registered for the same path; all are
 reachable regardless of registration order.  If at least one route
 matches the path but none matches the method, the server responds 405.
-If no route matches the path, the server responds 404.  Path matching
+If no route matches the path, the server responds 404.  A request whose
+method the server does not recognize at all is rejected earlier still,
+with 501, before route matching runs at all (see the CHTTP_ANY notes
+above).  Path matching
 includes validation of percent-encoded sequences: a request with invalid
 encoding in any path segment (whether a literal segment (e.g.
 /bad%ZZusers/{id} against /users/{id}) or a captured {name} parameter

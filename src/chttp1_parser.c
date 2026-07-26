@@ -50,6 +50,10 @@ SOFTWARE.
 #define F_CONNECTION_CLOSE 0x08u
 #define F_CONNECTION_KEEP_ALIVE 0x10u
 #define F_EXPECT_100_CONTINUE 0x20u
+#define F_CHUNK_TOO_LARGE                          \
+  0x40u /* set alongside a max_chunk_size_override \
+         * rejection; see                          \
+         * chttp1_chunk_size_limit_exceeded() */
 
 /* ========================================================================== */
 /*                         SMALL CHARACTER HELPERS                            */
@@ -579,6 +583,11 @@ static bool parse_chunk_size_line(chttp1_parser_t *parser) {
     parser->reason = "Invalid chunk size";
     return false;
   }
+  if (parser->max_chunk_size_override && v > parser->max_chunk_size_override) {
+    parser->flags |= F_CHUNK_TOO_LARGE;
+    parser->reason = "Chunk size exceeds configured maximum";
+    return false;
+  }
   parser->content_length = v;
   return true;
 }
@@ -954,6 +963,18 @@ bool chttp1_expects_continue(const chttp1_parser_t *parser) {
   return (parser->flags & F_EXPECT_100_CONTINUE) != 0;
 }
 
+bool chttp1_has_content_length(const chttp1_parser_t *parser) {
+  return parser && (parser->flags & F_CONTENT_LENGTH) != 0;
+}
+
+uint64_t chttp1_declared_content_length(const chttp1_parser_t *parser) {
+  return parser ? parser->content_length : 0;
+}
+
+bool chttp1_chunk_size_limit_exceeded(const chttp1_parser_t *parser) {
+  return parser && (parser->flags & F_CHUNK_TOO_LARGE) != 0;
+}
+
 /* ========================================================================== */
 /*                    WORKER-PULL BODY/RESPONSE STREAMING                     */
 /* ========================================================================== */
@@ -1124,6 +1145,39 @@ bool chttp1_stream_timed_out(const chttp1_stream_t *stream) {
 
 int chttp1_stream_last_error(const chttp1_stream_t *stream) {
   return stream->last_errno;
+}
+
+bool chttp1_stream_push_back_leftover(chttp1_stream_t *stream, const char *buf,
+                                      size_t len) {
+  if (len == 0) return true;
+  size_t existing = stream->carry_len - stream->carry_pos;
+  size_t total = len + existing;
+  char *nc = (char *)malloc(total);
+  if (!nc) return false;
+  memcpy(nc, buf, len);
+  if (existing) memcpy(nc + len, stream->carry + stream->carry_pos, existing);
+  free(stream->carry);
+  stream->carry = nc;
+  stream->carry_len = total;
+  stream->carry_pos = 0;
+  return true;
+}
+
+char *chttp1_stream_take_leftover(chttp1_stream_t *stream, size_t *len_out) {
+  if (len_out) *len_out = 0;
+  if (stream->carry_pos >= stream->carry_len) return NULL;
+  size_t remaining = stream->carry_len - stream->carry_pos;
+  char *out = (char *)malloc(remaining);
+  if (!out)
+    return NULL; /* stream's own carry is left untouched; still
+                  * cleaned up normally by chttp1_stream_release */
+  memcpy(out, stream->carry + stream->carry_pos, remaining);
+  free(stream->carry);
+  stream->carry = NULL;
+  stream->carry_len = 0;
+  stream->carry_pos = 0;
+  if (len_out) *len_out = remaining;
+  return out;
 }
 
 void chttp1_stream_release(chttp1_stream_t *stream) {

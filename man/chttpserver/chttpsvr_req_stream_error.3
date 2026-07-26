@@ -21,7 +21,10 @@ Return values:
                               request's total body read time exceeded
                               max_body_read_duration_ms (if set).
   ccol_msg_too_large         The body exceeded max_body_size
-                              mid-stream.
+                              mid-stream, or a single chunk's declared
+                              size (chunked Transfer-Encoding) exceeded
+                              max_body_size before any of that chunk's
+                              data was read.
   ccol_http_transfer_aborted The connection was closed or reset, or
                               the body's framing was malformed.
   ccol_success               No error is on record for req.

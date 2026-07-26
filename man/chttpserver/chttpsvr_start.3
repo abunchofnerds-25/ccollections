@@ -59,6 +59,18 @@ connection is closed after the resulting response (Connection: close)
 rather than kept alive, since the excess body bytes beyond the limit
 are discarded, not drained.
 
+A buffered route whose declared Content-Length already exceeds
+max_body_size is rejected with 413 immediately, before ever waiting for
+a body byte (which, for a stalled or malicious peer, may never arrive);
+this does not apply to a streaming route, whose handler is still always
+invoked regardless of the declared Content-Length, matching its own
+documented contract above.  Independently of route kind, any single
+chunk (chunked Transfer-Encoding) whose declared size exceeds
+max_body_size is also rejected as soon as its chunk-size line is parsed,
+before waiting for that chunk's data; this surfaces the same way any
+other malformed body already does for the route's kind (413/
+ccol_msg_too_large).
+
 Body read timeouts: cfg->stream_read_timeout_ms bounds how long a
 worker will wait for the next batch of body bytes (buffered or
 streaming); 0 waits indefinitely.  Because it resets on any new byte,

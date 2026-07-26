@@ -3610,7 +3610,16 @@ cfg.max_body_size        = 4*1024*1024;          /* 4 MiB body limit; exceeding 
                                                     error the handler observes via
                                                     chttpsvr_req_stream_error()
                                                     (streaming); either way the
-                                                    connection closes afterward */
+                                                    connection closes afterward.
+                                                    A buffered route whose
+                                                    declared Content-Length
+                                                    already exceeds this, or any
+                                                    single chunk (chunked
+                                                    Transfer-Encoding) whose
+                                                    declared size does, is
+                                                    rejected immediately, before
+                                                    ever waiting for a body byte
+                                                    that may never arrive */
 cfg.read_timeout_ms      = 30000;                /* 30 s read timeout (baseline) */
 cfg.idle_timeout_ms      = 60000;                /* 60 s keep-alive idle timeout */
 cfg.stream_read_timeout_ms = 30000;              /* 30 s wait for the next body batch; 0 = unbounded */
@@ -3706,7 +3715,7 @@ chttpsvr_register_handler(srv, CHTTP_PUT,    "/items/{id}/{sub}", update_item, N
 
 **Parameter name restrictions:** the name inside `{...}` must consist entirely of characters from `[A-Za-z0-9_]`. Patterns with names containing any other character (spaces, hyphens, dots, etc.) are rejected at registration time with `ccol_invalid_args`.
 
-Routes are matched in registration order across all registered routers. The server scans every route looking for a path-and-method match. If at least one route matches the path but none of those match the method, the server responds with 405 Method Not Allowed. If no route matches the path at all, it responds with 404. Path matching includes validation of percent-encoded sequences: a request with invalid encoding in any path segment (whether a literal segment (e.g. `/bad%ZZusers/{id}` against `/users/{id}`) or a captured `{name}` parameter (e.g. `/users/bad%ZZvalue` against `/users/{id}`)) does not match the route and returns 404 regardless of which methods are registered for that pattern. This means multiple methods can be registered for the same path and all will work correctly regardless of registration order:
+Routes are matched in registration order across all registered routers. The server scans every route looking for a path-and-method match. If at least one route matches the path but none of those match the method, the server responds with 405 Method Not Allowed. If no route matches the path at all, it responds with 404. A request whose method the server does not recognize at all (a WebDAV verb, `TRACE`, `CONNECT`, a custom verb, ...) is rejected earlier still, with 501 Not Implemented, before route matching (or even path parsing) ever runs; see "Wildcard method (`CHTTP_ANY`)" below for why this matters even for a catch-all `CHTTP_ANY` registration. Path matching includes validation of percent-encoded sequences: a request with invalid encoding in any path segment (whether a literal segment (e.g. `/bad%ZZusers/{id}` against `/users/{id}`) or a captured `{name}` parameter (e.g. `/users/bad%ZZvalue` against `/users/{id}`)) does not match the route and returns 404 regardless of which methods are registered for that pattern. This means multiple methods can be registered for the same path and all will work correctly regardless of registration order:
 
 ```c
 chttpsvr_register_handler(srv, CHTTP_GET,  "/users",      list_users,   NULL);
@@ -3731,7 +3740,7 @@ chttpsvr_register_handler(srv, CHTTP_GET,  "/users/{id}", get_user,  NULL);
 chttpsvr_register_handler(srv, CHTTP_ANY,  "/users/{id}", any_user,  NULL);
 ```
 
-`CHTTP_ANY` is a server-side routing sentinel only; do not pass it to the HTTP client API.
+`CHTTP_ANY` is a server-side routing sentinel only; do not pass it to the HTTP client API. It is a registration-time placeholder for "any of the seven concrete methods," never a real incoming request's method: a request whose method the server does not recognize at all (a WebDAV verb such as `PROPFIND`, `TRACE`, `CONNECT`, a custom verb, ...) never reaches any handler, including one registered with `CHTTP_ANY`. It is rejected with `501 Not Implemented` before routing (or even path/header parsing) ever runs, so `chttpsvr_req_method(req)` always returns one of the seven concrete methods, never a sentinel of any kind.
 
 **Duplicate routes:** Registering the same method and pattern more than once is permitted and succeeds each time, but only the first registered handler is ever invoked (first-wins policy). There is no error or warning for duplicate registrations.
 
@@ -3741,7 +3750,9 @@ chttpsvr_register_handler(srv, CHTTP_ANY,  "/users/{id}", any_user,  NULL);
 
 ### Streaming Handlers
 
-Routing happens as soon as headers are parsed, before any body byte is read; an unmatched route is rejected immediately without ever reading the body it's about to discard, and a matched route (buffered or streaming) is handed to the server's `ctpool` right away, regardless of body size. The reactor thread's job is therefore O(1) per request: it never blocks reading a large or slow body, nor does it ever block writing a rejection response (404/405/500 for an unmatched/malformed route, or 503 when `ctpool` is at capacity) -- every rejection's courtesy write runs on a small dedicated pool of its own, never the reactor thread, so a slow-reading client being told "no" cannot delay dispatch for any other, unrelated connection. The worker thread that picks up a matched request reads the body itself, batch by batch, directly off the socket via the same Content-Length/chunked framing logic the reactor would otherwise use; there is no temp file and no whole-body pre-buffering anywhere in the path.
+Routing happens as soon as headers are parsed, before any body byte is read; an unmatched route is rejected immediately without ever reading the body it's about to discard, and a matched route (buffered or streaming) is handed to the server's `ctpool` right away, regardless of body size. The reactor thread's job is therefore O(1) per request: it never blocks reading a large or slow body, nor does it ever block writing a rejection response (404/405/500 for an unmatched/malformed route, 501 for an unrecognized method, or 503 when `ctpool` is at capacity); every rejection's courtesy write runs on a small dedicated pool of its own, never the reactor thread, so a slow-reading client being told "no" cannot delay dispatch for any other, unrelated connection. The worker thread that picks up a matched request reads the body itself, batch by batch, directly off the socket via the same Content-Length/chunked framing logic the reactor would otherwise use; there is no temp file and no whole-body pre-buffering anywhere in the path.
+
+**Pipelining:** a client that writes a second request before reading the first response (or simply writes several requests close enough together that the kernel coalesces them) is fully supported on a keep-alive connection, for both buffered and streaming routes: any bytes belonging to a further request that have already arrived in the same read as the current one's own headers or body are recognized as such and carried forward to the next request cycle rather than discarded, so no pipelined request is ever silently dropped regardless of how the bytes happened to be batched on the wire.
 
 For a **buffered** handler, the worker reads the entire body into one growable buffer before invoking the handler, so `chttpsvr_req_body` still returns the complete body in one call. For a **streaming** handler, the worker hands each batch to `chttpsvr_req_read` as it arrives, so the handler can act on data before the rest of the body has even reached the server:
 
@@ -3850,6 +3861,12 @@ chttpsvr_resp_write_json(resp, json, len);   /* sets Content-Type + appends */
 ```
 
 The response is buffered and sent automatically when the handler returns. `chttpsvr_resp_write` uses an overflow-safe doubling strategy for buffer growth: it returns `ccol_not_enough_memory` when `len` would cause the total body length to overflow `size_t`, in addition to the normal allocator-failure case.
+
+`chttpsvr_resp_set_header` rejects a name or value containing a CR or LF byte with `ccol_invalid_args`, since both are written onto the wire with no further escaping: a handler that reflects request-controlled data (a query parameter, a path parameter, an echoed request header) into a response header must not be able to inject arbitrary extra header lines or split the response in two by way of an unsanitized `\r`/`\n` in that data.
+
+**HEAD requests:** a handler reachable via `CHTTP_HEAD` (explicitly, or through a `CHTTP_ANY` registration) may write a response body exactly as it would for `GET`; per RFC 7231, the server reports the real body length via `Content-Length` (matching what a `GET` would have reported) but never writes the actual body bytes to the wire for a `HEAD` request.
+
+**1xx/204/304 responses:** a handler may write a response body and then set (or have already set) an informational (1xx), `204 No Content`, or `304 Not Modified` status; per RFC 9110, none of the three may ever carry a body, regardless of method, so the body is never written to the wire for any of them, exactly like `HEAD`. A 1xx or 204 additionally never carries a `Content-Length` header at all, whether or not the handler wrote a body; `304` (like `HEAD`) still reports one, matching the length of whatever the handler wrote.
 
 ### Status Code Constants
 

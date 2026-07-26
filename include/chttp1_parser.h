@@ -419,6 +419,23 @@ struct chttp1_parser {
   size_t max_header_count_override;
   size_t max_total_header_bytes_override;
 
+  /** Optional per-parser cap on a single chunk's declared size (chunked
+   * Transfer-Encoding bodies only; has no effect on Content-Length-framed
+   * bodies). 0 (the default) means no cap: a chunk-size line is accepted
+   * for any value that fits in uint64_t, exactly as before this field
+   * existed. A nonzero value rejects a chunk-size line whose decoded value
+   * exceeds it as soon as that line is parsed, with CHTTP1_ERROR (see
+   * chttp1_chunk_size_limit_exceeded()), before ever waiting for a single
+   * byte of that chunk's data. Added for chttpserver's own max_body_size:
+   * without this, a peer could declare one absurdly large chunk (any value
+   * up to UINT64_MAX is a syntactically valid chunk-size token) and then
+   * simply never send it, tying up a worker thread until a read timeout
+   * fired, since max_body_size itself is only checked against bytes
+   * actually received (see chttp1_declared_content_length's own comment for
+   * the analogous Content-Length-framed gap this parallels). chttpclient.c
+   * has no equivalent public knob and simply never sets this field. */
+  uint64_t max_chunk_size_override;
+
   /* Fixed-size accumulation buffer for the status line, each header/trailer
    * line, and each chunk-size line; never used for body/chunk-data bytes,
    * which are passed straight from the caller's own buffer to on_body. A
@@ -614,6 +631,62 @@ bool chttp1_should_keep_alive(const chttp1_parser_t *parser);
  */
 bool chttp1_expects_continue(const chttp1_parser_t *parser);
 
+/**
+ * @brief Whether the just-parsed headers established Content-Length framing
+ *        (as opposed to chunked Transfer-Encoding, or no body at all).
+ *
+ * Meaningful once settings->on_headers_complete has fired. Mutually
+ * exclusive with chunked framing by construction: this parser rejects a
+ * message declaring both Content-Length and chunked Transfer-Encoding
+ * before headers can ever complete (RFC 7230 SS3.3.3), so this and chunked
+ * framing can never both be true for the same message. Added so a caller
+ * can inspect the declared body size (see chttp1_declared_content_length())
+ * before deciding whether to divert the request to a worker thread at all,
+ * without reaching into parser->flags directly (private to
+ * chttp1_parser.c).
+ */
+bool chttp1_has_content_length(const chttp1_parser_t *parser);
+
+/**
+ * @brief The declared Content-Length value, once chttp1_has_content_length()
+ *        is true.
+ *
+ * Only meaningful when chttp1_has_content_length() returns true: the
+ * underlying field is reused internally to track the CURRENT chunk's
+ * remaining byte count once chunked body parsing begins, so calling this
+ * for a chunked message, or after body parsing for a Content-Length-framed
+ * message has already started consuming bytes, returns a value with a
+ * different meaning, not the original declared total. Returns 0 for a NULL
+ * parser.
+ *
+ * Added specifically so a caller (chttpserver.c) can reject a request whose
+ * declared Content-Length already exceeds its own configured body-size
+ * limit immediately at headers-complete time, rather than only reactively,
+ * byte by byte, as the body is actually read (see
+ * chttp1_settings_t.on_body's own doc comment): without this, a peer that
+ * declares an oversized Content-Length and then simply never sends the
+ * body ties up a reader until a read timeout fires, since nothing ever
+ * crosses a byte-count-based limit if the bytes never arrive in the first
+ * place.
+ */
+uint64_t chttp1_declared_content_length(const chttp1_parser_t *parser);
+
+/**
+ * @brief Whether the most recent CHTTP1_ERROR was specifically a chunk-size
+ *        line exceeding max_chunk_size_override.
+ *
+ * Meaningful only immediately after chttp1_parser_execute() (or
+ * chttp1_parser_finish()) returns CHTTP1_ERROR; false in every other case,
+ * including every other rejection reason CHTTP1_ERROR also covers (a
+ * malformed chunk-size token, a too-long line, ...). Added so a caller that
+ * sets max_chunk_size_override can distinguish "this specific chunk
+ * declared more than the configured limit" from every other parse failure,
+ * e.g. to map it to the same "body too large" outcome (413/
+ * ccol_msg_too_large in chttpserver.c's case) a max_body_size violation
+ * already produces, rather than a generic transfer-aborted error.
+ */
+bool chttp1_chunk_size_limit_exceeded(const chttp1_parser_t *parser);
+
 /* ========================================================================== */
 /*                    WORKER-PULL BODY/RESPONSE STREAMING                     */
 /* ========================================================================== */
@@ -785,6 +858,66 @@ bool chttp1_stream_timed_out(const chttp1_stream_t *stream);
  *        from carry-over.
  */
 int chttp1_stream_last_error(const chttp1_stream_t *stream);
+
+/**
+ * @brief Pushes buf/len back onto stream's own carry-over, ahead of
+ *        whatever (if anything) is already sitting there unconsumed.
+ *
+ * For a caller driving chttp1_parser_execute() over stream's own
+ * chttp1_stream_read() output: when execute() reports a message boundary
+ * (CHTTP1_HEADERS_ONLY or CHTTP1_PAUSED) with chttp1_parser_consumed() less
+ * than the number of bytes just handed to it, the trailing, already-off-
+ * the-wire bytes belong to whatever comes next on this same connection
+ * (a pipelined next request, most commonly) and must not simply be
+ * dropped. Pushing them back here means a single, later
+ * chttp1_stream_take_leftover() call (once this message's own ingestion is
+ * completely done) reclaims them uniformly, regardless of whether they
+ * came from a real read(2)/ctls_conn_read() call or were already part of
+ * stream's own carry-over from chttp1_stream_prepare() and never needed at
+ * all (see that function's own doc comment for the latter case).
+ *
+ * buf is copied; the caller's own buffer may be reused or freed immediately
+ * after this call returns.
+ *
+ * @return true on success (including len == 0, a safe no-op); false only on
+ *         allocation failure, in which case stream's existing carry-over (if
+ *         any) is left completely untouched and buf/len are simply not
+ *         recoverable through this mechanism (an unavoidable, rare
+ *         degradation under OOM, not a crash or corruption).
+ */
+bool chttp1_stream_push_back_leftover(chttp1_stream_t *stream, const char *buf,
+                                      size_t len);
+
+/**
+ * @brief Reclaims whatever is left of stream's own carry-over (bytes never
+ *        consumed via chttp1_stream_read, whether still exactly what
+ *        chttp1_stream_prepare() was given or subsequently replaced/grown by
+ *        chttp1_stream_push_back_leftover()), transferring ownership to the
+ *        caller.
+ *
+ * Intended to be called exactly once, by whichever caller drove this
+ * stream's ingestion, right before chttp1_stream_release(); that function
+ * would otherwise silently free any such bytes with no way to get them
+ * back. This closes a real, previously-undetected bug in an earlier
+ * version of chttpserver.c: a pipelined next request's bytes, already
+ * permanently gone from the kernel's own socket receive buffer, would
+ * vanish the instant the current request's ingestion finished, hanging the
+ * client waiting for a response that would never come. After this call,
+ * stream's own carry-over is empty, exactly as if chttp1_stream_prepare()
+ * had been given none at all.
+ *
+ * @param len_out  Set to the number of bytes returned (0 if the return
+ *                 value is NULL).
+ * @return A heap-allocated (plain malloc(), not this codebase's _mem_alloc
+ *         convention; matching chttp1_stream_t's own carry-over
+ *         allocation) buffer the caller must free() (even when *len_out
+ *         would be 0, freeing a NULL pointer is always safe); NULL if there
+ *         was nothing left to reclaim, or on allocation failure (in which
+ *         case the bytes are unrecoverable through this call but stream's
+ *         own state is left valid and chttp1_stream_release() still cleans
+ *         it up normally).
+ */
+char *chttp1_stream_take_leftover(chttp1_stream_t *stream, size_t *len_out);
 
 /**
  * @brief Releases stream's own resources (its carry-over buffer, if any).

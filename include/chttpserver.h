@@ -903,6 +903,10 @@ ccol_retval_t chttpsvr_router_use(chttpsvr_router *router,
  *
  * Returns CHTTP_GET when req is NULL (unlike other request accessors, which
  * return NULL, this function cannot signal an error through the return type).
+ * Always one of the seven concrete chttp_method_t constants (never CHTTP_ANY,
+ * and never any other value): a request whose method this server does not
+ * recognize is rejected with 501 before any handler runs, so req always
+ * belongs to a request whose method is one of the seven.
  */
 chttp_method_t chttpsvr_req_method(const chttpsvr_req *req);
 
@@ -1084,11 +1088,19 @@ void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
  * All three arguments must be non-NULL; passing NULL for any returns
  * ccol_invalid_args without modifying the response.
  *
+ * name/value must not contain a CR or LF byte; either is written verbatim
+ * onto the wire with no further escaping, so an embedded CR/LF would let a
+ * caller that reflects request-controlled data (a query parameter, a path
+ * parameter, an echoed request header) into a response header inject
+ * arbitrary extra header lines or split the response in two on behalf of
+ * whoever controls that data. Rejected with ccol_invalid_args rather than
+ * silently stripped or truncated.
+ *
  * @param resp   Response handle (must not be NULL).
- * @param name   Header name (must not be NULL).
- * @param value  Header value (must not be NULL).
- * @return ccol_success, ccol_invalid_args (resp/name/value is NULL), or
- *         ccol_not_enough_memory.
+ * @param name   Header name (must not be NULL, must not contain CR/LF).
+ * @param value  Header value (must not be NULL, must not contain CR/LF).
+ * @return ccol_success, ccol_invalid_args (resp/name/value is NULL, or
+ *         name/value contains a CR or LF byte), or ccol_not_enough_memory.
  */
 ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
                                        const char *value);

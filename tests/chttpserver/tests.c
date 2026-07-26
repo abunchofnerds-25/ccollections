@@ -484,6 +484,19 @@ static void _headers_only_handler(chttpsvr_req *req, chttpsvr_resp *resp,
   /* Intentionally no chttpsvr_resp_write* call. */
 }
 
+/* Always writes a non-empty body, then overwrites the status code to
+   whatever numeric value the "x-force-status" request header names (200 if
+   absent/unparseable). Used to verify _send_response suppresses the body
+   (and, for a 1xx/204, the auto Content-Length too) for statuses that must
+   never carry one regardless of what the handler itself already wrote. */
+static void _forced_status_with_body_handler(chttpsvr_req *req,
+                                             chttpsvr_resp *resp, void *ctx) {
+  (void)ctx;
+  chttpsvr_resp_write_str(resp, "this-body-must-never-reach-the-wire");
+  const char *forced = chttpsvr_req_header(req, "x-force-status");
+  chttpsvr_resp_set_status(resp, forced ? atoi(forced) : 200);
+}
+
 /* Handler used as the SECOND registration of the same path+method to verify
    that duplicate registrations are silently accepted but only the FIRST handler
    ever runs (first-wins policy). */
@@ -531,6 +544,8 @@ static _Atomic int g_null_data_results[2]; /* resp_write_null_data_edge_cases */
 static _Atomic int
     g_null_hdr_results[2]; /* resp_set_header_null_name_value_live */
 static _Atomic int
+    g_crlf_hdr_results[3]; /* resp_set_header_crlf_injection_rejected */
+static _Atomic int
     g_json_zero_len_result; /* resp_write_json_zero_len_rejected */
 
 /* ========================================================================== */
@@ -561,6 +576,24 @@ static void _set_header_null_guards_handler(chttpsvr_req *req,
   _Atomic int *results = (_Atomic int *)ctx;
   results[0] = (int)chttpsvr_resp_set_header(resp, NULL, "v");
   results[1] = (int)chttpsvr_resp_set_header(resp, "x-null-v", NULL);
+  chttpsvr_resp_write_str(resp, "ok");
+}
+
+static void _set_header_crlf_guards_handler(chttpsvr_req *req,
+                                            chttpsvr_resp *resp, void *ctx) {
+  (void)req;
+  _Atomic int *results = (_Atomic int *)ctx;
+  /* A CRLF embedded in the NAME, attempting to inject a second header
+   * line ("x-injected: evil") ahead of the real value. */
+  results[0] =
+      (int)chttpsvr_resp_set_header(resp, "x-evil\r\nx-injected: evil", "v");
+  /* A CRLF embedded in the VALUE, attempting to inject a bogus status line
+   * for a second, attacker-controlled response. */
+  results[1] = (int)chttpsvr_resp_set_header(
+      resp, "x-evil", "v\r\n\r\nHTTP/1.1 200 OK\r\nx-injected: evil");
+  /* A legitimate header must still work fine after the two rejections
+   * above (rejection must not corrupt resp's header list). */
+  results[2] = (int)chttpsvr_resp_set_header(resp, "x-legit", "fine");
   chttpsvr_resp_write_str(resp, "ok");
 }
 
@@ -803,6 +836,8 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/set-header",
                             _set_header_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/status", _status_handler, NULL);
+  chttpsvr_register_handler(g_srv, CHTTP_GET, "/status-with-body",
+                            _forced_status_with_body_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/json", _json_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/raw-query", _raw_query_handler,
                             NULL);
@@ -941,6 +976,9 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/set-header-null-guards",
                             _set_header_null_guards_handler,
                             g_null_hdr_results);
+  chttpsvr_register_handler(g_srv, CHTTP_GET, "/set-header-crlf-guards",
+                            _set_header_crlf_guards_handler,
+                            g_crlf_hdr_results);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/json-zero-len",
                             _json_zero_len_handler, &g_json_zero_len_result);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/query-empty-key",
@@ -1884,7 +1922,7 @@ extern size_t _chttpsvr_reject_pool_task_count_for_tests(void);
    thread AFTER the rejection response has already been written to the
    client and the connection closed (see _reject_task's own comment on why
    the in_flight_requests release, and by extension this counter bump, comes
-   last) -- so a client that has just finished reading its response can, in
+   last); so a client that has just finished reading its response can, in
    principle, observe control back in the test before the server-side
    counter bump has actually run yet, a benign scheduling race rather than
    any ordering the library itself promises. Polls for the expected delta
@@ -2408,7 +2446,7 @@ TEST(chttpserver, unmatched_route_rejected_without_reading_body) {
 TEST(chttpserver, unmatched_route_rejection_routed_through_reject_pool) {
   /* Every rejection is now routed through reject_pool, not just the
      pool-full 503 case (see bounded_pool_full_returns_503's own assertion
-     on that) -- so a slow-reading client being told about a bad route can
+     on that); so a slow-reading client being told about a bad route can
      no longer stall the sole reactor thread either. A black-box client
      cannot distinguish "answered via reject_pool" from "answered via the
      synchronous last-resort fallback" (both produce an identical 404 on the
@@ -2428,7 +2466,7 @@ TEST(chttpserver, concurrent_route_rejections_do_not_starve_other_requests) {
   /* Previously, every unmatched-route rejection (404/405/500) ran
      synchronously on chttpserver's own sole reactor thread; a burst of many
      such rejections could delay dispatch for every other, unrelated
-     connection queued behind them on that same thread -- g_srv and
+     connection queued behind them on that same thread; g_srv and
      g_bounded_srv share one process-wide reactor, so this is not a
      hypothetical concern. Now that every rejection is routed through
      reject_pool (a small dedicated pool, sized from worker_thread_count; see
@@ -2547,6 +2585,249 @@ TEST(chttpserver, keep_alive_across_two_requests_on_one_connection) {
     REQUIRE_TRUE(strstr(buf, "Hello, world!") != NULL);
   }
   close(fd);
+}
+
+TEST(chttpserver, pipelined_bodyless_requests_both_answered) {
+  /* Regression test for a real bug: a bodyless request (GET, here) that
+     completes its own framing immediately after headers (no Content-Length,
+     no chunked Transfer-Encoding) never calls _drain_body's own
+     chttp1_stream_read loop at all, since chttp1_parser_message_complete()
+     is already true the instant the worker starts. Before this was fixed,
+     whatever chttp1_stream_prepare() was given as leftover (here: this
+     connection's ENTIRE second, pipelined request, already off the wire and
+     gone from the kernel's socket buffer for good) sat untouched in the
+     stream's own carry-over and was silently discarded the moment
+     chttp1_stream_release() ran, even though the connection was correctly
+     being kept alive; the second request's bytes vanished forever and the
+     client hung waiting for a response that would never come. Both requests
+     are concatenated into a single write() call so they are guaranteed to
+     land together in the reactor's own read buffer server-side, exactly
+     the shape that triggered the bug. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req =
+      "GET /hello HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "\r\n"
+      "GET /hello HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Connection: close\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[4096] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  /* Exactly two full responses, both 200, both carrying the handler's body;
+     the connection closes on its own right after the second (Connection:
+     close), rather than the client having to time out waiting on a second
+     response that never arrives. */
+  char *first = strstr(buf, "HTTP/1.1 200");
+  REQUIRE_TRUE(first != NULL);
+  char *second = strstr(first + 1, "HTTP/1.1 200");
+  REQUIRE_TRUE(second != NULL);
+  REQUIRE_TRUE(strstr(buf, "Hello, world!") != NULL);
+  REQUIRE_TRUE(strstr(second, "Hello, world!") != NULL);
+  REQUIRE_TRUE(strstr(second, "connection:close") != NULL);
+}
+
+TEST(chttpserver, pipelined_bytes_after_buffered_body_request_not_lost) {
+  /* Same regression as pipelined_bodyless_requests_both_answered, but for
+     the OTHER half of the same underlying bug: a request that DOES have a
+     body (so _drain_body's own chttp1_stream_read/chttp1_parser_execute
+     loop genuinely runs) can still lose a pipelined next request if that
+     loop's own read happens to pull in bytes past this message's body
+     boundary; chttp1_parser_execute reports back exactly how many of the
+     bytes it was given were actually consumed (chttp1_parser_consumed()),
+     but the trailing remainder (here: the second request's own raw bytes,
+     swept up in the very same chttp1_stream_read call that returned the
+     first request's 5-byte body) was previously never captured anywhere and
+     vanished right along with the rest of that read buffer. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *body = "howdy";
+  char req[512];
+  int n = snprintf(req, sizeof(req),
+                   "POST /echo-body HTTP/1.1\r\n"
+                   "Host: 127.0.0.1\r\n"
+                   "Content-Length: %zu\r\n"
+                   "\r\n"
+                   "%s"
+                   "GET /hello HTTP/1.1\r\n"
+                   "Host: 127.0.0.1\r\n"
+                   "Connection: close\r\n"
+                   "\r\n",
+                   strlen(body), body);
+  REQUIRE_TRUE(n > 0 && (size_t)n < sizeof(req));
+  REQUIRE_EQ(write(fd, req, (size_t)n), (ssize_t)n);
+
+  char buf[4096] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  char *first = strstr(buf, "HTTP/1.1 200");
+  REQUIRE_TRUE(first != NULL);
+  REQUIRE_TRUE(strstr(buf, body) != NULL);
+  char *second = strstr(first + 1, "HTTP/1.1 200");
+  REQUIRE_TRUE(second != NULL);
+  REQUIRE_TRUE(strstr(second, "Hello, world!") != NULL);
+  REQUIRE_TRUE(strstr(second, "connection:close") != NULL);
+}
+
+TEST(chttpserver, pipelined_bytes_after_streaming_body_request_not_lost) {
+  /* Streaming-route counterpart: chttpsvr_req_read() drives the identical
+     chttp1_stream_read/chttp1_parser_execute loop shape _drain_body uses
+     for a buffered route, so it needs (and, with this fix, has) the same
+     push-back-then-reclaim treatment; without it, a pipelined next request
+     riding in on the same read as a streamed body's own trailing bytes
+     would be lost exactly the same way. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *body = "streamed-and-pipelined";
+  char req[512];
+  int n = snprintf(req, sizeof(req),
+                   "POST /stream-echo HTTP/1.1\r\n"
+                   "Host: 127.0.0.1\r\n"
+                   "Content-Length: %zu\r\n"
+                   "\r\n"
+                   "%s"
+                   "GET /hello HTTP/1.1\r\n"
+                   "Host: 127.0.0.1\r\n"
+                   "Connection: close\r\n"
+                   "\r\n",
+                   strlen(body), body);
+  REQUIRE_TRUE(n > 0 && (size_t)n < sizeof(req));
+  REQUIRE_EQ(write(fd, req, (size_t)n), (ssize_t)n);
+
+  char buf[4096] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  char *first = strstr(buf, "HTTP/1.1 200");
+  REQUIRE_TRUE(first != NULL);
+  REQUIRE_TRUE(strstr(buf, body) != NULL);
+  char *second = strstr(first + 1, "HTTP/1.1 200");
+  REQUIRE_TRUE(second != NULL);
+  REQUIRE_TRUE(strstr(second, "Hello, world!") != NULL);
+  REQUIRE_TRUE(strstr(second, "connection:close") != NULL);
+}
+
+TEST(chttpserver, five_pipelined_bodyless_requests_all_answered) {
+  /* The three pipelining tests above (rejected-route, bodyless x2, buffered-
+     body, streaming-body) each concatenate exactly TWO requests into one
+     write(), which only ever exercises _conn_start_diverted/_conn_feed_bytes
+     being driven ONCE per connection, from the reactor thread. With a
+     THIRD request's bytes already sitting behind the second one (all
+     delivered together in a single read), _task_worker's own keep-alive
+     tail (see its own comment on chttp1_stream_take_leftover) must feed
+     those bytes into _conn_feed_bytes a SECOND time, on the worker thread
+     rather than the reactor thread; if that second request's own headers
+     complete right there (as they do here), _conn_start_diverted runs a
+     second time too, recursively, from inside _task_worker itself,
+     re-submitting to the very same worker pool for a fourth request's
+     bytes, and so on. This is the one code path in the pipelining fix that
+     was never exercised by any two-requests-only test: it locks in that
+     an arbitrarily long chain of pipelined requests, all delivered in one
+     socket read, is fully answered with none dropped, corrupted, or
+     duplicated, regardless of how many times that recursive hand-off has
+     to happen. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *keepalive_req = "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+  const char *final_req =
+      "GET /hello HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+
+#define _FIVE_PIPELINED_COUNT 5
+  char req[4096] = {0};
+  size_t off = 0;
+  for (int i = 0; i < _FIVE_PIPELINED_COUNT - 1; i++) {
+    size_t l = strlen(keepalive_req);
+    memcpy(req + off, keepalive_req, l);
+    off += l;
+  }
+  size_t fl = strlen(final_req);
+  memcpy(req + off, final_req, fl);
+  off += fl;
+  REQUIRE_TRUE(off < sizeof(req));
+  REQUIRE_EQ(write(fd, req, off), (ssize_t)off);
+
+  char buf[16384] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  /* Exactly _FIVE_PIPELINED_COUNT complete, correctly-bodied responses; no
+     fewer (a dropped request), no more (a duplicated/corrupted parse), and
+     the connection closes on its own after the last one. */
+  int count = 0;
+  const char *p = buf;
+  while ((p = strstr(p, "HTTP/1.1 200")) != NULL) {
+    count++;
+    p += 12;
+  }
+  REQUIRE_EQ(count, _FIVE_PIPELINED_COUNT);
+
+  size_t hello_count = 0;
+  const char *hp = buf;
+  while ((hp = strstr(hp, "Hello, world!")) != NULL) {
+    hello_count++;
+    hp += 13;
+  }
+  REQUIRE_EQ(hello_count, (size_t)_FIVE_PIPELINED_COUNT);
+  REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
+#undef _FIVE_PIPELINED_COUNT
 }
 
 TEST(chttpserver, keep_alive_two_consecutive_streaming_requests) {
@@ -3625,6 +3906,35 @@ TEST(chttpserver, resp_set_header_null_name_value_live) {
   REQUIRE_EQ(g_null_hdr_results[1], (int)ccol_invalid_args); /* NULL value */
 }
 
+TEST(chttpserver, resp_set_header_crlf_injection_rejected) {
+  /* chttpsvr_resp_set_header must reject a name or value containing an
+   * embedded CR/LF byte with ccol_invalid_args rather than writing it
+   * verbatim onto the wire: _send_response emits "name:value\r\n" with no
+   * escaping, so an unvalidated CRLF would let a handler that reflects
+   * request-controlled data into a response header inject arbitrary extra
+   * header lines, or split the response into two (classic HTTP response
+   * splitting). Also verifies a legitimate header set afterward is
+   * unaffected -- the two rejections must not corrupt resp's header list.
+   * The /set-header-crlf-guards route is registered in _setup. */
+  g_crlf_hdr_results[0] = g_crlf_hdr_results[1] = g_crlf_hdr_results[2] = -1;
+  char buf[4096] = {0};
+  int status =
+      _raw_request("GET", "/set-header-crlf-guards", NULL, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
+  REQUIRE_TRUE(strstr(buf, "x-legit:fine") != NULL);
+  /* Neither injection attempt made it onto the wire at all: no second
+   * status line, no injected header name anywhere in the response. */
+  REQUIRE_TRUE(strstr(buf, "x-injected") == NULL);
+  REQUIRE_TRUE(strstr(buf, "x-evil") == NULL);
+
+  REQUIRE_EQ(g_crlf_hdr_results[0], (int)ccol_invalid_args); /* CRLF in name */
+  REQUIRE_EQ(g_crlf_hdr_results[1], (int)ccol_invalid_args); /* CRLF in value */
+  REQUIRE_EQ(g_crlf_hdr_results[2],
+             (int)ccol_success); /* legit header still works */
+}
+
 TEST(chttpserver, subrouter_null_srv_rejected) {
   /* chttpsvr_subrouter must return NULL when srv is NULL to prevent a
    * dangling back-pointer in the new router from causing crashes at routing
@@ -4152,6 +4462,37 @@ TEST(chttpserver, any_method_first_wins_over_specific) {
   chttpclient_resp_free(resp);
 }
 
+TEST(chttpserver, unrecognized_method_rejected_with_501_not_dispatched) {
+  /* CHTTP_ANY is a registration-time-only placeholder ("match any of the
+     seven concrete methods this server recognizes"), never a real incoming
+     request's method; a syntactically valid but unrecognized method token
+     (a WebDAV verb like PROPFIND, TRACE, CONNECT, a custom verb, ...) must
+     never reach a CHTTP_ANY handler at all. Regression test for a real bug:
+     _find_route's method_ok test (route->method == CHTTP_ANY) used to
+     short-circuit to true regardless of the actual method, so such a
+     request reached _any_method_handler anyway, which called
+     chttp_method_str(chttpsvr_req_method(req)) and got back "UNKNOWN" (the
+     switch's default case) instead of a real method name: a 200 response
+     silently misreporting the request. Now rejected up front, before path/
+     header parsing or route matching ever runs, as 501 (RFC 7231 SS6.6.2),
+     and the handler is never invoked at all (an empty body proves this:
+     _any_method_handler always writes a non-empty method-name string). */
+  char buf[2048] = {0};
+  int status = _raw_request("PROPFIND", "/any-method", NULL, buf, sizeof(buf));
+  REQUIRE_EQ(status, 501);
+  REQUIRE_TRUE(strstr(buf, "content-length:0") != NULL);
+}
+
+TEST(chttpserver, unrecognized_method_rejected_even_on_unmatched_path) {
+  /* The rejection happens before route matching (and even before path
+     parsing) runs at all, so an unrecognized method on a path with no route
+     whatsoever still reports 501, not 404. */
+  char buf[2048] = {0};
+  int status =
+      _raw_request("PROPFIND", "/no-such-route-at-all", NULL, buf, sizeof(buf));
+  REQUIRE_EQ(status, 501);
+}
+
 /* ========================================================================== */
 /*                    max_body_size / 413 BOUNDARY TESTS                      */
 /* ========================================================================== */
@@ -4334,18 +4675,29 @@ TEST(chttpserver, malformed_chunked_encoding_forces_connection_close) {
 }
 
 TEST(chttpserver, oversized_chunk_size_hex_rejected_gracefully) {
-  /* http1_atol16 accumulates into an unsigned long long and only stops once
-     the top nibble becomes non-zero, so a 16-hex-digit chunk-size token can
-     come back with bit 63 set; negative once read as `long long`.
-     `0 - chunk_len` (turning a positive chunk size into this parser's
-     negative "bytes remaining" sentinel) was undefined behavior for
-     chunk_len == LLONG_MIN, and produced a *positive* content_length (an
-     inverted, wrong sign) for any other negative chunk_len, walking the
-     body cursor backward instead of forward. Verifies the fix (reject any
-     chunk-size token whose accumulated value comes back negative) produces
-     the exact same graceful, single-response, connection-closing behavior
-     as the sibling "ZZZZ" malformed-chunk-size test above, rather than a
-     crash, hang, or corrupted read. */
+  /* "8000000000000000" is a syntactically valid 16-hex-digit chunk-size
+     token (~9.2 exabytes as a uint64_t; this parser's chunk-size decoder is
+     pure unsigned arithmetic with proper overflow checks, so there is no
+     signed-negative-value class of bug here to protect against). Before
+     chttp1_parser_t gained max_chunk_size_override (wired from
+     chttpsvr_config_t.max_body_size in _conn_reset_for_request), a value
+     this large was simply accepted as the declared size of the current
+     chunk, and the connection then sat waiting for that many bytes of chunk
+     data that were never actually sent -- resolved only once the server's
+     stream_read_timeout_ms (30s by default on g_srv) finally fired. That
+     made this exact test take ~30 real seconds to pass, for the wrong
+     reason: its assertions were loose enough (some non-"none" x-stream-err
+     value) to pass equally whether the server rejected the oversized chunk
+     promptly or silently timed out half a minute later.
+     This now verifies the real, fast-path property: the oversized chunk is
+     rejected as soon as its chunk-size line is parsed, before any of its
+     (nonexistent) data is ever waited for, reported as the same
+     ccol_msg_too_large a merely-oversized *cumulative* body already
+     produces (see streaming_max_body_size_exceeded_reported), and the
+     round trip completes in well under a second -- not 30. */
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+
   struct sockaddr_in sa;
   memset(&sa, 0, sizeof(sa));
   sa.sin_family = AF_INET;
@@ -4374,10 +4726,62 @@ TEST(chttpserver, oversized_chunk_size_hex_rejected_gracefully) {
   buf[total] = '\0';
   close(fd);
 
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  double elapsed_s =
+      (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+  REQUIRE_TRUE(elapsed_s < 5.0);
+
   REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
-  REQUIRE_TRUE(strstr(buf, "x-stream-err:") != NULL);
-  REQUIRE_TRUE(strstr(buf, "x-stream-err:none") == NULL);
+  REQUIRE_TRUE(strstr(buf, "x-stream-err:ccol_msg_too_large") != NULL);
   REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
+}
+
+TEST(chttpserver, oversized_content_length_buffered_route_rejected_upfront) {
+  /* Companion to the chunked case above, for plain Content-Length framing:
+     a buffered route whose declared Content-Length already exceeds
+     max_body_size must be rejected with 413 immediately at headers-complete
+     time (_on_headers_complete's new upfront check), before ever diverting
+     to a worker thread or waiting for any body byte -- not only once that
+     many bytes have actually streamed in, which the peer here never sends
+     at all. g_small_body_srv (TEST_PORT+3) has max_body_size == 64. */
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT + 3);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  /* Declares far more than SMALL_BODY_MAX (64) and never sends a single
+     body byte. /small-body-echo is registered as a plain (non-streaming)
+     route via chttpsvr_register_handler in _setup. */
+  const char *req =
+      "POST /small-body-echo HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Content-Length: 999999999\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[1024] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  double elapsed_s =
+      (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9;
+  REQUIRE_TRUE(elapsed_s < 5.0);
+
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 413") != NULL);
 }
 
 TEST(chttpserver, chunked_body_with_trailer_headers_handled_once) {
@@ -4620,8 +5024,10 @@ static _Atomic bool g_restart_race_stop;
    failure by exiting (the listener side of the connection is expected to be
    torn down and replaced repeatedly by the main thread while this runs).
    Used by restart_races_live_keep_alive_connection_is_safe below to keep
-   real pressure on _task_pause_cb's read of srv->worker_pool throughout a
-   restart storm. */
+   real pressure on _conn_start_diverted's read of srv->worker_pool (and,
+   transitively, _conn_reset_for_request/_on_body's reads of
+   srv->max_header_bytes/max_body_size on the worker thread that call
+   diverts to) throughout a restart storm. */
 static void *_restart_race_pipeline_thread(void *arg) {
   int fd = *(int *)arg;
   const char *req = "GET /restart-race HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
@@ -4637,23 +5043,37 @@ static void *_restart_race_pipeline_thread(void *arg) {
 TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
   /* Regression test for a srv->worker_pool data race: worker_pool used to be
    * written (drained/destroyed/recreated) without srv->mutex in every
-   * chttpsvr_start restart/teardown path, while _task_pause_cb read it under
-   * the lock - a genuine data race, and a real use-after-free risk if a
+   * chttpsvr_start restart/teardown path, while _conn_start_diverted read it
+   * under the lock - a genuine data race, and a real use-after-free risk if a
    * leftover pool were destroyed while a still-open keep-alive connection's
    * next pipelined request was concurrently reading/submitting to it:
    * chttpsvr_stop only closes the listener, already-accepted connections
    * keep running, and their _on_headers_complete does not check
-   * srv->started, so _task_pause_cb can fire at any point during a restart.
-   * Fixed by _wait_and_detach_worker_pool, which waits for
+   * srv->started, so _conn_start_diverted can fire at any point during a
+   * restart. Fixed by _wait_and_detach_pools, which waits for
    * in_flight_requests to drain to zero before ever detaching/destroying a
-   * pool, guaranteeing no _task_pause_cb call can be mid-flight holding a
-   * stale copy of the pointer being handed to ctpool_destroy.
+   * pool, guaranteeing no _conn_start_diverted call can be mid-flight holding
+   * a stale copy of the pointer being handed to ctpool_destroy.
    *
-   * This test doesn't assert on a return value for most of its body; the bug
-   * is a data race / UAF, not a wrong result, so the real verification is
-   * `make memtest` (valgrind) running this test clean, and a debug build
-   * aborting/crashing outright if the race were reintroduced. A background
-   * thread keeps one keep-alive connection continuously pipelining requests
+   * Also covers a closely related, later-found data race on the same
+   * restart path: srv->max_header_bytes/max_body_size used to be plain
+   * (non-_Atomic) fields chttpsvr_start rewrote, unsynchronized, in the
+   * small gap after srv->worker_pool is published but before the listener is
+   * re-registered; a pre-existing keep-alive connection's worker thread
+   * could read either field (_conn_reset_for_request/_on_body) inside that
+   * same gap. Fixed by giving them the same _Atomic treatment as
+   * stream_read_timeout_ms/etc. on the same struct. This test varies both
+   * across every restart iteration specifically to exercise that path, even
+   * though the window is narrow enough that it is not expected to reliably
+   * trip a plain CI run (see the struct field's own comment for why); the
+   * real verification for both races is `make memtest` (valgrind) and
+   * `-fsanitize=thread` running this test clean, and a debug build
+   * aborting/crashing outright if either race were reintroduced.
+   *
+   * This test doesn't assert on a return value for most of its body, for the
+   * same reason: the bugs are data races / a UAF, not a wrong result. A
+   * background thread keeps one keep-alive connection continuously
+   * pipelining requests
    * while the main thread restarts the server many times in a tight loop (a
    * fresh port each cycle, so bind timing on a just-closed port can never
    * make this flaky; the race under test lives entirely on the srv side, not
@@ -4689,6 +5109,8 @@ TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
   for (int i = 0; i < 5; i++) {
     chttpsvr_stop(srv);
     cfg.port = (uint16_t)(TEST_PORT + 51 + i);
+    cfg.max_header_bytes = 2048 + (size_t)(i * 512);
+    cfg.max_body_size = (4 * 1024 * 1024) + (size_t)(i * 65536);
     REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
   }
 
@@ -5360,4 +5782,304 @@ TEST(chttpserver, ipv6_only_listener_still_serves_ipv6_traffic) {
   close(fd);
 
   __chttpsvr_destroy(srv);
+}
+
+/* ========================================================================== */
+/*         HEAD METHOD + CARRY-OVER ALLOCATION-FAILURE REGRESSION TESTS       */
+/* ========================================================================== */
+
+TEST(chttpserver, head_request_suppresses_response_body) {
+  /* RFC 7231 SS4.3.2: a HEAD response reports the same header fields
+     (Content-Length included) a GET would, but must never actually send the
+     message body. Regression test for a real bug: _send_response used to
+     write conn->resp.body to the wire unconditionally, regardless of
+     conn->method, so a HEAD request reaching a handler that writes a body
+     got that body streamed back anyway. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_ANY, "/head-body",
+                                               _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 18;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 18));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req = "HEAD /head-body HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  /* Read only up through the header/body separator. */
+  char buf[1024] = {0};
+  size_t total = 0;
+  char *hdr_end = NULL;
+  while (total < sizeof(buf) - 1) {
+    ssize_t r = read(fd, buf + total, sizeof(buf) - 1 - total);
+    REQUIRE_GT(r, (ssize_t)0);
+    total += (size_t)r;
+    buf[total] = '\0';
+    hdr_end = strstr(buf, "\r\n\r\n");
+    if (hdr_end) break;
+  }
+  REQUIRE_TRUE(hdr_end != NULL);
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
+
+  /* _hello_handler writes a non-empty "Hello, world!" body; Content-Length
+     must still report its real length even though it is never sent. */
+  char *cl = strstr(buf, "content-length:");
+  REQUIRE_TRUE(cl != NULL);
+  unsigned long declared_len = strtoul(cl + 15, NULL, 10);
+  REQUIRE_EQ(declared_len, (unsigned long)strlen("Hello, world!"));
+
+  /* Nothing beyond the header terminator may have already been read: a
+     buggy server writes the header block and the body back to back (often
+     within the same or the very next TCP segment), so simply waiting for
+     the next read() to time out is not enough; the body bytes could
+     already be sitting in buf, past hdr_end, from the very read() call(s)
+     that found the header terminator itself. */
+  REQUIRE_EQ(total, (size_t)(hdr_end - buf) + 4);
+
+  /* No further body bytes must ever follow either: a short poll() must see
+     nothing more arrive. */
+  struct pollfd pfd = {.fd = fd, .events = POLLIN};
+  int pr = poll(&pfd, 1, 200);
+  REQUIRE_EQ(pr, 0);
+
+  close(fd);
+  __chttpsvr_destroy(srv);
+}
+
+TEST(chttpserver, head_request_on_rejected_route_still_has_no_body) {
+  /* A rejected (404) HEAD request never has a body to begin with (reject
+     responses are always empty), but _conn_reject_and_close must still be
+     told about the HEAD method for consistency rather than hard-coding
+     suppress_body=false; this locks that call site in too. */
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != NULL);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 19;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 19));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req = "HEAD /no-such-route HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[1024] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  REQUIRE_GT(n, (ssize_t)0);
+  buf[n] = '\0';
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 404") != NULL);
+
+  close(fd);
+  __chttpsvr_destroy(srv);
+}
+
+/* Allocator that fails malloc/calloc/realloc exactly when the requested size
+   equals g_fail_alloc_size (0 = never fail), and otherwise behaves like a
+   plain pass-through. Lets a test target one specific allocation (here,
+   _conn_start_diverted's carry-over copy of pipelined leftover body bytes)
+   without disturbing every other allocation the server makes while serving
+   the same request. */
+static size_t g_fail_alloc_size = 0;
+
+static void *_fail_at_size_malloc(size_t n) {
+  if (n == g_fail_alloc_size) return NULL;
+  return malloc(n);
+}
+static void _fail_at_size_free(void *p) { free(p); }
+static void *_fail_at_size_calloc(size_t n, size_t s) {
+  if (n * s == g_fail_alloc_size) return NULL;
+  return calloc(n, s);
+}
+static void *_fail_at_size_realloc(void *p, size_t s) {
+  if (s == g_fail_alloc_size) return NULL;
+  return realloc(p, s);
+}
+
+TEST(chttpserver,
+     carry_over_alloc_failure_rejects_gracefully_instead_of_crashing) {
+  /* Regression test for a real bug in _conn_start_diverted: when a request's
+     headers and the start of its body arrive in the same read() (the
+     leftover/carry-over bytes past the header block), the function used to
+     set conn->_carry_over_len to the leftover length even if the matching
+     _mem_alloc for conn->_carry_over failed. The worker thread would then
+     call chttp1_stream_prepare with a NULL pointer and a nonzero length,
+     which unconditionally memcpy()s from that NULL pointer, crashing. This
+     drives that exact allocation to fail via a custom allocator and asserts
+     the connection is instead rejected gracefully (500) with the server
+     (and the rest of this test process) still alive and functional
+     afterward. */
+  size_t body_len = 6151; /* distinctive; unlikely to collide with any other
+                           * allocation size this request triggers */
+  ccol_memmgmt_procs_t mp = {_fail_at_size_malloc, _fail_at_size_free,
+                             _fail_at_size_calloc, _fail_at_size_realloc};
+  char *err = NULL;
+  chttpsvr srv = create_chttpsvr_mp(&mp, g_test_logger, &err);
+  REQUIRE_TRUE(srv != NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_POST, "/carry-oom",
+                                               _echo_body_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 20;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 20));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  char *body = (char *)malloc(body_len);
+  REQUIRE_TRUE(body != NULL);
+  memset(body, 'x', body_len);
+
+  char head[256];
+  int hn = snprintf(head, sizeof(head),
+                    "POST /carry-oom HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                    "Content-Length: %zu\r\n\r\n",
+                    body_len);
+  REQUIRE_GT(hn, 0);
+
+  /* Headers and the whole body in one buffer/one write() call, so the
+     reactor's single read() sees the body bytes as "leftover" past the
+     header block in the very same call that triggers the diversion path
+     under test; only now does g_fail_alloc_size get armed, so server
+     startup/route registration/connect above are unaffected by it. */
+  char *wire = (char *)malloc((size_t)hn + body_len);
+  REQUIRE_TRUE(wire != NULL);
+  memcpy(wire, head, (size_t)hn);
+  memcpy(wire + hn, body, body_len);
+  g_fail_alloc_size = body_len;
+  REQUIRE_EQ(write(fd, wire, (size_t)hn + body_len),
+             (ssize_t)((size_t)hn + body_len));
+  free(wire);
+  free(body);
+
+  char buf[512] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  g_fail_alloc_size = 0; /* disarm before any further allocation anywhere */
+  REQUIRE_GT(n, (ssize_t)0);
+  buf[n] = '\0';
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 500") != NULL);
+
+  close(fd);
+  __chttpsvr_destroy(srv);
+
+  /* The server (and this process) must still be fully usable afterward: a
+     fresh, ordinary request on a brand-new connection/port must succeed,
+     proving the earlier allocation failure was contained to that one
+     request rather than corrupting shared state. */
+  chttpsvr srv2 = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv2 != NULL);
+  rv = chttpsvr_register_handler(srv2, CHTTP_GET, "/after-carry-oom",
+                                 _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+  cfg.port = TEST_PORT + 21;
+  REQUIRE_EQ((int)chttpsvr_start(srv2, &cfg), (int)ccol_success);
+
+  int fd2 = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd2 >= 0);
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 21));
+  REQUIRE_EQ(connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  const char *req2 =
+      "GET /after-carry-oom HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+      "Connection: close\r\n\r\n";
+  REQUIRE_EQ(write(fd2, req2, strlen(req2)), (ssize_t)strlen(req2));
+  char buf2[512] = {0};
+  ssize_t n2 = read(fd2, buf2, sizeof(buf2) - 1);
+  REQUIRE_GT(n2, (ssize_t)0);
+  buf2[n2] = '\0';
+  REQUIRE_TRUE(strstr(buf2, "HTTP/1.1 200") != NULL);
+
+  close(fd2);
+  __chttpsvr_destroy(srv2);
+}
+
+/* ========================================================================== */
+/*         1xx/204/304 BODY-SUPPRESSION TESTS (RFC 9110 SS6.4.1/15.2.1/15.4.5)
+ */
+/* ========================================================================== */
+
+TEST(chttpserver, response_204_never_sends_body_or_content_length) {
+  /* Regression test for a real gap left behind by the HEAD body-suppression
+     fix: _send_response only ever suppressed the body for suppress_body
+     (HEAD), even though a 204 can never carry one either, regardless of
+     method (RFC 9110 SS15.2.1). Before this fix, /status-with-body's own
+     36-byte body would have been streamed back verbatim on a plain GET
+     whose handler happens to set 204 after writing it; any client that
+     correctly treats 204 as bodyless (including this library's own
+     chttpclient parser; see chttp1_parser.c's own CHTTP1_ST_HEADERS
+     handling) would then misparse that leaked body as the start of the
+     next pipelined response on a keep-alive connection.
+     A 204 additionally MUST NOT carry a Content-Length at all (RFC 9110
+     SS6.4.1), unlike HEAD/304 where reporting one is expected/permitted. */
+  char buf[2048] = {0};
+  int status = _raw_request("GET", "/status-with-body",
+                            "x-force-status: 204\r\n", buf, sizeof(buf));
+  REQUIRE_EQ(status, 204);
+  REQUIRE_TRUE(strstr(buf, "this-body-must-never-reach-the-wire") == NULL);
+  REQUIRE_TRUE(strstr(buf, "content-length:") == NULL);
+}
+
+TEST(chttpserver, response_304_suppresses_body_but_may_report_content_length) {
+  /* Same body-suppression fix as response_204_never_sends_body_or_
+     content_length, but for 304 (RFC 9110 SS15.4.5), which (unlike 1xx/204)
+     is still permitted to report a Content-Length (mirroring HEAD's own
+     treatment); this locks in that the auto-injected header is not also
+     suppressed for this particular status. */
+  char buf[2048] = {0};
+  int status = _raw_request("GET", "/status-with-body",
+                            "x-force-status: 304\r\n", buf, sizeof(buf));
+  REQUIRE_EQ(status, 304);
+  REQUIRE_TRUE(strstr(buf, "this-body-must-never-reach-the-wire") == NULL);
+  char *cl = strstr(buf, "content-length:");
+  REQUIRE_TRUE(cl != NULL);
+  unsigned long declared_len = strtoul(cl + 15, NULL, 10);
+  REQUIRE_EQ(declared_len,
+             (unsigned long)strlen("this-body-must-never-reach-the-wire"));
+}
+
+TEST(chttpserver, response_1xx_never_sends_body_or_content_length) {
+  /* Same reasoning as the 204 case, for the informational (1xx) class (RFC
+     9110 SS15.2.1/SS6.4.1): a handler is not realistically expected to set
+     one of these as a FINAL status in ordinary use (the interim 100
+     Continue response this server itself may send is handled entirely
+     separately in _task_worker, never through _send_response at all), but
+     _send_response's own suppression logic is keyed purely on the numeric
+     status range, with no special-casing of "how did we get here"; this
+     locks that in rather than leaving 1xx as an untested corner of the
+     same fix. */
+  char buf[2048] = {0};
+  int status = _raw_request("GET", "/status-with-body",
+                            "x-force-status: 199\r\n", buf, sizeof(buf));
+  REQUIRE_EQ(status, 199);
+  REQUIRE_TRUE(strstr(buf, "this-body-must-never-reach-the-wire") == NULL);
+  REQUIRE_TRUE(strstr(buf, "content-length:") == NULL);
 }

@@ -366,12 +366,42 @@ struct chttpserver {
   _Atomic unsigned max_body_read_duration_ms;
   _Atomic unsigned response_write_timeout_ms;
   _Atomic unsigned idle_timeout_ms; /* keep-alive idle timeout; 0 = disabled */
-  size_t max_body_size;
-  size_t max_header_bytes;        /* 0 = chttp1_parser's own built-in default */
+  /* _Atomic, not merely written under srv->mutex, for the same reason as
+   * stream_read_timeout_ms/etc. just above: chttpsvr_start() (re)writes
+   * these on every restart in the small unlocked gap after srv->worker_pool
+   * is published (see the mutex_lock/_unlock a few lines above the
+   * corresponding write site) and before the listener is re-registered.
+   * A pre-existing keep-alive connection that survived the preceding
+   * chttpsvr_stop() (which only tears down the listener, not already-
+   * accepted connections) can be diverted to that just-published pool and
+   * have its worker thread read max_body_size (_on_body) or
+   * max_header_bytes (_conn_reset_for_request) inside that same gap, with
+   * no lock or atomic op common to both the writer and that reader to
+   * establish a happens-before edge. A genuinely in-flight request is
+   * already excluded from racing here (chttpsvr_start's own
+   * _wait_and_detach_pools call, gated by srv->mutex the same way
+   * _conn_start_diverted's in_flight_requests increment is, blocks the
+   * restart until every such request has fully finished), but an idle
+   * connection's very next request is not. Found by code review, not by
+   * a failing test: the window is a handful of unlocked instructions per
+   * restart, real but too narrow to reliably reproduce under TSan even
+   * across tens of thousands of stress-test restart cycles. */
+  _Atomic size_t max_body_size;
+  _Atomic size_t
+      max_header_bytes;           /* 0 = chttp1_parser's own built-in default */
   _Atomic size_t max_connections; /* 0 = unlimited */
-  bool enable_keepalive; /* SO_KEEPALIVE on every accepted TCP connection;
-                          * set once at chttpsvr_start, read-only afterward,
-                          * same treatment as max_body_size above */
+  /* Plain bool, unlike the three fields above: its one read site
+   * (_listener_on_readable, via _apply_accepted_socket_options) only ever
+   * runs while a listener registration is live, and chttpsvr_stop()'s
+   * event_loop_remove(listen_reg) blocks until any in-flight listener
+   * callback has returned and guarantees none fires again afterward, while
+   * the new listener is not registered until well after chttpsvr_start()
+   * writes this field. So, unlike max_body_size/max_header_bytes above
+   * (whose reader is a pre-existing connection's worker thread, entirely
+   * decoupled from this server's own listener lifecycle), there is no
+   * window in which a reader of this specific field can run concurrently
+   * with a writer of it. */
+  bool enable_keepalive;
   _Atomic size_t current_connections;
 
   /* Idle-connection registry for the idle-timeout sweep: every connection
@@ -1590,13 +1620,48 @@ static int _to_stream_timeout_ms(unsigned configured_timeout_ms) {
  * explicitly (this server never uses chunked transfer-encoding for its own
  * responses) and a Connection header reflecting keep_alive. Returns false on
  * a write error/timeout (caller must then treat the connection as unusable
- * and close it). */
+ * and close it).
+ *
+ * suppress_body: true for a HEAD request (RFC 7231 SS4.3.2: a HEAD response
+ * MUST NOT include a message body, but SHOULD report the same header fields,
+ * Content-Length included, a GET would have). Content-Length is still
+ * computed from resp->body_len as usual; only the actual body bytes are
+ * withheld from the wire. Without this, a spec-compliant client that
+ * correctly stops reading after headers on a HEAD response would leave the
+ * unwritten body bytes sitting in the socket buffer, where they would be
+ * misparsed as the start of the next pipelined response on a keep-alive
+ * connection.
+ *
+ * The exact same hazard exists independently of suppress_body/HEAD for a
+ * 1xx, 204, or 304 status (RFC 9110 SS6.4.1/SS15.2.1/SS15.4.5: none of the
+ * three may ever carry a body, regardless of method): this codebase's own
+ * chttp1_parser response-parsing side already treats all three as bodyless
+ * unconditionally (see its own CHTTP1_ST_HEADERS handling), so any client
+ * honoring that same rule, including chttpclient, would misparse a body
+ * this function actually wrote as the start of the next pipelined response.
+ * A handler that sets one of these three statuses after (or instead of)
+ * writing a body via chttpsvr_resp_write is far more likely to be an
+ * oversight than an intentional non-compliant response, so this is
+ * suppressed unconditionally here rather than left as the handler's own
+ * responsibility. A 1xx or 204 additionally MUST NOT carry a Content-Length
+ * header at all (unlike HEAD/304, where reporting one matching what an
+ * equivalent GET would have sent is expected/permitted); the auto-injection
+ * below is skipped for those two specifically, though an explicit
+ * Content-Length the caller already set of their own accord is still never
+ * stripped, matching this function's existing treatment of every other
+ * caller-supplied header. */
 static bool _send_response(chttp1_stream_t *stream, chttpsvr_resp *resp,
-                           bool keep_alive, unsigned timeout_ms) {
+                           bool keep_alive, unsigned timeout_ms,
+                           bool suppress_body) {
   char head[4096];
   int status = (resp->status_code >= 100 && resp->status_code <= 999)
                    ? resp->status_code
                    : 500;
+  bool status_is_1xx = status >= 100 && status < 200;
+  bool no_body =
+      suppress_body || status_is_1xx || status == 204 || status == 304;
+  bool may_report_length = !status_is_1xx && status != 204;
+
   int n = snprintf(head, sizeof(head), "HTTP/1.1 %d %s\r\n", status,
                    _status_reason(status));
   if (n < 0) return false;
@@ -1627,7 +1692,7 @@ static bool _send_response(chttp1_stream_t *stream, chttpsvr_resp *resp,
     hlen += (size_t)hn;
   }
 
-  if (!have_content_length) {
+  if (!have_content_length && may_report_length) {
     int cn = snprintf(head + hlen, sizeof(head) - hlen,
                       "content-length:%zu\r\n", resp->body_len);
     if (cn < 0 || (size_t)cn >= sizeof(head) - hlen) return false;
@@ -1652,6 +1717,7 @@ static bool _send_response(chttp1_stream_t *stream, chttpsvr_resp *resp,
     if (n2 <= 0) return false;
     sent += (size_t)n2;
   }
+  if (no_body) return true;
   sent = 0;
   while (sent < resp->body_len) {
     ssize_t n3 = chttp1_stream_write(stream, resp->body + sent,
@@ -1728,10 +1794,32 @@ static void _conn_reset_for_request(chttpsvr_conn_t *conn) {
   chttp1_parser_t parser;
   chttp1_parser_init_request(&parser, conn->parser.settings);
   parser.data = conn;
-  if (conn->srv->max_header_bytes) {
+  size_t max_hdr_bytes = atomic_load(&conn->srv->max_header_bytes);
+  if (max_hdr_bytes) {
     parser.max_header_count_override = 0;
-    parser.max_total_header_bytes_override = conn->srv->max_header_bytes;
+    parser.max_total_header_bytes_override = max_hdr_bytes;
   }
+  /* Bounds a single chunk's declared size to no more than the whole request
+   * body is allowed to be, checked by chttp1_parser as soon as a chunk-size
+   * line is parsed rather than only reactively once that many bytes have
+   * actually arrived (see _on_body's own max_body_size check, and the
+   * analogous Content-Length upfront check in _on_headers_complete below).
+   * A single, absurdly large declared chunk (any value up to UINT64_MAX is
+   * a syntactically valid chunk-size token) that the peer then never
+   * actually sends would otherwise tie up a worker thread until
+   * stream_read_timeout_ms/max_body_read_duration_ms fired, since nothing
+   * else ever crosses a byte-count-based limit if the bytes never arrive.
+   * Left at its default (0, "no cap") only in the narrow corner where
+   * max_body_size itself is configured to exactly 0 -- 0 is this field's
+   * own "no cap" sentinel (see its doc comment), so it cannot also express
+   * "cap at zero" -- in which case the very first body byte the peer does
+   * send (for any chunk) is still caught immediately by the existing
+   * reactive _on_body check; only a chunk that declares a nonzero size and
+   * then sends literally none of it stays unbounded by this specific cap in
+   * that one corner, a low-value target not worth the extra complexity of
+   * a second sentinel to close. */
+  parser.max_chunk_size_override =
+      (uint64_t)atomic_load(&conn->srv->max_body_size);
   conn->parser = parser;
 }
 
@@ -1780,6 +1868,14 @@ static void _conn_free(chttpsvr_conn_t *conn) {
                      mp);
   _destroy_resp(&conn->resp, mp);
   _mem_free(mp, conn->body.buf);
+  /* Defense in depth, not a fix for a live leak: every call path that ever
+   * sets conn->_carry_over (_conn_start_diverted, _task_worker's keep-alive
+   * tail) already frees and NULLs it itself before conn can reach this
+   * function, so this is a no-op on every path exercised today. It exists so
+   * that a future rejection/close path added without perfect knowledge of
+   * that discipline fails safe (a no-op free of a NULL pointer) rather than
+   * silently leaking the carry-over buffer with nothing left to catch it. */
+  _mem_free(mp, conn->_carry_over);
   _mem_free(mp, conn);
 }
 
@@ -1801,6 +1897,30 @@ static int _on_request_line(chttp1_parser_t *p, const char *method,
                             size_t target_len) {
   chttpsvr_conn_t *conn = (chttpsvr_conn_t *)p->data;
   conn->method = _parse_method(method, method_len);
+
+  /* CHTTP_ANY is a registration-time-only placeholder ("match any concrete
+   * method"); it is never a real incoming request's method, and neither is
+   * _CHTTP_METHOD_UNKNOWN (the sentinel _parse_method returns for a
+   * syntactically valid but unrecognized method token, e.g. a WebDAV verb
+   * like PROPFIND, TRACE, CONNECT, or a custom verb). Without this check, a
+   * CHTTP_ANY-registered route's method_ok test in _find_route
+   * (route->method == CHTTP_ANY) short-circuits to true regardless of the
+   * actual method, so such a request would reach the handler anyway;
+   * chttpsvr_req_method() has no way to report anything back to it
+   * other than one of the seven named chttp_method_t constants, silently
+   * handing the handler a meaningless sentinel value instead of "the actual
+   * method of the incoming request" its own doc comment in chttp.h promises.
+   * Rejected here, before path/header parsing or route matching ever runs
+   * (this server does not implement any method outside the seven it
+   * recognizes), as 501 (RFC 7231 SS6.6.2: "the server does not support the
+   * functionality required to fulfill the request"), through the same
+   * reject_pool machinery every other rejection (404/405/500) already uses;
+   * see _conn_pump's CHTTP1_USER handling and _conn_dispatch_reject. */
+  if (conn->method == _CHTTP_METHOD_UNKNOWN) {
+    conn->req_rejected = true;
+    conn->reject_status = CHTTP_STATUS_NOT_IMPLEMENTED;
+    return 1;
+  }
 
   const char *qmark = (const char *)memchr(target, '?', target_len);
   size_t path_raw_len = qmark ? (size_t)(qmark - target) : target_len;
@@ -1908,6 +2028,35 @@ static int _on_headers_complete(chttp1_parser_t *p) {
   }
   rw_lock_unlock(srv->routes_lock);
 
+  /* Reject a buffered route's request immediately, before ever diverting it
+   * to a worker thread, when the declared Content-Length already exceeds
+   * max_body_size -- rather than only reactively, once that many bytes have
+   * actually streamed in (see _on_body's own check). Without this, a peer
+   * that declares an oversized Content-Length and then simply never sends
+   * the body ties up a worker thread until a read timeout fires, since
+   * nothing ever crosses a byte-count-based limit if the bytes never
+   * arrive; see chttp1_declared_content_length's own doc comment. Streaming
+   * routes are deliberately excluded: this module's documented contract for
+   * them (chttpsvr_config_t.max_body_size's own doc comment) is that the
+   * handler is ALWAYS invoked and decides its own response via
+   * chttpsvr_req_read()/chttpsvr_req_stream_error(); auto-rejecting here
+   * would silently break that contract. A chunked body's oversized-CHUNK
+   * analogue of this same protection is instead enforced uniformly for
+   * both route kinds via max_chunk_size_override (see
+   * _conn_reset_for_request), since that mechanism does not carry this same
+   * "handler always runs" contract to preserve -- it surfaces through the
+   * ordinary chttp1_parser_execute() error path _drain_body/
+   * chttpsvr_req_read already handle, exactly like any other malformed body. */
+  if (!mr.route->is_streaming && chttp1_has_content_length(p)) {
+    size_t limit = atomic_load(&srv->max_body_size);
+    if (chttp1_declared_content_length(p) > (uint64_t)limit) {
+      _free_param_values(mr.param_values, mr.route->param_count, srv->m_procs);
+      conn->req_rejected = true;
+      conn->reject_status = CHTTP_STATUS_PAYLOAD_TOO_LARGE;
+      return -1;
+    }
+  }
+
   conn->matched_router = mr.router;
   conn->matched_route = mr.route;
   conn->matched_param_values = mr.param_values;
@@ -1950,7 +2099,7 @@ static int _on_headers_complete(chttp1_parser_t *p) {
 static int _on_body(chttp1_parser_t *p, const char *at, size_t len) {
   chttpsvr_conn_t *conn = (chttpsvr_conn_t *)p->data;
   conn->body_bytes_seen += len;
-  if (conn->body_bytes_seen > conn->srv->max_body_size) {
+  if (conn->body_bytes_seen > atomic_load(&conn->srv->max_body_size)) {
     conn->body_too_large = true;
     return 1;
   }
@@ -2118,9 +2267,13 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
    * already-copied carry bytes directly avoids that lifetime hazard
    * entirely. */
   char *carry = NULL;
+  bool carry_alloc_failed = false;
   if (leftover_len > 0) {
     carry = (char *)_mem_alloc(conn->m_procs, leftover_len);
-    if (carry) memcpy(carry, leftover, leftover_len);
+    if (carry)
+      memcpy(carry, leftover, leftover_len);
+    else
+      carry_alloc_failed = true;
   }
   /* Publish carry/_carry_over_len BEFORE submitting to the pool, not after:
    * ctpool_try_submit can hand this task to an already-idle worker thread
@@ -2132,9 +2285,29 @@ static void _conn_start_diverted(chttpsvr_conn_t *conn, const char *leftover,
    * dropping the real leftover bytes for this request, and by the time
    * this function got around to the (now too late) assignment, nothing
    * would ever free that already-orphaned buffer; both a data-loss bug
-   * and the exact leak valgrind caught. */
+   * and the exact leak valgrind caught.
+   *
+   * _carry_over_len must stay in lockstep with whether _carry_over is
+   * actually non-NULL: leaving it at leftover_len when the allocation above
+   * failed would hand the worker thread a NULL/nonzero pair, and
+   * chttp1_stream_prepare/_tls unconditionally memcpy()s leftover_len bytes
+   * FROM that pointer, a NULL-source memcpy, not a no-op. */
   conn->_carry_over = carry;
-  conn->_carry_over_len = leftover_len;
+  conn->_carry_over_len = carry ? leftover_len : 0;
+
+  if (carry_alloc_failed) {
+    /* The leftover bytes are pipelined request-body bytes already read off
+     * the wire and gone from the socket for good; they cannot be silently
+     * dropped (the worker would then read the body starting at the wrong
+     * offset, silently truncating it) and cannot be hand-waved past the
+     * NULL-pointer hazard above. Reject with 500, exactly like the
+     * pool-full 503 case below: in_flight_requests was already incremented
+     * and conn->reg already paused/removed above. */
+    conn->req_rejected = true;
+    conn->reject_status = CHTTP_STATUS_INTERNAL_ERROR;
+    _conn_reject_via_pool(conn);
+    return;
+  }
 
   if (!pool ||
       ctpool_try_submit(pool, _task_worker, conn, NULL) != ccol_success) {
@@ -2171,7 +2344,7 @@ static void _conn_reject_and_close(chttpsvr_conn_t *conn, unsigned timeout_ms) {
     chttp1_stream_prepare_tls(&stream, conn->fd, conn->tls, NULL, 0);
   else
     chttp1_stream_prepare(&stream, conn->fd, NULL, 0);
-  _send_response(&stream, &resp, false, timeout_ms);
+  _send_response(&stream, &resp, false, timeout_ms, conn->method == CHTTP_HEAD);
   chttp1_stream_release(&stream);
   _destroy_resp(&resp, conn->m_procs);
   _conn_close(conn);
@@ -2206,6 +2379,71 @@ static void _reject_task(void *arg) {
   atomic_fetch_add(&g_reject_task_run_count_for_tests, 1);
 #endif
   _release_in_flight(srv);
+}
+
+/* Feeds n freshly-available bytes into conn->parser and resolves whatever
+ * outcome results, exactly the way _conn_pump's own read loop always has;
+ * factored out so _task_worker's keep-alive tail (see its own comment on
+ * chttp1_stream_take_leftover) can drive the very same header-parsing
+ * machinery synchronously, on the worker thread, against a pipelined next
+ * request's bytes that have already been pulled off the wire and can never
+ * arrive as a fresh socket-readable event for the reactor to react to.
+ *
+ * buf/n need not come from a live socket read at all; the caller owns
+ * buf's lifetime for the duration of this call only (chttp1_parser_execute
+ * never retains a pointer into it past return, and _conn_start_diverted
+ * below copies out whatever leftover it is given, exactly as it already
+ * does for a real reactor-thread read).
+ *
+ * @return true if the caller should keep reading (more bytes needed to
+ *         complete the request line/header block: CHTTP1_OK); false if
+ *         this call already fully resolved conn's fate for now (diverted
+ *         to a worker, rejected and routed to reject_pool, or closed
+ *         outright) and the caller must not touch conn again. */
+static bool _conn_feed_bytes(chttpsvr_conn_t *conn, const char *buf, size_t n) {
+  clock_gettime(CLOCK_MONOTONIC, &conn->last_activity);
+  chttp1_errno_t r = chttp1_parser_execute(&conn->parser, buf, n);
+
+  if (r == CHTTP1_OK) return true; /* need more header bytes; keep reading */
+
+  if (r == CHTTP1_HEADERS_ONLY || r == CHTTP1_PAUSED) {
+    size_t consumed = chttp1_parser_consumed(&conn->parser);
+    const char *leftover = buf + consumed;
+    size_t leftover_len = n - consumed;
+
+    /* The Expect: 100-continue interim write (if conn->expects_continue)
+     * is sent by _task_worker on a worker thread instead of here, once
+     * this request has actually been diverted; see that function's own
+     * comment for why. */
+    _conn_start_diverted(conn, leftover, leftover_len);
+    return false;
+  }
+
+  /* CHTTP1_USER: an unmatched/rejected route, decided by our own
+   * _on_headers_complete (conn->req_rejected already set to a specific
+   * status). The route itself was identified, so send a graceful
+   * error response (the body, if any, is never read; the connection is
+   * then closed rather than kept alive, since the client's still-arriving
+   * body would otherwise be misread as a pipelined request).
+   *
+   * CHTTP1_ERROR: a syntax-level problem the parser itself rejected before
+   * routing ever ran (a malformed request line, a negative Content-Length,
+   * chunked not last in a Transfer-Encoding list, a too-long header,
+   * ...). This matches every other pre-routing parse error in this
+   * parser: an outright connection close with NO response at all, not a
+   * graceful error page; see negative_content_length_rejected and
+   * chunked_not_last_in_transfer_encoding_list_rejected in tests.c, which
+   * assert exactly that. */
+  if (conn->req_rejected) {
+    /* Routed through reject_pool (or its bounded synchronous fallback),
+     * exactly like the pool-full 503 case, so a slow-reading client being
+     * told 404/405/500 can no longer stall the sole reactor thread; see
+     * _conn_dispatch_reject/_conn_reject_via_pool's own comments. */
+    _conn_dispatch_reject(conn);
+  } else {
+    _conn_close(conn);
+  }
+  return false;
 }
 
 /* Drives the reactor-owned portion of one connection: TLS handshake (if
@@ -2291,49 +2529,8 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
       return;
     }
 
-    clock_gettime(CLOCK_MONOTONIC, &conn->last_activity);
-    chttp1_errno_t r = chttp1_parser_execute(&conn->parser, buf, (size_t)n);
-
-    if (r == CHTTP1_OK) continue; /* need more header bytes; loop for more */
-
-    if (r == CHTTP1_HEADERS_ONLY || r == CHTTP1_PAUSED) {
-      size_t consumed = chttp1_parser_consumed(&conn->parser);
-      const char *leftover = buf + consumed;
-      size_t leftover_len = (size_t)n - consumed;
-
-      /* The Expect: 100-continue interim write (if conn->expects_continue)
-       * is sent by _task_worker on a worker thread instead of here, once
-       * this request has actually been diverted; see that function's own
-       * comment for why. */
-      _conn_start_diverted(conn, leftover, leftover_len);
-      return;
-    }
-
-    /* CHTTP1_USER: an unmatched/rejected route, decided by our own
-     * _on_headers_complete (conn->req_rejected already set to a specific
-     * status). The route itself was identified, so send a graceful
-     * error response (the body, if any, is never read; the connection is
-     * then closed rather than kept alive, since the client's still-arriving
-     * body would otherwise be misread as a pipelined request).
-     *
-     * CHTTP1_ERROR: a syntax-level problem the parser itself rejected before
-     * routing ever ran (a malformed request line, a negative Content-Length,
-     * chunked not last in a Transfer-Encoding list, a too-long header,
-     * ...). This matches every other pre-routing parse error in this
-     * parser: an outright connection close with NO response at all, not a
-     * graceful error page; see negative_content_length_rejected and
-     * chunked_not_last_in_transfer_encoding_list_rejected in tests.c, which
-     * assert exactly that. */
-    if (conn->req_rejected) {
-      /* Routed through reject_pool (or its bounded synchronous fallback),
-       * exactly like the pool-full 503 case, so a slow-reading client being
-       * told 404/405/500 can no longer stall the sole reactor thread; see
-       * _conn_dispatch_reject/_conn_reject_via_pool's own comments. */
-      _conn_dispatch_reject(conn);
-    } else {
-      _conn_close(conn);
-    }
-    return;
+    if (!_conn_feed_bytes(conn, buf, (size_t)n)) return;
+    /* CHTTP1_OK: loop for more header bytes. */
   }
 }
 
@@ -2426,8 +2623,35 @@ static ccol_retval_t _drain_body(chttpsvr_conn_t *conn,
     }
     if (n == 0) return ccol_http_transfer_aborted; /* truncated body */
     chttp1_errno_t r = chttp1_parser_execute(&conn->parser, raw, (size_t)n);
-    if (r == CHTTP1_PAUSED) break;
+    if (r == CHTTP1_PAUSED) {
+      /* This message is done, but raw may hold more than it needed: bytes
+       * already read off the wire that belong to a pipelined next request
+       * sitting right behind it in the same read. chttp1_parser_consumed()
+       * reports exactly where this message's own framing ended; anything
+       * past that must be pushed back onto stream's own carry-over rather
+       * than dropped, or a pipelined next request silently vanishes (the
+       * client hangs waiting for a response that will never come, since
+       * those bytes are already permanently gone from the kernel's own
+       * socket receive buffer); see chttp1_stream_take_leftover's own
+       * doc comment, and _task_worker's own call to it right before this
+       * stream is released, for the other half of this fix. */
+      size_t consumed = chttp1_parser_consumed(&conn->parser);
+      if ((size_t)n > consumed)
+        chttp1_stream_push_back_leftover(stream, raw + consumed,
+                                         (size_t)n - consumed);
+      break;
+    }
     if (r == CHTTP1_USER || r == CHTTP1_ERROR) {
+      /* A chunk's declared size exceeding max_chunk_size_override (see
+       * _conn_reset_for_request) is reported the same way an over-limit
+       * cumulative body already is (conn->body_too_large /
+       * ccol_msg_too_large), rather than the generic transfer-aborted
+       * bucket every other malformed-chunk-framing error falls into: from
+       * the caller's perspective it is the identical "body too large"
+       * outcome, just caught before any of that chunk's bytes had to
+       * actually arrive. */
+      if (chttp1_chunk_size_limit_exceeded(&conn->parser))
+        conn->body_too_large = true;
       return conn->body_too_large ? ccol_msg_too_large
                                   : ccol_http_transfer_aborted;
     }
@@ -2500,11 +2724,29 @@ ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen) {
     if (r == CHTTP1_USER || r == CHTTP1_ERROR) {
       /* Malformed framing (e.g. a bad chunk-size line) past the point
        * max_body_size enforcement in _on_body could have already set
-       * body_too_large for this same CHTTP1_USER/CHTTP1_ERROR result;
-       * chttpsvr_req_stream_error() checks body_too_large first, so setting
-       * both here is harmless and preserves that existing priority. */
+       * body_too_large for this same CHTTP1_USER/CHTTP1_ERROR result; a
+       * chunk's declared size exceeding max_chunk_size_override (see
+       * _conn_reset_for_request/_drain_body's identical check) sets it here
+       * too, for the same reason. chttpsvr_req_stream_error() checks
+       * body_too_large first, so setting both here is harmless and
+       * preserves that existing priority. */
+      if (chttp1_chunk_size_limit_exceeded(&conn->parser))
+        conn->body_too_large = true;
       conn->transfer_aborted = true;
       return -1;
+    }
+    if (r == CHTTP1_PAUSED) {
+      /* Same reasoning as _drain_body's own identical check: raw may hold
+       * more than this message needed (a pipelined next request's bytes,
+       * already read off the wire); push the trailing, unconsumed part
+       * back onto req->stream's own carry-over so _task_worker's later
+       * chttp1_stream_take_leftover() call reclaims it, rather than
+       * letting it vanish. The next loop iteration's message_complete
+       * check above returns 0 immediately once conn->body is drained. */
+      size_t consumed = chttp1_parser_consumed(&conn->parser);
+      if ((size_t)n > consumed)
+        chttp1_stream_push_back_leftover(req->stream, raw + consumed,
+                                         (size_t)n - consumed);
     }
     /* CHTTP1_OK or CHTTP1_PAUSED: loop back to drain whatever _on_body just
      * appended to conn->body. */
@@ -2599,12 +2841,35 @@ static void _task_worker(void *arg) {
                     chttp1_should_keep_alive(&conn->parser) &&
                     !conn->body_too_large;
 
-  bool sent = prepared && _send_response(&stream, &conn->resp, keep_alive,
-                                         write_timeout_ms);
+  bool sent =
+      prepared && _send_response(&stream, &conn->resp, keep_alive,
+                                 write_timeout_ms, conn->method == CHTTP_HEAD);
   if (!sent) keep_alive = false;
+
+  /* Reclaim any bytes belonging to a further pipelined request on this
+   * same connection that have already been pulled off the wire, before
+   * chttp1_stream_release below discards them unconditionally: whether
+   * this message completed before _drain_body/chttpsvr_req_read ever
+   * needed to touch stream at all (e.g. a bodyless GET/HEAD, or an
+   * explicit Content-Length: 0), in which case the whole of the original
+   * conn->_carry_over this stream was prepared with is still sitting here
+   * untouched; or a body-draining read swept up extra bytes past this
+   * message's own framing boundary (see _drain_body's/chttpsvr_req_read's
+   * own CHTTP1_PAUSED handling, which pushes exactly that case back onto
+   * stream's carry-over for this call to pick up uniformly). Reclaimed
+   * unconditionally whenever prepared (cheap; no I/O), but only actually
+   * kept when this connection is staying alive; freed outright otherwise,
+   * since a closing connection has nowhere to hand pipelined bytes to
+   * anyway (matching pipelined_bytes_after_rejected_route_not_misparsed's
+   * own documented "reject and close" precedent). */
+  size_t reclaimed_len = 0;
+  char *reclaimed =
+      prepared ? chttp1_stream_take_leftover(&stream, &reclaimed_len) : NULL;
 
   if (prepared) chttp1_stream_release(&stream);
   _destroy_req_qparams(&req);
+
+  if (!keep_alive) free(reclaimed);
 
   /* in_flight_requests is released (via _release_in_flight, at the bottom
    * of every exit path below) only once this connection has reached a
@@ -2646,6 +2911,59 @@ static void _task_worker(void *arg) {
    * gap, just two paths sharing one outcome. */
   _conn_reset_for_request(conn);
   conn->state = CONN_ST_READING_HEADERS;
+
+  if (reclaimed && reclaimed_len > 0) {
+    /* Copy into this module's own allocator (conn->_carry_over's normal
+     * convention) and free the plain-malloc'd source immediately; matches
+     * _conn_start_diverted's own carry_alloc_failed handling if this copy
+     * itself fails under OOM: the pipelined next request's bytes are
+     * then unrecoverably lost, but nothing crashes or corrupts, and the
+     * client simply discovers this via its own timeout and retries on a
+     * fresh connection. */
+    char *owned = (char *)_mem_alloc(conn->m_procs, reclaimed_len);
+    if (owned) {
+      memcpy(owned, reclaimed, reclaimed_len);
+      conn->_carry_over = owned;
+      conn->_carry_over_len = reclaimed_len;
+    }
+  }
+  free(reclaimed);
+
+  if (conn->_carry_over_len > 0) {
+    /* This connection's next request's bytes are already sitting in
+     * memory, not merely available to read later: they are permanently
+     * gone from the kernel's own socket receive buffer, so waiting for a
+     * fresh epoll readiness event here (the plain resume/add path below)
+     * would wait forever for data that will never arrive. Feed them
+     * straight into the just-reset parser now, on this worker thread,
+     * exactly as _conn_pump would once real socket bytes came in; see
+     * _conn_feed_bytes's own doc comment. This is what actually fixes the
+     * pipelining data-loss bug chttp1_stream_take_leftover's own doc
+     * comment describes: without it, these bytes would simply have been
+     * discarded (or, before this whole mechanism existed, silently freed
+     * by chttp1_stream_release above with no way to get them back at all). */
+    char *lo = conn->_carry_over;
+    size_t lo_len = conn->_carry_over_len;
+    conn->_carry_over = NULL;
+    conn->_carry_over_len = 0;
+    bool need_more = _conn_feed_bytes(conn, lo, lo_len);
+    _mem_free(conn->m_procs, lo);
+    if (!need_more) {
+      /* _conn_feed_bytes already fully resolved conn's fate: diverted a
+       * further pipelined request to a worker (possibly this very thread
+       * pool, but via a fresh ctpool_submit, not a direct recursive call),
+       * rejected it, or closed the connection outright. Only this call's
+       * own in_flight_requests slot (incremented back
+       * when THIS request was first diverted) is released here; whatever
+       * _conn_feed_bytes just started owns its own, independent slot. */
+      _release_in_flight(srv);
+      return;
+    }
+    /* CHTTP1_OK: the parser now holds a partial next request's headers,
+     * exactly as if a live socket read had produced them; fall through to
+     * the ordinary "wait for more" registration logic below unchanged. */
+  }
+
   if (conn->reg) {
     if (event_loop_resume(srv_engine_bundler.reactor, conn->reg) !=
         ccol_success) {
@@ -3491,8 +3809,8 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg) {
     atomic_store(&srv->idle_timeout_ms,
                  (unsigned)(eff_idle_ms > 0 ? eff_idle_ms : 0));
   }
-  srv->max_body_size = cfg->max_body_size;
-  srv->max_header_bytes = cfg->max_header_bytes;
+  atomic_store(&srv->max_body_size, cfg->max_body_size);
+  atomic_store(&srv->max_header_bytes, cfg->max_header_bytes);
   atomic_store(&srv->max_connections, cfg->max_connections);
   srv->enable_keepalive = cfg->enable_keepalive;
 
@@ -3908,6 +4226,16 @@ void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code) {
 ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
                                        const char *value) {
   if (!resp || !name || !value) return ccol_invalid_args;
+  /* _send_response() writes name/value verbatim onto the wire as
+   * "name:value\r\n", with no further escaping; an embedded CR or LF byte
+   * would let a caller that reflects any request-controlled data (a query
+   * parameter, a path parameter, an echoed request header) into a response
+   * header inject arbitrary extra header lines, or split the response into
+   * two, on behalf of whoever controls that data (classic HTTP response
+   * splitting / CRLF injection). Rejected outright here, at the one place
+   * every response header is set, rather than left to every caller to
+   * sanitize its own inputs. */
+  if (strpbrk(name, "\r\n") || strpbrk(value, "\r\n")) return ccol_invalid_args;
   ccol_memmgmt_procs_t *mp = resp->m_procs;
 
   for (size_t i = 0; i < resp->header_count; i++) {

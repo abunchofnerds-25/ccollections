@@ -5,9 +5,10 @@ SRC_FILE_PREFIX = cthreadcomm
 # chashmap.c is a transitive dependency: event_loop's internal fd registry
 # (int fd -> event_entry*) is backed by chmap. cthreadpool.c is a transitive
 # dependency too: event_loop's dispatch_pool (num_reactor_threads > 1) is a
-# ctpool.
+# ctpool. cvector.c is needed for event_loop's own generation-tagged handle
+# slot table (a cvec of slots plus a cvec free-index stack).
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \
-            ../../src/cthreadpool.c ../../src/common.c
+            ../../src/cthreadpool.c ../../src/cvector.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror
@@ -31,7 +32,7 @@ test_tsan: build_tsan
 	./tests_tsan
 
 memtest: build
-	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests
+	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \

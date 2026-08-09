@@ -18,14 +18,16 @@ When a request times out chttpclient_do returns ccol_timed_out.
 .fi
 .SH PARAMETERS
 .nf
-cli   Client handle; must not be NULL.
+cli   Client handle; must not be CHTTPCLI_INVALID.
 ms    Timeout in milliseconds.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success      Timeout updated.
-ccol_invalid_args cli is NULL.
+ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale/already-
+                  destroyed handle.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_set_connect_timeout (3),
+.BR chttpclient_set_max_response_body_size (3),
 .BR chttpclient_do (3)

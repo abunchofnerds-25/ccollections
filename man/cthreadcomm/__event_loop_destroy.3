@@ -1,6 +1,6 @@
-.TH __EVENT_LOOP_DESTROY 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.TH __EVENT_LOOP_DESTROY 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
-__event_loop_destroy \- destroy an event_loop (internal function)
+__event_loop_destroy \- internal destroy function
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,27 +11,36 @@ void __event_loop_destroy(event_loop loop);
 .fi
 .SH DESCRIPTION
 .nf
-Calls event_loop_shutdown() if the caller skipped it (guaranteeing every
-reactor thread is joined and no dispatch can be in flight before the
-next step), then frees every remaining registration through the same
-per-registration path event_loop_remove() uses.
+loop is an opaque VALUE handle (a packed {slot index, generation}
+pair), resolved through a library-owned slot table before the
+underlying reactor object is ever touched. loop must be a
+currently live handle (one returned by event_loop_create/
+_with_mprocs and not yet destroyed). EVENT_LOOP_INVALID is a
+silent no-op. Any other value (a stale handle already destroyed by
+an earlier call or concurrently by another thread, a forged value,
+or garbage) is a FATAL ERROR: this function calls fatal_err()
+(abort()/SIGABRT) rather than risk a use-after-free or double-free.
 
-For queue-backed registrations this correctly unlinks each one from its
-queue's own waiter list before freeing it, so a queue that outlives this
-event_loop is never left with a dangling waiter pointer.  fd
-registrations are not closed and queues are not destroyed; only the
-event_loop's own registration bookkeeping is freed.
-.fi
-.SH PARAMETERS
-.nf
-loop  event_loop to destroy.
-.fi
-.SH WARNINGS
-.nf
-Do not call directly; use the event_loop_destroy() macro instead, which
-also sets the caller's handle to NULL.
+On a live handle, waits for every in-flight resolved use of the
+handle to finish (event_loop_add/_modify/_pause/_resume/_remove/
+_reg_count calls currently executing on another thread), then
+calls event_loop_shutdown() if the caller skipped it (guaranteeing
+every reactor thread is joined and no dispatch can be in flight
+before the next step), then frees every remaining registration
+through the same per-registration path event_loop_remove() uses.
+
+For queue-backed registrations this correctly unlinks each one from
+its queue's own waiter list before freeing it, so a queue that
+outlives this event_loop is never left with a dangling waiter
+pointer. fd registrations are not closed and queues are not
+destroyed; only the event_loop's own registration bookkeeping is
+freed.
+
+Do not call directly; use the event_loop_destroy macro, which also
+sets the handle to EVENT_LOOP_INVALID.
 .fi
 .SH "SEE ALSO"
 .BR event_loop_destroy (3),
+.BR ___event_loop_destroy (3),
 .BR event_loop_shutdown (3),
 .BR event_loop_remove (3)

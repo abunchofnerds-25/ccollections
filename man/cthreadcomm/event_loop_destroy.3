@@ -1,32 +1,36 @@
-.TH EVENT_LOOP_DESTROY 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.TH EVENT_LOOP_DESTROY 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
-event_loop_destroy \- destroy an event_loop and set handle to NULL
+event_loop_destroy \- destroy an event_loop and invalidate the handle
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <cthreadcomm.h>
 
-event_loop_destroy(loop);
+event_loop_destroy(loop)
 .fi
 .SH DESCRIPTION
 .nf
-Calls __event_loop_destroy() to shut every reactor thread down (if not
-already shut down) and free every remaining registration, then sets loop
-to NULL.
+Macro wrapper around __event_loop_destroy. Blocks until every
+in-flight resolved use of the handle has finished, shuts every
+reactor thread down (if not already shut down), frees every
+remaining registration, then sets loop to EVENT_LOOP_INVALID.
+
+loop must be a currently live handle or EVENT_LOOP_INVALID (a
+silent no-op). Calling this on a stale handle (one already
+destroyed, sequentially by an earlier call or concurrently by
+another thread) is a FATAL ERROR (abort()/SIGABRT), not a silent
+double-free; see __event_loop_destroy(3) for further detail.
 
 See __event_loop_destroy(3) for the queue-outlives-the-loop safety
 guarantee this provides for queue-backed registrations.
 .fi
 .SH PARAMETERS
 .nf
-loop  event_loop variable to destroy (set to NULL after destruction).
-.fi
-.SH NOTES
-.nf
-Safe to call with a NULL handle (no-op).
+loop  An lvalue of type event_loop.
 .fi
 .SH "SEE ALSO"
 .BR __event_loop_destroy (3),
+.BR ___event_loop_destroy (3),
 .BR event_loop_create (3),
 .BR event_loop_shutdown (3)

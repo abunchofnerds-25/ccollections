@@ -59,6 +59,18 @@ connection is closed after the resulting response (Connection: close)
 rather than kept alive, since the excess body bytes beyond the limit
 are discarded, not drained.
 
+A buffered route whose declared Content-Length already exceeds
+max_body_size is rejected with 413 immediately, before ever waiting for
+a body byte (which, for a stalled or malicious peer, may never arrive);
+this does not apply to a streaming route, whose handler is still always
+invoked regardless of the declared Content-Length, matching its own
+documented contract above.  Independently of route kind, any single
+chunk (chunked Transfer-Encoding) whose declared size exceeds
+max_body_size is also rejected as soon as its chunk-size line is parsed,
+before waiting for that chunk's data; this surfaces the same way any
+other malformed body already does for the route's kind (413/
+ccol_msg_too_large).
+
 Body read timeouts: cfg->stream_read_timeout_ms bounds how long a
 worker will wait for the next batch of body bytes (buffered or
 streaming); 0 waits indefinitely.  Because it resets on any new byte,
@@ -106,8 +118,8 @@ previous cycle is freed automatically before the new one is installed.
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if srv is NULL, or if cfg->port is 0 and cfg->host
-is not a "unix://" path.
+ccol_invalid_args if srv is CHTTPSVR_INVALID, a stale/already-destroyed
+handle, or if cfg->port is 0 and cfg->host is not a "unix://" path.
 ccol_not_permitted if this server is already started.
 ccol_not_enough_memory if memory allocation fails.
 ccol_unexpected_failure if the listen socket could not be created/bound.
@@ -120,7 +132,12 @@ requests on this same handle at any point during a subsequent restart.
 The old ctpool is only drained and destroyed once every request already
 in flight has completed, so a restart is safe to call even while such a
 connection is still active; no request can ever be handed to a ctpool
-that is concurrently being torn down.
+that is concurrently being torn down. This wait is bounded (up to 30
+seconds, plus a further short grace period), even for a connection
+whose worker thread is genuinely blocked reading or writing it under a
+0 ("wait indefinitely") stream_read_timeout_ms/max_body_read_duration_ms/
+response_write_timeout_ms configuration; see chttpsvr_config_t's own
+documentation (CHTTPSVR_CONFIG_DEFAULT(3)) for the mechanism.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_stop (3),

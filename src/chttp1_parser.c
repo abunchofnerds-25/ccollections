@@ -43,6 +43,15 @@ SOFTWARE.
 #define CHTTP1_MAX_HEADER_COUNT 100
 #define CHTTP1_MAX_TOTAL_HEADER_BYTES (64 * 1024)
 
+/* RFC 7230 SS3.5 recommends a server ignore at least one leading empty line
+ * before the request-line (a stray CRLF some clients send after a POST
+ * body); bounded rather than skipped unconditionally, matching every other
+ * cap in this file, so a client that never stops sending blank lines is
+ * treated as malformed input instead of tolerated indefinitely. Response
+ * mode never uses this (a leading blank line before a status line has no
+ * equivalent real-world client bug to work around). */
+#define CHTTP1_MAX_LEADING_BLANK_LINES 25
+
 /* chttp1_parser_t.flags bits. */
 #define F_CHUNKED 0x01u
 #define F_CONTENT_LENGTH 0x02u
@@ -50,6 +59,10 @@ SOFTWARE.
 #define F_CONNECTION_CLOSE 0x08u
 #define F_CONNECTION_KEEP_ALIVE 0x10u
 #define F_EXPECT_100_CONTINUE 0x20u
+#define F_CHUNK_TOO_LARGE                          \
+  0x40u /* set alongside a max_chunk_size_override \
+         * rejection; see                          \
+         * chttp1_chunk_size_limit_exceeded() */
 
 /* ========================================================================== */
 /*                         SMALL CHARACTER HELPERS                            */
@@ -459,15 +472,22 @@ static void parse_connection_tokens(chttp1_parser_t *parser, const char *v,
  * chttpclient.c's own existing behaviour of inserting both into the same
  * headers map.
  */
+/* Shared by process_header_line and the CHTTP1_ST_FIRST_LINE case below, so
+ * the request/status line's own contribution to total_header_bytes is
+ * checked against the exact same effective cap a header line is. */
+static size_t effective_max_total_header_bytes(const chttp1_parser_t *parser) {
+  return parser->max_total_header_bytes_override
+             ? parser->max_total_header_bytes_override
+             : CHTTP1_MAX_TOTAL_HEADER_BYTES;
+}
+
 static ph_result_t process_header_line(chttp1_parser_t *parser) {
   size_t contribution =
       parser->line_len + 2; /* +2: the CRLF accumulate_line stripped */
   size_t max_count = parser->max_header_count_override
                          ? parser->max_header_count_override
                          : CHTTP1_MAX_HEADER_COUNT;
-  size_t max_bytes = parser->max_total_header_bytes_override
-                         ? parser->max_total_header_bytes_override
-                         : CHTTP1_MAX_TOTAL_HEADER_BYTES;
+  size_t max_bytes = effective_max_total_header_bytes(parser);
   if (parser->header_count + 1 > max_count) {
     parser->reason = "Too many headers";
     return PH_ERROR;
@@ -518,14 +538,38 @@ static ph_result_t process_header_line(chttp1_parser_t *parser) {
     parser->flags |= F_CONTENT_LENGTH;
     parser->content_length = v;
   } else if (header_name_is(name, name_len, "transfer-encoding")) {
+    /* RFC 7230 SS3.2.2 treats repeated header field lines with the same
+     * name as one concatenated comma-separated list, in order; a request's
+     * Transfer-Encoding legitimately CAN span multiple header lines (e.g.
+     * "Transfer-Encoding: gzip" followed by "Transfer-Encoding: chunked" is
+     * a valid, if unusual, way of saying the merged list is
+     * "gzip, chunked"). F_CHUNKED therefore reflects only whether the
+     * MOST RECENTLY processed Transfer-Encoding line ends in "chunked",
+     * re-derived from scratch on every line rather than only ever set
+     * (never cleared) as an earlier version of this code did; a
+     * chunked-final claim from an earlier line must NOT survive a later
+     * line that changes the picture (see the two regression tests this
+     * fix added: chunked-then-identity now correctly rejected,
+     * gzip-then-chunked now correctly still accepted). Whether the FINAL
+     * merged list actually ends in "chunked" can only be known once every
+     * Transfer-Encoding line has been seen, i.e. at headers-complete time
+     * (see the CHTTP1_ST_HEADERS blank-line branch below), not per line
+     * here. */
     parser->flags |= F_TRANSFER_ENCODING;
-    if (value_ends_with_chunked(vstart, value_len)) {
-      parser->flags |= F_CHUNKED;
-    } else if (parser->type == CHTTP1_PARSE_REQUEST &&
-               transfer_encoding_has_nonfinal_chunked(vstart, value_len)) {
+    if (parser->type == CHTTP1_PARSE_REQUEST &&
+        transfer_encoding_has_nonfinal_chunked(vstart, value_len)) {
+      /* Unlike the cross-line case above, "chunked" appearing before the
+       * end of a SINGLE line's own token list (e.g. "chunked, identity" on
+       * one line) is unconditionally wrong regardless of what any other
+       * Transfer-Encoding line says, so this is checked and rejected
+       * immediately rather than deferred. */
       parser->reason = "chunked must be the last Transfer-Encoding token";
       return PH_ERROR;
     }
+    if (value_ends_with_chunked(vstart, value_len))
+      parser->flags |= F_CHUNKED;
+    else
+      parser->flags &= (uint16_t)~F_CHUNKED;
   } else if (header_name_is(name, name_len, "connection")) {
     parse_connection_tokens(parser, vstart, value_len);
   } else if (header_name_is(name, name_len, "expect")) {
@@ -577,6 +621,11 @@ static bool parse_chunk_size_line(chttp1_parser_t *parser) {
   uint64_t v;
   if (!parse_uint64_hex(s, hex_len, &v)) {
     parser->reason = "Invalid chunk size";
+    return false;
+  }
+  if (parser->max_chunk_size_override && v > parser->max_chunk_size_override) {
+    parser->flags |= F_CHUNK_TOO_LARGE;
+    parser->reason = "Chunk size exceeds configured maximum";
     return false;
   }
   parser->content_length = v;
@@ -674,6 +723,36 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
                                   ? "Request line too long"
                                   : "Status line too long");
         if (lr == LINE_BAD_EOL) return fail(parser, "Expected CRLF");
+        if (parser->type == CHTTP1_PARSE_REQUEST && parser->line_len == 0) {
+          /* RFC 7230 SS3.5: ignore a leading blank line before the
+           * request-line itself (some clients erroneously send a stray
+           * CRLF after a POST body); see CHTTP1_MAX_LEADING_BLANK_LINES's
+           * own comment for why this is bounded, not unconditional. Without
+           * this, parse_request_line below would reject the empty line
+           * outright (method_len == 0), hard-closing an otherwise-healthy
+           * keep-alive/pipelined connection over one stray CRLF instead of
+           * absorbing it. */
+          if (++parser->leading_blank_lines > CHTTP1_MAX_LEADING_BLANK_LINES)
+            return fail(parser, "Too many leading blank lines");
+          parser->line_len = 0;
+          break;
+        }
+        {
+          /* The request/status line's own bytes count against the same
+           * total_header_bytes budget a header line does (chttpsvr_config_t.
+           * max_header_bytes is documented as bounding "request line + all
+           * header lines", not just the headers that follow it); without
+           * this, a request-target far larger than the configured cap
+           * (bounded only by the much larger CHTTP1_MAX_LINE_LEN) would
+           * still be accepted. */
+          size_t contribution = parser->line_len + 2;
+          if (parser->total_header_bytes + contribution >
+              effective_max_total_header_bytes(parser))
+            return fail(parser, parser->type == CHTTP1_PARSE_REQUEST
+                                    ? "Request line too large"
+                                    : "Status line too large");
+          parser->total_header_bytes += contribution;
+        }
         if (parser->type == CHTTP1_PARSE_REQUEST) {
           ph_result_t plr = parse_request_line(parser);
           if (plr == PH_ERROR) return fail_already_set(parser);
@@ -712,15 +791,43 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
              * specifically: this parser reports it as the complete message,
              * same as any other no-body response, rather than automatically
              * restarting to keep parsing a second message on the same
-             * parser instance for an interim 1xx response; chttpclient.c
-             * never sends "Expect: 100-continue" and has no code path that
-             * would know what to do with a second, later message on the
-             * same hop, so that behaviour would be untested, unused
-             * complexity; a conscious scope reduction, not an oversight.
-             * See chttp1_expects_continue's own doc comment for why the
-             * server side of this same feature is handled differently
-             * now.) */
+             * parser instance for an interim 1xx response. chttpclient.c's
+             * Tier 1 (chttp_do_internal, via chttp_request_t.expect_continue)
+             * does now send "Expect: 100-continue" and does drive a second
+             * message on the same connection after a "100 Continue" interim
+             * response; but it does so with a FRESH chttp1_parser_t
+             * instance for that second message (see chttpclient.c's
+             * _chttp_read_message, which creates a new parser per call),
+             * matching this codebase's own "fresh state per message"
+             * convention, rather than needing this parser instance to loop
+             * internally past the interim response. See
+             * chttp1_expects_continue's own doc comment for why the server
+             * side of this same feature is handled differently.) */
             no_body = true;
+          }
+
+          if (!no_body && parser->type == CHTTP1_PARSE_REQUEST &&
+              (parser->flags & F_TRANSFER_ENCODING) &&
+              !(parser->flags & F_CHUNKED)) {
+            /* RFC 7230 SS3.3.3: for a REQUEST specifically (never a
+             * response; see value_ends_with_chunked's own doc comment for
+             * that side's separate, pre-existing, documented scope
+             * reduction), a Transfer-Encoding whose final coding is not
+             * "chunked" leaves the message length genuinely indeterminate;
+             * a request has no EOF-delimited body-framing mode to fall
+             * back to the way a response does (see the request/response
+             * asymmetry documented where CHTTP1_ST_BODY_EOF is entered
+             * below), so silently falling through to the "no framing
+             * headers means no body" branch just below (the pre-existing
+             * behavior here) let a front-end that disagrees about framing
+             * desync from this parser: a conforming origin server MUST
+             * reject such a request outright instead. Checked here, once
+             * every Transfer-Encoding line has actually been seen (see
+             * process_header_line's own comment for why this can't be
+             * decided any earlier), not per individual header line. */
+            return fail(parser,
+                        "Transfer-Encoding present but final encoding is "
+                        "not chunked");
           }
 
           if (no_body) {
@@ -897,6 +1004,19 @@ chttp1_errno_t chttp1_parser_execute(chttp1_parser_t *parser, const char *data,
 
 chttp1_errno_t chttp1_parser_finish(chttp1_parser_t *parser) {
   if (parser->state == CHTTP1_ST_DEAD) return CHTTP1_ERROR;
+  /* Already at a clean message boundary (reached either via
+   * chttp1_parser_execute's own CHTTP1_PAUSED return, or via a PRIOR call to
+   * this same function completing an EOF-delimited body below): per this
+   * function's own documented contract ("already at a clean
+   * CHTTP1_ST_MESSAGE_DONE boundary ... returns CHTTP1_OK"), a second call
+   * is a no-op, not a re-fire. Without this check, the CHTTP1_FINISH_SAFE_
+   * WITH_CB case below (which never updates finish_state, only state, since
+   * chttp1_should_keep_alive's needs_eof check depends on finish_state
+   * staying CHTTP1_FINISH_SAFE_WITH_CB forever after completion) would
+   * re-enter that same branch on every subsequent call, re-invoking
+   * on_message_complete each time, in violation of that callback's own
+   * documented "fired exactly once" contract. */
+  if (parser->state == CHTTP1_ST_MESSAGE_DONE) return CHTTP1_OK;
 
   switch (parser->finish_state) {
     case CHTTP1_FINISH_SAFE:
@@ -927,7 +1047,19 @@ bool chttp1_parser_message_complete(const chttp1_parser_t *parser) {
 }
 
 bool chttp1_should_keep_alive(const chttp1_parser_t *parser) {
-  if (parser->http_major > 0 && parser->http_minor > 0) {
+  /* "HTTP/1.1 or later" is major > 1, or major == 1 with minor >= 1; NOT
+   * "both major and minor are nonzero". The latter (this function's
+   * previous condition) misclassifies any version whose minor happens to be
+   * 0 while major is already >= 2 (e.g. a literal "HTTP/2.0" status line,
+   * which this parser's grammar accepts, per parse_status_line's own doc
+   * comment: "not hard-coded to 1.x... since chttp1_should_keep_alive
+   * already needs to compare arbitrary major/minor values correctly
+   * regardless") as HTTP/1.0-or-earlier, wrongly requiring an explicit
+   * Connection: keep-alive token that a real server of that vintage would
+   * never send, and silently disabling connection reuse against it. */
+  bool is_1_1_or_later = parser->http_major > 1 ||
+                         (parser->http_major == 1 && parser->http_minor >= 1);
+  if (is_1_1_or_later) {
     /* HTTP/1.1 (or later): keep-alive by default unless Connection: close
      * was seen. */
     if (parser->flags & F_CONNECTION_CLOSE) return false;
@@ -954,6 +1086,18 @@ bool chttp1_expects_continue(const chttp1_parser_t *parser) {
   return (parser->flags & F_EXPECT_100_CONTINUE) != 0;
 }
 
+bool chttp1_has_content_length(const chttp1_parser_t *parser) {
+  return parser && (parser->flags & F_CONTENT_LENGTH) != 0;
+}
+
+uint64_t chttp1_declared_content_length(const chttp1_parser_t *parser) {
+  return parser ? parser->content_length : 0;
+}
+
+bool chttp1_chunk_size_limit_exceeded(const chttp1_parser_t *parser) {
+  return parser && (parser->flags & F_CHUNK_TOO_LARGE) != 0;
+}
+
 /* ========================================================================== */
 /*                    WORKER-PULL BODY/RESPONSE STREAMING                     */
 /* ========================================================================== */
@@ -968,7 +1112,20 @@ static bool _stream_prepare_common(chttp1_stream_t *stream, int fd,
   if (leftover_len == 0) return true;
 
   char *copy = (char *)malloc(leftover_len);
-  if (!copy) return false;
+  if (!copy) {
+    /* Leave stream genuinely safe to treat as never-prepared, matching this
+     * function's own documented "zero-initialized-equivalent on failure"
+     * contract: fd/tls/prepared were already set above, before the
+     * allocation that just failed, and must be rolled back rather than left
+     * half-committed. No current caller dereferences these fields without
+     * first checking this function's return value, but this is the one
+     * place that contract is actually established, and it should hold
+     * regardless of what any particular caller happens to check today. */
+    stream->fd = 0;
+    stream->tls = NULL;
+    stream->prepared = false;
+    return false;
+  }
   memcpy(copy, leftover, leftover_len);
   stream->carry = copy;
   stream->carry_len = leftover_len;
@@ -1057,30 +1214,72 @@ ssize_t chttp1_stream_read(chttp1_stream_t *stream, char *buf, size_t buflen,
   struct timespec deadline;
   if (has_deadline) _compute_deadline(&deadline, timeout_ms);
 
-  for (;;) {
-    int this_timeout = timeout_ms;
-    if (has_deadline) {
-      long rem = _remaining_ms(&deadline);
-      if (rem <= 0) {
-        stream->timed_out = true;
-        return -1;
-      }
-      this_timeout = (int)rem;
-    }
-    if (!wait_for_ready(stream, POLLIN, this_timeout)) return -1;
-
-    if (stream->tls) {
+  /* For a TLS stream specifically, attempt the read FIRST, before ever
+   * consulting poll(2)/the deadline: OpenSSL may already be holding
+   * decrypted application bytes in its own internal buffer (e.g. a caller
+   * upstream of this stream already called ctls_conn_read() once with a
+   * smaller buflen than the underlying TLS record actually contained, such
+   * as during header parsing before this connection was ever handed off to
+   * a worker), fully independent of whether the raw fd itself currently has
+   * anything left to read from the kernel. Polling the raw fd first (the
+   * previous shape, still used below for the plaintext case) made those
+   * already-decrypted bytes invisible to poll(2), stalling for the full
+   * timeout_ms budget despite data being immediately available; this also
+   * happens to be what makes timeout_ms == 0 actually mean "return
+   * immediately if fd is not already readable right now" (its own
+   * documented contract) for a TLS stream, rather than "never even attempt
+   * a read", since the very first attempt now always happens before the
+   * deadline (already expired for timeout_ms == 0) is ever checked.
+   *
+   * This is NOT extended to the plaintext branch below: a plaintext
+   * stream's fd is not guaranteed to be non-blocking (chttp1_stream_prepare,
+   * unlike _prepare_tls, has no such requirement documented anywhere, and
+   * this module's own test suite relies on it working correctly against a
+   * genuine blocking socketpair, gated entirely by poll(2); attempting a
+   * raw read(2) before ever confirming readiness reintroduces exactly the
+   * hang this design avoids: a blocking fd with nothing available blocks
+   * inside read(2) itself, silently ignoring timeout_ms altogether, a real,
+   * reproducible hang caught by this file's own stream.
+   * read_timeout_when_nothing_available test). A raw fd's own readiness,
+   * unlike a TLS stream's, has no equivalent internal-buffering concern for
+   * poll(2) to be blind to in the first place, so poll-first remains both
+   * correct and necessary here. */
+  if (stream->tls) {
+    for (;;) {
       ssize_t got = ctls_conn_read((ctls_conn_t *)stream->tls, buf, buflen);
       if (got >= 0) return got;
-      if (errno == EWOULDBLOCK || errno == EAGAIN) continue;
-      stream->last_errno = errno;
+      if (!(errno == EWOULDBLOCK || errno == EAGAIN)) {
+        stream->last_errno = errno;
+        return -1;
+      }
+
+      int this_timeout = timeout_ms;
+      if (has_deadline) {
+        long rem = _remaining_ms(&deadline);
+        if (rem <= 0) {
+          stream->timed_out = true;
+          return -1;
+        }
+        this_timeout = (int)rem;
+      }
+      if (!wait_for_ready(stream, POLLIN, this_timeout)) return -1;
+    }
+  }
+
+  int this_timeout = timeout_ms;
+  if (has_deadline) {
+    long rem = _remaining_ms(&deadline);
+    if (rem <= 0) {
+      stream->timed_out = true;
       return -1;
     }
-
-    ssize_t got = read(stream->fd, buf, buflen);
-    if (got < 0) stream->last_errno = errno;
-    return got;
+    this_timeout = (int)rem;
   }
+  if (!wait_for_ready(stream, POLLIN, this_timeout)) return -1;
+
+  ssize_t got = read(stream->fd, buf, buflen);
+  if (got < 0) stream->last_errno = errno;
+  return got;
 }
 
 ssize_t chttp1_stream_write(chttp1_stream_t *stream, const char *buf,
@@ -1113,8 +1312,15 @@ ssize_t chttp1_stream_write(chttp1_stream_t *stream, const char *buf,
     }
 
     ssize_t written = write(stream->fd, buf, len);
-    if (written < 0) stream->last_errno = errno;
-    return written;
+    if (written >= 0) return written;
+    /* Mirrors the TLS branch above: wait_for_ready() confirming POLLOUT does
+     * not guarantee a subsequent write(2) on a non-blocking fd (chttpserver.c
+     * always accepts via accept4(..., SOCK_NONBLOCK)) cannot itself still
+     * report EWOULDBLOCK/EAGAIN; loop back and wait again instead of
+     * surfacing a transient non-error as a hard I/O failure. */
+    if (errno == EWOULDBLOCK || errno == EAGAIN) continue;
+    stream->last_errno = errno;
+    return -1;
   }
 }
 
@@ -1124,6 +1330,39 @@ bool chttp1_stream_timed_out(const chttp1_stream_t *stream) {
 
 int chttp1_stream_last_error(const chttp1_stream_t *stream) {
   return stream->last_errno;
+}
+
+bool chttp1_stream_push_back_leftover(chttp1_stream_t *stream, const char *buf,
+                                      size_t len) {
+  if (len == 0) return true;
+  size_t existing = stream->carry_len - stream->carry_pos;
+  size_t total = len + existing;
+  char *nc = (char *)malloc(total);
+  if (!nc) return false;
+  memcpy(nc, buf, len);
+  if (existing) memcpy(nc + len, stream->carry + stream->carry_pos, existing);
+  free(stream->carry);
+  stream->carry = nc;
+  stream->carry_len = total;
+  stream->carry_pos = 0;
+  return true;
+}
+
+char *chttp1_stream_take_leftover(chttp1_stream_t *stream, size_t *len_out) {
+  if (len_out) *len_out = 0;
+  if (stream->carry_pos >= stream->carry_len) return NULL;
+  size_t remaining = stream->carry_len - stream->carry_pos;
+  char *out = (char *)malloc(remaining);
+  if (!out)
+    return NULL; /* stream's own carry is left untouched; still
+                  * cleaned up normally by chttp1_stream_release */
+  memcpy(out, stream->carry + stream->carry_pos, remaining);
+  free(stream->carry);
+  stream->carry = NULL;
+  stream->carry_len = 0;
+  stream->carry_pos = 0;
+  if (len_out) *len_out = remaining;
+  return out;
 }
 
 void chttp1_stream_release(chttp1_stream_t *stream) {

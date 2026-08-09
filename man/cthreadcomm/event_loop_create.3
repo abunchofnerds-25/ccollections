@@ -22,25 +22,28 @@ max_events_per_wait  Size of the epoll_wait batch buffer each reactor
                       events a single epoll_wait call drains, not the
                       number of registrations the loop can hold.
 num_lock_stripes     Number of independent lock stripes for the fd/entry
-                      registry (must be >= 1).  1 matches the original
-                      single-lock behavior; pass a larger value to reduce
+                      registry (must be >= 1).  1 means a single
+                      shared lock; pass a larger value to reduce
                       event_loop_add/event_loop_remove/event_loop_modify
                       contention across many different fds/registrations
                       under concurrent use.
-num_reactor_threads  Number of background reactor threads that call
-                      epoll_wait on the shared epoll instance (must be
-                      >= 1).  1 matches this module's original
-                      single-thread behavior exactly; see
-                      event_loop_create_with_mprocs(3)'s NOTES for the
-                      measured performance tradeoffs of a higher value.
+num_reactor_threads  Total OS thread count devoted to this loop's own
+                      polling and dispatch (must be >= 1); exactly one
+                      dedicated thread ever calls epoll_wait on the
+                      shared epoll instance regardless of this value.
+                      1 means that one thread also dispatches every
+                      callback inline; a larger value adds
+                      (num_reactor_threads - 1) separate dispatch
+                      worker threads.
 err_str               Optional pointer to receive an error string on
                       failure (pass NULL to ignore).
 .fi
 .SH RETURN VALUE
 .nf
 Returns a new event_loop handle on success.
-Returns NULL on failure (invalid arguments, allocation failure,
-epoll_create1/eventfd/pthread_create failure).
+Returns EVENT_LOOP_INVALID on failure (invalid arguments, allocation
+failure, epoll_create1/eventfd/pthread_create failure, or failure to
+allocate a handle slot).
 .fi
 .SH NOTES
 .nf

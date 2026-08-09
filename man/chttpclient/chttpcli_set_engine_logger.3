@@ -28,8 +28,11 @@ both at once).
 
 Call this before the first chttpclient_do_async/_streaming call
 anywhere in the process if a custom engine logger is wanted.  If no
-logger has been installed when the engine first starts, diagnostics are
-simply skipped; there is no default logger to fall back to.
+logger has been installed when the engine first starts, a fallback
+logger (fd 2, level CLOG_FATAL) is installed automatically; since
+this engine's own diagnostics are never logged above CLOG_INFO, that
+fallback logger is silent in practice unless this function is used
+to install a more verbose one.
 
 cl must not be NULL; the derived child logger is owned by the engine
 and must not be closed by the caller.

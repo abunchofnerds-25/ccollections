@@ -50,13 +50,18 @@ typedef enum chttp_method {
   CHTTP_HEAD,
   CHTTP_OPTIONS,
   /**
-   * Server-side wildcard: matches any incoming HTTP method when used as the
-   * method argument to chttpsvr_register_handler,
+   * Server-side wildcard: matches any of the seven concrete methods above
+   * when used as the method argument to chttpsvr_register_handler,
    * chttpsvr_register_streaming_handler, chttpsvr_router_on, or
    * chttpsvr_router_on_stream.  Not a valid method for client requests; passing
    * it to chttp_request_new / chttp_run_query produces undefined behaviour.
-   * chttpsvr_req_method never returns CHTTP_ANY; it always returns the actual
-   * method of the incoming request.
+   * A registration-time placeholder only, never a real incoming request's
+   * method: chttpsvr_req_method never returns CHTTP_ANY, and never returns
+   * anything outside the seven concrete constants above either.  A request
+   * whose method chttpserver does not recognize at all (a WebDAV verb, TRACE,
+   * CONNECT, a custom verb, ...) never reaches any handler, including one
+   * registered with CHTTP_ANY; it is rejected with 501 Not Implemented before
+   * routing ever runs.
    */
   CHTTP_ANY
 } chttp_method_t;
@@ -219,7 +224,8 @@ typedef struct chttp_request_body {
  * @param out_len  Optional: receives the length of the returned string
  *                 (excluding the terminating NUL). May be NULL.
  * @return Newly allocated, NUL-terminated base64 string, or NULL on
- *         allocation failure (or if data is NULL and len > 0).
+ *         allocation failure, if data is NULL and len > 0, or if len is
+ *         large enough that the encoded size would overflow size_t.
  */
 char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp, const void *data,
                              size_t len, size_t *out_len);

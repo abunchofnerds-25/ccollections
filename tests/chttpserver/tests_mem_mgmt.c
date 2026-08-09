@@ -56,7 +56,7 @@ TAU_MAIN()
 #define BASE_URL "http://127.0.0.1:18795"
 
 static clog g_test_logger = NULL;
-static chttpsvr g_srv = NULL;
+static chttpsvr g_srv = CHTTPSVR_INVALID;
 
 static size_t g_mm_malloc_count = 0;
 static size_t g_mm_free_count = 0;
@@ -94,7 +94,7 @@ static void _teardown(void) {
   if (g_srv) chttpsvr_stop(g_srv);
   if (g_srv) {
     __chttpsvr_destroy(g_srv);
-    g_srv = NULL;
+    g_srv = CHTTPSVR_INVALID;
   }
   /* __chttpsvr_destroy releases this server's shared-engine reference but
    * hands teardown of the shared event_loop reactor off to a joinable
@@ -293,7 +293,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
    * normally at process exit. */
   chttpsvr_stop(g_srv);
   __chttpsvr_destroy(g_srv);
-  g_srv = NULL;
+  g_srv = CHTTPSVR_INVALID;
   chttpsvr_engine_wait();
 
   /* Reinstalled procs must genuinely be exercised, not merely accepted, by
@@ -323,7 +323,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
 
   char *err = NULL;
   chttpsvr new_srv = create_chttpsvr(g_test_logger, &err);
-  REQUIRE_TRUE(new_srv != NULL);
+  REQUIRE_TRUE(new_srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(new_srv, CHTTP_GET, "/hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -346,7 +346,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), (size_t)3);
 
   chttpcli cli = create_chttpclient(NULL);
-  REQUIRE_TRUE(cli != NULL);
+  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
   chttp_request_t *req =
       chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);

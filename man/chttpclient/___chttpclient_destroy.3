@@ -13,10 +13,18 @@ ___chttpclient_destroy(chttpcli *pp);
 .nf
 Static inline function used as the cleanup callback in
 chttpcli_declare_scoped() and chttpcli_construct_scoped(). If *pp is
-non-NULL, calls __chttpclient_destroy(*pp) and sets *pp to NULL.
+not CHTTPCLI_INVALID, calls __chttpclient_destroy(*pp) and sets *pp
+to CHTTPCLI_INVALID.
 
 This function is not intended to be called directly; use
 chttpcli_declare_scoped() or chttpcli_construct_scoped() instead.
+
+Calling __chttpclient_destroy on a stale (already destroyed) handle
+is a FATAL ERROR (abort()/SIGABRT); see __chttpclient_destroy(3).
+This is only reachable here if *pp was left holding a stale value
+by code outside the normal declare/construct-scoped lifecycle, since
+the scoped macros themselves always leave *pp either live or already
+CHTTPCLI_INVALID.
 .fi
 .SH PARAMETERS
 .nf

@@ -1,4 +1,4 @@
-.TH CLRUCACHE_CREATE_FULL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CLRUCACHE_CREATE_FULL 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 clrucache_create_full \- create an LRU cache with full control
 .SH LIBRARY
@@ -55,16 +55,23 @@ err          Optional pointer to receive an error string on failure.
 .SH RETURN VALUE
 .nf
 Returns a new cache handle on success.
-Returns NULL on failure; *err is set if err is non-NULL.
+Returns CLRU_CACHE_INVALID on failure; *err is set if err is
+non-NULL.
 .fi
 .SH NOTES
 .nf
+The returned handle is an opaque VALUE (a packed {slot index,
+generation} pair), not a pointer; never cast it to/from void* or
+treat it as an address.
 Thread-safe: all operations on the returned handle are protected by
 an internal mutex and per-entry condition variables.
 The eviction callback is invoked while the cache mutex is held; it
 must not re-enter the cache.
-The destroy function must be called only after all other threads have
-finished using the cache.
+__clrucache_destroy waits for every in-flight resolved use of the
+handle (a concurrently executing clrucache_get_full/_set_full/
+clrucache_size/_capacity call) to finish before freeing anything, so
+it is no longer the caller's own responsibility to first prove no
+other thread is still using the cache; see __clrucache_destroy(3).
 .fi
 .SH "SEE ALSO"
 .BR clru_construct (3),

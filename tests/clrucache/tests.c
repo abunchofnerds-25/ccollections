@@ -1,7 +1,11 @@
 #include <clrucache.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
@@ -9,6 +13,9 @@
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
+
+extern struct clrucache *_clrucache_resolve_for_tests(clru_cache h);
+extern size_t _clrucache_slot_table_capacity_for_tests(void);
 
 /* ========================================================================== */
 /*                         BASIC OPERATIONS                                   */
@@ -105,7 +112,8 @@ TEST(basic, invalid_args_get) {
   _populate_cmap_pair(&kp, k);
   cmap_pair val_out = {};
 
-  REQUIRE_EQ(clrucache_get_full(NULL, &kp, &val_out), ccol_invalid_args);
+  REQUIRE_EQ(clrucache_get_full(CLRU_CACHE_INVALID, &kp, &val_out),
+             ccol_invalid_args);
   REQUIRE_EQ(clrucache_get_full(cache, NULL, &val_out), ccol_invalid_args);
   REQUIRE_EQ(clrucache_get_full(cache, &kp, NULL), ccol_invalid_args);
 
@@ -128,7 +136,8 @@ TEST(basic, invalid_args_set) {
   _populate_cmap_pair(&kp, k);
   _populate_cmap_pair(&vp, v);
 
-  REQUIRE_EQ(clrucache_set_full(NULL, &kp, &vp), ccol_invalid_args);
+  REQUIRE_EQ(clrucache_set_full(CLRU_CACHE_INVALID, &kp, &vp),
+             ccol_invalid_args);
   REQUIRE_EQ(clrucache_set_full(cache, NULL, &vp), ccol_invalid_args);
   REQUIRE_EQ(clrucache_set_full(cache, &kp, NULL), ccol_invalid_args);
 
@@ -151,34 +160,34 @@ TEST(basic, capacity_zero_returns_null) {
   char *err = NULL;
   clru_cache cache = clrucache_create_full(0, ccol_int, ccol_int, NULL, NULL,
                                            NULL, NULL, &err);
-  REQUIRE_NULL(cache);
+  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
   REQUIRE_NOT_NULL(err);
 }
 
 TEST(basic, null_cache_size_and_capacity_return_zero) {
-  REQUIRE_EQ(clrucache_size(NULL), (size_t)0);
-  REQUIRE_EQ(clrucache_capacity(NULL), (size_t)0);
+  REQUIRE_EQ(clrucache_size(CLRU_CACHE_INVALID), (size_t)0);
+  REQUIRE_EQ(clrucache_capacity(CLRU_CACHE_INVALID), (size_t)0);
 }
 
 TEST(basic, destroy_null_cache_is_noop) {
-  clru_cache cache = NULL;
+  clru_cache cache = CLRU_CACHE_INVALID;
   clru_destroy(cache); /* must not crash */
-  REQUIRE_NULL(cache);
+  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
 }
 
 TEST(basic, destroy_sets_handle_null) {
   clru_construct(cache, int, int, 4, NULL, NULL, NULL);
   clru_set(cache, 1, 10);
-  REQUIRE_NOT_NULL(cache);
+  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
   clru_destroy(cache);
-  REQUIRE_NULL(cache);
+  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
 }
 
 TEST(basic, create_full_null_err_on_failure) {
   /* Passing NULL for err must not crash when creation fails */
   clru_cache cache = clrucache_create_full(0, ccol_int, ccol_int, NULL, NULL,
                                            NULL, NULL, NULL);
-  REQUIRE_NULL(cache);
+  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
 }
 
 TEST(basic, size_unchanged_on_overwrite) {
@@ -2394,7 +2403,7 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
 TEST(get_val_types, get_into_rejects_live_value_too_large_for_buffer) {
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                            NULL, NULL, NULL);
-  REQUIRE_NOT_NULL(cache);
+  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
 
   int k = 1;
   long long v = 12345LL;
@@ -2457,7 +2466,7 @@ TEST(custom_alloc, get_full_copy_uses_custom_allocator) {
   char *err = NULL;
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                            NULL, &mprocs, &err);
-  REQUIRE_NOT_NULL(cache);
+  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
 
   int k = 1, v = 42;
   cmap_pair kp = {}, vp = {};
@@ -2487,7 +2496,7 @@ TEST(custom_alloc, char_ptr_get_full_uses_custom_allocator) {
   char *err = NULL;
   clru_cache cache = clrucache_create_full(8, ccol_string, ccol_string, NULL,
                                            NULL, NULL, &mprocs, &err);
-  REQUIRE_NOT_NULL(cache);
+  REQUIRE_NE(cache, CLRU_CACHE_INVALID);
 
   char *k = "hello", *v = "world";
   cmap_pair kp = {}, vp = {};
@@ -2513,5 +2522,249 @@ TEST(custom_alloc, invalid_mprocs_returns_null) {
   char *err = NULL;
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
                                            NULL, &bad, &err);
-  REQUIRE_NULL(cache);
+  REQUIRE_EQ(cache, CLRU_CACHE_INVALID);
+}
+
+/* ========================================================================== */
+/*        CLRU_CACHE HANDLE LIFECYCLE (GENERATION-TAGGED SLOT TABLE)          */
+/* ========================================================================== */
+
+/* Mirrors the already-implemented, already-verified chttpcli_handle_lifecycle
+ * / event_loop_handle_lifecycle test groups, adapted for clru_cache's own
+ * lock-protected pin mechanism (see src/clrucache.c's own struct clrucache.
+ * pending_resolve_count / pin_cv field comments: unlike event_loop's fully
+ * lock-free pin, clru_cache reuses the chttpcli/chttpsvr-style
+ * lock-protected decrement+broadcast, since this module is already a
+ * single-global-mutex design with no new-contention concern from adding one
+ * more brief mutex-protected step). */
+
+/* A fully completed destroy, followed later by a second destroy call on an
+ * independently-held copy of the same original handle value, must be a
+ * fatal error. Run in a forked child (mirroring tests/clogger/tests.c's own
+ * fork-test precedent for process-terminating misuse) since fatal_err
+ * aborts the whole process. */
+TEST(clrucache_handle_lifecycle, sequential_double_destroy_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
+                                             NULL, NULL, NULL);
+    if (cache == CLRU_CACHE_INVALID) _exit(2);
+    clru_cache stale = cache;   /* an independently-held copy of the handle
+          value, distinct from the local the macro below invalidates */
+    clru_destroy(cache);        /* completes normally; the local `cache` is now
+               CLRU_CACHE_INVALID, but `stale` still holds the original value */
+    __clrucache_destroy(stale); /* the actual misuse under test: a second,
+        purely sequential destroy of a handle already fully torn down */
+    _exit(0); /* unreachable if fatal_err() aborted as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+typedef struct {
+  clru_cache h;
+} clru_concurrent_destroy_arg_t;
+
+static void *clru_concurrent_destroy_thread(void *arg) {
+  clru_concurrent_destroy_arg_t *a = (clru_concurrent_destroy_arg_t *)arg;
+  __clrucache_destroy(a->h);
+  return NULL;
+}
+
+/* Two threads calling destroy on two independently-held copies of the SAME,
+ * still-valid handle at (as close to) the same moment as possible must also
+ * be fatal; regression coverage for the same class of concurrent double-free
+ * this whole redesign exists to close for chttpcli/chttpsvr/event_loop. */
+TEST(clrucache_handle_lifecycle, concurrent_double_destroy_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
+                                             NULL, NULL, NULL);
+    if (cache == CLRU_CACHE_INVALID) _exit(2);
+    clru_concurrent_destroy_arg_t a1 = {.h = cache};
+    clru_concurrent_destroy_arg_t a2 = {.h = cache};
+    pthread_t t1, t2;
+    pthread_create(&t1, NULL, clru_concurrent_destroy_thread, &a1);
+    pthread_create(&t2, NULL, clru_concurrent_destroy_thread, &a2);
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+    _exit(0); /* unreachable: whichever of the two destroy calls loses the
+                  race must hit fatal_err() */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+/* Reuses the pre-existing slow_remote_getter (defined above, in the
+ * COALESCING GETTERS section: sleeps 100ms before returning) to hold a
+ * clrucache_get_full call's pin open for a long, directly-controlled
+ * duration; unlike event_loop (which has no naturally-occurring slow public
+ * entry point and needed a dedicated resolve_pin_and_sleep_for_tests test
+ * hook), clru_cache's own remote-getter mechanism already gives every
+ * caller a way to block for an arbitrary, application-controlled duration
+ * while still holding a resolve's pin, so no new test-only accessor is
+ * needed for this test specifically. */
+
+typedef struct {
+  clru_cache h;
+  ccol_retval_t rv;
+} clru_slow_get_arg_t;
+
+static void *clru_slow_get_thread(void *arg) {
+  clru_slow_get_arg_t *a = (clru_slow_get_arg_t *)arg;
+  clru_cache c = a->h;
+  clru_redeclare(c, int, int);
+  int out = 0;
+  a->rv = clru_get(c, 42, &out);
+  return NULL;
+}
+
+/* The resolve-then-use race fix actually works: races a thread blocked
+ * inside clrucache_get_full's remote-getter call (still holding its pin)
+ * against a concurrent clru_destroy on the same handle. destroy must block
+ * until the pin is released, not race ahead and free the cache out from
+ * under the still-resolved pointer. */
+TEST(clrucache_handle_lifecycle, resolve_then_use_race_destroy_waits) {
+  clru_construct(cache, int, int, 8, slow_remote_getter, NULL, NULL);
+
+  clru_slow_get_arg_t get_arg = {.h = cache, .rv = ccol_success};
+  pthread_t get_thread;
+  REQUIRE_EQ(pthread_create(&get_thread, NULL, clru_slow_get_thread, &get_arg),
+             0);
+
+  /* Give the getter thread a brief head start so its resolve (and therefore
+   * its pin) has definitely already happened before destroy fires. */
+  struct timespec startup = {.tv_sec = 0, .tv_nsec = 10000000}; /* 10 ms */
+  nanosleep(&startup, NULL);
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  clru_destroy(cache); /* must block until the getter thread's 100ms
+                            remote_getter call (still holding the pin) has
+                            fully completed */
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+
+  pthread_join(get_thread, NULL);
+  REQUIRE_EQ(get_arg.rv, ccol_success);
+  /* The getter thread slept ~100ms while pinned; destroy returning in well
+   * under that would mean it did NOT actually wait for the pin, i.e. the
+   * resolve-then-use protection failed. */
+  REQUIRE_GT(elapsed_ms, 50L);
+}
+
+typedef struct {
+  clru_cache h;
+} clru_capacity_arg_t;
+
+static void *clru_capacity_thread(void *arg) {
+  clru_capacity_arg_t *a = (clru_capacity_arg_t *)arg;
+  /* Return value intentionally ignored: a legitimate race with a concurrent
+   * destroy can make this resolve fail (returning 0) instead of succeeding;
+   * both outcomes are correct. This thread exists purely to generate
+   * resolve/pin/unpin traffic concurrent with the destroy thread below. */
+  clrucache_capacity(a->h);
+  return NULL;
+}
+
+/* Distinct from resolve_then_use_race_destroy_waits above, and not
+ * redundant with it: that test's long, deliberately-held pin guarantees
+ * pending_resolve_count > 0 for the whole race window; this test needs the
+ * opposite shape: a fast, non-blocking entry point (clrucache_capacity:
+ * resolve, one mutex-free field read, unpin, return) raced against a
+ * concurrent destroy, repeated under stress, since the failure window for
+ * a fast pin/unpin pair is only a handful of instructions wide and will not
+ * reproduce reliably under a single unstressed run. A fresh cache is used
+ * each iteration so every repetition gets its own independent race rather
+ * than reusing one already-destroyed handle. */
+TEST(clrucache_handle_lifecycle, resolve_unpin_race_stress) {
+  enum { ITERATIONS = 25 };
+  for (int i = 0; i < ITERATIONS; i++) {
+    clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
+                                             NULL, NULL, NULL);
+    REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+
+    clru_capacity_arg_t capacity_arg = {.h = cache};
+    clru_concurrent_destroy_arg_t destroy_arg = {.h = cache};
+    pthread_t capacity_tid, destroy_tid;
+    REQUIRE_EQ(pthread_create(&capacity_tid, NULL, clru_capacity_thread,
+                              &capacity_arg),
+               0);
+    REQUIRE_EQ(pthread_create(&destroy_tid, NULL,
+                              clru_concurrent_destroy_thread, &destroy_arg),
+               0);
+    pthread_join(capacity_tid, NULL);
+    pthread_join(destroy_tid, NULL);
+  }
+}
+
+/* Legitimate slot reuse must never be confused with a stale handle to the
+ * slot's previous occupant; the whole point of the generation counter. */
+TEST(clrucache_handle_lifecycle,
+     legitimate_slot_reuse_not_confused_with_stale_handle) {
+  clru_cache a = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL, NULL,
+                                       NULL, NULL);
+  REQUIRE_NE(a, CLRU_CACHE_INVALID);
+  clru_cache stale_a = a;
+  clru_destroy(a);
+
+  clru_cache b = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL, NULL,
+                                       NULL, NULL);
+  REQUIRE_NE(b, CLRU_CACHE_INVALID);
+
+  /* B's operations must succeed normally regardless of whether the
+   * allocator happened to reuse A's exact address for B. */
+  REQUIRE_EQ(clrucache_capacity(b), (size_t)8);
+
+  /* A's stale handle must never resolve to B, even if it reused the same
+   * underlying address; the whole point of the generation counter. */
+  REQUIRE_EQ((void *)_clrucache_resolve_for_tests(stale_a), NULL);
+
+  clru_destroy(b);
+}
+
+/* The slot table is bounded, not ever-growing: a create/destroy churn loop
+ * with only a single slot ever in flight at a time must reuse that one
+ * freed slot on every iteration rather than growing the table further.
+ * Captures capacity right after the first create/destroy pair (rather than
+ * asserting a fixed absolute value like 1) since other tests earlier in
+ * this same process may have already grown the table to some N > 1; what
+ * this test actually needs to prove is that ITS OWN churn adds no further
+ * growth, not what the table's absolute size happens to be when it runs. */
+TEST(clrucache_handle_lifecycle, bounded_slot_reuse_under_churn) {
+  enum { ITERATIONS = 25 };
+
+  clru_cache cache0 = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
+                                            NULL, NULL, NULL);
+  REQUIRE_NE(cache0, CLRU_CACHE_INVALID);
+  clru_destroy(cache0);
+  size_t capacity_after_first = _clrucache_slot_table_capacity_for_tests();
+
+  for (int i = 1; i < ITERATIONS; i++) {
+    clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,
+                                             NULL, NULL, NULL);
+    REQUIRE_NE(cache, CLRU_CACHE_INVALID);
+    clru_destroy(cache);
+  }
+
+  REQUIRE_EQ(_clrucache_slot_table_capacity_for_tests(), capacity_after_first);
 }

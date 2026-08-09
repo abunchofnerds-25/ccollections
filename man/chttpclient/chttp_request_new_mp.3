@@ -20,7 +20,9 @@ the body data and content_type string into privately owned buffers.
 The caller may free its originals immediately after this call returns.
 
 Pass NULL for body or use the CHTTP_NO_BODY macro when no request body
-is needed (e.g. GET, DELETE).
+is needed (e.g. GET, DELETE). body->data may be NULL only when
+body->len == 0; a NULL body->data paired with a nonzero body->len is
+rejected (returns NULL) rather than silently treated as no body.
 
 The returned request's expect_continue field defaults to false (the
 struct is zero-initialised). Set it to true after construction (e.g.
@@ -30,8 +32,8 @@ chttpclient_do(3) for the full protocol. Has no effect on a request
 with no body, or one that already has an explicit "Expect" header set
 via chttp_request_set_header. Tier 1 (chttpclient_do/
 chttpclient_do_streaming) only; chttpclient_do_async and everything
-built on it silently ignore this field for now and send the body
-immediately, exactly as if it were false.
+built on it ignore this field and send the body immediately, exactly
+as if it were false.
 .fi
 .SH PARAMETERS
 .nf
@@ -43,7 +45,8 @@ err_str   Optional; receives a static error string on failure.
 .fi
 .SH RETURN VALUE
 .nf
-Pointer to the new request, or NULL on failure.
+Pointer to the new request, or NULL on failure (including a NULL url,
+a NULL body->data with a nonzero body->len, or allocation failure).
 .fi
 .SH NOTES
 .nf
@@ -51,6 +54,15 @@ All allocations use mprocs when non-NULL.
 The request must remain alive until any chttpclient_do call using it
 returns: the request's method/body/headers are read directly during
 that synchronous call.
+
+body->content_type is copied verbatim here with no validation (this
+function cannot yet know whether it will even be used on the wire; an
+explicit "content-type" header set later via chttp_request_set_header
+takes precedence and suppresses it). If it reaches serialization time
+still containing an embedded CR or LF byte, the chttpclient_do/
+chttp_run_query/etc. call using this request fails with
+ccol_invalid_args instead of writing it onto the wire; see
+chttp_request_set_header(3) for why.
 .fi
 .SH "SEE ALSO"
 .BR chttp_request_new (3),

@@ -68,7 +68,7 @@ test: build build_tls build_mem_mgmt build_engine_stop
 
 memtest: build build_tls build_mem_mgmt build_engine_stop
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
-		--error-exitcode=1 ./tests
+		--error-exitcode=1 --child-silent-after-fork=yes ./tests
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests_tls
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \

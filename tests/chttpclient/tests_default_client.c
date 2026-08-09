@@ -64,22 +64,22 @@ TAU_MAIN()
 
 TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
   chttpcli cli = chttp_default_client();
-  REQUIRE_NE((void *)cli, NULL);
+  REQUIRE_NE(cli, CHTTPCLI_INVALID);
 
   /* The actual misuse this test exists to make safe: the caller destroys
    * the handle chttp_default_client() itself owns and is responsible for
    * tearing down at process exit. */
   chttpclient_destroy(cli);
-  REQUIRE_EQ((void *)cli, NULL); /* the macro NULLs the local as usual */
+  REQUIRE_EQ(cli, CHTTPCLI_INVALID); /* the macro NULLs the local as usual */
 
-  /* Before the fix: this would return the same, now-dangling pointer
+  /* Before the fix: this would return the same, now-stale handle
    * (call_once never re-fires), and any use of it below would be a real
-   * use-after-free. After the fix: the singleton was cleared, so this
-   * consistently and permanently returns NULL instead -- there is no way
-   * to rebuild the default client once it has been destroyed this way (see
-   * chttp_default_client's own doc comment). */
+   * use-after-destroy. After the fix: the singleton was cleared, so this
+   * consistently and permanently returns CHTTPCLI_INVALID instead; there
+   * is no way to rebuild the default client once it has been destroyed
+   * this way (see chttp_default_client's own doc comment). */
   chttpcli cli2 = chttp_default_client();
-  REQUIRE_EQ((void *)cli2, NULL);
+  REQUIRE_EQ(cli2, CHTTPCLI_INVALID);
 
   /* Every convenience function built on the default client must fail
    * cleanly (no crash) rather than dereference the dangling pointer the
@@ -97,6 +97,6 @@ TEST(default_client, destroying_it_directly_does_not_crash_or_double_free) {
    * test process exits; it must find default_client_bundler.client already
    * NULL (cleared above) and be a no-op, not a second destroy of the same
    * freed memory. That is exactly what a clean valgrind run under `make
-   * memtest` for this binary verifies -- there is no in-test hook to
+   * memtest` for this binary verifies; there is no in-test hook to
    * observe the destructor directly. */
 }

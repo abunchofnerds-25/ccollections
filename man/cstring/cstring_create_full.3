@@ -27,11 +27,6 @@ err       Optional pointer to receive an error string on failure
 Returns pointer to newly created cstring on success
 Returns NULL on failure (details written to *err if err is non-NULL)
 .fi
-.SH NOTES
-.nf
-Minimum internal buffer capacity is 16 bytes
-Capacity is always rounded up to the nearest power of two
-.fi
 .SH "SEE ALSO"
 .BR cstring_create (3),
 .BR cstring_destroy (3)

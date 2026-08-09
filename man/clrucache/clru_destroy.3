@@ -1,6 +1,6 @@
-.TH CLRU_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CLRU_DESTROY 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
-clru_destroy \- destroy an LRU cache and set pointer to NULL
+clru_destroy \- destroy an LRU cache and invalidate the handle
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,18 +11,24 @@ clru_destroy(name);
 .fi
 .SH DESCRIPTION
 .nf
-Calls __clrucache_destroy() to evict all remaining entries (invoking
-the eviction callback for each while the mutex is held), destroy the
-internal map, and free all memory. Then sets name to NULL.
+Calls __clrucache_destroy() to wait for every in-flight resolved use
+of the handle to finish, evict all remaining entries (invoking the
+eviction callback for each while the mutex is held), destroy the
+internal map, and free all memory. Then sets name to
+CLRU_CACHE_INVALID.
 .fi
 .SH PARAMETERS
 .nf
-name  Cache variable to destroy (will be set to NULL after destruction)
+name  Cache variable to destroy (will be set to CLRU_CACHE_INVALID
+      after destruction)
 .fi
 .SH NOTES
 .nf
-Safe to call when name is NULL (no-op).
-Must be called only after all other threads have stopped using the cache.
+Safe to call when name is CLRU_CACHE_INVALID (no-op). Calling this
+on a stale handle (one already destroyed, sequentially by an
+earlier call or concurrently by another thread) is a FATAL ERROR
+(abort()/SIGABRT), not a silent double-free; see
+__clrucache_destroy(3) for further detail.
 .fi
 .SH "SEE ALSO"
 .BR clru_construct (3),

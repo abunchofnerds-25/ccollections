@@ -1,4 +1,4 @@
-.TH CTPOOL_SHUTDOWN_IMMEDIATE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_SHUTDOWN_IMMEDIATE 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_shutdown_immediate \- immediate shutdown
 .SH LIBRARY
@@ -22,7 +22,7 @@ no-op.
 .fi
 .SH PARAMETERS
 .nf
-pool   Thread pool handle (NULL is a no-op)
+pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed handle is a no-op)
 .fi
 .SH NOTES
 .nf

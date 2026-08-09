@@ -71,10 +71,10 @@ err_str   Optional pointer to receive an error string on failure.
 .SH RETURN VALUE
 .nf
 Returns a new registration handle on success.
-Returns NULL on failure: loop is NULL, sel is malformed (invalid
-type/dir, NULL queue pointer, or negative fd), the direction is already
-occupied on that fd (ccol_not_permitted), or allocation/epoll_ctl
-failure.
+Returns NULL on failure: loop is EVENT_LOOP_INVALID or a stale/
+already-destroyed handle, sel is malformed (invalid type/dir, NULL
+queue pointer, or negative fd), the direction is already occupied on
+that fd (ccol_not_permitted), or allocation/epoll_ctl failure.
 .fi
 .SH THREAD SAFETY
 .nf

@@ -1,4 +1,4 @@
-.TH CTPOOL_PENDING_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_PENDING_COUNT 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_pending_count \- number of tasks in the queue
 .SH LIBRARY
@@ -17,11 +17,11 @@ change immediately after the call returns.
 .fi
 .SH PARAMETERS
 .nf
-pool   Thread pool handle (NULL returns 0)
+pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed handle returns 0)
 .fi
 .SH RETURN VALUE
 .nf
-Number of queued tasks, or 0 if pool is NULL.
+Number of queued tasks, or 0 if pool is CTPOOL_INVALID or a stale/already-destroyed handle.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_active_count (3)

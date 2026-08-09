@@ -2,7 +2,11 @@ CC = gcc
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS
 SRC_FILE_PREFIX = cthreadpool
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/common.c
+# cvector.c is needed for ctpool's own generation-tagged handle slot table
+# (the same redesign already applied to chttpcli/chttpsvr/event_loop/
+# clru_cache).
+SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cvector.c \
+            ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
 	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O0 -Werror
@@ -16,7 +20,7 @@ test: build
 	./tests
 
 memtest: build
-	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests
+	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \

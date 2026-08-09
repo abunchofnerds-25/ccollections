@@ -1,4 +1,4 @@
-.TH CTPOOL_ACTIVE_COUNT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_ACTIVE_COUNT 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_active_count \- number of tasks currently executing
 .SH LIBRARY
@@ -17,11 +17,11 @@ change immediately after the call returns.
 .fi
 .SH PARAMETERS
 .nf
-pool   Thread pool handle (NULL returns 0)
+pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed handle returns 0)
 .fi
 .SH RETURN VALUE
 .nf
-Number of actively executing tasks, or 0 if pool is NULL.
+Number of actively executing tasks, or 0 if pool is CTPOOL_INVALID or a stale/already-destroyed handle.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_pending_count (3)

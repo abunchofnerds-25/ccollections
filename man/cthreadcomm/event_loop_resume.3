@@ -33,11 +33,12 @@ reg   Registration to resume.
 .SH RETURN VALUE
 .nf
 ccol_success        Resumed (or was not paused to begin with).
-ccol_invalid_args   loop or reg is NULL; reg is a queue/channel
-                    registration; or reg was concurrently removed
-                    (e.g. the connection was closed while the caller
-                    still thought it owned a paused registration to
-                    resume).
+ccol_invalid_args   loop is EVENT_LOOP_INVALID or a stale/already-
+                    destroyed handle; reg is NULL; reg is a queue/
+                    channel registration; or reg was concurrently
+                    removed (e.g. the connection was closed while the
+                    caller still thought it owned a paused
+                    registration to resume).
 .fi
 .SH THREAD SAFETY
 .nf

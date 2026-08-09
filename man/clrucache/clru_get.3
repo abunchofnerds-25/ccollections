@@ -1,4 +1,4 @@
-.TH CLRU_GET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CLRU_GET 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
 clru_get \- retrieve a value by key (type-safe convenience wrapper)
 .SH LIBRARY
@@ -48,7 +48,9 @@ val_ptr  Pointer to the value type (ValT *), NOT cmap_pair *.
 .nf
 ccol_success           Value delivered via val_ptr.
 ccol_key_not_found     Key absent and no getter, or getter failed.
-ccol_invalid_args      cache or key_pair is NULL.
+ccol_invalid_args      cache is CLRU_CACHE_INVALID or a stale
+                       (already-destroyed) handle; or key_pair is
+                       NULL.
 ccol_not_enough_memory Internal allocation failed.
 .fi
 .SH EXAMPLES

@@ -46,12 +46,13 @@ new_dir  ccol_select_read or ccol_select_write.
 .SH RETURN VALUE
 .nf
 ccol_success        Direction changed.
-ccol_invalid_args   loop or reg is NULL; reg is a queue/channel
-                    registration; new_dir is neither ccol_select_read
-                    nor ccol_select_write; or reg was concurrently
-                    removed (by another thread, or by reg's own
-                    callback self-removing) between the caller obtaining
-                    it and this call.
+ccol_invalid_args   loop is EVENT_LOOP_INVALID or a stale/already-
+                    destroyed handle; reg is NULL; reg is a queue/
+                    channel registration; new_dir is neither
+                    ccol_select_read nor ccol_select_write; or reg was
+                    concurrently removed (by another thread, or by
+                    reg's own callback self-removing) between the
+                    caller obtaining it and this call.
 ccol_not_permitted  The target direction is already occupied by a
                     different registration on the same fd.
 .fi

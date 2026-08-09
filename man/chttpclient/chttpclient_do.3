@@ -17,8 +17,12 @@ Acquires a pool slot (blocking if all slots are in use), executes the
 HTTP request synchronously, buffers the entire response body, and
 stores a heap-allocated chttpcli_response in *resp_out.
 
-The caller owns *resp_out on success and must call
-chttpclient_resp_free when done.
+*resp_out is set to NULL immediately, before any other work begins,
+and stays NULL on every non-success return; it is safe to
+unconditionally call chttpclient_resp_free(resp) after this call
+regardless of the returned ccol_retval_t, with no need to separately
+pre-initialize the caller's own local pointer. The caller owns
+*resp_out on success and must call chttpclient_resp_free when done.
 
 Redirects (301, 302, 303, 307, 308) are followed automatically, up to
 50 hops.  301/302/303 rewrite the method to a bodyless GET (HEAD is
@@ -26,14 +30,38 @@ left as HEAD); 307/308 preserve the original method and body.  The
 Location header may be an absolute URL, a protocol-relative
 reference ("//host/path"), an absolute-path reference ("/foo"), or a
 general relative reference ("foo", "../foo", "./foo", "?query");
-all are resolved per RFC 3986.  Dot-segment normalization
+all are resolved per RFC 3986.  A Location value that carries its
+own scheme (e.g. "mailto:x@y", "ftp://host/path", or any scheme
+other than http, https, or http+unix) is always treated as absolute
+per RFC 3986 SS5.2.2 and resolves to itself unchanged; since this
+client only connects over http/https/http+unix, the next hop then
+reports ccol_http_invalid_url (the same code an unsupported scheme
+in the original request URL already gets) instead of the reference
+being silently merged onto the current origin's path as though it
+were relative.  If the 50-hop cap is reached and the
+last hop's response is itself a would-be redirect, it is not
+followed or delivered; ccol_http_too_many_redirects is returned
+instead.  Dot-segment normalization
 ("..", ".") only ever rewrites the path component; a query string
 is always carried forward byte-for-byte, even one that happens to
 contain "/", "..", or "." characters.  If the request URL embedded
 credentials (see below), the resulting Authorization header is
 resent on every hop that stays on the same origin (scheme, host,
 and port) and is dropped permanently the first time a hop changes
-origin.
+origin.  An Authorization header set explicitly via
+chttp_request_set_header receives the identical treatment, tracked
+against the origin of the original request rather than any per-hop
+userinfo (matching curl's own hardened default behavior of never
+forwarding a user-set Authorization header to a different host on
+redirect).
+
+A 301/302/303 hop that rewrites the method to a bodyless GET also
+strips any caller-set Content-Length, Content-Type, and Expect
+header from that hop and every hop after it (unless a later 307/308
+hop restores a real body): those headers only ever describe a body,
+and resending a value that described the original request's body
+onto a request with no body at all is never correct.  Every other
+caller-set header is resent unchanged on every hop.
 
 The request URL accepts http://, https://, and http+unix:// (Unix
 domain socket support is identical across every tier; the
@@ -49,12 +77,28 @@ http+unix://, which has no userinfo convention).  A trailing
 "#fragment" is recognized and discarded (fragments are never sent to
 a server).
 
+Any interim informational (1xx) response the server sends is
+transparently discarded, and reading continues on the same
+connection for the real response; a caller never sees a 1xx status
+as though it were the final answer. RFC 8297 "103 Early Hints" is
+the most common real-world example, and may precede an ordinary
+response with no req->expect_continue involvement at all. A server
+that never stops sending interim responses is not tolerated
+indefinitely: after 64 consecutive discarded interim responses on
+one hop, chttpclient_do gives up and returns
+ccol_http_transfer_aborted, particularly relevant given
+request_timeout_ms defaults to 0 (no timeout).
+
 If req->expect_continue is true and the request has a body, only the
 request's headers are sent first, followed by up to a one second
 wait for the server's response:
 
   - If the server sends a "100 Continue" interim response, the body
     is sent and the real final response is read normally.
+  - If the server sends some OTHER interim 1xx status while waiting
+    (e.g. "103 Early Hints" ahead of "100 Continue"), it is
+    discarded and the wait continues, still bounded by the same
+    one-second budget.
   - If the server answers with a final status directly instead
     (e.g. to reject the request without wanting the body), that
     response is delivered to the caller as-is and the body is never
@@ -66,10 +110,25 @@ wait for the server's response:
 expect_continue has no effect on a request with no body, and is
 currently honored only by chttpclient_do and chttpclient_do_streaming
 (Tier 1); chttpclient_do_async and everything built on it ignore it.
+
+Once a "100 Continue" interim response has actually been received and
+the body written to that connection, a subsequent failure on that
+same connection is reported directly and never silently retried
+against a fresh connection, even if the connection was reused from
+the keep-alive idle pool: the server has already proven it was alive
+and accepted the body, so retrying would resend it to an unrelated
+second connection and risk a non-idempotent request being processed
+twice. See "Connection Pool Behaviour" in README.md for the general
+reused-connection retry-once behavior this is the one exception to.
+
+The buffered response body has no size limit by default. Call
+chttpclient_set_max_response_body_size to cap it; a response
+exceeding that cap is reported as ccol_msg_too_large instead of
+being buffered in full.
 .fi
 .SH PARAMETERS
 .nf
-cli       Client handle; must not be NULL.
+cli       Client handle; must not be CHTTPCLI_INVALID.
 req       Request to execute; must not be NULL.
 resp_out  Output parameter; must not be NULL.
 .fi
@@ -79,7 +138,13 @@ ccol_success
        Request completed; *resp_out is valid.
 
 ccol_invalid_args
-       Any argument is NULL.
+       Any argument is NULL, cli is CHTTPCLI_INVALID or a stale/
+       already-destroyed handle, a request header (or, on a request
+       with a body, body.content_type) contains an embedded CR or LF
+       byte, a request header is named "Transfer-Encoding", or (on a
+       body-carrying request: POST, PUT, or PATCH) a request header
+       named "Content-Length" does not exactly match the actual
+       body length being sent; see chttp_request_set_header(3).
 
 ccol_not_enough_memory
        Memory allocation failed.
@@ -93,9 +158,12 @@ ccol_not_permitted
 ccol_http_invalid_url
        URL is malformed, uses an unsupported scheme (only http://,
        https://, and http+unix:// are supported), has a missing/
-       invalid host, port, or userinfo component, or (for
-       http+unix://) names a socket path too long to fit
-       sockaddr_un.sun_path.
+       invalid host, port, or userinfo component (including an
+       embedded CR or LF byte in the host or in the path/query,
+       which would otherwise be carried verbatim onto the wire and
+       let it inject extra header lines or a whole smuggled second
+       request), or (for http+unix://) names a socket path too long
+       to fit sockaddr_un.sun_path.
 
 ccol_http_host_resolution_failed
        DNS resolution failed for the target host (never returned for
@@ -113,14 +181,21 @@ ccol_http_tls_handshake_failed
        verification.
 
 ccol_http_tls_cert_verification_failed
-       The peer certificate or hostname could not be verified, or the
-       configured client certificate/key/CA bundle path was not
-       readable.
+       The peer certificate or hostname could not be verified.
+
+ccol_http_tls_cert_load_failed
+       The configured client certificate, key, or CA bundle path was
+       not readable, or ctls failed to load/parse it.
 
 ccol_http_transfer_aborted
        The connection failed mid-transfer, the server sent a
        malformed HTTP/1.1 response, or a streaming chttpcli_write_fn
        returned fewer bytes than it was given.
+
+ccol_msg_too_large
+       The response body exceeded
+       chttpclient_set_max_response_body_size's configured cap.
+       Never returned unless that cap has been set.
 
 ccol_unexpected_failure
        Any other internal failure not covered by the above codes.
@@ -128,5 +203,6 @@ ccol_unexpected_failure
 .SH "SEE ALSO"
 .BR chttpclient_do_streaming (3),
 .BR chttpclient_do_async (3),
+.BR chttpclient_set_max_response_body_size (3),
 .BR chttp_do (3),
 .BR chttpclient_resp_free (3)

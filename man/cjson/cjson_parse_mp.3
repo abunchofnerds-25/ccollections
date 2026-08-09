@@ -41,9 +41,10 @@ cjson_parse_mp(json_str, err_str, NULL).
 json_str  Null-terminated JSON text.
 err_str   Out-parameter for the parse error message.  On success
           *err_str is set to NULL.  On failure a heap-allocated
-          null-terminated string is stored in *err_str; the caller
-          must free() it when done.  Pass NULL to discard the error
-          message.
+          null-terminated string, allocated through mp, is stored in
+          *err_str; the caller must free it with
+          cjson_serialize_free_mp() (passing the same mp) when done.
+          Pass NULL to discard the error message.
 mp        Custom memory management procedures for all nodes in the
           resulting tree, or NULL for the default allocator.
 .fi
@@ -51,14 +52,15 @@ mp        Custom memory management procedures for all nodes in the
 .nf
 Root cjson node on success.
 NULL on parse failure; if err_str was non-NULL, *err_str holds the
-reason (caller must free it).
+reason (caller must free it with cjson_serialize_free_mp(), passing
+the same mp).
 .fi
 .SH NOTES
 .nf
 The caller owns the returned tree and must free it with cjson_destroy().
-The error string (when requested) is always allocated with plain
-malloc so the caller can always free it with plain free(), regardless
-of which mp was used for node allocation.
+The error string (when requested) is allocated through the same mp
+used for the parse; free it with cjson_serialize_free_mp(err, mp)
+(or cjson_serialize_free(err) for the default allocator).
 .fi
 .SH EXAMPLE
 .nf
@@ -66,7 +68,7 @@ char *err = NULL;
 cjson doc = cjson_parse_mp(input, &err, NULL);
 if (!doc) {
     fprintf(stderr, "parse failed: %s\en", err);
-    free(err);
+    cjson_serialize_free(err);
     return -1;
 }
 /* use doc ... */
@@ -75,4 +77,5 @@ cjson_destroy(doc);
 .SH "SEE ALSO"
 .BR cjson_parse_n_mp (3),
 .BR cjson_destroy (3),
-.BR cjson_serialize (3)
+.BR cjson_serialize (3),
+.BR cjson_serialize_free_mp (3)

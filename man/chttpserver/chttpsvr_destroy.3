@@ -1,6 +1,6 @@
 .TH CHTTPSVR_DESTROY 3 "2026-07-14" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chttpsvr_destroy \- destroy a chttpsvr handle and NULL the pointer
+chttpsvr_destroy \- destroy a chttpsvr handle and set it to CHTTPSVR_INVALID
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,11 +11,16 @@ chttpsvr_destroy(name);
 .fi
 .SH DESCRIPTION
 .nf
-Calls __chttpsvr_destroy on name and then sets name to NULL.
+Calls __chttpsvr_destroy on name and then sets name to CHTTPSVR_INVALID.
 
 __chttpsvr_destroy drains all in-flight requests, and if this is the
 last active server also stops the shared engine.  Call chttpsvr_stop
 first to close the listener before calling this macro.
+
+Calling this a second time on an independently-held copy of the same
+handle value (whether concurrently, or later, after the first call
+has already completed) is a FATAL ERROR (abort()/SIGABRT); see
+__chttpsvr_destroy(3).
 
 Safe to call regardless of whether the shared engine is still running
 (this releases name's own engine reference, possibly triggering an

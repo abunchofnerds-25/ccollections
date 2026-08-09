@@ -65,6 +65,13 @@ static void _chttp_base64_decode_table_init(void) {
 char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp, const void *data,
                              size_t len, size_t *out_len) {
   if (!data && len > 0) return NULL;
+  /* enc_len below is ((len+2)/3)*4; len is a caller-supplied length with no
+   * upper bound of its own, and neither "len+2" nor the final "*4" was
+   * previously checked for overflow. Practically unreachable (it would take
+   * a multi-exabyte input to actually wrap size_t), but an unchecked size
+   * computation feeding an allocation is worth rejecting outright rather
+   * than trusting the input never gets that large. */
+  if (len > (SIZE_MAX / 4) * 3 - 4) return NULL;
 
   const unsigned char *p = (const unsigned char *)data;
   size_t enc_len = ((len + 2) / 3) * 4;

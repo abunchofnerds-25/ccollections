@@ -19,17 +19,49 @@ lookups are case-insensitive.  If a header with the same name (ignoring
 case) already exists it is overwritten with the new value.
 
 The headers map is lazily created on the first call.
+
+name and value must not contain an embedded CR or LF byte.  The
+serializer writes "name: value\r\n" onto the wire with no escaping, so
+an unvalidated CR/LF would let a caller that reflects untrusted data
+(a forwarded token, a proxied header) into a header inject arbitrary
+extra header lines, or split the request into two (HTTP request
+splitting).  Such a name or value is rejected outright with
+ccol_invalid_args rather than being stored.
+
+A name of "Transfer-Encoding" (case-insensitive) is also rejected
+outright.  chttpclient never transfer-codes a request body: a
+body-carrying request is always sent whole, Content-Length-framed.
+Accepting a caller-set Transfer-Encoding header would let
+chttpclient_do's own automatic Content-Length synthesis add a
+Content-Length header alongside it on the wire, over a body that was
+never actually transfer-coded; an ambiguous framing this library's own
+request/response parser rejects outright when it appears on a message
+being parsed (RFC 7230 SS3.3.3).
+
+A "Content-Length" header IS accepted by this function (it has no
+body length to check the value against without also duplicating the
+request's eventual method/redirect context), but is validated later,
+when the request actually reaches the wire: chttpclient_do and every
+other request-execution function reject a body-carrying request
+(POST, PUT, or PATCH) whose caller-set Content-Length does not
+exactly match the body actually being sent, for the identical
+"declared framing disagrees with the wire" reason Transfer-Encoding
+is rejected outright above; see chttpclient_do(3).
 .fi
 .SH PARAMETERS
 .nf
 req     Request to modify; must not be NULL.
-name    Header name (e.g. "Authorization"); must not be NULL.
-value   Header value; must not be NULL.
+name    Header name (e.g. "Authorization"); must not be NULL, must not
+        contain a CR or LF byte, and must not be "Transfer-Encoding".
+value   Header value; must not be NULL, and must not contain a CR or
+        LF byte.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success            Header was set.
-ccol_invalid_args       req, name, or value is NULL.
+ccol_invalid_args       req, name, or value is NULL, name/value
+                        contains an embedded CR or LF byte, or name is
+                        "Transfer-Encoding".
 ccol_not_enough_memory  Map allocation failed.
 .fi
 .SH "SEE ALSO"

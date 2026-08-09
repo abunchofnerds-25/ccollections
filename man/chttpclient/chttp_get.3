@@ -18,7 +18,8 @@ via the default client, and frees the request.
 .SH PARAMETERS
 .nf
 url       Target URL; must not be NULL.
-resp_out  Output parameter; must not be NULL.
+resp_out  Must not be NULL. Set to NULL immediately, then, on
+          success, receives the response pointer.
 .fi
 .SH RETURN VALUE
 .nf

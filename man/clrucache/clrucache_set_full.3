@@ -1,4 +1,4 @@
-.TH CLRUCACHE_SET_FULL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CLRUCACHE_SET_FULL 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 clrucache_set_full \- store a value by key (write-through)
 .SH LIBRARY
@@ -38,12 +38,20 @@ val_pair  Value to associate with the key (ptr and size must be set;
 ccol_success             Value stored (and remote setter succeeded if
                          one was provided).
 ccol_unexpected_failure  Remote setter returned false; cache unchanged.
-ccol_invalid_args        cache, key_pair, or val_pair is NULL; or
-                         val_pair->size is 0.
+ccol_invalid_args        cache is CLRU_CACHE_INVALID or a stale
+                         (already-destroyed) handle; or key_pair or
+                         val_pair is NULL; or val_pair->size is 0.
 ccol_not_enough_memory   Memory allocation for the new value failed.
 .fi
 .SH NOTES
 .nf
+cache is an opaque VALUE handle, resolved through a library-owned
+slot table before the underlying cache object is touched; the pin
+established by that resolve is held for the entire duration of this
+call, including any time spent blocked inside a remote setter
+callback, so a concurrent __clrucache_destroy on the same handle
+waits for this call to finish rather than freeing the cache out from
+under it.
 O(1) average-case complexity for the hash map operations.
 .fi
 .SH "SEE ALSO"

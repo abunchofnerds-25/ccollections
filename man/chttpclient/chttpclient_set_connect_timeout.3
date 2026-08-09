@@ -16,13 +16,14 @@ HTTPS, the TLS handshake).  Pass 0 to disable the timeout (default).
 .fi
 .SH PARAMETERS
 .nf
-cli   Client handle; must not be NULL.
+cli   Client handle; must not be CHTTPCLI_INVALID.
 ms    Timeout in milliseconds.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success      Timeout updated.
-ccol_invalid_args cli is NULL.
+ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale/already-
+                  destroyed handle.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_set_request_timeout (3)

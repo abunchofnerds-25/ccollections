@@ -1,5 +1,6 @@
 #include <chttp.h>
 #include <stdatomic.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #pragma GCC diagnostic push
@@ -56,6 +57,19 @@ TEST(base64_encode, null_data_with_zero_len_succeeds) {
 
 TEST(base64_encode, null_data_with_nonzero_len_fails) {
   REQUIRE_EQ((void *)chttp_base64_encode(NULL, 4, NULL), NULL);
+}
+
+TEST(base64_encode, length_large_enough_to_overflow_is_rejected) {
+  /* Regression test: enc_len = ((len+2)/3)*4 had no overflow check before
+   * allocating enc_len+1 bytes; a caller-supplied len large enough to wrap
+   * size_t would previously proceed with a tiny wrapped allocation and then
+   * write far past it. len is deliberately close to SIZE_MAX here, well
+   * past what this function could ever legitimately be asked to encode; a
+   * real (non-NULL, non-dereferenced) pointer is passed since a correctly
+   * fixed implementation must reject this before ever touching *data*, not
+   * merely before allocating. */
+  char dummy = 0;
+  REQUIRE_EQ((void *)chttp_base64_encode(&dummy, SIZE_MAX - 1, NULL), NULL);
 }
 
 TEST(base64_encode, embedded_nul_bytes_round_trip_via_out_len) {

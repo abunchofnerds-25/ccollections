@@ -1,4 +1,4 @@
-.TH CTPOOL_DECLARE_SCOPED 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CTPOOL_DECLARE_SCOPED 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
 ctpool_declare_scoped \- declare a thread pool variable with automatic RAII destruction
 .SH LIBRARY
@@ -15,8 +15,8 @@ Like ctpool_declare() but attaches __attribute__((cleanup(___ctpool_destroy)))
 so that __ctpool_destroy() is called automatically when the variable
 leaves scope.
 
-The variable must still be assigned before use. If it is still NULL
-when it goes out of scope the cleanup is a no-op.
+The variable must still be assigned before use. If it is still
+CTPOOL_INVALID when it goes out of scope the cleanup is a no-op.
 .fi
 .SH PARAMETERS
 .nf

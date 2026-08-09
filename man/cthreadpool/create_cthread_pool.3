@@ -1,4 +1,4 @@
-.TH CREATE_CTHREAD_POOL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CREATE_CTHREAD_POOL 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 create_cthread_pool \- create a thread pool with default memory management
 .SH LIBRARY
@@ -24,7 +24,7 @@ err_str        Optional: receives a static error string on failure
 .fi
 .SH RETURN VALUE
 .nf
-Returns a new ctpool handle on success, or NULL on failure.
+Returns a new ctpool handle on success, or CTPOOL_INVALID on failure.
 .fi
 .SH "SEE ALSO"
 .BR create_cthread_pool_mp (3),

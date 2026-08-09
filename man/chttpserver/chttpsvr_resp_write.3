@@ -26,6 +26,24 @@ ccol_invalid_args if resp is NULL, or if data is NULL and len > 0.
 ccol_not_enough_memory if the body length would overflow size_t or if
                        the allocator cannot satisfy the request.
 .fi
+.SH NOTES
+.nf
+For a request whose method is CHTTP_HEAD, the server reports the real
+accumulated body length via the Content-Length response header (the
+same value a GET would report, per RFC 7231 4.3.2) but never writes the
+actual body bytes to the wire.  A handler reachable via CHTTP_HEAD
+(explicitly, or through a CHTTP_ANY registration) therefore does not
+need to special-case the method before calling this function.
+
+The same suppression applies, independently of the request method,
+whenever the response's final status code is a 1xx (informational),
+204, or 304: RFC 9110 6.4.1/15.2.1/15.4.5 forbid a body on any of the
+three, so bytes written via this function are silently withheld from
+the wire for those statuses too.  A 1xx or 204 additionally never
+carries an auto-injected Content-Length header, unlike HEAD/304, where
+one matching the written body length is still reported.  See
+chttpsvr_resp_set_status(3).
+.fi
 .SH "SEE ALSO"
 .BR chttpsvr_resp_write_str (3),
 .BR chttpsvr_resp_printf (3),

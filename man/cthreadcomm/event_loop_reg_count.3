@@ -23,7 +23,8 @@ loop  event_loop to query.
 .SH RETURN VALUE
 .nf
 Returns the registration count on success.
-Returns (size_t)-1 if loop is NULL.
+Returns (size_t)-1 if loop is EVENT_LOOP_INVALID or a stale/
+already-destroyed handle.
 .fi
 .SH THREAD SAFETY
 .nf

@@ -3,14 +3,20 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <tau/tau.h>
 #include <time.h>
 #include <unistd.h>
 TAU_MAIN()  // sets up Tau (+ main function)
+
+extern struct event_loop_s *_event_loop_resolve_for_tests(event_loop h);
+extern size_t _event_loop_slot_table_capacity_for_tests(void);
+extern bool _event_loop_resolve_pin_and_sleep_for_tests(event_loop h, int ms);
 
 extern void add_duration_to_timespec(struct timespec *target,
                                      struct timespec *duration);
@@ -2178,7 +2184,7 @@ static void evl_sync_ctx_init(evl_sync_ctx *c) {
   c->last_msg = (c_message_t){.data = NULL, .size = 0};
   c->last_msg_valid = false;
   c->self_reg = NULL;
-  c->self_loop = NULL;
+  c->self_loop = EVENT_LOOP_INVALID;
 }
 
 static void evl_sync_ctx_destroy(evl_sync_ctx *c) {
@@ -2295,16 +2301,16 @@ static void evl_set_nonblocking(int fd) {
 TEST(event_loop, create_destroy) {
   char *err = NULL;
   event_loop loop = event_loop_create(8, 1, 1, &err);
-  REQUIRE_NE((void *)loop, NULL);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
   REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
   event_loop_destroy(loop);
-  REQUIRE_EQ((void *)loop, NULL);
+  REQUIRE_EQ(loop, EVENT_LOOP_INVALID);
 }
 
 TEST(event_loop, create_destroy_scoped) {
   {
     event_loop_construct_scoped(loop, 8, 1, 1);
-    REQUIRE_NE((void *)loop, NULL);
+    REQUIRE_NE(loop, EVENT_LOOP_INVALID);
   }
   /* loop was destroyed at scope exit; nothing to assert beyond "no crash,
    * clean under valgrind" (checked by the memtest target). */
@@ -3026,7 +3032,7 @@ TEST(event_loop, shutdown_with_pending_registrations) {
   REQUIRE_EQ(pipe(pfd), 0);
   char *err = NULL;
   event_loop loop = event_loop_create(8, 1, 1, &err);
-  REQUIRE_NE((void *)loop, NULL);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
@@ -3054,7 +3060,7 @@ TEST(event_loop, destroy_while_queue_registration_pending_queue_outlives_loop) {
 
   char *err = NULL;
   event_loop loop = event_loop_create(8, 1, 1, &err);
-  REQUIRE_NE((void *)loop, NULL);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
@@ -3194,7 +3200,7 @@ TEST(event_loop, multiple_independent_instances) {
 TEST(event_loop, num_lock_stripes_zero_returns_null) {
   char *err = NULL;
   event_loop loop = event_loop_create(8, 0, 1, &err);
-  REQUIRE_EQ((void *)loop, NULL);
+  REQUIRE_EQ(loop, EVENT_LOOP_INVALID);
 }
 
 TEST(event_loop, fd_both_directions_combine_and_recombine_multi_stripe) {
@@ -3363,8 +3369,9 @@ TEST(event_loop, pause_write_direction) {
   /* A pipe's write end is writable the moment it has room, which it does
    * immediately; no priming needed, unlike the circq_writable test above
    * (which had to fill the queue first to make write-readiness meaningful). */
-  event_reg *reg = event_loop_add(
-      loop, selectable_from_fd(pfd[1], ccol_select_write), handlers, &ctx, &err);
+  event_reg *reg =
+      event_loop_add(loop, selectable_from_fd(pfd[1], ccol_select_write),
+                     handlers, &ctx, &err);
   REQUIRE_NE((void *)reg, NULL);
 
   REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
@@ -3463,9 +3470,9 @@ TEST(event_loop, pause_and_resume_null_args_rejected) {
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
   REQUIRE_NE((void *)reg, NULL);
 
-  REQUIRE_EQ(event_loop_pause(NULL, reg), ccol_invalid_args);
+  REQUIRE_EQ(event_loop_pause(EVENT_LOOP_INVALID, reg), ccol_invalid_args);
   REQUIRE_EQ(event_loop_pause(loop, NULL), ccol_invalid_args);
-  REQUIRE_EQ(event_loop_resume(NULL, reg), ccol_invalid_args);
+  REQUIRE_EQ(event_loop_resume(EVENT_LOOP_INVALID, reg), ccol_invalid_args);
   REQUIRE_EQ(event_loop_resume(loop, NULL), ccol_invalid_args);
 
   event_loop_remove(loop, reg);
@@ -4256,7 +4263,7 @@ TEST(event_loop, multi_thread_shutdown_joins_poller_promptly) {
    * a silent pass. */
   char *err = NULL;
   event_loop loop = event_loop_create(8, 4, 16, &err);
-  REQUIRE_NE((void *)loop, NULL);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
 
   struct timespec start, end;
   clock_gettime(CLOCK_MONOTONIC, &start);
@@ -4281,7 +4288,7 @@ TEST(event_loop, multi_thread_shutdown_drains_idle_dispatch_pool_promptly) {
    * some idle worker un-woken would show up here as a slow/hung test. */
   char *err = NULL;
   event_loop loop = event_loop_create(8, 4, 16, &err);
-  REQUIRE_NE((void *)loop, NULL);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
 
   struct timespec start, end;
   clock_gettime(CLOCK_MONOTONIC, &start);
@@ -4350,7 +4357,7 @@ TEST(event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
   pthread_cond_init(&ctx.cond, NULL);
 
   event_loop loop = event_loop_create(8, 4, 4, NULL);
-  REQUIRE_NE((void *)loop, NULL);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
 
   event_handlers_t handlers = {.on_readable = evl_shutdown_drain_on_readable,
                                .on_writable = NULL,
@@ -4698,7 +4705,7 @@ TEST(event_loop,
   atomic_init(&ctx.observed_rv, (int)ccol_unexpected_failure);
 
   event_loop loop = event_loop_create(8, 1, 1, NULL);
-  REQUIRE_NE((void *)loop, NULL);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
   ctx.loop = loop;
 
   event_handlers_t handlers = {.on_readable = evl_self_shutdown_on_readable,
@@ -4743,7 +4750,7 @@ TEST(event_loop,
   atomic_init(&ctx.observed_rv, (int)ccol_unexpected_failure);
 
   event_loop loop = event_loop_create(8, 4, 4, NULL);
-  REQUIRE_NE((void *)loop, NULL);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
   ctx.loop = loop;
 
   event_handlers_t handlers = {.on_readable = evl_self_shutdown_on_readable,
@@ -4769,4 +4776,233 @@ TEST(event_loop,
   event_loop_destroy(loop);
   close(pfd[0]);
   close(pfd[1]);
+}
+
+/* ========================================================================== */
+/*         EVENT_LOOP HANDLE LIFECYCLE (GENERATION-TAGGED SLOT TABLE)         */
+/* ========================================================================== */
+
+/* Mirrors the already-implemented, already-verified chttpcli_handle_
+ * lifecycle test group in tests/chttpclient/tests.c, adapted for
+ * event_loop's own fully-lock-free pin mechanism (see src/cthreadcomm.c's
+ * own struct event_loop_s.pending_resolve_count field comment for why the
+ * unpin side here is a bare atomic decrement rather than chttpcli/
+ * chttpsvr's lock-protected one, and __event_loop_destroy's own comment for
+ * why that makes destroy wait by polling rather than a condvar). */
+
+/* A fully completed destroy, followed later by a second destroy call on an
+ * independently-held copy of the same original handle value, must be a
+ * fatal error. Run in a forked child (mirroring tests/clogger/tests.c's own
+ * fork-test precedent for process-terminating misuse) since fatal_err
+ * aborts the whole process. */
+TEST(event_loop_handle_lifecycle, sequential_double_destroy_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    event_loop loop = event_loop_create(8, 1, 1, NULL);
+    if (loop == EVENT_LOOP_INVALID) _exit(2);
+    event_loop stale = loop;     /* an independently-held copy of the handle
+            value, distinct from the local the macro below invalidates */
+    event_loop_destroy(loop);    /* completes normally; the local `loop` is now
+           EVENT_LOOP_INVALID, but `stale` still holds the original value */
+    __event_loop_destroy(stale); /* the actual misuse under test: a second,
+        purely sequential destroy of a handle already fully torn down */
+    _exit(0); /* unreachable if fatal_err() aborted as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+typedef struct {
+  event_loop h;
+} evl_concurrent_destroy_arg_t;
+
+static void *evl_concurrent_destroy_thread(void *arg) {
+  evl_concurrent_destroy_arg_t *a = (evl_concurrent_destroy_arg_t *)arg;
+  __event_loop_destroy(a->h);
+  return NULL;
+}
+
+/* Two threads calling destroy on two independently-held copies of the SAME,
+ * still-valid handle at (as close to) the same moment as possible must also
+ * be fatal; regression coverage for the same class of concurrent double-free
+ * this whole redesign exists to close for chttpcli/chttpsvr. */
+TEST(event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    event_loop loop = event_loop_create(8, 1, 1, NULL);
+    if (loop == EVENT_LOOP_INVALID) _exit(2);
+    evl_concurrent_destroy_arg_t a1 = {.h = loop};
+    evl_concurrent_destroy_arg_t a2 = {.h = loop};
+    pthread_t t1, t2;
+    pthread_create(&t1, NULL, evl_concurrent_destroy_thread, &a1);
+    pthread_create(&t2, NULL, evl_concurrent_destroy_thread, &a2);
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+    _exit(0); /* unreachable: whichever of the two destroy calls loses the
+                  race must hit fatal_err() */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+typedef struct {
+  event_loop h;
+  int sleep_ms;
+  bool resolved;
+} evl_pin_sleep_arg_t;
+
+static void *evl_pin_sleep_thread(void *arg) {
+  evl_pin_sleep_arg_t *a = (evl_pin_sleep_arg_t *)arg;
+  a->resolved = _event_loop_resolve_pin_and_sleep_for_tests(a->h, a->sleep_ms);
+  return NULL;
+}
+
+/* The resolve-then-use race fix actually works: races a thread that resolves
+ * and pins the handle for a deliberately long, directly-controlled duration
+ * (via _event_loop_resolve_pin_and_sleep_for_tests, since, unlike
+ * chttpcli's chttpclient_do against a slow endpoint, event_loop has no
+ * naturally-occurring slow public entry point to borrow for this) against a
+ * concurrent event_loop_destroy on the same handle. destroy must block until
+ * the pin is released, not race ahead and free the loop out from under the
+ * still-resolved pointer. */
+TEST(event_loop_handle_lifecycle, resolve_then_use_race_destroy_waits) {
+  event_loop_construct(loop, 8, 1, 1);
+
+  evl_pin_sleep_arg_t pin_arg = {.h = loop, .sleep_ms = 100, .resolved = false};
+  pthread_t pin_thread;
+  REQUIRE_EQ(pthread_create(&pin_thread, NULL, evl_pin_sleep_thread, &pin_arg),
+             0);
+
+  /* Give the pin thread a brief head start so its resolve (and therefore its
+   * pin) has definitely already happened before destroy fires. */
+  struct timespec startup = {.tv_sec = 0, .tv_nsec = 10000000}; /* 10 ms */
+  nanosleep(&startup, NULL);
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  event_loop_destroy(loop); /* must block until the pin thread's 100ms sleep
+                                (still holding the pin) has fully elapsed */
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+
+  pthread_join(pin_thread, NULL);
+  REQUIRE_TRUE(pin_arg.resolved);
+  /* The pin thread slept ~100ms while pinned; destroy returning in well
+   * under that would mean it did NOT actually wait for the pin, i.e. the
+   * resolve-then-use protection failed. */
+  REQUIRE_GT(elapsed_ms, 50L);
+}
+
+typedef struct {
+  event_loop h;
+} evl_reg_count_arg_t;
+
+static void *evl_reg_count_thread(void *arg) {
+  evl_reg_count_arg_t *a = (evl_reg_count_arg_t *)arg;
+  /* Return value intentionally ignored: a legitimate race with a concurrent
+   * destroy can make this resolve fail (returning (size_t)-1) instead of
+   * succeeding; both outcomes are correct. This thread exists purely to
+   * generate resolve/pin/unpin traffic concurrent with the destroy thread
+   * below. */
+  event_loop_reg_count(a->h);
+  return NULL;
+}
+
+/* Distinct from resolve_then_use_race_destroy_waits above, and not
+ * redundant with it: that test's long, deliberately-held pin guarantees
+ * pending_resolve_count > 0 for the whole race window, so destroy's
+ * poll-wait always finds it nonzero on its first check there; this test
+ * needs the opposite shape: a fast, non-blocking entry point
+ * (event_loop_reg_count: resolve, one atomic read, unpin, return; no
+ * sleeping at all) raced against a concurrent destroy, repeated under
+ * stress, since the failure window for a genuinely lock-free pin/unpin pair
+ * is only a handful of instructions wide and will not reproduce reliably
+ * under a single unstressed run. A fresh loop is used each iteration so
+ * every repetition gets its own independent race rather than reusing one
+ * already-destroyed handle. */
+TEST(event_loop_handle_lifecycle, resolve_unpin_race_stress) {
+  enum { ITERATIONS = 25 };
+  for (int i = 0; i < ITERATIONS; i++) {
+    event_loop loop = event_loop_create(8, 1, 1, NULL);
+    REQUIRE_NE(loop, EVENT_LOOP_INVALID);
+
+    evl_reg_count_arg_t reg_count_arg = {.h = loop};
+    evl_concurrent_destroy_arg_t destroy_arg = {.h = loop};
+    pthread_t reg_count_tid, destroy_tid;
+    REQUIRE_EQ(pthread_create(&reg_count_tid, NULL, evl_reg_count_thread,
+                              &reg_count_arg),
+               0);
+    REQUIRE_EQ(pthread_create(&destroy_tid, NULL, evl_concurrent_destroy_thread,
+                              &destroy_arg),
+               0);
+    pthread_join(reg_count_tid, NULL);
+    pthread_join(destroy_tid, NULL);
+  }
+}
+
+/* Legitimate slot reuse must never be confused with a stale handle to the
+ * slot's previous occupant; the whole point of the generation counter. */
+TEST(event_loop_handle_lifecycle,
+     legitimate_slot_reuse_not_confused_with_stale_handle) {
+  event_loop a = event_loop_create(8, 1, 1, NULL);
+  REQUIRE_NE(a, EVENT_LOOP_INVALID);
+  event_loop stale_a = a;
+  event_loop_destroy(a);
+
+  event_loop b = event_loop_create(8, 1, 1, NULL);
+  REQUIRE_NE(b, EVENT_LOOP_INVALID);
+
+  /* B's operations must succeed normally regardless of whether the
+   * allocator happened to reuse A's exact address for B. */
+  REQUIRE_EQ(event_loop_reg_count(b), (size_t)0);
+
+  /* A's stale handle must never resolve to B, even if it reused the same
+   * underlying address; the whole point of the generation counter. */
+  REQUIRE_EQ((void *)_event_loop_resolve_for_tests(stale_a), NULL);
+
+  event_loop_destroy(b);
+}
+
+/* The slot table is bounded, not ever-growing: a create/destroy churn loop
+ * with only a single slot ever in flight at a time must reuse that one
+ * freed slot on every iteration rather than growing the table further.
+ * Captures capacity right after the first create/destroy pair (rather than
+ * asserting a fixed absolute value like 1) since other tests earlier in
+ * this same process may have already grown the table to some N > 1; what
+ * this test actually needs to prove is that ITS OWN churn adds no further
+ * growth, not what the table's absolute size happens to be when it runs. */
+TEST(event_loop_handle_lifecycle, bounded_slot_reuse_under_churn) {
+  enum { ITERATIONS = 25 };
+
+  event_loop loop0 = event_loop_create(8, 1, 1, NULL);
+  REQUIRE_NE(loop0, EVENT_LOOP_INVALID);
+  event_loop_destroy(loop0);
+  size_t capacity_after_first = _event_loop_slot_table_capacity_for_tests();
+
+  for (int i = 1; i < ITERATIONS; i++) {
+    event_loop loop = event_loop_create(8, 1, 1, NULL);
+    REQUIRE_NE(loop, EVENT_LOOP_INVALID);
+    event_loop_destroy(loop);
+  }
+
+  REQUIRE_EQ(_event_loop_slot_table_capacity_for_tests(), capacity_after_first);
 }

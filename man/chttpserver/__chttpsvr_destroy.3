@@ -11,6 +11,18 @@ void __chttpsvr_destroy(chttpsvr srv);
 .fi
 .SH DESCRIPTION
 .nf
+srv must be a currently-live handle (one returned by create_chttpsvr /
+create_chttpsvr_mp and not yet destroyed). A stale handle (one that
+has already been destroyed, whether by an earlier, completed call to
+this same function, or concurrently, by another thread racing this
+one right now), a forged value, or garbage is a FATAL ERROR: this
+function calls fatal_err() (abort()/SIGABRT), rather than risking a
+use-after-free or double-free, for both a purely sequential
+double-destroy and a temporally-overlapping concurrent one.
+CHTTPSVR_INVALID (0) is the one exception and remains a silent no-op,
+matching the chttpsvr_destroy macro's own "destroy NULLs the handle"
+idiom.
+
 Stops this server's listener, drains all in-flight requests for this
 server (up to 30 seconds), then closes every remaining connection of
 this server (idle, mid-handshake, or otherwise still active) and waits
@@ -18,10 +30,18 @@ for each to actually finish closing (up to a further 30 seconds),
 releases this server's reference to the shared reactor, then frees all
 routers, routes, middleware nodes, the server's owned ctpool, and the
 server struct itself. Both waits are bounded escape hatches for a
-pathologically stuck connection (e.g. one configured with no read
-timeout at all whose peer never sends anything); neither one is hit in
-ordinary operation, where every connection either completes or reaches
-one of its own configured timeouts well before 30 seconds.
+pathologically stuck connection; neither one is hit in ordinary
+operation, where every connection either completes or reaches one of
+its own configured timeouts well before 30 seconds.
+
+A connection whose worker thread is still blocked reading or writing
+it when the first 30-second wait is exhausted (only reachable when
+stream_read_timeout_ms, max_body_read_duration_ms, and/or
+response_write_timeout_ms is configured to 0, "wait indefinitely," and
+the peer stalls without ever closing the connection) is forcibly
+closed at that point rather than left to block this function forever,
+with a further short grace period for the affected worker thread to
+notice and unwind.
 
 If this was the last reference to the shared reactor (from any
 chttpsvr instance in the process), its actual teardown happens
@@ -53,10 +73,10 @@ the remaining per-server memory (routers, routes, the server struct
 itself); it never double-closes the listener, double-releases the
 engine reference, or otherwise repeats work already done.
 
-Does not set the caller's pointer to NULL; use the chttpsvr_destroy
-macro for that.
+Does not set the caller's pointer to CHTTPSVR_INVALID; use the
+chttpsvr_destroy macro for that.
 
-Safe to call with NULL.
+Safe to call with CHTTPSVR_INVALID (0).
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_destroy (3),

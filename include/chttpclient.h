@@ -96,8 +96,25 @@ SOFTWARE.
 /*                         OPAQUE HANDLE                                      */
 /* ========================================================================== */
 
-/** @brief Opaque HTTP client handle. */
-typedef struct chttpclient *chttpcli;
+/**
+ * @brief Opaque HTTP client handle.
+ *
+ * chttpcli is an opaque VALUE handle (a packed {slot index, generation}
+ * pair), not a pointer; it must never be cast to/from void*, compared via
+ * a pointer cast, or otherwise treated as an address. Compare it directly
+ * against CHTTPCLI_INVALID (or use it in a truthiness check; CHTTPCLI_INVALID
+ * is 0, so `if (!cli)` still works exactly as it did when this was a raw
+ * pointer). Internally, every use of a chttpcli is resolved through a
+ * library-owned slot table before the underlying client object is touched:
+ * a handle whose slot has since been freed (or reused for an unrelated,
+ * later client) is always detected, rather than silently dereferencing
+ * freed or wrong-object memory. See chttpclient_destroy's own doc comment
+ * for what happens when a stale handle reaches it specifically.
+ */
+typedef uint64_t chttpcli;
+
+/** @brief Sentinel value for "no client"; the chttpcli analogue of NULL. */
+#define CHTTPCLI_INVALID ((chttpcli)0)
 
 /* ========================================================================== */
 /*                         STREAMING CALLBACK                                 */
@@ -186,9 +203,12 @@ typedef struct chttpcli_response {
  * @param method   HTTP method.
  * @param url      Target URL (copied; must not be NULL).
  * @param body     Request body, or NULL / &CHTTP_NO_BODY for bodyless methods.
+ *                 body->data may be NULL only when body->len == 0; a NULL
+ *                 body->data paired with a nonzero body->len is rejected.
  * @param mprocs   Custom allocator, or NULL for malloc/free.
  * @param err_str  Optional: receives a static error string on failure.
- * @return Newly allocated request, or NULL on failure.
+ * @return Newly allocated request, or NULL on failure (including a NULL url,
+ *         a NULL body->data with a nonzero body->len, or allocation failure).
  */
 chttp_request_t *chttp_request_new_mp(chttp_method_t method, const char *url,
                                       const chttp_request_body_t *body,
@@ -211,10 +231,31 @@ static inline __attribute__((always_inline)) chttp_request_t *chttp_request_new(
  * chttp_request_get_header is therefore case-insensitive. If a header with
  * the same name already exists its value is replaced.
  *
+ * A "Transfer-Encoding" header is always rejected: this client never
+ * transfer-codes a request body (a body-carrying request is always sent
+ * whole, Content-Length-framed), so honouring a caller-set Transfer-Encoding
+ * header is impossible, and silently accepting it would let
+ * chttpclient_do's own automatic Content-Length header sit alongside it on
+ * the wire over a body that was never actually transfer-coded; an
+ * ambiguous framing this library's own chttp1_parser rejects outright when
+ * it appears on a message being parsed.
+ *
+ * A "Content-Length" header IS accepted here (this function has no body
+ * length to check it against without also duplicating the request's
+ * eventual method/redirect context), but is validated later, when the
+ * request actually reaches the wire: chttpclient_do/_do_streaming/
+ * _do_async/_do_async_streaming/_do_pooled/_do_pooled_streaming/
+ * chttp_run_query all reject a request whose caller-set Content-Length does
+ * not exactly match the body actually being sent, for the identical
+ * "declared framing disagrees with the wire" reason Transfer-Encoding is
+ * rejected outright above; see chttpclient_do's own doc comment.
+ *
  * @param req    Request to modify.
  * @param name   Header name (e.g. "Content-Type").
  * @param value  Header value.
- * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ * @return ccol_success, ccol_invalid_args (req/name/value is NULL, name or
+ *         value contains a CR or LF byte, or name is "Transfer-Encoding"),
+ *         or ccol_not_enough_memory.
  */
 ccol_retval_t chttp_request_set_header(chttp_request_t *req, const char *name,
                                        const char *value);
@@ -248,19 +289,22 @@ void chttp_request_free(chttp_request_t *req);
  * the first request to customise behaviour.
  *
  * Default configuration (before any chttpclient_set_* calls):
- *   pool_size          = CPU count (resolved on first request)
- *   connect_timeout_ms = 0 (no timeout)
- *   request_timeout_ms = 0 (no timeout)
- *   TLS                = peer + host verification on, system CA bundle
+ *   pool_size              = CPU count (resolved on first request)
+ *   connect_timeout_ms     = 0 (no timeout)
+ *   request_timeout_ms     = 0 (no timeout)
+ *   max_response_body_size = 0 (no limit)
+ *   TLS                    = peer + host verification on, system CA bundle
  *
  * @param mprocs   Custom allocator, or NULL for malloc/free.
  * @param err_str  Optional: receives a static error string on failure.
- * @return New client handle, or NULL on failure.
+ * @return New client handle, or CHTTPCLI_INVALID on failure.
  */
 chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str);
 
 /**
  * @brief Create an HTTP client with the default allocator.
+ *
+ * @return New client handle, or CHTTPCLI_INVALID on failure.
  */
 static inline __attribute__((always_inline)) chttpcli
 create_chttpclient(char **err_str) {
@@ -284,7 +328,8 @@ create_chttpclient(char **err_str) {
  *
  * @param cli  Client handle.
  * @param n    Pool size; 0 = CPU count.
- * @return ccol_success or ccol_invalid_args.
+ * @return ccol_success or ccol_invalid_args (cli is CHTTPCLI_INVALID, or a
+ *         stale/already-destroyed handle).
  */
 ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
 
@@ -302,7 +347,8 @@ ccol_retval_t chttpclient_set_pool_size(chttpcli cli, size_t n);
  *
  * @param cli  Client handle.
  * @param ms   Timeout in milliseconds.
- * @return ccol_success or ccol_invalid_args.
+ * @return ccol_success or ccol_invalid_args (cli is CHTTPCLI_INVALID, or a
+ *         stale/already-destroyed handle).
  */
 ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, long ms);
 
@@ -314,9 +360,51 @@ ccol_retval_t chttpclient_set_connect_timeout(chttpcli cli, long ms);
  *
  * @param cli  Client handle.
  * @param ms   Timeout in milliseconds.
- * @return ccol_success or ccol_invalid_args.
+ * @return ccol_success or ccol_invalid_args (cli is CHTTPCLI_INVALID, or a
+ *         stale/already-destroyed handle).
  */
 ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, long ms);
+
+/**
+ * @brief Cap the buffered response body size (0 = unlimited, the default).
+ *
+ * Applies to every buffered (non-streaming) request path: chttpclient_do,
+ * chttpclient_do_async (and the pooled-sync wrappers built on it),
+ * chttp_get/post/put/delete/patch, and chttp_run_query. Has no effect on
+ * chttpclient_do_streaming / chttpclient_do_async_streaming /
+ * chttpclient_do_pooled_streaming: a streaming caller already controls its
+ * own memory via chttpcli_write_fn's return value (returning fewer bytes
+ * than len aborts the transfer), so there is nothing for this cap to bound
+ * there.
+ *
+ * Enforced two ways: a response whose Content-Length header alone already
+ * declares more than max_bytes is rejected immediately, before any body byte
+ * is read off the wire; a chunked or connection-close-delimited body (which
+ * has no declared length to check up front) is instead rejected reactively,
+ * the moment the cumulative body received so far would exceed max_bytes.
+ * Either case reports ccol_msg_too_large from chttpclient_do /
+ * chttpclient_do_async's result / chttpclient_do_pooled, and the connection
+ * is not reused afterward (mirroring how any other malformed-response
+ * failure discards rather than pools its connection).
+ *
+ * Redirect hops are unaffected by this cap regardless of their own declared
+ * or actual body size: an intermediate hop's body is always discarded
+ * without ever being buffered (see chttpclient_do's own redirect-following
+ * documentation), so only the final, delivered response's body counts
+ * against max_bytes.
+ *
+ * May be called before or after the first request, and takes effect
+ * immediately for every subsequent request; an already in-flight request is
+ * unaffected.
+ *
+ * @param cli        Client handle.
+ * @param max_bytes  Maximum buffered response body size in bytes; 0 = no
+ *                    limit.
+ * @return ccol_success or ccol_invalid_args (cli is CHTTPCLI_INVALID, or a
+ *         stale/already-destroyed handle).
+ */
+ccol_retval_t chttpclient_set_max_response_body_size(chttpcli cli,
+                                                     size_t max_bytes);
 
 /**
  * @brief Set TLS configuration for this client.
@@ -327,12 +415,19 @@ ccol_retval_t chttpclient_set_request_timeout(chttpcli cli, long ms);
  * cert_path/key_path/ca_bundle_path are validated for readability lazily, at
  * the time an HTTPS request actually needs them, rather than here; a path
  * that does not currently exist is accepted here without error and only
- * surfaces as ccol_http_tls_cert_verification_failed from chttpclient_do /
+ * surfaces as ccol_http_tls_cert_load_failed from chttpclient_do /
  * chttpclient_do_streaming once a request needs it.
+ *
+ * cert_path and key_path are a pair: exactly one of the two set (the other
+ * NULL) is rejected as ccol_invalid_args rather than silently treated as "no
+ * client certificate configured", since the latter would leave an mTLS
+ * deployment believing it presents a client certificate when it never does.
  *
  * @param cli  Client handle.
  * @param tls  TLS configuration to copy, or NULL to restore defaults.
- * @return ccol_success or ccol_invalid_args.
+ * @return ccol_success, ccol_invalid_args (cli is CHTTPCLI_INVALID, a
+ *         stale/already-destroyed handle, or exactly one of cert_path/
+ *         key_path is set), or ccol_not_enough_memory.
  */
 ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
 
@@ -355,9 +450,11 @@ ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
  *
  * Call this before the first chttpclient_do_async/_streaming call anywhere
  * in the process if you want a custom engine logger. If no logger has been
- * installed when the engine first starts, diagnostics are simply skipped: this
- * engine has no internal logging of its own that needs somewhere to go by
- * default.
+ * installed when the engine first starts, a fallback logger (fd 2, level
+ * CLOG_FATAL) is installed automatically; since this engine's own
+ * diagnostics are never logged above CLOG_INFO, that fallback logger is
+ * silent in practice unless this function is used to install a more
+ * verbose one.
  *
  * Internally this function derives a logger from cl via clog_derive(), adds
  * the field component=http-client-engine, and installs the derived logger.
@@ -451,30 +548,47 @@ ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads);
  * @brief Internal destroy; use chttpclient_destroy macro instead.
  *
  * Waits for all in-flight requests to complete before freeing resources.
+ *
+ * cli must be a currently-live handle (one returned by create_chttpclient/
+ * _mp or chttp_default_client and not yet destroyed). A stale handle
+ * (one that has already been destroyed, whether by an earlier, completed
+ * call to this same function, or concurrently, by another thread racing
+ * this one right now), a forged value, or garbage is a fatal error:
+ * this function calls fatal_err() (abort()/SIGABRT), rather than risking a
+ * use-after-free or double-free, for both a purely sequential double-destroy
+ * and a temporally-overlapping concurrent one. CHTTPCLI_INVALID (0) is the
+ * one exception and remains a silent no-op, matching chttpclient_destroy's
+ * own "destroy NULLs the handle" idiom.
  */
 void __chttpclient_destroy(chttpcli cli);
 
 /**
  * @brief RAII cleanup helper (used with _ccol_destructor).
+ *
+ * Safe to call on an already-CHTTPCLI_INVALID *pp (a no-op); calling it on a
+ * stale, non-CHTTPCLI_INVALID handle that was already destroyed some other
+ * way is the same fatal misuse __chttpclient_destroy itself documents.
  */
 static inline __attribute__((always_inline)) void ___chttpclient_destroy(
     chttpcli *pp) {
   if (pp && *pp) {
     __chttpclient_destroy(*pp);
-    *pp = NULL;
+    *pp = CHTTPCLI_INVALID;
   }
 }
 
 /**
- * @brief Destroy an HTTP client and set the handle to NULL.
+ * @brief Destroy an HTTP client and set the handle to CHTTPCLI_INVALID.
  *
  * Blocks until all in-flight requests complete. Must not be called
- * concurrently with other calls on the same handle.
+ * concurrently with other calls on the same handle; see
+ * __chttpclient_destroy's own doc comment for what happens if it is (a
+ * fatal error, not a silent race).
  */
 #define chttpclient_destroy(cli)  \
   do {                            \
     __chttpclient_destroy((cli)); \
-    (cli) = NULL;                 \
+    (cli) = CHTTPCLI_INVALID;     \
   } while (0)
 
 /* ========================================================================== */
@@ -487,7 +601,7 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
 /** @brief Declare a client variable with automatic destruction on scope exit.
  */
 #define chttpcli_declare_scoped(name) \
-  chttpcli name _ccol_destructor(___chttpclient_destroy) = NULL;
+  chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_INVALID;
 
 /**
  * @brief Declare and initialise an HTTP client; fatal_err on failure.
@@ -503,7 +617,7 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * @endcode
  */
 #define chttpcli_construct(name)                          \
-  chttpcli name = NULL;                                   \
+  chttpcli name = CHTTPCLI_INVALID;                       \
   do {                                                    \
     char *_clic_err = NULL;                               \
     (name) = create_chttpclient(&_clic_err);              \
@@ -517,15 +631,15 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * @brief Declare, initialise, and auto-destroy on scope exit; fatal_err on
  *        failure.
  */
-#define chttpcli_construct_scoped(name)                          \
-  chttpcli name _ccol_destructor(___chttpclient_destroy) = NULL; \
-  do {                                                           \
-    char *_clic_err = NULL;                                      \
-    (name) = create_chttpclient(&_clic_err);                     \
-    if (!(name)) {                                               \
-      fatal_err("chttpcli_construct_scoped('%s'): %s", #name,    \
-                _clic_err ? _clic_err : "unknown error");        \
-    }                                                            \
+#define chttpcli_construct_scoped(name)                                      \
+  chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_INVALID; \
+  do {                                                                       \
+    char *_clic_err = NULL;                                                  \
+    (name) = create_chttpclient(&_clic_err);                                 \
+    if (!(name)) {                                                           \
+      fatal_err("chttpcli_construct_scoped('%s'): %s", #name,                \
+                _clic_err ? _clic_err : "unknown error");                    \
+    }                                                                        \
   } while (0)
 
 /* ========================================================================== */
@@ -537,7 +651,11 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *
  * Blocks until a pool slot is free, executes the request synchronously, and
  * returns a heap-allocated response. The caller owns *resp_out and must call
- * chttpclient_resp_free when done.
+ * chttpclient_resp_free when done. *resp_out is set to NULL immediately
+ * (before any other work begins) and stays NULL on every non-success return;
+ * it is safe to unconditionally call chttpclient_resp_free(resp) after this
+ * call regardless of the returned ccol_retval_t, without the caller having
+ * to separately pre-initialise its own local pointer.
  *
  * Redirects (301, 302, 303, 307, 308) are followed automatically, up to 50
  * hops. 301/302/303 rewrite the method to a bodyless GET (HEAD is left as
@@ -545,7 +663,17 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * the original body unchanged. The Location header may be an absolute URL,
  * a protocol-relative reference ("//host/path"), an absolute-path reference
  * ("/foo"), or a general relative reference ("foo", "../foo", "./foo",
- * "?query"); all are resolved per RFC 3986.
+ * "?query"); all are resolved per RFC 3986. A Location value that carries its
+ * own scheme (e.g. "mailto:x@y", "ftp://host/path", or any scheme other than
+ * http/https/http+unix) is always treated as absolute (RFC 3986 SS5.2.2: a
+ * reference with a scheme is never relative, regardless of whether that
+ * scheme is one this client can actually fetch) and resolves to itself
+ * unchanged; the next hop then reports ccol_http_invalid_url, the same code
+ * an unsupported scheme in the original request URL already gets, rather
+ * than the reference being silently merged onto the current origin's path as
+ * though it were relative. If the 50-hop cap is reached and
+ * the last hop's response is itself a would-be redirect, it is not followed
+ * or delivered; ccol_http_too_many_redirects is returned instead.
  *
  * The request URL accepts http:// and https:// only. Both a plain
  * hostname/IPv4 literal and a bracketed IPv6 literal
@@ -560,11 +688,25 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *
  * @param cli       Client handle.
  * @param req       Request to execute.
- * @param resp_out  On success, receives a pointer to the response.
+ * @param resp_out  Set to NULL immediately, then, on success, receives a
+ *                   pointer to the response.
  * @return ccol_success
  *             Request completed; *resp_out is valid.
  *         ccol_invalid_args
- *             Any argument is NULL.
+ *             Any argument is NULL, cli is CHTTPCLI_INVALID or a stale/
+ *             already-destroyed handle, req sets a "Transfer-Encoding" header
+ *             (see chttp_request_set_header's own doc comment for why this
+ *             is always rejected), or req sets a "Content-Length" header
+ *             whose value does not exactly match the actual body length
+ *             being sent on a body-carrying request (POST/PUT/PATCH); a
+ *             mismatched declared length is the identical "framing
+ *             disagrees with what's actually on the wire" hazard the
+ *             Transfer-Encoding rejection exists to prevent, just reached
+ *             through a wrong length instead of a wrong transfer-coding.
+ *             Not checked for a non-body-carrying request (GET, DELETE,
+ *             HEAD, OPTIONS): any Content-Length header is stripped from
+ *             the wire entirely there, so there is no framing left for a
+ *             mismatched value to desync from.
  *         ccol_not_enough_memory
  *             Allocation failed.
  *         ccol_timed_out
@@ -574,7 +716,10 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *         ccol_http_invalid_url
  *             URL is malformed, uses an unsupported scheme (only http:// and
  *             https:// are supported), or has a missing/invalid host,
- *             port, or userinfo component.
+ *             port, or userinfo component (including an embedded CR or LF
+ *             byte anywhere in the host or the path/query, which would
+ *             otherwise be carried verbatim onto the wire and let it inject
+ *             extra header lines or a smuggled second request).
  *         ccol_http_host_resolution_failed
  *             DNS resolution failed for the target host.
  *         ccol_http_connection_failed
@@ -585,12 +730,17 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *             The TLS handshake failed for a reason other than certificate
  *             verification.
  *         ccol_http_tls_cert_verification_failed
- *             The peer certificate or hostname could not be verified, or the
- *             configured client certificate/key/CA bundle path was not
- *             readable.
+ *             The peer certificate or hostname could not be verified.
+ *         ccol_http_tls_cert_load_failed
+ *             The configured client certificate, key, or CA bundle path was
+ *             not readable, or ctls failed to load/parse it.
  *         ccol_http_transfer_aborted
  *             The connection failed mid-transfer, or the server sent a
  *             malformed HTTP/1.1 response.
+ *         ccol_msg_too_large
+ *             The response body exceeded chttpclient_set_max_response_
+ *             body_size's configured cap; see that function's own doc
+ *             comment. Never returned unless that cap has been set.
  *         ccol_unexpected_failure
  *             Any other internal failure not covered above.
  */
@@ -609,9 +759,11 @@ ccol_retval_t chttpclient_do(chttpcli cli, const chttp_request_t *req,
  * @param write_fn        Chunk delivery callback (must not be NULL).
  * @param write_ctx       Passed verbatim to write_fn.
  * @param status_code_out Receives HTTP status code on success, or NULL.
- * @return Same codes as chttpclient_do.  Additionally,
- *         ccol_http_transfer_aborted is returned when write_fn returns fewer
- *         bytes than len, aborting the transfer.
+ * @return Same codes as chttpclient_do, except ccol_msg_too_large is never
+ *         returned (chttpclient_set_max_response_body_size has no effect on
+ *         this streaming path; see that function's own doc comment).
+ *         Additionally, ccol_http_transfer_aborted is returned when write_fn
+ *         returns fewer bytes than len, aborting the transfer.
  */
 ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
                                        chttpcli_write_fn write_fn,
@@ -626,7 +778,11 @@ ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
  *        chttpclient_do_async_streaming.
  *
  * rv carries the same result codes chttpclient_do returns (see its own
- * documentation). resp is non-NULL only when rv == ccol_success; free it
+ * documentation), including ccol_msg_too_large when chttpclient_set_max_
+ * response_body_size's configured cap is exceeded; except for a request
+ * submitted via chttpclient_do_async_streaming, which (like chttpclient_
+ * do_streaming) is never subject to that cap and so never returns
+ * ccol_msg_too_large. resp is non-NULL only when rv == ccol_success; free it
  * with chttpclient_resp_free before freeing this result, exactly as with
  * chttpclient_do's resp_out. For a request submitted via
  * chttpclient_do_async_streaming, resp is still populated on success (so
@@ -659,8 +815,9 @@ typedef struct chttpcli_async_result {
  *            valid after this call returns; everything needed is copied
  *            or serialised internally before the call returns.
  * @return A future, or NULL if the request could not even be queued (NULL
- *         cli/req, malformed URL, TLS unusable, OOM, or the engine failing
- *         to start). On success, the caller owns the future and must
+ *         req, cli is CHTTPCLI_INVALID or a stale/already-destroyed handle,
+ *         malformed URL, TLS unusable, OOM, or the engine failing to
+ *         start). On success, the caller owns the future and must
  *         eventually call chttpclient_async_result_free (after
  *         chttpclient_async_result_get) followed by exactly one
  *         ctpool_future_free.
@@ -762,7 +919,9 @@ void chttpclient_async_result_free(chttpcli_async_result_t *result);
  *
  * @param cli      Client handle.
  * @param req      Request to execute.
- * @param resp_out Receives the response on success; must not be NULL.
+ * @param resp_out Must not be NULL. Set to NULL immediately, then, on
+ *                  success, receives the response (matching
+ *                  chttpclient_do's identical *resp_out contract).
  * @return Same result codes as chttpclient_do, with one difference: a
  *         failure to even submit the request to the engine (OOM, or the
  *         engine failing to start) is reported as ccol_unexpected_failure
@@ -791,7 +950,10 @@ ccol_retval_t chttpclient_do_pooled(chttpcli cli, const chttp_request_t *req,
  * @param write_fn        Chunk delivery callback (must not be NULL).
  * @param write_ctx       Passed verbatim to write_fn.
  * @param status_code_out Receives HTTP status code on success, or NULL.
- * @return Same codes as chttpclient_do_pooled.
+ * @return Same codes as chttpclient_do_pooled, except ccol_msg_too_large is
+ *         never returned (chttpclient_set_max_response_body_size has no
+ *         effect on this streaming path; see that function's own doc
+ *         comment).
  */
 ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
                                               const chttp_request_t *req,
@@ -816,11 +978,12 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
  * recognised and the module's own reference to it is cleared), but every
  * chttp_default_client/chttp_do/chttp_get/... call made afterward, by this
  * process, for the rest of its lifetime, then has no default client to use
- * and fails accordingly -- there is no way to rebuild it once destroyed
+ * and fails accordingly; there is no way to rebuild it once destroyed
  * this way. If you need a client with a bounded, caller-controlled
  * lifetime, create your own via create_chttpclient/_mp instead.
  *
- * @return Default client handle, or NULL if initialisation failed.
+ * @return Default client handle, or CHTTPCLI_INVALID if initialisation
+ *         failed.
  */
 chttpcli chttp_default_client(void);
 

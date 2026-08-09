@@ -1135,8 +1135,26 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
  */
 typedef struct event_loop_s event_loop_s;
 
-/** @brief Handle type (pointer to opaque struct) */
-typedef event_loop_s *event_loop;
+/**
+ * @brief Opaque event_loop handle.
+ *
+ * event_loop is an opaque VALUE handle (a packed {slot index, generation}
+ * pair), not a pointer; it must never be cast to/from void*, compared via
+ * a pointer cast, or otherwise treated as an address. Compare it directly
+ * against EVENT_LOOP_INVALID (or use it in a truthiness check;
+ * EVENT_LOOP_INVALID is 0, so `if (!loop)` still works exactly as it did
+ * when this was a raw pointer). Internally, every use of an event_loop is
+ * resolved through a library-owned slot table before the underlying
+ * struct event_loop_s* is touched: a handle whose slot has since been freed
+ * (or reused for an unrelated, later loop) is always detected, rather than
+ * silently dereferencing freed or wrong-object memory. See
+ * event_loop_destroy's own doc comment for what happens when a stale
+ * handle reaches it specifically.
+ */
+typedef uint64_t event_loop;
+
+/** @brief Sentinel value for "no loop"; the event_loop analogue of NULL. */
+#define EVENT_LOOP_INVALID ((event_loop)0)
 
 /** @brief Opaque handle to a single event_loop registration */
 typedef struct event_reg event_reg;
@@ -1381,7 +1399,8 @@ uint64_t event_loop_reg_generation(const event_reg *reg);
  * @param new_dir ccol_select_read or ccol_select_write
  *
  * @return ccol_success on success
- * @return ccol_invalid_args if loop/reg is NULL, reg is a queue/channel
+ * @return ccol_invalid_args if loop is EVENT_LOOP_INVALID or a stale/
+ * already-destroyed handle, reg is NULL, reg is a queue/channel
  * registration, new_dir is invalid, or reg was concurrently removed
  * @return ccol_not_permitted if the target direction is already occupied by
  * a different registration on the same fd
@@ -1426,7 +1445,8 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
  * @param reg  Registration to pause
  *
  * @return ccol_success on success
- * @return ccol_invalid_args if loop/reg is NULL, reg is a queue/channel
+ * @return ccol_invalid_args if loop is EVENT_LOOP_INVALID or a stale/
+ * already-destroyed handle, reg is NULL, reg is a queue/channel
  * registration, or reg was concurrently removed
  *
  * @note Thread-safe; may be called concurrently with event_loop_remove and
@@ -1450,7 +1470,8 @@ ccol_retval_t event_loop_pause(event_loop loop, event_reg *reg);
  * @param reg  Registration to resume
  *
  * @return ccol_success on success
- * @return ccol_invalid_args if loop/reg is NULL, reg is a queue/channel
+ * @return ccol_invalid_args if loop is EVENT_LOOP_INVALID or a stale/
+ * already-destroyed handle, reg is NULL, reg is a queue/channel
  * registration, or reg was concurrently removed (e.g. the connection was
  * closed while the caller still thought it owned a paused registration to
  * resume)
@@ -1484,7 +1505,8 @@ ccol_retval_t event_loop_resume(event_loop loop, event_reg *reg);
  * @param reg  Registration to remove
  *
  * @return ccol_success on success
- * @return ccol_invalid_args if loop or reg is NULL
+ * @return ccol_invalid_args if loop is EVENT_LOOP_INVALID or a stale/
+ * already-destroyed handle, or reg is NULL
  *
  * @note Thread-safe
  */
@@ -1498,7 +1520,8 @@ ccol_retval_t event_loop_remove(event_loop loop, event_reg *reg);
  * counts as 2.
  *
  * @param loop event_loop to query
- * @return Registration count, or (size_t)-1 if loop is NULL
+ * @return Registration count, or (size_t)-1 if loop is EVENT_LOOP_INVALID or
+ * a stale/already-destroyed handle
  */
 size_t event_loop_reg_count(event_loop loop);
 
@@ -1516,7 +1539,8 @@ size_t event_loop_reg_count(event_loop loop);
  * @param loop event_loop to shut down
  *
  * @return ccol_success on success
- * @return ccol_invalid_args if loop is NULL
+ * @return ccol_invalid_args if loop is EVENT_LOOP_INVALID or a stale/
+ * already-destroyed handle
  * @return ccol_not_permitted if called from within a callback running on
  * any of this loop's own threads (the poller, or, for num_reactor_threads
  * > 1, a dispatch worker); see the warning below
@@ -1531,7 +1555,23 @@ size_t event_loop_reg_count(event_loop loop);
 ccol_retval_t event_loop_shutdown(event_loop loop);
 
 /**
- * @brief Destroy an event_loop (internal function)
+ * @brief Internal destroy; use event_loop_destroy() macro instead
+ *
+ * Shuts the reactor thread down (if not already shut down) and frees every
+ * remaining registration; for queue-backed registrations this correctly
+ * unlinks each one from its queue's own waiter list first, so a queue that
+ * outlives this event_loop is never left with a dangling waiter pointer.
+ *
+ * loop must be a currently-live handle (one returned by
+ * event_loop_create/_with_mprocs and not yet destroyed). A stale handle
+ * (one that has already been destroyed, whether by an earlier, completed
+ * call to this same function, or concurrently, by another thread racing
+ * this one right now), a forged value, or garbage is a fatal error: this
+ * function calls fatal_err() (abort()/SIGABRT), rather than risking a
+ * use-after-free or double-free, for both a purely sequential double-destroy
+ * and a temporally-overlapping concurrent one. EVENT_LOOP_INVALID (0) is the
+ * one exception and remains a silent no-op, matching event_loop_destroy's
+ * own "destroy NULLs the handle" idiom.
  *
  * @param loop event_loop to destroy
  *
@@ -1541,31 +1581,36 @@ void __event_loop_destroy(event_loop loop);
 
 /**
  * @brief RAII cleanup function (used with _ccol_destructor)
+ *
+ * Safe to call on an already-EVENT_LOOP_INVALID *lp (a no-op); calling it on
+ * a stale, non-EVENT_LOOP_INVALID handle that was already destroyed some
+ * other way is the same fatal misuse __event_loop_destroy itself documents.
  */
 static inline __attribute__((always_inline)) void ___event_loop_destroy(
     event_loop *lp) {
   if (lp && *lp) {
     __event_loop_destroy(*lp);
-    *lp = NULL;
+    *lp = EVENT_LOOP_INVALID;
   }
 }
 
 /**
- * @brief Destroy an event_loop and set handle to NULL
+ * @brief Destroy an event_loop and set handle to EVENT_LOOP_INVALID
  *
- * Shuts the reactor thread down (if not already shut down) and frees every
- * remaining registration; for queue-backed registrations this correctly
- * unlinks each one from its queue's own waiter list first, so a queue that
- * outlives this event_loop is never left with a dangling waiter pointer.
+ * Blocks until every in-flight resolved use of this handle has finished.
+ * Must not be called concurrently with other calls on the same handle; see
+ * __event_loop_destroy's own doc comment for what happens if it is (a fatal
+ * error, not a silent race).
  *
- * @param loop event_loop to destroy (will be set to NULL after destruction)
+ * @param loop event_loop to destroy (will be set to EVENT_LOOP_INVALID after
+ *             destruction)
  *
- * @note Safe to call with NULL pointer
+ * @note Safe to call with an EVENT_LOOP_INVALID handle
  */
 #define event_loop_destroy(loop)  \
   do {                            \
     __event_loop_destroy((loop)); \
-    (loop) = NULL;                \
+    (loop) = EVENT_LOOP_INVALID;  \
   } while (0)
 
 /**
@@ -1579,7 +1624,7 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  * @brief Declare with automatic destruction on scope exit
  */
 #define event_loop_declare_scoped(name) \
-  event_loop name _ccol_destructor(___event_loop_destroy) = NULL
+  event_loop name _ccol_destructor(___event_loop_destroy) = EVENT_LOOP_INVALID
 
 /**
  * @brief Declare and initialise in one step; fatal_err on failure
@@ -1604,7 +1649,7 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  */
 #define event_loop_construct(name, max_events_per_wait, num_lock_stripes, \
                              num_reactor_threads)                         \
-  event_loop name = NULL;                                                 \
+  event_loop name = EVENT_LOOP_INVALID;                                   \
   do {                                                                    \
     char *_evl_err = NULL;                                                \
     (name) = event_loop_create((max_events_per_wait), (num_lock_stripes), \
@@ -1631,7 +1676,8 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  */
 #define event_loop_construct_scoped(name, max_events_per_wait,             \
                                     num_lock_stripes, num_reactor_threads) \
-  event_loop name _ccol_destructor(___event_loop_destroy) = NULL;          \
+  event_loop name _ccol_destructor(___event_loop_destroy) =                \
+      EVENT_LOOP_INVALID;                                                  \
   do {                                                                     \
     char *_evl_err = NULL;                                                 \
     (name) = event_loop_create((max_events_per_wait), (num_lock_stripes),  \

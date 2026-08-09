@@ -1,4 +1,4 @@
-.TH CLRUCACHE_SIZE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CLRUCACHE_SIZE 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 clrucache_size \- return the number of live entries in the cache
 .SH LIBRARY
@@ -21,10 +21,15 @@ cache  Cache handle.
 .fi
 .SH RETURN VALUE
 .nf
-Number of live entries, or 0 if cache is NULL.
+Number of live entries, or 0 if cache is CLRU_CACHE_INVALID or a
+stale (already-destroyed) handle.
 .fi
 .SH NOTES
 .nf
+cache is an opaque VALUE handle, resolved through a library-owned
+slot table before the underlying cache object is touched; a stale
+handle here is an ordinary error, not a fatal one (fatal-on-stale
+is reserved for __clrucache_destroy).
 Acquires the cache mutex for the duration of the read.
 O(1) complexity.
 .fi

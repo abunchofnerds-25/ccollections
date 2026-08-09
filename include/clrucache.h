@@ -102,8 +102,26 @@ typedef void (*clru_eviction_cb_t)(const cmap_pair *key, const cmap_pair *val);
 /** @brief Opaque LRU cache structure */
 typedef struct clrucache clrucache;
 
-/** @brief Handle type (pointer to opaque struct) */
-typedef clrucache *clru_cache;
+/**
+ * @brief Opaque LRU cache handle.
+ *
+ * clru_cache is an opaque VALUE handle (a packed {slot index, generation}
+ * pair), not a pointer; it must never be cast to/from void*, compared via
+ * a pointer cast, or otherwise treated as an address. Compare it directly
+ * against CLRU_CACHE_INVALID (or use it in a truthiness check;
+ * CLRU_CACHE_INVALID is 0, so `if (!cache)` still works exactly as it did
+ * when this was a raw pointer). Internally, every use of a clru_cache is
+ * resolved through a library-owned slot table before the underlying cache
+ * object is touched: a handle whose slot has since been freed (or reused
+ * for an unrelated, later cache) is always detected, rather than silently
+ * dereferencing freed or wrong-object memory. See
+ * __clrucache_destroy's own doc comment for what happens when a stale
+ * handle reaches it specifically.
+ */
+typedef uint64_t clru_cache;
+
+/** @brief Sentinel value for "no cache"; the clru_cache analogue of NULL. */
+#define CLRU_CACHE_INVALID ((clru_cache)0)
 
 /* ========================================================================== */
 /*                         CREATION / DESTRUCTION                             */
@@ -121,7 +139,7 @@ typedef clrucache *clru_cache;
  * @param eviction_cb  Called on eviction (may be NULL)
  * @param mprocs       Custom allocator, or NULL for malloc/free
  * @param err          Optional: set to error string on failure
- * @return New cache handle, or NULL on failure
+ * @return New cache handle, or CLRU_CACHE_INVALID on failure
  */
 clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
                                  ccol_data_type val_type,
@@ -131,11 +149,22 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
                                  ccol_memmgmt_procs_t *mprocs, char **err);
 
 /**
- * @brief Destroy a cache (internal - use clru_destroy() macro)
+ * @brief Internal destroy; use clru_destroy() macro instead
  *
- * Evicts all remaining entries (calling the eviction callback for each) and
- * frees all memory. Caller must ensure no other thread is blocked inside the
- * cache.
+ * cache must be a currently-live handle (one returned by
+ * clrucache_create_full/clru_init/clru_construct and not yet destroyed).
+ * A stale handle (one that has already been destroyed, whether by an
+ * earlier, completed call to this same function, or concurrently, by
+ * another thread racing this one right now), a forged value, or garbage
+ * is a fatal error: this function calls fatal_err() (abort()/SIGABRT),
+ * rather than risking a use-after-free or double-free, for both a purely
+ * sequential double-destroy and a temporally-overlapping concurrent one.
+ * CLRU_CACHE_INVALID (0) is the one exception and remains a silent
+ * no-op, matching clru_destroy's own "destroy NULLs the handle" idiom.
+ *
+ * On a live handle, blocks until every in-flight resolved use of the
+ * handle has finished, then evicts all remaining entries (calling the
+ * eviction callback for each) and frees all memory.
  */
 void __clrucache_destroy(clru_cache cache);
 
@@ -206,18 +235,34 @@ ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
 /*                         DESTROY MACRO                                      */
 /* ========================================================================== */
 
+/**
+ * @brief RAII cleanup function (used with _ccol_destructor)
+ *
+ * Safe to call on an already-CLRU_CACHE_INVALID *cp (a no-op); calling it
+ * on a stale, non-CLRU_CACHE_INVALID handle that was already destroyed
+ * some other way is the same fatal misuse __clrucache_destroy itself
+ * documents.
+ */
 static inline __attribute__((always_inline)) void ___clrucache_destroy(
     clru_cache *cp) {
   if (cp && *cp) {
     __clrucache_destroy(*cp);
-    *cp = NULL;
+    *cp = CLRU_CACHE_INVALID;
   }
 }
 
+/**
+ * @brief Destroy a cache and set the handle to CLRU_CACHE_INVALID
+ *
+ * Blocks until every in-flight resolved use of the handle has finished.
+ * Must not be called concurrently with other calls on the same handle;
+ * see __clrucache_destroy's own doc comment for what happens if it is
+ * (a fatal error, not a silent race).
+ */
 #define clru_destroy(name)       \
   do {                           \
     __clrucache_destroy((name)); \
-    (name) = NULL;               \
+    (name) = CLRU_CACHE_INVALID; \
   } while (0)
 
 /* ========================================================================== */
@@ -242,7 +287,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
 #define clru_declare_scoped(name, KeyT, ValT)                             \
   typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL; \
   typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL; \
-  clru_cache name _ccol_destructor(___clrucache_destroy) = NULL
+  clru_cache name _ccol_destructor(___clrucache_destroy) = CLRU_CACHE_INVALID
 
 /**
  * @brief Initialize a previously declared cache variable
@@ -282,7 +327,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
 #define clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb) \
   typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL;    \
   typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL;    \
-  clru_cache name = NULL;                                                    \
+  clru_cache name = CLRU_CACHE_INVALID;                                      \
   do {                                                                       \
     char *_clru_err = NULL;                                                  \
     (name) = clrucache_create_full(                                          \
@@ -298,21 +343,21 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
 /**
  * @brief Declare, initialize, and auto-destroy on scope exit
  */
-#define clru_construct_scoped(name, KeyT, ValT, capacity, getter, setter, \
-                              evict_cb)                                   \
-  typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL; \
-  typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL; \
-  clru_cache name _ccol_destructor(___clrucache_destroy) = NULL;          \
-  do {                                                                    \
-    char *_clru_err = NULL;                                               \
-    (name) = clrucache_create_full(                                       \
-        (capacity), determine_ccol_data_type(*name##__clru_key_type_var), \
-        determine_ccol_data_type(*name##__clru_val_type_var), (getter),   \
-        (setter), (evict_cb), NULL, &_clru_err);                          \
-    if (!(name)) {                                                        \
-      fatal_err("clru_construct_scoped('%s'): %s", #name,                 \
-                _clru_err ? _clru_err : "unknown error");                 \
-    }                                                                     \
+#define clru_construct_scoped(name, KeyT, ValT, capacity, getter, setter,      \
+                              evict_cb)                                        \
+  typeof(KeyT) *name##__clru_key_type_var __attribute__((unused)) = NULL;      \
+  typeof(ValT) *name##__clru_val_type_var __attribute__((unused)) = NULL;      \
+  clru_cache name _ccol_destructor(___clrucache_destroy) = CLRU_CACHE_INVALID; \
+  do {                                                                         \
+    char *_clru_err = NULL;                                                    \
+    (name) = clrucache_create_full(                                            \
+        (capacity), determine_ccol_data_type(*name##__clru_key_type_var),      \
+        determine_ccol_data_type(*name##__clru_val_type_var), (getter),        \
+        (setter), (evict_cb), NULL, &_clru_err);                               \
+    if (!(name)) {                                                             \
+      fatal_err("clru_construct_scoped('%s'): %s", #name,                      \
+                _clru_err ? _clru_err : "unknown error");                      \
+    }                                                                          \
   } while (0)
 
 /**

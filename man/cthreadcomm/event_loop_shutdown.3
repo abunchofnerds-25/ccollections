@@ -35,7 +35,8 @@ loop  event_loop to shut down.
 .SH RETURN VALUE
 .nf
 ccol_success        Shut down (or already was).
-ccol_invalid_args   loop is NULL.
+ccol_invalid_args   loop is EVENT_LOOP_INVALID or a stale/
+                    already-destroyed handle.
 ccol_not_permitted  Called from within a callback running on one of
                     loop's own threads (the poller, or a dispatch
                     worker); see WARNINGS.

@@ -25,7 +25,8 @@ out_len  Optional; receives the length of the returned string
 .SH RETURN VALUE
 .nf
 Newly allocated, NUL-terminated base64 string on success.
-NULL on allocation failure, or if data is NULL and len is nonzero.
+NULL on allocation failure, if data is NULL and len is nonzero, or
+if len is large enough that the encoded size would overflow size_t.
 .fi
 .SH "SEE ALSO"
 .BR chttp_base64_encode_mp (3),

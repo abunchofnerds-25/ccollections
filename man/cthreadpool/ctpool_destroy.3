@@ -1,6 +1,6 @@
-.TH CTPOOL_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CTPOOL_DESTROY 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
-ctpool_destroy \- destroy a thread pool and set pointer to NULL
+ctpool_destroy \- destroy a thread pool and invalidate the handle
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,9 +11,10 @@ ctpool_destroy(pool);
 .fi
 .SH DESCRIPTION
 .nf
-Calls __ctpool_destroy() to drain or cancel all pending tasks, join all
-worker threads, and free all associated resources. The pool pointer is
-then set to NULL.
+Calls __ctpool_destroy() to wait for every in-flight resolved use of
+the handle to finish, drain or cancel all pending tasks, join all
+worker threads, and free all associated resources. The pool handle
+is then set to CTPOOL_INVALID.
 
 If neither ctpool_shutdown_drain() nor ctpool_shutdown_immediate() was
 called beforehand, a drain shutdown is performed implicitly so that all
@@ -21,13 +22,16 @@ queued tasks complete before the pool is freed.
 .fi
 .SH PARAMETERS
 .nf
-pool  Thread pool variable to destroy (set to NULL after destruction).
+pool  Thread pool variable to destroy (set to CTPOOL_INVALID after
+      destruction).
 .fi
 .SH NOTES
 .nf
-Safe to call when pool is NULL (no-op).
-Must be called only after all other threads have stopped submitting to
-or querying the pool.
+Safe to call when pool is CTPOOL_INVALID (no-op). Calling this on a
+stale handle (one already destroyed, sequentially by an earlier
+call or concurrently by another thread) is a FATAL ERROR
+(abort()/SIGABRT), not a silent double-free; see __ctpool_destroy(3)
+for further detail.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_construct (3),

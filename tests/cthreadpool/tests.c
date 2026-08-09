@@ -1,10 +1,13 @@
 #include <common.h>
 #include <cthreadpool.h>
+#include <fcntl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -14,6 +17,9 @@
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
+
+extern struct cthread_pool *_ctpool_resolve_for_tests(ctpool h);
+extern size_t _ctpool_slot_table_capacity_for_tests(void);
 
 /* ========================================================================== */
 /*                         SHARED TASK FUNCTIONS                              */
@@ -59,9 +65,14 @@ static void *release_gate_fn(void *arg) {
 }
 
 /* Call ctpool_wait on the pool passed as arg; used to block a background
- * thread so the main thread can race ctpool_shutdown_immediate against it. */
+ * thread so the main thread can race ctpool_shutdown_immediate against it.
+ * arg is a `ctpool *` (the address of the caller's own local handle
+ * variable), not the handle value itself: ctpool is now a uint64_t value
+ * handle, not a pointer, so it can no longer be round-tripped through
+ * void* by value the way a raw pointer handle could. */
 static void *pool_wait_thread(void *arg) {
-  ctpool_wait((ctpool)arg);
+  ctpool *p = (ctpool *)arg;
+  ctpool_wait(*p);
   return NULL;
 }
 
@@ -193,14 +204,14 @@ static void *oom_realloc(void *ptr, size_t size) {
 
 TEST(construction, unbounded_default) {
   ctpool_construct(pool, 2, 0);
-  REQUIRE_NE((void *)pool, NULL);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);
 }
 
 TEST(construction, bounded) {
   ctpool_construct(pool, 4, 64);
-  REQUIRE_NE((void *)pool, NULL);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);
 }
@@ -208,7 +219,7 @@ TEST(construction, bounded) {
 TEST(construction, ccol_invalid_size_means_unbounded) {
   char *err = NULL;
   ctpool pool = create_cthread_pool(2, ccol_invalid_size, &err);
-  REQUIRE_NE((void *)pool, NULL);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);
 }
@@ -216,7 +227,7 @@ TEST(construction, ccol_invalid_size_means_unbounded) {
 TEST(construction, zero_threads_fails) {
   char *err = NULL;
   ctpool pool = create_cthread_pool(0, 0, &err);
-  REQUIRE_EQ((void *)pool, NULL);
+  REQUIRE_EQ(pool, CTPOOL_INVALID);
   REQUIRE_NE((void *)err, NULL);
 }
 
@@ -248,7 +259,7 @@ TEST(construction, declare_scoped_auto_destroys) {
     ctpool_declare_scoped(pool);
     char *err = NULL;
     pool = create_cthread_pool(2, 0, &err);
-    REQUIRE_NE((void *)pool, NULL);
+    REQUIRE_NE(pool, CTPOOL_INVALID);
     ctpool_submit(pool, inc_counter, &counter, NULL);
   } /* pool is auto-destroyed here */
   REQUIRE_EQ(atomic_load(&counter), 1);
@@ -308,13 +319,14 @@ TEST(submit, rejected_after_shutdown_immediate) {
 
 TEST(submit, invalid_args) {
   ctpool_construct(pool, 2, 0);
-  REQUIRE_EQ(ctpool_submit(NULL, inc_counter, NULL, NULL), ccol_invalid_args);
+  REQUIRE_EQ(ctpool_submit(CTPOOL_INVALID, inc_counter, NULL, NULL),
+             ccol_invalid_args);
   REQUIRE_EQ(ctpool_submit(pool, NULL, NULL, NULL), ccol_invalid_args);
-  REQUIRE_EQ(ctpool_try_submit(NULL, inc_counter, NULL, NULL),
+  REQUIRE_EQ(ctpool_try_submit(CTPOOL_INVALID, inc_counter, NULL, NULL),
              ccol_invalid_args);
   REQUIRE_EQ(ctpool_try_submit(pool, NULL, NULL, NULL), ccol_invalid_args);
   struct timespec ts = {.tv_sec = 1, .tv_nsec = 0};
-  REQUIRE_EQ(ctpool_timed_submit(NULL, inc_counter, NULL, NULL, &ts),
+  REQUIRE_EQ(ctpool_timed_submit(CTPOOL_INVALID, inc_counter, NULL, NULL, &ts),
              ccol_invalid_args);
   REQUIRE_EQ(ctpool_timed_submit(pool, NULL, NULL, NULL, &ts),
              ccol_invalid_args);
@@ -329,7 +341,7 @@ TEST(submit, returns_not_enough_memory) {
                              .realloc = oom_realloc};
   char *err = NULL;
   ctpool pool = create_cthread_pool_mp(2, 0, &mp, &err);
-  REQUIRE_NE((void *)pool, NULL);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
 
   atomic_int counter = 0;
   atomic_store(&g_oom_enabled, 1);
@@ -710,7 +722,7 @@ TEST(futures, invalid_args) {
   struct timespec ts = {.tv_sec = 1, .tv_nsec = 0};
 
   /* ctpool_try_submit_future: NULL pool, NULL fn, NULL out */
-  REQUIRE_EQ(ctpool_try_submit_future(NULL, identity_fn, &value, &f),
+  REQUIRE_EQ(ctpool_try_submit_future(CTPOOL_INVALID, identity_fn, &value, &f),
              ccol_invalid_args);
   REQUIRE_EQ((void *)f, NULL);
   REQUIRE_EQ(ctpool_try_submit_future(pool, NULL, &value, &f),
@@ -720,8 +732,9 @@ TEST(futures, invalid_args) {
              ccol_invalid_args);
 
   /* ctpool_timed_submit_future: NULL pool, NULL fn, NULL out */
-  REQUIRE_EQ(ctpool_timed_submit_future(NULL, identity_fn, &value, &ts, &f),
-             ccol_invalid_args);
+  REQUIRE_EQ(
+      ctpool_timed_submit_future(CTPOOL_INVALID, identity_fn, &value, &ts, &f),
+      ccol_invalid_args);
   REQUIRE_EQ((void *)f, NULL);
   REQUIRE_EQ(ctpool_timed_submit_future(pool, NULL, &value, &ts, &f),
              ccol_invalid_args);
@@ -730,7 +743,8 @@ TEST(futures, invalid_args) {
              ccol_invalid_args);
 
   /* ctpool_submit_future: NULL pool, NULL fn */
-  REQUIRE_EQ((void *)ctpool_submit_future(NULL, identity_fn, &value), NULL);
+  REQUIRE_EQ((void *)ctpool_submit_future(CTPOOL_INVALID, identity_fn, &value),
+             NULL);
   REQUIRE_EQ((void *)ctpool_submit_future(pool, NULL, &value), NULL);
 
   ctpool_shutdown_drain(pool);
@@ -753,7 +767,7 @@ TEST(futures, submit_future_returns_null_on_oom) {
                              .realloc = oom_realloc};
   char *err = NULL;
   ctpool pool = create_cthread_pool_mp(2, 0, &mp, &err);
-  REQUIRE_NE((void *)pool, NULL);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
 
   int value = 0;
 
@@ -996,7 +1010,7 @@ TEST(wait, concurrent_shutdown_immediate_unblocks_wait) {
   }
 
   pthread_t waiter;
-  pthread_create(&waiter, NULL, pool_wait_thread, pool);
+  pthread_create(&waiter, NULL, pool_wait_thread, &pool);
   sleep_ms(10); /* let waiter enter cond_var_wait inside ctpool_wait */
 
   /* Release the gate, then poll until active_count drops to 0.  The moment
@@ -1033,7 +1047,7 @@ TEST(wait, concurrent_shutdown_drain_unblocks_wait) {
   }
 
   pthread_t waiter;
-  pthread_create(&waiter, NULL, pool_wait_thread, pool);
+  pthread_create(&waiter, NULL, pool_wait_thread, &pool);
   sleep_ms(10); /* let waiter block inside ctpool_wait */
 
   /* A helper thread releases the gate after a delay so the worker exits
@@ -1245,7 +1259,7 @@ TEST(custom_mprocs, allocations_go_through_custom_procs) {
 
   char *err = NULL;
   ctpool pool = create_cthread_pool_mp(2, 0, &mp, &err);
-  REQUIRE_NE((void *)pool, NULL);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
 
   atomic_int counter = 0;
   for (int i = 0; i < 8; i++) {
@@ -1326,4 +1340,264 @@ TEST(load, concurrent_producers) {
 
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);
+}
+
+/* ========================================================================== */
+/*          CTPOOL HANDLE LIFECYCLE (GENERATION-TAGGED SLOT TABLE)            */
+/* ========================================================================== */
+
+/* Mirrors the already-implemented, already-verified chttpcli_handle_lifecycle
+ * / event_loop_handle_lifecycle / clrucache_handle_lifecycle test groups,
+ * adapted for ctpool's own lock-protected pin mechanism (see
+ * src/cthreadpool.c's own struct cthread_pool.pending_resolve_count/pin_cv
+ * field comments: like clru_cache, ctpool reuses the chttpcli/chttpsvr-style
+ * lock-protected decrement+broadcast, since this module is already a
+ * single-global-mutex design). */
+
+/* A fully completed destroy, followed later by a second destroy call on an
+ * independently-held copy of the same original handle value, must be a
+ * fatal error. Run in a forked child (mirroring tests/clogger/tests.c's own
+ * fork-test precedent for process-terminating misuse) since fatal_err
+ * aborts the whole process. */
+TEST(ctpool_handle_lifecycle, sequential_double_destroy_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    char *err = NULL;
+    ctpool pool = create_cthread_pool(2, 0, &err);
+    if (pool == CTPOOL_INVALID) _exit(2);
+    ctpool stale = pool;     /* an independently-held copy of the handle value,
+            distinct from the local the macro below invalidates */
+    ctpool_destroy(pool);    /* completes normally (implicit drain shutdown);
+           the local `pool` is now CTPOOL_INVALID, but `stale` still holds the
+           original value */
+    __ctpool_destroy(stale); /* the actual misuse under test: a second,
+        purely sequential destroy of a handle already fully torn down */
+    _exit(0); /* unreachable if fatal_err() aborted as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+typedef struct {
+  ctpool h;
+} ctp_concurrent_destroy_arg_t;
+
+static void *ctp_concurrent_destroy_thread(void *arg) {
+  ctp_concurrent_destroy_arg_t *a = (ctp_concurrent_destroy_arg_t *)arg;
+  __ctpool_destroy(a->h);
+  return NULL;
+}
+
+/* Two threads calling destroy on two independently-held copies of the SAME,
+ * still-valid handle at (as close to) the same moment as possible must also
+ * be fatal; regression coverage for the same class of concurrent double-free
+ * this whole redesign exists to close for chttpcli/chttpsvr/event_loop/
+ * clru_cache. */
+TEST(ctpool_handle_lifecycle, concurrent_double_destroy_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    char *err = NULL;
+    ctpool pool = create_cthread_pool(2, 0, &err);
+    if (pool == CTPOOL_INVALID) _exit(2);
+    ctp_concurrent_destroy_arg_t a1 = {.h = pool};
+    ctp_concurrent_destroy_arg_t a2 = {.h = pool};
+    pthread_t t1, t2;
+    pthread_create(&t1, NULL, ctp_concurrent_destroy_thread, &a1);
+    pthread_create(&t2, NULL, ctp_concurrent_destroy_thread, &a2);
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+    _exit(0); /* unreachable: whichever of the two destroy calls loses the
+                  race must hit fatal_err() */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+typedef struct {
+  ctpool h;
+  atomic_int *counter;
+  ccol_retval_t rv;
+} ctp_blocked_submit_arg_t;
+
+static void *ctp_blocked_submit_thread(void *arg) {
+  ctp_blocked_submit_arg_t *a = (ctp_blocked_submit_arg_t *)arg;
+  a->rv = ctpool_submit(a->h, inc_counter, a->counter, NULL);
+  return NULL;
+}
+
+/* The resolve-then-use race fix actually works, exercising the specific
+ * reversed wait-ordering __ctpool_teardown_raw uses (shutdown-drain BEFORE
+ * waiting on pending_resolve_count; see that function's own comment in
+ * src/cthreadpool.c): a one-worker, queue_cap==1 pool with its worker stuck
+ * in a long-running first task and a second task already filling the
+ * queue, so a third ctpool_submit call genuinely blocks inside
+ * submit_internal's cond_var_wait(not_full, ...) (holding a real,
+ * resolved pin on the handle for the entire blocked duration). A concurrent
+ * ctpool_destroy must (1) not crash / not free the pool out from under
+ * that still-pinned blocked submitter (the actual UAF this whole redesign
+ * exists to close: without the fix, submit_internal's blocked wait can
+ * only ever be released by shutdown's own not_full broadcast, so waiting
+ * on pending_resolve_count BEFORE running shutdown would deadlock
+ * destroy forever instead), (2) let the blocked submit return
+ * ccol_not_permitted once shutdown starts, and (3) still actually block
+ * until the worker thread has been joined (a real wait, not an instant
+ * return); proven by racing it against a release_gate_fn thread with a
+ * known, fixed 20ms delay. */
+TEST(ctpool_handle_lifecycle, resolve_then_use_race_destroy_waits) {
+  atomic_int gate = 0;
+  atomic_int started = 0;
+  atomic_int counter = 0;
+  gate_ctx_t gctx = {.gate = &gate, .started = &started};
+
+  ctpool_construct(pool, 1, 1);
+  ctpool_submit(pool, blocker_fn, &gctx, NULL);
+  while (!atomic_load(&started)) sleep_ms(1);
+
+  /* Fill the bounded queue (cap 1) so the next submit genuinely blocks. */
+  REQUIRE_EQ(ctpool_submit(pool, inc_counter, &counter, NULL), ccol_success);
+
+  ctp_blocked_submit_arg_t blocked_arg = {
+      .h = pool, .counter = &counter, .rv = ccol_success};
+  pthread_t blocked_thread;
+  REQUIRE_EQ(pthread_create(&blocked_thread, NULL, ctp_blocked_submit_thread,
+                            &blocked_arg),
+             0);
+  /* Give the blocked-submit thread a head start so its resolve (and
+   * therefore its pin) has definitely already happened before destroy
+   * fires. */
+  sleep_ms(10);
+
+  pthread_t gate_thread;
+  REQUIRE_EQ(pthread_create(&gate_thread, NULL, release_gate_fn, &gate), 0);
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  ctpool_destroy(pool); /* must block until the worker (stuck until the gate
+                            thread's ~20ms release) has actually exited */
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+
+  pthread_join(blocked_thread, NULL);
+  pthread_join(gate_thread, NULL);
+
+  REQUIRE_EQ(blocked_arg.rv, ccol_not_permitted);
+  /* The worker was stuck for ~20ms (the gate thread's own fixed delay);
+   * destroy returning in well under that would mean it did NOT actually
+   * wait for the worker to be joined. */
+  REQUIRE_GT(elapsed_ms, 10L);
+}
+
+typedef struct {
+  ctpool h;
+} ctp_pending_count_arg_t;
+
+static void *ctp_pending_count_thread(void *arg) {
+  ctp_pending_count_arg_t *a = (ctp_pending_count_arg_t *)arg;
+  /* Return value intentionally ignored: a legitimate race with a concurrent
+   * destroy can make this resolve fail (returning 0) instead of succeeding;
+   * both outcomes are correct. This thread exists purely to generate
+   * resolve/pin/unpin traffic concurrent with the destroy thread below. */
+  ctpool_pending_count(a->h);
+  return NULL;
+}
+
+/* Distinct from resolve_then_use_race_destroy_waits above, and not
+ * redundant with it: that test's blocked submit guarantees
+ * pending_resolve_count > 0 for a long, deterministic window; this test
+ * needs the opposite shape: a fast, non-blocking entry point
+ * (ctpool_pending_count: resolve, one mutex-protected field read, unpin,
+ * return) raced against a concurrent destroy, repeated under stress, since
+ * the failure window for a fast pin/unpin pair is only a handful of
+ * instructions wide and will not reproduce reliably under a single
+ * unstressed run. A fresh pool is used each iteration so every repetition
+ * gets its own independent race rather than reusing one already-destroyed
+ * handle. */
+TEST(ctpool_handle_lifecycle, resolve_unpin_race_stress) {
+  enum { ITERATIONS = 25 };
+  for (int i = 0; i < ITERATIONS; i++) {
+    char *err = NULL;
+    ctpool pool = create_cthread_pool(2, 0, &err);
+    REQUIRE_NE(pool, CTPOOL_INVALID);
+
+    ctp_pending_count_arg_t pending_arg = {.h = pool};
+    ctp_concurrent_destroy_arg_t destroy_arg = {.h = pool};
+    pthread_t pending_tid, destroy_tid;
+    REQUIRE_EQ(pthread_create(&pending_tid, NULL, ctp_pending_count_thread,
+                              &pending_arg),
+               0);
+    REQUIRE_EQ(pthread_create(&destroy_tid, NULL, ctp_concurrent_destroy_thread,
+                              &destroy_arg),
+               0);
+    pthread_join(pending_tid, NULL);
+    pthread_join(destroy_tid, NULL);
+  }
+}
+
+/* Legitimate slot reuse must never be confused with a stale handle to the
+ * slot's previous occupant; the whole point of the generation counter. */
+TEST(ctpool_handle_lifecycle,
+     legitimate_slot_reuse_not_confused_with_stale_handle) {
+  char *err = NULL;
+  ctpool a = create_cthread_pool(2, 0, &err);
+  REQUIRE_NE(a, CTPOOL_INVALID);
+  ctpool stale_a = a;
+  ctpool_destroy(a);
+
+  ctpool b = create_cthread_pool(2, 0, &err);
+  REQUIRE_NE(b, CTPOOL_INVALID);
+
+  /* B's operations must succeed normally regardless of whether the
+   * allocator happened to reuse A's exact address for B. */
+  REQUIRE_EQ(ctpool_pending_count(b), (size_t)0);
+
+  /* A's stale handle must never resolve to B, even if it reused the same
+   * underlying address; the whole point of the generation counter. */
+  REQUIRE_EQ((void *)_ctpool_resolve_for_tests(stale_a), NULL);
+
+  ctpool_destroy(b);
+}
+
+/* The slot table is bounded, not ever-growing: a create/destroy churn loop
+ * with only a single slot ever in flight at a time must reuse that one
+ * freed slot on every iteration rather than growing the table further.
+ * Captures capacity right after the first create/destroy pair (rather than
+ * asserting a fixed absolute value like 1) since other tests earlier in
+ * this same process may have already grown the table to some N > 1; what
+ * this test actually needs to prove is that ITS OWN churn adds no further
+ * growth, not what the table's absolute size happens to be when it runs. */
+TEST(ctpool_handle_lifecycle, bounded_slot_reuse_under_churn) {
+  enum { ITERATIONS = 25 };
+
+  char *err = NULL;
+  ctpool pool0 = create_cthread_pool(2, 0, &err);
+  REQUIRE_NE(pool0, CTPOOL_INVALID);
+  ctpool_destroy(pool0);
+  size_t capacity_after_first = _ctpool_slot_table_capacity_for_tests();
+
+  for (int i = 1; i < ITERATIONS; i++) {
+    ctpool pool = create_cthread_pool(2, 0, &err);
+    REQUIRE_NE(pool, CTPOOL_INVALID);
+    ctpool_destroy(pool);
+  }
+
+  REQUIRE_EQ(_ctpool_slot_table_capacity_for_tests(), capacity_after_first);
 }

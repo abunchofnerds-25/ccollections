@@ -1,4 +1,4 @@
-.TH __CTPOOL_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH __CTPOOL_DESTROY 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 __ctpool_destroy \- destroy a thread pool (internal)
 .SH LIBRARY
@@ -11,24 +11,36 @@ void __ctpool_destroy(ctpool pool);
 .fi
 .SH DESCRIPTION
 .nf
-Frees all resources associated with the pool. If neither
+pool is an opaque VALUE handle (a packed {slot index, generation}
+pair), resolved through a library-owned slot table before the
+underlying pool object is ever touched. pool must be a currently
+live handle (one returned by create_cthread_pool/_mp and not yet
+destroyed). CTPOOL_INVALID is a silent no-op. Any other value (a
+stale handle already destroyed by an earlier call or concurrently
+by another thread, a forged value, or garbage) is a FATAL ERROR:
+this function calls fatal_err() (abort()/SIGABRT) rather than risk
+a use-after-free or double-free.
+
+On a live handle, waits for every in-flight resolved use of the
+handle to finish (a ctpool_submit/_try_submit/_timed_submit/
+_submit_future/_try_submit_future/_timed_submit_future/_wait/
+_shutdown_drain/_shutdown_immediate/_pending_count/_active_count
+call currently executing on another thread). If neither
 ctpool_shutdown_drain nor ctpool_shutdown_immediate was called
-beforehand, performs a drain shutdown inline (waits for all queued and
-active tasks to complete) before freeing.
+beforehand, a drain shutdown runs first, BEFORE that wait: a
+submitter blocked on a full bounded queue can depend entirely on
+shutdown's own not_full broadcast to ever release its pin, so
+waiting for quiescence before running shutdown would risk deadlock
+against exactly the caller this function exists to protect. Frees
+all associated resources once every pin has been released.
 
 After this function returns the pool handle is invalid. Use the
-ctpool_destroy macro rather than calling this function directly, as the
-macro also sets the handle to NULL.
+ctpool_destroy macro rather than calling this function directly, as
+the macro also sets the handle to CTPOOL_INVALID.
 .fi
 .SH PARAMETERS
 .nf
-pool   Thread pool handle (NULL is a no-op)
-.fi
-.SH NOTES
-.nf
-Must not be called concurrently with any other pool operation.
-Calling ctpool_destroy (the macro) is preferred over calling this
-function directly.
+pool   Thread pool handle (CTPOOL_INVALID is a no-op)
 .fi
 .SH "SEE ALSO"
 .BR ctpool_destroy (3),

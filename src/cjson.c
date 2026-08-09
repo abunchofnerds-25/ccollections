@@ -1222,7 +1222,7 @@ static bool parse_string_raw(parse_ctx_t *ctx, char **out) {
           } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
             cp = 0xFFFD; /* lone low surrogate */
           }
-          /*   produces a null byte, which cannot be represented in a
+          /* \u0000 produces a null byte, which cannot be represented in a
            * null-terminated C string.  Reject it rather than silently
            * truncating the string at the embedded null. */
           if (cp == 0) {
@@ -1448,14 +1448,15 @@ static cjson_node_t *parse_value(parse_ctx_t *ctx) {
  * parse_value(), then verifies that no significant content follows the root
  * value (trailing garbage is rejected).
  *
- * On failure: *err_str (if non-NULL) receives a strdup'd human-readable
- * error message; the caller is responsible for freeing it with free().
+ * On failure: *err_str (if non-NULL) receives a heap-allocated human-readable
+ * error message, allocated through mp; the caller is responsible for freeing
+ * it with cjson_serialize_free_mp() (passing the same mp).
  * On success: *err_str is set to NULL.
  */
 static cjson parse_common(const char *src, size_t len, char **err_str,
                           ccol_memmgmt_procs_t *mp) {
   if (!src) {
-    if (err_str) *err_str = strdup("null input");
+    if (err_str) *err_str = ccol_strdup(mp, "null input");
     return NULL;
   }
   parse_ctx_t ctx = {.src = src, .pos = 0, .len = len, .error = "", .mp = mp};
@@ -1463,7 +1464,7 @@ static cjson parse_common(const char *src, size_t len, char **err_str,
   if (!root) {
     if (err_str) {
       const char *msg = ctx.error[0] ? ctx.error : "unknown parse error";
-      *err_str = strdup(msg);
+      *err_str = ccol_strdup(mp, msg);
     }
     return NULL;
   }
@@ -1473,7 +1474,7 @@ static cjson parse_common(const char *src, size_t len, char **err_str,
     if (err_str) {
       char buf[64];
       snprintf(buf, sizeof(buf), "trailing garbage at position %zu", ctx.pos);
-      *err_str = strdup(buf);
+      *err_str = ccol_strdup(mp, buf);
     }
     __cjson_destroy((cjson)root);
     return NULL;

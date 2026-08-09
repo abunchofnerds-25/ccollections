@@ -12,7 +12,8 @@ const char *cstring_c_str(cstr s);
 .SH DESCRIPTION
 .nf
 Returns a read-only pointer to the internal null-terminated buffer.
-The pointer becomes invalid after any mutating operation on the string.
+The pointer becomes invalid after any mutating operation on the string
+that may reallocate the buffer; see NOTES for the exact list.
 
 This function is the recommended bridge when using a cstr with chashmap
 or cbstmap. Those containers understand char * keys (with content-based

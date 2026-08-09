@@ -19,6 +19,9 @@ and all other registered listeners continue running unaffected.
 Idempotent: calling chttpsvr_stop on a server that was never started,
 or that was already stopped, is a no-op.
 
+A silent no-op if srv is CHTTPSVR_INVALID or a stale/already-destroyed
+handle, matching this function's existing "srv is NULL" behavior.
+
 Connections already accepted before this call keep running; they are
 not closed and may continue dispatching further requests through this
 handle for as long as the client keeps the connection open, even
@@ -27,7 +30,18 @@ __chttpsvr_destroy is the only call that waits for such in-flight
 requests to fully drain (and closes every remaining idle connection)
 before releasing the server's resources.
 
-Safe to call with NULL.
+Safe to call with CHTTPSVR_INVALID (0).
+.fi
+.SH WARNINGS
+.nf
+Synchronous and NOT async-signal-safe: unlike chttpsvr_engine_stop(),
+do not call this function directly from a signal handler. It takes
+internal locks that the interrupted thread could already be holding
+(for example, inside chttpsvr_start() or chttpsvr_destroy()), which
+can self-deadlock the calling thread. For a signal-driven shutdown
+hook, use chttpsvr_engine_stop() instead; only that function is
+documented as async-signal-safe, specifically because its
+implementation defers all such work off of the interrupted thread.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_start (3),

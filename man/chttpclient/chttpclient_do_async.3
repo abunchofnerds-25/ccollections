@@ -32,17 +32,44 @@ teardown) has no effect on the other.
 Unlike chttpclient_do, req need not remain valid after this call
 returns; everything needed is copied or serialised internally
 before the call returns.
+
+Any interim informational (1xx) response the server sends is
+transparently discarded, and reading continues on the same
+connection for the real response; the future is never fulfilled
+with a 1xx status as though it were the final answer. RFC 8297 "103
+Early Hints" is the most common real-world example. (chttpclient_do_
+async never sends "Expect: 100-continue" itself; see chttp_request_t.
+expect_continue's own doc comment.) A server that never stops
+sending interim responses is not tolerated indefinitely: after 64
+consecutive discarded interim responses on one hop, the future is
+fulfilled with ccol_http_transfer_aborted instead of waiting
+forever.
+
+A request header (or, on a request with a body, body.content_type)
+containing an embedded CR or LF byte, or a body-carrying request
+(POST, PUT, or PATCH) whose caller-set Content-Length header does
+not exactly match the actual body length, is a distinct case: it can
+only be detected once the request is actually serialised for the
+wire, which happens after the future already exists (unlike a
+malformed URL or unusable TLS config, both checked up front). Such a
+request still returns a non-NULL future; its eventual result (see
+chttpclient_async_result_get(3)) carries rv == ccol_invalid_args
+instead of a successful response, exactly the same as
+chttpclient_do would return synchronously for the equivalent
+request; see chttp_request_set_header(3) and chttpclient_do(3) for
+why this is rejected.
 .fi
 .SH PARAMETERS
 .nf
-cli Client handle; must not be NULL.
+cli Client handle; must not be CHTTPCLI_INVALID.
 req Request to execute; must not be NULL.
 .fi
 .SH RETURN VALUE
 .nf
-A future, or NULL if the request could not even be queued (NULL
-cli/req, malformed URL, TLS unusable, OOM, or the engine failing to
-start).  On success, the caller owns the future and must eventually
+A future, or NULL if the request could not even be queued (NULL req,
+cli is CHTTPCLI_INVALID or a stale/already-destroyed handle,
+malformed URL, TLS unusable, OOM, or the engine failing to start).
+On success, the caller owns the future and must eventually
 call chttpclient_async_result_free (after
 chttpclient_async_result_get) followed by exactly one
 ctpool_future_free.

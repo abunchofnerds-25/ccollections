@@ -1,4 +1,4 @@
-.TH CTPOOL_WAIT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_WAIT 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_wait \- block until the pool is idle
 .SH LIBRARY
@@ -21,7 +21,7 @@ submissions can cause indefinite blocking.
 .fi
 .SH PARAMETERS
 .nf
-pool   Thread pool handle (NULL is a no-op)
+pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed handle is a no-op)
 .fi
 .SH "SEE ALSO"
 .BR ctpool_shutdown_drain (3),

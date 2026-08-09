@@ -286,6 +286,79 @@ TEST(status_line, split_across_every_byte_boundary) {
 }
 
 /* ========================================================================== */
+/*                     KEEP-ALIVE                                            */
+/* ========================================================================== */
+
+TEST(keep_alive, http_1_1_default_is_keep_alive) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(chttp1_should_keep_alive(&parser));
+}
+
+TEST(keep_alive, http_1_1_connection_close_overrides_default) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_FALSE(chttp1_should_keep_alive(&parser));
+}
+
+TEST(keep_alive, http_1_0_default_is_not_keep_alive) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg = "HTTP/1.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_FALSE(chttp1_should_keep_alive(&parser));
+}
+
+TEST(keep_alive, http_1_0_connection_keep_alive_overrides_default) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.0 200 OK\r\nContent-Length: 5\r\nConnection: keep-alive\r\n\r\n"
+      "hello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(chttp1_should_keep_alive(&parser));
+}
+
+TEST(keep_alive, version_greater_than_1_with_zero_minor_defaults_keep_alive) {
+  /* Regression test: chttp1_should_keep_alive used to test
+   * "http_major > 0 && http_minor > 0" to decide "HTTP/1.1 or later", which
+   * incorrectly treated any version with a zero minor component (e.g. a
+   * literal "HTTP/2.0" status line, which this parser's grammar accepts;
+   * see status_line.any_major_minor_digit_accepted) as HTTP/1.0-or-earlier,
+   * requiring an explicit "Connection: keep-alive" token no real server of
+   * that vintage would send, and silently defeating connection reuse. The
+   * correct test is "major > 1, or major == 1 with minor >= 1". */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg = "HTTP/2.0 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_EQ(parser.http_major, 2);
+  REQUIRE_EQ(parser.http_minor, 0);
+  REQUIRE_TRUE(chttp1_should_keep_alive(&parser));
+}
+
+TEST(keep_alive,
+     version_greater_than_1_with_zero_minor_connection_close_honored) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/3.0 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_FALSE(chttp1_should_keep_alive(&parser));
+}
+
+/* ========================================================================== */
 /*                     HEADERS                                               */
 /* ========================================================================== */
 
@@ -525,6 +598,47 @@ TEST(headers, max_total_header_bytes_override_rejects_below_builtin_default) {
   const char *msg =
       "HTTP/1.1 200 OK\r\nX-Long-Header-Name: some longer value here\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(headers,
+     request_line_itself_counts_against_max_total_header_bytes_override) {
+  /* Regression test: chttpsvr_config_t.max_header_bytes is documented as
+   * bounding "request line + all header lines", but total_header_bytes
+   * used to only ever be incremented by process_header_line, never by the
+   * request/status line itself; so a request-target far larger than a
+   * configured cap was still accepted, bounded only by the much larger
+   * CHTTP1_MAX_LINE_LEN. A request line alone, comfortably over the tiny
+   * override below but nowhere near CHTTP1_MAX_LINE_LEN, must now be
+   * rejected before any header is even seen. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  parser.max_total_header_bytes_override = 32; /* well under the request line */
+
+  char target[512];
+  memset(target, 'a', sizeof(target) - 1);
+  target[sizeof(target) - 1] = '\0';
+  char msg[600];
+  snprintf(msg, sizeof(msg), "GET /%s HTTP/1.1\r\n\r\n", target);
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(headers, request_line_and_headers_share_the_same_total_bytes_budget) {
+  /* A request line and a header line that individually fit, but whose SUM
+   * exceeds the override, must still be rejected; confirming the request
+   * line's own contribution is genuinely added to the same running total a
+   * header line contributes to, not tracked separately/ignored. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  parser.max_total_header_bytes_override = 40; /* "GET / HTTP/1.1\r\n" is 16 */
+
+  const char *first_line = "GET / HTTP/1.1\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, first_line, strlen(first_line)),
+             CHTTP1_OK);
+  const char *header_line = "X-Long-Header-Name: some longer value\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, header_line, strlen(header_line)),
+             CHTTP1_ERROR);
 }
 
 /* ========================================================================== */
@@ -949,6 +1063,33 @@ TEST(finish_matrix, inside_eof_delimited_body_is_safe_with_callback) {
   REQUIRE_TRUE(ctx.message_complete_called);
 }
 
+TEST(finish_matrix,
+     calling_finish_twice_after_eof_delimited_body_does_not_refire_callback) {
+  /* Regression test: the CHTTP1_FINISH_SAFE_WITH_CB case never updated
+   * finish_state (only parser->state) after firing on_message_complete, so
+   * finish_state stayed CHTTP1_FINISH_SAFE_WITH_CB forever, and a second
+   * finish() call on an already-CHTTP1_ST_MESSAGE_DONE parser used to
+   * re-enter that same branch and re-invoke on_message_complete, violating
+   * that callback's own "fired exactly once" contract and this function's
+   * own documented "already at a clean boundary returns CHTTP1_OK"
+   * contract. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg = "HTTP/1.0 200 OK\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_OK);
+  REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.message_complete_called);
+
+  ctx.message_complete_called = false;
+  REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_OK);
+  REQUIRE_FALSE(ctx.message_complete_called);
+
+  ctx.message_complete_called = false;
+  REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_OK);
+  REQUIRE_FALSE(ctx.message_complete_called);
+}
+
 /* ========================================================================== */
 /*                     MISC                                                  */
 /* ========================================================================== */
@@ -1090,6 +1231,66 @@ TEST(request_line, split_across_every_byte_boundary) {
   }
 }
 
+TEST(request_line, single_leading_blank_line_tolerated) {
+  /* RFC 7230 SS3.5: a server SHOULD ignore at least one empty line received
+   * prior to the request-line (some clients send a stray CRLF after a POST
+   * body). Regression test: this used to hard-reject with PH_ERROR
+   * (method_len == 0), closing an otherwise-healthy keep-alive/pipelined
+   * connection over one stray CRLF. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "\r\nGET /path HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.request_line_called);
+  REQUIRE_STREQ(ctx.method, "GET");
+  REQUIRE_STREQ(ctx.target, "/path");
+}
+
+TEST(request_line, multiple_leading_blank_lines_tolerated) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "\r\n\r\n\r\nGET /path HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_STREQ(ctx.target, "/path");
+}
+
+TEST(request_line, leading_blank_lines_split_across_byte_boundaries) {
+  const char *msg = "\r\n\r\nGET /path HTTP/1.1\r\n\r\n";
+  size_t len = strlen(msg);
+  for (size_t split = 1; split < len; split++) {
+    chttp1_parser_t parser;
+    test_ctx_t ctx;
+    init_test_request(&parser, &ctx);
+    chttp1_errno_t r1 = chttp1_parser_execute(&parser, msg, split);
+    if (r1 == CHTTP1_PAUSED) continue;
+    REQUIRE_EQ(r1, CHTTP1_OK);
+    chttp1_errno_t r2 =
+        chttp1_parser_execute(&parser, msg + split, len - split);
+    REQUIRE_EQ(r2, CHTTP1_PAUSED);
+    REQUIRE_STREQ(ctx.target, "/path");
+  }
+}
+
+TEST(request_line, excessive_leading_blank_lines_rejected) {
+  /* Bounded, not skipped unconditionally: a client that never stops
+   * sending blank lines must eventually be treated as malformed input
+   * rather than tolerated indefinitely. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  char msg[4096];
+  size_t off = 0;
+  for (int i = 0; i < 200; i++) {
+    msg[off++] = '\r';
+    msg[off++] = '\n';
+  }
+  memcpy(msg + off, "GET / HTTP/1.1\r\n\r\n", 18);
+  off += 18;
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, off), CHTTP1_ERROR);
+}
+
 /* ========================================================================== */
 /*        REQUEST-MODE BODY FRAMING (RFC 7230 SS3.3 asymmetry vs response)   */
 /* ========================================================================== */
@@ -1141,6 +1342,73 @@ TEST(request_body_framing, trailer_name_not_whitelisted) {
       "5\r\nhello\r\n0\r\nCustom-Trailer: allowed\r\n\r\n";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
   REQUIRE_STREQ(find_header(&ctx, "Custom-Trailer"), "allowed");
+}
+
+TEST(request_body_framing,
+     transfer_encoding_present_but_final_coding_not_chunked_rejected) {
+  /* RFC 7230 SS3.3.3: a request's Transfer-Encoding whose final coding is
+   * not "chunked" leaves the message length indeterminate; a conforming
+   * server MUST reject it outright rather than silently treating it as
+   * bodyless (the request/response asymmetry means a request has no
+   * EOF-delimited fallback the way a response does). Regression test: this
+   * used to be silently accepted as if Transfer-Encoding were absent. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "POST /x HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(
+    request_body_framing,
+    transfer_encoding_chunked_not_last_split_across_two_header_lines_rejected) {
+  /* Regression test: transfer_encoding_has_nonfinal_chunked only sees one
+   * header line at a time, so "chunked" claimed as final by an EARLIER
+   * Transfer-Encoding line and then followed by a SECOND Transfer-Encoding
+   * line (RFC 7230 SS3.2.2: repeated header lines are one concatenated
+   * comma-separated list, in order) used to bypass that check entirely,
+   * since each line was validated in isolation. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n"
+      "Transfer-Encoding: identity\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(request_body_framing,
+     transfer_encoding_chunked_last_split_across_two_header_lines_accepted) {
+  /* The legitimate counterpart of the above: "chunked" arriving as the
+   * LAST token of the LAST Transfer-Encoding line (here, on the second
+   * line, following a first line that doesn't end in chunked) is valid
+   * framing and must still be accepted. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: gzip\r\n"
+      "Transfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+  REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
+}
+
+TEST(request_body_framing,
+     response_mode_final_coding_not_chunked_still_reads_until_eof) {
+  /* Response mode's own, separate, documented scope reduction (see
+   * value_ends_with_chunked's doc comment) must be unaffected by the
+   * request-mode-only rejection added above: a response with a
+   * Transfer-Encoding whose final coding isn't "chunked" still falls back
+   * to EOF-delimited framing, exactly as before. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg = "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_OK);
+  REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.message_complete_called);
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
 }
 
 /* ========================================================================== */
@@ -1242,6 +1510,166 @@ TEST(divert, response_mode_rejects_divert_hint) {
   ctx.want_divert = true;
   const char *msg = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
   REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_USER);
+}
+
+/* ========================================================================== */
+/*         chttp1_has_content_length / chttp1_declared_content_length        */
+/* ========================================================================== */
+
+TEST(content_length_accessor, false_before_headers_complete) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  REQUIRE_FALSE(chttp1_has_content_length(&parser));
+  REQUIRE_EQ(chttp1_declared_content_length(&parser), (uint64_t)0);
+}
+
+TEST(content_length_accessor, true_with_declared_value_once_headers_complete) {
+  /* want_divert pauses parsing right at headers-complete, before any body
+   * byte is consumed, so the accessor's own documented caveat ("reused
+   * internally to track the CURRENT chunk's remaining byte count once
+   * chunked parsing begins... calling this after body parsing has already
+   * started returns a value with a different meaning") does not yet apply;
+   * this is exactly the window chttpserver.c's real caller uses it in. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  ctx.want_divert = true;
+  const char *headers = "POST /x HTTP/1.1\r\nContent-Length: 42\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
+             CHTTP1_HEADERS_ONLY);
+  REQUIRE_TRUE(chttp1_has_content_length(&parser));
+  REQUIRE_EQ(chttp1_declared_content_length(&parser), (uint64_t)42);
+}
+
+TEST(content_length_accessor, false_for_chunked_body) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  ctx.want_divert = true;
+  const char *headers =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
+             CHTTP1_HEADERS_ONLY);
+  REQUIRE_FALSE(chttp1_has_content_length(&parser));
+}
+
+TEST(content_length_accessor, false_for_no_body) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg = "GET /path HTTP/1.1\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_FALSE(chttp1_has_content_length(&parser));
+}
+
+TEST(content_length_accessor, null_parser_returns_safe_defaults) {
+  REQUIRE_FALSE(chttp1_has_content_length(NULL));
+  REQUIRE_EQ(chttp1_declared_content_length(NULL), (uint64_t)0);
+  REQUIRE_FALSE(chttp1_chunk_size_limit_exceeded(NULL));
+}
+
+/* ========================================================================== */
+/*                     chttp1_parser_message_complete                        */
+/* ========================================================================== */
+
+TEST(message_complete_accessor, false_before_completion) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  REQUIRE_FALSE(chttp1_parser_message_complete(&parser));
+  const char *partial = "HTTP/1.1 200 OK\r\n";
+  chttp1_parser_execute(&parser, partial, strlen(partial));
+  REQUIRE_FALSE(chttp1_parser_message_complete(&parser));
+}
+
+TEST(message_complete_accessor, true_after_execute_returns_paused) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_TRUE(chttp1_parser_message_complete(&parser));
+}
+
+TEST(message_complete_accessor,
+     true_after_finish_completes_eof_delimited_body) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *headers = "HTTP/1.1 200 OK\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
+             CHTTP1_OK);
+  REQUIRE_FALSE(chttp1_parser_message_complete(&parser));
+  REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_PAUSED);
+  REQUIRE_TRUE(chttp1_parser_message_complete(&parser));
+}
+
+/* ========================================================================== */
+/*          max_chunk_size_override / chttp1_chunk_size_limit_exceeded       */
+/* ========================================================================== */
+
+TEST(chunk_size_limit, unset_override_accepts_any_size_that_fits) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *headers =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
+             CHTTP1_OK);
+  /* max_chunk_size_override defaults to 0 (no cap): even a large chunk-size
+   * token is accepted as a syntactically valid line with nothing to compare
+   * it against. */
+  const char *chunk_size = "ffffffff\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, chunk_size, strlen(chunk_size)),
+             CHTTP1_OK);
+  REQUIRE_FALSE(chttp1_chunk_size_limit_exceeded(&parser));
+}
+
+TEST(chunk_size_limit, override_rejects_oversized_chunk_before_reading_data) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  parser.max_chunk_size_override = 1024;
+  const char *headers =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
+             CHTTP1_OK);
+  /* Declares a chunk far larger than the override and never sends any of
+   * its data: rejection must happen the instant the chunk-size line itself
+   * is parsed, not after waiting (forever) for data that will never come. */
+  const char *chunk_size = "8000000000000000\r\n"; /* ~9.2 exabytes */
+  REQUIRE_EQ(chttp1_parser_execute(&parser, chunk_size, strlen(chunk_size)),
+             CHTTP1_ERROR);
+  REQUIRE_TRUE(chttp1_chunk_size_limit_exceeded(&parser));
+}
+
+TEST(chunk_size_limit, override_accepts_chunk_at_exactly_the_limit) {
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  parser.max_chunk_size_override = 5;
+  const char *headers =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, headers, strlen(headers)),
+             CHTTP1_OK);
+  const char *rest = "5\r\nhello\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, rest, strlen(rest)), CHTTP1_PAUSED);
+  REQUIRE_FALSE(chttp1_chunk_size_limit_exceeded(&parser));
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+}
+
+TEST(chunk_size_limit, not_set_for_an_unrelated_parse_error) {
+  /* chttp1_chunk_size_limit_exceeded() must be false for every OTHER
+   * CHTTP1_ERROR cause, not merely default-initialised false; confirmed by
+   * triggering a genuinely different rejection (a malformed status line)
+   * and checking the flag afterward. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg = "GARBAGE\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+  REQUIRE_FALSE(chttp1_chunk_size_limit_exceeded(&parser));
 }
 
 /* ========================================================================== */

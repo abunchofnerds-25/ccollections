@@ -1,4 +1,4 @@
-.TH CHTTPSVR_REGISTER_HANDLER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPSVR_REGISTER_HANDLER 3 "2026-08-03" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpsvr_register_handler \- register a buffered handler on the root router
 .SH LIBRARY
@@ -40,7 +40,11 @@ rejected immediately with ccol_invalid_args.
 The name inside a {name} segment must consist entirely of characters
 from [A-Za-z0-9_].  Names containing other characters (spaces, hyphens,
 dots, etc.) are rejected with ccol_invalid_args because they can never
-be retrieved via chttpsvr_req_param.
+be retrieved via chttpsvr_req_param.  A pattern that reuses the same
+{name} more than once (e.g. /a/{id}/b/{id}) is likewise rejected with
+ccol_invalid_args: the second occurrence's captured value would
+otherwise be unreachable, since chttpsvr_req_param always returns the
+FIRST matching name.
 
 Path-segment values (both literal segments and captured parameters) are
 decoded using RFC 3986 path semantics: percent-encoded sequences such as
@@ -63,7 +67,9 @@ encoding in any path segment (whether a literal segment (e.g.
 /bad%ZZusers/{id} against /users/{id}) or a captured {name} parameter
 (e.g. /users/bad%ZZvalue against /users/{id})) does not match the
 route and returns 404 regardless of which methods are registered for
-that pattern.
+that pattern.  A percent-encoded sequence that decodes to a literal NUL
+byte (%00) is treated as invalid encoding too, rather than being decoded
+and compared as-is.
 
 If the same method and pattern combination is registered more than once,
 each call succeeds (returns ccol_success) but only the FIRST registered
@@ -78,16 +84,21 @@ Patterns with consecutive slashes (e.g. /foo//bar) or a trailing slash
 incoming request path does NOT match a registered pattern that lacks one;
 register a separate pattern if the trailing-slash form must be accepted.
 
-This function is thread-safe and may be called before or after
-chttpsvr_start is running.
+This function is thread-safe and may be called at any time, including
+concurrently with chttpsvr_destroy of the same server from another
+thread; a call racing a destroy simply returns ccol_invalid_args rather
+than touching freed memory.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if srv, pattern, or fn is NULL; if pattern does not
-                  begin with '/'; if pattern contains consecutive
-                  slashes or a trailing slash; or if a {name} segment
-                  contains characters outside [A-Za-z0-9_].
+ccol_invalid_args if srv is CHTTPSVR_INVALID or a stale/already-
+                  destroyed handle; if pattern or fn is NULL; if
+                  pattern does not begin with '/'; if pattern contains
+                  consecutive slashes or a trailing slash; if a
+                  {name} segment contains characters outside
+                  [A-Za-z0-9_]; or if the same {name} is used more
+                  than once.
 ccol_not_enough_memory if allocation fails.
 .fi
 .SH "SEE ALSO"

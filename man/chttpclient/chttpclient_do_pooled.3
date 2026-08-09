@@ -24,9 +24,11 @@ request.
 .fi
 .SH PARAMETERS
 .nf
-cli      Client handle; must not be NULL.
+cli      Client handle; must not be CHTTPCLI_INVALID.
 req      Request to execute; must not be NULL.
-resp_out Receives the response on success; must not be NULL.
+resp_out Must not be NULL. Set to NULL immediately, then, on
+         success, receives the response (matching chttpclient_do's
+         identical *resp_out contract).
 .fi
 .SH RETURN VALUE
 .nf

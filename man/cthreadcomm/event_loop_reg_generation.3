@@ -20,14 +20,13 @@ fd/connection, so it keeps the same generation) and across both a read
 and a write registration on the same fd (both share one generation,
 since they represent one logical connection).
 
-This exists for a caller's own defensive bookkeeping across fd reuse, a
-direct analogue of what facil.io's uuid gave callers in this library's
-own HTTP modules: a caller holding onto a connection object across
-several asynchronous steps can stamp it with the generation it read
-right after event_loop_add() returned, and later compare against a
-fresh read to detect whether it is still reasoning about the same
-logical connection, or whether the underlying fd number has since been
-closed and reused by an unrelated new connection.
+This exists for a caller's own defensive bookkeeping across fd reuse:
+a caller holding onto a connection object across several asynchronous
+steps can stamp it with the generation it read right after
+event_loop_add() returned, and later compare against a fresh read to
+detect whether it is still reasoning about the same logical
+connection, or whether the underlying fd number has since been closed
+and reused by an unrelated new connection.
 
 Generation is not required for basic correctness. event_loop's own
 dispatch path already validates a registration's liveness before

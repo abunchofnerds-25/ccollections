@@ -34,6 +34,12 @@ response header inject arbitrary extra header lines, or split the
 response into two, on behalf of whoever controls that data (HTTP
 response splitting / CRLF injection).  Rejected with ccol_invalid_args
 rather than silently stripped or truncated.
+
+A "Connection" header is accepted and validated like any other name, but
+is never sent: the server always emits its own Connection header,
+reflecting whether the connection is actually kept open afterward, since
+that decision drives real socket behavior and must never disagree with
+what the client is told.
 .fi
 .SH RETURN VALUE
 .nf

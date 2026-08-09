@@ -119,9 +119,7 @@ void process(void) {
 
 ### 3.3 Cross-Scope Type Recovery
 
-When you call `cvec_construct(scores, int)`, the macro creates a hidden local variable alongside `scores` that records the element type `int`. This companion variable is what allows `cvec_push` to know how to store a value and `cvec_at` to know how to retrieve one. Because it is a local variable, it only exists in the scope where `*_construct` was called. If you pass `scores` to another function, the companion variable does not travel with it, and the type-dispatching macros will not compile there without it. The `*_redeclare` macro re-creates the companion variable in the new scope.
-
-The type-dispatching macros rely on a hidden companion variable created by `*_declare` or `*_construct`. When a container is passed across a function boundary, this variable is not present in the new scope. The `*_redeclare` macro re-establishes it, allowing all type-dispatching macros to function correctly:
+When you call `cvec_construct(scores, int)`, the macro creates a hidden local variable alongside `scores` that records the element type `int`. This companion variable is what allows `cvec_push` to know how to store a value and `cvec_at` to know how to retrieve one. Because it is a local variable, it only exists in the scope where `*_construct` was called. If you pass `scores` to another function, the companion variable does not travel with it, and the type-dispatching macros will not compile there without it. The `*_redeclare` macro re-creates the companion variable in the new scope, allowing all type-dispatching macros to function correctly there:
 
 ```c
 void fill(cvec vec) {
@@ -1671,13 +1669,13 @@ if (rc == ccol_timed_out) {
 
 `ccol_select` creates a fresh `epoll(7)` instance on every call, waits for exactly one ready selectable, and tears everything down before returning. `event_loop` is the persistent counterpart: one `epoll` instance and one or more background reactor threads, created once and mutated incrementally (`event_loop_add` / `event_loop_modify` / `event_loop_remove`) as fds and queues come and go, dispatching readiness through callbacks for as long as the loop lives. It reuses the exact same `ccol_selectable` type `ccol_select` uses, so `selectable_from_fd`, `selectable_from_circq`, `selectable_from_dynq`, and `selectable_from_chan` all carry over unchanged. Like `ccol_select`, `event_loop` never performs the receive or send itself, for any selectable type: the callback always performs its own explicit `circq_try_recv_zc`/`dynmq_try_recv_zc` or `read(2)`/`recv(2)`.
 
-The fd/registration registry is lock-striped: `num_lock_stripes` independent (mutex, chmap) pairs, each guarding a disjoint subset of registrations (one real fd, or one queue/channel registration's private bridge fd, is always handled by exactly one stripe). `1` reproduces the original single-lock behavior exactly; passing a larger value lets `event_loop_add` / `event_loop_remove` / `event_loop_modify` calls for different fds/registrations proceed concurrently under high-churn multi-threaded use instead of serializing through one lock, at the cost of `num_lock_stripes` mutexes and chmaps allocated up front. Most callers should just pass `1`.
+`event_loop` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `EVENT_LOOP_INVALID` (or use a truthiness check; `EVENT_LOOP_INVALID` is `0`, so `if (!loop)` works exactly as it did when this was a raw pointer). Internally, every use of an `event_loop` is resolved through a library-owned slot table before the underlying reactor object is touched, so a stale handle (one whose loop has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `event_loop_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free.
 
-`num_reactor_threads` (a separate constructor parameter from `num_lock_stripes`) is the total OS thread count devoted to this loop's own polling and dispatch; `1` reproduces the original single-thread behavior exactly (one thread both calls `epoll_wait(2)` and runs every callback inline). A larger value spawns exactly ONE dedicated polling thread (never more than one, regardless of how large `num_reactor_threads` is) plus `num_reactor_threads - 1` separate dispatch worker threads that actually execute callbacks, so total thread count for a given `num_reactor_threads` is always exactly that value in both configurations. With `num_reactor_threads > 1`, a single registration's callback is still never invoked concurrently with itself, and a read registration and a write registration sharing the same fd are never invoked concurrently with each other either (stricter than "no self-concurrency" alone, so a callback pair sharing state across both directions of one fd, e.g. one TLS connection object, needs no locking of its own on that account); a second dispatch for the same registration is also never collected while an earlier one is still queued or executing, so application code calling `event_loop_modify` from within an in-flight callback (a supported, commonly used pattern) never races a concurrently-collected second dispatch for that same registration.
+The fd/registration registry is lock-striped: `num_lock_stripes` independent (mutex, chmap) pairs, each guarding a disjoint subset of registrations (one real fd, or one queue/channel registration's private bridge fd, is always handled by exactly one stripe). `1` means a single shared lock; passing a larger value lets `event_loop_add` / `event_loop_remove` / `event_loop_modify` calls for different fds/registrations proceed concurrently under high-churn multi-threaded use instead of serializing through one lock, at the cost of `num_lock_stripes` mutexes and chmaps allocated up front. Most callers should just pass `1`.
 
-Only one thread ever calls `epoll_wait` (for every `num_reactor_threads` value) specifically because, in an earlier version of this design, every one of `num_reactor_threads` threads called `epoll_wait` independently on the shared `epoll` instance; a single ready event genuinely wakes every thread blocked on the same `epoll` instance (a real kernel-level thundering herd; `EPOLLEXCLUSIVE` does not help here, since it governs the same fd registered across multiple *separate* `epoll` instances, not many threads sharing one), which measurably hurt single-connection tail latency the moment more than one reactor thread was configured at all, even for an otherwise-uncontended connection. The current design eliminates that cost structurally while still providing multi-threaded dispatch throughput under real concurrent load via the separate worker pool; `num_reactor_threads == 1` measures byte-for-byte identical to the original single-thread design.
+`num_reactor_threads` (a separate constructor parameter from `num_lock_stripes`) is the total OS thread count devoted to this loop's own polling and dispatch. Exactly ONE dedicated thread ever calls `epoll_wait(2)`, regardless of how large `num_reactor_threads` is (this avoids a kernel-level thundering herd: `epoll`'s level-triggered semantics would otherwise wake every thread blocked on the same instance for a single ready event). With `num_reactor_threads == 1`, that one thread also runs every callback inline. With a larger value, that same one polling thread is joined by `num_reactor_threads - 1` separate dispatch worker threads that actually execute callbacks, so total thread count for a given `num_reactor_threads` is always exactly that value in both configurations. A single registration's callback is never invoked concurrently with itself, and a read registration and a write registration sharing the same fd are never invoked concurrently with each other either (stricter than "no self-concurrency" alone, so a callback pair sharing state across both directions of one fd, e.g. one TLS connection object, needs no locking of its own on that account); a second dispatch for the same registration is also never collected while an earlier one is still queued or executing, so application code calling `event_loop_modify` from within an in-flight callback (a supported, commonly used pattern) never races a concurrently-collected second dispatch for that same registration.
 
-`event_loop_reg_generation(reg)` returns a monotonically increasing, loop-wide-unique identity token minted once per fd when it is first registered (shared by both directions on the same fd, and preserved across `event_loop_modify`), for a caller's own defensive bookkeeping across fd reuse; a direct analogue of what facil.io's uuid gave callers in this library's own HTTP modules. It is not required for basic correctness: dispatch already validates a registration's liveness before invoking any callback unconditionally, so a stale, already-fetched batch entry for an already-removed (or fd-reused) registration is always a safe no-op regardless of whether a caller ever inspects the generation itself.
+`event_loop_reg_generation(reg)` returns a monotonically increasing, loop-wide-unique identity token minted once per fd when it is first registered (shared by both directions on the same fd, and preserved across `event_loop_modify`), for a caller's own defensive bookkeeping across fd reuse (e.g. detecting that an fd number has been closed and reused by an unrelated connection since a caller last read it). It is not required for basic correctness: dispatch already validates a registration's liveness before invoking any callback unconditionally, so a stale, already-fetched batch entry for an already-removed (or fd-reused) registration is always a safe no-op regardless of whether a caller ever inspects the generation itself.
 
 ```c
 event_loop_construct(loop, /*max_events_per_wait=*/32, /*num_lock_stripes=*/1,
@@ -1769,6 +1767,8 @@ event_loop_resume(loop, reg);   /* interest restored; same reg, same generation 
 A cache stores the results of expensive operations so that repeated requests for the same input return immediately without redoing the work. An LRU (Least-Recently-Used) cache has a fixed capacity; when it is full and a new entry needs to be added, the entry that has gone the longest without being accessed is evicted first. This keeps frequently requested results in memory and lets old, rarely used ones fall out automatically.
 
 `clrucache` is a thread-safe LRU cache backed by a hash map for O(1) lookup and a doubly-linked list for O(1) eviction. It supports optional remote getter and setter callbacks to integrate transparently with an external backing store such as a database.
+
+`clru_cache` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CLRU_CACHE_INVALID` (or use a truthiness check; `CLRU_CACHE_INVALID` is `0`, so `if (!cache)` works exactly as it did when this was a raw pointer). Internally, every use of a `clru_cache` is resolved through a library-owned slot table before the underlying cache object is touched, so a stale handle (one whose cache has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `clru_destroy`/`__clrucache_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free.
 
 **Header:** `#include <clrucache.h>`
 
@@ -1989,7 +1989,7 @@ void process(void) {
 | `clru_init(name, capacity, getter, setter, evict_cb)` | Initialise a previously declared cache; calls `fatal_err()` on failure |
 | `clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb)` | Declare and initialise in one step |
 | `clru_construct_scoped(name, KeyT, ValT, capacity, getter, setter, evict_cb)` | Declare, initialise, and register auto-cleanup |
-| `clru_destroy(name)` | Destroy the cache and set the pointer to `NULL` |
+| `clru_destroy(name)` | Destroy the cache and set the handle to `CLRU_CACHE_INVALID`; fatal on an already-destroyed/stale handle |
 | `clrucache_size(cache)` | Return the number of live entries currently stored |
 | `clrucache_capacity(cache)` | Return the configured capacity |
 
@@ -2471,7 +2471,7 @@ Every factory and parse function has an `_mp` variant that accepts a `ccol_memmg
 /* All nodes in the tree use my_procs. */
 char *err = NULL;
 cjson doc = cjson_parse_mp(json_str, &err, &my_procs);
-if (!doc) { fprintf(stderr, "%s\n", err); free(err); /* handle error */ }
+if (!doc) { fprintf(stderr, "%s\n", err); cjson_serialize_free_mp(err, &my_procs); /* handle error */ }
 /* ... use doc ... */
 cjson_destroy(doc);   /* uses each node's stored allocator automatically */
 
@@ -2516,7 +2516,7 @@ cjson_destroy(root);
 | Comments | `#` to end-of-line; silently ignored |
 | Tags | `!tag` / `!!tag`; silently ignored |
 
-**Not supported:** multi-line plain scalars (use `|` or `>` instead).
+**Not supported:** multi-line plain scalars (use `|` or `>` instead); merge keys (`<<:`).
 
 ### Multi-document streams
 
@@ -2711,7 +2711,7 @@ cyaml st_timeout = cyaml_get(doc, "staging.timeout");
 /* Independent deep clone: also CYAML_INTEGER, value 30 */
 ```
 
-Aliases resolve to independent deep clones of the anchored node.  Modifying the alias does not affect the original.  Merge keys (`<<:`) are not supported; see the "Not supported" note above.
+Aliases resolve to independent deep clones of the anchored node.  Modifying the alias does not affect the original.
 
 ### Lifecycle
 
@@ -2749,6 +2749,8 @@ The queue mode is selected once at construction time by the `queue_capacity` par
 
 - `queue_capacity == 0` or `ccol_invalid_size` - unbounded queue: `ctpool_submit` never blocks on capacity; the only non-trivial failure path is out-of-memory.
 - `queue_capacity > 0` - bounded queue of that capacity: `ctpool_submit` blocks when the queue is full, applying natural backpressure to producers.
+
+`ctpool` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CTPOOL_INVALID` (or use a truthiness check; `CTPOOL_INVALID` is `0`, so `if (!pool)` works exactly as it did when this was a raw pointer). Internally, every use of a `ctpool` is resolved through a library-owned slot table before the underlying pool object is touched, so a stale handle (one whose pool has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `ctpool_destroy`/`__ctpool_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free.
 
 **Header:** `#include <cthreadpool.h>`
 
@@ -2955,9 +2957,9 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 | `ctpool_declare_scoped(name)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initializing |
 | `ctpool_construct(name, num_threads, queue_cap)` | Declare and initialize in one step; calls `fatal_err()` on failure |
 | `ctpool_construct_scoped(name, num_threads, queue_cap)` | Declare, initialize, and register auto-cleanup; calls `fatal_err()` on failure |
-| `create_cthread_pool(num_threads, queue_cap, err_str)` | Allocate and return a pool using the default allocator; returns `NULL` on failure |
-| `create_cthread_pool_mp(num_threads, queue_cap, mprocs, err_str)` | Allocate and return a pool with a custom allocator; returns `NULL` on failure |
-| `ctpool_destroy(pool)` | Drain-shutdown if needed, free all resources, and set pointer to `NULL` |
+| `create_cthread_pool(num_threads, queue_cap, err_str)` | Allocate and return a pool using the default allocator; returns `CTPOOL_INVALID` on failure |
+| `create_cthread_pool_mp(num_threads, queue_cap, mprocs, err_str)` | Allocate and return a pool with a custom allocator; returns `CTPOOL_INVALID` on failure |
+| `ctpool_destroy(pool)` | Drain-shutdown if needed, free all resources, and set the handle to `CTPOOL_INVALID`; fatal on an already-destroyed/stale handle |
 
 **Task Submission**
 
@@ -2995,6 +2997,8 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 
 `chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: an internal `chttp1_parser` module drives request/response framing over raw sockets, TLS is provided by `ctls` (a reactor-agnostic OpenSSL wrapper), the reactor backing Tier 2/3's async engine is `event_loop` (from `cthreadcomm`), and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library. `chttpclient` has no dependency on any vendored third-party code.
 
+`chttpcli` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CHTTPCLI_INVALID` (or use a truthiness check; `CHTTPCLI_INVALID` is `0`, so `if (!cli)` works exactly as it did when this was a raw pointer). Internally, every use of a `chttpcli` is resolved through a library-owned slot table before the underlying client object is touched, so a stale handle (one whose client has already been destroyed) is always detected rather than silently dereferencing freed memory.
+
 **Supported URL forms:** `http://`/`https://`, plus `http+unix://<percent-encoded-socket-path>[/path][?query]` for connecting to a server listening on a Unix domain socket (matching Python's `requests-unixsocket` convention; `https+unix://` is not supported). Both a plain hostname/IPv4 literal and a bracketed IPv6 literal (`https://[::1]:8443/path`) are accepted for the network forms. A URL may embed credentials (`http://user:pass@host/path`); they are turned into an `Authorization: Basic ...` header automatically unless the request already sets its own `Authorization` header (not supported for `http+unix://`, which has no established userinfo convention). A trailing `#fragment` is recognized and discarded (fragments are a client-side-only concept and are never sent to a server). See "Redirect Following" below for how embedded credentials interact with redirects to a different origin, and "Unix Domain Sockets" below for the `http+unix://` scheme in full.
 
 The module is split across two headers: `chttp.h` declares shared types (`chttp_method_t`, `chttp_tls_config_t`, `chttp_request_body_t`, and status-code constants), and `chttpclient.h` declares the client API. Including `chttpclient.h` pulls in `chttp.h` automatically.
@@ -3008,6 +3012,8 @@ The module is split across two headers: `chttp.h` declares shared types (`chttp_
 The simplest path uses the process-level default client via the `chttp_get`, `chttp_post`, `chttp_put`, `chttp_delete`, and `chttp_patch` convenience functions. The default client is lazily initialized on the first call, uses the CPU count as the pool size, and has TLS peer and host verification enabled.
 
 Do not pass the handle returned by `chttp_default_client()` to `chttpclient_destroy`: it is owned by the library, which destroys it automatically at process exit. Doing so anyway will not crash that specific call, but the default client is never rebuilt afterward, so every later call to `chttp_default_client()` or any of the convenience functions above fails cleanly for the remainder of the process. If you need a client with a lifetime you control, create your own with `create_chttpclient`/`create_chttpclient_mp` instead.
+
+Every `resp_out`-taking entry point (`chttpclient_do`, `chttpclient_do_pooled`, `chttp_do`, `chttp_run_query`, and the convenience functions above) sets `*resp_out` to `NULL` immediately, before any other work begins, and leaves it `NULL` on every non-success return; combined with `chttpclient_resp_free`'s own "safe to call with NULL" contract, this means it is always safe to call `chttpclient_resp_free(resp)` unconditionally after one of these calls, regardless of the returned `ccol_retval_t`, without separately pre-initializing your own local pointer:
 
 ```c
 chttpcli_response *resp = NULL;
@@ -3044,6 +3050,7 @@ chttpcli_construct(cli);
 chttpclient_set_pool_size(cli, 8);
 chttpclient_set_connect_timeout(cli, 2000);   /* 2 s TCP connect timeout */
 chttpclient_set_request_timeout(cli, 10000);  /* 10 s total request timeout */
+chttpclient_set_max_response_body_size(cli, 10 * 1024 * 1024); /* 10 MiB cap */
 
 chttp_request_t *req = chttp_request_new(CHTTP_POST,
     "https://api.example.com/items",
@@ -3062,6 +3069,8 @@ if (rc == ccol_success) {
 
 chttpclient_destroy(cli);
 ```
+
+Calling `chttpclient_destroy`/`__chttpclient_destroy` again on a handle that has already been destroyed (whether sequentially, well after the first call completed, or concurrently, racing it from another thread) is a fatal error (`fatal_err()`, `abort()`/`SIGABRT`), not a silent double-free; see `chttpclient_destroy(3)` for the full contract.
 
 `chttpclient_do` blocks until a pool slot is free, executes the request synchronously, and returns the fully buffered response. Multiple threads may call `chttpclient_do` concurrently on the same handle.
 
@@ -3093,6 +3102,55 @@ ccol_for_each(resp->headers, it) {
 }
 ```
 
+Every header this module auto-injects a default value for (Host, Accept,
+User-Agent, Content-Length, Content-Type, Authorization, Expect) is detected
+in a case-insensitive manner, so setting any of them explicitly (via
+`chttp_request_set_header`, or via `chttp_run_query`'s `headers` map)
+suppresses the corresponding auto-injected default and the caller's own
+value is sent on the wire exactly as given, including a custom Host header.
+
+A `headers` map handed to `chttp_run_query` directly is keyed by exact byte
+content, so it may legally contain two literally different keys that are the
+same header name under HTTP's case-insensitive semantics (e.g. `"Host"` and
+`"host"` both present at once); `chttp_request_set_header` cannot produce
+this on its own, since it lower-cases every key before storing it. Request
+serialization deduplicates such case-variant duplicates before writing them
+onto the wire: only the most recently inserted one is sent, never both, so
+two `Host:` lines (a request RFC 7230 SS5.4 requires a server to reject
+outright) can never reach the wire this way.
+
+Neither a header name nor its value may contain an embedded CR or LF byte:
+`chttp_request_set_header` rejects such a call with `ccol_invalid_args`
+before storing anything, and the same check runs again as a backstop at
+request-serialization time (covering a `headers` map handed to
+`chttp_run_query` directly, bypassing `chttp_request_set_header`
+entirely) so a header value built from untrusted data (a forwarded token,
+a proxied header) can never split the request or inject extra header
+lines into it.
+
+A "Transfer-Encoding" header name is likewise always rejected (again with
+the identical set-time-plus-serialization-time-backstop treatment): this
+client never transfer-codes a request body, so honoring a caller-set
+Transfer-Encoding header is impossible, and letting one reach the wire
+would pair it with this module's own auto-synthesized Content-Length
+header over a body that was never actually transfer-coded, an ambiguous
+framing this library's own request/response parser explicitly rejects
+when receiving one.
+
+A caller-set "Content-Length" header IS accepted (unlike Transfer-Encoding,
+`chttp_request_set_header` has no reason to reject it outright), but on a
+body-carrying request (POST, PUT, or PATCH) it is validated at
+request-serialization time against the body actually being sent, once
+the request reaches the wire: a value that does not exactly match the
+real body length is rejected with `ccol_invalid_args`, for the identical
+"declared framing disagrees with the wire" reason Transfer-Encoding is
+rejected outright above, just reached through a wrong length instead of
+a wrong transfer-coding. This is only checked for a body-carrying
+request; for any other method (GET, DELETE, HEAD, OPTIONS) a
+Content-Length header is stripped from the wire entirely (there is no
+body to describe), so there is no framing left for a mismatched value
+to desync from.
+
 ### Streaming Response
 
 When the response body is large or must be processed incrementally, use `chttpclient_do_streaming`. The write callback receives chunks as they arrive:
@@ -3113,6 +3171,10 @@ fclose(out);
 
 Response headers are not accessible via the streaming path. Returning a value less than `len` from the write callback aborts the transfer.
 
+### Interim (1xx) Responses
+
+Any interim informational (1xx) response a server sends is transparently discarded, with reading continuing on the same connection until the real response arrives; no tier ever hands a 1xx status back to the caller as though it were the final answer. RFC 8297 `103 Early Hints` is the most common real-world example, and may precede an ordinary response with no `Expect: 100-continue` involvement at all. This applies uniformly to `chttpclient_do`/`chttpclient_do_streaming` (Tier 1) and `chttpclient_do_async`/`chttpclient_do_async_streaming` and everything built on them (Tiers 2/3). A server that never stops sending interim responses is not tolerated indefinitely: after 64 consecutive discarded interim responses on one hop, the client gives up and reports `ccol_http_transfer_aborted` rather than letting a misbehaving or malicious server pin a caller thread (Tier 1) or a chain/future (Tier 2/3) forever, particularly relevant given `request_timeout_ms` defaults to 0 (no timeout).
+
 ### Expect: 100-continue
 
 Set `req->expect_continue = true` on a POST/PUT/PATCH request with a body to hold the body back until the server confirms it wants it, avoiding wasted upload bandwidth against a server that is about to reject the request outright (e.g. on size or authentication grounds):
@@ -3129,7 +3191,9 @@ ccol_retval_t rc = chttpclient_do(cli, req, &resp);
 chttp_request_free(req);
 ```
 
-The client sends only the request's headers first, then waits up to one second for the server's interim `100 Continue` response before sending the body; if the server answers with a final status directly instead (e.g. `417 Expectation Failed`), that response is delivered to the caller and the body is never sent. A server that never replies within the one-second window is assumed to simply not support the mechanism: the body is sent anyway and the request proceeds normally. This has no effect on a request with no body, and is currently a Tier 1 (`chttpclient_do`/`chttpclient_do_streaming`) feature only; `chttpclient_do_async` and everything built on it (Tiers 2/3) ignore `expect_continue` and send the body immediately.
+The client sends only the request's headers first, then waits up to one second for the server's interim `100 Continue` response before sending the body; any OTHER interim 1xx status the server sends while waiting (e.g. `103 Early Hints` ahead of `100 Continue`) is discarded and the wait continues, still bounded by the same one-second budget. If the server answers with a final status directly instead (e.g. `417 Expectation Failed`), that response is delivered to the caller and the body is never sent. A server that never replies within the one-second window is assumed to simply not support the mechanism: the body is sent anyway and the request proceeds normally. This has no effect on a request with no body, and is a Tier 1 (`chttpclient_do`/`chttpclient_do_streaming`) feature only; `chttpclient_do_async` and everything built on it (Tiers 2/3) ignore `expect_continue` and send the body immediately.
+
+Once the server has sent `100 Continue` and the body has been written to the connection, that connection is never silently retried again for this request: see the reused-connection retry note under "Keep-alive idle pool" below for why an explicit `100 Continue` permanently disqualifies a hop from the reused-connection retry-once safety net, even if the connection then dies before the real final response arrives.
 
 ### Asynchronous Requests (Tier 2)
 
@@ -3190,7 +3254,7 @@ clog logger = clog_open_fd(2, CLOG_INFO);
 chttpcli_set_engine_logger(logger);   /* derive engine sub-logger; optional */
 ```
 
-If no logger is ever configured, the engine simply does not log; there is no default logger to fall back to. To redirect the engine's own internal memory management (the `event_loop` instance itself, its DNS/connect worker pool, and its own connection-registration bookkeeping) to a custom allocator, call `chttpcli_set_engine_mem_mgmt_procs` before the engine's first start (or after it has fully stopped):
+If no logger is ever configured, a fallback logger (fd 2, level `CLOG_FATAL`) is installed automatically the first time the engine starts; since the engine's own diagnostics are never logged above `CLOG_INFO`, that fallback logger is silent in practice unless `chttpcli_set_engine_logger` is used to install a more verbose one. To redirect the engine's own internal memory management (the `event_loop` instance itself, its DNS/connect worker pool, and its own connection-registration bookkeeping) to a custom allocator, call `chttpcli_set_engine_mem_mgmt_procs` before the engine's first start (or after it has fully stopped):
 
 ```c
 ccol_memmgmt_procs_t mp = {
@@ -3227,22 +3291,28 @@ chttpclient_set_tls(cli, &tls2);
 
 Pass `NULL` to restore the defaults.
 
+`cert_path` and `key_path` are a pair: providing exactly one of the two (the other left `NULL`) is rejected outright with `ccol_invalid_args`, rather than silently treated as "no client certificate configured" (which would leave an mTLS deployment believing it presents a client certificate when it never does). Both paths are validated for readability lazily, at the time an HTTPS request actually needs them, not by `chttpclient_set_tls` itself; a path that does not currently exist is accepted without error at configuration time and only surfaces as `ccol_http_tls_cert_load_failed` from `chttpclient_do`/`chttpclient_do_streaming` once a request needs it.
+
 `verify_host` always implies `verify_peer` in practice: hostname matching against a certificate whose chain was never validated gives no real security guarantee, since the certificate itself could be entirely forged. Setting `verify_peer = false, verify_host = true` does not get you "hostname-only checking with no chain trust"; it gets full verification (using the system CA store, or `ca_bundle_path` if set), the same as `verify_peer = true` would. To genuinely disable all server certificate checking, set both `verify_peer = false` and `verify_host = false`, as in the example above.
 
-Firing many concurrent HTTPS requests through Tier 2/3 (`chttpclient_do_async`/`_pooled`) to certificate-verifying origins that share one `chttpcli`'s trust store has been observed, under ThreadSanitizer, to race inside OpenSSL's own certificate-comparison internals (`X509_NAME_cmp`/`X509_cmp`'s canonical-encoding lazy cache) rather than in anything this library controls; every per-connection OpenSSL object this library allocates is independent per connection, and building the shared TLS context itself is already mutex-protected. This is a known, version-spanning class of issue in OpenSSL's own issue tracker, not something a caller can work around from the outside, and has not been observed to affect the outcome of any handshake in this library's own test suite. No functional workaround is applied here deliberately: doing so would mean serialising concurrent handshakes, defeating the point of a reactor built to multiplex several of them at once, to compensate for what is very likely a bug in a dependency outside this project's control.
+Firing many concurrent HTTPS requests through Tier 2/3 (`chttpclient_do_async`/`_pooled`) to certificate-verifying origins that share one `chttpcli`'s trust store can, under ThreadSanitizer, show a race inside OpenSSL's own certificate-comparison internals (`X509_NAME_cmp`/`X509_cmp`'s canonical-encoding lazy cache) rather than in anything this library controls; every per-connection OpenSSL object this library allocates is independent per connection, and building the shared TLS context itself is already mutex-protected. This is a known, version-spanning class of issue in OpenSSL's own issue tracker, not something a caller can work around from the outside; it does not affect the outcome of any handshake. No functional workaround is applied: doing so would mean serialising concurrent handshakes, defeating the point of a reactor built to multiplex several of them at once, to compensate for a bug in a dependency outside this library's control.
 
 ### Connection Pool Behaviour
 
 Each `chttpcli` handle has two independent layers:
 
 - **Concurrency limiter**; bounds the number of simultaneous in-flight requests. The limit defaults to the CPU count (`chttpclient_set_pool_size`); when the limit is reached, `chttpclient_do` blocks until a slot frees up, providing natural backpressure with no external semaphore required.
-- **Keep-alive idle pool**; after a request completes on an HTTP/1.1 keep-alive connection, the connection (and, for HTTPS, its already-established TLS session) is kept open and cached per origin (scheme + host + port) so a later request to the same origin can skip DNS resolution, the TCP handshake, and the TLS handshake entirely. A cheap liveness probe runs before reuse; a connection the peer has since closed is transparently discarded and replaced with a fresh one. Because the probe and the actual request are not atomic, the peer can still close the connection in between; if that happens, the request is transparently retried exactly once against a brand-new connection; this covers both a failed write and a failed (or empty) read, as long as no response bytes have been parsed or handed back to the caller yet, so nothing is ever silently duplicated. Idle connections are bounded per origin and in total, and expire after a short idle period; once the caps are hit, a completed connection is simply closed instead of cached, which only forfeits the reuse optimisation and never affects correctness.
+- **Keep-alive idle pool**; after a request completes on an HTTP/1.1 keep-alive connection, the connection (and, for HTTPS, its already-established TLS session) is kept open and cached per origin (scheme + host + port) so a later request to the same origin can skip DNS resolution, the TCP handshake, and the TLS handshake entirely. A cheap liveness probe runs before reuse; a connection the peer has since closed is transparently discarded and replaced with a fresh one. Because the probe and the actual request are not atomic, the peer can still close the connection in between; if that happens, the request is transparently retried exactly once against a brand-new connection; this covers both a failed write and a failed (or empty) read, as long as no response bytes have been parsed or handed back to the caller yet, so nothing is ever silently duplicated. The one exception is a request using `Expect: 100-continue` (Tier 1 only; see that section above): once the server has explicitly confirmed readiness with `100 Continue` and the body has been written to the connection, that hop is no longer eligible for this retry, since the server has already proven it was alive and accepted the body, retrying would resend that body to an unrelated second connection, and a non-idempotent request could then be processed twice; a subsequent failure on that hop is reported to the caller instead. Idle connections are bounded per origin and in total, and expire after a short idle period; once the caps are hit, a completed connection is simply closed instead of cached, which only forfeits the reuse optimisation and never affects correctness.
+
+Buffered (non-streaming) response bodies have no size limit by default: `chttpclient_do`, `chttpclient_do_async` (and the pooled-sync wrappers built on it), and the `chttp_get`/`post`/`put`/`delete`/`patch`/`run_query` convenience wrappers will all buffer an entire response body into memory regardless of size. `chttpclient_set_max_response_body_size(cli, max_bytes)` caps this (`0`, the default, means unlimited): a response whose `Content-Length` alone already declares more than `max_bytes` is rejected immediately, before any body byte is read off the wire; a chunked or connection-close-delimited body (no declared length to check up front) is instead rejected the moment the bytes actually received so far would exceed `max_bytes`. Either case reports `ccol_msg_too_large` and the connection is not reused afterward. This cap has no effect on `chttpclient_do_streaming`/`chttpclient_do_async_streaming`/`chttpclient_do_pooled_streaming`: a streaming caller already controls its own memory via its `chttpcli_write_fn`'s return value. The up-front declared-length check only ever applies to the message that will actually deliver the caller's body: an intermediate redirect hop's own body is always exempt (its body is discarded regardless of length; see "Redirect Following" below), a discarded 1xx informational response's declared `Content-Length` (RFC 7230 SS3.3.2 says a compliant server should never send one, but a misbehaving or malicious server might) is likewise exempt since that response is never delivered to the caller, and a `HEAD` response's `Content-Length` (which describes what a `GET` would have returned, per RFC 7231 SS4.3.2, and is never followed by actual body bytes) is exempt as well.
 
 ### Redirect Following
 
-Redirects (`chttpclient_do` and `chttpclient_do_streaming` both follow up to 50 hops) apply an explicit method/body policy on each hop: 301, 302, and 303 rewrite the method to a bodyless GET (HEAD is left as HEAD), while 307 and 308 preserve the original method and resend the original body.
+Redirects (`chttpclient_do` and `chttpclient_do_streaming` both follow up to 50 hops) apply an explicit method/body policy on each hop: 301, 302, and 303 rewrite the method to a bodyless GET (HEAD is left as HEAD), while 307 and 308 preserve the original method and resend the original body. If the 50-hop cap is reached and the last hop's response is itself a would-be redirect, it is not followed or delivered; `ccol_http_too_many_redirects` is returned instead.
 
-A `Location` header may be an absolute URL, a protocol-relative reference (`//host/path`), an absolute-path reference (`/foo`), or a general relative reference (`foo`, `../foo`, `./foo`, `?query`); all are resolved per RFC 3986. Dot-segment normalization (`..`, `.`) only ever rewrites the path component; a query string is always carried forward byte-for-byte, even one that happens to contain `/`, `..`, or `.` characters. If the original request URL embedded credentials, the resulting `Authorization: Basic ...` header is resent on every subsequent hop as long as the redirect stays on the same origin (scheme + host + port); it is dropped permanently (and never re-acquired even if a later hop redirects back to the original origin) the first time a hop changes origin. This matches curl's default (non `--location-trusted`) behavior and prevents credentials from leaking to an unexpected host via a redirect. A caller-supplied `Authorization` header set explicitly on the request is unaffected by any of this. A redirect that stays on a `http+unix://` origin (see below) resolves relative references against the same socket path; a redirect cannot cross between a network origin and a Unix-socket origin (there is no way to express that in a single `Location` header) and is followed only if the `Location` itself names the target scheme explicitly.
+A `Location` header may be an absolute URL, a protocol-relative reference (`//host/path`), an absolute-path reference (`/foo`), or a general relative reference (`foo`, `../foo`, `./foo`, `?query`); all are resolved per RFC 3986. A `Location` value that carries its own scheme (e.g. `mailto:x@y`, `ftp://host/path`, or any scheme other than `http`, `https`, or `http+unix`) is always treated as absolute (RFC 3986 SS5.2.2: a reference with a scheme is never relative, regardless of whether that scheme is one this client can actually fetch) and is resolved to itself unchanged; since this client only ever connects over `http://`/`https://`/`http+unix://`, the next hop then reports `ccol_http_invalid_url`, the same code an unsupported scheme in the original request URL already gets, rather than the reference being silently merged onto the current origin's path as though it were relative. Dot-segment normalization (`..`, `.`) only ever rewrites the path component; a query string is always carried forward byte-for-byte, even one that happens to contain `/`, `..`, or `.` characters. If the original request URL embedded credentials, the resulting `Authorization: Basic ...` header is resent on every subsequent hop as long as the redirect stays on the same origin (scheme + host + port); it is dropped permanently (and never re-acquired even if a later hop redirects back to the original origin) the first time a hop changes origin. This matches curl's own default behavior (without opting into trusted-redirect credential forwarding) and prevents credentials from leaking to an unexpected host via a redirect. A caller-supplied `Authorization` header set explicitly via `chttp_request_set_header` receives the identical same-origin-carry/permanent-cross-origin-drop treatment (also matching curl's own hardened default), tracked against the ORIGINAL request's origin rather than any per-hop userinfo. A redirect that stays on a `http+unix://` origin (see below) resolves relative references against the same socket path; a redirect cannot cross between a network origin and a Unix-socket origin (there is no way to express that in a single `Location` header) and is followed only if the `Location` itself names the target scheme explicitly.
+
+A 301/302/303 hop that rewrites the method to a bodyless GET also strips any caller-set `Content-Length`, `Content-Type`, or `Expect` header from that hop's own request (and every hop after it, unless a later 307/308 hop restores a real body): those three headers only ever describe a body, and once no hop can carry one, resending a stale value describing the ORIGINAL request's body onto a request with no body at all is never correct and can make a receiving server block waiting for a body that will never arrive. Every other caller-set header is resent unchanged on every hop, exactly as before.
 
 ### Unix Domain Sockets
 
@@ -3325,13 +3395,15 @@ If the pool size is smaller than the number of concurrent callers, excess thread
 
 | Return value | Meaning |
 |---|---|
-| `ccol_http_invalid_url` | URL is malformed, uses an unsupported scheme (only `http://`/`https://`/`http+unix://` are supported), has a missing/invalid host or port, or (for `http+unix://`) a socket path too long to fit `sockaddr_un.sun_path` |
+| `ccol_http_invalid_url` | URL is malformed, uses an unsupported scheme (only `http://`/`https://`/`http+unix://` are supported), has a missing/invalid host or port, has an embedded CR or LF byte in the host or path/query component (which would otherwise be carried verbatim onto the wire and let it inject extra header lines or a smuggled second request), or (for `http+unix://`) a socket path too long to fit `sockaddr_un.sun_path` |
 | `ccol_http_host_resolution_failed` | DNS resolution failed for the target host (never returned for `http+unix://`, which has no DNS step) |
 | `ccol_http_connection_failed` | The connection could not be established (e.g. connection refused, or a `http+unix://` socket path that does not exist) |
 | `ccol_http_too_many_redirects` | The redirect chain exceeded 50 hops |
 | `ccol_http_tls_handshake_failed` | The TLS handshake failed for a reason other than certificate verification |
-| `ccol_http_tls_cert_verification_failed` | The peer certificate or hostname could not be verified, or the configured client certificate/key/CA bundle path was not readable |
+| `ccol_http_tls_cert_verification_failed` | The peer certificate or hostname could not be verified |
+| `ccol_http_tls_cert_load_failed` | The configured client certificate, key, or CA bundle path was not readable, or ctls failed to load/parse it |
 | `ccol_http_transfer_aborted` | The connection failed mid-transfer, the server sent a malformed HTTP/1.1 response, or a streaming `chttpcli_write_fn` returned fewer bytes than it was given |
+| `ccol_msg_too_large` | The response body exceeded `chttpclient_set_max_response_body_size`'s configured cap (never returned unless that cap has been set, and never returned for a streaming request) |
 | `ccol_timed_out` | `chttpclient_set_connect_timeout` or `chttpclient_set_request_timeout` elapsed before the operation completed |
 | `ccol_unexpected_failure` | Any other internal failure not covered above |
 
@@ -3404,9 +3476,9 @@ Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn
 | `chttpcli_construct_scoped(name)` | Declare, initialize, and auto-destroy on scope exit; calls `fatal_err()` on failure |
 | `chttpcli_declare(name)` | Declare an uninitialized client variable |
 | `chttpcli_declare_scoped(name)` | Declare with automatic destruction on scope exit, without initializing |
-| `create_chttpclient(err)` | Allocate and return a client using the default allocator; returns NULL on failure |
-| `create_chttpclient_mp(mprocs, err)` | Allocate and return a client with a custom allocator; returns NULL on failure |
-| `chttpclient_destroy(cli)` | Block until all in-flight requests finish, then free and NULL the handle |
+| `create_chttpclient(err)` | Allocate and return a client using the default allocator; returns `CHTTPCLI_INVALID` on failure |
+| `create_chttpclient_mp(mprocs, err)` | Allocate and return a client with a custom allocator; returns `CHTTPCLI_INVALID` on failure |
+| `chttpclient_destroy(cli)` | Block until all in-flight requests finish, then free the client and set `cli` to `CHTTPCLI_INVALID`. Fatal (`abort()`/`SIGABRT`) if `cli` is a stale or already-destroyed handle |
 
 **Client Configuration**
 
@@ -3415,6 +3487,7 @@ Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn
 | `chttpclient_set_pool_size(cli, n)` | Set the maximum concurrent in-flight requests; 0 selects the CPU count |
 | `chttpclient_set_connect_timeout(cli, ms)` | TCP connect timeout in milliseconds; 0 = no limit |
 | `chttpclient_set_request_timeout(cli, ms)` | Total request timeout in milliseconds (connect + transfer); 0 = no limit |
+| `chttpclient_set_max_response_body_size(cli, max_bytes)` | Cap the buffered response body size across all three tiers; 0 = no limit (the default). No effect on the streaming variants |
 | `chttpclient_set_tls(cli, tls)` | Override TLS settings; NULL restores verification-on defaults |
 
 **Engine Configuration (Tier 2/3)**
@@ -3527,7 +3600,7 @@ clog logger = clog_open_fd(2, CLOG_INFO);
 chttpsvr_set_engine_logger(logger);   /* derive engine sub-logger; optional */
 ```
 
-If no logger is ever configured, the reactor simply does not log; there is no default logger to fall back to (unlike `create_chttpsvr`'s own internal stderr/FATAL-only logger).
+If no logger is ever configured, a fallback logger (fd 2, level `CLOG_FATAL`) is installed automatically the first time the engine starts, mirroring `create_chttpsvr`'s own internal stderr/FATAL-only logger; since the engine's own diagnostics (idle-timeout closures, TLS handshake failures, listen-socket setup failures) are all logged below `CLOG_FATAL`, that fallback logger's `min_level` filters every one of them out, so it is silent in practice unless `chttpsvr_set_engine_logger` is used to install a more verbose one.
 
 To redirect the reactor's own internal memory management (the `event_loop` instance itself, and its own connection-registration bookkeeping) to a custom allocator, call `chttpsvr_set_engine_mem_mgmt_procs` before the first `chttpsvr_start`:
 
@@ -3541,7 +3614,7 @@ chttpsvr_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default 
 
 This may only be called before the first `chttpsvr_start` in the process (it returns `ccol_not_permitted` afterward): swapping allocators once the reactor has already allocated memory with the previous one would produce mismatched malloc/free pairs. Passing NULL later (also before the first start, or after the reactor has fully stopped) reverts to the default allocator. Note this is independent of the allocator each individual `chttpsvr` instance uses for its own connections/requests (configured via `create_chttpsvr_mp`, following the usual `_mp` convention); this setter only affects the one shared reactor's own construction.
 
-By default the reactor uses exactly 1 thread: a single dedicated thread that both polls and dispatches every callback inline. This is a benchmarked, not assumed, default: measured faster and more latency-consistent than multiple dispatch threads for both plain HTTP and TLS-with-connection-reuse traffic (the common case for a well-behaved client population). Multiple dispatch threads only pull ahead under sustained *connection churn* combined with TLS (many distinct clients each opening a connection for only one or a few requests, so a large fraction of traffic pays a fresh handshake's CPU cost instead of amortizing it away); real for some deployments (a public API absorbing many one-off anonymous clients, an IoT/device gateway with frequent reconnects, a webhook receiver) but not the typical shape, since most HTTP client software pools and reuses connections specifically to avoid this cost. See `chttpsvr_set_engine_num_reactor_threads(3)` for the full measurements. To raise the thread count for a deployment that knows its own traffic is churn-heavy, call it under the same "before the first `chttpsvr_start`, or after a full stop" restriction as the allocator setter above:
+By default the reactor uses exactly 1 thread: a single dedicated thread that both polls and dispatches every callback inline. This is faster and more latency-consistent than multiple dispatch threads for both plain HTTP and TLS-with-connection-reuse traffic (the common case for a well-behaved client population). Multiple dispatch threads only pull ahead under sustained *connection churn* combined with TLS (many distinct clients each opening a connection for only one or a few requests, so a large fraction of traffic pays a fresh handshake's CPU cost instead of amortizing it away); real for some deployments (a public API absorbing many one-off anonymous clients, an IoT/device gateway with frequent reconnects, a webhook receiver) but not the typical shape, since most HTTP client software pools and reuses connections specifically to avoid this cost. See `chttpsvr_set_engine_num_reactor_threads(3)` for the full measurements. To raise the thread count for a deployment that knows its own traffic is churn-heavy, call it under the same "before the first `chttpsvr_start`, or after a full stop" restriction as the allocator setter above:
 
 ```c
 chttpsvr_set_engine_num_reactor_threads(4);   /* optional; 0 restores the default (1) */
@@ -3696,8 +3769,10 @@ The lifecycle macros follow the usual pattern:
 chttpsvr_construct(name, cl);         /* declare + init; fatal_err on failure */
 chttpsvr_construct_scoped(name, cl);  /* same + auto-destroy on scope exit */
 chttpsvr_declare(name);               /* declare without init */
-chttpsvr_destroy(name);               /* destroy and NULL the pointer */
+chttpsvr_destroy(name);               /* destroy and set to CHTTPSVR_INVALID */
 ```
+
+`chttpsvr` is an opaque value handle (a packed `{slot index, generation}` pair resolved through a library-owned slot table before the underlying server object is touched), not a pointer; never cast it to/from `void*` or compare it via a pointer cast; compare it directly against `CHTTPSVR_INVALID` (or use it in a truthiness check, since `CHTTPSVR_INVALID` is 0). Destroying the same handle twice, whether sequentially (a stale copy used after the first destroy already completed) or concurrently (two threads racing a destroy call on the same still-live handle), is a fatal error (`abort()`/`SIGABRT`), never a silent use-after-free or double-free.
 
 ### Routing
 
@@ -3715,7 +3790,7 @@ chttpsvr_register_handler(srv, CHTTP_PUT,    "/items/{id}/{sub}", update_item, N
 
 **Parameter name restrictions:** the name inside `{...}` must consist entirely of characters from `[A-Za-z0-9_]`. Patterns with names containing any other character (spaces, hyphens, dots, etc.) are rejected at registration time with `ccol_invalid_args`.
 
-Routes are matched in registration order across all registered routers. The server scans every route looking for a path-and-method match. If at least one route matches the path but none of those match the method, the server responds with 405 Method Not Allowed. If no route matches the path at all, it responds with 404. A request whose method the server does not recognize at all (a WebDAV verb, `TRACE`, `CONNECT`, a custom verb, ...) is rejected earlier still, with 501 Not Implemented, before route matching (or even path parsing) ever runs; see "Wildcard method (`CHTTP_ANY`)" below for why this matters even for a catch-all `CHTTP_ANY` registration. Path matching includes validation of percent-encoded sequences: a request with invalid encoding in any path segment (whether a literal segment (e.g. `/bad%ZZusers/{id}` against `/users/{id}`) or a captured `{name}` parameter (e.g. `/users/bad%ZZvalue` against `/users/{id}`)) does not match the route and returns 404 regardless of which methods are registered for that pattern. This means multiple methods can be registered for the same path and all will work correctly regardless of registration order:
+Routes are matched in registration order across all registered routers. The server scans every route looking for a path-and-method match. If at least one route matches the path but none of those match the method, the server responds with 405 Method Not Allowed. If no route matches the path at all, it responds with 404. A request whose method the server does not recognize at all (a WebDAV verb, `TRACE`, `CONNECT`, a custom verb, ...) is rejected earlier still, with 501 Not Implemented, before route matching (or even path parsing) ever runs; see "Wildcard method (`CHTTP_ANY`)" below for why this matters even for a catch-all `CHTTP_ANY` registration. Path matching includes validation of percent-encoded sequences: a request with invalid encoding in any path segment (whether a literal segment (e.g. `/bad%ZZusers/{id}` against `/users/{id}`) or a captured `{name}` parameter (e.g. `/users/bad%ZZvalue` against `/users/{id}`)) does not match the route and returns 404 regardless of which methods are registered for that pattern. A percent-encoded sequence that decodes to a literal NUL byte (`%00`) is treated the same way, as invalid encoding, rather than being decoded and compared as-is; this keeps a segment containing an embedded NUL from being compared against a registered segment name with a C string function that would otherwise stop at the first NUL and ignore everything after it. This means multiple methods can be registered for the same path and all will work correctly regardless of registration order:
 
 ```c
 chttpsvr_register_handler(srv, CHTTP_GET,  "/users",      list_users,   NULL);
@@ -3726,11 +3801,11 @@ chttpsvr_register_handler(srv, CHTTP_PUT,  "/users/{id}", update_user,  NULL);
 
 **Trailing slashes:** A request path with a trailing slash does NOT match a pattern without one. For example, `GET /users/42/` returns 404 if only `/users/{id}` is registered. Register a separate pattern if you want to accept the trailing-slash form.
 
-**Invalid patterns:** Route patterns must begin with `/`. Patterns that do not start with `/` (including the empty string) are rejected with `ccol_invalid_args`. Patterns containing consecutive slashes (e.g. `/foo//bar`) or a trailing slash (e.g. `/foo/`) are also rejected. Patterns whose `{name}` parameter segment contains characters outside `[A-Za-z0-9_]` are likewise rejected. All of these cases would produce unreachable or misleading routes because incoming paths are never normalised; only an exact segment-by-segment match succeeds.
+**Invalid patterns:** Route patterns must begin with `/`. Patterns that do not start with `/` (including the empty string) are rejected with `ccol_invalid_args`. Patterns containing consecutive slashes (e.g. `/foo//bar`) or a trailing slash (e.g. `/foo/`) are also rejected. Patterns whose `{name}` parameter segment contains characters outside `[A-Za-z0-9_]` are likewise rejected, as is a pattern that reuses the same `{name}` more than once (e.g. `/a/{id}/b/{id}`), since the second occurrence's captured value would otherwise be unreachable via `chttpsvr_req_param`. All of these cases would produce unreachable or misleading routes because incoming paths are never normalised; only an exact segment-by-segment match succeeds.
 
-**Thread safety:** Route and middleware registration (`chttpsvr_register_handler`, `chttpsvr_use`, `chttpsvr_router_on`, `chttpsvr_router_use`, `chttpsvr_subrouter`) is thread-safe and may be called at any time; before or after `chttpsvr_start`. A reader-writer lock protects the routing tables so concurrent requests are never blocked by rare registration writes.
+**Thread safety:** Route and middleware registration (`chttpsvr_register_handler`, `chttpsvr_use`, `chttpsvr_router_on`, `chttpsvr_router_use`, `chttpsvr_subrouter`) is thread-safe and may be called at any time; before or after `chttpsvr_start`, and concurrently with `chttpsvr_destroy` of the same server from another thread (a registration call racing a destroy simply returns `ccol_invalid_args`/NULL rather than touching freed memory). A reader-writer lock protects the routing tables so concurrent requests are never blocked by rare registration writes.
 
-`chttpsvr_register_handler` and `chttpsvr_router_on` return `ccol_invalid_args` if `fn` is NULL, `pattern` is NULL, `pattern` does not start with `/`, `pattern` contains consecutive or trailing slashes, or a `{name}` segment contains characters outside `[A-Za-z0-9_]`. `chttpsvr_register_streaming_handler` and `chttpsvr_router_on_stream` apply the same guards. `chttpsvr_use` and `chttpsvr_router_use` likewise return `ccol_invalid_args` for a NULL `fn`. `chttpsvr_subrouter` returns NULL if `srv` is NULL, `prefix` is NULL, `prefix` does not start with `/`, or `prefix` contains consecutive slashes (e.g. `"//api"` or `"/a//b"`).
+`chttpsvr_register_handler` and `chttpsvr_router_on` return `ccol_invalid_args` if `srv` is `CHTTPSVR_INVALID` or a stale/already-destroyed handle, if `fn` is NULL, `pattern` is NULL, `pattern` does not start with `/`, `pattern` contains consecutive or trailing slashes, a `{name}` segment contains characters outside `[A-Za-z0-9_]`, or the same `{name}` is used more than once. `chttpsvr_register_streaming_handler` and `chttpsvr_router_on_stream` apply the same guards. `chttpsvr_use` and `chttpsvr_router_use` likewise return `ccol_invalid_args` for a NULL `fn`. `chttpsvr_subrouter` returns NULL if `srv` is `CHTTPSVR_INVALID` or a stale/already-destroyed handle, `prefix` is NULL, `prefix` does not start with `/`, or `prefix` contains consecutive slashes (e.g. `"//api"` or `"/a//b"`). `chttpsvr_router_on`, `chttpsvr_router_on_stream`, and `chttpsvr_router_use` also return `ccol_invalid_args` if the sub-router's owning server has since been destroyed.
 
 **Wildcard method (`CHTTP_ANY`):** Pass `CHTTP_ANY` as the method to register a single handler that matches every HTTP method on the given pattern. Inside the handler, call `chttpsvr_req_method(req)` to determine which method was actually used. Because routing is first-wins, a method-specific route registered before a `CHTTP_ANY` route on the same pattern takes precedence for its method, while `CHTTP_ANY` catches every other method:
 
@@ -3777,9 +3852,11 @@ static void upload_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 
 `chttpsvr_req_read` blocks the calling worker thread (never the reactor) until at least one byte is available, the body ends, an error occurs, `chttpsvr_config_t.stream_read_timeout_ms` elapses with no new data, or (if set) `max_body_read_duration_ms` elapses. It returns `>0` bytes read, `0` at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics), or `-1` on error; call `chttpsvr_req_stream_error(req)` immediately afterward to distinguish a timeout (`ccol_timed_out`), an oversized body (`ccol_msg_too_large`), or a dropped connection (`ccol_http_transfer_aborted`). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1, and `chttpsvr_req_body` on a streaming handler returns `NULL`/0 (its body is never pre-extracted).
 
-`stream_read_timeout_ms` (default 30000ms) bounds how long a worker will wait for the *next* batch while reading a body, for both buffered and streaming routes; it exists because `read_timeout_ms`/`idle_timeout_ms` reset on any connection activity and so do not protect against a client that trickles bytes just fast enough to never trip them, tying up a worker thread indefinitely. Note that `stream_read_timeout_ms` itself resets on *any* new byte too, so a client that sends a byte or two just before each gap expires defeats it the same way; `max_body_read_duration_ms` (default 0, disabled) closes that loophole by capping the *total* time spent reading one request's body regardless of per-gap progress, independent of how many individual gaps it took to get there.
+If a request carries `Expect: 100-continue` and actually has a body (a `Content-Length` or chunked `Transfer-Encoding` was present), the first call to `chttpsvr_req_read` for that request sends the interim `100 Continue` response before attempting to read anything. A streaming handler that instead rejects a request outright (bad auth, unacceptable `Content-Type`, ...) by writing a final response without ever calling `chttpsvr_req_read` skips that interim response entirely, so the client sees the real rejection directly and is never asked to upload a body the server was not going to read. A buffered handler has no equivalent choice, since its whole body is always read before the handler ever runs; `chttpsvr` sends the interim response for a buffered route immediately, before that read begins. Either way, a request that carries `Expect: 100-continue` but has no body at all never receives the interim response: there is nothing to invite the client to upload.
 
-The server's `ctpool` is created at `chttpsvr_start` time. Its capacity is controlled by `chttpsvr_config_t.worker_thread_count` and `worker_queue_capacity`. If the queue is full when a request arrives, the server responds immediately with `503 Service Unavailable`; it never stalls the reactor thread. `chttpsvr_stop` only closes the listener; connections it already accepted keep running and may still dispatch further requests through the same handle, including across a subsequent `chttpsvr_start` restart. That restart drains and replaces the old `ctpool` only once every already-in-flight request has completed, so it is always safe to restart a server this way even while such a connection is still active.
+`stream_read_timeout_ms` (default 30000ms) bounds how long a worker will wait for the *next* batch while reading a body, for both buffered and streaming routes; it exists because `read_timeout_ms`/`idle_timeout_ms` reset on any connection activity and so do not protect against a client that trickles bytes just fast enough to never trip them, tying up a worker thread indefinitely. Note that `stream_read_timeout_ms` itself resets on *any* new byte too, so a client that sends a byte or two just before each gap expires defeats it the same way; `max_body_read_duration_ms` (default 0, disabled) closes that loophole by capping the *total* time spent reading one request's body regardless of per-gap progress, independent of how many individual gaps it took to get there. Configuring `stream_read_timeout_ms`, `max_body_read_duration_ms`, and/or `response_write_timeout_ms` to `0` ("wait indefinitely") does not turn a stalled connection into a permanent liability: shutting the server down (`chttpsvr_stop` immediately followed by `chttpsvr_start`, `chttpsvr_destroy`, or `chttpsvr_engine_stop`) still completes in bounded time by forcibly closing any connection whose worker thread is still blocked on it once that shutdown's own bounded, graceful wait is exhausted; a request that is still making progress is never affected by this.
+
+The server's `ctpool` is created at `chttpsvr_start` time. Its capacity is controlled by `chttpsvr_config_t.worker_thread_count` and `worker_queue_capacity`. If the queue is full when a request arrives, the server responds immediately with `503 Service Unavailable`; it never stalls the reactor thread. `chttpsvr_stop` only closes the listener; connections it already accepted keep running and may still dispatch further requests through the same handle, including across a subsequent `chttpsvr_start` restart. That restart drains and replaces the old `ctpool` only once every already-in-flight request has completed (bounded, per the paragraph above, even if one of them is genuinely stalled), so it is always safe to restart a server this way even while such a connection is still active.
 
 ### Middleware
 
@@ -3864,6 +3941,8 @@ The response is buffered and sent automatically when the handler returns. `chttp
 
 `chttpsvr_resp_set_header` rejects a name or value containing a CR or LF byte with `ccol_invalid_args`, since both are written onto the wire with no further escaping: a handler that reflects request-controlled data (a query parameter, a path parameter, an echoed request header) into a response header must not be able to inject arbitrary extra header lines or split the response in two by way of an unsanitized `\r`/`\n` in that data.
 
+`chttpsvr_resp_set_header` accepts (and validates) a `"Connection"` header like any other name, but never sends it: the server always emits its own `Connection` header, reflecting whether the connection is actually kept open afterward, since that decision is what drives real socket behavior and must never disagree with what the client is told.
+
 **HEAD requests:** a handler reachable via `CHTTP_HEAD` (explicitly, or through a `CHTTP_ANY` registration) may write a response body exactly as it would for `GET`; per RFC 7231, the server reports the real body length via `Content-Length` (matching what a `GET` would have reported) but never writes the actual body bytes to the wire for a `HEAD` request.
 
 **1xx/204/304 responses:** a handler may write a response body and then set (or have already set) an informational (1xx), `204 No Content`, or `304 Not Modified` status; per RFC 9110, none of the three may ever carry a body, regardless of method, so the body is never written to the wire for any of them, exactly like `HEAD`. A 1xx or 204 additionally never carries a `Content-Length` header at all, whether or not the handler wrote a body; `304` (like `HEAD`) still reports one, matching the length of whatever the handler wrote.
@@ -3904,10 +3983,10 @@ cfg.tls = &tls;
 
 | Function | Description |
 |---|---|
-| `create_chttpsvr(cl, err)` | Create a server with the default allocator; `cl` may be NULL (an internal stderr/FATAL-only logger is used) or a parent logger to derive this server's logger from (tagged `component=http-server`); returns NULL on failure |
+| `create_chttpsvr(cl, err)` | Create a server with the default allocator; `cl` may be NULL (an internal stderr/FATAL-only logger is used) or a parent logger to derive this server's logger from (tagged `component=http-server`); returns `CHTTPSVR_INVALID` on failure |
 | `create_chttpsvr_mp(mp, cl, err)` | Create a server with a custom allocator; same `cl` semantics as `create_chttpsvr` |
-| `__chttpsvr_destroy(srv)` | Destroy and free the server, including closing the server's own logger (`clog_close`); does not NULL the pointer. Safe to call regardless of whether the shared engine is still running (releases this server's own reference, possibly triggering an asynchronous engine stop if it was the last one) or was already force-stopped via `chttpsvr_engine_stop()` while `srv` was still started (the server's own listener/connections/worker pool are quiesced exactly once either way) |
-| `chttpsvr_destroy(srv)` | Macro: calls `__chttpsvr_destroy` then sets pointer to NULL |
+| `__chttpsvr_destroy(srv)` | Destroy and free the server, including closing the server's own logger (`clog_close`); does not set the handle to `CHTTPSVR_INVALID`. Safe to call regardless of whether the shared engine is still running (releases this server's own reference, possibly triggering an asynchronous engine stop if it was the last one) or was already force-stopped via `chttpsvr_engine_stop()` while `srv` was still started (the server's own listener/connections/worker pool are quiesced exactly once either way). `srv` must be a currently-live handle: a stale handle (already destroyed, whether sequentially or concurrently) is a fatal error (`abort()`/`SIGABRT`), not a use-after-free/double-free; `CHTTPSVR_INVALID` itself remains a silent no-op |
+| `chttpsvr_destroy(srv)` | Macro: calls `__chttpsvr_destroy` then sets the handle to `CHTTPSVR_INVALID` |
 
 **Engine Lifecycle (shared, process-level, independent of `chttpclient`'s own engine)**
 
@@ -3923,7 +4002,7 @@ cfg.tls = &tls;
 
 | Function | Description |
 |---|---|
-| `chttpsvr_start(srv, cfg)` | Start the server; on the first call in the process, lazily starts the shared reactor and idle-sweep thread; returns `ccol_invalid_args` if `srv` is NULL, or if `cfg->port` is 0 and `cfg->host` is not a `"unix://"` path; returns `ccol_not_permitted` if already started |
+| `chttpsvr_start(srv, cfg)` | Start the server; on the first call in the process, lazily starts the shared reactor and idle-sweep thread; returns `ccol_invalid_args` if `srv` is `CHTTPSVR_INVALID` or a stale/already-destroyed handle, or if `cfg->port` is 0 and `cfg->host` is not a `"unix://"` path; returns `ccol_not_permitted` if already started |
 | `chttpsvr_stop(srv)` | Close this server's listener; other servers continue running |
 
 **Route Registration (root router)**

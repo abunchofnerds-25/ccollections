@@ -37,14 +37,16 @@ error.
 cyaml_parse() is an inline wrapper that passes NULL for mp.
 
 On parse failure *err_str (if non-NULL) receives a heap-allocated,
-null-terminated error message that the caller must free().  On success
-*err_str is set to NULL.  Pass NULL for err_str to discard error
-details.
+null-terminated error message, allocated through mp, that the caller
+must free with cyaml_serialize_free_mp() (passing the same mp).  On
+success *err_str is set to NULL.  Pass NULL for err_str to discard
+error details.
 .fi
 .SH PARAMETERS
 .nf
 yaml_str   Null-terminated YAML input.
-err_str    Out-parameter for the error string, or NULL to ignore.
+err_str    Out-parameter for the error string (allocated through mp;
+           free with cyaml_serialize_free_mp()), or NULL to ignore.
 mp         Custom allocator for all nodes in the resulting tree, or
            NULL for the default allocator.
 .fi
@@ -65,4 +67,5 @@ the returned node with cyaml_type().
 .SH "SEE ALSO"
 .BR cyaml_parse_n_mp (3),
 .BR cyaml_destroy (3),
-.BR cyaml_serialize (3)
+.BR cyaml_serialize (3),
+.BR cyaml_serialize_free_mp (3)

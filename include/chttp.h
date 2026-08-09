@@ -224,7 +224,8 @@ typedef struct chttp_request_body {
  * @param out_len  Optional: receives the length of the returned string
  *                 (excluding the terminating NUL). May be NULL.
  * @return Newly allocated, NUL-terminated base64 string, or NULL on
- *         allocation failure (or if data is NULL and len > 0).
+ *         allocation failure, if data is NULL and len > 0, or if len is
+ *         large enough that the encoded size would overflow size_t.
  */
 char *chttp_base64_encode_mp(ccol_memmgmt_procs_t *mp, const void *data,
                              size_t len, size_t *out_len);

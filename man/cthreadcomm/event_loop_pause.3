@@ -50,8 +50,10 @@ reg   Registration to pause.
 .SH RETURN VALUE
 .nf
 ccol_success        Paused (or already paused).
-ccol_invalid_args   loop or reg is NULL; reg is a queue/channel
-                    registration; or reg was concurrently removed.
+ccol_invalid_args   loop is EVENT_LOOP_INVALID or a stale/already-
+                    destroyed handle; reg is NULL; reg is a queue/
+                    channel registration; or reg was concurrently
+                    removed.
 .fi
 .SH THREAD SAFETY
 .nf

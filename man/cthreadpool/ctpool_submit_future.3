@@ -1,4 +1,4 @@
-.TH CTPOOL_SUBMIT_FUTURE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_SUBMIT_FUTURE 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_submit_future \- submit a task that returns a void* result (blocking)
 .SH LIBRARY
@@ -37,8 +37,9 @@ arg   Passed to fn (may be NULL)
 .SH RETURN VALUE
 .nf
 Returns a new ctpool_future handle on success.
-Returns NULL if pool or fn is NULL, if the pool is shutting down, or
-if memory allocation fails.
+Returns NULL if pool is CTPOOL_INVALID or a stale/already-destroyed
+handle, if fn is NULL, if the pool is shutting down, or if memory
+allocation fails.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_try_submit_future (3),

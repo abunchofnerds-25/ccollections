@@ -17,10 +17,13 @@ previously installed engine logger is closed.
 
 The reactor logs to this handle at exactly three points: a TLS
 handshake failure, a listen-socket bind failure, and each idle-timeout
-sweep pass that closes one or more connections.  If no engine logger is
-ever configured, the reactor simply does not log at those points; there
-is no default logger to fall back to (unlike create_chttpsvr's own
-internal stderr/FATAL-only logger).
+sweep pass that closes one or more connections.  If no engine logger
+has been installed when the engine first starts, a fallback logger
+(fd 2, level CLOG_FATAL) is installed automatically, mirroring
+create_chttpsvr's own internal stderr/FATAL-only logger; since all
+three diagnostic points above log below CLOG_FATAL, that fallback
+logger's min_level filters every one of them out, so it is silent in
+practice unless this function is used to install a more verbose one.
 
 May be called at any time, including before the first chttpsvr_start,
 while the reactor is already running, or after a full engine stop; the

@@ -1,4 +1,4 @@
-.TH CREATE_CTHREAD_POOL_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CREATE_CTHREAD_POOL_MP 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 create_cthread_pool_mp \- create a thread pool with custom memory management
 .SH LIBRARY
@@ -27,7 +27,7 @@ The queue_capacity parameter controls the task queue mode:
 
 All num_threads worker threads are started before the function returns.
 If any pthread_create call fails the already-started threads are joined
-cleanly before the function returns NULL.
+cleanly before the function returns CTPOOL_INVALID.
 .fi
 .SH PARAMETERS
 .nf
@@ -39,14 +39,23 @@ err_str        Optional: receives a static error string on failure
 .SH RETURN VALUE
 .nf
 Returns a new ctpool handle on success.
-Returns NULL on failure and sets *err_str if err_str is non-NULL.
+Returns CTPOOL_INVALID on failure and sets *err_str if err_str is
+non-NULL.
 .fi
 .SH NOTES
 .nf
+The returned handle is an opaque VALUE (a packed {slot index,
+generation} pair), not a pointer; never cast it to/from void* or
+treat it as an address.
 Futures always use standard malloc/free regardless of mprocs.
 The pool must be shut down with ctpool_shutdown_drain or
 ctpool_shutdown_immediate before calling ctpool_destroy, unless
 ctpool_destroy is used directly (which performs a drain shutdown).
+__ctpool_destroy waits for every in-flight resolved use of the handle
+(a concurrently executing ctpool_submit/_wait/_pending_count/... call)
+to finish before freeing anything, so it is no longer the caller's
+own responsibility to first prove no other thread is still using the
+pool; see __ctpool_destroy(3).
 .fi
 .SH "SEE ALSO"
 .BR create_cthread_pool (3),

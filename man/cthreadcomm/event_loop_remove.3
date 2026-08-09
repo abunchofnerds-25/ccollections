@@ -41,7 +41,8 @@ reg   Registration to remove.
 .SH RETURN VALUE
 .nf
 ccol_success        Removed (or was already removed).
-ccol_invalid_args   loop or reg is NULL.
+ccol_invalid_args   loop is EVENT_LOOP_INVALID or a stale/already-
+                    destroyed handle, or reg is NULL.
 .fi
 .SH THREAD SAFETY
 .nf

@@ -1,4 +1,4 @@
-.TH CLRU_SET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CLRU_SET 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
 clru_set \- store a value by key (type-safe convenience wrapper)
 .SH LIBRARY
@@ -28,7 +28,9 @@ val   Value expression. Must be an lvalue or a string literal.
 .nf
 ccol_success             Value stored (remote setter succeeded, if any).
 ccol_unexpected_failure  Remote setter returned false; cache unchanged.
-ccol_invalid_args        Null pointer or zero-size argument.
+ccol_invalid_args        cache is CLRU_CACHE_INVALID or a stale
+                         (already-destroyed) handle; or a null
+                         pointer or zero-size argument.
 ccol_not_enough_memory   Memory allocation for the new value failed.
 .fi
 .SH EXAMPLES

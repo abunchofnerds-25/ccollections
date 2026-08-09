@@ -1,4 +1,4 @@
-.TH CTPOOL_FUTURE_CREATE_DETACHED 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_FUTURE_CREATE_DETACHED 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_future_create_detached \- create a standalone future with no pool or queued task
 .SH LIBRARY
@@ -24,9 +24,8 @@ released their reference, in either order; ctpool_future_free may
 be called before ctpool_future_fulfill, exactly as with pool-backed
 futures.
 
-Always uses standard malloc/free, independent of any custom allocator
-; matching ctpool_submit_future's existing futures, whose lifetime
-is deliberately decoupled from any single allocator.
+Always uses standard malloc/free, independent of any custom
+allocator, matching ctpool_submit_future's own futures.
 .fi
 .SH PARAMETERS
 .nf

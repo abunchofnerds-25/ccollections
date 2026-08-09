@@ -2506,14 +2506,15 @@ static cyaml_node_t *parse_one_document(parse_ctx_t *ctx) {
  * order.  Subsequent documents must begin with a '---' marker; bare content
  * after a document end is treated as a parse error.
  *
- * On failure *err_str (if non-NULL) is set to a heap-allocated message the
- * caller must free.  Any successfully parsed documents are destroyed before
- * returning NULL.
+ * On failure *err_str (if non-NULL) is set to a heap-allocated message,
+ * allocated through mp, that the caller must free with
+ * cyaml_serialize_free_mp() (passing the same mp).  Any successfully parsed
+ * documents are destroyed before returning NULL.
  */
 static cyaml parse_common(const char *src, size_t len, char **err_str,
                           ccol_memmgmt_procs_t *mp) {
   if (!src) {
-    if (err_str) *err_str = strdup("null input");
+    if (err_str) *err_str = ccol_strdup(mp, "null input");
     return NULL;
   }
   parse_ctx_t ctx = {
@@ -2538,7 +2539,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
       if (!at_doc_marker(&ctx) || memcmp(ctx.src + ctx.pos, "---", 3) != 0) {
         char buf[80];
         snprintf(buf, sizeof(buf), "trailing content at position %zu", ctx.pos);
-        if (err_str) *err_str = strdup(buf);
+        if (err_str) *err_str = ccol_strdup(mp, buf);
         goto fail;
       }
     }
@@ -2547,7 +2548,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
     if (!root) {
       if (err_str) {
         const char *msg = ctx.error[0] ? ctx.error : "unknown parse error";
-        *err_str = strdup(msg);
+        *err_str = ccol_strdup(mp, msg);
       }
       goto fail;
     }
@@ -2559,7 +2560,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
           _mem_realloc(mp, docs, new_cap * sizeof(cyaml_node_t *));
       if (!nd) {
         __cyaml_destroy((cyaml)root);
-        if (err_str) *err_str = strdup("out of memory");
+        if (err_str) *err_str = ccol_strdup(mp, "out of memory");
         goto fail;
       }
       docs = nd;
@@ -2589,7 +2590,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
   /* Multiple documents: wrap in a CYAML_LIST. */
   cyaml_node_t *list = (cyaml_node_t *)cyaml_create_list_mp(mp);
   if (!list) {
-    if (err_str) *err_str = strdup("out of memory");
+    if (err_str) *err_str = ccol_strdup(mp, "out of memory");
     goto fail;
   }
   for (size_t i = 0; i < ndocs; i++) {
@@ -2599,7 +2600,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
       for (size_t j = i; j < ndocs; j++) __cyaml_destroy((cyaml)docs[j]);
       _mem_free(mp, docs);
       __cyaml_destroy((cyaml)list);
-      if (err_str) *err_str = strdup("out of memory");
+      if (err_str) *err_str = ccol_strdup(mp, "out of memory");
       return NULL;
     }
   }

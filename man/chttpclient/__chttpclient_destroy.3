@@ -11,22 +11,32 @@ void __chttpclient_destroy(chttpcli cli);
 .fi
 .SH DESCRIPTION
 .nf
-Waits for all in-flight requests to complete (both a synchronous
-chttpclient_do/_streaming call still executing on another thread, and
-any Tier 2/3 chttpclient_do_async/_streaming or
-chttpclient_do_pooled/_streaming request submitted to the shared
+cli is an opaque VALUE handle (a packed {slot index, generation}
+pair), resolved through a library-owned slot table before the
+underlying client object is ever touched. cli must be a currently
+live handle (one returned by create_chttpclient/_mp or
+chttp_default_client and not yet destroyed). CHTTPCLI_INVALID is a
+silent no-op. Any other value (a stale handle already destroyed by
+an earlier call or concurrently by another thread, a forged value,
+or garbage) is a FATAL ERROR: this function calls fatal_err()
+(abort()/SIGABRT) rather than risk a use-after-free or double-free.
+
+On a live handle, waits for all in-flight requests to complete
+(both a synchronous chttpclient_do/_streaming call still executing
+on another thread, and any Tier 2/3 chttpclient_do_async/_streaming
+or chttpclient_do_pooled/_streaming request submitted to the shared
 reactor engine that has not yet completed), then closes all pooled
 connections (both idle and TLS), frees the idle-connection pool,
-destroys the client's TLS context, frees synchronisation primitives,
-and frees the client struct.
+destroys the client's TLS context, frees synchronisation
+primitives, and frees the client struct.
 
 If cli is the handle returned by chttp_default_client(), this
 module's own reference to it is cleared first so a subsequent
-chttp_default_client() call returns NULL instead of the now-freed
-pointer; see chttp_default_client(3)'s own WARNINGS section.
+chttp_default_client() call returns CHTTPCLI_INVALID instead of a
+stale handle; see chttp_default_client(3)'s own WARNINGS section.
 
 Do not call directly; use the chttpclient_destroy macro, which also
-sets the handle to NULL.
+sets the handle to CHTTPCLI_INVALID.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_destroy (3),

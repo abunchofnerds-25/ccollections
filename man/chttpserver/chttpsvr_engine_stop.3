@@ -40,7 +40,10 @@ that point rather than repeating any teardown work.
     chttpsvr_destroy(srv);    /* safe: srv was already quiesced above */
 
 Non-blocking and async-signal-safe: it is safe to call this function
-directly from a POSIX signal handler (e.g. SIGINT, SIGTERM).
+directly from a POSIX signal handler (e.g. SIGINT, SIGTERM).  This is
+the only function in this module documented as async-signal-safe;
+chttpsvr_stop() is not (see its own WARNINGS section) and must not be
+called directly from a signal handler.
 
 The library does not install any signal handlers.  Applications are
 responsible for wiring this function into whatever signal or shutdown

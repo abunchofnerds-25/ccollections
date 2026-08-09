@@ -25,7 +25,7 @@ differently from chttpclient_do_streaming's caller-thread callback.
 .fi
 .SH PARAMETERS
 .nf
-cli             Client handle; must not be NULL.
+cli             Client handle; must not be CHTTPCLI_INVALID.
 req             Request to execute; must not be NULL.
 write_fn        Chunk delivery callback; must not be NULL.
 write_ctx       Opaque context pointer passed verbatim to write_fn.
@@ -33,7 +33,9 @@ status_code_out Receives HTTP status code on success; may be NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Same codes as chttpclient_do_pooled.
+Same codes as chttpclient_do_pooled, except ccol_msg_too_large is
+never returned: chttpclient_set_max_response_body_size has no
+effect on this streaming path.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do_streaming (3),

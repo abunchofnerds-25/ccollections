@@ -653,6 +653,45 @@ TEST(ctls_sni, one_level_wildcard_matches_subdomain) {
   ctls_ctx_release(server_ctx);
 }
 
+TEST(ctls_sni, mixed_case_name_matches_case_insensitively) {
+  /* Registered with mixed case; ctls_ctx_cert_add lowercases server_name
+   * before using it as both the map key and (for a self-signed named entry)
+   * the certificate's own subject, so the CN below is expected lowercase
+   * regardless of the case used here. */
+  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
+             ccol_success);
+  REQUIRE_EQ(
+      ctls_ctx_cert_add(server_ctx, "Alpha.Test", NULL, NULL, NULL, NULL),
+      ccol_success);
+  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+
+  int fds[2];
+  _make_nonblocking_pair(fds);
+  ctls_conn_t *server_conn =
+      ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
+  /* Client sends the SNI extension value in a completely different case than
+   * how the cert was registered above. */
+  ctls_conn_t *client_conn =
+      ctls_conn_create_client(client_ctx, fds[1], "ALPHA.TEST", false, NULL);
+  REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
+
+  SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
+  char cn_buf[128];
+  const char *cn = _peer_cert_cn(client_ssl, cn_buf, sizeof(cn_buf));
+  REQUIRE_NE((void *)cn, (void *)NULL);
+  /* Falling back to "ctls-default" here (instead of "alpha.test") would mean
+   * the case mismatch caused the named entry to be missed entirely. */
+  REQUIRE_STREQ(cn, "alpha.test");
+
+  ctls_conn_destroy(client_conn);
+  ctls_conn_destroy(server_conn);
+  close(fds[0]);
+  close(fds[1]);
+  ctls_ctx_release(client_ctx);
+  ctls_ctx_release(server_ctx);
+}
+
 TEST(ctls_sni, unmatched_name_falls_back_to_default) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),

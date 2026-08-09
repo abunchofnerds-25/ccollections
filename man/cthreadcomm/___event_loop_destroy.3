@@ -1,4 +1,4 @@
-.TH ___EVENT_LOOP_DESTROY 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.TH ___EVENT_LOOP_DESTROY 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
 ___event_loop_destroy \- RAII cleanup function for event_loop
 .SH LIBRARY
@@ -12,11 +12,20 @@ ___event_loop_destroy(event_loop *lp);
 .SH DESCRIPTION
 .nf
 Static inline function used as the cleanup callback in
-event_loop_declare_scoped() and event_loop_construct_scoped().  If *lp
-is non-NULL, calls __event_loop_destroy(*lp) and sets *lp to NULL.
+event_loop_declare_scoped() and event_loop_construct_scoped(). If
+*lp is not EVENT_LOOP_INVALID, calls __event_loop_destroy(*lp) and
+sets *lp to EVENT_LOOP_INVALID.
 
 This function is not intended to be called directly; use
-event_loop_declare_scoped() or event_loop_construct_scoped() instead.
+event_loop_declare_scoped() or event_loop_construct_scoped()
+instead.
+
+Calling __event_loop_destroy on a stale (already destroyed) handle
+is a FATAL ERROR (abort()/SIGABRT); see __event_loop_destroy(3).
+This is only reachable here if *lp was left holding a stale value
+by code outside the normal declare/construct-scoped lifecycle, since
+the scoped macros themselves always leave *lp either live or already
+EVENT_LOOP_INVALID.
 .fi
 .SH PARAMETERS
 .nf
@@ -29,4 +38,5 @@ Compatible with __attribute__((cleanup)) on GCC and Clang.
 .SH "SEE ALSO"
 .BR event_loop_declare_scoped (3),
 .BR event_loop_construct_scoped (3),
+.BR __event_loop_destroy (3),
 .BR event_loop_destroy (3)

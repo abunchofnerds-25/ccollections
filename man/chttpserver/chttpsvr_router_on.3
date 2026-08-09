@@ -1,4 +1,4 @@
-.TH CHTTPSVR_ROUTER_ON 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPSVR_ROUTER_ON 3 "2026-08-03" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpsvr_router_on \- register a buffered handler on a sub-router
 .SH LIBRARY
@@ -16,16 +16,24 @@ ccol_retval_t chttpsvr_router_on(chttpsvr_router *router,
 .nf
 Same as chttpsvr_register_handler but registers the route on a sub-router.  All
 routing, leading-slash, trailing-slash, double-slash, param-name
-character, and thread-safety rules described for chttpsvr_register_handler apply
-here as well, including support for CHTTP_ANY as the method argument.
+character, duplicate-param-name, and thread-safety rules described for
+chttpsvr_register_handler apply here as well, including support for
+CHTTP_ANY as the method argument.
+
+This function validates that router's owning server has not been
+destroyed (including concurrently, from another thread) before
+touching it; a call racing a chttpsvr_destroy of the owning server
+simply returns ccol_invalid_args rather than touching freed memory.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
 ccol_invalid_args if router, pattern, or fn is NULL; if pattern does
                   not begin with '/'; if pattern contains consecutive
-                  slashes or a trailing slash; or if a {name} segment
-                  contains characters outside [A-Za-z0-9_].
+                  slashes or a trailing slash; if a {name} segment
+                  contains characters outside [A-Za-z0-9_]; if the
+                  same {name} is used more than once; or if router's
+                  owning server has since been destroyed.
 ccol_not_enough_memory if allocation fails.
 .fi
 .SH "SEE ALSO"

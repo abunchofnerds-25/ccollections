@@ -36,10 +36,9 @@ ccol_not_permitted if the reactor is already running; stop it first.
 .fi
 .SH NOTES
 .nf
-The default is 1, not an auto-detected CPU count, because it measured
-better for the common case, not merely simpler. Benchmarked (not
-assumed) against a real HTTP/HTTPS workload on a 22-core machine,
-across three traffic shapes:
+The default is 1 (not an auto-detected CPU count) because it performs
+better for the common case. Benchmarked against a real HTTP/HTTPS
+workload on a 22-core machine, across three traffic shapes:
 
   Plain HTTP, connections reused (typical browser/API-client
   traffic): num_threads == 1 measured ~3% higher throughput than

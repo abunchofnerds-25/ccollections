@@ -25,16 +25,20 @@ SOFTWARE.
 #include <arpa/inet.h>
 #include <chttpclient.h>
 #include <chttpserver.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -53,7 +57,7 @@ TAU_MAIN()
 #define BASE_URL "http://127.0.0.1:18765"
 
 static clog g_test_logger = NULL;
-static chttpsvr g_srv = NULL;
+static chttpsvr g_srv = CHTTPSVR_INVALID;
 
 /* ========================================================================== */
 /*                         ROUTE HANDLER FUNCTIONS                            */
@@ -254,6 +258,19 @@ static void _stream_error_report_handler(chttpsvr_req *req, chttpsvr_resp *resp,
       (n < 0) ? ccol_retval_to_str(chttpsvr_req_stream_error(req)) : "none";
   chttpsvr_resp_set_header(resp, "x-stream-err", err_str);
   chttpsvr_resp_write_str(resp, "done");
+}
+
+/* Streaming handler that deliberately never calls chttpsvr_req_read():
+   always rejects immediately, exercising the case Expect: 100-continue
+   (RFC 7231 SS5.1.1) exists for -- a server that decides to reject a
+   request without ever wanting its body. */
+static void _stream_reject_without_reading_handler(chttpsvr_req *req,
+                                                   chttpsvr_resp *resp,
+                                                   void *ctx) {
+  (void)req;
+  (void)ctx;
+  chttpsvr_resp_set_status(resp, 401);
+  chttpsvr_resp_write_str(resp, "no thanks");
 }
 
 /* Streaming handler that reads exactly one small batch of the body and then
@@ -497,6 +514,45 @@ static void _forced_status_with_body_handler(chttpsvr_req *req,
   chttpsvr_resp_set_status(resp, forced ? atoi(forced) : 200);
 }
 
+/* Sets an explicit, caller-supplied "Connection" response header (via the
+   "x-force-connection" request header) that may have nothing to do with
+   whatever this server's own framing logic actually decides afterward.
+   Used to verify that a handler can no longer make the wire Connection
+   header disagree with the server's real post-response keep-alive/close
+   behavior (see _send_response's own doc comment on this). */
+static void _explicit_connection_header_handler(chttpsvr_req *req,
+                                                chttpsvr_resp *resp,
+                                                void *ctx) {
+  (void)ctx;
+  const char *forced = chttpsvr_req_header(req, "x-force-connection");
+  if (forced) chttpsvr_resp_set_header(resp, "Connection", forced);
+  chttpsvr_resp_write_str(resp, "explicit-connection-header-ok");
+}
+
+/* Sets enough response headers, each with a large value, that the combined
+   header block comfortably exceeds a few KiB. Regression test for a real bug
+   in _send_response: it used to assemble the header block into a fixed
+   4096-byte stack buffer with no fallback, so a response whose headers alone
+   crossed that size silently lost its ENTIRE response (not even a graceful
+   500; the connection was simply closed with zero bytes ever written, and
+   nothing logged). _send_response now assembles the header block into a
+   buffer that grows (heap-allocated, doubling) as needed, so this must
+   succeed with every header intact regardless of size. */
+static void _large_response_headers_handler(chttpsvr_req *req,
+                                            chttpsvr_resp *resp, void *ctx) {
+  (void)req;
+  (void)ctx;
+  char value[300];
+  memset(value, 'x', sizeof(value) - 1);
+  value[sizeof(value) - 1] = '\0';
+  for (int i = 0; i < 20; i++) {
+    char name[32];
+    snprintf(name, sizeof(name), "x-custom-%02d", i);
+    chttpsvr_resp_set_header(resp, name, value);
+  }
+  chttpsvr_resp_write_str(resp, "large-headers-ok");
+}
+
 /* Handler used as the SECOND registration of the same path+method to verify
    that duplicate registrations are silently accepted but only the FIRST handler
    ever runs (first-wins policy). */
@@ -528,7 +584,7 @@ static void _null_key_query_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 }
 
 /* Second server for "already running" test (never actually served). */
-static chttpsvr g_srv2 = NULL;
+static chttpsvr g_srv2 = CHTTPSVR_INVALID;
 
 /* ========================================================================== */
 /*       SHARED RESULT ARRAYS FOR HANDLERS REGISTERED IN _setup              */
@@ -700,12 +756,12 @@ static void _any_method_param_handler(chttpsvr_req *req, chttpsvr_resp *resp,
    in _setup to verify that a full ctpool causes ctpool_try_submit to return
    ccol_container_full and the server responds 503.  Listening on TEST_PORT+2.
 */
-static chttpsvr g_bounded_srv = NULL;
+static chttpsvr g_bounded_srv = CHTTPSVR_INVALID;
 
 /* Dedicated server with a small max_body_size (64 bytes) for boundary tests
    of the 413/PAYLOAD_TOO_LARGE enforcement (buffered and streaming).
    Listening on TEST_PORT+3. */
-static chttpsvr g_small_body_srv = NULL;
+static chttpsvr g_small_body_srv = CHTTPSVR_INVALID;
 #define SMALL_BODY_MAX 64
 
 /* Mutex/condvar for synchronising the blocking handler used in the 503 test.
@@ -782,19 +838,19 @@ static void _teardown(void) {
    * closes it just below. */
   if (g_bounded_srv) {
     __chttpsvr_destroy(g_bounded_srv);
-    g_bounded_srv = NULL;
+    g_bounded_srv = CHTTPSVR_INVALID;
   }
   if (g_small_body_srv) {
     __chttpsvr_destroy(g_small_body_srv);
-    g_small_body_srv = NULL;
+    g_small_body_srv = CHTTPSVR_INVALID;
   }
   if (g_srv) {
     __chttpsvr_destroy(g_srv);
-    g_srv = NULL;
+    g_srv = CHTTPSVR_INVALID;
   }
   if (g_srv2) {
     __chttpsvr_destroy(g_srv2);
-    g_srv2 = NULL;
+    g_srv2 = CHTTPSVR_INVALID;
   }
   chttpsvr_engine_wait();
   if (g_test_logger) {
@@ -838,6 +894,10 @@ __attribute__((constructor)) static void _setup(void) {
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/status", _status_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/status-with-body",
                             _forced_status_with_body_handler, NULL);
+  chttpsvr_register_handler(g_srv, CHTTP_GET, "/explicit-connection-header",
+                            _explicit_connection_header_handler, NULL);
+  chttpsvr_register_handler(g_srv, CHTTP_GET, "/large-response-headers",
+                            _large_response_headers_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/json", _json_handler, NULL);
   chttpsvr_register_handler(g_srv, CHTTP_GET, "/raw-query", _raw_query_handler,
                             NULL);
@@ -1452,7 +1512,7 @@ TEST(chttpserver, serve_double_start) {
 TEST(chttpserver, multi_server_start_stop) {
   /* A second server on a different port must start successfully and serve
    * requests independently, demonstrating multiple-server support. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
 
   chttpsvr_register_handler(g_srv2, CHTTP_GET, "/ping-srv2", _hello_handler,
                             NULL);
@@ -1586,7 +1646,7 @@ TEST(chttpserver, stream_handler_registration_accepted) {
   /* chttpsvr_register_streaming_handler must accept a valid registration on
      an unstarted server.  The server owns its ctpool, so no pool is passed by
      the caller. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       g_srv2, CHTTP_POST, "/noop", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -1639,7 +1699,7 @@ TEST(chttpserver, invalid_param_pattern_rejected) {
      with ccol_invalid_args rather than silently extracting a wrong param name.
      g_srv2 is used because it is never started; adding invalid routes to it
      does not affect the running test server. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/{unclosed",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -1655,7 +1715,7 @@ TEST(chttpserver, invalid_param_name_chars_rejected) {
    * Such names can never be retrieved via chttpsvr_req_param and would create
    * silently unreachable parameters.  g_srv2 (never started) is used so the
    * running test server is not polluted. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
 
   /* Space inside param name. */
   ccol_retval_t rv = chttpsvr_register_handler(
@@ -1677,6 +1737,35 @@ TEST(chttpserver, invalid_param_name_chars_rejected) {
                                  NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
   rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/{order_id}/items",
+                                 _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+}
+
+TEST(chttpserver, duplicate_param_name_in_pattern_rejected) {
+  /* A pattern reusing the same {name} more than once (e.g. /a/{id}/b/{id})
+   * must be rejected at registration time with ccol_invalid_args: without
+   * this check the route would compile successfully and then silently make
+   * the SECOND occurrence's captured value unreachable, since
+   * chttpsvr_req_param always returns on the first name match. g_srv2 (never
+   * started) is used so the running test server is not polluted. */
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
+
+  ccol_retval_t rv = chttpsvr_register_handler(
+      g_srv2, CHTTP_GET, "/dup/{id}/b/{id}", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
+
+  rv = chttpsvr_register_streaming_handler(
+      g_srv2, CHTTP_POST, "/dup-stream/{id}/b/{id}", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
+
+  chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/dup-router");
+  REQUIRE_TRUE(r != NULL);
+  rv = chttpsvr_router_on(r, CHTTP_GET, "/{id}/b/{id}", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
+
+  /* A pattern with distinct param names, even reusing the same literal
+   * segment shape, must still be accepted. */
+  rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/dup/{id}/b/{other_id}",
                                  _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
 }
@@ -1725,7 +1814,7 @@ TEST(chttpserver, double_slash_pattern_rejected) {
      rejected at registration time with ccol_invalid_args.  Such patterns were
      previously silently normalised to /foo/bar, which is unexpected and
      error-prone.  Uses g_srv2 which is never started. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/foo//bar",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -1778,6 +1867,46 @@ TEST(chttpserver, path_url_decoded) {
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
   REQUIRE_STREQ(resp->body, "/echo-path/hello world");
+  chttpclient_resp_free(resp);
+}
+
+TEST(chttpserver, percent_encoded_nul_in_literal_segment_is_route_mismatch) {
+  /* A %00-encoded NUL byte inside a path segment must not let strcmp-based
+   * literal segment matching silently treat "hello" + trailing garbage as
+   * an exact match for the registered literal segment "hello": /hello%00xyz
+   * must NOT match the literal route /hello.  Before this was fixed,
+   * _seg_matches_literal decoded "hello%00xyz" to "hello\0xyz" and compared
+   * it against "hello" via strcmp, which stops at the first NUL in either
+   * operand and reported a match -- letting an attacker-chosen suffix hide
+   * behind a route match a caller reasonably expects to reflect the whole
+   * segment. */
+  chttpcli_response *resp = _get("/hello%00xyz");
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 404);
+  chttpclient_resp_free(resp);
+}
+
+TEST(chttpserver, percent_encoded_nul_in_param_segment_is_route_mismatch) {
+  /* Same class of bug, exercised through a {param} segment instead of a
+   * literal one: _decode_seg_alloc must treat a decoded embedded NUL as a
+   * decode failure (the same bucket a malformed %XX escape already falls
+   * into), not silently hand a truncated value to a would-be match. */
+  chttpcli_response *resp = _get("/echo-path/hello%00world");
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 404);
+  chttpclient_resp_free(resp);
+}
+
+TEST(chttpserver, percent_encoded_nul_in_query_key_does_not_alias) {
+  /* Same class of bug in the query-string decoder: a key "q%00x" must not
+   * decode-then-strcmp its way into aliasing the unrelated key "q". Before
+   * the fix, _parse_qparams stored the fully-decoded "q\0x" and
+   * chttpsvr_req_query_one's strcmp(qp->keys[i], "q") stopped at the
+   * embedded NUL and reported a spurious match. */
+  chttpcli_response *resp = _get("/query-one?q%00x=hello");
+  REQUIRE_TRUE(resp != NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "not_found");
   chttpclient_resp_free(resp);
 }
 
@@ -1845,7 +1974,7 @@ TEST(chttpserver, custom_allocator_lifecycle) {
                              _wrap_realloc};
   char *err = NULL;
   chttpsvr srv = create_chttpsvr_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   REQUIRE_GT(g_wrap_malloc_count + g_wrap_calloc_count, (size_t)0);
   REQUIRE_EQ(g_wrap_free_count, (size_t)0);
 
@@ -2028,7 +2157,7 @@ TEST(chttpserver, stop_on_unstarted_server_is_safe) {
   /* chttpsvr_stop on a server that was never started must be a safe no-op
    * that can be called multiple times without crashing.  g_srv2 is not
    * started by _setup, so this exercises the started==false branch. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_stop(g_srv2); /* must not block or crash */
   chttpsvr_stop(g_srv2); /* second call: must also be a no-op */
 }
@@ -2830,6 +2959,68 @@ TEST(chttpserver, five_pipelined_bodyless_requests_all_answered) {
 #undef _FIVE_PIPELINED_COUNT
 }
 
+TEST(chttpserver, pipelined_malformed_request_after_worker_processed_request) {
+  /* Regression test for a real use-after-free in _task_worker's own
+     keep-alive tail: when a further pipelined request's bytes are fed into
+     _conn_feed_bytes from a worker thread (rather than the reactor thread;
+     see _conn_feed_bytes's own doc comment and this exact code path's
+     comment in _task_worker), _conn_feed_bytes may fully resolve conn's
+     fate (including freeing it outright) before returning, per its own "the
+     caller must not touch conn again" contract. A syntactically malformed
+     follow-up request (chttp1_parser_execute returning CHTTP1_ERROR, e.g.
+     the negative Content-Length case in negative_content_length_rejected
+     above) takes _conn_feed_bytes's synchronous, same-thread _conn_close
+     branch, freeing conn deterministically before _conn_feed_bytes returns
+     -- not merely racily, unlike the cross-thread-divert case. A prior
+     version of this code read conn->m_procs immediately afterward to free
+     a local scratch buffer, a guaranteed use-after-free on this exact path.
+     Both requests are concatenated into one write() so the first (matched,
+     kept-alive) request is diverted to a worker thread from the reactor's
+     own initial read, and the second (malformed) request's bytes ride
+     along as leftover, reaching _conn_feed_bytes only once the worker
+     thread's own tail runs -- the reactor thread never touches the second
+     request's bytes at all. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req =
+      "GET /hello HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "\r\n"
+      "POST /hello HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Content-Length: -1\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[4096] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+  close(fd);
+
+  /* Exactly one response (200 for the first, well-formed request); the
+     malformed second request gets no response at all (matching
+     negative_content_length_rejected's own documented behavior) and the
+     connection closes on its own right after, rather than crashing the
+     server process. */
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 200") != NULL);
+  REQUIRE_TRUE(strstr(buf, "Hello, world!") != NULL);
+  char *first = strstr(buf, "HTTP/1.1");
+  REQUIRE_TRUE(first != NULL);
+  REQUIRE_TRUE(strstr(first + 8, "HTTP/1.1") == NULL);
+}
+
 TEST(chttpserver, keep_alive_two_consecutive_streaming_requests) {
   /* Per-message ingestion state (conn->body, body_too_large,
      transfer_aborted, deadline_exceeded, _carry_over, and conn->parser
@@ -3113,6 +3304,125 @@ TEST(chttpserver, expect_100_continue_interim_response_sent_before_body) {
   close(fd);
 }
 
+/* Regression test: a streaming route's handler that decides to reject a
+   request without ever calling chttpsvr_req_read() must produce the real
+   final response directly, with NO "100 Continue" interim response ever
+   reaching the client first. Before the fix, _task_worker sent "100
+   Continue" unconditionally, before the handler ever ran, for both buffered
+   and streaming routes alike -- silently telling the client to go ahead and
+   upload a body the server was never going to read, defeating the entire
+   point of Expect: 100-continue (RFC 7231 SS5.1.1: let the server answer
+   with a final status instead of "100 Continue" and skip the upload
+   entirely). Fixed by deferring the interim send for a streaming route to
+   chttpsvr_req_read() itself (see that function's own comment), so it fires
+   only if the handler actually asks to read. */
+TEST(
+    chttpserver,
+    expect_100_continue_not_sent_when_streaming_handler_rejects_without_reading) {
+  REQUIRE_EQ((int)chttpsvr_register_streaming_handler(
+                 g_srv, CHTTP_POST, "/stream-reject-no-read",
+                 _stream_reject_without_reading_handler, NULL),
+             (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *body = "this-body-must-never-be-read-by-the-server";
+  char hdr[256];
+  int hn = snprintf(hdr, sizeof(hdr),
+                    "POST /stream-reject-no-read HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Expect: 100-continue\r\n"
+                    "Content-Length: %zu\r\n"
+                    "\r\n",
+                    strlen(body));
+  REQUIRE_TRUE(hn > 0 && (size_t)hn < (int)sizeof(hdr));
+  REQUIRE_EQ(write(fd, hdr, (size_t)hn), (ssize_t)hn);
+
+  /* Deliberately never send `body`: a well-behaved Expect: 100-continue
+     client waits for either "100 Continue" or a final response before
+     uploading, and this test proves the server never asks it to. */
+  char buf[1024];
+  int status = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status, 401);
+  REQUIRE_TRUE(strstr(buf, "100 Continue") == NULL);
+  REQUIRE_TRUE(strstr(buf, "no thanks") != NULL);
+  close(fd);
+}
+
+/* Regression test: a request that carries "Expect: 100-continue" but has no
+   body at all (no Content-Length, no chunked Transfer-Encoding) must never
+   receive the interim "100 Continue" response, for a STREAMING route whose
+   handler does call chttpsvr_req_read(). Before the fix, the lazy send in
+   chttpsvr_req_read() fired unconditionally on its first call regardless of
+   whether chttp1_parser_message_complete() was already true (i.e.
+   regardless of whether there was ever a body to invite) -- telling the
+   client to go ahead and upload a body that was never coming. */
+TEST(chttpserver, expect_100_continue_not_sent_for_bodyless_streaming_request) {
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  /* No Content-Length, no Transfer-Encoding: per RFC 7230 SS3.3's
+     request-specific framing rule, this is an ordinary, valid, bodyless
+     POST -- not truncated or malformed. */
+  const char *req =
+      "POST /stream-echo HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Expect: 100-continue\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[1024];
+  int status = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  REQUIRE_TRUE(strstr(buf, "100 Continue") == NULL);
+  close(fd);
+}
+
+/* Same regression, for a BUFFERED route: _task_worker's own eager interim
+   send (fired before _drain_body, for routes registered with
+   chttpsvr_register_handler rather than the streaming variant) had the
+   identical unconditional-send bug. */
+TEST(chttpserver, expect_100_continue_not_sent_for_bodyless_buffered_request) {
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req =
+      "POST /echo-body HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "Expect: 100-continue\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[1024];
+  int status = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  REQUIRE_TRUE(strstr(buf, "100 Continue") == NULL);
+  REQUIRE_TRUE(strstr(buf, "(empty)") != NULL);
+  close(fd);
+}
+
 TEST(chttpserver, stream_read_timeout_ms_zero_means_wait_indefinitely) {
   /* chttpsvr_config_t.stream_read_timeout_ms is documented "0 = wait
      indefinitely", but every chttpserver.c call site that read it cast the
@@ -3134,7 +3444,7 @@ TEST(chttpserver, stream_read_timeout_ms_zero_means_wait_indefinitely) {
      actually arrive, and the resulting response must actually be
      delivered. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv =
       chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/zero-timeout-wait",
                                           _stream_error_report_handler, NULL);
@@ -3313,7 +3623,7 @@ TEST(chttpserver, on_null_fn_rejected) {
   /* chttpsvr_register_handler must return ccol_invalid_args when fn is NULL so
    * that a NULL handler can never be installed and later cause a crash at
    * dispatch time.  Uses g_srv2 which is created but never started. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv =
       chttpsvr_register_handler(g_srv2, CHTTP_GET, "/test-null-fn", NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -3322,7 +3632,7 @@ TEST(chttpserver, on_null_fn_rejected) {
 TEST(chttpserver, router_use_null_fn_rejected) {
   /* chttpsvr_router_use must return ccol_invalid_args when fn is NULL to
    * prevent a NULL middleware from being appended to the chain. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-mw-test");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv = chttpsvr_router_use(r, NULL, NULL);
@@ -3333,7 +3643,7 @@ TEST(chttpserver, use_null_fn_rejected) {
   /* chttpsvr_use must return ccol_invalid_args when fn is NULL, consistent
    * with chttpsvr_register_handler and chttpsvr_router_use.  Uses g_srv2 which
    * is never started so the running server is unaffected. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_use(g_srv2, NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
@@ -3346,7 +3656,7 @@ TEST(chttpserver, on_null_pattern_rejected) {
   /* chttpsvr_register_handler must enforce the NULL-pattern precondition at the
    * public API boundary, not delegate it silently to _router_add_route.  Uses
    * g_srv2. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv =
       chttpsvr_register_handler(g_srv2, CHTTP_GET, NULL, _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -3355,7 +3665,7 @@ TEST(chttpserver, on_null_pattern_rejected) {
 TEST(chttpserver, on_stream_null_pattern_rejected) {
   /* chttpsvr_register_streaming_handler must reject NULL pattern at the public
    * API boundary. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       g_srv2, CHTTP_POST, NULL, _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -3364,7 +3674,7 @@ TEST(chttpserver, on_stream_null_pattern_rejected) {
 TEST(chttpserver, router_on_null_pattern_rejected) {
   /* chttpsvr_router_on must also guard against NULL pattern, consistently with
    * chttpsvr_register_handler.  Uses a sub-router on g_srv2. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-pat-rt");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv =
@@ -3376,7 +3686,7 @@ TEST(chttpserver, router_on_stream_null_pattern_rejected) {
   /* chttpsvr_router_on_stream must enforce the NULL-pattern precondition at
    * the public API boundary, consistently with chttpsvr_router_on and
    * chttpsvr_register_streaming_handler.  Uses a sub-router on g_srv2. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-pat-stream");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv =
@@ -3393,7 +3703,7 @@ TEST(chttpserver, stop_twice_safe) {
    * safe: the first call is a no-op (chttpsvr_stop's own was_started check
    * is false) and the second is identical. Neither call should crash or
    * touch the shared engine reactor. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_stop(g_srv2);
   chttpsvr_stop(g_srv2);
 }
@@ -3492,7 +3802,7 @@ TEST(chttpserver, trailing_slash_pattern_rejected) {
    * "/"  (the root) is a special case that is always accepted.
    *
    * Uses g_srv2 (never started) to avoid polluting g_srv's routing table. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
 
   /* Rejected: trailing slash on a single-segment pattern. */
   ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "/foo/",
@@ -3545,7 +3855,7 @@ TEST(chttpserver, subrouter_null_prefix_rejected) {
   /* chttpsvr_subrouter must return NULL when prefix is NULL to protect against
    * the server later dereferencing the prefix for path matching.
    * Uses g_srv2 (never started) to avoid polluting g_srv's routing tables. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, NULL);
   REQUIRE_TRUE(r == NULL);
 }
@@ -3554,7 +3864,7 @@ TEST(chttpserver, subrouter_no_leading_slash_rejected) {
   /* chttpsvr_subrouter must return NULL when the prefix does not start with
    * '/', since all valid HTTP paths start with '/'.
    * Uses g_srv2 (never started) to avoid polluting g_srv's routing tables. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "api/v1");
   REQUIRE_TRUE(r == NULL);
 }
@@ -3565,7 +3875,7 @@ TEST(chttpserver, subrouter_double_slash_at_start_rejected) {
    * create a permanently unreachable router.  chttpsvr_subrouter must reject
    * it by returning NULL.
    * Uses g_srv2 (never started) to avoid polluting g_srv's routing tables. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "//api");
   REQUIRE_TRUE(r == NULL);
 }
@@ -3574,7 +3884,7 @@ TEST(chttpserver, subrouter_double_slash_in_middle_rejected) {
   /* A prefix with consecutive slashes in the middle (e.g. "/api//v1") is
    * equally unreachable and must also be rejected.
    * Uses g_srv2 (never started). */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/api//v1");
   REQUIRE_TRUE(r == NULL);
 }
@@ -3588,7 +3898,7 @@ TEST(chttpserver, on_stream_null_fn_rejected) {
    * is NULL, consistent with chttpsvr_register_handler which already rejects a
    * NULL handler. A NULL streaming handler would crash when the ctpool tries to
    * call it. Uses g_srv2 (never started). */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       g_srv2, CHTTP_POST, "/noop-fn", NULL, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
@@ -3598,7 +3908,7 @@ TEST(chttpserver, router_on_stream_null_fn_rejected) {
   /* chttpsvr_router_on_stream must return ccol_invalid_args when fn is NULL,
    * consistent with chttpsvr_register_streaming_handler and chttpsvr_router_on.
    * Uses a sub-router on g_srv2 (never started). */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-stream-fn");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv = chttpsvr_router_on_stream(r, CHTTP_POST, "/x", NULL, NULL);
@@ -3795,13 +4105,13 @@ TEST(chttpserver, resp_set_header_null_resp_returns_invalid_args) {
 TEST(chttpserver, serve_null_srv_returns_invalid_args) {
   /* chttpsvr_start(NULL, ...) must return ccol_invalid_args rather than
    * crashing on a NULL server pointer. */
-  ccol_retval_t rv = chttpsvr_start(NULL, NULL);
+  ccol_retval_t rv = chttpsvr_start(CHTTPSVR_INVALID, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
 TEST(chttpserver, stop_null_is_noop) {
-  /* chttpsvr_stop(NULL) must not crash. */
-  chttpsvr_stop(NULL);
+  /* chttpsvr_stop(CHTTPSVR_INVALID) must not crash. */
+  chttpsvr_stop(CHTTPSVR_INVALID);
 }
 
 /* (The engine lifecycle is now managed implicitly: the engine starts on the
@@ -3873,7 +4183,7 @@ TEST(chttpserver, router_on_null_fn_rejected) {
    * chttpsvr_register_streaming_handler, and chttpsvr_router_on_stream which
    * already have corresponding tests. Uses a sub-router on g_srv2 (never
    * started). */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *r = chttpsvr_subrouter(g_srv2, "/null-fn-rt");
   REQUIRE_TRUE(r != NULL);
   ccol_retval_t rv = chttpsvr_router_on(r, CHTTP_GET, "/x", NULL, NULL);
@@ -3940,7 +4250,7 @@ TEST(chttpserver, subrouter_null_srv_rejected) {
    * dangling back-pointer in the new router from causing crashes at routing
    * time.  The NULL prefix and no-leading-slash cases are already tested;
    * this test completes the guard coverage. */
-  chttpsvr_router *r = chttpsvr_subrouter(NULL, "/any");
+  chttpsvr_router *r = chttpsvr_subrouter(CHTTPSVR_INVALID, "/any");
   REQUIRE_TRUE(r == NULL);
 }
 
@@ -3963,7 +4273,7 @@ TEST(chttpserver, serve_port_zero_rejected) {
    * Port 0 causes the OS to assign an ephemeral port, but the caller has no
    * way to discover which port was chosen, making the server unreachable.
    * Uses g_srv2 (never started) so the running server is unaffected. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = 0;
@@ -3978,11 +4288,11 @@ TEST(chttpserver, serve_port_zero_rejected) {
 /* 1. on_stream with NULL server returns ccol_invalid_args */
 
 TEST(chttpserver, on_stream_null_srv_returns_invalid_args) {
-  /* chttpsvr_register_streaming_handler must validate srv != NULL before doing
-   * anything. If it doesn't, the server pointer dereference will crash.
-   * This is a pure API validation test (no live server needed). */
+  /* chttpsvr_register_streaming_handler must validate srv != CHTTPSVR_INVALID
+   * before doing anything. If it doesn't, the server pointer dereference will
+   * crash. This is a pure API validation test (no live server needed). */
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
-      NULL, CHTTP_GET, "/any", _hello_handler, NULL);
+      CHTTPSVR_INVALID, CHTTP_GET, "/any", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -4048,7 +4358,7 @@ TEST(chttpserver, pattern_no_leading_slash_rejected) {
    * stripped before segment comparison), violating the documented API contract.
    * g_srv2 is used because it is never started; registering invalid routes on
    * it does not affect the running test server. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
 
   ccol_retval_t rv = chttpsvr_register_handler(g_srv2, CHTTP_GET, "health",
                                                _hello_handler, NULL);
@@ -4084,7 +4394,7 @@ TEST(chttpserver, serve_stopped_server_state_valid) {
   /* chttpsvr_stop on a server that was not started is a no-op.  The handle
    * must remain in a consistent state afterwards: route registration must
    * still work without crashing or returning an error. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_stop(g_srv2); /* no-op: g_srv2 is not started */
   chttpsvr_stop(g_srv2); /* second call: must also be a no-op */
 
@@ -4105,7 +4415,7 @@ TEST(chttpserver, serve_tls_zero_port_rejected_before_tls_init) {
    * handshakes) requires valid certificate files; that coverage lives in the
    * dedicated tests_tls binary in this same directory (see this directory's
    * Makefile), not here. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.cert_path = "/nonexistent/cert.pem";
   tls.key_path = "/nonexistent/key.pem";
@@ -4139,7 +4449,7 @@ TEST(chttpserver, streaming_get_no_body_via_req_body) {
    * the handler must return NULL/0, and the handler must produce a valid
    * "(empty)" response rather than crashing or returning garbage.
    * This exercises the (body && len > 0) else branch in a streaming route. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   chttpcli_response *resp = _get("/stream-body-get-no-body");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4152,7 +4462,7 @@ TEST(chttpserver, dynamic_route_registration_while_running) {
    * serving requests (the write path of the rwlock is exercised while reactor
    * threads hold read locks).  The newly registered route must be reachable
    * immediately by subsequent requests in the same test process. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       g_srv, CHTTP_GET, "/late-dynamic-route", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -4174,7 +4484,7 @@ TEST(chttpserver, root_router_shadows_subrouter_at_same_path) {
    *   1. Root route  /shadow-test/ping -> _shadow_root_handler
    *   2. Sub-router  /shadow-test  with /ping -> _shadow_sub_handler
    * Request: GET /shadow-test/ping -> must return "root-wins". */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   chttpcli_response *resp = _get("/shadow-test/ping");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 200);
@@ -4189,7 +4499,7 @@ TEST(chttpserver, middleware_overflow_registration_rejected) {
    * behavior that was previously observable only at request-dispatch time is no
    * longer reachable through the public API because registration is rejected
    * before the overflow can occur. */
-  REQUIRE_TRUE(g_srv2 != NULL);
+  REQUIRE_TRUE(g_srv2 != CHTTPSVR_INVALID);
   chttpsvr_router *ov_r = chttpsvr_subrouter(g_srv2, "/overflow-mw-test");
   REQUIRE_TRUE(ov_r != NULL);
 
@@ -4214,7 +4524,7 @@ TEST(chttpserver, middleware_overflow_produces_500) {
    * router-level middlewares.  g_srv also has 1 global middleware (_global_mw),
    * so the combined dispatch-time count is 33 > 32, which triggers the
    * overflow guard in _on_request before the route handler is invoked. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   chttpcli_response *resp = _get("/mw-overflow-live/ping");
   REQUIRE_TRUE(resp != NULL);
   REQUIRE_EQ(resp->status_code, 500);
@@ -4232,7 +4542,7 @@ TEST(chttpserver, middleware_overflow_streaming_produces_500) {
    * is 33 > _CHTTPSVR_MAX_MW (32).  The streaming route /mw-overflow-live/
    * stream-ping must receive the same 500 response as the buffered
    * /mw-overflow-live/ping route. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   chttpcli_response *resp =
       _post("/mw-overflow-live/stream-ping", "payload", "text/plain");
   REQUIRE_TRUE(resp != NULL);
@@ -4247,7 +4557,7 @@ TEST(chttpserver, malformed_encoding_in_param_correct_method_returns_404) {
    * for bad encoding and the route is treated as a no-match.
    *
    * /api/v1/items/{id} is registered as GET only in _setup. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   char buf[2048] = {0};
   int status =
       _raw_request("GET", "/api/v1/items/bad%ZZvalue", NULL, buf, sizeof(buf));
@@ -4267,7 +4577,7 @@ TEST(chttpserver,
    *
    * After the fix, both modes validate encoding consistently: this request
    * must return 404, not 405. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   char buf[2048] = {0};
   int status =
       _raw_request("POST", "/api/v1/items/bad%ZZvalue", NULL, buf, sizeof(buf));
@@ -4287,7 +4597,7 @@ TEST(chttpserver, valid_percent_encoded_literal_segment_matches_route) {
    * the subsequent strcmp read past the valid content into uninitialised
    * stack memory.  On stacks where that byte happened to be non-zero the
    * route would fail to match and the server would return 404. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   char buf[4096] = {0};
   int status = _raw_request("GET", "/hel%6Co", NULL, buf, sizeof(buf));
   REQUIRE_EQ(status, 200);
@@ -4302,7 +4612,7 @@ TEST(chttpserver,
    * the wrong method.  /hel%6Co decodes to /hello; /hello is GET-only.  The
    * path must match (literal-segment decode succeeds) so the server sets the
    * method-mismatch flag and replies 405, not 404. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   char buf[2048] = {0};
   int status = _raw_request("POST", "/hel%6Co", NULL, buf, sizeof(buf));
   REQUIRE_EQ(status, 405);
@@ -4312,7 +4622,7 @@ TEST(chttpserver, malformed_encoding_in_literal_segment_returns_404) {
   /* Invalid percent-encoding in a LITERAL route segment must yield 404.
    * /hel%ZZo has bad encoding where the "hello" literal sits; no route can
    * match so the server returns 404 (not 500, not a crash). */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   char buf[2048] = {0};
   int status = _raw_request("GET", "/hel%ZZo", NULL, buf, sizeof(buf));
   REQUIRE_EQ(status, 404);
@@ -4324,7 +4634,7 @@ TEST(chttpserver,
    * match any route even in dry-run mode (method-check only).  Therefore
    * the method-mismatch flag is never set and the server must return 404,
    * not 405, regardless of which methods are registered for the pattern. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   char buf[2048] = {0};
   int status = _raw_request("POST", "/hel%ZZo", NULL, buf, sizeof(buf));
   REQUIRE_EQ(status, 404);
@@ -4335,12 +4645,12 @@ TEST(chttpserver,
 /* ========================================================================== */
 
 TEST(chttpserver, on_null_srv_returns_invalid_args) {
-  /* chttpsvr_register_handler must validate srv != NULL and return
+  /* chttpsvr_register_handler must validate srv != CHTTPSVR_INVALID and return
    * ccol_invalid_args before touching the root router.  Symmetric with
    * on_stream_null_srv_returns_invalid_args which already covers the streaming
    * variant. */
-  ccol_retval_t rv =
-      chttpsvr_register_handler(NULL, CHTTP_GET, "/any", _hello_handler, NULL);
+  ccol_retval_t rv = chttpsvr_register_handler(CHTTPSVR_INVALID, CHTTP_GET,
+                                               "/any", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_invalid_args);
 }
 
@@ -4371,7 +4681,7 @@ TEST(chttpserver, serve_null_cfg_uses_default) {
    * the double-start guard returns ccol_not_permitted; NOT ccol_invalid_args,
    * which would incorrectly signal that NULL is an invalid argument rather than
    * a handled default. */
-  REQUIRE_TRUE(g_srv != NULL);
+  REQUIRE_TRUE(g_srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_start(g_srv, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_not_permitted);
 }
@@ -4991,7 +5301,7 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
    * real verification. Uses its own short-lived server so it cannot disturb
    * the shared test fixture. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv =
       chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/destroy-slow-body",
                                           _stream_error_report_handler, NULL);
@@ -5015,6 +5325,158 @@ TEST(chttpserver, destroy_while_worker_reading_slow_body_is_safe) {
   __chttpsvr_destroy(srv);
 
   pthread_join(bg, NULL);
+}
+
+/* Connects to `port`, sends a POST declaring a Content-Length far larger
+   than what it actually sends, sends only a few bytes of it, and then never
+   sends the rest and never closes the connection -- a permanently stalled
+   peer, by design. Used by destroy_does_not_hang_when_worker_blocked_with_
+   disabled_timeouts below, which configures both stream_read_timeout_ms and
+   max_body_read_duration_ms to 0 ("wait indefinitely"), so nothing but the
+   server's own forced-unblock mechanism (see _force_unblock_diverted_
+   connections in chttpserver.c) can ever make the worker thread blocked
+   reading this connection's body return. */
+static void *_stall_forever_bg_thread(void *arg) {
+  int port = *(int *)arg;
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)port);
+  if (inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr) != 1) return NULL;
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return NULL;
+  if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+    close(fd);
+    return NULL;
+  }
+
+  char hdr[256];
+  int hn = snprintf(hdr, sizeof(hdr),
+                    "POST /stall-forever HTTP/1.1\r\n"
+                    "Host: 127.0.0.1\r\n"
+                    "Content-Length: 1000000\r\n"
+                    "\r\n");
+  if (hn < 0 || (size_t)hn >= sizeof(hdr) || write(fd, hdr, (size_t)hn) != hn) {
+    close(fd);
+    return NULL;
+  }
+  const char *partial = "only-a-few-bytes-of-a-much-larger-declared-body";
+  write(fd, partial, strlen(partial)); /* far short of the declared length */
+
+  /* Never send the rest, never close from this side. Block waiting for
+     whatever the server eventually does; unblocking at all (rather than
+     this thread, and therefore the pthread_join below, hanging forever) is
+     itself part of what this test proves. */
+  char buf[16];
+  ssize_t r;
+  while ((r = read(fd, buf, sizeof(buf))) > 0) {
+  }
+  close(fd);
+  return NULL;
+}
+
+static pthread_mutex_t g_destroy_hang_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_destroy_hang_cv = PTHREAD_COND_INITIALIZER;
+static bool g_destroy_hang_done = false;
+
+static void *_destroy_hang_thread_fn(void *arg) {
+  chttpsvr *srv = (chttpsvr *)arg;
+  chttpsvr_destroy(*srv);
+  pthread_mutex_lock(&g_destroy_hang_mtx);
+  g_destroy_hang_done = true;
+  pthread_cond_broadcast(&g_destroy_hang_cv);
+  pthread_mutex_unlock(&g_destroy_hang_mtx);
+  return NULL;
+}
+
+/* Regression test for a real gap: chttpsvr_config_t.stream_read_timeout_ms
+   and max_body_read_duration_ms both document "0 = wait indefinitely" as a
+   legitimate, supported configuration (e.g. for slow legitimate uploads);
+   but chttpsvr_destroy() (via _quiesce_server_once) unconditionally calls
+   ctpool_shutdown_drain() on the worker pool shortly after its own,
+   carefully bounded (30s) wait for in-flight requests -- and that function
+   has no timeout of its own at all ("blocks until every queued and active
+   task has completed"). Before the fix, a single peer that stalled mid-body
+   under this configuration (sent a partial body, declared far more via
+   Content-Length, then never sent the rest and never closed) left a worker
+   thread permanently blocked inside chttp1_stream_read with nothing to ever
+   unblock it, so chttpsvr_destroy() would hang forever despite that
+   elaborate bounded wait. Fixed by forcibly shutdown(2)-ing any connection
+   still diverted to a worker thread once the bounded wait is exhausted; see
+   _wait_in_flight_bounded/_force_unblock_diverted_connections in
+   chttpserver.c. This test's real assertion is that chttpsvr_destroy()
+   actually returns at all, checked via a bounded condition-variable wait
+   (not a bare pthread_join) so a regression fails this one test cleanly
+   instead of hanging the whole binary. Uses its own short-lived server (not
+   the shared g_srv) with both timeouts disabled, exactly the documented
+   configuration this bug required. Uses the white-box
+   _chttpsvr_set_wait_in_flight_bounds_for_tests() hook to shrink
+   _wait_in_flight_bounded's own graceful-wait/grace-period bounds from tens
+   of real seconds down to a few hundred milliseconds, so this test
+   exercises the exact same escalation logic deterministically without
+   actually waiting out the real, production-sized timers. */
+extern void _chttpsvr_set_wait_in_flight_bounds_for_tests(unsigned graceful_ms,
+                                                          unsigned grace_ms);
+
+TEST(chttpserver,
+     destroy_does_not_hang_when_worker_blocked_with_disabled_timeouts) {
+  _chttpsvr_set_wait_in_flight_bounds_for_tests(300, 2000);
+
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  ccol_retval_t rv = chttpsvr_register_handler(
+      srv, CHTTP_POST, "/stall-forever", _echo_body_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 29;
+  cfg.stream_read_timeout_ms = 0;    /* "wait indefinitely" */
+  cfg.max_body_read_duration_ms = 0; /* "wait indefinitely" */
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  int port = TEST_PORT + 29;
+  pthread_t bg;
+  REQUIRE_EQ(pthread_create(&bg, NULL, _stall_forever_bg_thread, &port), 0);
+
+  /* Give the background connection time to be accepted, headers parsed, and
+     diverted to a ctpool worker (which will then be genuinely, permanently
+     blocked inside chttp1_stream_read, absent the fix) before destroying. */
+  usleep(100000);
+
+  pthread_mutex_lock(&g_destroy_hang_mtx);
+  g_destroy_hang_done = false;
+  pthread_mutex_unlock(&g_destroy_hang_mtx);
+
+  pthread_t destroy_th;
+  REQUIRE_EQ(pthread_create(&destroy_th, NULL, _destroy_hang_thread_fn, &srv),
+             0);
+
+  /* Generous bound relative to the shrunk 300ms/2000ms overrides above,
+     with real margin for a loaded CI machine; nowhere near the real,
+     production-sized 30s/5s defaults this would otherwise need. */
+  struct timespec deadline;
+  clock_gettime(CLOCK_REALTIME, &deadline);
+  deadline.tv_sec += 15;
+  pthread_mutex_lock(&g_destroy_hang_mtx);
+  bool destroyed_in_time = true;
+  while (!g_destroy_hang_done) {
+    if (pthread_cond_timedwait(&g_destroy_hang_cv, &g_destroy_hang_mtx,
+                               &deadline) == ETIMEDOUT) {
+      destroyed_in_time = false;
+      break;
+    }
+  }
+  pthread_mutex_unlock(&g_destroy_hang_mtx);
+  REQUIRE_TRUE(destroyed_in_time);
+
+  pthread_join(destroy_th, NULL);
+  pthread_join(bg, NULL);
+
+  /* Restore the real, production-sized defaults for every subsequent test
+     in this same process (the override is process-wide, not per-server). */
+  _chttpsvr_set_wait_in_flight_bounds_for_tests(0, 0);
 }
 
 static _Atomic bool g_restart_race_stop;
@@ -5080,7 +5542,7 @@ TEST(chttpserver, restart_races_live_keep_alive_connection_is_safe) {
    * the listener's port). Uses its own short-lived server so it cannot
    * disturb the shared test fixture. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/restart-race",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5138,7 +5600,7 @@ TEST(chttpserver, max_body_read_duration_exceeded_reports_ccol_timed_out) {
    * fail the client's own subsequent writes with EPIPE before it ever gets
    * to read the response). */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_streaming_handler(
       srv, CHTTP_POST, "/deadline-test", _stream_error_report_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5210,7 +5672,7 @@ TEST(chttpserver, max_body_read_duration_default_disabled_allows_slow_drip) {
    * enough that the per-gap timeout doesn't fire either. Guards against the
    * deadline check misfiring when it's supposed to be a no-op. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv =
       chttpsvr_register_streaming_handler(srv, CHTTP_POST, "/deadline-disabled",
                                           _stream_error_report_handler, NULL);
@@ -5242,7 +5704,7 @@ TEST(chttpserver, create_with_null_logger_uses_internal_fatal_only_logger) {
    * (stderr, FATAL-only) instead of requiring a caller-supplied one. The
    * server must still be fully functional. */
   chttpsvr srv = create_chttpsvr(NULL, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/null-logger-hello", _hello_handler, NULL);
@@ -5275,7 +5737,7 @@ TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
   REQUIRE_TRUE(parent != NULL);
 
   chttpsvr srv = create_chttpsvr(parent, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/derived-logger-hello", _hello_handler, NULL);
@@ -5304,7 +5766,7 @@ TEST(chttpserver, create_with_logger_derives_and_leaves_parent_open) {
   log_info(parent, "parent logger still usable after server destroy");
 
   chttpsvr srv2 = create_chttpsvr(parent, NULL);
-  REQUIRE_TRUE(srv2 != NULL);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
   __chttpsvr_destroy(srv2);
 
   clog_close(parent);
@@ -5319,7 +5781,7 @@ TEST(chttpserver, unix_socket_listen_and_round_trip) {
      instead of a TCP listener, and a request over that socket must be
      routed and answered exactly like a TCP connection would be. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/unix-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5374,7 +5836,7 @@ TEST(chttpserver, unix_socket_stale_file_replaced_on_start) {
   close(stale_fd);
 
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/stale-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5410,7 +5872,7 @@ TEST(chttpserver, unix_socket_unwritable_path_start_fails) {
   /* A directory component that doesn't exist must fail chttpsvr_start
      gracefully (bind() fails) rather than crashing or silently succeeding. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "unix:///chttpsvr_test_nonexistent_dir_xyz/socket.sock";
   ccol_retval_t rv = chttpsvr_start(srv, &cfg);
@@ -5427,7 +5889,7 @@ TEST(chttpserver, max_connections_enforced) {
      pending in the kernel's listen backlog (never accept()'d, never
      served) until the first connection closes and frees the one slot. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/maxconn-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5482,7 +5944,7 @@ TEST(chttpserver, max_connections_enforced) {
 
 TEST(chttpserver, max_header_bytes_within_limit_succeeds) {
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdrcap-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5511,7 +5973,7 @@ TEST(chttpserver, max_header_bytes_exceeded_closes_connection) {
      matching every other pre-routing parse error in this parser (see
      negative_content_length_rejected above). */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdrcap-hello2",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5575,7 +6037,7 @@ static void _large_body_handler(chttpsvr_req *req, chttpsvr_resp *resp,
 
 TEST(chttpserver, response_write_timeout_closes_slow_reader_connection) {
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/big-body",
                                                _large_body_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5629,7 +6091,7 @@ TEST(chttpserver, idle_timeout_closes_unused_connection) {
      closed by the module-local idle-timeout sweep thread once
      idle_timeout_ms has elapsed, rather than being held open forever. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/idle-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5664,6 +6126,53 @@ TEST(chttpserver, idle_timeout_closes_unused_connection) {
   __chttpsvr_destroy(srv);
 }
 
+TEST(chttpserver, idle_timeout_ms_overflow_clamped_not_wrapped) {
+  /* chttpsvr_config_t.idle_timeout_ms/read_timeout_ms are `long`, but the
+     internal field chttpsvr_start() feeds them into is `unsigned`; a value
+     >= 2^32 must clamp to UINT_MAX rather than silently wrap (a multiple of
+     2^32 would wrap to exactly 0, this field's own "idle timeout disabled"
+     sentinel, silently turning off the idle-timeout sweep the caller
+     explicitly configured instead of applying the very long timeout that
+     was actually asked for). Verified via the white-box accessor rather
+     than waiting out a real idle timeout, since the whole point here is
+     that the configured value is enormous. */
+  extern unsigned _chttpsvr_idle_timeout_ms_for_tests(chttpsvr h);
+
+  chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 24;
+  cfg.idle_timeout_ms = 4294967296L; /* exactly 2^32; wraps to 0 uncorrected */
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+  REQUIRE_EQ(_chttpsvr_idle_timeout_ms_for_tests(srv), UINT_MAX);
+  __chttpsvr_destroy(srv);
+
+  /* Same clamp exercised via the read_timeout_ms fallback path
+     (idle_timeout_ms left at 0). */
+  chttpsvr srv2 = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
+  chttpsvr_config_t cfg2 = CHTTPSVR_CONFIG_DEFAULT;
+  cfg2.host = "127.0.0.1";
+  cfg2.port = TEST_PORT + 25;
+  cfg2.idle_timeout_ms = 0;
+  cfg2.read_timeout_ms = 8589934592L; /* 2^33; also wraps to 0 uncorrected */
+  REQUIRE_EQ((int)chttpsvr_start(srv2, &cfg2), (int)ccol_success);
+  REQUIRE_EQ(_chttpsvr_idle_timeout_ms_for_tests(srv2), UINT_MAX);
+  __chttpsvr_destroy(srv2);
+
+  /* An ordinary, small value must still pass through untouched. */
+  chttpsvr srv3 = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv3 != CHTTPSVR_INVALID);
+  chttpsvr_config_t cfg3 = CHTTPSVR_CONFIG_DEFAULT;
+  cfg3.host = "127.0.0.1";
+  cfg3.port = TEST_PORT + 26;
+  cfg3.idle_timeout_ms = 5000;
+  REQUIRE_EQ((int)chttpsvr_start(srv3, &cfg3), (int)ccol_success);
+  REQUIRE_EQ(_chttpsvr_idle_timeout_ms_for_tests(srv3), (unsigned)5000);
+  __chttpsvr_destroy(srv3);
+}
+
 TEST(chttpserver, enable_keepalive_does_not_break_normal_requests) {
   /* SO_KEEPALIVE is set on an accepted connection's own fd, which a client
      has no portable way to observe from the outside (getsockopt only ever
@@ -5674,7 +6183,7 @@ TEST(chttpserver, enable_keepalive_does_not_break_normal_requests) {
      unobservable from a client (e.g. max_header_bytes_within_limit_
      succeeds above, for the byte cap itself). */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv, CHTTP_GET, "/keepalive-opt-hello", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5703,7 +6212,7 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
      real, externally observable effect of the option, unlike
      enable_keepalive/ipv6_only above. */
   chttpsvr srv1 = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv1 != NULL);
+  REQUIRE_TRUE(srv1 != CHTTPSVR_INVALID);
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
   cfg.port = TEST_PORT + 15;
@@ -5711,7 +6220,7 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
   REQUIRE_EQ((int)chttpsvr_start(srv1, &cfg), (int)ccol_success);
 
   chttpsvr srv2 = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv2 != NULL);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(
       srv2, CHTTP_GET, "/reuseport-hello", _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5746,7 +6255,7 @@ TEST(chttpserver, ipv6_only_listener_still_serves_ipv6_traffic) {
      rather than hard-fail if binding "::1" itself doesn't work at all,
      since that's an environment limitation unrelated to ipv6_only. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/v6only-hello",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5796,7 +6305,7 @@ TEST(chttpserver, head_request_suppresses_response_body) {
      conn->method, so a HEAD request reaching a handler that writes a body
      got that body streamed back anyway. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_ANY, "/head-body",
                                                _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5865,7 +6374,7 @@ TEST(chttpserver, head_request_on_rejected_route_still_has_no_body) {
      told about the HEAD method for consistency rather than hard-coding
      suppress_body=false; this locks that call site in too. */
   chttpsvr srv = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
   cfg.host = "127.0.0.1";
@@ -5901,7 +6410,7 @@ TEST(chttpserver, head_request_on_rejected_route_still_has_no_body) {
    _conn_start_diverted's carry-over copy of pipelined leftover body bytes)
    without disturbing every other allocation the server makes while serving
    the same request. */
-static size_t g_fail_alloc_size = 0;
+static _Atomic size_t g_fail_alloc_size = 0;
 
 static void *_fail_at_size_malloc(size_t n) {
   if (n == g_fail_alloc_size) return NULL;
@@ -5936,7 +6445,7 @@ TEST(chttpserver,
                              _fail_at_size_calloc, _fail_at_size_realloc};
   char *err = NULL;
   chttpsvr srv = create_chttpsvr_mp(&mp, g_test_logger, &err);
-  REQUIRE_TRUE(srv != NULL);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_POST, "/carry-oom",
                                                _echo_body_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -5997,7 +6506,7 @@ TEST(chttpserver,
      proving the earlier allocation failure was contained to that one
      request rather than corrupting shared state. */
   chttpsvr srv2 = create_chttpsvr(g_test_logger, NULL);
-  REQUIRE_TRUE(srv2 != NULL);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
   rv = chttpsvr_register_handler(srv2, CHTTP_GET, "/after-carry-oom",
                                  _hello_handler, NULL);
   REQUIRE_EQ((int)rv, (int)ccol_success);
@@ -6010,6 +6519,266 @@ TEST(chttpserver,
   REQUIRE_EQ(connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
   const char *req2 =
       "GET /after-carry-oom HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+      "Connection: close\r\n\r\n";
+  REQUIRE_EQ(write(fd2, req2, strlen(req2)), (ssize_t)strlen(req2));
+  char buf2[512] = {0};
+  ssize_t n2 = read(fd2, buf2, sizeof(buf2) - 1);
+  REQUIRE_GT(n2, (ssize_t)0);
+  buf2[n2] = '\0';
+  REQUIRE_TRUE(strstr(buf2, "HTTP/1.1 200") != NULL);
+
+  close(fd2);
+  __chttpsvr_destroy(srv2);
+}
+
+/* Regression test for a real bug in _on_header: an allocation failure while
+   copying a header's name/value (before routing has even run) used to
+   return 1 (aborting the parse with CHTTP1_USER) without ever setting
+   conn->req_rejected/reject_status, so _conn_feed_bytes fell into its
+   "else" branch and silently closed the connection with zero response
+   bytes -- unlike the identical OOM failure mode _on_headers_complete
+   already handles gracefully (a 500 via reject_pool) a few callbacks
+   later. Drives that exact allocation to fail via the same fail-at-size
+   custom allocator the carry-over OOM test above uses, and asserts a
+   graceful 500 (not a bare closed connection) is delivered instead. */
+TEST(
+    chttpserver,
+    on_header_alloc_failure_rejects_gracefully_instead_of_dropping_connection) {
+  size_t value_strlen = 6201; /* distinctive; value_strlen+1 targets the
+                               * header value allocation specifically */
+  ccol_memmgmt_procs_t mp = {_fail_at_size_malloc, _fail_at_size_free,
+                             _fail_at_size_calloc, _fail_at_size_realloc};
+  char *err = NULL;
+  chttpsvr srv = create_chttpsvr_mp(&mp, g_test_logger, &err);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  ccol_retval_t rv = chttpsvr_register_handler(srv, CHTTP_GET, "/hdr-oom",
+                                               _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 27;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 27));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req_head = "GET /hdr-oom HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Big: ";
+  const char *req_tail = "\r\n\r\n";
+  size_t total = strlen(req_head) + value_strlen + strlen(req_tail);
+  char *wire = (char *)malloc(total + 1);
+  REQUIRE_TRUE(wire != NULL);
+  memcpy(wire, req_head, strlen(req_head));
+  memset(wire + strlen(req_head), 'y', value_strlen);
+  memcpy(wire + strlen(req_head) + value_strlen, req_tail, strlen(req_tail));
+  wire[total] = '\0';
+
+  g_fail_alloc_size = value_strlen + 1;
+  REQUIRE_EQ(write(fd, wire, total), (ssize_t)total);
+  free(wire);
+
+  char buf[512] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  g_fail_alloc_size = 0; /* disarm before any further allocation anywhere */
+  REQUIRE_GT(n, (ssize_t)0);
+  buf[n] = '\0';
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 500") != NULL);
+
+  close(fd);
+
+  /* The server (and this process) must still be fully usable afterward: an
+     ordinary request on a fresh connection must succeed, proving the
+     earlier allocation failure was contained to that one request rather
+     than corrupting shared state. */
+  int fd2 = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd2 >= 0);
+  REQUIRE_EQ(connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  const char *req2 =
+      "GET /hdr-oom HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+  REQUIRE_EQ(write(fd2, req2, strlen(req2)), (ssize_t)strlen(req2));
+  char buf2[512] = {0};
+  ssize_t n2 = read(fd2, buf2, sizeof(buf2) - 1);
+  REQUIRE_GT(n2, (ssize_t)0);
+  buf2[n2] = '\0';
+  REQUIRE_TRUE(strstr(buf2, "HTTP/1.1 200") != NULL);
+
+  close(fd2);
+  __chttpsvr_destroy(srv);
+}
+
+/* Regression test for the identical bug class as the one just above, this
+   time in _on_request_line: an allocation failure while copying the raw
+   (still percent-encoded) request path -- which happens before any route
+   has been matched at all -- used to abort the parse with CHTTP1_USER
+   without ever setting conn->req_rejected/reject_status, silently dropping
+   the connection instead of sending a graceful 500. */
+TEST(
+    chttpserver,
+    on_request_line_path_alloc_failure_rejects_gracefully_instead_of_dropping_connection) {
+  size_t path_len = 6221; /* distinctive; path_len+1 targets the raw-path
+                           * allocation _on_request_line makes before any
+                           * routing has run */
+  ccol_memmgmt_procs_t mp = {_fail_at_size_malloc, _fail_at_size_free,
+                             _fail_at_size_calloc, _fail_at_size_realloc};
+  char *err = NULL;
+  chttpsvr srv = create_chttpsvr_mp(&mp, g_test_logger, &err);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  ccol_retval_t rv = chttpsvr_register_handler(
+      srv, CHTTP_GET, "/after-path-oom", _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 28;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 28));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req_head = "GET /";
+  const char *req_tail = " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+  size_t path_body_len = path_len - 1; /* excludes the leading '/' already
+                                        * in req_head */
+  size_t total = strlen(req_head) + path_body_len + strlen(req_tail);
+  char *wire = (char *)malloc(total + 1);
+  REQUIRE_TRUE(wire != NULL);
+  memcpy(wire, req_head, strlen(req_head));
+  memset(wire + strlen(req_head), 'p', path_body_len);
+  memcpy(wire + strlen(req_head) + path_body_len, req_tail, strlen(req_tail));
+  wire[total] = '\0';
+
+  g_fail_alloc_size = path_len + 1;
+  REQUIRE_EQ(write(fd, wire, total), (ssize_t)total);
+  free(wire);
+
+  char buf[512] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  g_fail_alloc_size = 0; /* disarm before any further allocation anywhere */
+  REQUIRE_GT(n, (ssize_t)0);
+  buf[n] = '\0';
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 500") != NULL);
+
+  close(fd);
+
+  /* Still usable afterward, exactly like the sibling _on_header test above. */
+  int fd2 = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd2 >= 0);
+  REQUIRE_EQ(connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  const char *req2 =
+      "GET /after-path-oom HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+      "Connection: close\r\n\r\n";
+  REQUIRE_EQ(write(fd2, req2, strlen(req2)), (ssize_t)strlen(req2));
+  char buf2[512] = {0};
+  ssize_t n2 = read(fd2, buf2, sizeof(buf2) - 1);
+  REQUIRE_GT(n2, (ssize_t)0);
+  buf2[n2] = '\0';
+  REQUIRE_TRUE(strstr(buf2, "HTTP/1.1 200") != NULL);
+
+  close(fd2);
+  __chttpsvr_destroy(srv);
+}
+
+/* Regression test for a real bug in _task_worker: unlike the carry-over copy
+   above (which goes through this module's own custom-allocator convention
+   and is therefore rejected gracefully by _conn_start_diverted before ever
+   diverting), _task_worker's OWN chttp1_stream_prepare()/_tls() call (a
+   second, separate copy of the same carry-over bytes, made on the worker
+   thread) goes through plain malloc() and has no custom-allocator hook to
+   fail it from a test; _chttpsvr_force_stream_prepare_fail_for_tests()
+   deterministically exercises that same failure path instead. Before the
+   fix: every response path in _task_worker was gated on `prepared`, so on
+   this failure the connection was simply closed with zero response bytes
+   for a buffered route (the intended 500 was set but never sent), and for a
+   streaming route the handler still ran against a NULL req->stream, with
+   chttpsvr_req_stream_error() falsely reporting ccol_success instead of the
+   real failure. This drives that exact scenario against a streaming route
+   and asserts the connection instead receives a graceful 500 with the
+   handler never invoked at all (no x-stream-err header, which only the
+   handler itself ever sets). */
+TEST(chttpserver, stream_prepare_failure_in_worker_sends_500_not_bare_close) {
+  extern void _chttpsvr_force_stream_prepare_fail_for_tests(bool force);
+
+  char *err = NULL;
+  chttpsvr srv = create_chttpsvr(g_test_logger, &err);
+  REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
+  ccol_retval_t rv = chttpsvr_register_streaming_handler(
+      srv, CHTTP_POST, "/stream-prepare-oom", _stream_error_report_handler,
+      NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+
+  chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT;
+  cfg.host = "127.0.0.1";
+  cfg.port = TEST_PORT + 22;
+  REQUIRE_EQ((int)chttpsvr_start(srv, &cfg), (int)ccol_success);
+
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 22));
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  /* Headers and body in one write() call, so the reactor's single read()
+     sees the body bytes as carry-over past the header block, exactly like
+     the allocation-failure test above; only now is the worker-thread-side
+     prepare forced to fail, so server startup/route registration/connect
+     above are unaffected by it. */
+  const char *body = "hello";
+  char wire[256];
+  int wn = snprintf(wire, sizeof(wire),
+                    "POST /stream-prepare-oom HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                    "Content-Length: %zu\r\n\r\n%s",
+                    strlen(body), body);
+  REQUIRE_GT(wn, 0);
+
+  _chttpsvr_force_stream_prepare_fail_for_tests(true);
+  REQUIRE_EQ(write(fd, wire, (size_t)wn), (ssize_t)wn);
+
+  char buf[512] = {0};
+  ssize_t n = read(fd, buf, sizeof(buf) - 1);
+  _chttpsvr_force_stream_prepare_fail_for_tests(false); /* disarm first */
+  REQUIRE_GT(n, (ssize_t)0);
+  buf[n] = '\0';
+  REQUIRE_TRUE(strstr(buf, "HTTP/1.1 500") != NULL);
+  /* The handler was never invoked: it is the only thing that would have set
+     this header. */
+  REQUIRE_TRUE(strstr(buf, "x-stream-err") == NULL);
+
+  close(fd);
+  __chttpsvr_destroy(srv);
+
+  /* The server (and this process) must still be fully usable afterward. */
+  chttpsvr srv2 = create_chttpsvr(g_test_logger, NULL);
+  REQUIRE_TRUE(srv2 != CHTTPSVR_INVALID);
+  rv = chttpsvr_register_handler(srv2, CHTTP_GET, "/after-stream-prepare-oom",
+                                 _hello_handler, NULL);
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+  cfg.port = TEST_PORT + 23;
+  REQUIRE_EQ((int)chttpsvr_start(srv2, &cfg), (int)ccol_success);
+
+  int fd2 = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd2 >= 0);
+  sa.sin_port = htons((uint16_t)(TEST_PORT + 23));
+  REQUIRE_EQ(connect(fd2, (struct sockaddr *)&sa, sizeof(sa)), 0);
+  const char *req2 =
+      "GET /after-stream-prepare-oom HTTP/1.1\r\nHost: 127.0.0.1\r\n"
       "Connection: close\r\n\r\n";
   REQUIRE_EQ(write(fd2, req2, strlen(req2)), (ssize_t)strlen(req2));
   char buf2[512] = {0};
@@ -6082,4 +6851,370 @@ TEST(chttpserver, response_1xx_never_sends_body_or_content_length) {
   REQUIRE_EQ(status, 199);
   REQUIRE_TRUE(strstr(buf, "this-body-must-never-reach-the-wire") == NULL);
   REQUIRE_TRUE(strstr(buf, "content-length:") == NULL);
+}
+
+TEST(chttpserver, large_response_headers_still_delivered_in_full) {
+  /* Regression test: _send_response used to assemble the response header
+     block into a fixed 4096-byte stack buffer with no fallback, so a
+     response whose headers alone crossed that size silently lost the
+     ENTIRE response -- not a graceful 500, not a truncated write, just a
+     bare connection close with zero bytes ever written and nothing logged.
+     /large-response-headers sets 20 headers of ~300 bytes each (~6.2 KiB of
+     header block, well past the old fixed cap); every one of them, the
+     200 status, and the body must all still reach the client intact. */
+  char buf[8192] = {0};
+  int status =
+      _raw_request("GET", "/large-response-headers", NULL, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  REQUIRE_TRUE(strstr(buf, "large-headers-ok") != NULL);
+  char expect_val[300];
+  memset(expect_val, 'x', sizeof(expect_val) - 1);
+  expect_val[sizeof(expect_val) - 1] = '\0';
+  for (int i = 0; i < 20; i++) {
+    char expect_line[340];
+    snprintf(expect_line, sizeof(expect_line), "x-custom-%02d:%s", i,
+             expect_val);
+    REQUIRE_TRUE(strstr(buf, expect_line) != NULL);
+  }
+}
+
+TEST(chttpserver,
+     explicit_connection_close_header_ignored_when_actually_kept_alive) {
+  /* Regression test: _send_response used to emit a handler-supplied
+     "Connection" response header verbatim, completely independent of the
+     keep_alive value _task_worker actually used afterward to decide whether
+     the connection stays open. A handler here explicitly sets "Connection:
+     close" while nothing about this ordinary HTTP/1.1 request gives the
+     server any real reason to close (fully parsed, no body_too_large, no
+     abort); the real decision is therefore keep-alive, and the wire must say
+     so -- not whatever the handler happened to set -- with the connection
+     genuinely still usable for a second request right after. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req =
+      "GET /explicit-connection-header HTTP/1.1\r\n"
+      "Host: 127.0.0.1\r\n"
+      "x-force-connection: close\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[1024] = {0};
+  int status = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status, 200);
+  REQUIRE_TRUE(strstr(buf, "explicit-connection-header-ok") != NULL);
+  REQUIRE_TRUE(strstr(buf, "connection:keep-alive") != NULL);
+  REQUIRE_TRUE(strstr(buf, "connection:close") == NULL);
+
+  /* The connection must genuinely still be alive: a second request on the
+     same socket must succeed, not hang or reset. */
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+  memset(buf, 0, sizeof(buf));
+  int status2 = _read_one_http_response(fd, buf, sizeof(buf));
+  REQUIRE_EQ(status2, 200);
+  REQUIRE_TRUE(strstr(buf, "explicit-connection-header-ok") != NULL);
+  close(fd);
+}
+
+TEST(chttpserver,
+     explicit_connection_keepalive_header_ignored_when_actually_closing) {
+  /* The other direction of the same fix: a handler explicitly sets
+     "Connection: keep-alive" on an HTTP/1.0 request that carries no
+     "Connection: keep-alive" token of its own, so chttp1_should_keep_alive()
+     correctly reports this connection is not eligible for reuse regardless
+     of what the handler wants. The wire must say "close" (matching what the
+     server actually does), never the handler's own overridden value. */
+  struct sockaddr_in sa;
+  memset(&sa, 0, sizeof(sa));
+  sa.sin_family = AF_INET;
+  sa.sin_port = htons(TEST_PORT);
+  REQUIRE_EQ(inet_pton(AF_INET, "127.0.0.1", &sa.sin_addr), 1);
+
+  int fd = socket(AF_INET, SOCK_STREAM, 0);
+  REQUIRE_TRUE(fd >= 0);
+  REQUIRE_EQ(connect(fd, (struct sockaddr *)&sa, sizeof(sa)), 0);
+
+  const char *req =
+      "GET /explicit-connection-header HTTP/1.0\r\n"
+      "Host: 127.0.0.1\r\n"
+      "x-force-connection: keep-alive\r\n"
+      "\r\n";
+  REQUIRE_EQ(write(fd, req, strlen(req)), (ssize_t)strlen(req));
+
+  char buf[1024] = {0};
+  size_t total = 0;
+  ssize_t r;
+  while (total < sizeof(buf) - 1 &&
+         (r = read(fd, buf + total, sizeof(buf) - 1 - total)) > 0)
+    total += (size_t)r;
+  buf[total] = '\0';
+
+  int status = -1;
+  sscanf(buf, "HTTP/1.1 %d", &status);
+  REQUIRE_EQ(status, 200);
+  REQUIRE_TRUE(strstr(buf, "explicit-connection-header-ok") != NULL);
+  REQUIRE_TRUE(strstr(buf, "connection:close") != NULL);
+  REQUIRE_TRUE(strstr(buf, "connection:keep-alive") == NULL);
+
+  /* The read loop above only stops on EOF (r <= 0), which for a still-open
+     keep-alive connection would instead have blocked forever; reaching here
+     at all already proves the server closed its end. */
+  close(fd);
+}
+
+/* ========================================================================== */
+/*         CHTTPSVR HANDLE LIFECYCLE (GENERATION-TAGGED SLOT TABLE)          */
+/* ========================================================================== */
+
+/*
+ * chttpsvr is a generation-tagged {slot index, generation} value handle
+ * resolved through a library-owned slot table before the underlying struct
+ * chttpserver* is ever touched (see the "CHTTPSVR HANDLE SLOT TABLE"
+ * section of src/chttpserver.c; the exact same mechanism chttpclient.c
+ * already uses for its own chttpcli handle, ported over for the identical
+ * reason: __chttpsvr_destroy used to have no protection at all against
+ * being run twice on the same handle, sequentially or concurrently, a
+ * genuine double-free). This section tests that redesign directly.
+ */
+extern struct chttpserver *_chttpsvr_resolve_for_tests(chttpsvr h);
+extern size_t _chttpsvr_slot_table_capacity_for_tests(void);
+
+static void _noop_middleware_for_lifecycle_tests(chttpsvr_req *req,
+                                                 chttpsvr_resp *resp, void *ctx,
+                                                 chttpsvr_next_fn next) {
+  (void)ctx;
+  if (next) next(req, resp);
+}
+
+/* A fully completed destroy, followed later by a second destroy call on an
+ * independently-held copy of the same original handle value, must be a
+ * fatal error. Run in a forked child (mirroring this codebase's own
+ * fork-test precedent, e.g. tests/clogger/tests.c) since fatal_err aborts
+ * the whole process. Each server in this section is created with a NULL
+ * logger (create_chttpsvr's own internal stderr/FATAL-only logger) rather
+ * than g_test_logger, so these tests have no dependency on the shared,
+ * process-wide test server/logger state _setup/_teardown manage. */
+TEST(chttpsvr_handle_lifecycle, sequential_double_destroy_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    chttpsvr srv = create_chttpsvr(NULL, NULL);
+    if (srv == CHTTPSVR_INVALID) _exit(2);
+    chttpsvr stale = srv;  /* an independently-held copy of the handle value,
+         distinct from the local the macro below NULLs out */
+    chttpsvr_destroy(srv); /* completes normally; the local `srv` is now
+        CHTTPSVR_INVALID, but `stale` still holds the original value */
+    __chttpsvr_destroy(stale); /* the actual misuse under test: a second,
+        purely sequential destroy of a handle already fully torn down */
+    _exit(0); /* unreachable if fatal_err() aborted as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+typedef struct {
+  chttpsvr h;
+} concurrent_svr_destroy_arg_t;
+
+static void *concurrent_svr_destroy_thread(void *arg) {
+  concurrent_svr_destroy_arg_t *a = (concurrent_svr_destroy_arg_t *)arg;
+  __chttpsvr_destroy(a->h);
+  return NULL;
+}
+
+/* Two threads calling destroy on two independently-held copies of the SAME,
+ * still-valid handle at (as close to) the same moment as possible must also
+ * be fatal; regression coverage for the original bug this redesign
+ * exists to fix (a genuine heap double-free). */
+TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    chttpsvr srv = create_chttpsvr(NULL, NULL);
+    if (srv == CHTTPSVR_INVALID) _exit(2);
+    concurrent_svr_destroy_arg_t a1 = {.h = srv};
+    concurrent_svr_destroy_arg_t a2 = {.h = srv};
+    pthread_t t1, t2;
+    pthread_create(&t1, NULL, concurrent_svr_destroy_thread, &a1);
+    pthread_create(&t2, NULL, concurrent_svr_destroy_thread, &a2);
+    pthread_join(t1, NULL);
+    pthread_join(t2, NULL);
+    _exit(0); /* unreachable: whichever of the two destroy calls loses the
+                  race must hit fatal_err() */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+typedef struct {
+  chttpsvr h;
+} use_setter_arg_t;
+
+static void *use_setter_thread(void *arg) {
+  use_setter_arg_t *a = (use_setter_arg_t *)arg;
+  /* Return value intentionally ignored: a legitimate race with a concurrent
+   * destroy can make this resolve fail (ccol_invalid_args) instead of
+   * succeeding; both outcomes are correct. This thread exists purely to
+   * generate resolve/pin/unpin traffic concurrent with the destroy thread
+   * below. chttpsvr_use is representative of this module's entire non-
+   * destroy public API: every one of chttpsvr_start/_stop/
+   * _register_handler/_register_streaming_handler/_use/_subrouter resolves,
+   * pins for its own short synchronous duration, and unpins before
+   * returning, so exercising any one of them against a concurrent destroy
+   * covers the same race window the others would. */
+  chttpsvr_use(a->h, _noop_middleware_for_lifecycle_tests, NULL);
+  return NULL;
+}
+
+/* Races a fast, non-blocking entry point (chttpsvr_use: resolve, pin, a
+ * short critical section, unpin, return; no blocking I/O at all) against
+ * a concurrent destroy, repeated under stress, since a real regression here
+ * (a resolve-then-use race, or a use-after-free in the unpin path itself;
+ * see chttpclient.c's own _chttpcli_resolve_unpin comment for a real
+ * example of the latter, found only by tracing a precise interleaving by
+ * hand) would only be reachable in a handful-of-instructions-wide window
+ * that will not reproduce reliably under a single unstressed run. A fresh
+ * server is used each iteration so every repetition gets its own
+ * independent race rather than reusing one already-destroyed handle. */
+TEST(chttpsvr_handle_lifecycle, resolve_unpin_race_stress) {
+  enum { ITERATIONS = 30 };
+  for (int i = 0; i < ITERATIONS; i++) {
+    chttpsvr srv = create_chttpsvr(NULL, NULL);
+    REQUIRE_NE(srv, CHTTPSVR_INVALID);
+
+    use_setter_arg_t setter_arg = {.h = srv};
+    concurrent_svr_destroy_arg_t destroy_arg = {.h = srv};
+    pthread_t setter_tid, destroy_tid;
+    REQUIRE_EQ(
+        pthread_create(&setter_tid, NULL, use_setter_thread, &setter_arg), 0);
+    REQUIRE_EQ(pthread_create(&destroy_tid, NULL, concurrent_svr_destroy_thread,
+                              &destroy_arg),
+               0);
+    pthread_join(setter_tid, NULL);
+    pthread_join(destroy_tid, NULL);
+  }
+}
+
+typedef struct {
+  chttpsvr_router *router;
+} router_use_setter_arg_t;
+
+static void *router_use_setter_thread(void *arg) {
+  router_use_setter_arg_t *a = (router_use_setter_arg_t *)arg;
+  /* Return value intentionally ignored: a legitimate race with a concurrent
+   * destroy of the owning server can make this resolve fail
+   * (ccol_invalid_args) instead of succeeding; both outcomes are correct.
+   * This is a regression test for a real bug: chttpsvr_router_on/_on_stream/
+   * _use used to dereference router->srv (and mutate router->routes/mw_head)
+   * directly, with no resolve/pin against the owning server's handle at all,
+   * unlike every other mutating entry point in this API -- racing a
+   * concurrent chttpsvr_destroy() that frees both srv and every router (via
+   * _destroy_router) once it observes pending_resolve_count == 0, a count
+   * these three functions never used to contribute to. */
+  chttpsvr_router_on(a->router, CHTTP_GET, "/race", _hello_handler, NULL);
+  return NULL;
+}
+
+/* Sub-router analogue of resolve_unpin_race_stress above: races
+ * chttpsvr_router_on (representative of chttpsvr_router_on/_on_stream/_use,
+ * which all now resolve/pin the router's owning server the same way) against
+ * a concurrent chttpsvr_destroy() of that same server. Real verification for
+ * this is `make memtest` (valgrind) / -fsanitize=thread, which would report a
+ * genuine use-after-free if the resolve/pin protection regressed; this test's
+ * own job is just to reliably manufacture the race window. */
+TEST(chttpsvr_handle_lifecycle, router_resolve_unpin_race_stress) {
+  enum { ITERATIONS = 30 };
+  for (int i = 0; i < ITERATIONS; i++) {
+    chttpsvr srv = create_chttpsvr(NULL, NULL);
+    REQUIRE_NE(srv, CHTTPSVR_INVALID);
+    chttpsvr_router *router = chttpsvr_subrouter(srv, "/race-router");
+    REQUIRE_TRUE(router != NULL);
+
+    router_use_setter_arg_t setter_arg = {.router = router};
+    concurrent_svr_destroy_arg_t destroy_arg = {.h = srv};
+    pthread_t setter_tid, destroy_tid;
+    REQUIRE_EQ(pthread_create(&setter_tid, NULL, router_use_setter_thread,
+                              &setter_arg),
+               0);
+    REQUIRE_EQ(pthread_create(&destroy_tid, NULL, concurrent_svr_destroy_thread,
+                              &destroy_arg),
+               0);
+    pthread_join(setter_tid, NULL);
+    pthread_join(destroy_tid, NULL);
+  }
+}
+
+/* Legitimate slot reuse must never be confused with a stale handle to the
+ * slot's previous occupant; exactly the scenario a naive address-keyed
+ * "remember every destroyed pointer forever" design could not handle
+ * safely, since glibc's tcache routinely (though not guaranteedly) reuses a
+ * just-freed struct chttpserver's exact address for the very next one
+ * allocated. */
+TEST(chttpsvr_handle_lifecycle,
+     legitimate_slot_reuse_not_confused_with_stale_handle) {
+  chttpsvr a = create_chttpsvr(NULL, NULL);
+  REQUIRE_NE(a, CHTTPSVR_INVALID);
+  chttpsvr stale_a = a;
+  chttpsvr_destroy(a);
+
+  chttpsvr b = create_chttpsvr(NULL, NULL);
+  REQUIRE_NE(b, CHTTPSVR_INVALID);
+
+  /* B's operations must succeed normally regardless of whether the
+   * allocator happened to reuse A's exact address for B. */
+  REQUIRE_EQ(chttpsvr_use(b, _noop_middleware_for_lifecycle_tests, NULL),
+             ccol_success);
+
+  /* A's stale handle must never resolve to B, even if it reused the same
+   * underlying address; the whole point of the generation counter. */
+  REQUIRE_EQ((void *)_chttpsvr_resolve_for_tests(stale_a), NULL);
+
+  chttpsvr_destroy(b);
+}
+
+/* The slot table is bounded, not ever-growing: a create/destroy churn loop
+ * with only a single slot ever in flight at a time must reuse that one
+ * freed slot on every iteration rather than growing the table further.
+ * Captures capacity right after the first create/destroy pair (rather than
+ * asserting a fixed absolute value) since other tests earlier in this same
+ * process may have already grown the table to some N > 1; what this test
+ * actually needs to prove is that ITS OWN churn adds no further growth. */
+TEST(chttpsvr_handle_lifecycle, bounded_slot_reuse_under_churn) {
+  enum { ITERATIONS = 100 };
+
+  chttpsvr s0 = create_chttpsvr(NULL, NULL);
+  REQUIRE_NE(s0, CHTTPSVR_INVALID);
+  chttpsvr_destroy(s0);
+  size_t capacity_after_first = _chttpsvr_slot_table_capacity_for_tests();
+
+  for (int i = 1; i < ITERATIONS; i++) {
+    chttpsvr srv = create_chttpsvr(NULL, NULL);
+    REQUIRE_NE(srv, CHTTPSVR_INVALID);
+    chttpsvr_destroy(srv);
+  }
+
+  REQUIRE_EQ(_chttpsvr_slot_table_capacity_for_tests(), capacity_after_first);
 }

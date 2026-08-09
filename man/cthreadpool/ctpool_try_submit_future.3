@@ -1,4 +1,4 @@
-.TH CTPOOL_TRY_SUBMIT_FUTURE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_TRY_SUBMIT_FUTURE 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_try_submit_future \- submit a future task without blocking
 .SH LIBRARY
@@ -34,7 +34,7 @@ out   Receives the future handle on success; set to NULL on failure
 .SH RETURN VALUE
 .nf
 ccol_success           - task enqueued; *out set to the future handle.
-ccol_invalid_args      - pool, fn, or out is NULL.
+ccol_invalid_args      - pool is CTPOOL_INVALID or a stale/already-destroyed handle, or fn or out is NULL.
 ccol_not_enough_memory - future or task allocation failed.
 ccol_not_permitted     - pool is shutting down.
 ccol_container_full    - bounded queue is at capacity.

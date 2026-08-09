@@ -61,7 +61,7 @@ TAU_MAIN()
 #define BASE_URL_MISMATCHED_HOST "https://localhost:18790"
 
 static clog g_test_logger = NULL;
-static chttpsvr g_tls_srv = NULL;
+static chttpsvr g_tls_srv = CHTTPSVR_INVALID;
 static char g_cert_dir[256];
 static char g_cert_path[320];
 static char g_key_path[320];
@@ -156,7 +156,7 @@ static void _teardown(void) {
   if (g_tls_srv) chttpsvr_stop(g_tls_srv);
   if (g_tls_srv) {
     __chttpsvr_destroy(g_tls_srv);
-    g_tls_srv = NULL;
+    g_tls_srv = CHTTPSVR_INVALID;
   }
   /* __chttpsvr_destroy releases this server's shared-engine reference but
    * does not synchronously wait for chttpserver's own shared event_loop
@@ -242,7 +242,7 @@ TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
   }
 
   chttpcli cli = create_chttpclient(NULL);
-  REQUIRE_TRUE(cli != NULL);
+  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
@@ -305,7 +305,7 @@ TEST(chttpserver_tls, hostname_mismatch_rejected_when_verify_host_enabled) {
   }
 
   chttpcli cli = create_chttpclient(NULL);
-  REQUIRE_TRUE(cli != NULL);
+  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
@@ -337,7 +337,7 @@ TEST(chttpserver_tls, hostname_mismatch_allowed_when_verify_host_disabled) {
   }
 
   chttpcli cli = create_chttpclient(NULL);
-  REQUIRE_TRUE(cli != NULL);
+  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;
@@ -377,7 +377,7 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
   }
 
   chttpcli cli = create_chttpclient(NULL);
-  REQUIRE_TRUE(cli != NULL);
+  REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
   tls.ca_bundle_path = g_cert_path;

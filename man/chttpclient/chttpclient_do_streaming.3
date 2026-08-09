@@ -24,7 +24,7 @@ than len aborts the transfer with a failure.
 .fi
 .SH PARAMETERS
 .nf
-cli             Client handle; must not be NULL.
+cli             Client handle; must not be CHTTPCLI_INVALID.
 req             Request to execute; must not be NULL.
 write_fn        Callback invoked with each body chunk; must not be NULL.
 write_ctx       Opaque context pointer passed verbatim to write_fn.
@@ -32,9 +32,12 @@ status_code_out Receives the HTTP status code on success; may be NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Same codes as chttpclient_do.  Additionally,
-ccol_http_transfer_aborted is returned when write_fn returns fewer
-bytes than len, aborting the transfer.
+Same codes as chttpclient_do, except ccol_msg_too_large is never
+returned: chttpclient_set_max_response_body_size has no effect on
+this streaming path, since the caller's own write_fn already
+controls memory use.  Additionally, ccol_http_transfer_aborted is
+returned when write_fn returns fewer bytes than len, aborting the
+transfer.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do (3),

@@ -1,4 +1,4 @@
-.TH CHTTPSVR_ROUTER_ON_STREAM 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPSVR_ROUTER_ON_STREAM 3 "2026-08-03" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpsvr_router_on_stream \- register a streaming handler on a sub-router
 .SH LIBRARY
@@ -18,17 +18,24 @@ ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
 Same as chttpsvr_register_streaming_handler but registers the route on
 a sub-router.  All pattern validation rules from
 chttpsvr_register_streaming_handler apply here as well, including the
-requirement that pattern begins with '/' and that {name} segments
-contain only [A-Za-z0-9_], and support for CHTTP_ANY as the method
-argument.
+requirement that pattern begins with '/', that {name} segments
+contain only [A-Za-z0-9_], that the same {name} is not used more than
+once, and support for CHTTP_ANY as the method argument.
+
+This function validates that router's owning server has not been
+destroyed (including concurrently, from another thread) before
+touching it; a call racing a chttpsvr_destroy of the owning server
+simply returns ccol_invalid_args rather than touching freed memory.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
 ccol_invalid_args if router, pattern, or fn is NULL; if pattern does
                   not begin with '/'; if pattern contains consecutive
-                  slashes or a trailing slash; or if a {name} segment
-                  contains characters outside [A-Za-z0-9_].
+                  slashes or a trailing slash; if a {name} segment
+                  contains characters outside [A-Za-z0-9_]; if the
+                  same {name} is used more than once; or if router's
+                  owning server has since been destroyed.
 ccol_not_enough_memory if allocation fails.
 .fi
 .SH "SEE ALSO"

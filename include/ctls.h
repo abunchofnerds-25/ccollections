@@ -178,13 +178,14 @@ static inline __attribute__((always_inline)) ctls_ctx_t *ctls_ctx_new(
  * replaces the previous default certificate.
  *
  * server_name non-NULL/non-empty registers (or replaces, if the same name
- * was already registered) a certificate dispatched by exact hostname match
- * against the TLS ClientHello's SNI extension; a leading "*." is matched as
- * a one-label wildcard (e.g. "*.example.com" matches "foo.example.com" but
- * not "example.com" or "a.b.example.com"), mirroring common CA-issued
- * wildcard certificates. The very first call with a non-empty server_name
- * installs the SNI dispatch callback on ctx; subsequent calls simply add
- * more named entries.
+ * was already registered, case-insensitively) a certificate dispatched by
+ * case-insensitive exact hostname match against the TLS ClientHello's SNI
+ * extension; a leading "*." is matched as a one-label wildcard (e.g.
+ * "*.example.com" matches "foo.example.com"/"FOO.EXAMPLE.COM" but not
+ * "example.com" or "a.b.example.com"), mirroring common CA-issued wildcard
+ * certificates. The very first call with a non-empty server_name installs
+ * the SNI dispatch callback on ctx; subsequent calls simply add more named
+ * entries.
  *
  * cert_path and key_path must both be NULL, or both non-NULL:
  * - Both non-NULL: loads the certificate/key from these PEM files (read

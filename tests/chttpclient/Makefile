@@ -72,7 +72,7 @@ test: build build_tls build_parser build_default_client
 
 memtest: build build_tls build_parser build_default_client
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
-		--error-exitcode=1 --suppressions=ld_so_dlopen.supp ./tests
+		--error-exitcode=1 --child-silent-after-fork=yes --suppressions=ld_so_dlopen.supp ./tests
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests_tls
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \

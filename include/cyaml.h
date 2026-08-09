@@ -236,8 +236,9 @@ static inline cyaml cyaml_create_dictionary(void) {
  * @param yaml_str  Input text (must be null-terminated).
  * @param err_str   Out-parameter for the error message on parse failure.
  *                  On success *err_str is set to NULL.  On failure a
- *                  heap-allocated string is stored; the caller must free() it.
- *                  Pass NULL to ignore error details.
+ *                  heap-allocated string is stored, allocated through mp;
+ *                  the caller must free it with cyaml_serialize_free_mp()
+ *                  (passing the same mp).  Pass NULL to ignore error details.
  * @param mp        Custom allocator for all nodes in the resulting tree,
  *                  or NULL for the default allocator.
  * @return Root cyaml node on success, NULL on parse failure.
@@ -256,7 +257,8 @@ static inline cyaml cyaml_parse(const char *yaml_str, char **err_str) {
  * @param yaml_str  Input buffer.
  * @param len       Number of bytes to parse.
  * @param err_str   Out-parameter for the error message (same semantics as
- *                  cyaml_parse_mp).  Pass NULL to ignore.
+ *                  cyaml_parse_mp, including the free contract).  Pass NULL
+ *                  to ignore.
  * @param mp        Custom allocator, or NULL for default.
  * @return Root cyaml node, or NULL on failure.
  */

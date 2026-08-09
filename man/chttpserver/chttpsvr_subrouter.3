@@ -1,4 +1,4 @@
-.TH CHTTPSVR_SUBROUTER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPSVR_SUBROUTER 3 "2026-08-03" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpsvr_subrouter \- create a sub-router with a path prefix
 .SH LIBRARY
@@ -25,7 +25,13 @@ A trailing slash in prefix is stripped automatically: "/api/v1/" and
 behaviour.
 
 The returned pointer is owned by the server and must not be freed by
-the caller.
+the caller.  Every chttpsvr_router_on, chttpsvr_router_on_stream, and
+chttpsvr_router_use call against the returned router validates that
+this server has not been destroyed (including concurrently, from
+another thread) before touching it, so it is safe to hold the returned
+pointer across a chttpsvr_stop/chttpsvr_start restart, and a
+registration call racing a concurrent chttpsvr_destroy of srv simply
+returns ccol_invalid_args rather than touching freed memory.
 
 This function is thread-safe and may be called before or after
 chttpsvr_start is running.
@@ -54,9 +60,10 @@ pattern.
 .fi
 .SH RETURN VALUE
 .nf
-Pointer to the new chttpsvr_router on success, or NULL when srv is NULL,
-prefix is NULL, prefix does not start with '/', prefix contains
-consecutive slashes, or on OOM.
+Pointer to the new chttpsvr_router on success, or NULL when srv is
+CHTTPSVR_INVALID or a stale/already-destroyed handle, prefix is NULL,
+prefix does not start with '/', prefix contains consecutive slashes,
+or on OOM.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_router_on (3),

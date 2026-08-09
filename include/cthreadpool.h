@@ -61,8 +61,25 @@ SOFTWARE.
 /** @brief Opaque thread pool structure */
 typedef struct cthread_pool cthread_pool;
 
-/** @brief Handle type (pointer to opaque struct) */
-typedef cthread_pool *ctpool;
+/**
+ * @brief Handle type: an opaque VALUE (packed {slot index, generation}
+ *        pair), NOT a pointer.
+ *
+ * Never cast a ctpool to/from void*, compare it via a pointer cast, or
+ * treat it as an address. Compare it against CTPOOL_INVALID (or use it in
+ * a truthiness check; CTPOOL_INVALID is 0, so `if (!pool)` still works
+ * exactly as it did when this was a raw pointer). Every use of a ctpool is
+ * resolved through a library-owned slot table before the underlying
+ * cthread_pool object is ever touched, so a stale handle (one whose pool
+ * has already been destroyed) is always detected rather than silently
+ * dereferencing freed memory; passing an already-destroyed or otherwise
+ * stale handle to __ctpool_destroy specifically is a fatal error (see that
+ * function's own doc comment).
+ */
+typedef uint64_t ctpool;
+
+/** @brief Sentinel value for "no pool" / "not yet created" / "destroyed" */
+#define CTPOOL_INVALID ((ctpool)0)
 
 /** @brief Future handle; represents a pending void* result */
 typedef struct ctpool_future ctpool_future;
@@ -79,7 +96,7 @@ typedef struct ctpool_future ctpool_future;
  *                        N > 0 -> bounded task queue of capacity N
  * @param mprocs          Custom allocator, or NULL for malloc/free
  * @param err_str         Optional: receives error description on failure
- * @return New pool handle, or NULL on failure
+ * @return New pool handle, or CTPOOL_INVALID on failure
  */
 ctpool create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
                               ccol_memmgmt_procs_t *mprocs, char **err_str);
@@ -101,8 +118,25 @@ create_cthread_pool(size_t num_threads, size_t queue_capacity, char **err_str) {
 /**
  * @brief Internal destroy; use ctpool_destroy macro instead
  *
- * If neither ctpool_shutdown_drain nor ctpool_shutdown_immediate was called
- * beforehand, performs a drain shutdown inline before freeing resources.
+ * pool is an opaque VALUE handle, resolved through a library-owned slot
+ * table before the underlying pool object is ever touched. pool must be a
+ * currently live handle (one returned by create_cthread_pool/_mp and not
+ * yet destroyed). CTPOOL_INVALID is a silent no-op. Any other stale
+ * handle - one already destroyed, whether by an earlier, completed call
+ * to this same function or concurrently by another thread racing this one
+ * right now - a forged value, or garbage, is a FATAL ERROR: this function
+ * calls fatal_err() (abort()/SIGABRT) rather than risk a use-after-free or
+ * double-free, for both a purely sequential double-destroy and a
+ * temporally-overlapping concurrent one.
+ *
+ * On a live handle, waits for every in-flight resolved use of the handle
+ * to finish (a ctpool_submit/_try_submit/_timed_submit/_submit_future/
+ * _try_submit_future/_timed_submit_future/_wait/_shutdown_drain/
+ * _shutdown_immediate/_pending_count/_active_count call currently
+ * executing on another thread). If neither ctpool_shutdown_drain nor
+ * ctpool_shutdown_immediate was called beforehand, a drain shutdown runs
+ * first (before that wait), since a submitter blocked on a full bounded
+ * queue can depend on shutdown's own broadcast to ever release its pin.
  */
 void __ctpool_destroy(ctpool pool);
 
@@ -113,17 +147,22 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
     ctpool *pp) {
   if (pp && *pp) {
     __ctpool_destroy(*pp);
-    *pp = NULL;
+    *pp = CTPOOL_INVALID;
   }
 }
 
 /**
- * @brief Destroy a thread pool and set handle to NULL
+ * @brief Destroy a thread pool and set handle to CTPOOL_INVALID
+ *
+ * Calling this on a stale handle - one already destroyed, whether
+ * sequentially by an earlier call or concurrently by another thread
+ * racing this one - is a FATAL ERROR (abort()/SIGABRT), not a silent
+ * double-free; see __ctpool_destroy(3) for the full account.
  */
 #define ctpool_destroy(pool)  \
   do {                        \
     __ctpool_destroy((pool)); \
-    (pool) = NULL;            \
+    (pool) = CTPOOL_INVALID;  \
   } while (0)
 
 /* ========================================================================== */
@@ -141,7 +180,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
  * @brief Declare with automatic destruction on scope exit
  */
 #define ctpool_declare_scoped(name) \
-  ctpool name _ccol_destructor(___ctpool_destroy) = NULL
+  ctpool name _ccol_destructor(___ctpool_destroy) = CTPOOL_INVALID
 
 /**
  * @brief Declare and initialise in one step; fatal_err on failure
@@ -155,7 +194,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
  * @endcode
  */
 #define ctpool_construct(name, num_threads, queue_capacity)                   \
-  ctpool name = NULL;                                                         \
+  ctpool name = CTPOOL_INVALID;                                               \
   do {                                                                        \
     char *_ctp_err = NULL;                                                    \
     (name) = create_cthread_pool((num_threads), (queue_capacity), &_ctp_err); \
@@ -170,7 +209,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
  *        failure
  */
 #define ctpool_construct_scoped(name, num_threads, queue_capacity)            \
-  ctpool name _ccol_destructor(___ctpool_destroy) = NULL;                     \
+  ctpool name _ccol_destructor(___ctpool_destroy) = CTPOOL_INVALID;           \
   do {                                                                        \
     char *_ctp_err = NULL;                                                    \
     (name) = create_cthread_pool((num_threads), (queue_capacity), &_ctp_err); \
@@ -195,8 +234,10 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
  * @param fn          Task function (must not be NULL)
  * @param arg         Argument passed to fn and on_complete (may be NULL)
  * @param on_complete Called by the worker after fn returns (may be NULL)
- * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
- *         ccol_not_permitted (pool is shutting down)
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ *         stale/already-destroyed handle, or fn is NULL),
+ *         ccol_not_enough_memory, or ccol_not_permitted (pool is shutting
+ *         down)
  */
 ccol_retval_t ctpool_submit(ctpool pool, void (*fn)(void *), void *arg,
                             void (*on_complete)(void *));
@@ -207,8 +248,10 @@ ccol_retval_t ctpool_submit(ctpool pool, void (*fn)(void *), void *arg,
  * Returns ccol_container_full immediately if a bounded queue is at capacity.
  * For unbounded queues the behaviour is identical to ctpool_submit.
  *
- * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory,
- *         ccol_not_permitted, or ccol_container_full
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ *         stale/already-destroyed handle, or fn is NULL),
+ *         ccol_not_enough_memory, ccol_not_permitted, or
+ *         ccol_container_full
  */
 ccol_retval_t ctpool_try_submit(ctpool pool, void (*fn)(void *), void *arg,
                                 void (*on_complete)(void *));
@@ -221,9 +264,10 @@ ccol_retval_t ctpool_try_submit(ctpool pool, void (*fn)(void *), void *arg,
  * CLOCK_REALTIME).
  *
  * @param timeout Relative duration to wait; NULL is treated as zero (try-only)
- * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory,
- *         ccol_not_permitted, ccol_container_full, ccol_timed_out, or
- *         ccol_unexpected_failure
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ *         stale/already-destroyed handle, or fn is NULL),
+ *         ccol_not_enough_memory, ccol_not_permitted, ccol_container_full,
+ *         ccol_timed_out, or ccol_unexpected_failure
  */
 ccol_retval_t ctpool_timed_submit(ctpool pool, void (*fn)(void *), void *arg,
                                   void (*on_complete)(void *),
@@ -246,7 +290,9 @@ ccol_retval_t ctpool_timed_submit(ctpool pool, void (*fn)(void *), void *arg,
  * @param pool  Thread pool handle
  * @param fn    Task function returning a void* result (must not be NULL)
  * @param arg   Argument passed to fn (may be NULL)
- * @return New future handle, or NULL on OOM or if the pool is shutting down
+ * @return New future handle, or NULL on OOM, if the pool is shutting down,
+ *         or if pool is CTPOOL_INVALID or a stale (already-destroyed)
+ *         handle
  */
 ctpool_future *ctpool_submit_future(ctpool pool, void *(*fn)(void *),
                                     void *arg);
@@ -262,8 +308,10 @@ ctpool_future *ctpool_submit_future(ctpool pool, void *(*fn)(void *),
  * @param arg   Argument passed to fn (may be NULL)
  * @param out   Receives the future handle on success; set to NULL on failure
  *              (must not be NULL)
- * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory,
- *         ccol_not_permitted, or ccol_container_full
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ *         stale/already-destroyed handle, or fn or out is NULL),
+ *         ccol_not_enough_memory, ccol_not_permitted, or
+ *         ccol_container_full
  */
 ccol_retval_t ctpool_try_submit_future(ctpool pool, void *(*fn)(void *),
                                        void *arg, ctpool_future **out);
@@ -282,9 +330,10 @@ ccol_retval_t ctpool_try_submit_future(ctpool pool, void *(*fn)(void *),
  * @param timeout Relative duration to wait; NULL is treated as zero (try-only)
  * @param out     Receives the future handle on success; set to NULL on failure
  *                (must not be NULL)
- * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory,
- *         ccol_not_permitted, ccol_container_full, ccol_timed_out, or
- *         ccol_unexpected_failure
+ * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
+ *         stale/already-destroyed handle, or fn or out is NULL),
+ *         ccol_not_enough_memory, ccol_not_permitted, ccol_container_full,
+ *         ccol_timed_out, or ccol_unexpected_failure
  */
 ccol_retval_t ctpool_timed_submit_future(ctpool pool, void *(*fn)(void *),
                                          void *arg, struct timespec *timeout,
@@ -386,6 +435,8 @@ ccol_retval_t ctpool_future_fulfill(ctpool_future *f, void *result);
  * Contract: no other thread should be submitting tasks concurrently when this
  * is called. With an unbounded queue, concurrent submissions can cause
  * indefinite blocking.
+ *
+ * A no-op if pool is CTPOOL_INVALID or a stale (already-destroyed) handle.
  */
 void ctpool_wait(ctpool pool);
 
@@ -395,6 +446,8 @@ void ctpool_wait(ctpool pool);
  * Blocks until every queued and active task has completed. No new tasks may
  * be submitted after this call. Must be called before ctpool_destroy unless
  * ctpool_shutdown_immediate was called instead.
+ *
+ * A no-op if pool is CTPOOL_INVALID or a stale (already-destroyed) handle.
  */
 void ctpool_shutdown_drain(ctpool pool);
 
@@ -404,16 +457,24 @@ void ctpool_shutdown_drain(ctpool pool);
  * All tasks still in the queue are discarded (future handles for those tasks
  * become cancelled). Workers finish their current task and then exit. Blocks
  * until all worker threads have exited.
+ *
+ * A no-op if pool is CTPOOL_INVALID or a stale (already-destroyed) handle.
  */
 void ctpool_shutdown_immediate(ctpool pool);
 
 /**
  * @brief Number of tasks currently in the queue (not yet picked up by a
  *        worker)
+ *
+ * Returns 0 if pool is CTPOOL_INVALID or a stale (already-destroyed)
+ * handle.
  */
 size_t ctpool_pending_count(ctpool pool);
 
 /**
  * @brief Number of tasks currently being executed by worker threads
+ *
+ * Returns 0 if pool is CTPOOL_INVALID or a stale (already-destroyed)
+ * handle.
  */
 size_t ctpool_active_count(ctpool pool);

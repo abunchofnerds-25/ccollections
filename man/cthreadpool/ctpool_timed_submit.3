@@ -1,4 +1,4 @@
-.TH CTPOOL_TIMED_SUBMIT 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CTPOOL_TIMED_SUBMIT 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 ctpool_timed_submit \- submit a task with a relative timeout
 .SH LIBRARY
@@ -32,7 +32,7 @@ timeout      Relative duration to wait (NULL = do not wait)
 .SH RETURN VALUE
 .nf
 ccol_success           - task enqueued.
-ccol_invalid_args      - pool or fn is NULL.
+ccol_invalid_args      - pool is CTPOOL_INVALID or a stale/already-destroyed handle, or fn is NULL.
 ccol_not_enough_memory - task struct allocation failed.
 ccol_not_permitted     - pool is shutting down.
 ccol_container_full    - NULL timeout and queue is full.

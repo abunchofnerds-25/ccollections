@@ -1,4 +1,4 @@
-.TH __CLRUCACHE_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH __CLRUCACHE_DESTROY 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 __clrucache_destroy \- destroy an LRU cache (internal)
 .SH LIBRARY
@@ -11,22 +11,33 @@ void __clrucache_destroy(clru_cache cache);
 .fi
 .SH DESCRIPTION
 .nf
-Evicts all remaining live entries (invoking the eviction callback for
-each while the mutex is held), destroys the internal hash map, frees
-the mutex, and releases all memory.
+cache is an opaque VALUE handle (a packed {slot index, generation}
+pair), resolved through a library-owned slot table before the
+underlying cache object is ever touched. cache must be a currently
+live handle (one returned by clrucache_create_full and not yet
+destroyed). CLRU_CACHE_INVALID is a silent no-op. Any other value (a
+stale handle already destroyed by an earlier call or concurrently
+by another thread, a forged value, or garbage) is a FATAL ERROR:
+this function calls fatal_err() (abort()/SIGABRT) rather than risk
+a use-after-free or double-free.
+
+On a live handle, waits for every in-flight resolved use of the
+handle to finish (a clrucache_get_full/_set_full/clrucache_size/
+_capacity call currently executing on another thread, including one
+still blocked inside a slow remote getter/setter callback), then
+evicts all remaining live entries (invoking the eviction callback
+for each while the mutex is held), destroys the internal hash map,
+frees the mutex and the handle's own pin condition variable, and
+releases all memory.
 
 This is the low-level destructor. In application code use the
-clru_destroy() macro, which also sets the pointer to NULL.
+clru_destroy() macro, which also sets the handle to
+CLRU_CACHE_INVALID.
 .fi
 .SH PARAMETERS
 .nf
-cache  Cache handle to destroy. Passing NULL is a no-op.
-.fi
-.SH WARNINGS
-.nf
-Must be called only after all other threads have stopped using the
-cache. Outstanding blocked get or set calls will corrupt memory if
-__clrucache_destroy is called while they are in progress.
+cache  Cache handle to destroy. Passing CLRU_CACHE_INVALID is a
+       no-op.
 .fi
 .SH "SEE ALSO"
 .BR clru_destroy (3),

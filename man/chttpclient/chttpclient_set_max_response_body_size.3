@@ -1,0 +1,72 @@
+.TH CHTTPCLIENT_SET_MAX_RESPONSE_BODY_SIZE 3 "2026-07-30" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chttpclient_set_max_response_body_size \- cap the buffered response body size
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chttpclient.h>
+
+ccol_retval_t chttpclient_set_max_response_body_size(chttpcli cli,
+                                                      size_t max_bytes);
+.fi
+.SH DESCRIPTION
+.nf
+Caps the buffered response body size across all three tiers:
+chttpclient_do, chttpclient_do_async (and the pooled-sync wrappers
+built on it, chttpclient_do_pooled), chttp_get/post/put/delete/patch,
+and chttp_run_query.  Pass 0 (the default) to restore unlimited
+buffering.
+
+Has no effect on chttpclient_do_streaming, chttpclient_do_async_
+streaming, or chttpclient_do_pooled_streaming: a streaming caller
+already controls its own memory via chttpcli_write_fn's return
+value (returning fewer bytes than len aborts the transfer), so there
+is nothing for this cap to bound on that path.
+
+Enforced two ways.  A response whose Content-Length header alone
+already declares more than max_bytes is rejected immediately, before
+any body byte is read off the wire.  A chunked or connection-close-
+delimited body (which has no declared length to check up front) is
+instead rejected reactively, the moment the cumulative body received
+so far would exceed max_bytes.  Either case reports
+ccol_msg_too_large from chttpclient_do / the async result's rv /
+chttpclient_do_pooled, and the connection is not reused afterward
+(the same as any other malformed-response failure).
+
+Redirect hops are unaffected by this cap regardless of their own
+declared or actual body size: an intermediate hop's body is always
+discarded without ever being buffered, so only the final, delivered
+response's body counts against max_bytes.
+
+The up-front declared-length check only ever applies to a message
+that will actually deliver the caller's body.  A 1xx informational
+response's own declared Content-Length is exempt (RFC 7230 3.3.2
+says a compliant server should never send one on a 1xx response, but
+a misbehaving or malicious server might; such a response is always
+discarded and never delivered to the caller regardless).  A HEAD
+response's declared Content-Length is exempt too: it describes what
+a GET would have returned (RFC 7231 4.3.2) and is never followed by
+actual body bytes.
+
+May be called before or after the first request, and takes effect
+immediately for every subsequent request; an already in-flight
+request is unaffected.
+.fi
+.SH PARAMETERS
+.nf
+cli       Client handle; must not be CHTTPCLI_INVALID.
+max_bytes Maximum buffered response body size in bytes; 0 = no limit.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success      Cap updated.
+ccol_invalid_args cli is CHTTPCLI_INVALID, or a stale/already-
+                  destroyed handle.
+.fi
+.SH "SEE ALSO"
+.BR chttpclient_do (3),
+.BR chttpclient_do_streaming (3),
+.BR chttpclient_do_async (3),
+.BR chttpclient_do_pooled (3),
+.BR chttpclient_set_request_timeout (3)

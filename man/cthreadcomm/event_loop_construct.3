@@ -21,11 +21,11 @@ name                  Variable name for the event_loop handle.
 max_events_per_wait   Size of the epoll_wait batch buffer each reactor
                       thread uses (must be >= 1).
 num_lock_stripes      Number of independent lock stripes for the fd/entry
-                      registry (must be >= 1).  1 matches the original
-                      single-lock behavior.
+                      registry (must be >= 1).  1 means a single
+                      shared lock.
 num_reactor_threads   Number of background reactor threads (must be
-                      >= 1; 1 matches the original single-thread
-                      behavior exactly).
+                      >= 1; 1 means a single thread that both polls
+                      and dispatches inline).
 .fi
 .SH NOTES
 .nf

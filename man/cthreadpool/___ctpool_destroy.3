@@ -1,4 +1,4 @@
-.TH ___CTPOOL_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH ___CTPOOL_DESTROY 3 "2026-08-02" "c_collections" "C Collections Library - Macros"
 .SH NAME
 ___ctpool_destroy \- RAII cleanup function for ctpool
 .SH LIBRARY
@@ -12,11 +12,19 @@ ___ctpool_destroy(ctpool *pp);
 .SH DESCRIPTION
 .nf
 Static inline function used as the cleanup callback in
-ctpool_declare_scoped() and ctpool_construct_scoped(). If *pp is
-non-NULL, calls __ctpool_destroy(*pp) and sets *pp to NULL.
+ctpool_declare_scoped() and ctpool_construct_scoped(). If *pp is not
+CTPOOL_INVALID, calls __ctpool_destroy(*pp) and sets *pp to
+CTPOOL_INVALID.
 
 This function is not intended to be called directly; use
 ctpool_declare_scoped() or ctpool_construct_scoped() instead.
+
+Calling __ctpool_destroy on a stale (already destroyed) handle is a
+FATAL ERROR (abort()/SIGABRT); see __ctpool_destroy(3). This is only
+reachable here if *pp was left holding a stale value by code outside
+the normal declare/construct-scoped lifecycle, since the scoped
+macros themselves always leave *pp either live or already
+CTPOOL_INVALID.
 .fi
 .SH PARAMETERS
 .nf

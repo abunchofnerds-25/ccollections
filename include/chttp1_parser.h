@@ -398,14 +398,13 @@ struct chttp1_parser {
   uint64_t content_length; /* remaining bytes for CHTTP1_ST_BODY_CONTENT_LENGTH,
                             * or remaining bytes in the CURRENT chunk for
                             * CHTTP1_ST_BODY_CHUNK_DATA; reused for both. */
-  bool is_trailer_section; /* true once parsing trailers after a chunked
-                            * body's terminating 0-length chunk; on_header's
-                            * header-vs-trailer distinction (none) is the
-                            * same either way, this only affects which state
-                            * to return to after the blank line. */
 
   size_t header_count;
   size_t total_header_bytes;
+  /* Request mode only: counts a leading blank line tolerated before the
+   * request-line itself (RFC 7230 SS3.5), bounded by
+   * CHTTP1_MAX_LEADING_BLANK_LINES (private to chttp1_parser.c). */
+  size_t leading_blank_lines;
 
   /** Optional per-parser override of the built-in CHTTP1_MAX_HEADER_COUNT /
    * CHTTP1_MAX_TOTAL_HEADER_BYTES caps (both private to chttp1_parser.c).
@@ -508,9 +507,15 @@ void chttp1_parser_init_request(chttp1_parser_t *parser,
  *
  * 2. Once this function returns CHTTP1_PAUSED, no further bytes must be fed
  *    to this parser instance. Bytes from chttp1_parser_consumed() to len in
- *    the buffer that triggered the pause are unconsumed and are the
- *    caller's to discard; this parser has no pipelining support
- *    (chttpclient.c never feeds it again after CHTTP1_PAUSED).
+ *    the buffer that triggered the pause are unconsumed. In response mode
+ *    (chttpclient.c's only use of this parser) they are simply the
+ *    caller's to discard: chttpclient.c never feeds this parser instance
+ *    again after CHTTP1_PAUSED, and has no pipelining concept at all. In
+ *    request mode, chttpserver.c DOES treat them as real, meaningful
+ *    pipelined-request bytes rather than discarding them (see
+ *    chttp1_stream_push_back_leftover(), which exists specifically to
+ *    thread them into the next request's own parse); this contract
+ *    predates that request-mode use and is scoped to response mode only.
  *
  * 3. CHTTP1_HEADERS_ONLY (request mode only) is NOT covered by contract #2
  *    above: it is not a terminal outcome, and feeding more bytes afterward
@@ -799,10 +804,16 @@ bool chttp1_stream_prepare_tls(chttp1_stream_t *stream, int fd, void *tls_conn,
  * @brief Reads up to buflen bytes into buf.
  *
  * Drains any remaining carry-over bytes first (never touching fd at all
- * while carry-over remains); once carry-over is exhausted, blocks via
- * poll(2) for up to timeout_ms milliseconds waiting for fd to become
- * readable, then performs one read (via ctls_conn_read() if stream was
- * prepared with chttp1_stream_prepare_tls(), or a raw read(2) otherwise).
+ * while carry-over remains); once carry-over is exhausted, attempts one
+ * read (via ctls_conn_read() if stream was prepared with
+ * chttp1_stream_prepare_tls(), or a raw read(2) otherwise) BEFORE ever
+ * consulting poll(2)/timeout_ms: a TLS stream in particular may already
+ * have decrypted application bytes sitting in OpenSSL's own internal
+ * buffer, fully independent of whether the raw fd itself currently has
+ * anything left to read from the kernel, so checking fd readiness first
+ * would make those bytes invisible. Only once an attempt reports
+ * EWOULDBLOCK/EAGAIN does this block via poll(2) for up to the remaining
+ * timeout_ms milliseconds waiting for fd to become readable, then retry.
  * For a TLS stream specifically, a single readiness event does not
  * guarantee application bytes come back immediately (a partial TLS record,
  * or a renegotiation/key-update message OpenSSL consumes internally, can

@@ -33,11 +33,11 @@ Either way, the server's own logger (internal or derived) is closed
 automatically by __chttpsvr_destroy.
 
 On failure, err_str (if non-NULL) is set to a static diagnostic string
-and NULL is returned.
+and CHTTPSVR_INVALID is returned.
 .fi
 .SH RETURN VALUE
 .nf
-A valid chttpsvr handle on success, or NULL on failure.
+A valid chttpsvr handle on success, or CHTTPSVR_INVALID on failure.
 .fi
 .SH "SEE ALSO"
 .BR create_chttpsvr (3),

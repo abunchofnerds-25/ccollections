@@ -45,7 +45,8 @@ is ever invoked (first-wins policy).
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if srv or fn is NULL.
+ccol_invalid_args if srv is CHTTPSVR_INVALID or a stale/already-
+                  destroyed handle, or if fn is NULL.
 ccol_not_enough_memory if allocation fails.
 ccol_not_permitted if the root router's middleware chain is already at
 the 32-entry cap.

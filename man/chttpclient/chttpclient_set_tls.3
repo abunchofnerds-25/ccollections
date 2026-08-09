@@ -23,8 +23,14 @@ be freed or reused immediately after this call returns.
 cert_path/key_path/ca_bundle_path are validated for readability
 lazily, at the time an HTTPS request actually needs them, rather than
 here; a path that does not currently exist is accepted here without
-error and only surfaces as ccol_http_tls_cert_verification_failed from
+error and only surfaces as ccol_http_tls_cert_load_failed from
 chttpclient_do/chttpclient_do_streaming once a request needs it.
+
+cert_path and key_path are a pair: providing exactly one of the two
+(the other NULL) is rejected outright as ccol_invalid_args, rather
+than silently treated as "no client certificate configured", which
+would leave an mTLS deployment believing it presents a client
+certificate when it never does.
 
 verify_host always implies verify_peer: a request run with
 verify_peer = false but verify_host = true still performs full
@@ -34,13 +40,21 @@ CHTTP_TLS_DEFAULT(3) for details.
 .fi
 .SH PARAMETERS
 .nf
-cli   Client handle; must not be NULL.
+cli   Client handle; must not be CHTTPCLI_INVALID.
 tls   TLS configuration to copy, or NULL to restore defaults.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success      Configuration updated.
-ccol_invalid_args cli is NULL.
+ccol_success          Configuration updated.
+ccol_invalid_args     cli is CHTTPCLI_INVALID or a stale/already-
+                      destroyed handle, or exactly one of
+                      tls->cert_path/key_path is set.
+ccol_not_enough_memory
+                      Memory allocation failed; the client's TLS
+                      configuration is left at the default
+                      (verify_peer = true, verify_host = true,
+                      system CA bundle, no client certificate)
+                      rather than partially applied.
 .fi
 .SH "SEE ALSO"
 .BR CHTTP_TLS_DEFAULT (3),

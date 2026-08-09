@@ -30,6 +30,7 @@ SOFTWARE.
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,6 +45,21 @@ SOFTWARE.
 #pragma GCC diagnostic pop
 
 TAU_MAIN()
+
+/* SIGPIPE must be suppressed for this binary's own mock TLS server, for the
+ * same reason src/chttpserver.c's engine init already does this
+ * unconditionally for every real TCP server in this codebase, and for the
+ * identical reason tests/chttpclient/tests.c's own mock server needs the
+ * same fix (see that file's own comment for the full account of a real,
+ * valgrind-only, intermittent whole-process SIGPIPE death this was found to
+ * cause): this file's own SSL_write() calls below still perform a real
+ * underlying socket write with no SIGPIPE protection of their own, so a
+ * client closing/reusing a connection at the exact moment the mock TLS
+ * server thread is mid-SSL_write() can raise SIGPIPE, killing the entire
+ * process rather than just that thread. */
+__attribute__((constructor)) static void _ignore_sigpipe_for_mock_server(void) {
+  signal(SIGPIPE, SIG_IGN);
+}
 
 /* ========================================================================== */
 /*   REAL TLS HANDSHAKE COVERAGE FOR THE ASYNC ENGINE (dedicated binary)      */
@@ -379,6 +395,102 @@ static void make_tls_url(char *buf, size_t buf_size, const char *path) {
 /*                                 TESTS                                      */
 /* ========================================================================== */
 
+/* Tier 1 (chttpclient_do, synchronous) counterparts of the async_tls tests
+ * below. Tier 1's own connect/handshake code (_conn_open/_tls_handshake) is
+ * textually independent from Tier 2's (_async_tls_advance et al.); before
+ * these tests existed, every "https://" request anywhere in this test
+ * directory either targeted an unreachable port (a connection-refused test)
+ * or a plain-HTTP server (an immediate handshake-garbage failure), so a real,
+ * successful handshake and a real certificate-verification failure over a
+ * live TLS connection had no coverage at all for the synchronous path. */
+TEST(sync_tls, handshake_succeeds_when_ca_is_trusted) {
+  if (!g_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  chttpcli_construct(cli);
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_cert_path;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  chttp_request_free(req);
+
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_NE((void *)resp->body, NULL);
+  REQUIRE_STREQ(resp->body, TLS_TEST_BODY);
+
+  chttpclient_resp_free(resp);
+  chttpclient_destroy(cli);
+}
+
+TEST(sync_tls, large_body_response_over_tls) {
+  /* Exercises multiple _tls_handshake/_conn_read invocations against a
+   * single TLS response, not just a one-shot read. */
+  if (!g_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  chttpcli_construct(cli);
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_cert_path;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  char url[160];
+  make_tls_url(url, sizeof(url), "/large");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  chttp_request_free(req);
+
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_EQ(resp->body_len, (size_t)8192);
+
+  chttpclient_resp_free(resp);
+  chttpclient_destroy(cli);
+}
+
+TEST(sync_tls, untrusted_cert_fails_verification) {
+  /* No ca_bundle_path configured; the default system trust store, which does
+   * not (and cannot) trust a freshly generated throwaway self-signed cert. A
+   * real, negative proof that certificate verification is actually enforced
+   * on the synchronous path too, not silently skipped. */
+  if (!g_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  chttpcli_construct(cli);
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttp_request_free(req);
+
+  REQUIRE_EQ(rv, ccol_http_tls_cert_verification_failed);
+  REQUIRE_EQ((void *)resp, NULL);
+
+  chttpclient_destroy(cli);
+}
+
 TEST(async_tls, handshake_succeeds_when_ca_is_trusted) {
   if (!g_cert_ready) {
     fprintf(stderr,
@@ -441,6 +553,7 @@ TEST(async_tls, large_body_response_over_tls) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -517,6 +630,7 @@ TEST(async_tls, concurrent_https_requests_all_succeed) {
 
   for (int i = 0; i < N; i++) {
     chttpcli_async_result_t *raw = chttpclient_async_result_get(futures[i]);
+    REQUIRE_NE((void *)raw, NULL);
     REQUIRE_EQ(raw->rv, ccol_success);
     chttpcli_response *resp = raw->resp;
     REQUIRE_NE((void *)resp, NULL);

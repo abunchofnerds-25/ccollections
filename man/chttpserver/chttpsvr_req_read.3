@@ -37,6 +37,21 @@ semantics.  Only when buflen > 0 is buf required to be non-NULL.
 
 This function is intended for streaming handlers registered with
 chttpsvr_register_streaming_handler.  For buffered handlers, use chttpsvr_req_body.
+
+If the request carried "Expect: 100-continue" and actually has a body
+(a Content-Length or chunked Transfer-Encoding was present), the first
+call to this function for that request writes the interim "100
+Continue" response before attempting to read anything, telling the
+client it may go ahead and upload the body.  A streaming handler that
+instead rejects a request outright (bad auth, unacceptable
+Content-Type, and so on) by writing a final response without ever
+calling this function skips that interim response entirely: the
+client sees the real rejection directly, exactly as if it had never
+sent "Expect: 100-continue", and is never asked to upload a body the
+server was not going to read.  A request that carries "Expect:
+100-continue" but has no body at all never receives the interim
+response either, for the identical reason: there is nothing to invite
+the client to upload.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_body (3),

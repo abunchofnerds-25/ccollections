@@ -48,6 +48,7 @@ SOFTWARE.
 #include <ctype.h>
 #include <limits.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -127,6 +128,48 @@ SOFTWARE.
 
 /** @brief Signal all waiting threads on condition variable */
 #define cond_var_broadcast(c) pthread_cond_broadcast(&(c))
+
+/**
+ * @brief Unnamed, process-private semaphore type (wraps sem_t)
+ *
+ * The one synchronization primitive in this file POSIX guarantees is
+ * async-signal-safe to operate on (specifically: semaphore_post() below,
+ * via sem_post(3)). Every other primitive here (mutex_t, cond_var_t,
+ * rw_lock_t, and thread_create()/call_once() themselves) is explicitly NOT
+ * safe to call from within a signal handler: pthread_mutex_lock can
+ * self-deadlock if the interrupted thread already holds the very mutex a
+ * handler tries to (re)acquire, and pthread_create/pthread_once can
+ * internally need malloc's own arena lock, which the interrupted thread
+ * could likewise already hold for an unrelated reason. A module that needs
+ * to expose a genuinely async-signal-safe entry point (e.g. "safe to call
+ * from a SIGTERM handler") must not call mutex_lock/thread_create/call_once
+ * from that entry point directly; instead, wake an already-running,
+ * dedicated watcher thread via semaphore_post() and let that thread (an
+ * ordinary, non-signal execution context) perform the actual work. See
+ * chttpserver.c's engine-stop watcher for the reference implementation of
+ * this pattern.
+ */
+#define semaphore_t sem_t
+
+/** @brief Initialize an unnamed, process-private semaphore to an initial
+ *  count of value. */
+#define semaphore_init(s, value) sem_init(&(s), 0, (value))
+
+/** @brief Destroy a semaphore initialized with semaphore_init(). */
+#define semaphore_destroy(s) sem_destroy(&(s))
+
+/** @brief Block until the semaphore's count is > 0, then atomically
+ *  decrement it. Not async-signal-safe (may block); call only from an
+ *  ordinary thread, never from within a signal handler. */
+#define semaphore_wait(s) sem_wait(&(s))
+
+/**
+ * @brief Increment the semaphore's count, waking one waiter if any.
+ *
+ * Async-signal-safe per POSIX (sem_post(3)): the one operation in this
+ * file that is genuinely safe to call from within a signal handler.
+ */
+#define semaphore_post(s) sem_post(&(s))
 
 /** @brief Thread ID type (wraps pthread_t) */
 #define thread_id_t pthread_t

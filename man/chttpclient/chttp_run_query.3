@@ -23,6 +23,46 @@ hand via chttp_request_new plus repeated chttp_request_set_header calls.
 
 The caller retains full ownership of headers; it is only borrowed for
 the duration of this call and is never freed or modified by it.
+
+headers may use any casing for its keys (e.g. "Host", "Content-Type",
+"Accept"): every key this module auto-injects a default value for
+(host, accept, user-agent, content-length, content-type, authorization,
+expect) is matched against headers case-insensitively, so a caller-
+supplied header with natural casing correctly suppresses the matching
+auto-injected default instead of appearing alongside it on the wire.
+
+Because a chmap key is matched by exact byte content, headers may
+legally contain two literally different keys that are the same header
+name under HTTP's own case-insensitive semantics (e.g. "Host" and
+"host" both present at once); unlike chttp_request_set_header, which
+lower-cases every key before storing it and so can never produce this
+situation, a directly-built headers map has no such guarantee. Only
+one of the case-variant duplicates reaches the wire, never both:
+whichever one was inserted into headers most recently wins, matching
+how a single exact-key update already behaves; the other is silently
+dropped rather than sent as a second, duplicate header line.
+
+Because headers is handed to this function directly, bypassing
+chttp_request_set_header's own validation, no key or value in it may
+contain an embedded CR or LF byte (same rule and same rationale as
+chttp_request_set_header: it would otherwise let CRLF-bearing data
+inject extra header lines or split the request); such a headers map is
+rejected outright with ccol_invalid_args, before any connection is
+opened. headers must likewise not contain a "Transfer-Encoding" key
+(any casing), for the same reason chttp_request_set_header itself
+rejects one: this client never transfer-codes a request body, so
+honoring one is impossible, and letting it reach the wire would
+produce a request with both a caller-declared Transfer-Encoding and
+this module's own auto-synthesized Content-Length, an ambiguous
+framing over a body that was never actually transfer-coded.
+
+A "Content-Length" key IS accepted in headers, but, on a
+body-carrying request (POST, PUT, or PATCH), is rejected with
+ccol_invalid_args if its value does not exactly match the actual
+body length being sent, once the request reaches the wire; see
+chttpclient_do(3) and chttp_request_set_header(3) for the identical
+check and the same "declared framing disagrees with the wire"
+reasoning.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,13 +70,18 @@ method     HTTP method.
 url        Target URL; must not be NULL.
 body       Request body, or NULL for a bodyless request.
 headers    chmap(char* -> char*) of request headers, or NULL for none.
-           Borrowed for the duration of the call; not consumed or freed.
-resp_out   On success, receives the response pointer.
+           Borrowed for the duration of the call; not consumed or
+           freed. No key or value may contain a CR or LF byte, and no
+           key may be "Transfer-Encoding".
+resp_out   Must not be NULL. Set to NULL immediately, then, on
+           success, receives the response pointer.
 .fi
 .SH RETURN VALUE
 .nf
 Same codes as chttpclient_do, or ccol_not_enough_memory if the internal
-request object could not be allocated.
+request object could not be allocated. ccol_invalid_args if url or
+resp_out is NULL, or headers contains a key or value with an embedded
+CR or LF byte, or a "Transfer-Encoding" key.
 .fi
 .SH "SEE ALSO"
 .BR chttp_do (3),

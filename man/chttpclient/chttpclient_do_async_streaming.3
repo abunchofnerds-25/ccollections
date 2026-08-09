@@ -33,7 +33,7 @@ thread it is running on.
 .fi
 .SH PARAMETERS
 .nf
-cli       Client handle; must not be NULL.
+cli       Client handle; must not be CHTTPCLI_INVALID.
 req       Request to execute; must not be NULL.
 write_fn  Chunk delivery callback; must not be NULL.
 write_ctx Opaque context pointer passed verbatim to write_fn.
@@ -43,7 +43,9 @@ write_ctx Opaque context pointer passed verbatim to write_fn.
 A future, or NULL under the same conditions as chttpclient_do_async
 (including a NULL write_fn).  On success, the future's eventual
 result carries ccol_http_transfer_aborted if write_fn ever returns
-fewer bytes than len, aborting the transfer.
+fewer bytes than len, aborting the transfer.  Never carries
+ccol_msg_too_large: chttpclient_set_max_response_body_size has no
+effect on this streaming path.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do_async (3),

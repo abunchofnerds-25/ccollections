@@ -1,4 +1,4 @@
-.TH CLRUCACHE_GET_FULL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CLRUCACHE_GET_FULL 3 "2026-08-02" "c_collections" "C Collections Library - Functions"
 .SH NAME
 clrucache_get_full \- retrieve a value by key
 .SH LIBRARY
@@ -51,12 +51,21 @@ val_out   Output pair populated on success. val_out->ptr is set to a
 .nf
 ccol_success           val_out populated; caller owns val_out->ptr.
 ccol_key_not_found     Key absent and no getter, or getter failed.
-ccol_invalid_args      cache, key_pair, or val_out is NULL.
+ccol_invalid_args      cache is CLRU_CACHE_INVALID or a stale
+                       (already-destroyed) handle; or key_pair or
+                       val_out is NULL.
 ccol_not_enough_memory Allocation failed (placeholder entry or output
                        copy).
 .fi
 .SH NOTES
 .nf
+cache is an opaque VALUE handle, resolved through a library-owned
+slot table before the underlying cache object is touched; the pin
+established by that resolve is held for the entire duration of this
+call, including any time spent blocked inside a remote getter
+callback, so a concurrent __clrucache_destroy on the same handle
+waits for this call to finish rather than freeing the cache out from
+under it.
 The returned val_out->ptr is allocated with the cache's custom
 allocator if one was provided at construction, or with the standard
 malloc() otherwise. Free it with the matching allocator.

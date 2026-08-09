@@ -1,6 +1,6 @@
 .TH CHTTPCLIENT_DESTROY 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-chttpclient_destroy \- destroy an HTTP client and NULL the handle
+chttpclient_destroy \- destroy an HTTP client and invalidate the handle
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -12,7 +12,8 @@ chttpclient_destroy(cli)
 .SH DESCRIPTION
 .nf
 Macro wrapper around __chttpclient_destroy.  Waits for all in-flight
-requests to complete, frees all resources, then sets cli to NULL.
+requests to complete, frees all resources, then sets cli to
+CHTTPCLI_INVALID.
 
 "All in-flight requests" spans every tier: a synchronous
 chttpclient_do/_streaming call still executing on another thread, and
@@ -21,6 +22,12 @@ _streaming request submitted to the shared reactor engine that has
 not yet completed and is not merely sitting idle-pooled.  It is safe
 to call this even if a ctpool_future returned by chttpclient_do_async/
 _streaming has not been waited on yet.
+
+cli must be a currently live handle or CHTTPCLI_INVALID (a silent
+no-op).  Calling this on a stale handle (one already destroyed,
+sequentially by an earlier call or concurrently by another thread)
+is a FATAL ERROR (abort()/SIGABRT), not a silent double-free; see
+__chttpclient_destroy(3) for further detail.
 .fi
 .SH PARAMETERS
 .nf

@@ -23,8 +23,7 @@ against it.
 
 Exactly ONE dedicated thread ever calls epoll_wait, for every
 num_reactor_threads value; never more than one, regardless of how
-large num_reactor_threads is.  num_reactor_threads == 1 reproduces this
-module's original single-thread design exactly, byte-for-byte: that one
+large num_reactor_threads is.  With num_reactor_threads == 1, that one
 thread both polls and runs every callback inline.  A larger value spawns
 that same one polling thread plus (num_reactor_threads - 1) separate
 dispatch worker threads that actually execute callbacks, so total OS
@@ -67,8 +66,8 @@ independent (mutex, chmap) pairs, each guarding a disjoint subset of
 registrations.  A real fd, or a queue/channel registration's private
 bridge eventfd, is always handled by exactly one stripe for its entire
 lifetime, so no operation ever needs more than one stripe's lock.
-Passing 1 reproduces the original single-lock design exactly (one mutex,
-one chmap), just with one extra array indirection.  Passing a larger
+Passing 1 uses a single lock (one mutex, one chmap), just with one
+extra array indirection.  Passing a larger
 value lets event_loop_add/event_loop_remove/event_loop_modify calls for
 different fds/registrations proceed concurrently instead of serializing
 through a single lock, at the cost of num_lock_stripes mutexes and
@@ -79,15 +78,14 @@ chmaps allocated up front.
 max_events_per_wait  Size of the epoll_wait batch buffer the polling
                       thread uses (must be >= 1).
 num_lock_stripes     Number of independent lock stripes for the fd/entry
-                      registry (must be >= 1).  1 matches the original
-                      single-lock behavior.  No upper bound is enforced.
+                      registry (must be >= 1).  1 means a single shared
+                      lock.  No upper bound is enforced.
 num_reactor_threads  Total OS thread count devoted to this loop's own
-                      polling and dispatch (must be >= 1).  1 matches
-                      this module's original single-thread behavior
-                      exactly (one thread polls and dispatches inline);
-                      any larger value means exactly one dedicated
-                      polling thread plus (num_reactor_threads - 1)
-                      dispatch worker threads.
+                      polling and dispatch (must be >= 1).  1 means a
+                      single thread that both polls and dispatches
+                      inline; any larger value means exactly one
+                      dedicated polling thread plus
+                      (num_reactor_threads - 1) dispatch worker threads.
 mmgmt_procs          Custom memory management procedures, or NULL for
                       default malloc/free.
 err_str               Optional pointer to receive an error string on
@@ -96,10 +94,13 @@ err_str               Optional pointer to receive an error string on
 .SH RETURN VALUE
 .nf
 Returns a new event_loop handle on success.
-Returns NULL on failure: max_events_per_wait is 0, num_lock_stripes is 0,
-num_reactor_threads is 0, mmgmt_procs is malformed (some but not all of
-malloc/calloc/realloc/free set), allocation failure, or
-epoll_create1(2)/eventfd(2)/pthread_create(3) failure.
+Returns EVENT_LOOP_INVALID on failure: max_events_per_wait is 0,
+num_lock_stripes is 0, num_reactor_threads is 0, mmgmt_procs is
+malformed (some but not all of malloc/calloc/realloc/free set),
+allocation failure, epoll_create1(2)/eventfd(2)/pthread_create(3)
+failure, or failure to allocate a handle slot (the poller thread, and
+dispatch pool if configured, are stopped again before returning in
+this last case).
 .fi
 .SH NOTES
 .nf
@@ -109,24 +110,13 @@ stripe array, and shares no global state with any other instance
 (including num_lock_stripes and num_reactor_threads, both genuinely
 per-instance settings).
 
-This module originally let every one of num_reactor_threads threads call
-epoll_wait independently on the shared epoll instance. That design was
-replaced with the single-poller-plus-worker-pool design described above
-after being measured, not assumed, to cost real single-connection tail
-latency: with N threads each independently blocked in epoll_wait on one
-shared epoll instance, a single ready event genuinely wakes every one of
-them (a real kernel-level thundering herd; EPOLLEXCLUSIVE does not help,
-since it governs the same fd registered across multiple SEPARATE epoll
-instances, not many threads sharing one), and that wasted wakeup cost
-measurably hurt p95/p99 latency for a single, otherwise-uncontended
-connection the moment more than one thread was configured at all. The
-current design eliminates that cost structurally (only one thread ever
-blocks in epoll_wait, so there is nothing left to wake but that one
-thread) while still providing multi-threaded dispatch throughput under
-real concurrent load via the separate worker pool. num_reactor_threads
-== 1 measures byte-for-byte identical to the original single-thread
-design, confirming this change was purely additive for that
-configuration.
+Exactly one thread ever blocks in epoll_wait, regardless of
+num_reactor_threads: having more than one thread call epoll_wait on
+the same shared instance would let a single ready event wake every
+one of them (a kernel-level thundering herd; EPOLLEXCLUSIVE does not
+help here, since it governs the same fd registered across multiple
+SEPARATE epoll instances, not many threads sharing one), wasting
+dispatch latency on a single, otherwise-uncontended connection.
 .fi
 .SH THREAD SAFETY
 .nf

@@ -52,6 +52,29 @@ typedef struct {
                            slot index, starts at 0 (pre-first-use),
                            becomes 1 on first acquire */
   bool in_use;
+#if FORK_SAFETY_REQUIRED
+  /* True from the exact instant __ctpool_destroy clears in_use until
+   * _ctpool_teardown_raw is about to make ptr->mu unsafe to touch (either
+   * by destroying it, or, on the foreign_since_fork path, by freeing the
+   * struct that embeds it); see _ctpool_atfork_prepare's own doc comment
+   * for the real, previously-unprotected hang this closes: in_use alone
+   * used to be _ctpool_atfork_prepare's sole signal that ptr->mu is both
+   * live and worth locking, but a pool's own worker threads are not
+   * actually gone the instant in_use goes false, only once
+   * _ctpool_shutdown_drain_internal has finished joining every one of
+   * them (a step that runs entirely AFTER in_use is cleared, specifically
+   * so a concurrent resolve/second-destroy is rejected as early as
+   * possible); a fork() landing anywhere in that join window could
+   * previously inherit ptr->mu locked by one of those still-very-real,
+   * about-to-be-joined worker threads, with in_use already false telling
+   * _ctpool_atfork_prepare there was nothing here worth protecting. Never
+   * true while in_use is true (the two are set at different points, never
+   * both together); ptr is guaranteed non-NULL and safe to dereference
+   * for as long as this is true, since it is cleared (under this same
+   * ctpool_slot_table.mutex) strictly before the struct it points to
+   * becomes unsafe to touch. */
+  bool torn_down;
+#endif
 } ctpool_slot_t;
 
 static struct {
@@ -274,16 +297,21 @@ struct cthread_pool {
  * event_loop's), closes it for every caller of this module, not only
  * event_loop's own usage of it.
  *
- * Only ever walks slots with in_use == true, mirroring the exact condition
+ * Walks every slot with in_use == true (mirroring the exact condition
  * _ctpool_resolve itself already trusts as the sole indicator that
- * slot->ptr is safe to dereference: __ctpool_destroy clears in_use (under
- * this same ctpool_slot_table.mutex) BEFORE doing any of its own, possibly
- * slow, teardown work (joining every worker thread, freeing the task
- * queue), and only actually frees the pool struct itself, then finally
- * clears slot->ptr, well after that teardown has completed; a pool already
- * past that first step is therefore, by this file's own established
- * convention, already off-limits for any purpose, fork-related or not, for
- * the remainder of its teardown (not a new gap this fix introduces).
+ * slot->ptr is safe to dereference for ordinary resolve purposes) AND every
+ * slot with torn_down == true: __ctpool_destroy clears in_use (under this
+ * same ctpool_slot_table.mutex) BEFORE doing any of its own, possibly slow,
+ * teardown work (joining every worker thread, freeing the task queue), so a
+ * pool's own worker threads are not actually gone the instant in_use goes
+ * false, only once that join phase completes; torn_down stays true for
+ * exactly that window (see ctpool_slot_t's own field comment), so a fork()
+ * landing while a not-yet-joined worker thread still holds ptr->mu is
+ * caught here exactly like an ordinary live pool's mu would be. ptr is only
+ * actually freed, and slot->ptr finally cleared, well after both in_use and
+ * torn_down have gone false; a pool past that point is, by this file's own
+ * established convention, already off-limits for any purpose, fork-related
+ * or not (not a new gap this fix introduces).
  *
  * Deliberately does NOT extend to any individual ctpool_future's own mu.
  * Unlike a pool (reachable from ctpool_slot_table, this module's own
@@ -309,7 +337,7 @@ static void _ctpool_atfork_prepare(void) {
   for (size_t i = 0; i < n; i++) {
     ctpool_slot_t *slot =
         (ctpool_slot_t *)cvector_at(ctpool_slot_table.slots, i);
-    if (!slot->in_use) continue;
+    if (!slot->in_use && !slot->torn_down) continue;
     mutex_lock(slot->ptr->mu);
   }
 }
@@ -335,10 +363,20 @@ static void _ctpool_atfork_release_impl(bool is_child) {
   for (size_t i = 0; i < n; i++) {
     ctpool_slot_t *slot =
         (ctpool_slot_t *)cvector_at(ctpool_slot_table.slots, i);
-    if (!slot->in_use) continue;
+    if (!slot->in_use && !slot->torn_down) continue;
     cthread_pool *pool = slot->ptr;
 
-    if (is_child) {
+    /* A torn_down (already not-in_use) slot's own destroy is already
+     * in progress in THIS process: it can never be resolved again (in_use
+     * is already false) and so, unlike a genuinely still-live pool, has no
+     * way to reach _ctpool_teardown_raw's foreign_since_fork branch a
+     * second time in the child. Its own destroying thread simply no
+     * longer exists there (unless it happened to be the forking thread
+     * itself), leaving this pool's memory harmlessly unreachable for the
+     * rest of the child's life; only unlocking its mu (done unconditionally
+     * below, for both branches) is needed to close the hang this whole
+     * mechanism exists to prevent. */
+    if (slot->in_use && is_child) {
       atomic_store(&pool->foreign_since_fork, true);
       /* A now-vanished parent-side thread may have been mid-resolve (a
        * pinned _ctpool_resolve call) at the instant of fork(), leaving
@@ -453,6 +491,12 @@ static ctpool _ctpool_handle_slot_acquire(cthread_pool *pool) {
   if (slot->generation == 0) slot->generation++;
   slot->ptr = pool;
   slot->in_use = true;
+#if FORK_SAFETY_REQUIRED
+  slot->torn_down = false; /* always already false by the time a slot is
+                               reused (see ctpool_slot_t's own field
+                               comment); reset explicitly anyway, defensively,
+                               rather than relying on that invariant alone */
+#endif
   ctpool h = ((ctpool)idx << 32) | (ctpool)slot->generation;
   mutex_unlock(ctpool_slot_table.mutex);
   return h;
@@ -852,11 +896,19 @@ static void *worker_thread_fn(void *arg) {
   return NULL;
 }
 
+/* Sentinel `idx` for _ctpool_teardown_raw meaning "pool was never
+ * registered in ctpool_slot_table at all" (create_cthread_pool_mp's own
+ * slot-acquire-failure rollback path): with no slot to consult, torn_down
+ * bookkeeping is neither possible nor needed there, since a handle that was
+ * never exposed to any caller cannot be raced by a concurrent fork() through
+ * this module's own slot-table-driven atfork mechanism in the first place. */
+#define CTPOOL_TEARDOWN_NO_SLOT ((uint32_t)-1)
+
 /* Forward declarations: create_cthread_pool_mp's own slot-acquire-failure
  * rollback path needs the shared teardown helper defined later in this
  * file (right after the shutdown_drain/_immediate internal/public split it
  * itself depends on). */
-static void _ctpool_teardown_raw(cthread_pool *pool);
+static void _ctpool_teardown_raw(cthread_pool *pool, uint32_t idx);
 
 /* ========================================================================== */
 /*                         CREATION                                           */
@@ -987,7 +1039,7 @@ ctpool create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
   if (h == 0) {
     if (err_str)
       *err_str = CCOL_ERR_STR("failed to allocate ctpool handle slot");
-    _ctpool_teardown_raw(pool);
+    _ctpool_teardown_raw(pool, CTPOOL_TEARDOWN_NO_SLOT);
     return CTPOOL_INVALID;
   }
 
@@ -1561,7 +1613,29 @@ size_t ctpool_active_count(ctpool pool) {
  * is already idempotent under its own lock (it no-ops the instant it observes
  * shutdown_started already true), so calling it unconditionally costs nothing
  * extra for the ordinary case and removes the unsynchronized read entirely. */
-static void _ctpool_teardown_raw(cthread_pool *pool) {
+#if FORK_SAFETY_REQUIRED
+/* Clears slots[idx].torn_down (see ctpool_slot_t's own field comment),
+ * a no-op when idx is CTPOOL_TEARDOWN_NO_SLOT (the pool was never
+ * registered in the slot table to begin with). Must run, in every caller,
+ * strictly before pool->mu becomes unsafe for _ctpool_atfork_prepare to
+ * dereference: either by being destroyed outright, or, on the
+ * foreign_since_fork path, by the struct that embeds it being freed. */
+static void _ctpool_teardown_clear_torn_down(uint32_t idx) {
+  if (idx == CTPOOL_TEARDOWN_NO_SLOT) return;
+  mutex_lock(ctpool_slot_table.mutex);
+  ctpool_slot_t *slot =
+      (ctpool_slot_t *)cvector_at(ctpool_slot_table.slots, idx);
+  slot->torn_down = false;
+  mutex_unlock(ctpool_slot_table.mutex);
+}
+#endif
+
+static void _ctpool_teardown_raw(cthread_pool *pool, uint32_t idx) {
+#if !FORK_SAFETY_REQUIRED
+  (void)idx; /* only meaningful for the torn_down slot bookkeeping below,
+                entirely compiled out along with the rest of this module's
+                atfork machinery when fork safety is opted out of. */
+#endif
 #if FORK_SAFETY_REQUIRED
   if (atomic_load(&pool->foreign_since_fork)) {
     /* This process inherited `pool` across a fork() call (see
@@ -1649,6 +1723,7 @@ static void _ctpool_teardown_raw(cthread_pool *pool) {
     drain_task_free_list(pool);
 
     _mem_free(pool->m_procs, pool->threads);
+    _ctpool_teardown_clear_torn_down(idx);
     pool_free_self(pool);
     return;
   }
@@ -1671,6 +1746,9 @@ static void _ctpool_teardown_raw(cthread_pool *pool) {
 
   _mem_free(pool->m_procs, pool->threads);
 
+#if FORK_SAFETY_REQUIRED
+  _ctpool_teardown_clear_torn_down(idx);
+#endif
   mutex_destroy(pool->mu);
   cond_var_destroy(pool->not_empty);
   cond_var_destroy(pool->not_full);
@@ -1737,9 +1815,17 @@ void __ctpool_destroy(ctpool pool) {
   slot->in_use = false; /* blocks ALL future resolves for this handle from
                             this instant, including a second concurrent
                             destroy attempt */
+#if FORK_SAFETY_REQUIRED
+  /* See ctpool_slot_t's own torn_down field comment: raw's worker threads
+   * are not actually gone yet, only unreachable via this handle from now
+   * on, so _ctpool_atfork_prepare must keep locking raw->mu across fork()
+   * until _ctpool_teardown_raw itself clears this, right before raw->mu
+   * becomes unsafe to touch. */
+  slot->torn_down = true;
+#endif
   mutex_unlock(ctpool_slot_table.mutex);
 
-  _ctpool_teardown_raw(raw);
+  _ctpool_teardown_raw(raw, idx);
 
   /* Release the slot last, only after raw is fully torn down and freed:
    * this is what makes the slot's generation bump (and the free-index

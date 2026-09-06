@@ -44,7 +44,6 @@ SOFTWARE.
  * handling throughout the library.
  */
 
-#include <assert.h>
 #include <ctype.h>
 #include <limits.h>
 #include <pthread.h>
@@ -55,6 +54,46 @@ SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* ========================================================================== */
+/*                         FORK SAFETY OPT-OUT                                */
+/* ========================================================================== */
+
+/**
+ * @brief Compile-time switch controlling whether this library's own
+ *        pthread_atfork()-based fork() safety machinery is compiled in.
+ *
+ * Several modules (cthreadpool, cthreadcomm's event_loop and queue types,
+ * clogger) register pthread_atfork() prepare/parent/child handlers so that a
+ * fork() landing while some thread holds one of their internal locks does
+ * not hand a permanently-locked mutex to the child (which has no thread left
+ * alive that could ever unlock it). That protection costs real, non-zero
+ * work on every single fork() call made anywhere in the process, by any
+ * thread, for any reason: the registered prepare handler must lock every
+ * currently-live handle's own internal lock (walking that module's own
+ * process-wide registry) before fork() is allowed to proceed at all, and the
+ * parent/child handlers must then unlock them all again.
+ *
+ * An application that never calls fork() at all, or only ever calls it
+ * immediately followed by exec() (running a subprocess, e.g. via
+ * fork()+execve() or an equivalent posix_spawn()-style wrapper, so the child
+ * never touches any handle from this library before its own process image is
+ * replaced), gets no benefit from this protection and can define this to 0
+ * (e.g. -DFORK_SAFETY_REQUIRED=0) to compile every one of these
+ * registrations, their handler bodies, and the handle-level state that
+ * exists solely to support them (e.g. a "this handle was inherited across a
+ * fork()" flag) out of the library entirely, removing that per-fork() cost.
+ * Every other aspect of a module's thread safety (its own locking,
+ * concurrent create/destroy safety via the generation-tagged handle tables,
+ * ...) is completely unaffected either way; only the fork()-specific
+ * protection is gated by this switch.
+ *
+ * Defined to 1 (fork-safety compiled in) unless a caller has already defined
+ * it before this header is first included.
+ */
+#ifndef FORK_SAFETY_REQUIRED
+#define FORK_SAFETY_REQUIRED 1
+#endif
 
 /* ========================================================================== */
 /*                         THREADING PRIMITIVES                               */
@@ -248,10 +287,32 @@ SOFTWARE.
 /**
  * @brief Assertion macro for collections library
  *
- * Wrapper around standard assert() for consistency across the library.
- * Enables runtime assertion checking in debug builds.
+ * @param cond Condition that must hold
+ *
+ * Deliberately NOT built on the standard library's assert(): this library's
+ * own documented "will assert on misuse" contracts (double-free detection,
+ * corruption detection, foreign/cross-container-pointer rejection, and
+ * every other invariant this macro guards throughout every module) are
+ * load-bearing safety checks a caller is expected to be able to rely on,
+ * not debug-only sanity checks meant to be compiled away in a release
+ * build. A plain assert() silently becomes a no-op whenever NDEBUG is
+ * defined, at which point every one of those checks stops aborting and
+ * instead falls through into continued execution on known-invalid state
+ * (e.g. a null-pointer dereference one line later, or a double free
+ * proceeding uncaught); exactly the outcome these checks exist to
+ * prevent. This macro instead always evaluates cond and always terminates
+ * the program via abort() (raising SIGABRT, the same signal a standard
+ * assert() failure would) when it is false, regardless of NDEBUG or any
+ * other compilation setting.
  */
-#define ccol_assert assert
+#define ccol_assert(cond)                                                    \
+  do {                                                                       \
+    if (!(cond)) {                                                           \
+      fprintf(stderr, "%s:%d: ccol_assert failed: %s\n", __FILE__, __LINE__, \
+              #cond);                                                        \
+      abort();                                                               \
+    }                                                                        \
+  } while (0)
 
 /* ========================================================================== */
 /*                         ERROR HANDLING                                     */
@@ -605,6 +666,84 @@ typedef struct ccol_memmgmt_procs_t {
 } ccol_memmgmt_procs_t;
 
 /* ========================================================================== */
+/*                         GROWABLE BYTE BUFFER                               */
+/* ========================================================================== */
+
+/**
+ * @brief A dynamically-growing byte buffer, for text-building code
+ * (serialization, incremental parse-time text accumulation, ...) that needs
+ * to append an unpredictable amount of data one piece at a time.
+ *
+ * Capacity doubles on growth. Once an allocation fails, oom latches true
+ * and every further ccol_growbuf_* operation on that buffer becomes a safe
+ * no-op, letting a caller defer error checking to the end of a whole build
+ * pass rather than testing after every single append. buf/len/oom are
+ * meant to be read directly by callers once building is complete (buf is
+ * NUL-terminated unless oom is set, in which case it may be NULL); cap and
+ * m_procs are internal bookkeeping for growth, not meant to be read by
+ * callers.
+ */
+typedef struct {
+  char *buf;
+  size_t len;
+  size_t cap;
+  bool oom;
+  ccol_memmgmt_procs_t *m_procs;
+} ccol_growbuf_t;
+
+/**
+ * @brief Initialize a growable byte buffer with a 256-byte backing store.
+ * @param b  Buffer to initialize.
+ * @param mp Allocator to use for every growth/append on this buffer.
+ * @note Sets the buffer's internal OOM flag on allocation failure; every
+ * further ccol_growbuf_* call on b is then a safe no-op.
+ */
+void ccol_growbuf_init(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp);
+
+/**
+ * @brief Like ccol_growbuf_init(), but pre-sizes the backing store to at
+ * least `hint + 1` bytes (minimum 64), for a caller that already knows
+ * approximately how much content it is about to append.
+ * @param b    Buffer to initialize.
+ * @param mp   Allocator to use for every growth/append on this buffer.
+ * @param hint Approximate number of content bytes expected.
+ */
+void ccol_growbuf_init_hint(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp,
+                            size_t hint);
+
+/**
+ * @brief Append n raw bytes, growing the buffer as needed.
+ * @note No-op once the buffer's internal OOM flag is set.
+ */
+void ccol_growbuf_append(ccol_growbuf_t *b, const char *data, size_t n);
+
+/** @brief Append a single byte. */
+static inline void ccol_growbuf_append_c(ccol_growbuf_t *b, char c) {
+  ccol_growbuf_append(b, &c, 1);
+}
+
+/**
+ * @brief Append a NUL-terminated string.
+ * @note A NULL s is treated as an empty append rather than invoking
+ * strlen(NULL) (which would be undefined behavior); this deliberately
+ * tolerates a caller passing through another buffer's own buf field
+ * after ITS init/append failed and left it NULL.
+ */
+static inline void ccol_growbuf_append_cstr(ccol_growbuf_t *b, const char *s) {
+  if (!s) return;
+  ccol_growbuf_append(b, s, strlen(s));
+}
+
+/**
+ * @brief Free the buffer's backing store (b->buf).
+ * @note Does not free b itself (b is typically stack- or struct-embedded).
+ * Safe to call on an already-OOM buffer (b->buf may be NULL).
+ */
+static inline void ccol_growbuf_destroy(ccol_growbuf_t *b) {
+  _mem_free(b->m_procs, b->buf);
+}
+
+/* ========================================================================== */
 /*                    COMPARISON AND HASHING TYPES                            */
 /* ========================================================================== */
 
@@ -639,6 +778,14 @@ typedef int (*ccol_comparison_proc_t)(const void *first, const void *second);
  *
  * @param ptr Pointer to data to hash
  * @return Hash value (unsigned long)
+ *
+ * @note The callback receives only ptr, not the key's size; a hash map
+ * already knows its own fixed key size internally (from the key type the
+ * map was constructed with) and does not need to pass it through, but a
+ * hash function meant to work over a genuinely variable-length binary key
+ * (as opposed to a fixed-size key type) must determine its own extent by
+ * some external convention (e.g. a length-prefixed or NUL-terminated
+ * buffer), since it cannot safely infer it from ptr alone.
  *
  * Example:
  * @code
@@ -683,7 +830,7 @@ typedef struct cmap_iterator {
   cmap_pair *val_pair; /**< Pointer to current value */
   struct cmap_iterator *(*_next_fn)(struct cmap_iterator *); /**< Advance fn */
   void (*_free_fn)(struct cmap_iterator *);                  /**< Destroy fn */
-  bool _direct_ptr; /**< true → val_pair->ptr IS the element (vec); false → map
+  bool _direct_ptr; /**< true = val_pair->ptr IS the element (vec); false = map
                        SSO rules apply */
 } cmap_iterator;
 
@@ -1134,23 +1281,39 @@ static inline void _ccol_scoped_ptr_cleanup(ccol_scoped_ptr_ctx_t *ctx) {
        default: true))
 #endif
 
+/* Every enumerator below is given an explicit value, deliberately, even
+ * though C would auto-increment them the same way if left implicit: an
+ * implicit-value list silently renumbers every later entry the moment a new
+ * enumerator is inserted anywhere but the very end, exactly the class of bug
+ * this project has already been bitten by once for ccol_retval_t (see that
+ * enum's own doc comment in this file). ccol_signed_char was added after
+ * every pre-existing value below had already shipped; appending it at the
+ * end with the next free number keeps every pre-existing enumerator's value
+ * unchanged. */
 typedef enum ccollections_data_type {
   ccol_char = 0,
-  ccol_short,
-  ccol_int,
-  ccol_long,
-  ccol_long_long,
-  ccol_unsigned_char,
-  ccol_unsigned_short,
-  ccol_unsigned_int,
-  ccol_unsigned_long,
-  ccol_unsigned_long_long,
-  ccol_float,
-  ccol_double,
-  ccol_long_double,
-  ccol_pointer,
-  ccol_string,
-  ccol_other_types,
+  ccol_short = 1,
+  ccol_int = 2,
+  ccol_long = 3,
+  ccol_long_long = 4,
+  ccol_unsigned_char = 5,
+  ccol_unsigned_short = 6,
+  ccol_unsigned_int = 7,
+  ccol_unsigned_long = 8,
+  ccol_unsigned_long_long = 9,
+  ccol_float = 10,
+  ccol_double = 11,
+  ccol_long_double = 12,
+  ccol_pointer = 13,
+  ccol_string = 14,
+  ccol_other_types = 15,
+  ccol_signed_char = 16, /**< A scalar `signed char` (or `int8_t`) key/value
+                           type, distinct from ccol_char: plain `char`'s
+                           signedness is platform-defined, so `signed char`
+                           needs its own type to get a genuine signed
+                           comparison regardless of platform (see
+                           cbstmap.c's compare_keys()). A `signed char *`
+                           still resolves to ccol_string, unaffected. */
 } ccol_data_type;
 
 #if defined __clang__
@@ -1160,7 +1323,7 @@ typedef enum ccollections_data_type {
     _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\""); \
     ccol_data_type result = _Generic((var),                                 \
         char: ccol_char,                                                    \
-        signed char: ccol_char,                                             \
+        signed char: ccol_signed_char,                                      \
         short: ccol_short,                                                  \
         int: ccol_int,                                                      \
         long: ccol_long,                                                    \
@@ -1174,7 +1337,7 @@ typedef enum ccollections_data_type {
         double: ccol_double,                                                \
         long double: ccol_long_double,                                      \
         const char: ccol_char,                                              \
-        const signed char: ccol_char,                                       \
+        const signed char: ccol_signed_char,                                \
         const short: ccol_short,                                            \
         const int: ccol_int,                                                \
         const long: ccol_long,                                              \
@@ -1195,7 +1358,7 @@ typedef enum ccollections_data_type {
 #define _determine_non_special_data_type(var)            \
   _Generic((var),                                        \
       char: ccol_char,                                   \
-      signed char: ccol_char,                            \
+      signed char: ccol_signed_char,                     \
       short: ccol_short,                                 \
       int: ccol_int,                                     \
       long: ccol_long,                                   \
@@ -1209,7 +1372,7 @@ typedef enum ccollections_data_type {
       double: ccol_double,                               \
       long double: ccol_long_double,                     \
       const char: ccol_char,                             \
-      const signed char: ccol_char,                      \
+      const signed char: ccol_signed_char,               \
       const short: ccol_short,                           \
       const int: ccol_int,                               \
       const long: ccol_long,                             \
@@ -1225,22 +1388,45 @@ typedef enum ccollections_data_type {
       default: ccol_other_types)
 #endif
 
-#define determine_ccol_data_type(data)                                 \
-  ({                                                                   \
-    ccol_data_type r = ccol_other_types;                               \
-    if (is_char_array((data))) {                                       \
-      r = ccol_string;                                                 \
-    } else if (is_char_ptr((data))) {                                  \
-      r = ccol_string;                                                 \
-    } else {                                                           \
-      if (__builtin_classify_type((data)) == 5 && /* is a pointer */   \
-          sizeof((data)) == sizeof(uintptr_t)) {  /* other pointers */ \
-        r = ccol_pointer;                                              \
-      } else {                                                         \
-        r = _determine_non_special_data_type((data));                  \
-      }                                                                \
-    }                                                                  \
-    r;                                                                 \
+/* __ccol_dcdt_type_probe is a fresh, zero-initialized object of (data)'s own
+ * type, used below in place of (data) itself. __builtin_classify_type()'s
+ * operand, like sizeof's/_Generic's, is a pure compile-time type
+ * classification and is never evaluated for its VALUE; but unlike
+ * sizeof/_Generic, Clang's own -Wuninitialized analysis does not treat it as
+ * an unevaluated context, so passing (data) directly trips a false "used
+ * before initialized" diagnostic whenever a caller's (data) dereferences a
+ * type-tracking companion variable that is deliberately left uninitialized
+ * (e.g. chmap_declare()'s own hm_name##__ccol_key_type_var, which must stay
+ * uninitialized so that same macro remains valid as a struct member
+ * declaration too, where an initializer is not legal C syntax at all).
+ * __ccol_dcdt_type_probe has the exact same type as (data) (typeof(data)
+ * is itself unevaluated, so this does not depend on (data)'s value either)
+ * but is a genuinely well-defined object, so nothing here ever reads
+ * indeterminate memory, closing the false positive without changing this
+ * macro's actual behavior (or (data)'s own single-evaluation contract) in
+ * any way. Named specifically enough that no real caller's own (data)
+ * expression could plausibly collide with it, matching this header's own
+ * ccol_scoped_ptr_release/__ccol_released_ptr precedent for the identical
+ * reason. */
+#define determine_ccol_data_type(data)                                \
+  ({                                                                  \
+    ccol_data_type r = ccol_other_types;                              \
+    if (is_char_array((data))) {                                      \
+      r = ccol_string;                                                \
+    } else if (is_char_ptr((data))) {                                 \
+      r = ccol_string;                                                \
+    } else {                                                          \
+      typeof(data) __ccol_dcdt_type_probe = {0};                      \
+      if (__builtin_classify_type(__ccol_dcdt_type_probe) ==          \
+              5 && /* is a pointer */                                 \
+          sizeof(__ccol_dcdt_type_probe) ==                           \
+              sizeof(uintptr_t)) { /* other pointers */               \
+        r = ccol_pointer;                                             \
+      } else {                                                        \
+        r = _determine_non_special_data_type(__ccol_dcdt_type_probe); \
+      }                                                               \
+    }                                                                 \
+    r;                                                                \
   })
 
 /* ========================================================================== */

@@ -1,0 +1,2 @@
+fail=0
+name=Nested flow collections on one line

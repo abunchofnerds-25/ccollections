@@ -1,0 +1,2 @@
+fail=0
+name=Mapping, key and flow sequence item anchors

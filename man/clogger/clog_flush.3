@@ -1,0 +1,51 @@
+.TH CLOG_FLUSH 3 "2026-08-26" "c_collections" "C Collections Library - Functions"
+.SH NAME
+clog_flush \- block until queued log records are durably written
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <clogger.h>
+
+void clog_flush(clog logger);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks the calling thread until every record queued through logger
+(or any sibling handle sharing the same underlying target) as of the
+moment this call is made, plus any partially-filled aggregation
+buffer, has been durably written via write(2).
+
+A no-op that returns immediately for a synchronous (non-async)
+logger, i.e. one created without a clog_async_cfg_t (see
+clog_open_fd_mp(3) / clog_open_file_mp(3)).
+
+A record submitted by some other thread concurrently with, but
+strictly after, this call is not guaranteed to be included.
+.fi
+.SH PARAMETERS
+.nf
+logger  Logger handle.
+.fi
+.SH RETURN VALUE
+.nf
+None.
+.fi
+.SH NOTES
+.nf
+Safe to call on any still-open handle at any time, including
+concurrently with ordinary log_*() calls on the same or a sibling
+handle.
+If the underlying async queue cannot accept the flush request (a rare
+allocation failure), this function returns immediately without
+blocking rather than waiting for an acknowledgment that will never
+arrive.
+In a forked child, a logger whose async mode has fallen back to
+synchronous logging (see clog_open_fd_mp(3)) treats this call as the
+same no-op a synchronous logger's own call would be.
+Asserts if logger is CLOG_INVALID, stale, or already closed.
+.fi
+.SH "SEE ALSO"
+.BR clog_open_fd_mp (3),
+.BR clog_open_file_mp (3),
+.BR clog_close (3)

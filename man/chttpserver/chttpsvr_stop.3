@@ -20,7 +20,7 @@ Idempotent: calling chttpsvr_stop on a server that was never started,
 or that was already stopped, is a no-op.
 
 A silent no-op if srv is CHTTPSVR_INVALID or a stale/already-destroyed
-handle, matching this function's existing "srv is NULL" behavior.
+handle.
 
 Connections already accepted before this call keep running; they are
 not closed and may continue dispatching further requests through this
@@ -31,6 +31,11 @@ requests to fully drain (and closes every remaining idle connection)
 before releasing the server's resources.
 
 Safe to call with CHTTPSVR_INVALID (0).
+
+Safe to call concurrently with a chttpsvr_start call restarting the
+same handle on a different thread: the restart waits for this call's
+own teardown of the old listener to fully finish before binding a new
+one, rather than racing it.
 .fi
 .SH WARNINGS
 .nf

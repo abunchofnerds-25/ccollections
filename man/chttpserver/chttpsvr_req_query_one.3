@@ -16,6 +16,9 @@ ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req,
 Looks up a query parameter that is expected to appear exactly once.
 Unlike chttpsvr_req_query, this function distinguishes an OOM failure
 from a missing key and avoids allocating a scratch result array.
+
+On any failure return, *val_out (if val_out itself is non-NULL) is
+reset to NULL.
 .fi
 .SH RETURN VALUE
 .nf

@@ -26,6 +26,11 @@ Sorts in-place using stable mergesort algorithm
 O(n log n) time complexity, O(n) space complexity
 Asserts if v is NULL
 Uses csort for sorting
+Calls fatal_err() if comparison_proc is NULL
+Calls fatal_err() if the sort's internal temporary buffer could not be
+allocated, matching every other mutating type-safe macro in cvector.h
+(cvec_push, cvec_reserve, cvec_append_array, ...); the vector is left
+completely unsorted in that case.
 .fi
 .SH EXAMPLES
 .nf

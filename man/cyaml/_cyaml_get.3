@@ -21,13 +21,23 @@ Escape sequences in path components:
   \e\e   -> literal '\e' in the key
 A '\e' before any other character is left unchanged.
 
+An empty path component (nothing between two dots, or a leading or
+trailing dot) has no valid interpretation as either a literal
+empty-string key or a "#N" index; navigation stops and NULL is
+returned, at any position in the path, not just the leaf.
+
+A NULL or empty path returns root itself: a zero-component path
+addresses the root, consistent with a leaf-only path (e.g. "key")
+addressing a direct child of it.
+
 The cyaml_get() macro is the preferred public interface.  Call
 _cyaml_get() directly only when the macro wrapper is inconvenient.
 .fi
 .SH RETURN VALUE
 .nf
-Non-owning node reference, or NULL if any component is missing or the
-node type at that step is incompatible with the operation.
+Non-owning node reference, or NULL if root is NULL, any path
+component is missing, the node type at that step is incompatible
+with the operation, or the path contains an empty component.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_get (macro) (3),

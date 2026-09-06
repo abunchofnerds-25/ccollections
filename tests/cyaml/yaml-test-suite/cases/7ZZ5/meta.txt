@@ -1,0 +1,2 @@
+fail=0
+name=Empty flow collections

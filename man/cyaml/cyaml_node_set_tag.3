@@ -1,0 +1,47 @@
+.TH CYAML_NODE_SET_TAG 3 "2026-08-17" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_node_set_tag \- attach, replace, or clear a node's YAML tag
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+ccol_retval_t cyaml_node_set_tag(cyaml node, const char *tag);
+.fi
+.SH DESCRIPTION
+.nf
+Attach or replace node's tag, or clear it.  An internal copy of tag
+is made.
+
+This sets metadata only; it never coerces node's existing type or
+value.  Setting "tag:yaml.org,2002:str" on an already-constructed
+CYAML_INTEGER node leaves it a CYAML_INTEGER still carrying that
+(now type-inconsistent) tag string; a caller wanting a node
+genuinely typed as a string should construct one
+(cyaml_create_string(3)) and tag it, not tag an existing node of a
+different type.
+
+A tag set here is preserved across a later cyaml_set() call on the
+same node, which mutates only the node's value.  A tag that does not
+match the node's own type is also preserved across
+cyaml_serialize()/cyaml_serialize_flow(): it is emitted in its
+fully-resolved verbatim form exactly like a custom tag, rather than
+being silently dropped as a matching core-schema tag would be (see
+cyaml_serialize(3)).
+.fi
+.SH PARAMETERS
+.nf
+node  Target node of any type; a no-op if NULL.
+tag   New tag string (copied); NULL clears any existing tag.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success, ccol_invalid_args if node is NULL, or
+ccol_not_enough_memory on allocation failure (node's existing tag,
+if any, is left untouched in that case).
+.fi
+.SH "SEE ALSO"
+.BR cyaml_node_tag (3),
+.BR cyaml_set (3),
+.BR cyaml_create_string (3)

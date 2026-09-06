@@ -24,6 +24,10 @@ The write sequence (all steps under the per-logger mutex) is:
      return immediately (no output). CLOG_FATAL bypasses this check.
   2. Format the user message with vsnprintf into a 1024-byte stack
      buffer; spill to heap if the formatted text exceeds 1024 bytes.
+     If the heap spill itself cannot be allocated, the message falls
+     back to the truncated stack copy with its final bytes replaced by
+     a visible "...[truncated]" marker rather than being emitted as if
+     it were the complete message.
   3. If time rotation is enabled, check and fire if due.
   4. Build the log record according to the shared backing-store format:
 
@@ -35,6 +39,30 @@ The write sequence (all steps under the per-logger mutex) is:
        {"ts":"...","level":"...","proc":"name(pid):tname(tid)",
         "src":"file:N","func":"...", [fields,] "msg":"..." [,"bt":[...]]}
        The "bt" array is appended inline when with_backtrace is true.
+       If the array cannot be built (backtrace_symbols() failure, or a
+       buffer-growth allocation failure), a "bt_error":"unavailable"
+       key is written in its place instead, so the record still closes
+       normally and the omission is never silent. Every string value
+       (message and every field key/value) is validated as UTF-8
+       before being embedded, since JSON text must be valid Unicode;
+       a byte or byte sequence that is not well-formed UTF-8 is
+       replaced, one invalid byte at a time, with the Unicode
+       replacement character (U+FFFD).
+
+     CLOG_FMT_SYSLOG:
+       <PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID
+       [ccol proc="..." src="..." func="..." [fields]] MSG
+       Control characters (including newline and carriage return) in
+       MSG and in every proc/src/func/field value are backslash-
+       escaped, so a single record can never span more than one line.
+       HOSTNAME and APP-NAME are cached at logger-construction time
+       filtered to RFC 5424 PRINTUSASCII (0x21-0x7e), so neither can
+       contain a byte that would need this same escaping.
+
+     Every value above is escaped or quoted per the target format's
+     own rules; if building the full record would exceed the write
+     buffer's hard cap (see below), the partial content is discarded
+     and replaced with a short, well-formed placeholder record instead.
 
   5. Write the record atomically with write(2) via an EINTR-retry loop.
   6. If with_backtrace is true, emit the backtrace:
@@ -42,13 +70,59 @@ The write sequence (all steps under the per-logger mutex) is:
        write each frame as a tab-indented continuation line:
          \et#N symbol\en
      CLOG_FMT_SYSLOG: emit each frame as a separate RFC 5424 syslog
-       message (same PRI and MSGID as the original record).
+       message (same PRI, TIMESTAMP, and MSGID as the original record).
      CLOG_FMT_JSON: backtrace was already embedded as "bt" in step 4.
+     In both CLOG_FMT_LOGFMT and CLOG_FMT_SYSLOG, the symbol text for
+     each frame is backslash-escaped the same way MSG is, so an
+     unusual symbol name can never split a frame's own line into two;
+     a frame whose line cannot be built (buffer-growth allocation
+     failure, or too little room left before the internal buffer cap)
+     is skipped in favor of any shorter frame that follows, rather
+     than written incomplete or discarding the whole backtrace, so
+     every line that is written is always a complete, well-formed
+     record. If capture failed entirely (backtrace() unsupported on
+     this platform, or backtrace_symbols() itself failed to allocate),
+     or every individual frame failed to fit, a single fixed
+     "backtrace unavailable" marker line (CLOG_FMT_LOGFMT) or marker
+     record (CLOG_FMT_SYSLOG) is emitted in place of the missing
+     per-frame output, mirroring CLOG_FMT_JSON's own
+     "bt_error":"unavailable" key, so the omission is never silent.
   7. If size rotation is enabled, check and fire if due.
   8. If level == CLOG_FATAL, call exit(EXIT_FAILURE).
 
+When the logger was created with a non-NULL clog_async_cfg_t (see
+clog_open_fd_mp(3)) and level != CLOG_FATAL, steps 3-7 above run on a
+dedicated writer thread instead of the calling thread: this function
+only formats the message and captures a snapshot of the logger's
+current fields, timestamp, and thread identity (steps 1-2, plus the
+backtrace capture for step 6, all still done here so they reflect the
+calling thread rather than the writer thread), then hands the rest
+off to be aggregated with records from other handles sharing the
+same target and written later. CLOG_FATAL always runs the full
+sequence synchronously on the calling thread regardless of async
+configuration, after first draining anything already queued from
+earlier, non-fatal calls.
+
 The write buffer is a per-logger dynamic buffer that starts at 4 KiB
-and grows (doubling) up to 16 MiB. It is reused across calls.
+and grows (doubling) up to a 16 MiB hard cap. It is reused across
+calls. If a single record (message, structured fields, and framing
+combined) would exceed that cap, the oversized content is discarded
+and a short, well-formed placeholder record is written in its place,
+in the same output format, noting the original message's size in
+bytes; this guarantees a record can never be emitted truncated
+mid-value or missing its closing delimiters or trailing newline. The
+same placeholder also covers a transient, size-unrelated allocation
+failure while enumerating structured fields; its note reports the
+allocation failure directly rather than misattributing it to size.
+For CLOG_FMT_JSON, if with_backtrace is true the placeholder still
+carries a "bt_error":"unavailable" key, exactly like a "bt" array
+that failed to embed inline, so a requested backtrace is never
+silently indistinguishable from one that was never requested. In the
+extreme case where memory pressure is severe enough that not even
+this placeholder record can be built, a minimal, still
+format-appropriate diagnostic line is written directly instead, so a
+record is never reduced to zero written bytes with no trace of it
+anywhere in the output.
 .fi
 .SH PARAMETERS
 .nf
@@ -65,9 +139,12 @@ fmt             printf-style format string.
 .nf
 Backtrace support requires a platform with execinfo.h (glibc, macOS,
 FreeBSD) and the binary linked with -rdynamic for symbol resolution.
-On other platforms the backtrace is silently omitted.
+On other platforms, or on a transient allocation failure while
+resolving symbol names, capture itself fails, but the omission is
+never silent (see step 6 above).
 The format attribute causes the compiler to type-check fmt and the
 variadic arguments at compile time.
+Asserts if logger is CLOG_INVALID, stale, or already closed.
 .fi
 .SH "SEE ALSO"
 .BR log_trace (3),

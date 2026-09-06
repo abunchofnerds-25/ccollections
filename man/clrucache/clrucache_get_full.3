@@ -29,10 +29,15 @@ Cache miss without a remote getter: returns ccol_key_not_found.
 Cache miss with a remote getter: a placeholder entry is inserted and
 the remote getter is called outside the mutex. Concurrent get calls
 for the same key coalesce: only the first caller runs the fetch; all
-others block until the result is available. On getter success the
-fetched value is cached and a heap-allocated copy is written into
-val_out for all waiters. On getter failure, all waiters receive
-ccol_key_not_found.
+others block until the result is available and receive the same
+result the fetching caller did. On getter success the fetched value
+is cached and a heap-allocated copy is written into val_out for all
+waiters. On an ordinary getter failure, all waiters receive
+ccol_key_not_found; if instead the fetched value was rejected for
+being the wrong size for a concurrent, coalesced clru_get()/
+__clrucache_get_into() caller's own fixed-size buffer, all waiters
+(including this call, if it is one of them) receive
+ccol_unexpected_failure instead.
 
 If a set is in progress for the same key this call blocks until the
 set completes and the cache is in a consistent state.
@@ -56,6 +61,16 @@ ccol_invalid_args      cache is CLRU_CACHE_INVALID or a stale
                        val_out is NULL.
 ccol_not_enough_memory Allocation failed (placeholder entry or output
                        copy).
+ccol_unexpected_failure
+                       This call coalesced onto another, concurrent
+                       cache-miss fetch for the same key, and that
+                       fetch's own caller rejected the fetched value
+                       for being the wrong size for its own fixed-size
+                       destination buffer. Every caller coalesced onto
+                       the same fetch receives this same result.
+ccol_container_full    On a cache miss, the cache's own internal
+                       bookkeeping has reached its maximum element
+                       count; not reachable in practice.
 .fi
 .SH NOTES
 .nf

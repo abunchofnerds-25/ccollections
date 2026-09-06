@@ -1,0 +1,2 @@
+fail=0
+name=Spec Example 8.4. Chomping Final Line Break

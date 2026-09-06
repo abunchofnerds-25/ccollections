@@ -1,0 +1,2 @@
+fail=0
+name=Spec Example 2.1. Sequence of Scalars

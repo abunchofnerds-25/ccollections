@@ -69,6 +69,45 @@ typedef struct __internal_entry_header {
 } __internal_entry_header;
 
 /**
+ * @brief True iff _ccol_mempool_align_up(x) is well-defined for x, i.e. the
+ * rounding-up addition it performs does not overflow size_t.
+ *
+ * Not meant to be used directly; mempool_create(), mempool_create_from_
+ * preallocated_buffer(), and DECLARE_PREALLOCATED_MEMPOOL_BUFFER all check
+ * this (directly or via _ccol_mempool_buffer_params_fit) before relying on
+ * _ccol_mempool_align_up()'s result.
+ */
+#define _ccol_mempool_align_up_fits(x) \
+  ((x) <= SIZE_MAX - (_Alignof(__internal_entry_header) - 1))
+
+/**
+ * @brief Rounds x up to the nearest multiple of __internal_entry_header's
+ * own alignment requirement.
+ *
+ * Every entry in a mempool's contiguous backing buffer (whether heap
+ * allocated or supplied via mempool_create_from_preallocated_buffer /
+ * DECLARE_PREALLOCATED_MEMPOOL_BUFFER) sits extended_elem_size bytes after
+ * the previous one. The buffer's own starting address being aligned for
+ * __internal_entry_header (already validated separately) is only enough to
+ * keep entry 0 correctly aligned; every later entry's alignment depends on
+ * extended_elem_size ITSELF being a multiple of that same alignment, or the
+ * per-entry offset drifts out of alignment one stride at a time. This is
+ * what makes every per-element header write/read
+ * (mempool_init_internal_scalars, mempool_alloc_entry, __mempool_free_
+ * entry, ...) for an entry other than the first a misaligned access
+ * (undefined behavior, and a real fault risk on strict-alignment
+ * architectures) whenever a caller's own elem_size, once the header
+ * overhead is added, is not already a multiple of this alignment (e.g. any
+ * plain struct built only from < 8-byte-aligned members, like a 12-byte
+ * "float x, y, z" struct on a 64-bit platform). Callers must first confirm
+ * x fits via _ccol_mempool_align_up_fits(x), since the addition below can
+ * otherwise overflow.
+ */
+#define _ccol_mempool_align_up(x)                    \
+  (((x) + (_Alignof(__internal_entry_header) - 1)) & \
+   ~(size_t)(_Alignof(__internal_entry_header) - 1))
+
+/**
  * @brief Create a fixed-size memory pool
  *
  * Creates a memory pool that manages a fixed number of fixed-size elements.
@@ -77,7 +116,7 @@ typedef struct __internal_entry_header {
  *
  * @param elem_count Number of elements in the pool (must be > 0)
  * @param elem_size Size of each element in bytes (must be > 0, minimum
- * sizeof(uintptr_t))
+ * sizeof(uintptr_t), maximum SIZE_MAX minus the internal header overhead)
  * @param fallback_to_dynamic_memory If true, allocate from heap when pool
  * exhausted
  * @param single_threaded If true, omit locking (faster but not thread-safe)
@@ -89,8 +128,13 @@ typedef struct __internal_entry_header {
  * @return Pointer to newly created memory pool, or NULL on failure
  *
  * @note Actual element size includes header overhead
- * (offsetof(__internal_entry_header, next))
+ * (offsetof(__internal_entry_header, next)), further rounded up to
+ * __internal_entry_header's own alignment requirement so every entry in the
+ * pool's contiguous buffer, not just the first, lands on a properly aligned
+ * address
  * @note If elem_size < sizeof(uintptr_t), it is rounded up
+ * @note Returns NULL with error if elem_size would overflow size_t once the
+ * header overhead and alignment rounding are added
  * @note Thread-safe if single_threaded is false (uses read-write locks)
  * @note With fallback enabled, pool never fails allocation (until system OOM)
  * @note The pool must be destroyed with mempool_destroy() when done
@@ -116,6 +160,27 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
  *
  * @note Automatically includes header overhead in size calculation
  * @note Useful for embedded systems or avoiding heap allocation
+ * @note The declared buffer is aligned suitably for __internal_entry_header
+ * (whose fields include a size_t and a pointer), so it can be handed directly
+ * to mempool_create_from_preallocated_buffer() without any extra alignment
+ * considerations on the caller's part
+ * @note elem_size smaller than sizeof(uintptr_t) is rounded up to fit the
+ * free-list pointer before the buffer's size is computed, the same way
+ * mempool_create_from_preallocated_buffer() itself rounds it; this keeps the
+ * declared buffer's element count in agreement with what that constructor
+ * will actually carve it into, rather than the buffer being sized for the
+ * caller's smaller, unrounded elem_size while the constructor divides it up
+ * using the larger, rounded one
+ * @note The per-element stride (rounded elem_size + header overhead) is
+ * further rounded up to __internal_entry_header's own alignment requirement,
+ * again matching mempool_create_from_preallocated_buffer()'s own stride
+ * exactly; this keeps every entry past the first one in the resulting pool
+ * correctly aligned, not just entry 0
+ * @note elem_count must be nonzero; rejected at compile time (via a
+ * _Static_assert), rather than silently producing an undersized (or, for
+ * elem_count == 0, zero-length) array, if elem_count is zero or if
+ * elem_count * (rounded and aligned elem_size + header overhead) would
+ * overflow size_t
  *
  * @see mempool_create_from_preallocated_buffer
  *
@@ -126,9 +191,40 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
  *     my_buffer, sizeof(my_buffer), 64, false, false, NULL, NULL);
  * @endcode
  */
-#define DECLARE_PREALLOCATED_MEMPOOL_BUFFER(name, elem_count, elem_size) \
-  uint8_t name[(elem_count) *                                            \
-               ((elem_size) + offsetof(__internal_entry_header, next))]
+/* The leading ccol_max(elem_size, sizeof(uintptr_t)) <= SIZE_MAX -
+ * offsetof(...) term below guards the FIRST addition this macro performs
+ * (bumped elem_size + header overhead), before that sum is ever handed to
+ * _ccol_mempool_align_up_fits(), which only proves the SECOND addition
+ * (align_up's own rounding step) is safe for whatever value it is given.
+ * Without this leading term, an elem_size within offsetof(__internal_entry_
+ * header, next) bytes of SIZE_MAX made that first addition itself silently
+ * wrap to a small value before _ccol_mempool_align_up_fits ever saw it,
+ * so every later term in this macro (and DECLARE_PREALLOCATED_MEMPOOL_
+ * BUFFER's own array-size expression, which repeats the identical
+ * unprotected addition) was evaluated against that wrapped, wrong value
+ * instead of failing the way mempool_create()'s equivalent, subtraction-
+ * only check already does for the exact same elem_size range. */
+#define _ccol_mempool_buffer_params_fit(elem_count, elem_size)             \
+  ((elem_count) > 0 &&                                                     \
+   ccol_max((elem_size), sizeof(uintptr_t)) <=                             \
+       SIZE_MAX - offsetof(__internal_entry_header, next) &&               \
+   _ccol_mempool_align_up_fits(ccol_max((elem_size), sizeof(uintptr_t)) +  \
+                               offsetof(__internal_entry_header, next)) && \
+   _ccol_mempool_align_up(ccol_max((elem_size), sizeof(uintptr_t)) +       \
+                          offsetof(__internal_entry_header, next)) <=      \
+       SIZE_MAX / (elem_count))
+
+#define DECLARE_PREALLOCATED_MEMPOOL_BUFFER(name, elem_count, elem_size)     \
+  _Static_assert(                                                            \
+      _ccol_mempool_buffer_params_fit((elem_count), (elem_size)),            \
+      "DECLARE_PREALLOCATED_MEMPOOL_BUFFER: elem_count must be nonzero, "    \
+      "and elem_count * elem_size (rounded up for the minimum element "      \
+      "size and for __internal_entry_header's own alignment requirement) "   \
+      "must not overflow size_t");                                           \
+  _Alignas(__internal_entry_header) uint8_t                                  \
+      name[(elem_count) *                                                    \
+           _ccol_mempool_align_up(ccol_max((elem_size), sizeof(uintptr_t)) + \
+                                  offsetof(__internal_entry_header, next))]
 
 /**
  * @brief Create a memory pool from a preallocated buffer
@@ -140,7 +236,9 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
  *
  * @param buffer Pointer to preallocated buffer
  * @param buf_size Size of buffer in bytes
- * @param elem_size Size of each element in bytes (minimum sizeof(uintptr_t))
+ * @param elem_size Size of each element in bytes (must be > 0; if smaller
+ * than sizeof(uintptr_t) it is rounded up, mirroring mempool_create();
+ * maximum SIZE_MAX minus the internal header overhead)
  * @param fallback_to_dynamic_memory If true, allocate from heap when pool
  * exhausted
  * @param single_threaded If true, omit locking (faster but not thread-safe)
@@ -150,10 +248,23 @@ mempool *mempool_create(size_t elem_count, size_t elem_size,
  *
  * @return Pointer to newly created memory pool, or NULL on failure
  *
- * @note Element count is calculated as buf_size / (elem_size + header_overhead)
+ * @note Element count is calculated as buf_size / stride, where stride is
+ * elem_size + header_overhead further rounded up to __internal_entry_
+ * header's own alignment requirement (so every entry, not just the first,
+ * lands on a properly aligned address); the same stride
+ * DECLARE_PREALLOCATED_MEMPOOL_BUFFER sizes its own buffer with
  * @note Buffer is not freed by mempool_destroy() (user manages buffer lifetime)
  * @note Pool struct itself is still allocated via mmgmt_procs
- * @note Returns NULL with error if elem_size < sizeof(uintptr_t)
+ * @note Returns NULL with error if elem_size is zero
+ * @note If elem_size is nonzero but < sizeof(uintptr_t), it is rounded up
+ * (same as mempool_create())
+ * @note Returns NULL with error if elem_size would overflow size_t once the
+ * header overhead and alignment rounding are added
+ * @note Returns NULL with error if buffer is not sufficiently aligned for
+ * __internal_entry_header (a buffer declared via
+ * DECLARE_PREALLOCATED_MEMPOOL_BUFFER is always properly aligned; a
+ * hand-rolled buffer must be aligned to at least _Alignof(max_align_t) or
+ * explicitly to __internal_entry_header's own alignment requirement)
  *
  * @see DECLARE_PREALLOCATED_MEMPOOL_BUFFER
  * @see mempool_create
@@ -232,6 +343,7 @@ void *mempool_alloc_entry(mempool *mp);
  * @note O(1) allocation + mem_set cost
  * @note Only zeros user-visible portion (not internal header)
  * @note Thread-safe if pool was created with single_threaded=false
+ * @note Will assert if mp is NULL
  *
  * @see mempool_alloc_entry
  * @see mempool_free_entry
@@ -414,12 +526,78 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
  * @return Size in bytes required for the buffer
  *
  * @note For internal use - use DECLARE_PREALLOCATED_RMEMPOOL_BUFFER instead
+ *
+ * The second term below is mathematically
+ * 2 * 2^SC * header_overhead * (2^N - 1) / 2^N, where N = LS - SS + 1; the
+ * r_mempool_create() validation this macro's own parameters must already
+ * satisfy (SC >= LS - SS, i.e. SC + 1 >= N) guarantees that division is
+ * exact. Rather than forming the full, un-reduced product 2 * 2^SC *
+ * header_overhead * (2^N - 1) and dividing it down afterward (which can
+ * overflow size_t well before the final division would have brought the
+ * value back into range, silently wrapping to a wrong, too-small buffer
+ * size), the 2 * 2^SC / 2^N factor is reduced first via a single right
+ * shift (exact under the same precondition, and always well-defined
+ * since (LS - SS) is itself bounded below size_t's width by
+ * r_mempool_create()'s own validation) before multiplying by the much
+ * smaller remaining factors. This does not (and cannot) avoid overflow for
+ * parameters large enough that the requested buffer itself is not
+ * representable in a size_t; it only removes the overflow the original
+ * multiply-then-divide ordering introduced on top of that inherent limit.
  */
-#define CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(SS, LS, SC)         \
-  (((LS) - (SS) + 1) * ((size_t)1 << (SC)) * ((size_t)1 << (SS)) +      \
-   (2 * ((size_t)1 << (SC)) * offsetof(__internal_entry_header, next) * \
-    (((size_t)1 << ((LS) - (SS) + 1)) - 1)) /                           \
-       ((size_t)1 << ((LS) - (SS) + 1)))
+#define CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(SS, LS, SC)    \
+  (((LS) - (SS) + 1) * ((size_t)1 << (SC)) * ((size_t)1 << (SS)) + \
+   ((((size_t)1 << (SC)) >> ((LS) - (SS))) *                       \
+    offsetof(__internal_entry_header, next) *                      \
+    (((size_t)1 << ((LS) - (SS) + 1)) - 1)))
+
+/**
+ * @brief Compile-time guard for DECLARE_PREALLOCATED_RMEMPOOL_BUFFER
+ *
+ * True iff the three power-of-two parameters produce a well-defined
+ * CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE result that fits in a size_t.
+ * Not meant to be used directly; DECLARE_PREALLOCATED_RMEMPOOL_BUFFER is the
+ * public entry point.
+ *
+ * Every sub-condition below is ordered so that a term is only ever
+ * evaluated once every condition it depends on for well-definedness has
+ * already been confirmed true by an earlier, short-circuited && operand
+ * (neither GCC nor Clang requires the short-circuited side of && / || in a
+ * _Static_assert condition to itself be free of undefined behavior, e.g. an
+ * out-of-range shift or a division by zero, so this ordering is sufficient
+ * on both compilers this library builds with). In order: every power-of-two
+ * exponent is small enough that a 1 << exponent is well-defined;
+ * largest_size_power_of_two is genuinely larger than
+ * smallest_size_power_of_two; their difference stays small enough that the
+ * widest shift CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE performs stays
+ * well-defined; number_of_smallest_size_elems_power_of_two is at least
+ * largest_size_power_of_two - smallest_size_power_of_two (the exact
+ * precondition CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE's own division
+ * requires to be mathematically exact, matching what
+ * r_mempool_create's own input validation separately enforces at runtime);
+ * then each of the two terms CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
+ * sums is checked for overflow via division rather than by forming the
+ * (possibly overflowing) product directly, followed by a check that the sum
+ * of those two terms does not itself overflow size_t.
+ */
+#define _ccol_rmempool_buffer_params_fit(SS, LS, SC)                           \
+  ((size_t)(SS) < (sizeof(size_t) * CHAR_BIT) &&                               \
+   (size_t)(LS) < (sizeof(size_t) * CHAR_BIT) &&                               \
+   (size_t)(SC) < (sizeof(size_t) * CHAR_BIT) && (LS) > (SS) &&                \
+   ((size_t)(LS) - (size_t)(SS)) < (sizeof(size_t) * CHAR_BIT) - 1 &&          \
+   (size_t)(SC) >= ((size_t)(LS) - (size_t)(SS)) &&                            \
+   ((size_t)1 << (SC)) <= SIZE_MAX / ((size_t)(LS) - (size_t)(SS) + 1) &&      \
+   ((size_t)1 << (SS)) <=                                                      \
+       SIZE_MAX / (((size_t)(LS) - (size_t)(SS) + 1) * ((size_t)1 << (SC))) && \
+   offsetof(__internal_entry_header, next) <=                                  \
+       SIZE_MAX / (((size_t)1 << (SC)) >> ((size_t)(LS) - (size_t)(SS))) &&    \
+   (((size_t)1 << ((size_t)(LS) - (size_t)(SS) + 1)) - 1) <=                   \
+       SIZE_MAX / ((((size_t)1 << (SC)) >> ((size_t)(LS) - (size_t)(SS))) *    \
+                   offsetof(__internal_entry_header, next)) &&                 \
+   (((size_t)(LS) - (size_t)(SS) + 1) * ((size_t)1 << (SC)) *                  \
+    ((size_t)1 << (SS))) <=                                                    \
+       SIZE_MAX - ((((size_t)1 << (SC)) >> ((size_t)(LS) - (size_t)(SS))) *    \
+                   offsetof(__internal_entry_header, next) *                   \
+                   (((size_t)1 << ((size_t)(LS) - (size_t)(SS) + 1)) - 1)))
 
 /**
  * @brief Declare a preallocated buffer for a ranged memory pool
@@ -437,6 +615,19 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
  * @note Automatically includes header overhead in size calculation
  * @note Useful for embedded systems or avoiding heap allocation
  * @note Buffer contains all sub-pools in contiguous memory
+ * @note The declared buffer is aligned suitably for __internal_entry_header
+ * (whose fields include a size_t and a pointer), so it can be handed directly
+ * to r_mempool_create_from_preallocated_buffer() without any extra alignment
+ * considerations on the caller's part; every individual sub-pool segment
+ * within the buffer stays correctly aligned as a consequence
+ * @note Rejected at compile time (via a _Static_assert), rather than
+ * silently producing a wrongly-sized array, if the three parameters would
+ * make the pool's own required buffer size overflow size_t, or if
+ * number_of_smallest_size_elems_power_of_two is smaller than
+ * largest_size_power_of_two - smallest_size_power_of_two (the same
+ * precondition r_mempool_create's own input validation enforces at runtime,
+ * required here too for CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE's own
+ * division to be exact rather than silently truncated)
  *
  * @see CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
  * @see r_mempool_create_from_preallocated_buffer
@@ -449,12 +640,21 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
  *     fallback_disabled, false, NULL, NULL);
  * @endcode
  */
-#define DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(                    \
-    name, smallest_size_power_of_two, largest_size_power_of_two, \
-    number_of_smallest_size_elems_power_of_two)                  \
-  uint8_t name[CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(      \
-      (smallest_size_power_of_two), (largest_size_power_of_two), \
-      (number_of_smallest_size_elems_power_of_two))]
+#define DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(                            \
+    name, smallest_size_power_of_two, largest_size_power_of_two,         \
+    number_of_smallest_size_elems_power_of_two)                          \
+  _Alignas(__internal_entry_header)                                      \
+      uint8_t name[CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE(          \
+          (smallest_size_power_of_two), (largest_size_power_of_two),     \
+          (number_of_smallest_size_elems_power_of_two))];                \
+  _Static_assert(                                                        \
+      _ccol_rmempool_buffer_params_fit(                                  \
+          (smallest_size_power_of_two), (largest_size_power_of_two),     \
+          (number_of_smallest_size_elems_power_of_two)),                 \
+      "DECLARE_PREALLOCATED_RMEMPOOL_BUFFER: parameters would make the " \
+      "pool's own required buffer size overflow size_t, or violate "     \
+      "number_of_smallest_size_elems_power_of_two >= "                   \
+      "largest_size_power_of_two - smallest_size_power_of_two")
 
 /**
  * @brief Create a ranged memory pool from a preallocated buffer
@@ -483,6 +683,11 @@ r_mempool *r_mempool_create(uint8_t smallest_size_power_of_two,
  * lifetime)
  * @note Pool structs are still allocated via mmgmt_procs
  * @note Buffer contains all sub-pools in adjacent segments
+ * @note Returns NULL with error if buffer is not sufficiently aligned for
+ * __internal_entry_header (a buffer declared via
+ * DECLARE_PREALLOCATED_RMEMPOOL_BUFFER is always properly aligned; a
+ * hand-rolled buffer must be aligned to at least _Alignof(max_align_t) or
+ * explicitly to __internal_entry_header's own alignment requirement)
  *
  * @see DECLARE_PREALLOCATED_RMEMPOOL_BUFFER
  * @see r_mempool_create
@@ -632,6 +837,7 @@ void *r_mempool_alloc_entry(r_mempool *rmp, size_t size);
  *
  * @note Zeros exactly 'size' bytes (not the full pool element)
  * @note Thread-safe if pool was created with single_threaded=false
+ * @note Will assert if rmp is NULL
  *
  * @see r_mempool_alloc_entry
  * @see r_mempool_realloc_entry
@@ -641,9 +847,12 @@ void *r_mempool_calloc_entry(r_mempool *rmp, size_t size);
 /**
  * @brief Reallocate an entry to a different size
  *
- * Changes the size of an allocated entry. If the new size maps to the same
- * pool as the old size, returns the original pointer. Otherwise, allocates
- * a new entry, copies min(old_size, new_size) bytes, and frees the old entry.
+ * Changes the size of an allocated entry. If the new size does not require
+ * moving to a differently-sized underlying allocation, returns the original
+ * pointer unchanged (no copy); this applies uniformly whether addr is
+ * served by one of the pool's own fixed-size tiers or by the dynamic/heap
+ * fallback path. Otherwise, allocates a new entry sized for the request,
+ * copies min(old_size, new_size) bytes, and frees the old entry.
  *
  * @param rmp Ranged memory pool
  * @param addr Existing entry to reallocate, or NULL to allocate new
@@ -652,12 +861,21 @@ void *r_mempool_calloc_entry(r_mempool *rmp, size_t size);
  * @return Pointer to reallocated entry, or NULL on failure
  *
  * @note If addr is NULL, equivalent to r_mempool_alloc_entry()
- * @note If new size maps to same pool, returns original pointer (no copy)
+ * @note If the new size does not require a differently-sized allocation,
+ * returns the original pointer unchanged (no copy)
  * @note Otherwise, allocates new, copies data, frees old
  * @note Copies min(old_user_size, new_user_size) bytes
  * @note Old entry is automatically freed if reallocation succeeds
  * @note Thread-safe if pool was created with single_threaded=false
- * @note Returns NULL if size is 0 or > largest_size
+ * @note Returns NULL if size is 0 or > largest_size, WITHOUT touching addr:
+ * a non-NULL addr is neither freed nor moved when size itself is invalid,
+ * exactly as if the call had never been made; a genuinely failed
+ * reallocation (a valid size that simply cannot be satisfied) leaves addr
+ * equally untouched, so both failure modes share the same "original
+ * pointer still valid, still owned by the caller" contract
+ * @note Will assert if addr is non-NULL and was not obtained from this
+ * r_mempool (corruption/foreign-pointer detection, mirroring
+ * mempool_free_entry())
  *
  * @see r_mempool_alloc_entry
  * @see r_mempool_free_entry

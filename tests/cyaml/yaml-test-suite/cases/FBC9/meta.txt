@@ -1,0 +1,2 @@
+fail=0
+name=Allowed characters in plain scalars

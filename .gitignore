@@ -7,6 +7,26 @@ tests/*/tests
 tests/*/tests_*
 !tests/*/tests_*.*
 tests/*/coverage/
+tests/*/fuzz_*
+tests/*/crash-*
+tests/*/oom-*
+tests/*/timeout-*
+__pycache__/
+tests/cyaml/differential/cyaml_to_json
+# libFuzzer auto-discovers and writes new corpus entries (bare-hash
+# filenames, no extension) back into whatever corpus directory it's
+# pointed at; only the deliberately-extracted seed files (*.bin, or *.yaml
+# for cyaml) should be committed.
+tests/chttpclient/fuzz/corpus_request/*
+!tests/chttpclient/fuzz/corpus_request/*.bin
+tests/chttpclient/fuzz/corpus_response/*
+!tests/chttpclient/fuzz/corpus_response/*.bin
+tests/cjson/fuzz/corpus_parse/*
+!tests/cjson/fuzz/corpus_parse/*.bin
+tests/cjson/fuzz/corpus_path/*
+!tests/cjson/fuzz/corpus_path/*.bin
+tests/cyaml/fuzz/corpus/*
+!tests/cyaml/fuzz/corpus/*.yaml
 *.gcno
 *.gcda
 *.gcov
@@ -15,3 +35,4 @@ tests/*/coverage/
 main
 /*.pdb
 .envrc
+massif.out.*

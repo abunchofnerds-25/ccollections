@@ -32,7 +32,13 @@ Three formats are available:
        "src":"file:N","func":"...", [fields,] "msg":"..."}
     Structured fields become top-level JSON keys.  For log_error,
     log_alert, and log_fatal the backtrace is embedded as a "bt"
-    string array inside the same JSON object.
+    string array inside the same JSON object.  Every string value
+    (the message and every field key/value) is validated as UTF-8
+    before being embedded; a byte or byte sequence that is not
+    well-formed UTF-8 is replaced, one invalid byte at a time, with
+    the Unicode replacement character (U+FFFD), so a message or
+    field value built from arbitrary or binary data can never
+    produce a record with invalid Unicode content.
 
   CLOG_FMT_SYSLOG (2)
     RFC 5424 syslog format.  Available only for fd-based loggers
@@ -47,8 +53,15 @@ Three formats are available:
                    clog_level_t: TRACE=7, DEBUG=7, INFO=6, WARN=4,
                    ERROR=3, ALERT=1, FATAL=0)
       TIMESTAMP  = ISO 8601 UTC (same format as logfmt/JSON)
-      HOSTNAME   = result of gethostname(2), or "-" if unavailable
-      APP-NAME   = process name from /proc/self/comm or argv[0], or "-"
+      HOSTNAME   = result of gethostname(2), kept only where every byte
+                   is RFC 5424 PRINTUSASCII (0x21-0x7e); any other byte
+                   (including a space or control character) is dropped
+                   rather than truncating the value at that point; "-"
+                   if this yields no bytes at all (including
+                   gethostname(2) itself failing)
+      APP-NAME   = process name from /proc/self/comm or argv[0],
+                   filtered to PRINTUSASCII the same way; "-" if this
+                   yields no bytes at all
       PID        = getpid(2)
       MSGID      = level string ("INFO", "ERROR", etc.)
       [ccol ...]  = RFC 5424 SD-ELEMENT with SD-ID "ccol" carrying
@@ -57,10 +70,23 @@ Three formats are available:
                    attached via clog_set_field()
       MSG        = the formatted message text
 
+    Control characters (including a literal newline or carriage
+    return) in MSG and in every proc/src/func/field value are
+    backslash-escaped (\en, \er, \et, or \exNN), the same scheme
+    logfmt uses for its own values.  HOSTNAME and APP-NAME cannot
+    contain a byte requiring this escaping in the first place, since
+    both are already filtered down to PRINTUSASCII above.  Together
+    this guarantees a single record can never be split across
+    multiple lines by its own content.
+
     The facility is controlled by clog_set_facility() and defaults to
     CLOG_SYSLOG_USER.  Backtraces (log_error, log_alert, log_fatal) are
     emitted as separate syslog messages, one per frame, using the same
-    PRI and MSGID as the original record.
+    PRI, TIMESTAMP, and MSGID as the original record; the frame text
+    itself is backslash-escaped the same way MSG is.  Sharing the
+    original record's own TIMESTAMP (rather than each frame's own
+    write time) is what lets a reader correlate a record with its own
+    backtrace frames.
 
     The fd must be connected to a syslog daemon before calling
     clog_set_format().  On Linux this is typically a SOCK_DGRAM Unix
@@ -76,6 +102,7 @@ fmt     CLOG_FMT_LOGFMT, CLOG_FMT_JSON, or CLOG_FMT_SYSLOG.
 .nf
 Thread-safe: protected by the shared backing-store mutex.
 Passing CLOG_FMT_SYSLOG on a file-backed logger is a silent no-op.
+Asserts if logger is CLOG_INVALID, stale, or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_get_format (3),

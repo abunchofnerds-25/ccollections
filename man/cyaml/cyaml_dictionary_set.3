@@ -14,8 +14,9 @@ ccol_retval_t cyaml_dictionary_set(cyaml map, const char *key,
 .nf
 Store child under key in the CYAML_DICTIONARY node map.  An internal copy
 of key is made.  Ownership of child transfers to map.  If the key
-already exists, the previous child is deep-freed before the new one is
-stored.
+already exists, the new child is stored first and the previous child is
+deep-freed afterward, so both may be resident in memory at the same
+instant during the replacement.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,7 +26,9 @@ child  Value node (ownership transfers).
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
+ccol_container_full (the dictionary has reached its maximum
+representable element count; not reachable in practice).
 .fi
 .SH "SEE ALSO"
 .BR cyaml_dictionary_get (3),

@@ -1,0 +1,2 @@
+fail=1
+name=Anchor and alias as mapping key

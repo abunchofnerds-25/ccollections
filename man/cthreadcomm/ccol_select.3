@@ -83,7 +83,8 @@ Phase 2 (wait)
     arrived between Phase 1 and the actual sleep.  Producers set the
     ready flag under sel_mtx before signalling sel_cond, so no wakeup
     is ever lost.  On ETIMEDOUT with ready still false, ccol_timed_out
-    is returned.
+    is returned.  If pthread_cond_timedwait() itself reports any other
+    error, ccol_unexpected_failure is returned rather than retrying.
     Epoll path (fd selectables present): call epoll_wait() with the
     remaining timeout recomputed on each attempt (including EINTR
     retries) so signal delivery cannot extend the deadline.  n_ready==0
@@ -108,11 +109,17 @@ it; the heap buffer backing the node array cannot be freed mid-traversal.
 ready_index   Pointer to a size_t that receives the 0-based index of the
               selectable that became ready.  Valid only when ccol_success
               is returned.
-n             Number of elements in the selectables array.  Must be >= 1.
+n             Number of elements in the selectables array.  Must be >= 1
+              and no larger than INT_MAX, rejected with ccol_invalid_args
+              otherwise (see RETURN VALUE); also, separately, no larger
+              than SIZE_MAX / sizeof(internal waiter node).  No realistic
+              caller can reach either ceiling.
 selectables   Array of n ccol_selectable values to monitor.
 timeout_ms    (ccol_select_timed only) Maximum milliseconds to wait.
               -1: infinite wait (same as ccol_select).  0: non-blocking
-              poll.  Positive: wait up to that many milliseconds.
+              poll.  Positive: wait up to that many milliseconds.  Any
+              other negative value is also treated as an infinite wait,
+              identically to -1.
 .fi
 .SH RETURN VALUE
 .nf
@@ -124,17 +131,30 @@ ccol_timed_out          (ccol_select_timed only) timeout_ms elapsed
                         before any selectable became ready.
                         *ready_index is unmodified.
 
-ccol_invalid_args       ready_index or selectables is NULL; n is 0;
-                        a queue selectable contains a NULL queue pointer;
-                        an fd selectable contains a negative fd; or an
-                        unrecognised type tag is present.
+ccol_invalid_args       ready_index or selectables is NULL; n is 0,
+                        larger than INT_MAX (a matched selectable's own
+                        index is narrowed through a plain int
+                        internally), or larger than SIZE_MAX / sizeof
+                        (internal waiter node) (the internal
+                        per-selectable waiter-node array would overflow
+                        size_t); unreachable with any n a caller could
+                        realistically construct; a queue selectable
+                        contains a NULL queue pointer; an fd selectable
+                        contains a negative fd; or an unrecognised type
+                        tag is present.
 ccol_not_enough_memory  malloc failed to allocate the internal waiter node
                         array (one node per selectable).
 ccol_unexpected_failure epoll_create1(2), eventfd(2), or epoll_ctl(2)
-                        failed with an unexpected errno.  Only possible
-                        when at least one fd selectable is present.
-                        Treat as a fatal configuration error (e.g.,
-                        fd-table exhaustion or memory pressure).
+                        failed with an unexpected errno.  Reachable for
+                        both functions, but only when at least one fd
+                        selectable is present.  For ccol_select_timed()
+                        specifically, also returned when no fd
+                        selectable is present and timeout_ms is
+                        non-negative, if the internal timed
+                        condition-variable wait itself fails with an
+                        error other than a timeout.  Treat as a fatal
+                        configuration error (e.g., fd-table exhaustion
+                        or memory pressure).
 .fi
 .SH NOTES
 .nf
@@ -164,6 +184,24 @@ immediately so they can observe the new state.
 File descriptors must be kept open for the entire duration of the
 ccol_select() call.  Closing an fd that ccol_select() is currently
 watching produces undefined behaviour.
+
+Likewise, a queue or channel passed to selectable_from_circq()/
+selectable_from_dynq()/selectable_from_chan() must not be destroyed
+while a ccol_select()/ccol_select_timed() call is still watching it:
+circular_queue_destroy()/dynamic_queue_destroy()/channel_destroy() assert
+if the queue still has a linked waiter (from either an in-progress
+ccol_select()/ccol_select_timed() call or a live event_loop
+registration), since the still-linked waiter node would otherwise
+reference the queue's own, about-to-be-freed mutex.
+
+The same fd may appear in more than one selectable within a single call,
+in any mix of directions (including an outright duplicate of the same
+direction twice); for example, watching one connected socket for both
+readability and writability at once.  Selectables sharing an fd are
+combined into a single underlying registration internally; when it fires,
+ccol_select() resolves the returned index to whichever one of the sharing
+selectables, in the order they were supplied, has its own direction
+actually satisfied by what became ready.
 
 Uses POSIX mutexes and condition variables internally; epoll(7) and
 eventfd(2) when fd selectables are present (Linux only).
@@ -221,6 +259,20 @@ r = ccol_select_timed_va(&idx, 500,
 if (r == ccol_timed_out) {
     printf("no source ready within 500 ms\en");
 }
+
+/* Watch one connected socket for either direction, whichever comes first: */
+r = ccol_select_va(&idx,
+        selectable_from_fd(sock_fd, ccol_select_read),
+        selectable_from_fd(sock_fd, ccol_select_write));
+if (r == ccol_success) {
+    if (idx == 0) {
+        char buf[512];
+        ssize_t n = read(sock_fd, buf, sizeof(buf));
+        printf("read %zd bytes\en", n);
+    } else {
+        write(sock_fd, "hi", 2);
+    }
+}
 .fi
 .SH "SEE ALSO"
 .BR ccol_select_timed (3),
@@ -233,4 +285,7 @@ if (r == ccol_timed_out) {
 .BR selectable_from_fd (3),
 .BR circq_try_recv_zc (3),
 .BR dynmq_try_recv_zc (3),
-.BR chan_try_recv_zc (3)
+.BR chan_try_recv_zc (3),
+.BR circular_queue_destroy (3),
+.BR dynamic_queue_destroy (3),
+.BR channel_destroy (3)

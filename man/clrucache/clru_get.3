@@ -11,13 +11,18 @@ ccol_retval_t clru_get(name, key, val_ptr);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe GNU C statement expression that serialises key into a
-cmap_pair and retrieves the stored value. The behaviour on success
+Type-safe GNU C statement expression that converts key to the cache's
+own declared KeyT (the same way a plain C assignment would), retrieves
+the stored value, and delivers it via val_ptr. The behaviour on success
 depends on the value type declared at cache construction:
 
-Non-char* val types: the value is copied directly into *val_ptr with
-no heap allocation. val_ptr is a pointer to ValT (e.g. double * for a
-cache<int, double>), NOT a cmap_pair *.
+Non-char* val types: the stored value is converted to *val_ptr's own
+type the same way a plain C assignment would (e.g. a cache storing int
+values read into a double * out-param converts the int to a double,
+rather than copying its raw bytes); no heap allocation occurs. val_ptr
+is a pointer to *val_ptr's own type, NOT a cmap_pair *; a *val_ptr type
+that cannot be implicitly converted from the cache's declared ValT is a
+compile error at this point, not a silently reinterpreted value.
 
 char* val types: ownership of the heap-allocated string is transferred
 directly to the caller via *(char **)val_ptr. The caller must free()
@@ -32,14 +37,15 @@ name     Cache variable (must have companion type variables in scope,
          either from clru_construct / clru_declare or clru_redeclare).
          When passing a cache across function boundaries, call
          clru_redeclare() with a simple local alias first; the
-         val-type detection relies on the name##__clru_val_type_var
-         companion variable.
-key      Key expression. Must be an lvalue or a string literal; assign
-         computed values to a variable first.
-val_ptr  Pointer to the value type (ValT *), NOT cmap_pair *.
-         For non-char* val types: receives the value directly (e.g.
-         double * for a double-valued cache); no heap allocation
-         occurs.
+         key/val-type conversion relies on the
+         name##__clru_key_type_var / name##__clru_val_type_var
+         companion variables.
+key      Key expression; any expression implicitly convertible to KeyT.
+val_ptr  Pointer to the value type, NOT cmap_pair *.
+         For non-char* val types: receives the stored value converted
+         to *val_ptr's own type (e.g. double * for a double out-param);
+         no heap allocation occurs. Left untouched if the call does not
+         return ccol_success.
          For char* val types: pointer to a char* variable; on success
          it is set to the heap-allocated string and the caller must
          free() it.
@@ -52,6 +58,14 @@ ccol_invalid_args      cache is CLRU_CACHE_INVALID or a stale
                        (already-destroyed) handle; or key_pair is
                        NULL.
 ccol_not_enough_memory Internal allocation failed.
+ccol_unexpected_failure
+                       A remote getter fetched a value whose size does
+                       not match ValT's own size (for a non-char* val
+                       type, where sizeof(ValT) is the required exact
+                       size), whether this call ran the fetch itself
+                       or coalesced onto another concurrent caller's
+                       fetch of the same key. val_ptr is left
+                       untouched.
 .fi
 .SH EXAMPLES
 .nf
@@ -94,7 +108,7 @@ independent allocation, so two successive calls for the same key
 yield two independent pointers that must each be freed separately.
 
 For non-char* val types: no heap allocation occurs.  The value is
-copied directly into *val_ptr; the caller must NOT call free() on it.
+converted into *val_ptr; the caller must NOT call free() on it.
 .fi
 .SH NOTES
 .nf

@@ -26,11 +26,14 @@ Prefer the cjson_delete() macro for all call sites.
 .SH RETURN VALUE
 .nf
 ccol_success           - node removed and freed.
-ccol_invalid_args      - root or path is NULL, path is empty, or the
-                         leaf component is not valid for the parent type
-                         (e.g. a non-'#N' component on a list parent).
-ccol_key_not_found     - any path component, including the parent path,
-                         is absent.
+ccol_invalid_args      - root or path is NULL, an empty path or path
+                         component (leading, trailing, or consecutive
+                         dots), the leaf component is not valid for the
+                         parent type (e.g. a non-'#N' component on a list
+                         parent), or a malformed "#N" index (non-numeric,
+                         negative, or bare '#').
+ccol_key_not_found     - the parent path, or a syntactically valid leaf
+                         key / index, is absent.
 ccol_not_enough_memory - internal strdup failed.
 .fi
 .SH "SEE ALSO"

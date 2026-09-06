@@ -7,21 +7,19 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cbstmap.h>
 
-cbmap cbmap_create_full(bool keys_are_signed_ints,
-                        bool keys_are_strings,
+cbmap cbmap_create_full(ccol_data_type key_type,
                         ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char **err);
 .fi
 .SH DESCRIPTION
 .nf
-Creates a self-balancing BST map with full control over key signedness,
-string key support, memory management, and comparison function.
+Creates a self-balancing BST map with full control over the key type,
+memory management, and comparison function.
 .fi
 .SH PARAMETERS
 .nf
-keys_are_signed_ints     Treat integer keys as signed
-keys_are_strings         If true, use strcmp for key comparison
+key_type                 Type of the keys stored in the map
 mmgmt_procs              Custom memory management, or NULL
 custom_comparison_proc   Custom comparison function, or NULL
 err                      Optional pointer to receive error string
@@ -33,9 +31,22 @@ Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-Default comparison for unsigned: memcmp
-Default comparison for signed: proper signed comparison (1, 2, 4, 8 bytes)
-Default comparison for strings: strcmp (when keys_are_strings is true)
+Default comparison for ccol_char: this platform's own native char comparison
+(signed or unsigned, matching however char behaves on this platform)
+Default comparison for ccol_signed_char (a scalar signed char or its
+typedef int8_t; a signed char * string key is ccol_string, not this) and
+short/int/long/long_long: signed comparison, independent of this
+platform's own char signedness
+Default comparison for the unsigned integer types and ccol_pointer: unsigned
+comparison
+Default comparison for ccol_float/double/long_double: numeric floating-point
+comparison; a NaN key sorts as greater than every non-NaN key and equal to
+every other NaN key
+Default comparison for ccol_string: strcmp-equivalent lexicographic order
+For ccol_other_types (e.g. a struct key type), the default falls back to a
+raw memcmp of the representation, comparing indeterminate padding bytes and
+any pointer members by address rather than by pointee; pass
+custom_comparison_proc for a struct key
 Custom comparison receives void* pointers to key data
 .fi
 .SH "SEE ALSO"

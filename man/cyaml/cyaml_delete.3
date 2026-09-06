@@ -31,9 +31,15 @@ a key name, consistent with cyaml_get and cyaml_set.
 .SH RETURN VALUE
 .nf
 ccol_retval_t.  Returns ccol_success on success.
-ccol_invalid_args if root or path is NULL, path is empty, or the leaf
-component is not valid for the parent type.
-ccol_key_not_found if any path component (parent or leaf) is absent.
+ccol_invalid_args if root or path is NULL, path is empty, a component
+is not valid for the node it addresses (e.g. a non-'#N' component on
+a list, or any component encountered under a scalar), malformed
+'#N' index syntax, or an empty component (nothing between two dots,
+or a leading or trailing dot); at any position in the path, not just
+the leaf.
+ccol_key_not_found if a syntactically well-formed component (a
+dictionary key or a '#N' index) is absent; at any position, including
+a syntactically valid but out-of-range list index.
 ccol_not_enough_memory on internal allocation failure.
 .fi
 .SH EXAMPLE

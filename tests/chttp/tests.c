@@ -208,6 +208,36 @@ TEST(basic_auth, null_username_or_password_fails) {
   REQUIRE_EQ((void *)chttp_basic_auth(NULL, NULL), NULL);
 }
 
+extern bool _chttp_basic_auth_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
+                                                       const char *username,
+                                                       size_t fake_user_len,
+                                                       const char *password,
+                                                       size_t fake_pass_len);
+
+TEST(basic_auth, length_sum_large_enough_to_overflow_is_rejected) {
+  /* Regression test: combined_len = user_len + 1 + pass_len had no overflow
+   * check before allocating combined_len+1 bytes; two independently
+   * caller-supplied lengths summing close to SIZE_MAX would previously
+   * proceed with a wrapped allocation and then write far past it. Both
+   * fake lengths are deliberately huge (not just one), matching
+   * base64_encode's own "length_large_enough_to_overflow_is_rejected"
+   * pattern; real (non-NULL, short) strings are passed since a correctly
+   * fixed implementation must reject this before ever calling snprintf,
+   * not merely before allocating. */
+  bool rejected = _chttp_basic_auth_overflow_guard_for_tests(
+      NULL, "user", SIZE_MAX / 2, "pass", SIZE_MAX / 2);
+  REQUIRE_TRUE(rejected);
+}
+
+TEST(basic_auth, ordinary_small_lengths_still_work) {
+  /* Same helper, ordinary (nowhere near overflowing) real strings and their
+   * own genuine lengths: confirms the guard above doesn't false-positive on
+   * legitimate, realistic username/password lengths. */
+  bool rejected = _chttp_basic_auth_overflow_guard_for_tests(
+      NULL, "user", strlen("user"), "pass", strlen("pass"));
+  REQUIRE_FALSE(rejected);
+}
+
 /* ========================================================================== */
 /*                     CUSTOM ALLOCATOR PLUMBING                              */
 /* ========================================================================== */

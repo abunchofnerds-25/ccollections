@@ -1,8 +1,11 @@
 #include <cstring.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <tau/tau.h>
+#include <unistd.h>
 
 TAU_MAIN()
 
@@ -442,6 +445,60 @@ TEST(cstrings, reset_then_reuse) {
   cstring_destroy(s);
 }
 
+// A realloc-counting allocator, distinct from the budget-style OOM allocator
+// further below: it always delegates to the real allocator, purely to let a
+// test assert on how many times realloc() was actually invoked.
+static int g_cstr_realloc_call_count = 0;
+static void *_cstr_counting_realloc(void *ptr, size_t size) {
+  g_cstr_realloc_call_count++;
+  return realloc(ptr, size);
+}
+static ccol_memmgmt_procs_t g_cstr_counting_procs = {
+    .malloc = malloc,
+    .calloc = calloc,
+    .realloc = _cstr_counting_realloc,
+    .free = free};
+
+// cstring_reset() must not issue a realloc() call at all when the string is
+// already at the minimum capacity (the common case: a freshly created
+// string, or one that has already been reset); there would be nothing to
+// shrink. Checking only the resulting capacity (as reset_clears_content and
+// reset_shrinks_capacity above already do) cannot distinguish "the call was
+// skipped" from "the call was made and happened to be a no-op", so this
+// asserts the actual call count instead.
+TEST(cstrings, reset_at_minimum_capacity_skips_realloc) {
+  cstr s = cstring_create_full(NULL, &g_cstr_counting_procs, NULL);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+
+  g_cstr_realloc_call_count = 0;
+  cstring_reset(s);
+  REQUIRE_EQ(g_cstr_realloc_call_count, 0);
+  REQUIRE_EQ(cstring_length(s), (size_t)0);
+  REQUIRE_STREQ(cstring_c_str(s), "");
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+
+  cstring_destroy(s);
+}
+
+// The converse of the above: a string that has actually grown past the
+// minimum capacity must still shrink back via exactly one realloc() call.
+TEST(cstrings, reset_above_minimum_capacity_still_reallocs_once) {
+  cstr s = cstring_create_full(NULL, &g_cstr_counting_procs, NULL);
+  REQUIRE_NE((void *)s, NULL);
+
+  const char *chunk = "0123456789abcdef0123456789abcdef";  // 32 chars
+  REQUIRE_EQ(cstring_append(s, chunk), ccol_success);
+  REQUIRE_TRUE(cstring_get_capacity(s) > (size_t)CSTRING_MIN_CAPACITY);
+
+  g_cstr_realloc_call_count = 0;
+  cstring_reset(s);
+  REQUIRE_EQ(g_cstr_realloc_call_count, 1);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+
+  cstring_destroy(s);
+}
+
 // ========================================================================
 // RESERVE
 // ========================================================================
@@ -627,6 +684,12 @@ TEST(cstrings, compare_empty_with_nonempty) {
   cstring_destroy(s);
 }
 
+TEST(cstrings, compare_null_str) {
+  cstr s = cstring_create("hello", NULL);
+  REQUIRE_EQ(cstring_compare(s, NULL), 1);
+  cstring_destroy(s);
+}
+
 TEST(cstrings, equals_match) {
   cstr s = cstring_create("hello", NULL);
   REQUIRE_TRUE(cstring_equals(s, "hello"));
@@ -684,6 +747,12 @@ TEST(cstrings, starts_with_prefix_longer_than_string) {
   cstring_destroy(s);
 }
 
+TEST(cstrings, starts_with_null_prefix) {
+  cstr s = cstring_create("hello", NULL);
+  REQUIRE_FALSE(cstring_starts_with(s, NULL));
+  cstring_destroy(s);
+}
+
 TEST(cstrings, ends_with_true) {
   cstr s = cstring_create("hello world", NULL);
   REQUIRE_TRUE(cstring_ends_with(s, "world"));
@@ -707,6 +776,12 @@ TEST(cstrings, ends_with_empty_suffix) {
 TEST(cstrings, ends_with_suffix_longer_than_string) {
   cstr s = cstring_create("hi", NULL);
   REQUIRE_FALSE(cstring_ends_with(s, "hello"));
+  cstring_destroy(s);
+}
+
+TEST(cstrings, ends_with_null_suffix) {
+  cstr s = cstring_create("hello", NULL);
+  REQUIRE_FALSE(cstring_ends_with(s, NULL));
   cstring_destroy(s);
 }
 
@@ -864,6 +939,84 @@ TEST(cstrings, replace_entire_string) {
   cstring_destroy(s);
 }
 
+// ------------------------------------------------------------------------
+// cstring_replace()'s ccol_container_full overflow guards, exercised via
+// cstring_replace_compute_new_length_for_tests() rather than through
+// cstring_replace() itself: reaching either overflow condition through the
+// real API would require constructing actual multi-gigabyte strings (a
+// several-GB source string built from a single repeated character, together
+// with a several-GB replacement string), impractical for a routine test run.
+// These tests exercise the exact same arithmetic cstring_replace() itself
+// runs (see compute_replace_new_length() in cstring.c), just fed with
+// fabricated length/count values instead of real backing memory.
+// ------------------------------------------------------------------------
+
+TEST(cstrings, replace_new_length_normal_growth_case) {
+  size_t new_len = 0;
+  // 10-byte string, 3 occurrences of a 2-byte needle each replaced by a
+  // 5-byte replacement: 10 + (5-2)*3 = 19.
+  ccol_retval_t rv =
+      cstring_replace_compute_new_length_for_tests(10, 2, 5, 3, &new_len);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_EQ(new_len, (size_t)19);
+}
+
+TEST(cstrings, replace_new_length_normal_shrink_case) {
+  size_t new_len = 0;
+  // 20-byte string, 2 occurrences of a 5-byte needle each replaced by a
+  // 2-byte replacement: 20 - (5-2)*2 = 14.
+  ccol_retval_t rv =
+      cstring_replace_compute_new_length_for_tests(20, 5, 2, 2, &new_len);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_EQ(new_len, (size_t)14);
+}
+
+TEST(cstrings, replace_new_length_multiplication_overflow_detected) {
+  // (rlen - nlen) * count must overflow size_t: (SIZE_MAX/2 + 1) * 2 wraps.
+  size_t new_len = 12345;  // sentinel; must be left untouched on failure
+  size_t nlen = 1;
+  size_t rlen = (SIZE_MAX / 2) + 2;  // rlen - nlen == SIZE_MAX/2 + 1
+  ccol_retval_t rv =
+      cstring_replace_compute_new_length_for_tests(0, nlen, rlen, 2, &new_len);
+  REQUIRE_EQ(rv, ccol_container_full);
+  REQUIRE_EQ(new_len, (size_t)12345);
+}
+
+TEST(cstrings, replace_new_length_addition_overflow_detected) {
+  // added itself doesn't overflow (it's 1), but orig_length + added does.
+  size_t new_len = 12345;  // sentinel; must be left untouched on failure
+  ccol_retval_t rv =
+      cstring_replace_compute_new_length_for_tests(SIZE_MAX, 1, 2, 1, &new_len);
+  REQUIRE_EQ(rv, ccol_container_full);
+  REQUIRE_EQ(new_len, (size_t)12345);
+}
+
+// Distinct from replace_new_length_addition_overflow_detected above: here
+// orig_length + added lands on exactly SIZE_MAX without ever dipping below
+// orig_length, so the "new_len < orig_length" wraparound check alone would
+// NOT catch it. This is the case cstring_length_fits_with_terminator()
+// exists to reject, since cstring_replace()'s caller still needs to add 1
+// to new_len (for the null terminator) before it can be used as a capacity.
+TEST(cstrings, replace_new_length_result_exactly_size_max_detected) {
+  size_t new_len = 12345;  // sentinel; must be left untouched on failure
+  ccol_retval_t rv = cstring_replace_compute_new_length_for_tests(
+      SIZE_MAX - 1, 1, 2, 1, &new_len);
+  REQUIRE_EQ(rv, ccol_container_full);
+  REQUIRE_EQ(new_len, (size_t)12345);
+}
+
+// The shared size_t-wraparound guard every mutating function (append,
+// prepend, insert, set, create_full) and cstring_replace()'s own length
+// arithmetic route through before requesting a length + 1 sized buffer.
+// Exercised directly, since reaching it through any public API would
+// require a string spanning the entire address space.
+TEST(cstrings, length_fits_with_terminator_guard) {
+  REQUIRE_TRUE(cstring_length_fits_with_terminator_for_tests(0));
+  REQUIRE_TRUE(cstring_length_fits_with_terminator_for_tests(1));
+  REQUIRE_TRUE(cstring_length_fits_with_terminator_for_tests(SIZE_MAX - 1));
+  REQUIRE_FALSE(cstring_length_fits_with_terminator_for_tests(SIZE_MAX));
+}
+
 // ========================================================================
 // SUBSTRING
 // ========================================================================
@@ -889,7 +1042,7 @@ TEST(cstrings, substring_from_start) {
 
 TEST(cstrings, substring_clamped_length) {
   cstr s = cstring_create("hello", NULL);
-  // Request more than available from start=2 → only 3 chars ("llo")
+  // Request more than available from start=2 -> only 3 chars ("llo")
   cstr sub = cstring_substring(s, 2, 100, NULL);
   REQUIRE_NE((void *)sub, NULL);
   REQUIRE_STREQ(cstring_c_str(sub), "llo");
@@ -909,12 +1062,12 @@ TEST(cstrings, substring_full_string) {
 
 TEST(cstrings, substring_start_at_or_beyond_length) {
   cstr s = cstring_create("hello", NULL);
-  // start == length → returns empty string
+  // start == length -> returns empty string
   cstr sub = cstring_substring(s, 5, 1, NULL);
   REQUIRE_NE((void *)sub, NULL);
   REQUIRE_STREQ(cstring_c_str(sub), "");
   cstring_destroy(sub);
-  // start beyond length → returns empty string
+  // start beyond length -> returns empty string
   sub = cstring_substring(s, 100, 1, NULL);
   REQUIRE_NE((void *)sub, NULL);
   REQUIRE_STREQ(cstring_c_str(sub), "");
@@ -1130,7 +1283,7 @@ TEST(cstrings, capacity_initial_is_minimum) {
 }
 
 TEST(cstrings, capacity_large_initial_rounds_up) {
-  // A 30-char initial string needs at least 31 bytes → rounds up to 32
+  // A 30-char initial string needs at least 31 bytes -> rounds up to 32
   cstr s = cstring_create("012345678901234567890123456789", NULL);
   REQUIRE_EQ(cstring_length(s), 30);
   size_t cap = cstring_get_capacity(s);
@@ -1350,7 +1503,7 @@ TEST(cstrings, many_appends_correctness) {
 // ========================================================================
 
 TEST(cstrings, append_self_alias_triggers_realloc) {
-  // "123456789" len=9; append self → "123456789123456789" len=18
+  // "123456789" len=9; append self -> "123456789123456789" len=18
   // 18+1 > 16 so cstring_grow_to must realloc; the old str pointer would
   // be dangling without the alias fix.
   cstr_construct(s, "123456789");
@@ -1389,7 +1542,7 @@ TEST(cstrings, append_self_alias_no_realloc) {
 }
 
 TEST(cstrings, prepend_self_alias_triggers_realloc) {
-  // "123456789" prepend self → "123456789123456789"
+  // "123456789" prepend self -> "123456789123456789"
   cstr_construct(s, "123456789");
   ccol_retval_t rv = cstring_prepend(s, cstring_c_str(s));
   REQUIRE_EQ(rv, ccol_success);
@@ -1425,7 +1578,7 @@ TEST(cstrings, prepend_self_alias_no_realloc) {
 }
 
 TEST(cstrings, insert_self_alias_triggers_realloc) {
-  // "123456789" insert self at pos 0 → "123456789123456789"
+  // "123456789" insert self at pos 0 -> "123456789123456789"
   cstr_construct(s, "123456789");
   ccol_retval_t rv = cstring_insert(s, 0, cstring_c_str(s));
   REQUIRE_EQ(rv, ccol_success);
@@ -1449,7 +1602,7 @@ TEST(cstrings, insert_alias_after_pos_no_realloc) {
 TEST(cstrings, insert_alias_overlapping_dst_gt_src) {
   // "abcde", insert s->data+1 ("bcde") at pos 3.
   // alias_off=1 <= pos=3, str_len=4: after memmove the copy source overlaps
-  // destination with dst > src — previously a forward memcpy would corrupt.
+  // destination with dst > src; previously a forward memcpy would corrupt.
   // Expected: "abc" + "bcde" + "de" = "abcbcdede"
   cstr_construct(s, "abcde");
   ccol_retval_t rv = cstring_insert(s, 3, cstring_c_str(s) + 1);
@@ -1471,6 +1624,159 @@ TEST(cstrings, insert_self_alias_at_nonzero_pos_no_realloc) {
   REQUIRE_STREQ(cstring_c_str(s), "hehellollo");
   REQUIRE_EQ(cstring_length(s), (size_t)10);
   cstr_destroy(s);
+}
+
+// Every other alias-with-realloc test above uses alias_off == 0 (the whole
+// string aliased); every other nonzero-alias-offset test stays within the
+// current capacity, so grow_to() never actually reallocates. This test
+// combines both: a nonzero alias offset AND an actual buffer relocation,
+// which is exactly the scenario the "re-derive str after grow_to() may have
+// moved the buffer" fix exists for.
+TEST(cstrings, prepend_alias_offset_nonzero_triggers_realloc) {
+  // 20-char base -> init_cap = next_pow2(21) = 32. Prepending its own
+  // offset-5 suffix (15 chars) grows the string to 35 bytes, forcing an
+  // actual realloc (new capacity 64) while alias_off (5) is nonzero.
+  const char *base = "12345678901234567890";
+  char expected[64];
+  snprintf(expected, sizeof(expected), "%s%s", base + 5, base);
+
+  cstr s = cstring_create_full(base, &g_cstr_counting_procs, NULL);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)32);
+
+  g_cstr_realloc_call_count = 0;
+  ccol_retval_t rv = cstring_prepend(s, cstring_c_str(s) + 5);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(g_cstr_realloc_call_count >= 1);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)64);
+  REQUIRE_STREQ(cstring_c_str(s), expected);
+  REQUIRE_EQ(cstring_length(s), (size_t)35);
+
+  cstring_destroy(s);
+}
+
+// Same combination as prepend_alias_offset_nonzero_triggers_realloc above,
+// but for cstring_insert() with a nonzero pos as well: alias_off (5) > pos
+// (3), so this also exercises the "second pointer correction after the
+// first memmove shifts the source right" branch together with a genuine
+// reallocation.
+TEST(cstrings, insert_alias_offset_nonzero_triggers_realloc) {
+  const char *base = "12345678901234567890";  // 20 chars, capacity 32
+  const char *inserted = base + 5;            // "678901234567890", 15 chars
+  size_t pos = 3;
+
+  char expected[64];
+  size_t blen = strlen(base), ilen = strlen(inserted);
+  memcpy(expected, base, pos);
+  memcpy(expected + pos, inserted, ilen);
+  memcpy(expected + pos + ilen, base + pos, blen - pos + 1);
+
+  cstr s = cstring_create_full(base, &g_cstr_counting_procs, NULL);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)32);
+
+  g_cstr_realloc_call_count = 0;
+  ccol_retval_t rv = cstring_insert(s, pos, cstring_c_str(s) + 5);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(g_cstr_realloc_call_count >= 1);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)64);
+  REQUIRE_STREQ(cstring_c_str(s), expected);
+  REQUIRE_EQ(cstring_length(s), blen + ilen);
+
+  cstring_destroy(s);
+}
+
+// The converse combination of insert_alias_offset_nonzero_triggers_realloc
+// above: alias_off (2) < pos (10), together with a genuine reallocation.
+// cstring_insert()'s second pointer correction is gated on `alias_off > pos`
+// specifically because the region [alias_off, alias_off+str_len) is provably
+// never touched by the first memmove's shift whenever alias_off <= pos (see
+// cstring.c's own comment on that memmove); this pins that no-correction
+// path is still correct once grow_to() actually relocates the buffer, not
+// just when the buffer happens to already be large enough.
+TEST(cstrings, insert_alias_offset_less_than_pos_triggers_realloc) {
+  const char *base = "12345678901234567890";  // 20 chars, capacity 32
+  const char *inserted = base + 2;            // "345678901234567890", 18 chars
+  size_t pos = 10;
+
+  char expected[64];
+  size_t blen = strlen(base), ilen = strlen(inserted);
+  memcpy(expected, base, pos);
+  memcpy(expected + pos, inserted, ilen);
+  memcpy(expected + pos + ilen, base + pos, blen - pos + 1);
+
+  cstr s = cstring_create_full(base, &g_cstr_counting_procs, NULL);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)32);
+
+  g_cstr_realloc_call_count = 0;
+  ccol_retval_t rv = cstring_insert(s, pos, cstring_c_str(s) + 2);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(g_cstr_realloc_call_count >= 1);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)64);
+  REQUIRE_STREQ(cstring_c_str(s), expected);
+  REQUIRE_EQ(cstring_length(s), blen + ilen);
+
+  cstring_destroy(s);
+}
+
+// The exact boundary between the two combinations above: alias_off == pos,
+// together with a genuine reallocation. This is the case the `> pos` (not
+// `>= pos`) condition in cstring_insert()'s second correction deliberately
+// excludes: the region [alias_off, alias_off+str_len) == [pos, pos+str_len)
+// sits precisely at the first memmove's own shift boundary, so it is left
+// untouched by that shift regardless of whether grow_to() relocated the
+// buffer. insert_self_alias_at_nonzero_pos_no_realloc (INSERT section,
+// above) already covers this same alias_off == pos boundary for alias_off
+// == 0; this covers it for a nonzero alias_off, combined with an actual
+// reallocation, which that test does not exercise.
+TEST(cstrings, insert_alias_offset_equal_to_pos_triggers_realloc) {
+  const char *base = "12345678901234567890";  // 20 chars, capacity 32
+  const char *inserted = base + 5;            // "678901234567890", 15 chars
+  size_t pos = 5;
+
+  char expected[64];
+  size_t blen = strlen(base), ilen = strlen(inserted);
+  memcpy(expected, base, pos);
+  memcpy(expected + pos, inserted, ilen);
+  memcpy(expected + pos + ilen, base + pos, blen - pos + 1);
+
+  cstr s = cstring_create_full(base, &g_cstr_counting_procs, NULL);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)32);
+
+  g_cstr_realloc_call_count = 0;
+  ccol_retval_t rv = cstring_insert(s, pos, cstring_c_str(s) + 5);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(g_cstr_realloc_call_count >= 1);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)64);
+  REQUIRE_STREQ(cstring_c_str(s), expected);
+  REQUIRE_EQ(cstring_length(s), blen + ilen);
+
+  cstring_destroy(s);
+}
+
+// set_self_alias_full_length_no_realloc (SET section, above) already checks
+// the resulting content is correct; this checks the "no realloc" half of its
+// own comment directly, via an actual call-count assertion, mirroring
+// reset_at_minimum_capacity_skips_realloc's use of the same counting
+// allocator for the identical kind of claim.
+TEST(cstrings, set_self_alias_no_realloc_verified_by_call_count) {
+  cstr s =
+      cstring_create_full("1234567890123456", &g_cstr_counting_procs, NULL);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_EQ(cstring_length(s), (size_t)16);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)32);
+
+  g_cstr_realloc_call_count = 0;
+  ccol_retval_t rv = cstring_set(s, cstring_c_str(s));
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_EQ(g_cstr_realloc_call_count, 0);
+  REQUIRE_STREQ(cstring_c_str(s), "1234567890123456");
+  REQUIRE_EQ(cstring_length(s), (size_t)16);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)32);
+
+  cstring_destroy(s);
 }
 
 // ========================================================================
@@ -1563,4 +1869,458 @@ TEST(cstrings, substring_macro) {
   REQUIRE_EQ(cstring_length(sub), 5);
   cstr_destroy(sub);
   cstr_destroy(s);
+}
+
+// ========================================================================
+// MACRO HYGIENE REGRESSION (cstr_insert's internal retval local)
+// ========================================================================
+
+// cstr_insert used to declare its internal retval as plain '_r'; a caller
+// whose own pos argument was literally named '_r' would silently bind to
+// that not-yet-initialized local instead (C's declarator-scope rule) rather
+// than the caller's real value, since ccol_retval_t implicitly converts to
+// size_t with no diagnostic guaranteed. Confirmed to actually reproduce
+// (wrong insertion position, or a spurious ccol_invalid_args depending on
+// what garbage the uninitialized enum held) against the pre-fix macro before
+// being fixed by renaming the internal local to __cstr_insert_r.
+TEST(cstrings, insert_macro_pos_argument_named__r_is_not_shadowed) {
+  cstr_construct(s, "hello");
+  size_t _r = 2;
+  cstr_insert(s, _r, "X");
+  REQUIRE_STREQ(cstring_c_str(s), "heXllo");
+  cstr_destroy(s);
+}
+
+// ========================================================================
+// FATAL / NULL-ARGUMENT TESTS
+//
+// Every query/modification/search/substring function in this module is
+// documented to assert (abort via ccol_assert) when handed a NULL cstr.
+// None of these paths were previously exercised by this suite. Each one is
+// run in its own forked child (mirroring the fork+SIGABRT pattern used
+// throughout this codebase, e.g. tests/cvector's
+// type_safe_at_out_of_bounds_is_fatal) so the process-aborting assert
+// doesn't take down the whole test binary, and the parent confirms the
+// child actually died via SIGABRT rather than merely exiting or crashing
+// some other way (e.g. a plain NULL-deref SIGSEGV, which is exactly the
+// failure mode cstring_get_mprocs had before it gained its own NULL guard).
+// ========================================================================
+
+static int run_forked(void (*fn)(void)) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    fn();
+    _exit(0); /* unreachable if the assert aborted as expected */
+  }
+  int status = 0;
+  waitpid(pid, &status, 0);
+  return status;
+}
+
+#define DEFINE_NULL_ARG_FATAL_TEST(test_name, callexpr)       \
+  static void _null_arg_thunk_##test_name(void) { callexpr; } \
+  TEST(cstrings, test_name) {                                 \
+    int status = run_forked(_null_arg_thunk_##test_name);     \
+    REQUIRE_TRUE(WIFSIGNALED(status));                        \
+    REQUIRE_EQ(WTERMSIG(status), SIGABRT);                    \
+  }
+
+DEFINE_NULL_ARG_FATAL_TEST(null_length_is_fatal, (void)cstring_length(NULL))
+DEFINE_NULL_ARG_FATAL_TEST(null_c_str_is_fatal, (void)cstring_c_str(NULL))
+DEFINE_NULL_ARG_FATAL_TEST(null_at_is_fatal, (void)cstring_at(NULL, 0))
+DEFINE_NULL_ARG_FATAL_TEST(null_is_empty_is_fatal, (void)cstring_is_empty(NULL))
+DEFINE_NULL_ARG_FATAL_TEST(null_append_is_fatal,
+                           (void)cstring_append(NULL, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_prepend_is_fatal,
+                           (void)cstring_prepend(NULL, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_insert_is_fatal,
+                           (void)cstring_insert(NULL, 0, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_set_is_fatal, (void)cstring_set(NULL, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_reset_is_fatal, cstring_reset(NULL))
+DEFINE_NULL_ARG_FATAL_TEST(null_reserve_is_fatal,
+                           (void)cstring_reserve(NULL, 16))
+DEFINE_NULL_ARG_FATAL_TEST(null_to_upper_is_fatal, cstring_to_upper(NULL))
+DEFINE_NULL_ARG_FATAL_TEST(null_to_lower_is_fatal, cstring_to_lower(NULL))
+DEFINE_NULL_ARG_FATAL_TEST(null_trim_is_fatal, cstring_trim(NULL))
+DEFINE_NULL_ARG_FATAL_TEST(null_replace_is_fatal,
+                           (void)cstring_replace(NULL, "a", "b"))
+DEFINE_NULL_ARG_FATAL_TEST(null_compare_is_fatal,
+                           (void)cstring_compare(NULL, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_equals_is_fatal,
+                           (void)cstring_equals(NULL, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_starts_with_is_fatal,
+                           (void)cstring_starts_with(NULL, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_ends_with_is_fatal,
+                           (void)cstring_ends_with(NULL, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_find_is_fatal, (void)cstring_find(NULL, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_rfind_is_fatal, (void)cstring_rfind(NULL, "x"))
+DEFINE_NULL_ARG_FATAL_TEST(null_substring_is_fatal,
+                           (void)cstring_substring(NULL, 0, 1, NULL))
+DEFINE_NULL_ARG_FATAL_TEST(null_copy_is_fatal, (void)cstring_copy(NULL, NULL))
+DEFINE_NULL_ARG_FATAL_TEST(null_split_is_fatal,
+                           (void)cstring_split(NULL, ",", NULL))
+// cstring_get_mprocs previously had no NULL guard at all and would segfault
+// (WIFSIGNALED + SIGSEGV) rather than assert (WIFSIGNALED + SIGABRT); this
+// pins the fixed, now-consistent-with-the-rest-of-the-module behavior.
+DEFINE_NULL_ARG_FATAL_TEST(null_get_mprocs_is_fatal,
+                           (void)cstring_get_mprocs(NULL))
+
+// ========================================================================
+// OUT OF MEMORY / ALLOCATOR FAILURE TESTS
+//
+// A budget-style counting allocator: the first g_cstr_oom_budget calls to
+// malloc/calloc/realloc succeed (delegating to the real allocator); every
+// call after the budget is exhausted returns NULL. free() always delegates
+// to the real free() unconditionally (never budget-tracked), so whatever DID
+// succeed is still released correctly by every cleanup path under test.
+//
+// Calibrated against the real, built library (not guessed) via a standalone
+// counting harness: cstring_create_full() always costs exactly 3 calls
+// (1 calloc for the container + 1 malloc for the copied mprocs + 1 malloc
+// for the data buffer, in that order) for any initial content that fits
+// within the minimum 16-byte capacity; a grow_to() that actually reallocates
+// costs exactly 1 further realloc call; cvector_create_full(sizeof(cstr))
+// (used internally by cstring_split) costs the identical 3 calls.
+// ========================================================================
+
+static int g_cstr_oom_budget = 0;
+static void *_cstr_oom_malloc(size_t size) {
+  if (g_cstr_oom_budget <= 0) return NULL;
+  g_cstr_oom_budget--;
+  return malloc(size);
+}
+static void *_cstr_oom_calloc(size_t count, size_t size) {
+  if (g_cstr_oom_budget <= 0) return NULL;
+  g_cstr_oom_budget--;
+  return calloc(count, size);
+}
+static void *_cstr_oom_realloc(void *ptr, size_t size) {
+  if (g_cstr_oom_budget <= 0) return NULL;
+  g_cstr_oom_budget--;
+  return realloc(ptr, size);
+}
+static void _cstr_oom_free(void *ptr) { free(ptr); }
+
+static ccol_memmgmt_procs_t g_cstr_oom_procs = {.malloc = _cstr_oom_malloc,
+                                                .calloc = _cstr_oom_calloc,
+                                                .realloc = _cstr_oom_realloc,
+                                                .free = _cstr_oom_free};
+
+TEST(cstrings, create_full_oom_container_alloc_fails) {
+  char *err = NULL;
+  g_cstr_oom_budget = 0;  // fails the very first call (calloc for the struct)
+  cstr s = cstring_create_full("hello", &g_cstr_oom_procs, &err);
+  REQUIRE_EQ((void *)s, NULL);
+  REQUIRE_NE((void *)err, NULL);
+}
+
+TEST(cstrings, create_full_oom_mprocs_copy_alloc_fails) {
+  char *err = NULL;
+  // Budget covers exactly the container calloc; the mprocs-copy malloc
+  // (the 2nd call) must fail.
+  g_cstr_oom_budget = 1;
+  cstr s = cstring_create_full("hello", &g_cstr_oom_procs, &err);
+  REQUIRE_EQ((void *)s, NULL);
+  REQUIRE_NE((void *)err, NULL);
+}
+
+TEST(cstrings, create_full_oom_data_buffer_alloc_fails) {
+  char *err = NULL;
+  // Budget covers the container calloc and the mprocs-copy malloc; the data
+  // buffer malloc (the 3rd call) must fail.
+  g_cstr_oom_budget = 2;
+  cstr s = cstring_create_full("hello", &g_cstr_oom_procs, &err);
+  REQUIRE_EQ((void *)s, NULL);
+  REQUIRE_NE((void *)err, NULL);
+}
+
+TEST(cstrings, create_full_oom_budget_exactly_sufficient_succeeds) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("hello", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_EQ((void *)err, NULL);
+  REQUIRE_STREQ(cstring_c_str(s), "hello");
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, append_oom_grow_failure_leaves_string_unchanged) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("hello", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  g_cstr_oom_budget = 0;  // the grow_to() realloc must fail
+  ccol_retval_t rv = cstring_append(s, "0123456789abcdef0123456789");
+  REQUIRE_EQ(rv, ccol_not_enough_memory);
+  REQUIRE_STREQ(cstring_c_str(s), "hello");  // unchanged
+  REQUIRE_EQ(cstring_length(s), (size_t)5);
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, prepend_oom_grow_failure_leaves_string_unchanged) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("hello", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  g_cstr_oom_budget = 0;
+  ccol_retval_t rv = cstring_prepend(s, "0123456789abcdef0123456789");
+  REQUIRE_EQ(rv, ccol_not_enough_memory);
+  REQUIRE_STREQ(cstring_c_str(s), "hello");
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, insert_oom_grow_failure_leaves_string_unchanged) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("hello", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  g_cstr_oom_budget = 0;
+  ccol_retval_t rv = cstring_insert(s, 2, "0123456789abcdef0123456789");
+  REQUIRE_EQ(rv, ccol_not_enough_memory);
+  REQUIRE_STREQ(cstring_c_str(s), "hello");
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, set_oom_grow_failure_leaves_string_unchanged) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("hello", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  g_cstr_oom_budget = 0;
+  ccol_retval_t rv = cstring_set(s, "0123456789abcdef0123456789");
+  REQUIRE_EQ(rv, ccol_not_enough_memory);
+  REQUIRE_STREQ(cstring_c_str(s), "hello");
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, reserve_oom_returns_false_capacity_unchanged) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full(NULL, &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+
+  g_cstr_oom_budget = 0;
+  REQUIRE_FALSE(cstring_reserve(s, 1024));
+  REQUIRE_EQ(cstring_get_capacity(s), (size_t)CSTRING_MIN_CAPACITY);
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, replace_oom_new_buffer_alloc_fails_leaves_string_unchanged) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("hello world hello", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  g_cstr_oom_budget = 0;  // the single new-buffer malloc must fail
+  ccol_retval_t rv = cstring_replace(s, "hello", "X");
+  REQUIRE_EQ(rv, ccol_not_enough_memory);
+  REQUIRE_STREQ(cstring_c_str(s), "hello world hello");  // unchanged
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, substring_oom_result_creation_fails) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("hello world", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  g_cstr_oom_budget = 0;  // the result's own container calloc must fail
+  char *sub_err = NULL;
+  cstr sub = cstring_substring(s, 0, 5, &sub_err);
+  REQUIRE_EQ((void *)sub, NULL);
+  REQUIRE_NE((void *)sub_err, NULL);
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, substring_oom_grow_to_fails_after_result_created) {
+  char *err = NULL;
+  // Source must hold >= 16 characters so the requested substring's own
+  // length forces cstring_grow_to() to actually reallocate past the
+  // result's initial minimum capacity.
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("0123456789abcdefghij", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  // Budget covers exactly the result's own cstring_create_full() (3 calls);
+  // the substring-specific grow_to() realloc (the 4th call) must fail.
+  g_cstr_oom_budget = 3;
+  char *sub_err = NULL;
+  cstr sub = cstring_substring(s, 0, 20, &sub_err);
+  REQUIRE_EQ((void *)sub, NULL);
+  REQUIRE_NE((void *)sub_err, NULL);
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, copy_oom_propagates_create_full_failure) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("hello", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  g_cstr_oom_budget = 0;
+  char *copy_err = NULL;
+  cstr c = cstring_copy(s, &copy_err);
+  REQUIRE_EQ((void *)c, NULL);
+  REQUIRE_NE((void *)copy_err, NULL);
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+static void free_cstr_vector_oom(cvec parts) {
+  if (!parts) return;
+  g_cstr_oom_budget = 1000000;  // teardown itself must never be budget-limited
+  for (size_t i = 0; i < cvector_elem_count(parts); i++) {
+    cstr *p = (cstr *)cvector_at(parts, i);
+    cstring_destroy(*p);
+  }
+  cvector_destroy(parts);
+}
+
+TEST(cstrings, split_oom_vector_creation_fails) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("a,b,c", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  g_cstr_oom_budget = 0;  // cvector_create_full()'s own first call must fail
+  char *split_err = NULL;
+  cvec parts = cstring_split(s, ",", &split_err);
+  REQUIRE_EQ((void *)parts, NULL);
+  REQUIRE_NE((void *)split_err, NULL);
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, split_oom_mid_loop_token_creation_fails) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("a,b,c", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  // Budget covers the vector (3 calls) and the first token "a" (3 calls);
+  // the second token "b"'s own container calloc (the 7th call) must fail.
+  // Must return NULL with the first token already destroyed by
+  // destroy_cstr_vector(), not leaked (verified separately under
+  // `make memtest`).
+  g_cstr_oom_budget = 6;
+  char *split_err = NULL;
+  cvec parts = cstring_split(s, ",", &split_err);
+  REQUIRE_EQ((void *)parts, NULL);
+  REQUIRE_NE((void *)split_err, NULL);
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, split_oom_last_token_creation_fails) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("a,b,c", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  // Budget covers the vector and both loop tokens "a"/"b" (9 calls); the
+  // final tail token "c"'s own container calloc (the 10th call) must fail.
+  g_cstr_oom_budget = 9;
+  char *split_err = NULL;
+  cvec parts = cstring_split(s, ",", &split_err);
+  REQUIRE_EQ((void *)parts, NULL);
+  REQUIRE_NE((void *)split_err, NULL);
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, split_oom_token_grow_to_fails) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  // First token is 16 characters, forcing its own post-creation grow_to()
+  // to actually reallocate past the default minimum capacity.
+  cstr s =
+      cstring_create_full("0123456789abcdef,short", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  // Budget covers the vector (3) and the first token's own
+  // cstring_create_full() (3); its grow_to() realloc (the 7th call) must
+  // fail.
+  g_cstr_oom_budget = 6;
+  char *split_err = NULL;
+  cvec parts = cstring_split(s, ",", &split_err);
+  REQUIRE_EQ((void *)parts, NULL);
+  REQUIRE_NE((void *)split_err, NULL);
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
+}
+
+TEST(cstrings, split_oom_budget_exactly_sufficient_succeeds) {
+  char *err = NULL;
+  g_cstr_oom_budget = 3;
+  cstr s = cstring_create_full("a,b,c", &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  g_cstr_oom_budget = 12;  // vector + 3 tokens, 3 calls each
+  char *split_err = NULL;
+  cvec parts = cstring_split(s, ",", &split_err);
+  REQUIRE_NE((void *)parts, NULL);
+  REQUIRE_EQ((void *)split_err, NULL);
+  REQUIRE_EQ(cvector_elem_count(parts), (size_t)3);
+
+  g_cstr_oom_budget = 1000000;
+  free_cstr_vector_oom(parts);
+  cstring_destroy(s);
+}
+
+// cstring_reset() is documented to leave the buffer's capacity unchanged
+// (while still unconditionally resetting length to 0) when its internal
+// shrink-realloc fails, rather than losing the existing content or crashing.
+TEST(cstrings, reset_realloc_failure_leaves_capacity_unchanged) {
+  char *err = NULL;
+  g_cstr_oom_budget = 1000000;
+  cstr s = cstring_create_full(NULL, &g_cstr_oom_procs, &err);
+  REQUIRE_NE((void *)s, NULL);
+
+  const char *chunk =
+      "0123456789abcdef0123456789abcdef";  // 33 chars, forces grow
+  REQUIRE_EQ(cstring_append(s, chunk), ccol_success);
+  size_t grown_cap = cstring_get_capacity(s);
+  REQUIRE_TRUE(grown_cap > CSTRING_MIN_CAPACITY);
+
+  g_cstr_oom_budget = 0;  // the shrink-back-to-minimum realloc must fail
+  cstring_reset(s);
+  REQUIRE_EQ(cstring_length(s), (size_t)0);
+  REQUIRE_STREQ(cstring_c_str(s), "");
+  REQUIRE_EQ(cstring_get_capacity(s), grown_cap);  // unchanged, not shrunk
+
+  g_cstr_oom_budget = 1000000;
+  cstring_destroy(s);
 }

@@ -29,6 +29,8 @@ SOFTWARE.
 #include <ctype.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -37,6 +39,7 @@ SOFTWARE.
 #include <string.h>
 #include <strings.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -224,7 +227,17 @@ static ssize_t srv_read_headers(int fd, char *buf, size_t max,
   ssize_t total = 0;
   while (total < (ssize_t)(max - 1)) {
     ssize_t n = recv(fd, buf + total, max - 1 - (size_t)total, 0);
-    if (n <= 0) return total > 0 ? total : n;
+    if (n <= 0) {
+      /* Connection closed/errored with some bytes already read but before
+       * the header terminator was ever found; *hdr_len_out is set here for
+       * the same self-consistency reason as the buffer-exhausted fallback
+       * below (a caller that only checks `if (n <= 0) break;` and not
+       * `total`/`*hdr_len_out` together would otherwise treat these
+       * leftover, header-terminator-less bytes as a fully-parsed zero-
+       * length header block). */
+      *hdr_len_out = 0;
+      return total > 0 ? total : n;
+    }
     total += n;
     buf[total] = '\0';
 
@@ -234,6 +247,12 @@ static ssize_t srv_read_headers(int fd, char *buf, size_t max,
       return total;
     }
   }
+  /* Buffer exhausted without ever finding the header terminator (a request
+   * whose headers alone exceed `max` bytes); *hdr_len_out is deliberately
+   * set here rather than left for the caller's own pre-initialization to
+   * cover, so this function's output is self-consistent regardless of what
+   * the caller happened to initialize hdr_len_out to before the call. */
+  *hdr_len_out = 0;
   return total;
 }
 
@@ -434,6 +453,108 @@ static bool srv_handle_expect_continue_die_after_100_clean_route(
     atomic_fetch_add(&g_die_after_100_clean_body_recv_count, 1);
 
   return true; /* close with no further bytes at all: a clean EOF */
+}
+
+/*
+ * An eighth Expect: 100-continue-aware route, used only by the async engine's
+ * own async_expect_continue.interim_100_bundled_with_final_response_in_same_
+ * read test: writes "100 Continue" immediately followed, in the SAME send()
+ * call (so it lands in the same read on the client side), by a COMPLETE,
+ * valid final response - unlike srv_handle_expect_continue_fake_final_then_
+ * die_route above, whose trailing bytes are deliberately truncated garbage
+ * the connection then dies mid-way through. This route's own trailing bytes
+ * are a genuine, fully-formed response the client can legitimately consume;
+ * it then drains and discards whatever body the client goes on to send
+ * (rather than closing immediately), so the client's own subsequent body
+ * write completes normally instead of racing this route's own close.
+ * Exercises the async engine's own carry-forward path for exactly this
+ * scenario (see chttp_async_ctx_t.continue_carry's field comment): the
+ * final response bytes arrive before the body write even starts, so they
+ * must be stashed and replayed once that write actually finishes, rather
+ * than lost or misread as part of some later message.
+ */
+static bool srv_handle_expect_continue_bundled_final_route(
+    int conn_fd, char *buf, size_t max, size_t total, size_t hdr_len) {
+  const char *resp_body = "bundled-response";
+  char wire[512];
+  int wn = snprintf(wire, sizeof(wire),
+                    "HTTP/1.1 100 Continue\r\n\r\n"
+                    "HTTP/1.1 200 OK\r\n"
+                    "content-type: text/plain\r\n"
+                    "content-length: %zu\r\n"
+                    "connection: close\r\n"
+                    "\r\n%s",
+                    strlen(resp_body), resp_body);
+  send(conn_fd, wire, (size_t)wn, 0);
+
+  char cl_str[32] = {0};
+  long cl = 0;
+  if (srv_find_header(buf, "content-length", cl_str, sizeof(cl_str)))
+    cl = atol(cl_str);
+
+  while (cl > 0 && total - hdr_len < (size_t)cl && total < max - 1) {
+    ssize_t m = recv(conn_fd, buf + total, max - 1 - total, 0);
+    if (m <= 0) break;
+    total += (size_t)m;
+    buf[total] = '\0';
+  }
+
+  return true; /* Connection: close was already declared above */
+}
+
+/*
+ * A ninth Expect: 100-continue-aware route, used only by
+ * expect_continue.hints_both_sides_of_100_continue_each_phase_gets_its_own_cap
+ * and its async counterpart: sends n_before "103 Early Hints" interim
+ * responses, THEN "100 Continue", reads the declared body, THEN sends
+ * n_after more "103 Early Hints" interim responses before finally answering
+ * for real. n_before/n_after are taken from the path
+ * ("/expect-continue-hints-both-sides/<n_before>/<n_after>"). Exercises
+ * whether the client's own CHTTP_MAX_INTERIM_RESPONSES cap is enforced as a
+ * true CONSECUTIVE-discard count (independently bounding the interim
+ * responses discarded while waiting for "100 Continue" and the interim
+ * responses discarded while reading the real final response, since a
+ * confirmed "100 Continue" is itself a genuine, non-discarded message that
+ * breaks the run) rather than one combined budget shared across both
+ * phases; see chttp_async_ctx_t.interim_responses_seen's own field comment
+ * for the real bug this guards (Tier 2/3 used to share a single counter
+ * across both phases, giving a hop that discarded interim responses before
+ * "100 Continue" strictly less than the documented 64-response budget left
+ * over for its own final-response read).
+ */
+static bool srv_handle_expect_continue_hints_both_sides_route(
+    int conn_fd, char *buf, size_t max, size_t total, size_t hdr_len,
+    const char *path) {
+  int n_before = 0, n_after = 0;
+  sscanf(path, "/expect-continue-hints-both-sides/%d/%d", &n_before, &n_after);
+  const char *hints =
+      "HTTP/1.1 103 Early Hints\r\nLink: </style.css>; rel=preload\r\n\r\n";
+  for (int i = 0; i < n_before; i++) {
+    if (send(conn_fd, hints, strlen(hints), 0) < 0) return true;
+  }
+  const char *cont = "HTTP/1.1 100 Continue\r\n\r\n";
+  send(conn_fd, cont, strlen(cont), 0);
+
+  char cl_str[32] = {0};
+  long cl = 0;
+  if (srv_find_header(buf, "content-length", cl_str, sizeof(cl_str)))
+    cl = atol(cl_str);
+
+  while (cl > 0 && total - hdr_len < (size_t)cl && total < max - 1) {
+    ssize_t m = recv(conn_fd, buf + total, max - 1 - total, 0);
+    if (m <= 0) break;
+    total += (size_t)m;
+    buf[total] = '\0';
+  }
+
+  for (int i = 0; i < n_after; i++) {
+    if (send(conn_fd, hints, strlen(hints), 0) < 0) return true;
+  }
+
+  const char *b = "{\"status\":\"ok\"}";
+  srv_respond(conn_fd, 200, "OK", "application/json", NULL, b, strlen(b),
+              false);
+  return true;
 }
 
 /*
@@ -800,6 +921,37 @@ static bool srv_handle_route(int conn_fd, const char *method, const char *path,
     return true;
   }
 
+  if (strcmp(path, "/304-oversized-content-length") == 0) {
+    /* A 304 Not Modified carrying the original resource's own Content-
+     * Length (RFC 7232 SS4.1 - a real, common pattern for a conditional GET
+     * against a CDN/static-asset server); no body bytes ever follow on the
+     * wire, per RFC 7230 SS3.3 (identical framing rule to 1xx/204).
+     * Regression coverage for a real bug: _on_headers_complete's up-front
+     * too-large check only excluded 1xx and HEAD, not 204/304, so a large
+     * declared Content-Length here used to fail the whole request with
+     * ccol_msg_too_large even though chttp1_parser itself already
+     * unconditionally forces no_body for a 304 regardless of any declared
+     * length. */
+    char header[256];
+    int hlen = snprintf(header, sizeof(header),
+                        "HTTP/1.1 304 Not Modified\r\n"
+                        "Content-Length: 999999\r\nConnection: close\r\n\r\n");
+    if (hlen > 0) send(conn_fd, header, (size_t)hlen, 0);
+    return true;
+  }
+
+  if (strcmp(path, "/204-oversized-content-length") == 0) {
+    /* Same rationale as /304-oversized-content-length above, for 204 No
+     * Content (a legacy/misbehaving-server pattern; RFC 7230 SS3.3 forbids
+     * a body just as strictly). */
+    char header[256];
+    int hlen = snprintf(header, sizeof(header),
+                        "HTTP/1.1 204 No Content\r\n"
+                        "Content-Length: 999999\r\nConnection: close\r\n\r\n");
+    if (hlen > 0) send(conn_fd, header, (size_t)hlen, 0);
+    return true;
+  }
+
   if (strcmp(path, "/echo-method-body") == 0) {
     /* Echoes "<METHOD>:<body_len>"; used to verify the redirect-following
      * method/body policy (301/302/303 -> bodyless GET except HEAD; 307/308 ->
@@ -1097,6 +1249,13 @@ static void *srv_conn_thread(void *arg) {
     } else if (strcmp(path, "/expect-continue-die-after-100-clean") == 0) {
       close_after = srv_handle_expect_continue_die_after_100_clean_route(
           conn_fd, buf, TEST_SERVER_BUF, (size_t)n, hdr_len);
+    } else if (strcmp(path, "/expect-continue-bundled-final") == 0) {
+      close_after = srv_handle_expect_continue_bundled_final_route(
+          conn_fd, buf, TEST_SERVER_BUF, (size_t)n, hdr_len);
+    } else if (strncmp(path, "/expect-continue-hints-both-sides/",
+                       strlen("/expect-continue-hints-both-sides/")) == 0) {
+      close_after = srv_handle_expect_continue_hints_both_sides_route(
+          conn_fd, buf, TEST_SERVER_BUF, (size_t)n, hdr_len, path);
     } else {
       /* Ordinary route: read the rest of the body (if any) per
        * content-length, exactly reproducing the now-removed
@@ -1547,6 +1706,47 @@ TEST(request, set_header_rejects_crlf_in_value) {
   chttp_request_free(req);
 }
 
+TEST(request, set_header_rejects_empty_name) {
+  /* An empty name has no valid on-the-wire representation. Must not
+   * corrupt the request's existing headers. */
+  chttp_request_t *req =
+      chttp_request_new(CHTTP_GET, "http://example.com/", NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttp_request_set_header(req, "x-legit", "fine");
+  REQUIRE_EQ(chttp_request_set_header(req, "", "v"), ccol_invalid_args);
+  REQUIRE_STREQ(chttp_request_get_header(req, "x-legit"), "fine");
+
+  chttp_request_free(req);
+}
+
+TEST(request, set_header_rejects_non_tchar_name) {
+  /* chttp_request_set_header must reject a header NAME containing a byte
+   * outside RFC 7230 SS3.2.6's tchar set, not merely one containing no
+   * CR/LF: a space or a literal colon is not itself a CRLF-injection
+   * vector, but still produces a structurally malformed "name: value\r\n"
+   * wire line a strict downstream server/proxy could misread, mirroring
+   * chttpsvr_resp_set_header's identical validation on the server side
+   * (chttpserver.c). A legitimate header using every non-alphanumeric
+   * tchar byte RFC 7230 SS3.2.6 permits must still work after both
+   * rejections. */
+  chttp_request_t *req =
+      chttp_request_new(CHTTP_GET, "http://example.com/", NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  REQUIRE_EQ(chttp_request_set_header(req, "X Foo", "bar"), ccol_invalid_args);
+  REQUIRE_EQ(chttp_request_set_header(req, "X:Foo", "bar"), ccol_invalid_args);
+  REQUIRE_EQ((void *)chttp_request_get_header(req, "X Foo"), NULL);
+  REQUIRE_EQ((void *)chttp_request_get_header(req, "X:Foo"), NULL);
+
+  REQUIRE_EQ(chttp_request_set_header(req, "x-legit!#$%&'*+-.^_`|~", "fine"),
+             ccol_success);
+  REQUIRE_STREQ(chttp_request_get_header(req, "x-legit!#$%&'*+-.^_`|~"),
+                "fine");
+
+  chttp_request_free(req);
+}
+
 TEST(request, set_header_rejects_transfer_encoding) {
   /* Regression test: chttpclient never transfer-codes a request body (a
    * body-carrying request is always sent whole, Content-Length-framed), so
@@ -1991,7 +2191,7 @@ TEST(http, default_client_convenience) {
   make_url(url, sizeof(url), "/get");
 
   chttpcli def = chttp_default_client();
-  REQUIRE_NE((void *)def, NULL);
+  REQUIRE_NE(def, CHTTPCLI_INVALID);
 
   chttpcli_response *resp = NULL;
   ccol_retval_t rv = chttpclient_do(def, NULL, &resp);
@@ -2243,8 +2443,17 @@ TEST(http, concurrent_requests) {
         pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]), 0);
   }
 
+  /* Join every thread FIRST, in its own loop, before any REQUIRE_* runs:
+   * tau's REQUIRE_* macros return from this function immediately on
+   * failure, and args/threads are stack-local to this function. Checking
+   * results in the same loop as the join would leave any not-yet-joined
+   * thread still running and still writing into args[] after this
+   * function's own stack frame is gone the moment an earlier iteration's
+   * assertion failed - a real stack-use-after-return, not just a lost test
+   * result, that could corrupt whatever later test happens to reuse that
+   * same stack memory. */
+  for (int i = 0; i < NTHREADS; i++) pthread_join(threads[i], NULL);
   for (int i = 0; i < NTHREADS; i++) {
-    pthread_join(threads[i], NULL);
     REQUIRE_EQ(args[i].result_rv, ccol_success);
     REQUIRE_EQ(args[i].result_status, 200);
   }
@@ -2268,6 +2477,7 @@ TEST(pool, grow_after_initialization) {
   REQUIRE_NE((void *)req, NULL);
   chttpcli_response *resp = NULL;
   REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   chttpclient_resp_free(resp);
   chttp_request_free(req);
@@ -2280,6 +2490,7 @@ TEST(pool, grow_after_initialization) {
   REQUIRE_NE((void *)req, NULL);
   resp = NULL;
   REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   chttpclient_resp_free(resp);
   chttp_request_free(req);
@@ -2476,6 +2687,7 @@ TEST(pool, shrink_after_initialization) {
   REQUIRE_NE((void *)req, NULL);
   chttpcli_response *resp = NULL;
   REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   chttpclient_resp_free(resp);
   chttp_request_free(req);
@@ -2488,6 +2700,7 @@ TEST(pool, shrink_after_initialization) {
   REQUIRE_NE((void *)req, NULL);
   resp = NULL;
   REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   chttpclient_resp_free(resp);
   chttp_request_free(req);
@@ -2523,8 +2736,12 @@ TEST(pool, idle_handles_freed_on_shrink) {
     REQUIRE_EQ(
         pthread_create(&threads[i], NULL, concurrent_req_thread, &args[i]), 0);
   }
+  /* Join every thread FIRST, in its own loop, before any REQUIRE_* runs;
+   * see http.concurrent_requests's identical comment for why (a
+   * stack-use-after-return via a not-yet-joined thread, not just a lost
+   * test result). */
+  for (int i = 0; i < POOL_LARGE; i++) pthread_join(threads[i], NULL);
   for (int i = 0; i < POOL_LARGE; i++) {
-    pthread_join(threads[i], NULL);
     REQUIRE_EQ(args[i].result_rv, ccol_success);
     REQUIRE_EQ(args[i].result_status, 200);
   }
@@ -2538,6 +2755,7 @@ TEST(pool, idle_handles_freed_on_shrink) {
   REQUIRE_NE((void *)req, NULL);
   chttpcli_response *resp = NULL;
   REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   chttpclient_resp_free(resp);
   chttp_request_free(req);
@@ -2585,10 +2803,20 @@ TEST(pool, shrink_while_in_flight_exiles_slots) {
     nanosleep(&ts, NULL);
   }
 
-  REQUIRE_EQ(chttpclient_set_pool_size(cli, POOL_SMALL), ccol_success);
+  /* Return value captured, not asserted yet: an early-returning REQUIRE_*
+   * here, before the threads below are joined, would leave POOL_LARGE
+   * threads still running against the stack-local args[]/threads[] arrays
+   * after this function's own frame is gone. */
+  ccol_retval_t set_pool_size_rv = chttpclient_set_pool_size(cli, POOL_SMALL);
 
+  /* Join every thread FIRST, in its own loop, before any REQUIRE_* runs;
+   * see http.concurrent_requests's identical comment for why (a
+   * stack-use-after-return via a not-yet-joined thread, not just a lost
+   * test result). */
+  for (int i = 0; i < POOL_LARGE; i++) pthread_join(threads[i], NULL);
+
+  REQUIRE_EQ(set_pool_size_rv, ccol_success);
   for (int i = 0; i < POOL_LARGE; i++) {
-    pthread_join(threads[i], NULL);
     REQUIRE_EQ(args[i].result_rv, ccol_success);
     REQUIRE_EQ(args[i].result_status, 200);
   }
@@ -2599,6 +2827,7 @@ TEST(pool, shrink_while_in_flight_exiles_slots) {
   REQUIRE_NE((void *)req, NULL);
   chttpcli_response *resp = NULL;
   REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   chttpclient_resp_free(resp);
   chttp_request_free(req);
@@ -3047,6 +3276,7 @@ TEST(pool, set_pool_size_zero_after_initialization) {
   REQUIRE_NE((void *)req, NULL);
   chttpcli_response *resp = NULL;
   REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   chttpclient_resp_free(resp);
   chttp_request_free(req);
@@ -3059,6 +3289,7 @@ TEST(pool, set_pool_size_zero_after_initialization) {
   REQUIRE_NE((void *)req, NULL);
   resp = NULL;
   REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
   REQUIRE_EQ(resp->status_code, 200);
   chttpclient_resp_free(resp);
   chttp_request_free(req);
@@ -3112,18 +3343,40 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
     nanosleep(&ts, NULL);
   }
 
-  REQUIRE_EQ(chttpclient_set_request_timeout(cli, 20), ccol_success);
+  /* Every result below is captured into a local, not asserted immediately:
+   * occupant_thread is confirmed running (spun-wait above) and does not
+   * finish until the server's own ~100ms /slow sleep completes, so an
+   * early-returning REQUIRE_* anywhere between here and the join further
+   * down would leave it still running and still writing into the
+   * stack-local `occupant` after this function's own frame is gone - a
+   * real stack-use-after-return, not just a lost test result. This
+   * includes chttpclient_set_request_timeout and chttp_request_new
+   * themselves, not just chttpclient_do's own result: an earlier version
+   * of this test asserted on those two calls immediately, before the join,
+   * missing exactly this window. */
+  ccol_retval_t set_timeout_rv = chttpclient_set_request_timeout(cli, 20);
 
   chttp_request_t *req = chttp_request_new(CHTTP_GET, get_url, NULL, NULL);
-  REQUIRE_NE((void *)req, NULL);
   chttpcli_response *resp = NULL;
-  struct timespec t0, t1;
-  clock_gettime(CLOCK_MONOTONIC, &t0);
-  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
-  clock_gettime(CLOCK_MONOTONIC, &t1);
-  long elapsed_ms =
-      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+  ccol_retval_t rv = ccol_unexpected_failure;
+  long elapsed_ms = -1;
+  if (req) {
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    rv = chttpclient_do(cli, req, &resp);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    elapsed_ms =
+        (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+    chttp_request_free(req);
+  }
 
+  /* Joined before any REQUIRE_* below runs; see the comment above. The
+   * join does not affect the timing measurement above, which was already
+   * captured into elapsed_ms before this point. */
+  pthread_join(occupant_thread, NULL);
+
+  REQUIRE_EQ(set_timeout_rv, ccol_success);
+  REQUIRE_NE((void *)req, NULL);
   REQUIRE_EQ(rv, ccol_timed_out);
   REQUIRE_EQ((void *)resp, NULL);
   /* The return code alone isn't a sufficient regression signal: merely
@@ -3138,9 +3391,7 @@ TEST(pool, request_timeout_counts_time_spent_waiting_for_a_pool_slot) {
    * once its own 20ms elapsed" from "blocked for the occupant's ~100ms
    * first". */
   REQUIRE_LT(elapsed_ms, 80L);
-  chttp_request_free(req);
 
-  pthread_join(occupant_thread, NULL);
   REQUIRE_EQ(occupant.result_rv, ccol_success);
   REQUIRE_EQ(occupant.result_status, 200);
 
@@ -3323,19 +3574,28 @@ TEST(pool, do_returns_not_permitted_when_destroying) {
   pthread_t destroy_tid;
   REQUIRE_EQ(pthread_create(&destroy_tid, NULL, do_destroy_thread, &cli), 0);
 
+  /* Every thread is joined FIRST, in this one block, before any REQUIRE_*
+   * below runs: tau's REQUIRE_* macros return from this function
+   * immediately on failure, and probe/slow_args/cli are all stack-local to
+   * this function (destroy_tid was even handed &cli directly). Checking
+   * assertions interleaved with joins, as an earlier version of this test
+   * did, would leave a not-yet-joined thread still running and still
+   * writing into this function's own stack frame - including, for
+   * destroy_tid specifically, still calling chttpclient_destroy on a `cli`
+   * variable that no longer exists - the moment any earlier assertion
+   * failed. A real stack-use-after-return, not just a lost test result. */
   pthread_join(probe_tid, NULL);
-  REQUIRE_EQ(probe.result_rv, ccol_not_permitted);
-  REQUIRE_EQ(probe.result_status, 0);
-
-  /* Let the slow requests complete so the destroy thread can finish. */
-  for (int i = 0; i < 2; i++) {
-    pthread_join(slow_tids[i], NULL);
-    REQUIRE_EQ(slow_args[i].result_rv, ccol_success);
-    REQUIRE_EQ(slow_args[i].result_status, 200);
-  }
+  for (int i = 0; i < 2; i++) pthread_join(slow_tids[i], NULL);
   pthread_join(destroy_tid, NULL);
   /* cli has been freed by do_destroy_thread; do not call chttpclient_destroy.
    */
+
+  REQUIRE_EQ(probe.result_rv, ccol_not_permitted);
+  REQUIRE_EQ(probe.result_status, 0);
+  for (int i = 0; i < 2; i++) {
+    REQUIRE_EQ(slow_args[i].result_rv, ccol_success);
+    REQUIRE_EQ(slow_args[i].result_status, 200);
+  }
 }
 
 /* ========================================================================== */
@@ -3697,6 +3957,57 @@ TEST(max_response_body_size, head_response_oversized_content_length_exempt) {
   chttpclient_destroy(cli);
 }
 
+TEST(max_response_body_size, response_304_oversized_content_length_exempt) {
+  /* Regression test for a real bug: _on_headers_complete's up-front
+   * too-large check excluded 1xx and HEAD, but not 204/304, even though RFC
+   * 7230 SS3.3 treats all of these identically for body-framing purposes and
+   * chttp1_parser.c already unconditionally forces no_body for 204/304
+   * regardless of any declared Content-Length. A 304 commonly carries the
+   * original resource's own (potentially large) Content-Length per RFC 7232
+   * SS4.1 - a real, common pattern for a conditional GET against a CDN. */
+  chttpcli_construct(cli);
+  REQUIRE_EQ(chttpclient_set_max_response_body_size(cli, 100), ccol_success);
+
+  char url[160];
+  make_url(url, sizeof(url), "/304-oversized-content-length");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttp_request_free(req);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 304);
+  REQUIRE_EQ(resp->body_len, (size_t)0);
+
+  chttpclient_resp_free(resp);
+  chttpclient_destroy(cli);
+}
+
+TEST(max_response_body_size, response_204_oversized_content_length_exempt) {
+  /* Same rationale as response_304_oversized_content_length_exempt above,
+   * for 204 No Content. */
+  chttpcli_construct(cli);
+  REQUIRE_EQ(chttpclient_set_max_response_body_size(cli, 100), ccol_success);
+
+  char url[160];
+  make_url(url, sizeof(url), "/204-oversized-content-length");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttp_request_free(req);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 204);
+  REQUIRE_EQ(resp->body_len, (size_t)0);
+
+  chttpclient_resp_free(resp);
+  chttpclient_destroy(cli);
+}
+
 TEST(max_response_body_size, response_exactly_at_cap_succeeds) {
   /* The cap is an upper bound, not an exclusive one: a response whose body
    * is exactly max_bytes must still succeed. */
@@ -3907,6 +4218,146 @@ TEST(keepalive, concurrent_requests_exceeding_idle_cap_no_crash) {
     REQUIRE_EQ(args[i].result_status, 200);
   }
 
+  chttpclient_destroy(cli);
+}
+
+/* ========================================================================== */
+/*                     MAX IDLE ORIGINS (Tier 1 and Tier 2/3)                 */
+/* ========================================================================== */
+
+/* Forward declarations: full doc comments live alongside the primary
+ * declarations further below (search for these same names), which are
+ * declared too late in this file to be visible to the tests in this
+ * section. */
+extern struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h);
+extern size_t _chttpclient_idle_pools_key_count_for_tests(
+    struct chttpclient *cli);
+extern size_t _chttpclient_idle_pools_async_key_count_for_tests(
+    struct chttpclient *cli);
+extern void _chttpclient_set_max_idle_origins_for_tests(size_t n);
+
+TEST(max_idle_origins, tier1_distinct_origins_bounded_and_reclaimed) {
+  /* Regression test for two related fixes in _idle_pool_take/_idle_pool_
+   * offer:
+   *
+   * (1) A per-origin idle-pool list, once popped down to empty, used to
+   *     leave its own (now-empty) chmap entry behind permanently rather
+   *     than being pruned - closed by making _idle_pool_take delete the
+   *     entry the moment a pop empties its list.
+   *
+   * (2) Pruning alone does not bound growth for an origin visited exactly
+   *     once and never revisited (a crawler pattern): nothing ever pops
+   *     its connection back out to trigger the pruning above. Closed by
+   *     CHTTP_MAX_IDLE_ORIGINS, a hard cap on distinct origin keys
+   *     _idle_pool_offer will ever create a fresh entry for; overridden
+   *     here to 2 (via the test-only hook) since the real cap (128) would
+   *     need 128 genuinely distinct origins to exercise directly.
+   *
+   * Uses this suite's own three independent real listeners (IPv4, IPv6,
+   * Unix domain socket - all serving identical routes) as three genuinely
+   * distinct origin_keys, rather than anything synthetic. */
+  _chttpclient_set_max_idle_origins_for_tests(2);
+
+  char url4[160], url6[160], url_unix[256];
+  make_url(url4, sizeof(url4), "/keepalive");
+  make_url6(url6, sizeof(url6), "/keepalive");
+  make_unix_url(url_unix, sizeof(url_unix), "/keepalive");
+
+  chttpcli_construct(cli);
+  struct chttpclient *raw = _chttpcli_resolve_for_tests(cli);
+  REQUIRE_NE((void *)raw, NULL);
+
+  /* First two distinct origins fill the (overridden) cap of 2. */
+  chttp_request_t *req4 = chttp_request_new(CHTTP_GET, url4, NULL, NULL);
+  REQUIRE_NE((void *)req4, NULL);
+  chttpcli_response *resp4 = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req4, &resp4), ccol_success);
+  REQUIRE_NE((void *)resp4, NULL);
+  chttpclient_resp_free(resp4);
+  chttp_request_free(req4);
+
+  chttp_request_t *req6 = chttp_request_new(CHTTP_GET, url6, NULL, NULL);
+  REQUIRE_NE((void *)req6, NULL);
+  chttpcli_response *resp6 = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req6, &resp6), ccol_success);
+  REQUIRE_NE((void *)resp6, NULL);
+  chttpclient_resp_free(resp6);
+  chttp_request_free(req6);
+
+  usleep(20000); /* let both connections actually land in the idle pool */
+  REQUIRE_EQ(_chttpclient_idle_pools_key_count_for_tests(raw), (size_t)2);
+
+  /* A third, genuinely distinct origin (Unix) still succeeds - the cap only
+   * governs whether ITS connection gets pooled afterward, never whether the
+   * request itself is served - but must NOT grow the key count past 2. */
+  int accepts_before_unix = test_server_accept_count();
+  chttp_request_t *req_u1 = chttp_request_new(CHTTP_GET, url_unix, NULL, NULL);
+  REQUIRE_NE((void *)req_u1, NULL);
+  chttpcli_response *resp_u1 = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req_u1, &resp_u1), ccol_success);
+  REQUIRE_NE((void *)resp_u1, NULL);
+  chttpclient_resp_free(resp_u1);
+  chttp_request_free(req_u1);
+
+  usleep(20000);
+  REQUIRE_EQ(_chttpclient_idle_pools_key_count_for_tests(raw), (size_t)2);
+
+  /* Since the Unix connection was never pooled (cap already full), a SECOND
+   * request against it cannot possibly reuse anything: proves the "not
+   * pooled" outcome directly, not just indirectly via the key count. */
+  chttp_request_t *req_u2 = chttp_request_new(CHTTP_GET, url_unix, NULL, NULL);
+  REQUIRE_NE((void *)req_u2, NULL);
+  chttpcli_response *resp_u2 = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req_u2, &resp_u2), ccol_success);
+  REQUIRE_NE((void *)resp_u2, NULL);
+  chttpclient_resp_free(resp_u2);
+  chttp_request_free(req_u2);
+
+  usleep(20000);
+  int accepts_after_unix = test_server_accept_count();
+  REQUIRE_EQ(accepts_after_unix - accepts_before_unix, 2);
+
+  /* Reclamation, proving fix (1) directly (not just (2) above): pop IPv4's
+   * one pooled connection via an ordinary, successful reuse - popping the
+   * LAST entry in an origin's list prunes that origin's own map entry
+   * immediately, in the very same locked section as the pop, regardless of
+   * whether the popped connection later turns out alive or dead. /get sends
+   * a real "Connection: close" (unlike /keepalive), so the reused
+   * connection is torn down afterward rather than re-offered - IPv4's
+   * pruned entry is never recreated, making the prune permanently
+   * observable rather than immediately masked by a fresh offer. If pruning
+   * were broken, IPv4's now-empty entry would still be sitting in the map,
+   * and the key count below would read 2, not 1. */
+  char url4_close[160];
+  make_url(url4_close, sizeof(url4_close), "/get");
+  chttp_request_t *req4b = chttp_request_new(CHTTP_GET, url4_close, NULL, NULL);
+  REQUIRE_NE((void *)req4b, NULL);
+  chttpcli_response *resp4b = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req4b, &resp4b), ccol_success);
+  REQUIRE_NE((void *)resp4b, NULL);
+  chttpclient_resp_free(resp4b);
+  chttp_request_free(req4b);
+  usleep(20000);
+  /* IPv4's connection was popped (for reuse) above and, since /get sends
+   * Connection: close, is never re-offered; count reflects only IPv6's
+   * still-live entry, proving IPv4's own entry really was pruned, not that
+   * the cap simply had residual room from never having been reached. */
+  REQUIRE_EQ(_chttpclient_idle_pools_key_count_for_tests(raw), (size_t)1);
+
+  /* With IPv4's slot now genuinely freed (count 1 < cap 2), a fresh Unix
+   * request must be able to claim it: proves the cap correctly recognises
+   * freed room, not just correct rejection while full. */
+  chttp_request_t *req_u3 = chttp_request_new(CHTTP_GET, url_unix, NULL, NULL);
+  REQUIRE_NE((void *)req_u3, NULL);
+  chttpcli_response *resp_u3 = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req_u3, &resp_u3), ccol_success);
+  REQUIRE_NE((void *)resp_u3, NULL);
+  chttpclient_resp_free(resp_u3);
+  chttp_request_free(req_u3);
+  usleep(20000);
+  REQUIRE_EQ(_chttpclient_idle_pools_key_count_for_tests(raw), (size_t)2);
+
+  _chttpclient_set_max_idle_origins_for_tests(0);
   chttpclient_destroy(cli);
 }
 
@@ -4309,6 +4760,246 @@ TEST(relative_redirects, rfc3986_5_4_reference_table) {
     REQUIRE_STREQ(result, cases[i].expected);
     free(result);
   }
+}
+
+TEST(relative_redirects,
+     query_only_reference_against_dotted_base_left_verbatim) {
+  /* RFC 3986 SS5.3: if R.path == "" (a query-only reference, e.g. "?y"),
+   * T.path = Base.path VERBATIM (no merge, no dot-segment removal). The
+   * table above only ever exercises "?y" against a base ("/b/c/d;p") with no
+   * dot segments in it at all, so it cannot distinguish "left verbatim" from
+   * "silently re-normalised"; this base deliberately has unresolved ".."
+   * segments of its own; this client never dot-segment-normalises the
+   * caller's own original request URL (see _parse_chttp_url), so the exact
+   * same bytes must still be there after a query-only redirect, matching
+   * both the RFC and a reference implementation (e.g. Python's
+   * urllib.parse.urljoin('http://example.com/a/../b?x', '?y') ==
+   * 'http://example.com/a/../b?y'). The sibling "#frag" (fragment-only)
+   * case already gets this right today and is included here as a same-base
+   * control to confirm the two stay consistent with each other. */
+  static const struct {
+    const char *location;
+    const char *expected;
+  } cases[] = {
+      {"?y", "http://example.com/a/../b?y"},
+      {"#frag", "http://example.com/a/../b?x"},
+  };
+
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    char *result = _chttp_resolve_redirect_url_for_tests(
+        "http://example.com/a/../b?x", cases[i].location);
+    REQUIRE_NE((void *)result, NULL);
+    REQUIRE_STREQ(result, cases[i].expected);
+    free(result);
+  }
+}
+
+/* ========================================================================== */
+/*                  REQUEST SERIALIZATION OVERFLOW GUARD                      */
+/* ========================================================================== */
+
+extern bool _chttp_ob_append_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
+                                                      size_t fake_len,
+                                                      size_t n);
+
+/* Records a call without ever actually allocating anything (returns NULL
+ * unconditionally); used to prove _ob_append's overflow guard rejects an
+ * out-of-range append BEFORE ever reaching the real allocator, mirroring
+ * this project's own established "assert the allocator was never invoked"
+ * pattern for this exact class of overflow guard elsewhere (cvector, csort,
+ * cmempool). Safe regardless of whether the guard under test
+ * is present or not: even if a regression let a call through, this
+ * allocator still returns NULL immediately rather than attempting a real,
+ * wrapped-size allocation, so the call count alone (not a crash) is what
+ * distinguishes the two outcomes. */
+static atomic_int g_ob_overflow_alloc_calls;
+static void *ob_overflow_never_malloc(size_t sz) {
+  (void)sz;
+  atomic_fetch_add(&g_ob_overflow_alloc_calls, 1);
+  return NULL;
+}
+static void *ob_overflow_never_calloc(size_t n, size_t sz) {
+  (void)n;
+  (void)sz;
+  atomic_fetch_add(&g_ob_overflow_alloc_calls, 1);
+  return NULL;
+}
+static void *ob_overflow_never_realloc(void *p, size_t sz) {
+  (void)p;
+  (void)sz;
+  atomic_fetch_add(&g_ob_overflow_alloc_calls, 1);
+  return NULL;
+}
+static void ob_overflow_never_free(void *p) { (void)p; }
+static ccol_memmgmt_procs_t g_ob_overflow_never_mp = {
+    .malloc = ob_overflow_never_malloc,
+    .free = ob_overflow_never_free,
+    .calloc = ob_overflow_never_calloc,
+    .realloc = ob_overflow_never_realloc};
+
+TEST(request_serialization,
+     ob_append_overflow_guard_rejects_without_allocating) {
+  /* fake_len + n (SIZE_MAX - 3 + 8) wraps past SIZE_MAX; the guard must
+   * reject this outright, reporting OOM, without ever calling into mp's own
+   * malloc/calloc/realloc (a broken guard would instead let the doubling
+   * loop settle on a small, wrapped `nc` and proceed to allocate/memcpy,
+   * which is exactly what this allocator's own call count would catch). */
+  atomic_store(&g_ob_overflow_alloc_calls, 0);
+  bool oom = _chttp_ob_append_overflow_guard_for_tests(&g_ob_overflow_never_mp,
+                                                       SIZE_MAX - 3, 8);
+  REQUIRE_TRUE(oom);
+  REQUIRE_EQ(atomic_load(&g_ob_overflow_alloc_calls), 0);
+}
+
+TEST(request_serialization, ob_append_ordinary_small_append_still_works) {
+  /* Same helper, an ordinary (nowhere near overflowing) starting length,
+   * through the default allocator: confirms the guard above doesn't
+   * false-positive on legitimate, realistic-sized buffers. */
+  bool oom = _chttp_ob_append_overflow_guard_for_tests(NULL, 0, 8);
+  REQUIRE_FALSE(oom);
+}
+
+/* ========================================================================== */
+/*             UNIX-SOCKET-PATH PERCENT-ENCODING OVERFLOW GUARD               */
+/* ========================================================================== */
+
+extern bool _chttp_percent_encode_unix_path_overflow_guard_for_tests(
+    ccol_memmgmt_procs_t *mp, const char *path, size_t fake_len);
+
+TEST(request_serialization,
+     percent_encode_unix_path_overflow_guard_rejects_without_allocating) {
+  /* fake_len * 3 + 1 would wrap past SIZE_MAX for any fake_len exceeding
+   * (SIZE_MAX - 1) / 3; the guard must reject this outright, without ever
+   * calling into mp's own malloc/calloc/realloc (a broken guard would
+   * instead under-allocate `out` and then write past its end in the
+   * encoding loop). Mirrors ob_append_overflow_guard_rejects_without_
+   * allocating's own pattern for the sibling guard in _ob_append. */
+  atomic_store(&g_ob_overflow_alloc_calls, 0);
+  bool rejected = _chttp_percent_encode_unix_path_overflow_guard_for_tests(
+      &g_ob_overflow_never_mp, "/x", SIZE_MAX);
+  REQUIRE_TRUE(rejected);
+  REQUIRE_EQ(atomic_load(&g_ob_overflow_alloc_calls), 0);
+}
+
+TEST(request_serialization,
+     percent_encode_unix_path_ordinary_small_path_still_works) {
+  /* Same helper, an ordinary (nowhere near overflowing) real path and its
+   * own genuine length, through the default allocator: confirms the guard
+   * above doesn't false-positive on a legitimate, realistic socket path. */
+  const char *path = "/var/run/app.sock";
+  bool rejected = _chttp_percent_encode_unix_path_overflow_guard_for_tests(
+      NULL, path, strlen(path));
+  REQUIRE_FALSE(rejected);
+}
+
+/* ========================================================================== */
+/*                  RESPONSE-BODY-BUFFER OVERFLOW GUARD                       */
+/* ========================================================================== */
+
+extern bool _chttp_sink_buffered_overflow_guard_for_tests(
+    ccol_memmgmt_procs_t *mp, size_t fake_len);
+
+TEST(request_serialization,
+     sink_buffered_overflow_guard_rejects_without_allocating) {
+  /* fake_len + sizeof(probe) (SIZE_MAX - 3 + 8) wraps past SIZE_MAX; the
+   * guard must reject this outright, reporting OOM (not too_large), without
+   * ever calling into mp's own malloc/calloc/realloc. Mirrors
+   * ob_append_overflow_guard_rejects_without_allocating's own pattern for
+   * the sibling guard in _ob_append. */
+  atomic_store(&g_ob_overflow_alloc_calls, 0);
+  bool rejected = _chttp_sink_buffered_overflow_guard_for_tests(
+      &g_ob_overflow_never_mp, SIZE_MAX - 3);
+  REQUIRE_TRUE(rejected);
+  REQUIRE_EQ(atomic_load(&g_ob_overflow_alloc_calls), 0);
+}
+
+TEST(request_serialization, sink_buffered_ordinary_small_body_still_works) {
+  /* Same helper, an ordinary (nowhere near overflowing) starting length,
+   * through the default allocator: confirms the guard above doesn't
+   * false-positive on a legitimate, realistic-sized response body. */
+  bool rejected = _chttp_sink_buffered_overflow_guard_for_tests(NULL, 0);
+  REQUIRE_FALSE(rejected);
+}
+
+/* ========================================================================== */
+/*             HEADER-NAME-DEDUP-TRACKER OVERFLOW GUARD                       */
+/* ========================================================================== */
+
+extern bool _chttp_seen_names_add_overflow_guard_for_tests(
+    ccol_memmgmt_procs_t *mp, size_t fake_cap);
+
+TEST(request_serialization,
+     seen_names_add_overflow_guard_rejects_without_allocating) {
+  /* fake_cap * 2 (SIZE_MAX) wraps past SIZE_MAX; the guard must reject this
+   * outright, without ever calling into mp's own malloc/calloc/realloc.
+   * Mirrors ob_append_overflow_guard_rejects_without_allocating's own
+   * pattern for the sibling guard in _ob_append. */
+  atomic_store(&g_ob_overflow_alloc_calls, 0);
+  bool rejected = _chttp_seen_names_add_overflow_guard_for_tests(
+      &g_ob_overflow_never_mp, SIZE_MAX / 2 + 1);
+  REQUIRE_TRUE(rejected);
+  REQUIRE_EQ(atomic_load(&g_ob_overflow_alloc_calls), 0);
+}
+
+TEST(request_serialization, seen_names_add_ordinary_small_cap_still_works) {
+  /* Same helper, an ordinary (nowhere near overflowing) starting cap
+   * (0, the real initial value every chttp_seen_names_t starts with),
+   * through the default allocator: confirms the guard above doesn't
+   * false-positive on a legitimate, realistic header count. */
+  bool rejected = _chttp_seen_names_add_overflow_guard_for_tests(NULL, 0);
+  REQUIRE_FALSE(rejected);
+}
+
+/* ========================================================================== */
+/*             REDIRECT-PATH-QUERY-CONCAT OVERFLOW GUARD                      */
+/* ========================================================================== */
+
+extern bool _chttp_merge_ref_path_overflow_guard_for_tests(
+    ccol_memmgmt_procs_t *mp, const char *base_path_and_query,
+    const char *ref_path, size_t fake_ref_path_len);
+extern bool _chttp_concat_len_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
+                                                       const char *a,
+                                                       size_t fake_a_len,
+                                                       const char *b,
+                                                       size_t fake_b_len);
+
+TEST(relative_redirects,
+     merge_ref_path_overflow_guard_rejects_without_allocating) {
+  /* dir_len (bounded to a few bytes here) + fake_ref_path_len (SIZE_MAX)
+   * wraps past SIZE_MAX; the guard must reject this outright, without ever
+   * calling into mp's own malloc/calloc/realloc. */
+  atomic_store(&g_ob_overflow_alloc_calls, 0);
+  bool rejected = _chttp_merge_ref_path_overflow_guard_for_tests(
+      &g_ob_overflow_never_mp, "/a/b/c", "x", SIZE_MAX);
+  REQUIRE_TRUE(rejected);
+  REQUIRE_EQ(atomic_load(&g_ob_overflow_alloc_calls), 0);
+}
+
+TEST(relative_redirects, merge_ref_path_ordinary_small_path_still_works) {
+  /* Same helper, an ordinary (nowhere near overflowing) real reference path
+   * and its own genuine length, through the default allocator. */
+  bool rejected =
+      _chttp_merge_ref_path_overflow_guard_for_tests(NULL, "/a/b/c", "d", 1);
+  REQUIRE_FALSE(rejected);
+}
+
+TEST(relative_redirects, concat_len_overflow_guard_rejects_without_allocating) {
+  /* fake_b_len (SIZE_MAX) + fake_a_len (bounded to a few bytes here) wraps
+   * past SIZE_MAX; the guard must reject this outright, without ever
+   * calling into mp's own malloc/calloc/realloc. */
+  atomic_store(&g_ob_overflow_alloc_calls, 0);
+  bool rejected = _chttp_concat_len_overflow_guard_for_tests(
+      &g_ob_overflow_never_mp, "/a/b", 4, "?q=1", SIZE_MAX);
+  REQUIRE_TRUE(rejected);
+  REQUIRE_EQ(atomic_load(&g_ob_overflow_alloc_calls), 0);
+}
+
+TEST(relative_redirects, concat_len_ordinary_small_strings_still_works) {
+  /* Same helper, ordinary (nowhere near overflowing) real strings and their
+   * own genuine lengths, through the default allocator. */
+  bool rejected =
+      _chttp_concat_len_overflow_guard_for_tests(NULL, "/a/b", 4, "?q=1", 4);
+  REQUIRE_FALSE(rejected);
 }
 
 TEST(relative_redirects, location_with_unrecognized_scheme_resolves_absolute) {
@@ -5030,6 +5721,29 @@ TEST(http, run_query_borrowed_map_crlf_in_name_rejected) {
   chmap_destroy(hdrs);
 }
 
+TEST(http, run_query_borrowed_map_non_tchar_name_rejected) {
+  /* _serialize_request's own backstop tchar check (see chttp_request_set_
+   * header's identical, redundant rejection): req->headers is an internal
+   * chmap handle a caller can still populate directly (bypassing chttp_
+   * request_set_header entirely, exactly like chttp_run_query itself does
+   * here) and hand to chttp_run_query, so the header-emission loop must
+   * reject a non-tchar name byte too (a space here, no CR/LF of its own),
+   * not just chttp_request_set_header. Must fail before ever opening a
+   * connection, i.e. no wire traffic and no leaked resp. */
+  char url[128];
+  make_url(url, sizeof(url), "/get");
+
+  chmap_construct(hdrs, char *, char *);
+  chmap_insert(hdrs, "X Evil", "1");
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_run_query(CHTTP_GET, url, NULL, hdrs, &resp);
+  REQUIRE_EQ(rv, ccol_invalid_args);
+  REQUIRE_EQ((void *)resp, NULL);
+
+  chmap_destroy(hdrs);
+}
+
 TEST(http, run_query_borrowed_map_transfer_encoding_rejected) {
   /* _serialize_request's own backstop Transfer-Encoding check (see
    * chttp_request_set_header's identical, redundant rejection): req->headers
@@ -5109,6 +5823,96 @@ TEST(request, set_header_mismatched_content_length_rejected) {
   chttp_request_free(req);
 }
 
+TEST(request, set_header_content_length_leading_sign_rejected) {
+  /* Regression test: the mismatch check above validated the numeric VALUE
+   * of a caller-set Content-Length via strtoull, which (unlike this
+   * codebase's own request-parsing chttp1_parser.c, used by chttpserver.c)
+   * tolerates a leading '+'/'-' sign before the digits. A value like "+22"
+   * numerically equal to the real body length used to pass this check and
+   * be written verbatim onto the wire as "content-length: +22\r\n", a
+   * header this library's own server-side parser rejects outright as
+   * "Invalid Content-Length" despite the client having accepted it. */
+  char url[128];
+  make_url(url, sizeof(url), "/post");
+
+  const char *payload = "some-nonempty-payload";
+  size_t payload_len = strlen(payload);
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, payload_len);
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  char cl_val[32];
+  snprintf(cl_val, sizeof(cl_val), "+%zu", payload_len);
+  REQUIRE_EQ(chttp_request_set_header(req, "Content-Length", cl_val),
+             ccol_success);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_do(req, &resp);
+  REQUIRE_EQ(rv, ccol_invalid_args);
+  REQUIRE_EQ((void *)resp, NULL);
+
+  chttp_request_free(req);
+}
+
+TEST(request, set_header_content_length_embedded_whitespace_rejected) {
+  /* Same class of gap as set_header_content_length_leading_sign_rejected
+   * above, reached via a leading space instead of a sign: strtoull skips
+   * leading whitespace before parsing digits, so " 22" (numerically equal
+   * to the real body length) used to pass the mismatch check and reach the
+   * wire as "content-length:  22\r\n" (two spaces after the colon). */
+  char url[128];
+  make_url(url, sizeof(url), "/post");
+
+  const char *payload = "some-nonempty-payload";
+  size_t payload_len = strlen(payload);
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, payload_len);
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  char cl_val[32];
+  snprintf(cl_val, sizeof(cl_val), " %zu", payload_len);
+  REQUIRE_EQ(chttp_request_set_header(req, "Content-Length", cl_val),
+             ccol_success);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_do(req, &resp);
+  REQUIRE_EQ(rv, ccol_invalid_args);
+  REQUIRE_EQ((void *)resp, NULL);
+
+  chttp_request_free(req);
+}
+
+TEST(request, set_header_content_length_leading_zeros_still_accepted) {
+  /* A leading-zero-padded value (e.g. "00022") is a plain digit string
+   * (chttp1_parser.c's own parse_uint64_decimal has no leading-zero
+   * restriction either), so it must still be accepted: the stricter
+   * digit-only validation added for the '+'/whitespace gap above must not
+   * over-reject this legitimate, if unusual, form. */
+  char url[128];
+  make_url(url, sizeof(url), "/post");
+
+  const char *payload = "some-nonempty-payload";
+  size_t payload_len = strlen(payload);
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, payload_len);
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  char cl_val[32];
+  snprintf(cl_val, sizeof(cl_val), "000%zu", payload_len);
+  REQUIRE_EQ(chttp_request_set_header(req, "Content-Length", cl_val),
+             ccol_success);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_do(req, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, payload);
+
+  chttp_request_free(req);
+  chttpclient_resp_free(resp);
+}
+
 TEST(http, run_query_borrowed_map_mismatched_content_length_rejected) {
   /* Borrowed-map counterpart of set_header_mismatched_content_length_rejected
    * above: req->headers is an internal chmap handle a caller can populate
@@ -5165,9 +5969,43 @@ TEST(http, set_header_host_reaches_the_wire) {
 /*                     ZERO-LENGTH BODY TESTS                                 */
 /* ========================================================================== */
 
+TEST(request, zero_len_body_content_type_still_reaches_the_wire) {
+  /* End-to-end companion to
+   * request.body_data_non_null_but_zero_len_treated_as_no_body: an explicit
+   * content_type on a genuinely empty body (a real, legitimate shape - e.g.
+   * CHTTP_JSON_BODY("", 0)) must still be auto-injected as a real
+   * Content-Type header on the wire, not silently dropped because there
+   * happens to be no body to go with it. Uses /echo-header-raw to check the
+   * actual value the server received, not just that the call succeeded. */
+  char url[128];
+  make_url(url, sizeof(url), "/echo-header-raw");
+
+  chttp_request_body_t body = {
+      .data = "ignored", .len = 0, .content_type = "text/plain"};
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  chttp_request_set_header(req, "x-echo-name", "content-type");
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_do(req, &resp);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_NE((void *)resp->body, NULL);
+  REQUIRE_STREQ(resp->body, "text/plain");
+
+  chttp_request_free(req);
+  chttpclient_resp_free(resp);
+}
+
 TEST(request, body_data_non_null_but_zero_len_treated_as_no_body) {
-  /* body.data != NULL with body.len == 0 must not be copied into the request;
-   * the condition (body->data && body->len > 0) must gate the copy. */
+  /* body.data != NULL with body.len == 0 must not be copied into the
+   * request; the condition (body->data && body->len > 0) gates that copy.
+   * content_type, however, is copied whenever the caller supplied one,
+   * independent of body length: a genuinely empty body with an explicit
+   * content type (e.g. CHTTP_JSON_BODY("", 0)) is a legitimate request
+   * shape, and chttp_request_new's own documented contract copies
+   * body->content_type whenever it is non-NULL. */
   const char *data = "ignored";
   chttp_request_body_t body = {
       .data = data, .len = 0, .content_type = "text/plain"};
@@ -5177,8 +6015,8 @@ TEST(request, body_data_non_null_but_zero_len_treated_as_no_body) {
   REQUIRE_NE((void *)req, NULL);
   REQUIRE_EQ((void *)req->body.data, NULL);
   REQUIRE_EQ(req->body.len, (size_t)0);
-  /* content_type is only copied when there is an actual body. */
-  REQUIRE_EQ((void *)req->body.content_type, NULL);
+  REQUIRE_NE((void *)req->body.content_type, NULL);
+  REQUIRE_STREQ(req->body.content_type, "text/plain");
   chttp_request_free(req);
 }
 
@@ -5700,6 +6538,38 @@ TEST(expect_continue, early_hints_before_100_continue_still_waits) {
   chttpclient_resp_free(resp);
 }
 
+TEST(expect_continue,
+     hints_both_sides_of_100_continue_each_phase_gets_its_own_cap) {
+  /* /expect-continue-hints-both-sides/40/40 discards 40 interim "103 Early
+   * Hints" responses while waiting for "100 Continue", THEN, after a
+   * genuine "100 Continue" arrives and the body is sent, discards 40 MORE
+   * while reading the final response: 80 total, comfortably past
+   * CHTTP_MAX_INTERIM_RESPONSES (64), but each of the two phases stays
+   * within its own 64-response budget. Tier 1's _chttp_send_and_read hands
+   * the continue-wait and the final-response read to two SEPARATE
+   * _chttp_read_message_loop calls, each with its own independent discard
+   * counter, so this has always succeeded here; this test exists mainly to
+   * pin that behavior down directly and to give the async counterpart
+   * (async_expect_continue's own test of the same name) a known-good
+   * reference to compare against. */
+  char url[160];
+  make_url(url, sizeof(url), "/expect-continue-hints-both-sides/40/40");
+
+  const char *payload = "hello";
+  chttp_request_body_t body = CHTTP_JSON_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttp_do(req, &resp);
+  chttp_request_free(req);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  chttpclient_resp_free(resp);
+}
+
 TEST(expect_continue, ignored_for_bodyless_request) {
   /* GET has no body, so expect_continue must have no effect at all (per its
    * own doc comment); no "expect:" header is emitted (_serialize_request's
@@ -5895,6 +6765,7 @@ extern int _chttpclient_engine_ref_count_for_tests(void);
 extern bool _chttpclient_engine_running_for_tests(void);
 extern ccol_retval_t _chttpclient_engine_acquire_for_tests(void);
 extern void _chttpclient_engine_release_for_tests(void);
+extern size_t _chttp_async_chain_struct_size_for_tests(void);
 /* _client_engine_release() hands the actual teardown (event_loop_destroy of
  * g_client_reactor, stopping the deadline sweep, destroying the DNS pool)
  * off to a detached reaper thread rather than blocking the caller; necessary
@@ -5932,6 +6803,20 @@ extern void _chttpclient_force_async_idle_stale_for_tests(
  * for the one place this is used. */
 extern size_t _chttpclient_async_idle_total_count_for_tests(
     struct chttpclient *cli);
+/* Reads how many distinct origin keys cli->idle_pools (Tier 1) currently
+ * holds an entry for. See max_idle_origins.tier1_distinct_origins_bounded_
+ * and_reclaimed below. */
+extern size_t _chttpclient_idle_pools_key_count_for_tests(
+    struct chttpclient *cli);
+/* Async (Tier 2/3) counterpart of the accessor above, for
+ * cli->idle_pools_async. */
+extern size_t _chttpclient_idle_pools_async_key_count_for_tests(
+    struct chttpclient *cli);
+/* Overrides CHTTP_MAX_IDLE_ORIGINS's effective value (shared by both Tier 1
+ * and Tier 2/3's idle pools) process-wide; 0 restores the real compile-time
+ * constant. Needed because the real cap (128) requires 128 genuinely
+ * distinct origins to exercise directly. */
+extern void _chttpclient_set_max_idle_origins_for_tests(size_t n);
 /* Resolves a chttpcli handle to its underlying struct chttpclient* WITHOUT
  * pinning it against concurrent destroy; safe here specifically because
  * every call site below runs synchronously, with no concurrent destroy
@@ -6327,6 +7212,7 @@ TEST(async_step_a, post_echoes_body) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -6340,17 +7226,15 @@ TEST(async_step_a, post_echoes_body) {
   chttpclient_destroy(cli);
 }
 
-TEST(async_step_a, expect_continue_field_is_silently_ignored_not_sent_on_wire) {
-  /* Regression coverage for a documented-but-previously-untested contract:
-   * chttpclient.h documents that Tier 2/3 silently ignore chttp_request_t.
-   * expect_continue and send the body immediately. The implementation
-   * achieves this only incidentally, via memset-ing the synthetic hop_req
-   * in _async_submit_hop so expect_continue is never copied from the
-   * chain's own stored request; a one-line regression that started
-   * copying the field across would make Tier 2 emit "expect:
-   * 100-continue" on the wire while never actually waiting for or
-   * handling any interim response, a real protocol violation, and nothing
-   * previously would have caught it. */
+TEST(async_step_a, expect_continue_field_reaches_the_wire) {
+  /* /count-header has no Expect: 100-continue awareness of its own, so this
+   * hop takes the timeout-then-send-anyway path (see the async_expect_
+   * continue group below for the tier's other outcomes); this test's own
+   * narrow purpose is verifying the header itself actually reaches the
+   * wire, via /count-header's dedicated x-count-name mechanism, not the
+   * interim-response handling. Slow (~1s): that timeout wait is the whole
+   * reason /count-header (rather than an Expect-aware route) is used here.
+   */
   chttpcli_construct(cli);
   char url[160];
   make_url(url, sizeof(url), "/count-header");
@@ -6372,7 +7256,7 @@ TEST(async_step_a, expect_continue_field_is_silently_ignored_not_sent_on_wire) {
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
-  REQUIRE_STREQ(resp->body, "0");
+  REQUIRE_STREQ(resp->body, "1");
 
   chttpclient_resp_free(resp);
   chttpclient_async_result_free(raw);
@@ -6396,6 +7280,7 @@ TEST(async_step_a, large_body_response) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -6464,6 +7349,7 @@ TEST(async_max_response_body_size, declared_content_length_rejected_up_front) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_msg_too_large);
   REQUIRE_EQ((void *)raw->resp, NULL);
 
@@ -6487,6 +7373,7 @@ TEST(async_max_response_body_size, response_exactly_at_cap_succeeds) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -6619,6 +7506,7 @@ TEST(async_max_response_body_size, async_streaming_is_unaffected_by_the_cap) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   REQUIRE_NE((void *)raw->resp, NULL);
   REQUIRE_EQ(raw->resp->status_code, 200);
@@ -6666,6 +7554,7 @@ TEST(async_step_a, status_code_forwarded) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -6973,6 +7862,443 @@ TEST(async_early_hints,
 }
 
 /* ========================================================================== */
+/*             EXPECT: 100-CONTINUE TESTS (TIER 2/3), ASYNC ENGINE            */
+/* ========================================================================== */
+
+/*
+ * Async-tier counterparts of the expect_continue suite above (Tier 1),
+ * exercising CHTTP_ASYNC_AWAITING_CONTINUE / _async_awaiting_continue_on_data
+ * / the deadline sweep's own continue_deadline branch against the exact same
+ * mock server routes; reused directly rather than duplicated, since the
+ * routes just speak raw HTTP over the socket regardless of which client tier
+ * connects.
+ */
+
+TEST(async_expect_continue, interim_100_then_body_sent) {
+  chttpcli_construct(cli);
+  char url[160];
+  make_url(url, sizeof(url), "/expect-continue-echo");
+
+  const char *payload = "hold-until-continue-async";
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  chttpcli_response *resp = raw->resp;
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, payload);
+
+  chttpclient_resp_free(resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_expect_continue, server_rejects_without_100) {
+  chttpcli_construct(cli);
+  char url[160];
+  make_url(url, sizeof(url), "/expect-continue-reject");
+
+  const char *payload = "should-never-be-sent-async";
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  chttpcli_response *resp = raw->resp;
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 417);
+  REQUIRE_STREQ(resp->body, "expectation failed");
+
+  chttpclient_resp_free(resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_expect_continue,
+     direct_rejection_without_100_never_pools_connection) {
+  /* Async-tier counterpart of Tier 1's identical-purpose test: verifies
+   * ctx->retry_unsafe/keep_alive handling doesn't just avoid a crash but
+   * actually forces a fresh connection for the next, unrelated request
+   * rather than pooling one the server may still consider mid-request. */
+  char url1[160], url2[160];
+  make_url(url1, sizeof(url1), "/expect-continue-reject-keepalive");
+  make_url(url2, sizeof(url2), "/keepalive");
+
+  chttpcli_construct(cli);
+  int accepts_before = test_server_accept_count();
+
+  const char *payload = "should-never-be-sent-async";
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, strlen(payload));
+  chttp_request_t *req1 = chttp_request_new(CHTTP_POST, url1, &body, NULL);
+  REQUIRE_NE((void *)req1, NULL);
+  req1->expect_continue = true;
+  ctpool_future *f1 = chttpclient_do_async(cli, req1);
+  REQUIRE_NE((void *)f1, NULL);
+  chttp_request_free(req1);
+  chttpcli_async_result_t *raw1 = chttpclient_async_result_get(f1);
+  REQUIRE_NE((void *)raw1, NULL);
+  REQUIRE_EQ(raw1->rv, ccol_success);
+  REQUIRE_NE((void *)raw1->resp, NULL);
+  REQUIRE_EQ(raw1->resp->status_code, 417);
+  chttpclient_resp_free(raw1->resp);
+  chttpclient_async_result_free(raw1);
+  ctpool_future_free(f1);
+
+  chttp_request_t *req2 = chttp_request_new(CHTTP_GET, url2, NULL, NULL);
+  REQUIRE_NE((void *)req2, NULL);
+  ctpool_future *f2 = chttpclient_do_async(cli, req2);
+  REQUIRE_NE((void *)f2, NULL);
+  chttp_request_free(req2);
+  chttpcli_async_result_t *raw2 = chttpclient_async_result_get(f2);
+  REQUIRE_NE((void *)raw2, NULL);
+  REQUIRE_EQ(raw2->rv, ccol_success);
+  REQUIRE_NE((void *)raw2->resp, NULL);
+  REQUIRE_EQ(raw2->resp->status_code, 200);
+  chttpclient_resp_free(raw2->resp);
+  chttpclient_async_result_free(raw2);
+  ctpool_future_free(f2);
+
+  wait_for_async_engine_idle();
+  int accepts_after = test_server_accept_count();
+  REQUIRE_EQ(accepts_after - accepts_before, 2);
+
+  chttpclient_destroy(cli);
+}
+
+TEST(async_expect_continue, dead_connection_after_100_clean_eof_not_retried) {
+  /* Async-tier counterpart of Tier 1's identical-purpose test: once a real
+   * "100 Continue" has been seen and the body sent, ctx->retry_unsafe must
+   * suppress _async_ctx_finish's usual reused-connection retry-once safety
+   * net, even though nothing about THIS particular failure (a clean EOF on
+   * the final read) would otherwise look any different from an ordinary
+   * dead pooled connection. */
+  char url1[160], url2[160];
+  make_url(url1, sizeof(url1), "/keepalive");
+  make_url(url2, sizeof(url2), "/expect-continue-die-after-100-clean");
+
+  chttpcli_construct(cli);
+  int accepts_before = test_server_accept_count();
+  atomic_store(&g_die_after_100_clean_body_recv_count, 0);
+
+  chttp_request_t *req1 = chttp_request_new(CHTTP_GET, url1, NULL, NULL);
+  REQUIRE_NE((void *)req1, NULL);
+  ctpool_future *f1 = chttpclient_do_async(cli, req1);
+  REQUIRE_NE((void *)f1, NULL);
+  chttp_request_free(req1);
+  chttpcli_async_result_t *raw1 = chttpclient_async_result_get(f1);
+  REQUIRE_NE((void *)raw1, NULL);
+  REQUIRE_EQ(raw1->rv, ccol_success);
+  REQUIRE_NE((void *)raw1->resp, NULL);
+  REQUIRE_EQ(raw1->resp->status_code, 200);
+  chttpclient_resp_free(raw1->resp);
+  chttpclient_async_result_free(raw1);
+  ctpool_future_free(f1);
+
+  /* Give the first hop's connection time to actually land in the idle
+   * pool before the second request is submitted, so it genuinely reuses
+   * it (matching Tier 1's own sequential-blocking-call guarantee, which
+   * this async engine has no equivalent synchronous ordering for). */
+  usleep(20000);
+
+  const char *payload = "must-not-be-sent-twice-async";
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, strlen(payload));
+  chttp_request_t *req2 = chttp_request_new(CHTTP_POST, url2, &body, NULL);
+  REQUIRE_NE((void *)req2, NULL);
+  req2->expect_continue = true;
+  ctpool_future *f2 = chttpclient_do_async(cli, req2);
+  REQUIRE_NE((void *)f2, NULL);
+  chttp_request_free(req2);
+  chttpcli_async_result_t *raw2 = chttpclient_async_result_get(f2);
+  REQUIRE_NE((void *)raw2, NULL);
+  REQUIRE_NE((int)raw2->rv, (int)ccol_success);
+  REQUIRE_EQ((void *)raw2->resp, NULL);
+  chttpclient_async_result_free(raw2);
+  ctpool_future_free(f2);
+
+  wait_for_async_engine_idle();
+  int accepts_after = test_server_accept_count();
+  REQUIRE_EQ(accepts_after - accepts_before, 1);
+  REQUIRE_EQ(atomic_load(&g_die_after_100_clean_body_recv_count), 1);
+
+  chttpclient_destroy(cli);
+}
+
+TEST(async_expect_continue, wait_times_out_body_sent_anyway) {
+  /* /post has no Expect: 100-continue awareness at all; exercises the
+   * deadline sweep's own continue_deadline branch (event_loop_modify to
+   * write direction, dispatching to _async_on_writable_impl's own
+   * CHTTP_ASYNC_AWAITING_CONTINUE branch) rather than a genuine "100
+   * Continue" ever being seen. Slow (~1s): this is the whole point. */
+  chttpcli_construct(cli);
+  char url[160];
+  make_url(url, sizeof(url), "/post");
+
+  const char *payload = "{\"sent\":\"after-timeout-async\"}";
+  chttp_request_body_t body = CHTTP_JSON_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  chttpcli_response *resp = raw->resp;
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, payload);
+
+  chttpclient_resp_free(resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_expect_continue, explicit_expect_header_suppresses_the_wait) {
+  /* /post responds immediately once the body is read; a correctly-behaving
+   * request completes almost instantly, unlike wait_times_out_body_sent_
+   * anyway above (~1s). */
+  chttpcli_construct(cli);
+  char url[160];
+  make_url(url, sizeof(url), "/post");
+
+  const char *payload = "{\"x\":1}";
+  chttp_request_body_t body = CHTTP_JSON_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+  chttp_request_set_header(req, "Expect", "204-content");
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  REQUIRE_NE((void *)raw->resp, NULL);
+  REQUIRE_EQ(raw->resp->status_code, 200);
+  /* A generous bound rather than mirroring Tier 1's tighter 500ms (see that
+   * sibling test's own comment): the async engine's own extra thread hops
+   * (submitter -> DNS/connect pool -> reactor -> dispatch worker) each pay
+   * their own share of per-instruction instrumentation overhead under
+   * valgrind, which can push this well past 500ms (838-887ms observed);
+   * and, under sustained system load from other concurrently-running test
+   * suites (e.g. a full root `make memtest` sweep), even past the 1500ms
+   * this bound was previously widened to once already; widened again to
+   * 3000ms for the same reason, still nowhere near the real ~1000ms
+   * CHTTP_100_CONTINUE_WAIT_MS this assertion exists to rule out. */
+  REQUIRE_LT(elapsed_ms, 3000L);
+
+  chttpclient_resp_free(raw->resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_expect_continue, early_hints_before_100_continue_still_waits) {
+  /* /expect-continue-with-hints sends "103 Early Hints" BEFORE "100
+   * Continue"; exercises _async_awaiting_continue_on_data's own non-100
+   * interim-discard branch, distinct from CHTTP_ASYNC_READING's identical
+   * looking one in _async_process_reading_data. */
+  chttpcli_construct(cli);
+  char url[160];
+  make_url(url, sizeof(url), "/expect-continue-with-hints");
+
+  const char *payload = "hello-async";
+  chttp_request_body_t body = CHTTP_JSON_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  chttpcli_response *resp = raw->resp;
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, payload);
+
+  chttpclient_resp_free(resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_expect_continue,
+     hints_both_sides_of_100_continue_each_phase_gets_its_own_cap) {
+  /* Async counterpart of expect_continue's own test of the same name: a
+   * real, previously-reproducible bug, not just a defensive regression.
+   * chttp_async_ctx_t.interim_responses_seen used to be a single counter
+   * shared across both _async_awaiting_continue_on_data's own interim-
+   * discard loop (while waiting for "100 Continue") and _async_process_
+   * reading_data's identical-looking one (while reading the final
+   * response), never reset at the point a genuine "100 Continue" (or the
+   * continue-wait timing out) hands off between the two; so a hop that
+   * discarded 40 interim responses before "100 Continue" had only 24 (not
+   * a fresh 64) left over for its own final-response read, silently
+   * violating the documented "64 CONSECUTIVE discarded interim responses"
+   * cap (a confirmed "100 Continue" is itself a non-discarded message that
+   * breaks the run) and failing THIS exact scenario with
+   * ccol_http_transfer_aborted well before the real, distinct 65-in-a-row
+   * cap (see async_early_hints.discards_exactly_64_before_giving_up)
+   * should ever apply. Confirmed to fail (raw->rv != ccol_success) against
+   * a scratch copy of the code with both of ctx->interim_responses_seen's
+   * new reset points (in _async_awaiting_continue_on_data's confirmed-100
+   * branch and _async_on_writable_impl's continue-timeout branch) removed,
+   * before the fix was reapplied. */
+  chttpcli_construct(cli);
+  char url[160];
+  make_url(url, sizeof(url), "/expect-continue-hints-both-sides/40/40");
+
+  const char *payload = "hello-async";
+  chttp_request_body_t body = CHTTP_JSON_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  chttpcli_response *resp = raw->resp;
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+
+  chttpclient_resp_free(resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_expect_continue,
+     interim_100_bundled_with_final_response_in_same_read) {
+  /* /expect-continue-bundled-final writes "100 Continue" immediately
+   * followed, in the SAME send() call, by a complete, valid final response,
+   * then drains and discards whatever body the client goes on to send.
+   * Exercises ctx->continue_carry: the trailing final-response bytes arrive
+   * before the body write even starts and must be stashed, then replayed
+   * via _async_process_reading_data the moment that write actually
+   * finishes (see _async_awaiting_continue_on_data's own 100-branch and
+   * _async_plain_try_write/_tls_try_write's shared completion-path check).
+   */
+  chttpcli_construct(cli);
+  char url[160];
+  make_url(url, sizeof(url), "/expect-continue-bundled-final");
+
+  const char *payload = "hold-until-continue-bundled";
+  chttp_request_body_t body = CHTTP_TEXT_BODY(payload, strlen(payload));
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, &body, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  chttpcli_response *resp = raw->resp;
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_STREQ(resp->body, "bundled-response");
+
+  chttpclient_resp_free(resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_expect_continue, bodyless_request_not_affected) {
+  /* body_carrying_method && body.data && body.len > 0 is false here (no
+   * body at all), so want_100_continue must stay false and this hop must
+   * behave like an ordinary immediate send; mirrors Tier 1's identical
+   * no-op-for-bodyless-request case. */
+  chttpcli_construct(cli);
+  char url[160];
+  make_url(url, sizeof(url), "/post");
+
+  chttp_request_t *req = chttp_request_new(CHTTP_POST, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+  req->expect_continue = true;
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  REQUIRE_NE((void *)raw->resp, NULL);
+  REQUIRE_EQ(raw->resp->status_code, 200);
+  /* A generous bound rather than mirroring Tier 1's tighter 500ms (see that
+   * sibling test's own comment): the async engine's own extra thread hops
+   * (submitter -> DNS/connect pool -> reactor -> dispatch worker) each pay
+   * their own share of per-instruction instrumentation overhead under
+   * valgrind, which can push this well past 500ms (838-887ms observed);
+   * and, under sustained system load from other concurrently-running test
+   * suites (e.g. a full root `make memtest` sweep), even past the 1500ms
+   * this bound was previously widened to once already; widened again to
+   * 3000ms for the same reason, still nowhere near the real ~1000ms
+   * CHTTP_100_CONTINUE_WAIT_MS this assertion exists to rule out. */
+  REQUIRE_LT(elapsed_ms, 3000L);
+
+  chttpclient_resp_free(raw->resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+/* ========================================================================== */
 /*              ASYNC STATE MACHINE; STEP B (REDIRECT FOLLOWING)            */
 /* ========================================================================== */
 
@@ -7000,6 +8326,7 @@ TEST(async_redirects, get_301_follows_to_final_resource) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7028,6 +8355,7 @@ TEST(async_redirects, post_301_becomes_bodyless_get) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7060,6 +8388,7 @@ TEST(async_redirects, post_307_preserves_method_and_body) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7098,6 +8427,7 @@ TEST(async_redirects, stale_content_length_stripped_after_downgrade) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7130,6 +8460,7 @@ TEST(async_redirects, stale_content_type_stripped_after_downgrade) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7162,6 +8493,7 @@ TEST(async_redirects, stale_expect_stripped_after_downgrade) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7197,6 +8529,7 @@ TEST(async_redirects, body_stays_dropped_across_a_later_preserving_hop) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7227,6 +8560,7 @@ TEST(async_redirects, explicit_authorization_header_carried_same_origin) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7261,6 +8595,7 @@ TEST(async_redirects, explicit_authorization_header_dropped_cross_origin) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7287,6 +8622,7 @@ TEST(async_redirects, relative_location_resolved_against_current_host) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7324,6 +8660,7 @@ TEST(async_redirects, plain_relative_location_merged_against_current_path) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7366,6 +8703,7 @@ TEST(async_redirects, relative_location_resolved_against_ipv6_host) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7396,6 +8734,7 @@ TEST(async_redirects, userinfo_credentials_carried_same_origin) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7431,6 +8770,7 @@ TEST(async_redirects, userinfo_credentials_dropped_cross_origin) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7460,6 +8800,7 @@ TEST(async_redirects, multi_hop_chain_reaches_final_resource) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -7493,6 +8834,7 @@ TEST(async_redirects, exceeding_max_redirects_reports_error) {
   chttp_request_free(req);
 
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_http_too_many_redirects);
   REQUIRE_EQ((void *)raw->resp, NULL);
 
@@ -7614,6 +8956,7 @@ TEST(async_idle_pool, sequential_requests_reuse_connection) {
     ctpool_future *f = async_get(cli, url);
     REQUIRE_NE((void *)f, NULL);
     chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+    REQUIRE_NE((void *)raw, NULL);
     REQUIRE_EQ(raw->rv, ccol_success);
     chttpcli_response *resp = raw->resp;
     REQUIRE_NE((void *)resp, NULL);
@@ -7647,6 +8990,7 @@ TEST(async_idle_pool, dead_connection_detected_and_retried) {
   ctpool_future *f1 = async_get(cli, url1);
   REQUIRE_NE((void *)f1, NULL);
   chttpcli_async_result_t *raw1 = chttpclient_async_result_get(f1);
+  REQUIRE_NE((void *)raw1, NULL);
   REQUIRE_EQ(raw1->rv, ccol_success);
   chttpcli_response *resp1 = raw1->resp;
   REQUIRE_NE((void *)resp1, NULL);
@@ -7663,6 +9007,7 @@ TEST(async_idle_pool, dead_connection_detected_and_retried) {
   ctpool_future *f2 = async_get(cli, url2);
   REQUIRE_NE((void *)f2, NULL);
   chttpcli_async_result_t *raw2 = chttpclient_async_result_get(f2);
+  REQUIRE_NE((void *)raw2, NULL);
   REQUIRE_EQ(raw2->rv, ccol_success);
   chttpcli_response *resp2 = raw2->resp;
   REQUIRE_NE((void *)resp2, NULL);
@@ -7712,6 +9057,7 @@ TEST(async_idle_pool, stale_connection_eviction_releases_engine_reference) {
   ctpool_future *f1 = async_get(cli, url);
   REQUIRE_NE((void *)f1, NULL);
   chttpcli_async_result_t *raw1 = chttpclient_async_result_get(f1);
+  REQUIRE_NE((void *)raw1, NULL);
   REQUIRE_EQ(raw1->rv, ccol_success);
   chttpclient_resp_free(raw1->resp);
   chttpclient_async_result_free(raw1);
@@ -7730,6 +9076,7 @@ TEST(async_idle_pool, stale_connection_eviction_releases_engine_reference) {
   ctpool_future *f2 = async_get(cli, url);
   REQUIRE_NE((void *)f2, NULL);
   chttpcli_async_result_t *raw2 = chttpclient_async_result_get(f2);
+  REQUIRE_NE((void *)raw2, NULL);
   REQUIRE_EQ(raw2->rv, ccol_success);
   chttpclient_resp_free(raw2->resp);
   chttpclient_async_result_free(raw2);
@@ -7853,13 +9200,27 @@ TEST(async_idle_pool, concurrent_stale_eviction_races_dispatch_no_uaf) {
   enum { NUM_THREADS = 6, ITERATIONS_PER_THREAD = 40 };
   pthread_t tids[NUM_THREADS];
   stale_race_arg_t args[NUM_THREADS];
+  /* create_rv captured, not asserted immediately: if pthread_create itself
+   * fails partway through this loop (extremely unlikely in practice, but
+   * possible under real thread/resource exhaustion), an immediate
+   * REQUIRE_EQ would return from this function while the earlier,
+   * already-created threads are still running against these stack-local
+   * args[]/tids[] arrays - the same stack-use-after-return class already
+   * fixed elsewhere for the join-vs-assert ordering, just triggered by
+   * creation failing instead. created tracks exactly how many threads
+   * exist to join. */
+  int created = 0;
+  int create_rv = 0;
   for (int i = 0; i < NUM_THREADS; i++) {
     args[i].cli = cli;
     args[i].url = url;
     args[i].iterations = ITERATIONS_PER_THREAD;
-    REQUIRE_EQ(pthread_create(&tids[i], NULL, stale_race_thread, &args[i]), 0);
+    create_rv = pthread_create(&tids[i], NULL, stale_race_thread, &args[i]);
+    if (create_rv != 0) break;
+    created++;
   }
-  for (int i = 0; i < NUM_THREADS; i++) pthread_join(tids[i], NULL);
+  for (int i = 0; i < created; i++) pthread_join(tids[i], NULL);
+  REQUIRE_EQ(create_rv, 0);
 
   chttpclient_destroy(cli);
   wait_for_async_engine_idle();
@@ -7896,6 +9257,29 @@ static ccol_memmgmt_procs_t g_hop_fail_mp = {.malloc = hop_fail_malloc,
                                              .free = hop_fail_free,
                                              .calloc = hop_fail_calloc,
                                              .realloc = hop_fail_realloc};
+
+/* Fails exactly the one calloc(n, sz) call whose n*sz equals
+ * g_size_fail_target_size (0 = never fail), passing every other call
+ * (including every malloc/realloc) through to the real allocator. Unlike
+ * g_hop_fail_mp's call-index counting, this targets a specific allocation
+ * by its BYTE SIZE, so it stays correct regardless of how many other,
+ * differently-sized allocations happen to run before it - used by
+ * async_idle_pool.chain_creation_oom_reports_not_enough_memory_not_generic
+ * to deterministically fail only _async_chain_create's own chain-struct
+ * calloc. */
+static size_t g_size_fail_target_size = 0;
+static void *size_fail_malloc(size_t sz) { return malloc(sz); }
+static void *size_fail_calloc(size_t n, size_t sz) {
+  if (g_size_fail_target_size != 0 && n * sz == g_size_fail_target_size)
+    return NULL;
+  return calloc(n, sz);
+}
+static void *size_fail_realloc(void *p, size_t sz) { return realloc(p, sz); }
+static void size_fail_free(void *p) { free(p); }
+static ccol_memmgmt_procs_t g_size_fail_mp = {.malloc = size_fail_malloc,
+                                              .free = size_fail_free,
+                                              .calloc = size_fail_calloc,
+                                              .realloc = size_fail_realloc};
 
 TEST(async_idle_pool, reused_hop_setup_failure_releases_engine_reference) {
   /* Regression test for a leak in _async_submit_hop_fail's reused branch: a
@@ -7934,6 +9318,7 @@ TEST(async_idle_pool, reused_hop_setup_failure_releases_engine_reference) {
     ctpool_future *fw = async_get(cli, url);
     REQUIRE_NE((void *)fw, NULL);
     chttpcli_async_result_t *rw = chttpclient_async_result_get(fw);
+    REQUIRE_NE((void *)rw, NULL);
     REQUIRE_EQ(rw->rv, ccol_success);
     chttpclient_resp_free(rw->resp);
     chttpclient_async_result_free(rw);
@@ -7983,6 +9368,86 @@ TEST(async_idle_pool, reused_hop_setup_failure_releases_engine_reference) {
 
   chttpclient_destroy(cli);
   wait_for_async_engine_idle();
+}
+
+TEST(async_idle_pool,
+     chain_creation_oom_reports_not_enough_memory_not_generic) {
+  /* Regression test: an allocation failure inside _async_chain_create used
+   * to be reported by fulfilling the future with a bare NULL data pointer
+   * (ctpool_future_fulfill(future, NULL)) rather than a real
+   * chttpcli_async_result_t, so chttpclient_async_result_get(f) returned
+   * NULL exactly as it documents for a CANCELLED future - collapsing a
+   * genuine, common allocation failure into the same signal a cancellation
+   * produces, and losing the specific ccol_not_enough_memory code entirely.
+   * Tier 3 (chttpclient_do_pooled) compounded this: it maps ANY NULL result
+   * from chttpclient_async_result_get to the generic ccol_unexpected_
+   * failure, so this same allocation failure surfaced there as a code with
+   * no diagnostic value at all.
+   *
+   * Targets the fix precisely using g_size_fail_mp: failing only the one
+   * calloc call whose byte size matches the internal chain struct exactly
+   * (via _chttp_async_chain_struct_size_for_tests, since chttp_async_
+   * chain_t itself is not a public type) guarantees this hits _async_
+   * chain_create's own calloc specifically - not any of the several
+   * differently-sized string allocations that run before it (URL parsing,
+   * initial_origin_key) - regardless of how many of those precede it or
+   * ever change in number. An earlier version of this test used
+   * g_hop_fail_mp's call-index counting instead; that version passed even
+   * with the fix fully reverted, because indices past the intended target
+   * could land on a LATER, already-correct ccol_not_enough_memory report
+   * elsewhere in _async_submit_hop, satisfying the assertion without ever
+   * exercising this fix at all - caught only by deliberately reverting the
+   * fix and re-running the test, which is why this version exists instead. */
+  char url[160];
+  make_url(url, sizeof(url), "/get");
+
+  size_t chain_size = _chttp_async_chain_struct_size_for_tests();
+
+  /* Tier 2. */
+  {
+    char *cerr = NULL;
+    chttpcli cli = create_chttpclient_mp(&g_size_fail_mp, &cerr);
+    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    g_size_fail_target_size = chain_size;
+
+    chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+    REQUIRE_NE((void *)req, NULL);
+    ctpool_future *f = chttpclient_do_async(cli, req);
+    chttp_request_free(req);
+    REQUIRE_NE((void *)f, NULL);
+    chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+    REQUIRE_NE((void *)raw, NULL);
+    REQUIRE_EQ(raw->rv, ccol_not_enough_memory);
+    REQUIRE_EQ((void *)raw->resp, NULL);
+    chttpclient_async_result_free(raw);
+    ctpool_future_free(f);
+
+    g_size_fail_target_size = 0;
+    chttpclient_destroy(cli);
+    wait_for_async_engine_idle();
+  }
+
+  /* Tier 3: the identical fault must now surface the same specific code
+   * through chttpclient_do_pooled too, not the generic ccol_unexpected_
+   * failure it used to collapse to. */
+  {
+    char *cerr = NULL;
+    chttpcli cli = create_chttpclient_mp(&g_size_fail_mp, &cerr);
+    REQUIRE_NE(cli, CHTTPCLI_INVALID);
+    g_size_fail_target_size = chain_size;
+
+    chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+    REQUIRE_NE((void *)req, NULL);
+    chttpcli_response *resp = NULL;
+    ccol_retval_t rv = chttpclient_do_pooled(cli, req, &resp);
+    chttp_request_free(req);
+    REQUIRE_EQ(rv, ccol_not_enough_memory);
+    REQUIRE_EQ((void *)resp, NULL);
+
+    g_size_fail_target_size = 0;
+    chttpclient_destroy(cli);
+    wait_for_async_engine_idle();
+  }
 }
 
 TEST(client_construction, tier1_hop_allocation_failure_sweep_no_leak) {
@@ -8067,15 +9532,23 @@ TEST(async_idle_pool, concurrent_requests_exceeding_idle_cap_no_crash) {
   enum { N = 12 };
   pthread_t threads[N];
   async_idle_concurrent_arg_t args[N];
+  /* create_rv/created: see async_idle_pool.concurrent_stale_eviction_races_
+   * dispatch_no_uaf's identical comment - guards against a stack-use-
+   * after-return if pthread_create itself fails partway through this
+   * loop, since threads[]/args[] are stack-local. */
+  int created = 0;
+  int create_rv = 0;
   for (int i = 0; i < N; i++) {
     args[i].cli = cli;
     snprintf(args[i].url, sizeof(args[i].url), "%s", url);
     args[i].ok = false;
-    REQUIRE_EQ(pthread_create(&threads[i], NULL, async_idle_concurrent_thread,
-                              &args[i]),
-               0);
+    create_rv = pthread_create(&threads[i], NULL, async_idle_concurrent_thread,
+                               &args[i]);
+    if (create_rv != 0) break;
+    created++;
   }
-  for (int i = 0; i < N; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < created; i++) pthread_join(threads[i], NULL);
+  REQUIRE_EQ(create_rv, 0);
   for (int i = 0; i < N; i++) REQUIRE_TRUE(args[i].ok);
 
   chttpclient_destroy(cli);
@@ -8112,7 +9585,9 @@ TEST(async_idle_pool, offer_push_failure_no_double_free) {
   ctpool_future *f = async_get(cli, url);
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
+  REQUIRE_NE((void *)raw->resp, NULL);
   REQUIRE_EQ(raw->resp->status_code, 200);
   chttpclient_resp_free(raw->resp);
   chttpclient_async_result_free(raw);
@@ -8170,6 +9645,7 @@ TEST(async_idle_pool, reactivate_failure_retries_without_uaf) {
   ctpool_future *f1 = async_get(cli, url);
   REQUIRE_NE((void *)f1, NULL);
   chttpcli_async_result_t *raw1 = chttpclient_async_result_get(f1);
+  REQUIRE_NE((void *)raw1, NULL);
   REQUIRE_EQ(raw1->rv, ccol_success);
   chttpclient_resp_free(raw1->resp);
   chttpclient_async_result_free(raw1);
@@ -8185,7 +9661,9 @@ TEST(async_idle_pool, reactivate_failure_retries_without_uaf) {
   ctpool_future *f2 = async_get(cli, url);
   REQUIRE_NE((void *)f2, NULL);
   chttpcli_async_result_t *raw2 = chttpclient_async_result_get(f2);
+  REQUIRE_NE((void *)raw2, NULL);
   REQUIRE_EQ(raw2->rv, ccol_success);
+  REQUIRE_NE((void *)raw2->resp, NULL);
   REQUIRE_EQ(raw2->resp->status_code, 200);
   chttpclient_resp_free(raw2->resp);
   chttpclient_async_result_free(raw2);
@@ -8204,6 +9682,99 @@ TEST(async_idle_pool, reactivate_failure_retries_without_uaf) {
   }
   REQUIRE_TRUE(refs <= 1);
 
+  chttpclient_destroy(cli);
+  wait_for_async_engine_idle();
+}
+
+TEST(max_idle_origins, tier2_distinct_origins_bounded_and_reclaimed) {
+  /* Async (Tier 2/3) counterpart of max_idle_origins.tier1_distinct_
+   * origins_bounded_and_reclaimed; see that test's own comment for the
+   * full rationale (the same two fixes, in _async_idle_pool_take/_async_
+   * idle_pool_offer this time). Uses chttpclient_do_async + async_get
+   * instead of the blocking chttpclient_do, otherwise identical in
+   * structure and mechanism (an ordinary reuse pop of an origin's last
+   * pooled ctx prunes its own map entry in the same locked section as the
+   * pop; /get's real "Connection: close" keeps the reused ctx from being
+   * re-offered afterward, making the prune permanently observable). */
+  _chttpclient_set_max_idle_origins_for_tests(2);
+
+  char url4[160], url6[160], url_unix[256];
+  make_url(url4, sizeof(url4), "/keepalive");
+  make_url6(url6, sizeof(url6), "/keepalive");
+  make_unix_url(url_unix, sizeof(url_unix), "/keepalive");
+
+  chttpcli_construct(cli);
+  struct chttpclient *raw = _chttpcli_resolve_for_tests(cli);
+  REQUIRE_NE((void *)raw, NULL);
+
+  ctpool_future *f4 = async_get(cli, url4);
+  REQUIRE_NE((void *)f4, NULL);
+  chttpcli_async_result_t *raw4 = chttpclient_async_result_get(f4);
+  REQUIRE_NE((void *)raw4, NULL);
+  REQUIRE_EQ(raw4->rv, ccol_success);
+  chttpclient_resp_free(raw4->resp);
+  chttpclient_async_result_free(raw4);
+  ctpool_future_free(f4);
+
+  ctpool_future *f6 = async_get(cli, url6);
+  REQUIRE_NE((void *)f6, NULL);
+  chttpcli_async_result_t *raw6 = chttpclient_async_result_get(f6);
+  REQUIRE_NE((void *)raw6, NULL);
+  REQUIRE_EQ(raw6->rv, ccol_success);
+  chttpclient_resp_free(raw6->resp);
+  chttpclient_async_result_free(raw6);
+  ctpool_future_free(f6);
+
+  usleep(20000);
+  REQUIRE_EQ(_chttpclient_idle_pools_async_key_count_for_tests(raw), (size_t)2);
+
+  /* A third, genuinely distinct origin (Unix) still succeeds but must not
+   * grow the key count past the (overridden) cap of 2. */
+  ctpool_future *fu1 = async_get(cli, url_unix);
+  REQUIRE_NE((void *)fu1, NULL);
+  chttpcli_async_result_t *rawu1 = chttpclient_async_result_get(fu1);
+  REQUIRE_NE((void *)rawu1, NULL);
+  REQUIRE_EQ(rawu1->rv, ccol_success);
+  chttpclient_resp_free(rawu1->resp);
+  chttpclient_async_result_free(rawu1);
+  ctpool_future_free(fu1);
+
+  usleep(20000);
+  REQUIRE_EQ(_chttpclient_idle_pools_async_key_count_for_tests(raw), (size_t)2);
+
+  /* Reclamation: pop IPv4's one pooled ctx via an ordinary reuse (/get sends
+   * Connection: close, so it is never re-offered afterward), pruning IPv4's
+   * own entry permanently - if pruning were broken, the key count below
+   * would read 2 (a leftover empty IPv4 entry), not 1. */
+  char url4_close[160];
+  make_url(url4_close, sizeof(url4_close), "/get");
+  ctpool_future *f4b = async_get(cli, url4_close);
+  REQUIRE_NE((void *)f4b, NULL);
+  chttpcli_async_result_t *raw4b = chttpclient_async_result_get(f4b);
+  REQUIRE_NE((void *)raw4b, NULL);
+  REQUIRE_EQ(raw4b->rv, ccol_success);
+  chttpclient_resp_free(raw4b->resp);
+  chttpclient_async_result_free(raw4b);
+  ctpool_future_free(f4b);
+
+  usleep(20000);
+  REQUIRE_EQ(_chttpclient_idle_pools_async_key_count_for_tests(raw), (size_t)1);
+
+  /* With IPv4's slot now genuinely freed, a fresh Unix request must be able
+   * to claim it. */
+  ctpool_future *fu2 = async_get(cli, url_unix);
+  REQUIRE_NE((void *)fu2, NULL);
+  chttpcli_async_result_t *rawu2 = chttpclient_async_result_get(fu2);
+  REQUIRE_NE((void *)rawu2, NULL);
+  REQUIRE_EQ(rawu2->rv, ccol_success);
+  chttpclient_resp_free(rawu2->resp);
+  chttpclient_async_result_free(rawu2);
+  ctpool_future_free(fu2);
+
+  usleep(20000);
+  REQUIRE_EQ(_chttpclient_idle_pools_async_key_count_for_tests(raw), (size_t)2);
+
+  _chttpclient_set_max_idle_origins_for_tests(0);
   chttpclient_destroy(cli);
   wait_for_async_engine_idle();
 }
@@ -8234,6 +9805,7 @@ TEST(async_deadline, request_timeout_fires_against_slow_endpoint) {
   ctpool_future *f = async_get(cli, url);
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_timed_out);
   REQUIRE_EQ((void *)raw->resp, NULL);
   chttpclient_async_result_free(raw);
@@ -8253,6 +9825,7 @@ TEST(async_deadline, generous_request_timeout_does_not_interfere) {
   ctpool_future *f = async_get(cli, url);
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -8288,6 +9861,7 @@ TEST(async_deadline, connect_timeout_fires_against_unroutable_address) {
   ctpool_future *f = async_get(cli, "http://192.0.2.1:9/");
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   bool connect_did_not_silently_succeed =
       raw->rv == ccol_timed_out || raw->rv == ccol_http_connection_failed ||
       raw->rv == ccol_http_transfer_aborted;
@@ -8310,6 +9884,7 @@ TEST(async_deadline, generous_connect_timeout_does_not_interfere) {
   ctpool_future *f = async_get(cli, url);
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -8417,6 +9992,7 @@ TEST(async_deadline,
   ctpool_future *f = async_get(cli, url);
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_timed_out);
   REQUIRE_EQ((void *)raw->resp, NULL);
   chttpclient_async_result_free(raw);
@@ -8458,6 +10034,7 @@ TEST(async_streaming, basic_get_delivers_body_via_callback) {
   ctpool_future *f = async_get_streaming(cli, url, stream_sink_write, &sink);
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -8486,6 +10063,7 @@ TEST(async_streaming, large_body_streamed_in_chunks) {
   ctpool_future *f = async_get_streaming(cli, url, stream_sink_write, &sink);
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -8514,6 +10092,7 @@ TEST(async_streaming, write_fn_returning_less_aborts_transfer) {
   ctpool_future *f = async_get_streaming(cli, url, abort_write_fn, NULL);
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_http_transfer_aborted);
   REQUIRE_EQ((void *)raw->resp, NULL);
 
@@ -8559,6 +10138,7 @@ TEST(async_streaming, redirect_final_body_delivered_not_intermediate) {
   ctpool_future *f = async_get_streaming(cli, url, stream_sink_write, &sink);
   REQUIRE_NE((void *)f, NULL);
   chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
   REQUIRE_EQ(raw->rv, ccol_success);
   chttpcli_response *resp = raw->resp;
   REQUIRE_NE((void *)resp, NULL);
@@ -8718,15 +10298,23 @@ TEST(pooled, concurrent_callers_all_succeed) {
   enum { N = 12 };
   pthread_t threads[N];
   pooled_concurrent_arg_t args[N];
+  /* create_rv/created: see async_idle_pool.concurrent_stale_eviction_races_
+   * dispatch_no_uaf's identical comment - guards against a stack-use-
+   * after-return if pthread_create itself fails partway through this
+   * loop, since threads[]/args[] are stack-local. */
+  int created = 0;
+  int create_rv = 0;
   for (int i = 0; i < N; i++) {
     args[i].cli = cli;
     snprintf(args[i].url, sizeof(args[i].url), "%s", url);
     args[i].ok = false;
-    REQUIRE_EQ(
-        pthread_create(&threads[i], NULL, pooled_concurrent_thread, &args[i]),
-        0);
+    create_rv =
+        pthread_create(&threads[i], NULL, pooled_concurrent_thread, &args[i]);
+    if (create_rv != 0) break;
+    created++;
   }
-  for (int i = 0; i < N; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < created; i++) pthread_join(threads[i], NULL);
+  REQUIRE_EQ(create_rv, 0);
   for (int i = 0; i < N; i++) REQUIRE_TRUE(args[i].ok);
 
   chttpclient_destroy(cli);
@@ -9271,14 +10859,24 @@ TEST(chttpcli_handle_lifecycle, resolve_unpin_race_stress) {
     pool_size_setter_arg_t setter_arg = {.h = cli};
     concurrent_destroy_arg_t destroy_arg = {.h = cli};
     pthread_t setter_tid, destroy_tid;
-    REQUIRE_EQ(
-        pthread_create(&setter_tid, NULL, pool_size_setter_thread, &setter_arg),
-        0);
-    REQUIRE_EQ(pthread_create(&destroy_tid, NULL, concurrent_destroy_thread,
-                              &destroy_arg),
-               0);
-    pthread_join(setter_tid, NULL);
-    pthread_join(destroy_tid, NULL);
+    /* Both create results captured, not asserted immediately: if the
+     * SECOND pthread_create failed here, an immediate REQUIRE_EQ would
+     * return from this function while the already-created setter_tid is
+     * still running against the stack-local setter_arg (which holds `cli`
+     * by value, but the thread function itself still needs setter_arg to
+     * remain alive for its own duration) - a stack-use-after-return. Join
+     * only what was actually created before asserting. */
+    int setter_rv =
+        pthread_create(&setter_tid, NULL, pool_size_setter_thread, &setter_arg);
+    int destroy_rv = 0;
+    if (setter_rv == 0) {
+      destroy_rv = pthread_create(&destroy_tid, NULL, concurrent_destroy_thread,
+                                  &destroy_arg);
+    }
+    if (setter_rv == 0) pthread_join(setter_tid, NULL);
+    if (setter_rv == 0 && destroy_rv == 0) pthread_join(destroy_tid, NULL);
+    REQUIRE_EQ(setter_rv, 0);
+    REQUIRE_EQ(destroy_rv, 0);
   }
 }
 
@@ -9381,4 +10979,563 @@ TEST(tls, set_tls_all_exit_paths_release_pin) {
     g_hop_fail_at_call = -1;
     REQUIRE_TRUE(destroy_completes_promptly(cli));
   }
+}
+
+/* ========================================================================== */
+/*                REAL TLS HANDSHAKE COVERAGE FOR THE ASYNC ENGINE            */
+/*                                                                            */
+/* The async_step_a TLS tests above only cover failure paths (connection     */
+/* refused, handshake against a non-TLS server); a real successful           */
+/* handshake needs a valid certificate/key pair and a peer that actually     */
+/* speaks TLS. This section generates a real, throwaway self-signed cert/key */
+/* pair via the `openssl` CLI at startup and runs a minimal, hand-rolled     */
+/* raw-OpenSSL mock TLS server (SSL_accept/SSL_read/SSL_write; NOT           */
+/* chttpserver.c) to drive chttpclient through a genuine end-to-end HTTPS    */
+/* request, both synchronously (Tier 1) and via the async engine (Tier 2). A */
+/* hand-rolled mock server is used instead of reusing chttpserver.c purely   */
+/* for simplicity, keeping this TLS-handshake-focused section free of        */
+/* chttpserver's routing/dispatch machinery; not because of any per-process  */
+/* engine restriction (chttpserver and chttpclient's async engine each own a */
+/* fully independent, independently startable/stoppable reactor, so a        */
+/* process may freely run both at once).                                     */
+/* ========================================================================== */
+
+#define TLS_TEST_BODY "{\"status\":\"ok\"}"
+
+static SSL_CTX *g_tls_ssl_ctx = NULL;
+/* atomic_int, not plain int: _stop_tls_server's teardown write races
+ * _tls_accept_loop's own accept() read of this same field on the way out,
+ * exactly the same benign-but-TSan-flagged shape already fixed for this
+ * file's own g_srv.server_fd (see that field's own comment). */
+static atomic_int g_tls_srv_fd = -1;
+static int g_tls_srv_port = 0;
+static pthread_t g_tls_accept_tid;
+static atomic_int g_tls_srv_running = 0;
+static char g_tls_cert_dir[256];
+static char g_tls_cert_path[320];
+static char g_tls_key_path[320];
+static bool g_tls_cert_ready = false;
+
+/* Connection-thread registry so _tls_teardown can join them all before
+ * freeing g_tls_ssl_ctx out from under any still-running SSL_accept. A
+ * separate registry from this file's own g_conn_threads/g_conn_thread_count/
+ * g_conn_mutex (the plain-HTTP mock server's own): the two mock servers are
+ * independent listeners with independently-lifetimed connection threads. */
+#define MAX_TLS_CONN_THREADS 64
+static pthread_t g_tls_conn_threads[MAX_TLS_CONN_THREADS];
+static int g_tls_conn_thread_count = 0;
+static pthread_mutex_t g_tls_conn_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Generates a throwaway self-signed cert/key pair into a fresh mkdtemp()
+ * directory via the openssl CLI (same approach as tests/chttpserver_tls).
+ * Returns 0 on success, -1 on any failure; callers must treat -1 as "TLS
+ * integration could not be verified in this environment" rather than crash. */
+static int _openssl_selfsigned(const char *key_path, const char *cert_path,
+                               const char *cn, const char *san) {
+  char cmd[1024];
+  int cn_len;
+  if (san) {
+    cn_len = snprintf(cmd, sizeof(cmd),
+                      "openssl req -x509 -newkey rsa:2048 -nodes "
+                      "-keyout '%s' -out '%s' -days 1 -subj '/CN=%s' "
+                      "-addext 'subjectAltName=%s' >/dev/null 2>&1",
+                      key_path, cert_path, cn, san);
+  } else {
+    cn_len = snprintf(cmd, sizeof(cmd),
+                      "openssl req -x509 -newkey rsa:2048 -nodes "
+                      "-keyout '%s' -out '%s' -days 1 -subj '/CN=%s' "
+                      ">/dev/null 2>&1",
+                      key_path, cert_path, cn);
+  }
+  if (cn_len < 0 || (size_t)cn_len >= sizeof(cmd)) return -1;
+  if (system(cmd) != 0) return -1;
+  if (access(cert_path, R_OK) != 0 || access(key_path, R_OK) != 0) return -1;
+  return 0;
+}
+
+static int _generate_self_signed_cert(void) {
+  snprintf(g_tls_cert_dir, sizeof(g_tls_cert_dir),
+           "/tmp/chttpclient_tls_test_XXXXXX");
+  if (!mkdtemp(g_tls_cert_dir)) return -1;
+
+  int dn = snprintf(g_tls_cert_path, sizeof(g_tls_cert_path), "%s/cert.pem",
+                    g_tls_cert_dir);
+  int kn = snprintf(g_tls_key_path, sizeof(g_tls_key_path), "%s/key.pem",
+                    g_tls_cert_dir);
+  if (dn < 0 || (size_t)dn >= sizeof(g_tls_cert_path) || kn < 0 ||
+      (size_t)kn >= sizeof(g_tls_key_path))
+    return -1;
+
+  /* subjectAltName=IP:127.0.0.1: a real IP-address certificate, exercising
+   * the connect-side X509_check_ip verification path (reached via
+   * X509_VERIFY_PARAM_set1_ip_asc for an IP-literal target), not the legacy
+   * CN-matching fallback. */
+  return _openssl_selfsigned(g_tls_key_path, g_tls_cert_path, "127.0.0.1",
+                             "IP:127.0.0.1");
+}
+
+static void _remove_generated_cert(void) {
+  if (g_tls_cert_path[0]) unlink(g_tls_cert_path);
+  if (g_tls_key_path[0]) unlink(g_tls_key_path);
+  if (g_tls_cert_dir[0]) rmdir(g_tls_cert_dir);
+}
+
+/* Reads one HTTP/1.1 request off ssl (headers only; this section's requests
+ * never send a body) up to the terminating blank line, ignoring the actual
+ * content; every route below responds identically regardless of what was
+ * requested, except path-based routing for /large. */
+static void _tls_read_request(SSL *ssl, char *buf, size_t max, char *path,
+                              size_t path_max) {
+  size_t total = 0;
+  buf[0] = '\0';
+  while (total < max - 1) {
+    int n = SSL_read(ssl, buf + total, (int)(max - 1 - total));
+    if (n <= 0) break;
+    total += (size_t)n;
+    buf[total] = '\0';
+    if (strstr(buf, "\r\n\r\n")) break;
+  }
+  path[0] = '\0';
+  const char *sp1 = strchr(buf, ' ');
+  if (sp1) {
+    const char *sp2 = strchr(sp1 + 1, ' ');
+    if (sp2 && (size_t)(sp2 - sp1 - 1) < path_max) {
+      memcpy(path, sp1 + 1, (size_t)(sp2 - sp1 - 1));
+      path[sp2 - sp1 - 1] = '\0';
+    }
+  }
+}
+
+static void _tls_send_response(SSL *ssl, int status, const char *status_text,
+                               const char *body, size_t body_len) {
+  char header[256];
+  int hlen = snprintf(header, sizeof(header),
+                      "HTTP/1.1 %d %s\r\n"
+                      "Content-Type: application/json\r\n"
+                      "Content-Length: %zu\r\n"
+                      "Connection: close\r\n"
+                      "\r\n",
+                      status, status_text, body_len);
+  if (hlen > 0) SSL_write(ssl, header, hlen);
+  if (body && body_len > 0) SSL_write(ssl, body, (int)body_len);
+}
+
+static void *_tls_conn_thread(void *arg) {
+  int fd = (int)(intptr_t)arg;
+  SSL *ssl = SSL_new(g_tls_ssl_ctx);
+  if (!ssl) {
+    close(fd);
+    return NULL;
+  }
+  SSL_set_fd(ssl, fd);
+
+  if (SSL_accept(ssl) <= 0) {
+    SSL_free(ssl);
+    close(fd);
+    return NULL;
+  }
+
+  char buf[8192];
+  char path[256];
+  _tls_read_request(ssl, buf, sizeof(buf), path, sizeof(path));
+
+  if (strcmp(path, "/large") == 0) {
+    static char large_body[8192];
+    memset(large_body, 'x', sizeof(large_body));
+    _tls_send_response(ssl, 200, "OK", large_body, sizeof(large_body));
+  } else {
+    _tls_send_response(ssl, 200, "OK", TLS_TEST_BODY, strlen(TLS_TEST_BODY));
+  }
+
+  /* Give the peer a bounded chance to finish reading (and close/send its own
+   * close_notify) before we tear down our end. SSL_write() returning the
+   * full byte count only means the bytes were handed to the kernel's send
+   * buffer, not that the peer has actually received them; immediately
+   * closing right after can occasionally race the peer's read and abort the
+   * transfer with the response body never fully delivered; rare at native
+   * speed, but reproducible under valgrind's much heavier scheduling
+   * perturbation. A receive timeout bounds the wait so a peer that never
+   * closes (a bug, or a client that keeps the connection open) can never
+   * hang this thread indefinitely; which would otherwise also hang
+   * _tls_teardown()'s join of every connection thread. */
+  struct timeval rcvto = {.tv_sec = 2, .tv_usec = 0};
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &rcvto, sizeof(rcvto));
+  char drain[64];
+  while (SSL_read(ssl, drain, sizeof(drain)) > 0) {
+    /* Keep draining until the peer closes, errors, or the timeout above
+     * fires. */
+  }
+
+  SSL_shutdown(ssl);
+  SSL_free(ssl);
+  close(fd);
+  return NULL;
+}
+
+static void *_tls_accept_loop(void *arg) {
+  (void)arg;
+  while (atomic_load(&g_tls_srv_running)) {
+    int fd = accept(g_tls_srv_fd, NULL, NULL);
+    if (fd < 0) {
+      if (!atomic_load(&g_tls_srv_running)) break;
+      continue;
+    }
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, _tls_conn_thread, (void *)(intptr_t)fd) !=
+        0) {
+      close(fd);
+      continue;
+    }
+    pthread_mutex_lock(&g_tls_conn_mutex);
+    if (g_tls_conn_thread_count < MAX_TLS_CONN_THREADS) {
+      g_tls_conn_threads[g_tls_conn_thread_count++] = tid;
+    } else {
+      pthread_detach(tid);
+    }
+    pthread_mutex_unlock(&g_tls_conn_mutex);
+  }
+  return NULL;
+}
+
+static int _start_tls_server(void) {
+  g_tls_srv_fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (g_tls_srv_fd < 0) return -1;
+  int opt = 1;
+  setsockopt(g_tls_srv_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = 0;
+
+  if (bind(g_tls_srv_fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
+      listen(g_tls_srv_fd, 64) != 0) {
+    close(g_tls_srv_fd);
+    g_tls_srv_fd = -1;
+    return -1;
+  }
+
+  socklen_t len = sizeof(addr);
+  getsockname(g_tls_srv_fd, (struct sockaddr *)&addr, &len);
+  g_tls_srv_port = ntohs(addr.sin_port);
+
+  atomic_store(&g_tls_srv_running, 1);
+  if (pthread_create(&g_tls_accept_tid, NULL, _tls_accept_loop, NULL) != 0) {
+    close(g_tls_srv_fd);
+    g_tls_srv_fd = -1;
+    atomic_store(&g_tls_srv_running, 0);
+    return -1;
+  }
+  return 0;
+}
+
+static void _stop_tls_server(void) {
+  if (g_tls_srv_fd < 0) return;
+  atomic_store(&g_tls_srv_running, 0);
+  shutdown(g_tls_srv_fd, SHUT_RDWR);
+  close(g_tls_srv_fd);
+  g_tls_srv_fd = -1;
+  pthread_join(g_tls_accept_tid, NULL);
+
+  pthread_mutex_lock(&g_tls_conn_mutex);
+  for (int i = 0; i < g_tls_conn_thread_count; i++) {
+    pthread_join(g_tls_conn_threads[i], NULL);
+  }
+  g_tls_conn_thread_count = 0;
+  pthread_mutex_unlock(&g_tls_conn_mutex);
+}
+
+static void _tls_teardown(void) {
+  _stop_tls_server();
+  if (g_tls_ssl_ctx) {
+    SSL_CTX_free(g_tls_ssl_ctx);
+    g_tls_ssl_ctx = NULL;
+  }
+  _remove_generated_cert();
+}
+
+__attribute__((constructor)) static void _tls_setup(void) {
+  if (_generate_self_signed_cert() != 0) {
+    fprintf(stderr,
+            "WARNING: could not generate a self-signed cert via the openssl "
+            "CLI; real TLS handshake tests will be skipped in this "
+            "environment.\n");
+    g_tls_cert_ready = false;
+    atexit(_tls_teardown);
+    return;
+  }
+
+  g_tls_ssl_ctx = SSL_CTX_new(TLS_server_method());
+  if (!g_tls_ssl_ctx) {
+    fprintf(stderr, "FATAL: SSL_CTX_new failed\n");
+    exit(1);
+  }
+  if (SSL_CTX_use_certificate_file(g_tls_ssl_ctx, g_tls_cert_path,
+                                   SSL_FILETYPE_PEM) <= 0 ||
+      SSL_CTX_use_PrivateKey_file(g_tls_ssl_ctx, g_tls_key_path,
+                                  SSL_FILETYPE_PEM) <= 0) {
+    fprintf(stderr, "FATAL: could not load generated cert/key into SSL_CTX\n");
+    exit(1);
+  }
+
+  if (_start_tls_server() != 0) {
+    fprintf(stderr, "FATAL: could not start mock TLS server\n");
+    exit(1);
+  }
+  g_tls_cert_ready = true;
+  atexit(_tls_teardown);
+}
+
+static void make_tls_url(char *buf, size_t buf_size, const char *path) {
+  snprintf(buf, buf_size, "https://127.0.0.1:%d%s", g_tls_srv_port, path);
+}
+
+/* Tier 1 (chttpclient_do, synchronous) counterparts of the async_tls tests
+ * below. Tier 1's own connect/handshake code (_conn_open/_tls_handshake) is
+ * textually independent from Tier 2's (_async_tls_advance et al.); without
+ * these tests, every "https://" request anywhere in this file would either
+ * target an unreachable port (a connection-refused test) or a plain-HTTP
+ * server (an immediate handshake-garbage failure), so a real, successful
+ * handshake and a real certificate-verification failure over a live TLS
+ * connection would have no coverage at all for the synchronous path. */
+TEST(sync_tls, handshake_succeeds_when_ca_is_trusted) {
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  chttpcli_construct(cli);
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_tls_cert_path;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  chttp_request_free(req);
+
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_NE((void *)resp->body, NULL);
+  REQUIRE_STREQ(resp->body, TLS_TEST_BODY);
+
+  chttpclient_resp_free(resp);
+  chttpclient_destroy(cli);
+}
+
+TEST(sync_tls, large_body_response_over_tls) {
+  /* Exercises multiple _tls_handshake/_conn_read invocations against a
+   * single TLS response, not just a one-shot read. */
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  chttpcli_construct(cli);
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_tls_cert_path;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  char url[160];
+  make_tls_url(url, sizeof(url), "/large");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  REQUIRE_EQ(chttpclient_do(cli, req, &resp), ccol_success);
+  chttp_request_free(req);
+
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_EQ(resp->body_len, (size_t)8192);
+
+  chttpclient_resp_free(resp);
+  chttpclient_destroy(cli);
+}
+
+TEST(sync_tls, untrusted_cert_fails_verification) {
+  /* No ca_bundle_path configured; the default system trust store, which does
+   * not (and cannot) trust a freshly generated throwaway self-signed cert. A
+   * real, negative proof that certificate verification is actually enforced
+   * on the synchronous path too, not silently skipped. */
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  chttpcli_construct(cli);
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  chttpcli_response *resp = NULL;
+  ccol_retval_t rv = chttpclient_do(cli, req, &resp);
+  chttp_request_free(req);
+
+  REQUIRE_EQ(rv, ccol_http_tls_cert_verification_failed);
+  REQUIRE_EQ((void *)resp, NULL);
+
+  chttpclient_destroy(cli);
+}
+
+TEST(async_tls, handshake_succeeds_when_ca_is_trusted) {
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  chttpcli_construct(cli);
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_tls_cert_path;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+
+  chttpcli_response *resp = raw->resp;
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_NE((void *)resp->body, NULL);
+  REQUIRE_STREQ(resp->body, TLS_TEST_BODY);
+
+  chttpclient_resp_free(resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_tls, large_body_response_over_tls) {
+  /* Exercises multiple on_data invocations against a single TLS response
+   * (repeated ctls_conn_read calls), not just a one-shot read. */
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  chttpcli_construct(cli);
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_tls_cert_path;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  char url[160];
+  make_tls_url(url, sizeof(url), "/large");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  REQUIRE_EQ(raw->rv, ccol_success);
+  chttpcli_response *resp = raw->resp;
+  REQUIRE_NE((void *)resp, NULL);
+  REQUIRE_EQ(resp->status_code, 200);
+  REQUIRE_EQ(resp->body_len, (size_t)8192);
+
+  chttpclient_resp_free(resp);
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_tls, untrusted_cert_fails_verification) {
+  /* No ca_bundle_path configured; the default system trust store, which
+   * does not (and cannot) trust a freshly generated throwaway self-signed
+   * cert. A real, negative proof that certificate verification is actually
+   * being enforced, not silently skipped. */
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  chttpcli_construct(cli);
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+  chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+  REQUIRE_NE((void *)req, NULL);
+
+  ctpool_future *f = chttpclient_do_async(cli, req);
+  REQUIRE_NE((void *)f, NULL);
+  chttp_request_free(req);
+
+  chttpcli_async_result_t *raw = chttpclient_async_result_get(f);
+  REQUIRE_NE((void *)raw, NULL);
+  ccol_retval_t rv = raw->rv;
+  REQUIRE_EQ(rv, ccol_http_tls_cert_verification_failed);
+  REQUIRE_EQ((void *)raw->resp, NULL);
+
+  chttpclient_async_result_free(raw);
+  ctpool_future_free(f);
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
+}
+
+TEST(async_tls, concurrent_https_requests_all_succeed) {
+  /* Multiple concurrent HTTPS requests through the shared async engine;
+   * proves the reactor multiplexes several simultaneous TLS handshakes and
+   * encrypted data streams correctly, not just one at a time. */
+  if (!g_tls_cert_ready) {
+    fprintf(stderr,
+            "SKIP: no self-signed cert available in this environment\n");
+    return;
+  }
+
+  enum { N = 6 };
+  chttpcli_construct(cli);
+  chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
+  tls.ca_bundle_path = g_tls_cert_path;
+  REQUIRE_EQ(chttpclient_set_tls(cli, &tls), ccol_success);
+
+  char url[160];
+  make_tls_url(url, sizeof(url), "/hello");
+
+  ctpool_future *futures[N];
+  for (int i = 0; i < N; i++) {
+    chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+    REQUIRE_NE((void *)req, NULL);
+    futures[i] = chttpclient_do_async(cli, req);
+    REQUIRE_NE((void *)futures[i], NULL);
+    chttp_request_free(req);
+  }
+
+  for (int i = 0; i < N; i++) {
+    chttpcli_async_result_t *raw = chttpclient_async_result_get(futures[i]);
+    REQUIRE_NE((void *)raw, NULL);
+    REQUIRE_EQ(raw->rv, ccol_success);
+    chttpcli_response *resp = raw->resp;
+    REQUIRE_NE((void *)resp, NULL);
+    REQUIRE_EQ(resp->status_code, 200);
+    chttpclient_resp_free(resp);
+    chttpclient_async_result_free(raw);
+    ctpool_future_free(futures[i]);
+  }
+
+  wait_for_async_engine_idle();
+  chttpclient_destroy(cli);
 }

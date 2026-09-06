@@ -15,13 +15,23 @@ Walks the DOM tree rooted at node and produces a compact (no whitespace)
 JSON string.  A NULL node produces the string "null".
 
 Doubles are serialized with the shortest round-trip decimal
-representation (up to 17 significant digits).  Integers use %lld.
-Non-finite doubles (Inf, NaN) are serialized as "null".
+representation (up to 17 significant digits), always using '.' as the
+decimal separator per RFC 8259, regardless of the calling thread's
+ambient LC_NUMERIC locale setting.  Integers use %lld.  Non-finite
+doubles (Inf, NaN) are serialized as "null".
+
+A subtree nested more than 500 levels deep (arrays and/or objects, in
+any combination) is not serialized further; NULL is returned instead.
+A tree built directly through the construction API (cjson_list_push(),
+cjson_dictionary_set()) is not otherwise bounded in depth the way a
+parsed document is, so this cap applies independently of cjson_parse().
+Ordinary trees never approach this depth.
 .fi
 .SH RETURN VALUE
 .nf
 Heap-allocated null-terminated string on success.
-NULL on allocation failure.
+NULL on allocation failure, or if node is nested more than 500 levels
+deep.
 The caller must free the string with cjson_serialize_free().
 .fi
 .SH "SEE ALSO"

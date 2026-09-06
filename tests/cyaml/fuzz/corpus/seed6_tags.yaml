@@ -1,0 +1,18 @@
+%TAG !e! tag:example.com,2000:app/
+---
+a: !!str 42
+b: !!int "42"
+c: !!float 3
+d: !!bool yes
+e: !!null value
+f: !e!foo bar
+g: !<tag:example.com,2000:app/foo> baz
+h: !local
+i: !!seq [1, 2, 3]
+j: !!map {k: v}
+nested: !outer
+  inner: !inner
+    - !leaf1 a
+    - !leaf2 b
+anchored: &x !!str 5
+alias: *x

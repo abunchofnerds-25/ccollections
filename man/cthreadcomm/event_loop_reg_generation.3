@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cthreadcomm.h>
 
-uint64_t event_loop_reg_generation(const event_reg *reg);
+uint64_t event_loop_reg_generation(event_loop loop, event_reg reg);
 .fi
 .SH DESCRIPTION
 .nf
@@ -42,20 +42,26 @@ for the calling application's own bookkeeping on top of that guarantee.
 .fi
 .SH PARAMETERS
 .nf
-reg  Registration to query.
+loop  event_loop reg belongs to.
+reg   Registration to query.
 .fi
 .SH RETURN VALUE
 .nf
 Returns the generation value.
-Returns 0 if reg is NULL (0 is never a valid generation for a real
-registration; the counter starts at 1).
+Returns 0 if reg is EVENT_REG_INVALID or otherwise fails to resolve
+(including because it was already removed), or if loop is
+EVENT_LOOP_INVALID or a stale/already-destroyed handle (0 is never a
+valid generation for a real registration; the counter starts at 1).
 .fi
 .SH NOTES
 .nf
-Safe to call even on an already-removed reg: like event_loop_modify()'s
-own safe handling of a stale reg pointer, this reads a field set once
-at registration and never written again, protected by reg's own
-deferred-free contract rather than requiring reg to still be live.
+Safe to call at any time on any event_reg value ever returned by
+event_loop_add for this loop, including one already removed (whether
+by this thread earlier or a genuinely concurrent one racing right
+now): reg is resolved against loop's own registration table before
+anything is dereferenced, so an already-removed or otherwise stale
+handle is always detected as such and reported as generation 0, never
+a use-after-free.
 .fi
 .SH THREAD SAFETY
 .nf
@@ -65,17 +71,17 @@ dispatch, event_loop_modify(), and event_loop_remove().
 .SH EXAMPLES
 .nf
 typedef struct conn {
-    event_reg *reg;
+    event_reg reg;
     uint64_t generation;
 } conn_t;
 
 conn_t *c = malloc(sizeof(*c));
 c->reg = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
                         handlers, c, NULL);
-c->generation = event_loop_reg_generation(c->reg);
+c->generation = event_loop_reg_generation(loop, c->reg);
 
 /* ... later, from some other asynchronous step holding a conn_t* ... */
-if (event_loop_reg_generation(c->reg) != c->generation) {
+if (event_loop_reg_generation(loop, c->reg) != c->generation) {
     /* stale: this fd number has been closed and reused since */
 }
 .fi

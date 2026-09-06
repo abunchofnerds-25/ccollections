@@ -22,6 +22,12 @@ destroyed, sequentially by an earlier call or concurrently by
 another thread) is a FATAL ERROR (abort()/SIGABRT), not a silent
 double-free; see __event_loop_destroy(3) for further detail.
 
+Calling this on loop from within a callback currently dispatching
+on one of loop's own reactor/dispatch threads is likewise a FATAL
+ERROR (abort()/SIGABRT), not a deadlock or a silent no-op; defer
+destruction to another thread, or to after the callback returns,
+instead.
+
 See __event_loop_destroy(3) for the queue-outlives-the-loop safety
 guarantee this provides for queue-backed registrations.
 .fi

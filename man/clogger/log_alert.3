@@ -21,8 +21,8 @@ backtrace is appended in the same way as log_error():
 
 ALERT maps to RFC 5424 syslog severity 1 ("alert; action must be taken
 immediately").  In CLOG_FMT_SYSLOG mode each backtrace frame is emitted
-as a separate syslog message using the same PRI and MSGID as the original
-record.
+as a separate syslog message using the same PRI, TIMESTAMP, and MSGID as
+the original record.
 
 ALERT sits between ERROR (severity 3) and FATAL (severity 0) in the
 clog_level_t ordering.  Use it for conditions that require immediate
@@ -39,9 +39,25 @@ fmt    printf-style format string.
 Like log_error, log_alert does NOT terminate the process. Use
 log_fatal if process termination is required.
 Backtrace requires the binary to be linked with -rdynamic.  On platforms
-without execinfo.h the backtrace lines are silently omitted.
+without execinfo.h, or on a transient allocation failure while resolving
+symbol names, capture itself fails; a single "backtrace unavailable"
+marker line (or, in CLOG_FMT_SYSLOG mode, marker record) is emitted in
+place of the usual per-frame output, so the omission is visible rather
+than silent.
 The backtrace write is protected by the per-logger mutex, so the
 backtrace and the preceding log line always appear contiguously.
+Under sustained memory pressure, or when the record's own content
+already leaves little room before the internal buffer cap, an
+individual backtrace frame that cannot be formatted is omitted (in
+favor of any shorter frame that follows) rather than written
+incomplete; every line that is written is always a complete,
+well-formed record. If none of the frames fit at all, a single
+"backtrace unavailable" marker line (or, in CLOG_FMT_SYSLOG mode,
+marker record) takes their place, the same marker used when capture
+itself fails. In CLOG_FMT_JSON mode, if the backtrace cannot be
+embedded at all under such pressure, a "bt_error":"unavailable" key
+takes the place of "bt" so the omission is visible rather than
+silent.
 .fi
 .SH EXAMPLES
 .nf

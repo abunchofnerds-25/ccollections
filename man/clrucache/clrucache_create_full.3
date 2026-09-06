@@ -38,8 +38,12 @@ getter       Remote getter callback, or NULL. Called on cache miss to
              fetch the value from an external source. On success it
              must heap-allocate the value data, assign it to val->ptr,
              set val->size to the byte length, and return true. The
-             cache takes ownership of val->ptr and frees it. On
-             failure it must leave val->ptr as NULL and return false.
+             cache takes ownership of val->ptr and frees it with its
+             own allocator (mprocs if one was given, or malloc()/
+             free() otherwise); the getter's allocation must use that
+             same allocator or the cache's eventual free will corrupt
+             the heap. On failure it must leave val->ptr as NULL and
+             return false.
 setter       Remote setter callback, or NULL. Called synchronously
              before each cache update. Receives the key and value as
              const cmap_pair* pointers. If it returns false the cache
@@ -70,8 +74,8 @@ must not re-enter the cache.
 __clrucache_destroy waits for every in-flight resolved use of the
 handle (a concurrently executing clrucache_get_full/_set_full/
 clrucache_size/_capacity call) to finish before freeing anything, so
-it is no longer the caller's own responsibility to first prove no
-other thread is still using the cache; see __clrucache_destroy(3).
+the caller does not need to independently prove no other thread is
+still using the cache; see __clrucache_destroy(3).
 .fi
 .SH "SEE ALSO"
 .BR clru_construct (3),

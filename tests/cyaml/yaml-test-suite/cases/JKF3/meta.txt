@@ -1,0 +1,2 @@
+fail=1
+name=Multiline unidented double quoted block key

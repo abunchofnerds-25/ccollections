@@ -1,0 +1,2 @@
+fail=0
+name=Spec Example 8.19. Compact Block Mappings

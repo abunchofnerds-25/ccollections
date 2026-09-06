@@ -37,32 +37,30 @@ ccol_not_permitted if the reactor is already running; stop it first.
 .SH NOTES
 .nf
 The default is 1 (not an auto-detected CPU count) because it performs
-better for the common case. Benchmarked against a real HTTP/HTTPS
-workload on a 22-core machine, across three traffic shapes:
+better for the common case:
 
   Plain HTTP, connections reused (typical browser/API-client
-  traffic): num_threads == 1 measured ~3% higher throughput than
-  CPU-count dispatch threads. There is essentially no CPU-bound work
-  in the dispatch phase for plain HTTP (a fast header parse), so
-  spreading it across threads only adds hand-off overhead with
-  nothing to parallelize.
+  traffic): a single thread gives the best throughput. There is
+  essentially no CPU-bound work in the dispatch phase for plain HTTP
+  (a fast header parse), so spreading it across threads only adds
+  hand-off overhead with nothing to parallelize.
 
   TLS, connections reused (typical HTTPS traffic once a client's
   connection pooling is accounted for): a genuine trade, not a clean
-  win either way. num_threads == 1 measured ~4% lower throughput but
-  a clearly better and more consistent p99 latency than CPU-count
+  win either way. A single thread gives lower throughput but a
+  clearly better and more consistent p99 latency than multiple
   dispatch threads. Most of a TLS connection's requests hit the same
   cheap steady-state path plain HTTP does; only the connection's own
   handshake pays the expensive part, and that cost is amortized
   across however many requests the connection goes on to serve.
 
   TLS with no connection reuse at all (every request pays a
-  brand-new handshake; a deliberately extreme synthetic case, not
-  typical traffic): CPU-count dispatch threads won by ~8-9%
-  throughput and ~10-15% p99 latency, since a TLS handshake's
-  asymmetric-crypto cost (the server's private-key operation) is
-  genuine CPU-bound work that benefits from being spread across
-  cores when there is enough of it.
+  brand-new handshake; a deliberately extreme case, not typical
+  traffic): multiple dispatch threads give both higher throughput
+  and lower p99 latency, since a TLS handshake's asymmetric-crypto
+  cost (the server's private-key operation) is genuine CPU-bound
+  work that benefits from being spread across cores when there is
+  enough of it.
 
 The scenario where a larger num_threads is worth its cost is
 specifically sustained connection churn combined with TLS: many

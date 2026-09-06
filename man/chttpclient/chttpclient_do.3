@@ -107,9 +107,19 @@ wait for the server's response:
     body is sent anyway and the final response is read normally
     (the server is assumed not to support the mechanism).
 
-expect_continue has no effect on a request with no body, and is
-currently honored only by chttpclient_do and chttpclient_do_streaming
-(Tier 1); chttpclient_do_async and everything built on it ignore it.
+The 64-consecutive-discarded-interim-response cap described above
+applies independently to the wait for "100 Continue" and to the
+final response read that follows it: a "100 Continue" (or the wait
+simply timing out) is itself a genuine, non-discarded outcome, so it
+resets the count: a hop may therefore discard up to 64 interim
+responses while waiting for "100 Continue" and up to 64 more while
+reading the final response, not merely 64 combined.
+
+expect_continue has no effect on a request with no body. It is
+honored uniformly by every tier: chttpclient_do_async and everything
+built on it implement the identical three-outcome protocol described
+above as part of their own non-blocking dispatch, rather than a
+blocking wait.
 
 Once a "100 Continue" interim response has actually been received and
 the body written to that connection, a subsequent failure on that
@@ -143,8 +153,10 @@ ccol_invalid_args
        with a body, body.content_type) contains an embedded CR or LF
        byte, a request header is named "Transfer-Encoding", or (on a
        body-carrying request: POST, PUT, or PATCH) a request header
-       named "Content-Length" does not exactly match the actual
-       body length being sent; see chttp_request_set_header(3).
+       named "Content-Length" is not a plain unsigned decimal digit
+       string (no leading '+'/'-', no embedded whitespace) exactly
+       matching the actual body length being sent; see
+       chttp_request_set_header(3).
 
 ccol_not_enough_memory
        Memory allocation failed.

@@ -17,13 +17,14 @@ strcmp() semantics.
 .SH PARAMETERS
 .nf
 s     String to compare
-str   C string to compare against (must not be NULL)
+str   C string to compare against
 .fi
 .SH RETURN VALUE
 .nf
 Negative if s < str
 Zero if s == str
 Positive if s > str
+1 if str is NULL (a non-null string is considered greater than NULL)
 .fi
 .SH NOTES
 .nf

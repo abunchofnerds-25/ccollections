@@ -1,0 +1,2 @@
+fail=1
+name=Invalid Mapping in plain scalar

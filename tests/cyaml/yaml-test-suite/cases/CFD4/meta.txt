@@ -1,0 +1,2 @@
+fail=0
+name=Empty implicit key in single pair flow sequences

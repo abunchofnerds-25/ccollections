@@ -23,6 +23,17 @@ CHTTPSVR_INVALID (0) is the one exception and remains a silent no-op,
 matching the chttpsvr_destroy macro's own "destroy NULLs the handle"
 idiom.
 
+Calling this from within a request handler or middleware currently
+running on srv's own worker pool (destroying the very server a
+handler is executing for, from inside that same handler) is the
+identical FATAL misuse, reported the same way and just as
+immediately: that thread's own in-flight request can never finish
+while it is itself blocked here waiting to destroy the server it
+belongs to. To shut a server down from within one of its own
+handlers, either destroy it from a different thread, or call
+chttpsvr_engine_stop() (safe to call from within a handler) if a full
+engine shutdown is the goal.
+
 Stops this server's listener, drains all in-flight requests for this
 server (up to 30 seconds), then closes every remaining connection of
 this server (idle, mid-handshake, or otherwise still active) and waits
@@ -36,9 +47,10 @@ its own configured timeouts well before 30 seconds.
 
 A connection whose worker thread is still blocked reading or writing
 it when the first 30-second wait is exhausted (only reachable when
-stream_read_timeout_ms, max_body_read_duration_ms, and/or
-response_write_timeout_ms is configured to 0, "wait indefinitely," and
-the peer stalls without ever closing the connection) is forcibly
+stream_read_timeout_ms, max_body_read_duration_ms,
+response_write_timeout_ms, and/or max_response_write_duration_ms is
+configured to 0, "wait indefinitely," and the peer stalls without ever
+closing the connection) is forcibly
 closed at that point rather than left to block this function forever,
 with a further short grace period for the affected worker thread to
 notice and unwind.
@@ -72,6 +84,14 @@ down, so calling this function afterward on the same handle only frees
 the remaining per-server memory (routers, routes, the server struct
 itself); it never double-closes the listener, double-releases the
 engine reference, or otherwise repeats work already done.
+
+Also safe to call concurrently with a chttpsvr_engine_stop() that is
+still force-stopping this same server on its own background reaper
+thread right now (e.g. a signal handler triggering chttpsvr_engine_stop()
+while an application thread independently calls this function on the
+same handle): whichever of the two finishes tearing srv down first,
+the other waits for that teardown to fully complete before proceeding,
+rather than racing it.
 
 Does not set the caller's pointer to CHTTPSVR_INVALID; use the
 chttpsvr_destroy macro for that.

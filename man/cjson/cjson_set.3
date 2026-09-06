@@ -20,7 +20,19 @@ Accepted C types for val:
   float / double             -> CJSON_FLOAT  (stored as double)
   char * / const char *      -> CJSON_STRING  (strdup'd copy)
   string literal ("...")     -> CJSON_STRING
-  NULL or other pointer      -> CJSON_NULL
+  NULL                       -> CJSON_NULL
+
+Any other C type (long double, a struct, an enum, or any pointer
+type other than char * / const char *) is rejected: cjson_set
+returns ccol_invalid_args and the target leaf is left untouched
+(created leaves are not left behind as CJSON_NULL for an unsupported
+type; an existing leaf's value is not overwritten).
+
+A void * value that is not NULL is rejected the same way
+(ccol_invalid_args), rather than being silently written as
+CJSON_NULL: only a genuine NULL value is treated as an intentional
+null, even though void * is also the compile-time type of the bare
+NULL literal.
 
 Signed integer types are sign-extended to long long correctly.
 Unsigned integers in the range [0, LLONG_MAX] round-trip faithfully.
@@ -43,10 +55,20 @@ val    C value; the type must be one of the accepted types listed above.
 .SH RETURN VALUE
 .nf
 ccol_retval_t: ccol_success on success.
-ccol_invalid_args; empty path, parent type incompatible, array
-                     index out of bounds, or bare '#' with no digits.
-ccol_key_not_found; a non-leaf component on the path does not exist.
+ccol_invalid_args; an empty path or path component (leading,
+                     trailing, or consecutive dots), parent type
+                     incompatible with the leaf component, a
+                     malformed array index (non-numeric, negative,
+                     or bare '#' with no digits), val's C type is
+                     not one of the accepted types listed above, or
+                     val is a void * value that is not NULL.
+ccol_key_not_found; the parent path, or a syntactically valid but
+                     out-of-range array index, does not exist.  An
+                     array, unlike an object, has no way to
+                     auto-extend to fit an arbitrary index.
 ccol_not_enough_memory; allocation failure.
+ccol_container_full; the parent object has already reached its
+                     maximum element count (creating a new key only).
 .fi
 .SH NOTES
 .nf

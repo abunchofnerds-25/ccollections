@@ -12,8 +12,9 @@ cbmap_construct(hm_name, key_type, val_type);
 .SH DESCRIPTION
 .nf
 Type-safe macro for creating a BST map with default settings.
-Automatically determines if keys are signed integers and creates type
-marker variables for compile-time type checking.
+Automatically determines the key type (signed/unsigned integer,
+floating-point, string, or other) and creates type marker variables for
+compile-time type checking.
 .fi
 .SH PARAMETERS
 .nf
@@ -25,6 +26,10 @@ val_type  Type of values
 .nf
 Terminates program on allocation failure
 Uses default memory management and comparison
+For a struct key_type, this falls back to a raw memcmp ordering; see
+cbmap_create_full(3) for the default-comparison rules and how to
+supply a custom_comparison_proc instead (the cbmap_construct_cc
+macro is the type-safe equivalent for a struct key_type)
 .fi
 .SH EXAMPLES
 .nf
@@ -32,5 +37,5 @@ cbmap_construct(map, int, char*);
 cbmap_insert(map, 42, "hello");
 .fi
 .SH "SEE ALSO"
-.BR cbmap_construct_full (3),
-.BR cbmap_create (3)
+.BR cbmap_create (3),
+.BR cbmap_create_full (3)

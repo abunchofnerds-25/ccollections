@@ -27,8 +27,12 @@ that frame #0 is the caller of log_error. Backtrace depth is capped
 at 64 frames.
 
 Backtrace requires the binary to be linked with -rdynamic for symbol
-resolution. On platforms without execinfo.h the backtrace lines are
-omitted silently and the log line is emitted normally.
+resolution. On platforms without execinfo.h, or on a transient
+allocation failure while resolving symbol names, capture itself
+fails; the log line is still emitted normally, but a single
+"\et#error backtrace unavailable" continuation line is appended in
+place of the usual per-frame lines so the omission is visible rather
+than silent.
 .fi
 .SH PARAMETERS
 .nf
@@ -43,6 +47,17 @@ termination is desired.
 The backtrace write is also protected by the per-logger mutex, so
 the backtrace and the preceding log line always appear contiguously
 even under concurrent logging from multiple threads.
+Under sustained memory pressure, or when the record's own content
+already leaves little room before the internal buffer cap, an
+individual backtrace frame that cannot be formatted is omitted (in
+favor of any shorter frame that follows) rather than written
+incomplete; every line that is written is always a complete,
+well-formed record. If none of the frames fit at all, a single
+"\et#error backtrace unavailable" continuation line takes their
+place, the same marker used when capture itself fails. In
+CLOG_FMT_JSON mode, if the backtrace cannot be embedded at all under
+such pressure, a "bt_error":"unavailable" key takes the place of "bt"
+so the omission is visible rather than silent.
 .fi
 .SH EXAMPLES
 .nf

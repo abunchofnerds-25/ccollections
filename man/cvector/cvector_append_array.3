@@ -33,6 +33,15 @@ All elements are appended or none (atomic operation)
 Automatically reserves capacity if needed
 Elements are copied into the vector
 Asserts if v is NULL
+arr_ptr may safely point into v's own backing buffer (for example a
+pointer returned by cvector_data_ptr(3) or cvector_at(3)); any
+capacity expansion this call triggers will not invalidate it
+The source and destination ranges are allowed to overlap (for example
+when arr_ptr aliases v's own buffer and elem_count reads past the
+vector's current element count); the copy is overlap-safe
+The cvec_append_array(3) macro evaluates elem_count exactly once,
+including on the failure path, so a side-effecting expression is safe
+to pass
 .fi
 .SH "SEE ALSO"
 .BR cvec_append_array (3),

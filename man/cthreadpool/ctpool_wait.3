@@ -23,6 +23,20 @@ submissions can cause indefinite blocking.
 .nf
 pool   Thread pool handle (CTPOOL_INVALID or a stale/already-destroyed handle is a no-op)
 .fi
+.SH NOTES
+.nf
+A pool inherited across a fork(2) call (its worker threads are not
+duplicated into the child) is treated as vacuously idle: ctpool_wait
+on such a pool in the child returns immediately rather than waiting
+for progress no worker thread in that process can ever make.
+
+Calling ctpool_wait on pool from within a task (or that task's
+on_complete callback) currently executing on one of pool's own
+worker threads is also treated as vacuously idle and returns
+immediately: the calling task is itself still counted among pool's
+active tasks until it returns, so waiting here would otherwise
+deadlock the calling worker against itself.
+.fi
 .SH "SEE ALSO"
 .BR ctpool_shutdown_drain (3),
 .BR ctpool_shutdown_immediate (3)

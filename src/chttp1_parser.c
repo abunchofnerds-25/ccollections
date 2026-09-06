@@ -72,8 +72,10 @@ static bool is_digit(unsigned char c) { return c >= '0' && c <= '9'; }
 
 static bool is_ows(unsigned char c) { return c == ' ' || c == '\t'; }
 
-/* RFC 7230 SS3.2.6 tchar: the set of bytes a header field NAME may contain. */
-static bool is_tchar(unsigned char c) {
+/* RFC 7230 SS3.2.6 tchar: the set of bytes a header field NAME may contain.
+ * Not static: exposed to chttpclient.c/chttpserver.c via chttp1_parser.h;
+ * see that declaration's own doc comment. */
+bool chttp1_is_tchar(unsigned char c) {
   if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || is_digit(c))
     return true;
   switch (c) {
@@ -325,7 +327,7 @@ static ph_result_t parse_request_line(chttp1_parser_t *parser) {
   const char *method = s;
   size_t method_len = i;
   for (size_t j = 0; j < method_len; j++) {
-    if (!is_tchar((unsigned char)method[j])) {
+    if (!chttp1_is_tchar((unsigned char)method[j])) {
       parser->reason = "Invalid method";
       return PH_ERROR;
     }
@@ -507,7 +509,7 @@ static ph_result_t process_header_line(chttp1_parser_t *parser) {
   char *name = line;
   size_t name_len = (size_t)(colon - line);
   for (size_t i = 0; i < name_len; i++) {
-    if (!is_tchar((unsigned char)name[i])) {
+    if (!chttp1_is_tchar((unsigned char)name[i])) {
       parser->reason = "Invalid header field char";
       return PH_ERROR;
     }
@@ -1120,8 +1122,14 @@ static bool _stream_prepare_common(chttp1_stream_t *stream, int fd,
      * half-committed. No current caller dereferences these fields without
      * first checking this function's return value, but this is the one
      * place that contract is actually established, and it should hold
-     * regardless of what any particular caller happens to check today. */
-    stream->fd = 0;
+     * regardless of what any particular caller happens to check today.
+     * fd is rolled back to -1, not 0: 0 is a real, valid file descriptor
+     * (stdin), so leaving it there would make a caller that ever skipped
+     * the return-value check silently poll/read/write against fd 0 instead
+     * of failing loudly; -1 matches this codebase's own "no fd" sentinel
+     * convention everywhere else (e.g. chttp_conn_t.fd, chttp_async_ctx_t.
+     * fd). */
+    stream->fd = -1;
     stream->tls = NULL;
     stream->prepared = false;
     return false;
@@ -1262,20 +1270,40 @@ ssize_t chttp1_stream_read(chttp1_stream_t *stream, char *buf, size_t buflen,
         }
         this_timeout = (int)rem;
       }
-      if (!wait_for_ready(stream, POLLIN, this_timeout)) return -1;
+      /* ctls_conn_read()'s own EWOULDBLOCK does not always mean "wait for
+       * readable" the way a raw read(2)'s would: OpenSSL can need to WRITE
+       * before this exact call can make progress (e.g. flushing a deferred
+       * post-handshake session ticket, or a TLS 1.2 renegotiation); see
+       * ctls_conn_wants_write's own doc comment. Waiting on POLLIN
+       * unconditionally here would leave the connection stalled with no
+       * further readiness event ever arriving in the direction it actually
+       * still needs, until timeout_ms (or, for a caller configured with no
+       * deadline at all, forever). */
+      short want_events =
+          ctls_conn_wants_write((ctls_conn_t *)stream->tls) ? POLLOUT : POLLIN;
+      if (!wait_for_ready(stream, want_events, this_timeout)) return -1;
     }
   }
 
-  int this_timeout = timeout_ms;
-  if (has_deadline) {
-    long rem = _remaining_ms(&deadline);
-    if (rem <= 0) {
-      stream->timed_out = true;
-      return -1;
-    }
-    this_timeout = (int)rem;
-  }
-  if (!wait_for_ready(stream, POLLIN, this_timeout)) return -1;
+  /* Unlike the TLS branch above (a real retry loop that can genuinely burn
+   * down the deadline across more than one iteration) or chttp1_stream_
+   * write's own shared loop below, this plaintext path performs exactly one
+   * wait, immediately after `deadline` was computed as "now + timeout_ms" a
+   * few instructions up; re-deriving "time remaining until it" here via a
+   * second clock_gettime() call would, for any timeout_ms > 0, only ever
+   * reproduce timeout_ms itself minus a handful of nanoseconds of pure call
+   * overhead (harmless), but for timeout_ms == 0 specifically, ANY nonzero
+   * elapsed time already exceeds a zero-length budget, so that recomputed
+   * value is unconditionally <= 0. That made this function report "already
+   * timed out" without ever calling poll(2) or attempting read(2) at all,
+   * even when the fd was already readable right now: a real violation of
+   * this function's own documented timeout_ms == 0 contract ("return
+   * immediately if fd is not already readable right now"), not merely a
+   * missed optimisation. Passing timeout_ms straight through fixes this
+   * (poll(2)'s own timeout_ms == 0 convention is exactly "one immediate,
+   * non-blocking check") while behaving identically to before for every
+   * timeout_ms > 0 or negative ("block forever") value. */
+  if (!wait_for_ready(stream, POLLIN, timeout_ms)) return -1;
 
   ssize_t got = read(stream->fd, buf, buflen);
   if (got < 0) stream->last_errno = errno;
@@ -1291,9 +1319,30 @@ ssize_t chttp1_stream_write(chttp1_stream_t *stream, const char *buf,
   struct timespec deadline;
   if (has_deadline) _compute_deadline(&deadline, timeout_ms);
 
+  /* The direction to poll for before the NEXT attempt; POLLOUT to start,
+   * matching a plain write(2)'s own contract, but re-derived after every
+   * TLS write attempt below; see that branch's own comment for why a
+   * ctls_conn_write() EWOULDBLOCK can mean the opposite direction. */
+  short want_events = POLLOUT;
+  /* True only for this loop's very first iteration, whose `deadline` was
+   * just computed as "now + timeout_ms" a few instructions up and therefore
+   * cannot legitimately have already expired: recomputing "time remaining
+   * until it" there anyway would, for timeout_ms == 0, treat the handful of
+   * nanoseconds of pure call overhead since that computation as having
+   * already exhausted a zero-length budget, reporting a timeout without
+   * ever calling poll(2) or attempting the write below, even when the fd
+   * was already writable right now; a real violation of this function's own
+   * documented timeout_ms == 0 contract ("return immediately if fd is not
+   * already writable right now"), not merely a missed optimisation. From
+   * the SECOND iteration onward, a real wait_for_ready() call (and possibly
+   * a real, if non-blocking, write attempt) has already consumed genuine
+   * wall-clock time, so consulting the deadline there is both necessary
+   * (bounding the TOTAL time this retry loop may spend, not just one
+   * attempt) and correct. */
+  bool first_attempt = true;
   for (;;) {
     int this_timeout = timeout_ms;
-    if (has_deadline) {
+    if (has_deadline && !first_attempt) {
       long rem = _remaining_ms(&deadline);
       if (rem <= 0) {
         stream->timed_out = true;
@@ -1301,12 +1350,25 @@ ssize_t chttp1_stream_write(chttp1_stream_t *stream, const char *buf,
       }
       this_timeout = (int)rem;
     }
-    if (!wait_for_ready(stream, POLLOUT, this_timeout)) return -1;
+    if (!wait_for_ready(stream, want_events, this_timeout)) return -1;
+    first_attempt = false;
 
     if (stream->tls) {
       ssize_t written = ctls_conn_write((ctls_conn_t *)stream->tls, buf, len);
       if (written >= 0) return written;
-      if (errno == EWOULDBLOCK || errno == EAGAIN) continue;
+      if (errno == EWOULDBLOCK || errno == EAGAIN) {
+        /* ctls_conn_write()'s own EWOULDBLOCK does not always mean "wait
+         * for writable": OpenSSL can need to READ before this exact call
+         * can make progress (e.g. during a TLS 1.2 renegotiation); see
+         * ctls_conn_wants_write's own doc comment. Always looping back to
+         * wait on POLLOUT here would leave the connection stalled with no
+         * further readiness event ever arriving in the direction it
+         * actually still needs. */
+        want_events = ctls_conn_wants_write((ctls_conn_t *)stream->tls)
+                          ? POLLOUT
+                          : POLLIN;
+        continue;
+      }
       stream->last_errno = errno;
       return -1;
     }
@@ -1336,6 +1398,17 @@ bool chttp1_stream_push_back_leftover(chttp1_stream_t *stream, const char *buf,
                                       size_t len) {
   if (len == 0) return true;
   size_t existing = stream->carry_len - stream->carry_pos;
+  /* Overflow guard on the "needed size" computation below, matching the
+   * SIZE_MAX-relative guard idiom this codebase's other growable/
+   * concatenated buffers already use for the identical class of
+   * computation (e.g. chttpclient.c's _merge_ref_path/_concat_len): len and
+   * existing are two independently sized values (a freshly read chunk and
+   * whatever carry-over this stream already held), so their sum reaching
+   * close to SIZE_MAX does not require either one alone to be implausibly
+   * large. Unreachable in practice, but this project treats a reducible/
+   * unguarded overflow in a size computation as a real bug regardless of
+   * how large an input is needed to trigger it. */
+  if (len > SIZE_MAX - existing) return false;
   size_t total = len + existing;
   char *nc = (char *)malloc(total);
   if (!nc) return false;

@@ -20,7 +20,10 @@ memory management procedures.
 .fi
 .SH PARAMETERS
 .nf
-max_size   Maximum number of messages each direction can hold
+max_size   Maximum number of messages each direction can hold; each
+           direction is backed by its own circular queue, so the same
+           SIZE_MAX / sizeof(c_message_t) bound documented for
+           circular_queue_create(3) applies here
 err_str    Optional error string pointer
 .fi
 .SH RETURN VALUE
@@ -33,6 +36,17 @@ Returns NULL on failure
 All operations are thread-safe
 Channel must be destroyed with channel_destroy() when done
 Direction is automatically selected based on calling thread ID
+The owner thread (the one that called channel_create()) must remain
+alive for as long as the channel is in use: routing compares the
+calling thread's ID against the ID captured at creation time, and the
+OS may reuse that ID for an unrelated, later thread once the original
+owner exits, which would then be silently misrouted as the owner too
+fork(2) is safe with respect to each underlying circular queue's own
+internal locking: a lock held by some other thread at the instant of
+the fork is never inherited by the child already locked. Neither
+queue owns a thread of its own, so a channel already live and in
+active use across the fork remains fully usable on both sides
+afterward.
 .fi
 .SH "SEE ALSO"
 .BR channel_create_with_mprocs (3),

@@ -24,7 +24,8 @@ and deallocation using a free list.
 .nf
 elem_count                 Number of elements in the pool (must be > 0)
 elem_size                  Size of each element in bytes (must be > 0,
-                          minimum sizeof(uintptr_t))
+                          minimum sizeof(uintptr_t), maximum SIZE_MAX
+                          minus the internal header overhead)
 fallback_to_dynamic_memory If true, allocate from heap when pool exhausted
 single_threaded           If true, omit locking (faster but not thread-safe)
 mmgmt_procs               Custom memory management, or NULL for default
@@ -37,8 +38,11 @@ Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-Actual element size includes header overhead
+Actual element size includes header overhead, further rounded up so every
+element in the pool is correctly aligned, not just the first
 If elem_size < sizeof(uintptr_t), it is rounded up
+Returns NULL with error if elem_size would overflow size_t once the
+header overhead and alignment rounding are added
 Thread-safe if single_threaded is false (uses read-write locks)
 With fallback enabled, pool never fails allocation (until system OOM)
 Pool must be destroyed with mempool_destroy() when done

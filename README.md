@@ -2,7 +2,7 @@
 
 `c_collections` is a library of generic data structures and utilities for C. It provides what the C standard library leaves out: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, inter-thread communication primitives, a thread pool, a structured logger, a JSON parser, a YAML parser, an HTTP client, and an HTTP server; all under one consistent API.
 
-If you have used C++'s `vector` and `map`, Java's `ArrayList` and `HashMap`, or Python's `list` and `dict`, the containers here will feel familiar. The difference is that this library is plain C11; no code generators, no external build tools, no hidden runtime.
+If you have used C++'s `vector` and `map`, Java's `ArrayList` and `HashMap`, or Python's `list` and `dict`, the containers here will feel familiar. The difference is that this library is C11 (plus the GNU C extensions GCC and Clang both support: `typeof`, statement expressions, and `__attribute__((cleanup(...)))`); no code generators, no external build tools, no hidden runtime.
 
 Every module follows the same naming conventions (`*_construct`, `*_destroy`, and optional `*_scoped` variants for automatic cleanup), so once you have learned how one container works, the others follow naturally. The library compiles cleanly under GCC and Clang at `-Wall -Wextra -Werror`, and each module ships with a test suite that runs under Valgrind.
 
@@ -85,7 +85,7 @@ the cast fools the `_Generic` check and nothing stops you. The library provides 
 Every container macro inspects its argument with `_Generic` at the call site and records a `ccol_data_type` enum in the container's header struct. This enum drives all subsequent type-dependent decisions at runtime:
 
 - `chashmap` selects open-addressing or separate-chaining based on key and value types.
-- `cbstmap` selects signed, unsigned, or lexicographic key comparison.
+- `cbstmap` selects signed, unsigned, floating-point, or lexicographic key comparison.
 - `csort` selects the default comparator.
 - Internal serialisation into `cmap_pair` chooses the correct path.
 
@@ -241,6 +241,36 @@ cd tests/chttpclient  && make test
 cd tests/chttpserver  && make test
 ```
 
+### Fuzz Testing
+
+Three libFuzzer-based fuzzing harnesses ship alongside the test suites, targeting the `cyaml` YAML parser, the `chttp1_parser` HTTP/1.1 parser, and the `cjson` JSON parser directly. None are part of `make test`, `make build`, or `make all`; all are opt-in. A CI job already runs all of them automatically whenever a pull request is merged into the branch `main`, so running them yourself is not part of the regular development loop; this is for readers who want to dig further into parser-level edge cases on their own, not something every contributor needs to touch.
+
+Building them requires Clang (libFuzzer is a Clang/LLVM feature; GCC does not provide it), regardless of which compiler you use for everything else:
+
+```bash
+# YAML parser
+cd tests/cyaml
+make fuzz                                       # builds ./fuzz_cyaml
+./fuzz_cyaml fuzz/corpus                        # fuzzes until interrupted (Ctrl-C)
+./fuzz_cyaml fuzz/corpus -max_total_time=1800   # or bound the run to N seconds
+
+# HTTP/1.1 parser (request and response modes are separate targets and corpora)
+cd tests/chttpclient
+make fuzz_request fuzz_response                 # builds ./fuzz_chttp1_request, ./fuzz_chttp1_response
+./fuzz_chttp1_request  fuzz/corpus_request  -max_total_time=900
+./fuzz_chttp1_response fuzz/corpus_response -max_total_time=900
+
+# JSON parser (the JSON grammar itself, and the separate dot-separated path
+# grammar behind cjson_get/cjson_set/cjson_delete, are separate targets and
+# corpora)
+cd tests/cjson
+make fuzz_parse fuzz_path                       # builds ./fuzz_cjson_parse, ./fuzz_cjson_path
+./fuzz_cjson_parse fuzz/corpus_parse -max_total_time=900
+./fuzz_cjson_path  fuzz/corpus_path  -max_total_time=900
+```
+
+Each corpus directory seeds the fuzzer with a small set of curated byte sequences. Drop `-max_total_time` to run indefinitely; doing so mutates and grows the corpus directory in place with newly-discovered inputs, so `git status` will show new files afterward. Any crash, timeout, or out-of-memory finding is written to a `crash-*`/`timeout-*`/`oom-*` file in the same directory; pass that file as the sole argument (e.g. `./fuzz_cyaml crash-<hash>`) to replay it deterministically once you're ready to debug it.
+
 To link an application against the library:
 
 ```bash
@@ -273,6 +303,16 @@ gcc -o myapp myapp.c -lccollections -lpthread -lssl -lcrypto -lm
 ```
 
 `cvector.h`, `chashmap.h`, and `cbstmap.h` each automatically include `citerators.h`, so the unified iteration API (`ccol_begin`, `ccol_for_each`, `ccol_iter_declare`, and related macros) is available whenever any one of those container headers is included.
+
+### Compile-Time Configuration
+
+`FORK_SAFETY_REQUIRED` (defined to `1` by default in `common.h`) controls whether `cthreadpool`, `cthreadcomm` (`event_loop`, `circular_queue`, `dynamic_queue`, `channel`), `clogger`, and `chttpserver` compile in their `pthread_atfork()`-based protection against a `fork()` call inheriting one of their internal locks already held by a since-vanished thread. That protection costs real work on every single `fork()` call anywhere in the process, by any thread, for any reason: the registered handlers must lock every currently-live handle's own internal lock before `fork()` is allowed to proceed, then unlock them all again. An application that never calls `fork()` at all, or only ever calls it immediately followed by `exec()` (so the child never touches a handle from this library before its own process image is replaced), gets no benefit from this protection and can build the library with `-DFORK_SAFETY_REQUIRED=0` to remove it entirely:
+
+```bash
+make EXTRA_CFLAGS="-DFORK_SAFETY_REQUIRED=0"
+```
+
+Every other aspect of these modules' thread safety (locking, concurrent create/destroy safety via the generation-tagged handle tables) is unaffected either way; this switch controls fork() protection alone. With it turned off, calling `fork()` while any of these modules' locks might be held by another thread is the caller's own responsibility to avoid.
 
 ### Quick Start
 
@@ -365,7 +405,7 @@ cvec_destroy(scores);
 
 ### Pushing Lvalues and Rvalues
 
-The distinction between `cvec_push` and `cvec_push_rvalue` exists because the type-dispatching macro internally takes the address of its argument. Addressable variables use `cvec_push`; literals and expressions use `cvec_push_rvalue`:
+Both `cvec_push` and `cvec_push_rvalue` convert their argument to the vector's declared element type the same way a plain C assignment would before storing it, so a value whose type merely happens to be the same size as the vector's element type (an `int` literal pushed into a `long`-typed vector, or a `float` pushed into an `int`-typed vector) is converted correctly rather than having its raw bytes copied verbatim. The two macros exist for a purely syntactic reason: `cvec_push_rvalue` accepts values with no addressable storage of their own (literals and computed expressions); `cvec_push` is the simpler form for a value you already have in a variable. Use `cvec_push` for addressable variables; `cvec_push_rvalue` for literals and expressions:
 
 ```c
 int x = 42;
@@ -456,22 +496,23 @@ void print_page(Student *all_students, size_t count,
 
 | Macro | Description |
 |---|---|
-| `cvec_push(v, var)` | Append a copy of an lvalue; calls `fatal_err()` on failure |
-| `cvec_push_rvalue(v, expr)` | Append an rvalue or expression (literal, computed value); calls `fatal_err()` on failure |
+| `cvec_push(v, var)` | Append a copy of `var`, converted to `v`'s declared element type the same way a plain C assignment would; `var` may safely alias into `v`'s own backing buffer (for example `cvec_at(v, i)`); calls `fatal_err()` on failure |
+| `cvec_push_rvalue(v, expr)` | Append `expr`, converted to `v`'s declared element type the same way a plain C assignment would; accepts rvalues (literals, computed values); calls `fatal_err()` on failure |
 | `cvec_pop(v)` | Remove and return the last element as a value; calls `fatal_err()` if the vector is empty |
-| `cvec_at(v, i)` | Return a modifiable lvalue reference to the element at index `i`; no bounds checking |
+| `cvec_at(v, i)` | Return a modifiable lvalue reference to the element at index `i`; `i` is evaluated exactly once; calls `fatal_err()` if `i` is out of bounds |
+| `cvec_at_ptr(v, i)` | Return a pointer to the element at index `i`, or `NULL` if `i` is out of bounds (does not terminate) |
 | `cvec_size(v)` | Return the number of elements currently stored |
-| `cvec_reserve(v, n)` | Pre-allocate capacity for at least `n` elements; calls `fatal_err()` on failure |
+| `cvec_reserve(v, n)` | Pre-allocate capacity for at least `n` elements; `n` is evaluated exactly once; calls `fatal_err()` on failure |
 | `cvec_data_ptr(v)` | Return a raw pointer to the internal data array; invalidated by any resize |
 
 **Bulk Operations and Sorting**
 
 | Macro | Description |
 |---|---|
-| `cvec_append_array(v, arr_ptr, count)` | Append `count` elements from a plain C array in a single operation; calls `fatal_err()` on failure |
+| `cvec_append_array(v, arr_ptr, count)` | Append `count` elements from a plain C array in a single operation; `count` is evaluated exactly once; `arr_ptr` may safely point into `v`'s own backing buffer; calls `fatal_err()` on failure |
 | `cvec_append_cvec(v_dst, v_src)` | Append all elements of `v_src` to `v_dst`; both must have the same element type; calls `fatal_err()` on failure |
-| `cvec_sort(v)` | Sort in place using the default comparator for the element type |
-| `cvector_sort_with_comparison_proc(v, cmp)` | Sort in place using a caller-supplied comparator (`int cmp(const void *, const void *)`) |
+| `cvec_sort(v)` | Sort in place using the default comparator for the element type; calls `fatal_err()` on failure |
+| `cvector_sort_with_comparison_proc(v, cmp)` | Sort in place using a caller-supplied comparator (`int cmp(const void *, const void *)`); calls `fatal_err()` on failure |
 
 ---
 
@@ -678,11 +719,13 @@ A hash map stores key-value pairs and answers "what value is associated with thi
 
 ### Implementation Selection
 
-**Open-addressing** is selected when both the key and the value are integral types no wider than eight bytes. It uses compact 17-byte slots (8-byte key, 8-byte value, 1-byte metadata), Fibonacci hashing for integers, and linear probing. Load factor thresholds are 0.70 (grow) and 0.25 (shrink), with a 2x scale factor. There are zero per-entry heap allocations, and cache locality is quite good.
+**Open-addressing** is selected when both the key and the value are integral types no wider than eight bytes. It uses compact 24-byte slots (8-byte key, 8-byte value, 1-byte metadata, padded to a multiple of 8 so key/value storage stays naturally aligned for direct in-place access), Fibonacci hashing for integers, and linear probing. Load factor thresholds are 0.70 (grow) and 0.25 (shrink), with a 2x scale factor. There are zero per-entry heap allocations, and cache locality is quite good.
 
-**Separate chaining** is selected for all other type combinations. It uses a linked-list per bucket, XXHash64 for content-based hashing, Small String Optimisation (23-byte inline buffer for short strings), and a doubly-linked list that preserves reverse insertion order. The minimum bucket count is 16 (always a power of two), and the scale factor is 4x.
+**Separate chaining** is selected for all other type combinations. It uses a linked-list per bucket, Small String Optimisation (23-byte inline buffer for short strings), and a doubly-linked list that preserves reverse insertion order. The minimum bucket count is 16 (always a power of two), and the scale factor is 4x.
 
-The selection happens transparently; the same macro interface is used in both cases.
+The default hash function is selected by key type, not by which backend ends up chosen: Fibonacci hashing for integral/float/double/pointer keys, XXHash64 for string and other buffer-like keys. A separate-chaining map with an integral key type (for example a `double` key paired with a non-integral value) still gets Fibonacci hashing for that key.
+
+The selection happens transparently; the same macro interface is used in both cases. `chmap_get_ptr`/`chmap_get_elem_ref` always return a pointer that is correctly aligned for the value's type, regardless of which backend is in use. A reference returned by `chmap_get_elem_ref` stays valid until the map is actually modified (insert/delete/resize); looking up a different key never invalidates a reference already held for another key, so multiple references may be kept concurrently. A `key_pair` whose size does not match the byte size of the key type is rejected with `ccol_invalid_args` for any fixed-width key type (every integral type, `float`, `double`, and `long double`), regardless of which backend the map uses; a `val_pair` whose size does not match the byte size of the value type is rejected the same way, but only on a map using the open-addressing backend, since separate chaining accepts values of varying size.
 
 ### Basic Usage
 
@@ -788,6 +831,39 @@ ccol_for_each(coords, it, {
 chmap_destroy(coords);
 ```
 
+### Key Equality for `float` and `double` Keys
+
+Key equality for a `float` or `double` key is bitwise equality, not IEEE 754 `==` equality, with one exception: `-0.0` and `0.0` are canonicalized to the same key, matching `-0.0 == 0.0` in C. Every other bit pattern, including NaN, follows bitwise equality instead of `==` semantics: a NaN key is always found again by the exact bit pattern it was inserted with (unlike `NaN == NaN`, which is always false in C), and two different NaN payloads are two different keys.
+
+This canonicalization happens before the key is hashed, stored, or compared, and applies unconditionally, including with a custom hashing function passed via `chmap_create_ch`/`chmap_construct_ch`: the custom function is always given the already-canonicalized bit pattern, and a key inserted as `-0.0` is stored (and later observed via iteration) as `0.0`, not its original bit pattern.
+
+```c
+chmap_construct(m, double, int);
+
+double neg_zero = -0.0, pos_zero = 0.0;
+int v = 1;
+chmap_insert(m, neg_zero, v);
+chmap_get(m, pos_zero);   /* 1 - -0.0 and 0.0 are the same key */
+```
+
+### Key Equality for `long double` Keys
+
+A `long double` key (always separate chaining; see Implementation Selection above) is compared by numeric value (native `==`), not bitwise equality: `-0.0L` and `0.0L` are the same key, matching `-0.0L == 0.0L` in C, and two keys holding the identical value remain the same key even if their in-memory representations differ in ways that do not affect the value itself. This differs from `float`/`double`, whose equality is bitwise with only `-0.0`/`0.0` unified; `long double` needs the value-based approach because its representation is not fully significant on most platforms (extra bytes beyond the actual precision have no defined meaning), so two variables holding the same number are not guaranteed to be byte-identical the way a `float`/`double` always is.
+
+Every NaN `long double` collapses into a single key, regardless of its payload; this is a deliberate difference from `float`/`double`'s own per-payload NaN identity, made necessary by the same representation gap noted above.
+
+This value-based handling is specific to the map's default hashing; a custom hashing function passed via `chmap_create_ch`/`chmap_construct_ch` receives the key's raw bytes exactly like it would for any other type, so a custom hash function for a `long double` key type must itself be value-based (for example, by hashing the result of `frexpl()`) to stay consistent with the map's own key equality.
+
+```c
+chmap_construct(m, long double, int);
+
+long double a = 3.0L;
+long double b = 1.0L + 2.0L;   /* same value, computed differently */
+int v = 1;
+chmap_insert(m, a, v);
+chmap_get(m, b);   /* 1 - a and b are the same key */
+```
+
 ### Real-World Use Case: Command Dispatcher for a Text Adventure Game
 
 A small text adventure game reads a word typed by the player ("look", "inventory", "quit") and needs to run the matching function. Storing each command as a string key mapped to a function pointer turns this into a single O(1) map lookup instead of a long chain of `if (strcmp(...))` comparisons. `chmap_get_ptr` returns `NULL` for a command the game does not recognise, without triggering a fatal error:
@@ -883,7 +959,7 @@ An ordered map works like a hash map (you look up values by key) but it always k
 
 **Header:** `#include <cbstmap.h>`
 
-Automatic key comparison is provided for signed integer keys, unsigned integer keys, and `char *` keys (using `strcmp`). For other key types, a custom comparison function must be supplied.
+Automatic key comparison is provided for `char` keys (compared using this platform's own native `char` semantics, signed or unsigned), signed integer keys (`signed char`/`int8_t`, `short`, `int`, `long`, `long long`, always compared as genuinely signed regardless of this platform's own `char` signedness), unsigned integer keys, floating-point keys (`float`, `double`, `long double`, compared by numeric value), and `char *` keys (using `strcmp`). For other key types (structs, enums, and the like), a custom comparison function must be supplied, or the default falls back to a raw `memcmp` of the key's representation (see the callout below). A `NaN` floating-point key sorts as greater than every non-NaN key and equal to every other NaN key, so a `NaN` key can be inserted, looked up, and deleted like any other key.
 
 ### Basic Usage
 
@@ -955,6 +1031,8 @@ int compare_version(const void *a, const void *b) {
 
 cbmap_construct_cc(changelog, Version, char*, compare_version);
 ```
+
+> **Struct keys without a custom comparator:** `cbmap_construct` (no `_cc`/`_ch` suffix) falls back to a raw byte-for-byte `memcmp` of the key's representation when the key type is neither an integer nor `char *`. For a struct, this compares padding bytes (which are indeterminate for a stack-allocated or partially-initialized struct) and any pointer members by their raw address rather than by what they point to, so the resulting order rarely matches a struct's intended field-by-field ordering and is not guaranteed to be consistent across two structs that an application would otherwise consider equal. Provide a comparator (`cbmap_construct_cc`, shown above) for any struct key type.
 
 ### String Keys
 
@@ -1229,7 +1307,15 @@ Person people[] = {{"Alice", 30}, {"Bob", 25}, {"Charlie", 35}};
 csort_sort(people, 3, sizeof(Person), person_getter, compare_by_age, NULL);
 ```
 
+`csort_get_default_comparison_proc` (used internally by `cvec_sort`) recognizes every standard integral and floating-point type plus genuine `char*`/`const char*` pointer variables, but not a fixed-size char array field like `Person.name` above; sort a struct containing one with an explicit comparator, as `compare_by_age` does here, rather than relying on the default comparator.
+
+The default `float`, `double`, and `long double` comparators order a NaN value as greater than every non-NaN value, and equal only to another NaN, so a NaN present anywhere in the collection can never disturb the relative order of the other elements.
+
 **Complexity guarantees:** O(n log n) in all cases; O(n) auxiliary space; stable (equal elements preserve their original order); iterative (no recursion, no stack overflow risk for large inputs).
+
+`csort_sort` returns `true` on success (including the trivial cases of a NULL collection, a zero- or one-element length, or an `elem_size` of 0, none of which have anything to do) and `false` if `length` exceeds the library's own maximum element count, a non-NULL final argument does not have all four of `malloc`/`free`/`calloc`/`realloc` populated, its internal temporary merge buffer could not be allocated, or `length * elem_size` would overflow `size_t`, in which case the collection is left completely untouched. `cvec_sort` and `cvector_sort_with_comparison_proc` call `fatal_err()` instead of returning a value, matching every other mutating type-safe macro in `cvector.h`.
+
+`getter_proc` and `comparison_proc` must both be non-NULL whenever `collection` is non-NULL and `length` is 2 or greater; this holds even when `elem_size` is 0, a case where neither would actually be called. Only a NULL `collection` or a `length` of 0 or 1 exempts a call from needing genuine, non-NULL procs. A call that violates this aborts the process rather than returning `false`.
 
 ### Real-World Use Case: Sorting a Printer Queue by Priority
 
@@ -1309,6 +1395,8 @@ mempool_free_entry(slot);
 mempool_destroy(pool);  /* The buffer itself is not freed */
 ```
 
+`DECLARE_PREALLOCATED_MEMPOOL_BUFFER` declares its buffer with the alignment the pool's internal per-element bookkeeping needs, so it can be handed straight to `mempool_create_from_preallocated_buffer()`. A hand-rolled buffer (not declared via the macro) must be aligned to at least `_Alignof(max_align_t)`, or creation fails with an error. `elem_size` smaller than `sizeof(uintptr_t)` is silently rounded up to fit the free-list pointer, the same way `mempool_create()` handles it; a genuine `elem_size` of `0` is rejected, and so is an `elem_count` of `0`. The per-element stride used to lay out the buffer (and, correspondingly, the pool's own heap-allocated buffer when not using a preallocated one) is further rounded up so that every element the pool hands out is correctly aligned, not just the first.
+
 ### Ranged Pool - `r_mempool`
 
 A `r_mempool` covers allocation requests across a configurable range of power-of-two sizes. It maintains an internal sub-pool for each size class and selects the smallest fitting class for each request. Requests that exceed the largest class can fall back to the system allocator.
@@ -1360,7 +1448,7 @@ DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(rmempool_buf, /* pool buffer name */
     12, /* largest_size_power_of_two */
     9,  /* number_of_smallest_size_elems_power_of_two */);
 
-mempool *pool = r_mempool_create_from_preallocated_buffer(
+r_mempool *pool = r_mempool_create_from_preallocated_buffer(
     rmempool_buf, sizeof(rmempool_buf), 4, 12, 9,
     fallback_at_last_exhaustion, /*single_threaded=*/true,
     NULL, NULL);
@@ -1370,6 +1458,8 @@ void *slot = r_mempool_alloc_entry(pool, 100);
 r_mempool_free_entry(slot);
 r_mempool_destroy(pool);  /* The buffer itself is not freed */
 ```
+
+The same alignment requirement applies here: `DECLARE_PREALLOCATED_RMEMPOOL_BUFFER` already declares a suitably aligned buffer (every sub-pool segment inside it stays correctly aligned as a consequence), while a hand-rolled buffer must be aligned to at least `_Alignof(max_align_t)`.
 
 ### Real-World Use Case: A Fixed Pool of Bullets for a Game
 
@@ -1518,6 +1608,8 @@ pthread_join(t, NULL);
 channel_destroy(ch);
 ```
 
+`fork(2)` is safe with respect to `circular_queue`/`dynamic_queue`/`channel`'s own internal locking: a `cq->mutex`/`dq->mutex` held by some other thread at the instant of the fork is never inherited by the child already locked. Unlike `event_loop`/`cthreadpool`, a queue owns no worker thread of its own, so this guarantee is unqualified: a queue that was already live and in active use across the fork remains fully usable on both sides afterward, with no thread-liveness caveat to observe. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it; see "Compile-Time Configuration" above.
+
 ### Example: Producer-Consumer with Sentinel Termination
 
 ```c
@@ -1662,6 +1754,7 @@ if (rc == ccol_timed_out) {
 
 - Readiness only, for every selectable type: a queue win means a message is (probably) available to claim via `circq_try_recv_zc`/`dynmq_try_recv_zc`; a file descriptor read win means `read(2)`/`recv(2)` will (probably) return data. Either explicit call may still find nothing if a concurrent consumer/producer won the race first (TOCTOU, the same contract POSIX `select(2)` itself has); the call must be non-blocking and its result checked.
 - Queue-only selectable sets use a condition variable path with no `epoll` overhead. Any file descriptor in the set switches the implementation to `epoll(7)` automatically.
+- The same fd may appear in more than one selectable within a single call, in any mix of directions, e.g. watching one connected socket for both readability and writability at once; the underlying registrations are combined automatically, and the returned index resolves to whichever one of the sharing selectables actually became ready.
 
 ---
 
@@ -1669,13 +1762,17 @@ if (rc == ccol_timed_out) {
 
 `ccol_select` creates a fresh `epoll(7)` instance on every call, waits for exactly one ready selectable, and tears everything down before returning. `event_loop` is the persistent counterpart: one `epoll` instance and one or more background reactor threads, created once and mutated incrementally (`event_loop_add` / `event_loop_modify` / `event_loop_remove`) as fds and queues come and go, dispatching readiness through callbacks for as long as the loop lives. It reuses the exact same `ccol_selectable` type `ccol_select` uses, so `selectable_from_fd`, `selectable_from_circq`, `selectable_from_dynq`, and `selectable_from_chan` all carry over unchanged. Like `ccol_select`, `event_loop` never performs the receive or send itself, for any selectable type: the callback always performs its own explicit `circq_try_recv_zc`/`dynmq_try_recv_zc` or `read(2)`/`recv(2)`.
 
-`event_loop` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `EVENT_LOOP_INVALID` (or use a truthiness check; `EVENT_LOOP_INVALID` is `0`, so `if (!loop)` works exactly as it did when this was a raw pointer). Internally, every use of an `event_loop` is resolved through a library-owned slot table before the underlying reactor object is touched, so a stale handle (one whose loop has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `event_loop_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free.
+`event_loop` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `EVENT_LOOP_INVALID` (or use a truthiness check; `EVENT_LOOP_INVALID` is `0`, so `if (!loop)` works as expected). Internally, every use of an `event_loop` is resolved through a library-owned slot table before the underlying reactor object is touched, so a stale handle (one whose loop has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `event_loop_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free. Calling `event_loop_destroy` on a loop from within a callback currently dispatching on one of that loop's own threads (the poller thread, or a dispatch worker) is a fatal error too: that thread is the one destruction would otherwise need to join, and freeing live registrations and the loop itself out from under the still-running callback would be worse than the deadlock this same misuse would cause against `event_loop_shutdown` directly. Defer destruction to another thread, or to after the callback returns, instead.
 
 The fd/registration registry is lock-striped: `num_lock_stripes` independent (mutex, chmap) pairs, each guarding a disjoint subset of registrations (one real fd, or one queue/channel registration's private bridge fd, is always handled by exactly one stripe). `1` means a single shared lock; passing a larger value lets `event_loop_add` / `event_loop_remove` / `event_loop_modify` calls for different fds/registrations proceed concurrently under high-churn multi-threaded use instead of serializing through one lock, at the cost of `num_lock_stripes` mutexes and chmaps allocated up front. Most callers should just pass `1`.
 
 `num_reactor_threads` (a separate constructor parameter from `num_lock_stripes`) is the total OS thread count devoted to this loop's own polling and dispatch. Exactly ONE dedicated thread ever calls `epoll_wait(2)`, regardless of how large `num_reactor_threads` is (this avoids a kernel-level thundering herd: `epoll`'s level-triggered semantics would otherwise wake every thread blocked on the same instance for a single ready event). With `num_reactor_threads == 1`, that one thread also runs every callback inline. With a larger value, that same one polling thread is joined by `num_reactor_threads - 1` separate dispatch worker threads that actually execute callbacks, so total thread count for a given `num_reactor_threads` is always exactly that value in both configurations. A single registration's callback is never invoked concurrently with itself, and a read registration and a write registration sharing the same fd are never invoked concurrently with each other either (stricter than "no self-concurrency" alone, so a callback pair sharing state across both directions of one fd, e.g. one TLS connection object, needs no locking of its own on that account); a second dispatch for the same registration is also never collected while an earlier one is still queued or executing, so application code calling `event_loop_modify` from within an in-flight callback (a supported, commonly used pattern) never races a concurrently-collected second dispatch for that same registration.
 
-`event_loop_reg_generation(reg)` returns a monotonically increasing, loop-wide-unique identity token minted once per fd when it is first registered (shared by both directions on the same fd, and preserved across `event_loop_modify`), for a caller's own defensive bookkeeping across fd reuse (e.g. detecting that an fd number has been closed and reused by an unrelated connection since a caller last read it). It is not required for basic correctness: dispatch already validates a registration's liveness before invoking any callback unconditionally, so a stale, already-fetched batch entry for an already-removed (or fd-reused) registration is always a safe no-op regardless of whether a caller ever inspects the generation itself.
+`event_reg` (the handle `event_loop_add` returns, and the type every other `event_loop_*` registration function takes) is, like `event_loop` itself, an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `EVENT_REG_INVALID` (or use a truthiness check; `EVENT_REG_INVALID` is `0`). Every use of an `event_reg` is resolved through its own loop's registration table before anything is dereferenced, so a stale or already-removed handle is always detected and rejected cleanly (`ccol_invalid_args`, or generation `0`) rather than risking a use-after-free, even when two threads race each other calling `event_loop_modify`/`_pause`/`_resume`/`_remove`/`event_loop_reg_generation` on the very same registration.
+
+`event_loop_reg_generation(loop, reg)` returns a monotonically increasing, loop-wide-unique identity token minted once per fd when it is first registered (shared by both directions on the same fd, and preserved across `event_loop_modify`), for a caller's own defensive bookkeeping across fd reuse (e.g. detecting that an fd number has been closed and reused by an unrelated connection since a caller last read it). It is not required for basic correctness: dispatch already validates a registration's liveness before invoking any callback unconditionally, so a stale, already-fetched batch entry for an already-removed (or fd-reused) registration is always a safe no-op regardless of whether a caller ever inspects the generation itself.
+
+`max_events_per_wait` bounds how many ready events a single `epoll_wait(2)` call drains, not the number of registrations the loop can hold; it must be between 1 and `INT_MAX` inclusive, and small enough that `max_events_per_wait * sizeof(struct epoll_event)` does not overflow `size_t`, since the value is narrowed to `epoll_wait(2)`'s own `int` parameter and used to size the poller thread's own events buffer. `event_loop_create`/`event_loop_create_with_mprocs` reject a value outside that range with a `NULL` handle.
 
 ```c
 event_loop_construct(loop, /*max_events_per_wait=*/32, /*num_lock_stripes=*/1,
@@ -1691,8 +1788,8 @@ void on_job_ready(event_loop loop, ccol_selectable *sel, void *arg) {
 }
 
 event_handlers_t handlers = { .on_readable = on_job_ready };
-event_reg *reg = event_loop_add(loop, selectable_from_circq(jobs, ccol_select_read),
-                                 handlers, NULL, NULL);
+event_reg reg = event_loop_add(loop, selectable_from_circq(jobs, ccol_select_read),
+                                handlers, NULL, NULL);
 
 c_message_t msg = { .data = strdup("build #42"), .size = 10 };
 circq_send_zc(jobs, &msg);   /* on_job_ready fires asynchronously, on the reactor thread */
@@ -1710,7 +1807,7 @@ event_loop_destroy(loop);
 A minimal single-connection echo handler over a raw socket shows the fd side:
 
 ```c
-typedef struct { event_loop loop; event_reg *reg; } conn_ctx_t;
+typedef struct { event_loop loop; event_reg reg; } conn_ctx_t;
 
 void close_conn(conn_ctx_t *ctx, int fd) {
     /* Self-removal from within the callback that triggered it is safe */
@@ -1741,9 +1838,11 @@ ctx->reg = event_loop_add(loop, selectable_from_fd(client_fd, ccol_select_read),
                            client_handlers, ctx, NULL);
 ```
 
-Both directions may be registered on the same fd at once (e.g. a full-duplex socket being read and written concurrently) by calling `event_loop_add` twice, once per direction; each call returns an independent `event_reg *`. Flipping a single registration's direction over time instead (e.g. a non-blocking connect: write-interest until the connect completes, then read-interest afterward) uses one registration plus `event_loop_modify`.
+Both directions may be registered on the same fd at once (e.g. a full-duplex socket being read and written concurrently) by calling `event_loop_add` twice, once per direction; each call returns an independent `event_reg`. Flipping a single registration's direction over time instead (e.g. a non-blocking connect: write-interest until the connect completes, then read-interest afterward) uses one registration plus `event_loop_modify`.
 
-For a caller pattern where an fd registration needs to temporarily stop receiving events and later come back (e.g. a connection handed off to a worker thread for blocking body I/O, then handed back to the reactor for its next request), `event_loop_pause`/`event_loop_resume` are far cheaper than an `event_loop_remove` immediately followed by a later `event_loop_add`: the registration stays fully intact (no heap allocation/free, no fd-registry chmap churn) and only the fd's combined epoll interest mask is recomputed to exclude/include it:
+A queue or channel selectable has no such one-registration-per-direction limit: any number of `event_loop_add` calls for the same queue+direction (across one or more `event_loop` instances), and any mix of those with a concurrent `ccol_select()` call on the same queue+direction, are all live at once, and every one of them eventually gets a turn rather than the earliest-registered ones being starved by a later one. A message that arrives while more than one such listener is registered wakes exactly one of them at a time (never all of them, to avoid a thundering herd); whichever one is woken checks, once its own callback returns, whether the queue is still ready for its direction and, if so, hands the wake to the next listener in line. A backlog deeper than the number of live listeners on that queue+direction may still need a further, unrelated send/receive to fully drain, the same "a notification is not guaranteed to correspond to exactly one message" characteristic a single listener already has (a callback that must not leave messages stranded under bursty traffic should call `circq_try_recv_zc()`/`dynmq_try_recv_zc()` in a loop until it returns `ccol_container_empty`); what's guaranteed is that no live listener is ever passed over indefinitely.
+
+For a caller pattern where an fd registration needs to temporarily stop receiving events and later come back (e.g. a connection handed off to a worker thread for blocking body I/O, then handed back to the reactor for its next request), `event_loop_pause`/`event_loop_resume` are far cheaper than an `event_loop_remove` immediately followed by a later `event_loop_add`: the registration stays fully intact (no heap allocation/free, no fd-registry chmap churn) and only the fd's combined epoll interest mask is recomputed to exclude/include it. If every direction currently registered on the fd ends up paused, the fd is removed from the kernel's own epoll interest set entirely rather than merely narrowed to an empty mask, so it produces zero further wakeups of any kind while paused, including on its own error/hangup condition (which the kernel would otherwise keep reporting regardless of the requested interest mask):
 
 ```c
 event_loop_pause(loop, reg);    /* no more callbacks for reg until resumed */
@@ -1756,9 +1855,12 @@ event_loop_resume(loop, reg);   /* interest restored; same reg, same generation 
 - `num_reactor_threads` total background threads per `event_loop` (one dedicated polling thread, plus `num_reactor_threads - 1` dispatch worker threads when greater than 1), spawned at creation and all joined at `event_loop_shutdown` / `event_loop_destroy`; multiple independent instances share no global state.
 - A single registration's callback is never invoked concurrently with itself, and a read and a write registration sharing the same fd are never invoked concurrently with each other, regardless of how many reactor threads are configured.
 - `event_loop_reg_generation` gives every fd registration a loop-wide-unique, monotonically increasing identity token, stable across `event_loop_modify` and shared by both directions on the same fd, for detecting fd reuse from application code; dispatch itself already validates a registration's liveness unconditionally, so this is for the caller's own bookkeeping, not required for internal correctness.
+- `event_loop_modify`/`_pause`/`_resume`/`_remove`/`event_loop_reg_generation` may all be called concurrently, from different threads, against the very same `event_reg`; the losing side of a race against a concurrent `event_loop_remove` always sees the registration as already removed, never a use-after-free.
 - `event_loop_pause`/`event_loop_resume` are fd-only (same restriction as `event_loop_modify`) and never change `event_loop_reg_count` or `event_loop_reg_generation`; pausing an already-paused registration, or resuming one that isn't paused, is a no-op success.
 - `event_loop_remove` is safe to call from within a registration's own callback (self-removal on error is a common pattern) as well as from any other thread, including concurrently with an in-flight dispatch for the same registration.
 - Removing an fd registration or destroying the loop never closes the fd itself, and never destroys a registered queue; ownership stays exactly where `selectable_from_fd`/`selectable_from_circq`/etc. already put it.
+- A queue registered via `selectable_from_circq`/`selectable_from_dynq`/`selectable_from_chan` must outlive its registration: `circular_queue_destroy`/`dynamic_queue_destroy`/`channel_destroy` assert if the queue still has a live `event_loop` registration or an in-progress `ccol_select`/`ccol_select_timed` call watching it, since the still-linked waiter would otherwise reference the queue's own, about-to-be-freed mutex. Call `event_loop_remove` (or let every watching `ccol_select`/`ccol_select_timed` call return) before destroying the queue; destroying the loop first is fine, since `event_loop_destroy`/`event_loop_remove` always unlink a queue's waiter before it is ever touched again.
+- `fork(2)` is safe with respect to `event_loop`'s own internal locking: a fresh `event_loop_create`/`_destroy`/`_add`/`_remove`/`_modify`/`_pause`/`_resume` call, from any thread, in either the parent or a freshly forked child, never hangs waiting on a lock that some other (possibly no-longer-existing, since `fork()` duplicates only the calling thread) thread happened to hold at the instant of the fork. A loop that was already live across the fork is a different matter: `fork()` does not duplicate its poller/dispatch threads, so an inherited loop can no longer dispatch anything in the child regardless of this guarantee; the child should treat such a loop as inert (safe to `event_loop_destroy`, not usable for further dispatch) rather than keep registering against it. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it; see "Compile-Time Configuration" in section 4.
 
 ---
 
@@ -1768,7 +1870,7 @@ A cache stores the results of expensive operations so that repeated requests for
 
 `clrucache` is a thread-safe LRU cache backed by a hash map for O(1) lookup and a doubly-linked list for O(1) eviction. It supports optional remote getter and setter callbacks to integrate transparently with an external backing store such as a database.
 
-`clru_cache` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CLRU_CACHE_INVALID` (or use a truthiness check; `CLRU_CACHE_INVALID` is `0`, so `if (!cache)` works exactly as it did when this was a raw pointer). Internally, every use of a `clru_cache` is resolved through a library-owned slot table before the underlying cache object is touched, so a stale handle (one whose cache has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `clru_destroy`/`__clrucache_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free.
+`clru_cache` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CLRU_CACHE_INVALID` (or use a truthiness check; `CLRU_CACHE_INVALID` is `0`, so `if (!cache)` works as expected). Internally, every use of a `clru_cache` is resolved through a library-owned slot table before the underlying cache object is touched, so a stale handle (one whose cache has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `clru_destroy`/`__clrucache_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free.
 
 **Header:** `#include <clrucache.h>`
 
@@ -1804,7 +1906,7 @@ clru_destroy(cache);
 
 ### Remote Getter - Read-Through
 
-A remote getter is called on a cache miss. The cache takes ownership of the heap-allocated value returned by the getter. Concurrent requests for the same missing key coalesce: only one fetch executes, and all waiters receive the result.
+A remote getter is called on a cache miss. The cache takes ownership of the heap-allocated value returned by the getter and frees it with the cache's own allocator (its custom allocator if one was provided at construction, or `free()` otherwise); the getter's allocation must therefore be made with that same allocator (its custom `malloc`/`calloc` if one was provided, or plain `malloc()` otherwise), never a different, unrelated allocator. Concurrent requests for the same missing key coalesce: only one fetch executes, and all waiters receive the result.
 
 ```c
 bool load_from_db(const cmap_pair *key, cmap_pair *val) {
@@ -1904,7 +2006,7 @@ The LRU eviction policy bounds memory usage: the 500 most recently looked-up wor
 
 `clru_get` memory behavior depends on the value type. Only `char *` values cause a heap allocation; for all other types no heap allocation occurs.
 
-**Non-`char *` value types** - the macro copies the value directly into `*val_ptr` with no heap allocation. The caller receives the value in a plain typed variable; `free()` is neither needed nor valid:
+**Non-`char *` value types** - the macro converts the stored value to `*val_ptr`'s own type the same way a plain C assignment would, with no heap allocation. The caller receives the value in a plain typed variable; `free()` is neither needed nor valid:
 
 ```c
 clru_construct(cache, int, double, 128, NULL, NULL, NULL);
@@ -1997,16 +2099,20 @@ void process(void) {
 
 | Macro / Function | Description |
 |---|---|
-| `clru_get(name, key, val_ptr)` | Retrieve the value for `key`. `val_ptr` is a pointer to the value type (`ValT *`), **not** `cmap_pair *`. For non-`char *` val types, the value is copied directly into `*val_ptr`; no heap allocation occurs. For `char *` val types, `*(char **)val_ptr` is set to a heap-allocated string allocated by the cache's custom allocator (or `malloc()` if none was configured); the caller must free it with the matching function. Returns `ccol_success`, `ccol_key_not_found`, or another error code. |
-| `clru_set(name, key, val)` | Store `val` for `key`; if a remote setter was provided it is called first; returns `ccol_success` or `ccol_unexpected_failure` on remote failure |
+| `clru_get(name, key, val_ptr)` | Retrieve the value for `key`; `key` is converted to `KeyT` the same way a plain C assignment would. `val_ptr` is a pointer to the value type, **not** `cmap_pair *`. For non-`char *` val types, the stored value is converted to `*val_ptr`'s own type the same way a plain C assignment would (not a raw byte copy); no heap allocation occurs. For `char *` val types, `*(char **)val_ptr` is set to a heap-allocated string allocated by the cache's custom allocator (or `malloc()` if none was configured); the caller must free it with the matching function. Returns `ccol_success`, `ccol_key_not_found`, or another error code. |
+| `clru_set(name, key, val)` | Store `val` for `key`; `key` and `val` are converted to `KeyT`/`ValT` the same way a plain C assignment would; if a remote setter was provided it is called first; returns `ccol_success` or `ccol_unexpected_failure` on remote failure |
 
 ---
 
 ## 14. Structured Logger - `clogger`
 
-Logging is how a running program records what it is doing and what went wrong. `clogger` writes structured log lines: instead of free-form text, every message is a sequence of `key=value` pairs that can be filtered, searched, and aggregated programmatically. Three output formats are supported: logfmt (default, plain text, human-readable), NDJSON (one JSON object per line, easy to parse with tools like `jq`), and RFC 5424 syslog (for integration with system logging infrastructure). All writes are serialised through a mutex, making the logger safe to call from multiple threads without any extra coordination.
+Logging is how a running program records what it is doing and what went wrong. `clogger` writes structured log lines: instead of free-form text, every message is a sequence of `key=value` pairs that can be filtered, searched, and aggregated programmatically. Three output formats are supported: logfmt (default, plain text, human-readable), NDJSON (one JSON object per line, easy to parse with tools like `jq`), and RFC 5424 syslog (for integration with system logging infrastructure). All writes are serialised through a mutex, making the logger safe to call from multiple threads without any extra coordination, for as long as every handle involved stays open. Closing a handle (`clog_close`) is the one operation this does not cover: as with every other handle-based type in this library, it is the caller's responsibility to ensure no other thread is still using (or concurrently closing) that same handle when it is closed.
 
 **Header:** `#include <clogger.h>`
+
+A `clog` handle is an opaque value (not a pointer; never cast it to or from `void *`), returned by `clog_open_fd_mp`/`clog_open_file_mp`, or `CLOG_INVALID` on failure. Every function documented below expects a live logger handle; passing `CLOG_INVALID`, or a handle whose logger has already been closed, terminates the program rather than silently doing nothing.
+
+A logger handle open at the time of `fork()` remains fully usable in the child: logging, deriving, and closing it all continue to work correctly on both sides of the fork, with no risk of a lock inherited mid-operation leaving the child permanently stuck. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it; see "Compile-Time Configuration" in section 4.
 
 ### Output Formats
 
@@ -2028,6 +2134,8 @@ ts=2026-05-29T21:52:39.096473Z level=ERROR proc=myapp(1234):main(1234) src=main.
 	#1 ./myapp(main+0x42) [0x7f...]
 ```
 
+If the backtrace itself cannot be captured (see the note on `-rdynamic`/`execinfo.h` below), or none of its frame lines fit within the internal buffer cap described below (each frame that is too long to fit is skipped independently in favor of any shorter frame that follows, rather than discarding the whole backtrace the moment one frame does not fit), a single `\t#error backtrace unavailable` continuation line is emitted in place of the missing per-frame lines, so a reader can always tell a backtrace was requested but omitted apart from one never having been requested at all.
+
 #### JSON (NDJSON)
 
 When `CLOG_FMT_JSON` is selected, each log record is a single self-contained JSON object followed by a newline:
@@ -2037,7 +2145,9 @@ When `CLOG_FMT_JSON` is selected, each log record is a single self-contained JSO
 {"ts":"2026-05-29T21:52:39.096642Z","level":"ERROR","proc":"myapp(1234):main(1234)","src":"main.c:10","func":"main","env":"prod","msg":"db failed","bt":["#0 main+0x16d","#1 libc.so.6+0x29ca8"]}
 ```
 
-Structured fields appear as top-level JSON keys (insertion order). For `log_error`, `log_alert`, and `log_fatal` the backtrace is embedded as a `"bt"` string array inside the same JSON object instead of being written as separate continuation lines.
+Structured fields appear as top-level JSON keys (insertion order). For `log_error`, `log_alert`, and `log_fatal` the backtrace is embedded as a `"bt"` string array inside the same JSON object instead of being written as separate continuation lines. In the rare case that the backtrace itself cannot be embedded (a transient allocation failure, or the record is already near the internal buffer cap described below), the record is still closed normally with a `"bt_error":"unavailable"` key in place of `"bt"`, so a missing backtrace is always visible rather than silently absent from an otherwise ordinary-looking record.
+
+Every string value (the message, and every field key/value) is validated as UTF-8 before being embedded, since RFC 8259 requires JSON text to be valid Unicode. A well-formed multi-byte UTF-8 sequence is passed through unescaped; a byte or byte sequence that is not well-formed (a lone continuation byte, an overlong or otherwise out-of-range lead byte, an encoded UTF-16 surrogate half, or a multi-byte sequence truncated by the end of the string) is replaced, one invalid byte at a time, with the Unicode replacement character (U+FFFD). This means a message or field value built from arbitrary or binary data can never produce a JSON record with invalid Unicode content, even though `clogger`'s own API takes plain `char *` strings with no encoding of their own to declare.
 
 #### Syslog (RFC 5424)
 
@@ -2047,7 +2157,11 @@ When `CLOG_FMT_SYSLOG` is selected, each record is emitted as a single RFC 5424 
 <PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol proc="name(pid):tname(tid)" src="file:N" func="fn" [fields]] MSG
 ```
 
-The `PRI` field encodes both the facility (default `CLOG_SYSLOG_USER`; see `clog_set_facility`) and the severity level mapped from `clog_level_t` according to RFC 5424 (TRACE/DEBUG -> 7, INFO -> 6, WARN -> 4, ERROR -> 3, ALERT -> 1, FATAL -> 0). For `log_error`, `log_alert`, and `log_fatal` each backtrace frame is emitted as a separate syslog message carrying the same PRI and MSGID.
+The `PRI` field encodes both the facility (default `CLOG_SYSLOG_USER`; see `clog_set_facility`) and the severity level mapped from `clog_level_t` according to RFC 5424 (TRACE/DEBUG -> 7, INFO -> 6, WARN -> 4, ERROR -> 3, ALERT -> 1, FATAL -> 0). For `log_error`, `log_alert`, and `log_fatal` each backtrace frame is emitted as a separate syslog message carrying the same PRI, TIMESTAMP, and MSGID as the record it continues, with its own frame text backslash-escaped the same way the message text is (see below); the shared TIMESTAMP is what lets a reader correlate a record with its own backtrace frames rather than whichever frame a log collector happened to receive around the same time. If the backtrace itself cannot be captured, or none of its frames fit in a single syslog message, a single additional syslog message carrying the text `#error backtrace unavailable` is emitted in its place, the same visible-omission guarantee logfmt and JSON each provide in their own way.
+
+Control characters (including a literal newline or carriage return) in the message text, in every structured-data value, and in each backtrace frame's own text are backslash-escaped (`\n`, `\r`, `\t`, or `\xNN`), the same way logfmt and JSON already escape them in their own message/field output. `HOSTNAME` and `APP-NAME` are filtered to RFC 5424 PRINTUSASCII (`0x21`-`0x7e`) when the logger is created, dropping any other byte rather than truncating at it, so neither field can contain a byte needing this same escaping in the first place; either falls back to `-` if filtering leaves no bytes at all. Together this guarantees a single syslog record can never be split across multiple lines by its own content.
+
+RFC 5424 caps an SD-PARAM-NAME at 32 characters. A field key longer than that is shortened to its first 23 characters followed by `~` and an 8-hex-digit hash of the full key (32 characters total), rather than a bare 32-character prefix; two distinct long keys that happen to share the same 32-character prefix therefore still get distinct SD-PARAM-NAMEs.
 
 `CLOG_FMT_SYSLOG` is restricted to **fd-based loggers** (`clog_open_fd` / `clog_open_fd_mp`). Calling `clog_set_format` with `CLOG_FMT_SYSLOG` on a file-backed logger is a silent no-op. The fd must be connected to a syslog daemon beforehand; on Linux this is typically a `SOCK_DGRAM` Unix socket at `/dev/log`:
 
@@ -2057,7 +2171,7 @@ struct sockaddr_un sa = { .sun_family = AF_UNIX };
 strncpy(sa.sun_path, "/dev/log", sizeof sa.sun_path - 1);
 connect(fd, (struct sockaddr *)&sa, sizeof sa);
 
-clog lg = clog_open_fd(fd, CLOG_INFO);
+clog lg = clog_open_fd(fd, CLOG_INFO, NULL);
 clog_set_format(lg, CLOG_FMT_SYSLOG);
 clog_set_facility(lg, CLOG_SYSLOG_DAEMON);
 
@@ -2068,12 +2182,16 @@ close(fd);
 
 Keep individual messages under 2 KiB to stay within typical syslogd datagram limits. Log rotation is unavailable for fd-based loggers.
 
+Because an fd-based logger's target may be a pipe or a socket (as in the example above), the process ignores `SIGPIPE` from the moment the first logger of any kind is created; if the peer end ever goes away, the next write is dropped silently (matching every other unrecoverable write error) instead of terminating the process.
+
+An fd-based logger's own fd may be blocking or non-blocking. If the fd is non-blocking and momentarily cannot accept more data (`EAGAIN`/`EWOULDBLOCK`, e.g. a UDP socket's send buffer is full under load), the logging call waits for the fd to become writable again and retries rather than dropping the rest of the record; only a genuinely unrecoverable write error (or a peer that has gone away, per the `SIGPIPE` note above) drops a record.
+
 ---
 
 The format is stored on the **shared backing store**, so it applies to all logger handles that write to the same file descriptor (root and every derived logger). Setting it via any handle takes effect immediately for all of them:
 
 ```c
-clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, NULL, NULL);
+clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, NULL, NULL, NULL);
 clog_set_format(lg, CLOG_FMT_JSON);
 
 clog derived = clog_derive(lg);
@@ -2082,7 +2200,9 @@ clog derived = clog_derive(lg);
 clog_format_t fmt = clog_get_format(lg); /* CLOG_FMT_JSON */
 ```
 
-Backtrace (for any format) requires linking the binary with `-rdynamic`. On platforms without `execinfo.h` (glibc, macOS, FreeBSD) the backtrace is omitted silently.
+Backtrace capture requires linking the binary with `-rdynamic` and is available on glibc, macOS, and FreeBSD (any platform providing `execinfo.h`); elsewhere, or on a transient allocation failure while resolving symbol names, capture itself fails, but the omission is never silent; each format surfaces it visibly in its own way, as described above.
+
+Each logger's write buffer grows as needed up to an internal 16 MiB hard cap. In the rare case that a single record (an oversized message, or a very large accumulation of structured fields) would exceed that cap, the record is not truncated or emitted malformed: the oversized content is discarded and a short, well-formed placeholder record is written in its place instead, in the same output format, noting the original message's size in bytes. The same placeholder mechanism also covers a transient, size-unrelated allocation failure (e.g. while enumerating structured fields); in that case the placeholder's note reports the allocation failure directly rather than misattributing it to the record's size. A message longer than 1023 bytes that cannot even be formatted in full under sustained memory pressure is truncated with a visible `...[truncated]` marker rather than silently emitted as if it were complete. Even in the extreme case where memory pressure is severe enough that the placeholder record itself cannot be built, a minimal diagnostic line is written directly in its place, so a record can never be silently reduced to zero written bytes with no trace of it anywhere in the output.
 
 ### Basic Usage
 
@@ -2090,7 +2210,7 @@ Backtrace (for any format) requires linking the binary with `-rdynamic`. On plat
 #include <clogger.h>
 
 /* Logger targeting stderr */
-clog lg = clog_open_fd_mp(2, CLOG_INFO, NULL);
+clog lg = clog_open_fd_mp(2, CLOG_INFO, NULL, NULL);
 
 /* Attach persistent fields */
 clog_set_field(lg, "env",     "prod");
@@ -2127,10 +2247,10 @@ clog_rotation_cfg_t cfg = {
     .max_rotated_files      = 7,                     /* keep one week of logs */
 };
 
-clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, &cfg, NULL);
+clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, &cfg, NULL, NULL);
 ```
 
-When a rotation fires the current file is renamed to `<path>.<YYYYMMDDHHMMSS>` (e.g. `app.log.20260529215239`) and a new file is opened. Collisions within the same second are resolved with a `_1`, `_2`, ... suffix. When `max_rotated_files` is positive, the oldest rotated files beyond the limit are deleted automatically.
+When a rotation fires the current file is renamed to `<path>.<YYYYMMDDHHMMSS>` (e.g. `app.log.20260529215239`) and a new file is opened. Collisions within the same second are resolved with a zero-padded `_0001`, `_0002`, ... suffix. The oldest rotated files beyond `max_rotated_files` are deleted automatically; a zero or negative `max_rotated_files` falls back to `CLOG_DEFAULT_MAX_ROTATED_FILES` (7) rather than disabling pruning, so a logger configured with rotation enabled never accumulates an unbounded number of rotated files on disk. Only files matching this exact `<path>.<YYYYMMDDHHMMSS>[_NNNN][.gz]` pattern are ever considered for deletion or compression, so an unrelated file in the same directory (even one that starts with a similarly-formatted timestamp) is never touched.
 
 Pass `NULL` as the configuration to open a file-backed logger without rotation.
 
@@ -2145,10 +2265,38 @@ ccol_memmgmt_procs_t my_alloc = {
     .calloc  = my_calloc,
     .realloc = my_realloc,
 };
-clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, NULL, &my_alloc);
+clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, NULL, NULL, &my_alloc);
 ```
 
-All four function pointers must be set; passing a partially-populated struct returns `NULL`.
+All four function pointers must be set; passing a partially-populated struct returns `CLOG_INVALID`.
+
+### Async Logging
+
+By default, every `log_*` call formats its message, serializes its fields, and writes to the underlying fd or file synchronously, all before returning. Passing a `clog_async_cfg_t *` to either creation function switches to asynchronous logging: the calling thread only formats its own message and captures its own timestamp/fields, then hands the rest off to a dedicated writer thread that aggregates records from every logger sharing the same target into one buffer, flushed once a size or time threshold is reached. Async mode is inherited by every logger later derived from the root via `clog_derive`.
+
+```c
+clog_async_cfg_t acfg = {
+    .queue_size          = 0,      /* 0 = unbounded queue; never blocks a caller */
+    .flush_buffer_size   = 64 * 1024,
+    .flush_interval_ms   = 200,
+};
+clog lg = clog_open_file_mp("/var/log/app.log", CLOG_INFO, NULL, &acfg, NULL);
+```
+
+Unlike `clog_rotation_cfg_t`, a `NULL` `async_cfg` and a non-`NULL` pointer to an all-zero `clog_async_cfg_t` are not equivalent: passing any non-`NULL` pointer enables async mode, with every zero-valued field falling back to its own documented default; only a literal `NULL` keeps logging synchronous.
+
+`queue_size` controls backpressure: `0` uses an unbounded queue that never blocks a caller on `log_*`; a positive value uses a fixed-capacity queue where a full queue blocks the calling thread until space frees up rather than dropping the message. `flush_buffer_size` and `flush_interval_ms` control how often the writer thread actually writes to disk: whichever threshold is reached first triggers a flush. The batching buffer's own growth ceiling follows `flush_buffer_size` itself whenever that is configured above the library's internal 16 MiB per-record default described above, so a larger configured value is genuinely honored, not silently capped at that default. Call `clog_flush` to block until everything queued as of that call has been durably written, without waiting for either threshold:
+
+```c
+log_info(lg, "about to do something risky");
+clog_flush(lg);   /* block until the line above is on disk */
+```
+
+`CLOG_FMT_SYSLOG` output is exempt from batching regardless of these settings: every record and every backtrace frame keeps its own `write()` call, matching the one-write-per-UDP-datagram contract syslog output already documents. A `CLOG_FATAL` call always bypasses the queue: it first drains everything already queued from earlier calls, then writes the fatal record itself synchronously, before terminating the process; a message logged moments before a crash is never silently lost.
+
+Because a batch can span several records built moments apart, a batch that happens to straddle a rotation boundary is written to whichever file is current at flush time, not split precisely at each record's own logging moment.
+
+A logger's async writer thread does not exist in a forked child process; a `fork()`ed child transparently falls back to logging synchronously on any inherited async-enabled handle, so `log_*`/`clog_close` continue to work correctly on both sides of the fork with no risk of the child waiting on a thread that was never duplicated into it. This fallback is part of the same `FORK_SAFETY_REQUIRED` protection (see "Compile-Time Configuration" in section 4) and is not performed when it is compiled out; a caller that disables it must not fork a process with a live async-enabled logger.
 
 ### Log Levels
 
@@ -2183,6 +2331,8 @@ clog_clear_fields(lg);   /* remove all fields */
 
 Field values that contain spaces, `=`, `"`, `\`, or control characters are automatically double-quoted and backslash-escaped in the output.
 
+A key must consist entirely of printable US-ASCII characters (0x21-0x7e) excluding `=`, `]`, `"`, and `\`. `clog_set_field` silently ignores a key that is empty, contains any of those excluded characters, contains whitespace or a control character, contains a non-ASCII byte, or that names one of the fixed keys every log line already carries (`ts`, `level`, `proc`, `src`, `func`, `msg`, `bt`, `bt_error`); a field reusing one of those names would otherwise produce a duplicate key in the same record.
+
 ### Real-World Use Case: Per-Order Logging for a Small Shop
 
 A small order-processing script logs what happens to every customer order, tagged with that order's ID and customer name. Using `clog_derive`, each order gets a private logger that shares the underlying file and mutex with the root logger but carries its own order-scoped fields. The derived handle is released once the order is done, without affecting the root or any other derived loggers:
@@ -2215,7 +2365,7 @@ int main(void) {
         .rotation_interval_secs = 86400,                  /* daily */
         .max_rotated_files      = 14,
     };
-    g_logger = clog_open_file_mp("/var/log/orders.log", CLOG_INFO, &rot, NULL);
+    g_logger = clog_open_file_mp("/var/log/orders.log", CLOG_INFO, &rot, NULL, NULL);
     clog_set_field(g_logger, "app", "order-processor");
 
     process_order("ORD-1001", "Alice", "coffee mug");
@@ -2234,32 +2384,33 @@ Order-scoped fields (`order_id`, `customer`) appear in every line emitted by `or
 
 | Function | Description |
 |---|---|
-| `clog_open_fd_mp(fd, min_level, mprocs)` | Create a logger writing to an existing open fd; the fd is not closed on `clog_close` |
-| `clog_open_file_mp(path, min_level, cfg, mprocs)` | Create a file-backed logger; pass a `clog_rotation_cfg_t *` for rotation or `NULL` to disable it |
+| `clog_open_fd_mp(fd, min_level, async_cfg, mprocs)` | Create a logger writing to an existing open fd; the fd is not closed on `clog_close` |
+| `clog_open_file_mp(path, min_level, cfg, async_cfg, mprocs)` | Create a file-backed logger; pass a `clog_rotation_cfg_t *` for rotation or `NULL` to disable it |
 | `clog_derive(parent)` | Create a derived logger sharing the same fd, mutex, and rotation as `parent`; starts with a snapshot of `parent`'s fields and level, then evolves independently; release with `clog_close` |
-| `clog_close(logger)` | Flush, close (if file-backed), and free all resources; the underlying fd is kept open until all derived handles are also closed; safe with `NULL` |
+| `clog_close(logger)` | Flush, close (if file-backed), and free all resources; the underlying fd is kept open until all derived handles are also closed |
+| `clog_flush(logger)` | Block until everything queued as of this call has been durably written; a no-op for a synchronous (non-async) logger |
 
 **Level Control**
 
 | Function | Description |
 |---|---|
 | `clog_set_level(logger, level)` | Change the minimum log level; thread-safe |
-| `clog_get_level(logger)` | Return the current minimum level; returns `CLOG_OFF` for a `NULL` logger |
+| `clog_get_level(logger)` | Return the current minimum level |
 
 **Output Format and Syslog Facility**
 
 | Function | Description |
 |---|---|
 | `clog_set_format(logger, fmt)` | Change the output format (`CLOG_FMT_LOGFMT`, `CLOG_FMT_JSON`, or `CLOG_FMT_SYSLOG`); affects all handles sharing the same fd; `CLOG_FMT_SYSLOG` is a no-op on file-backed loggers; thread-safe |
-| `clog_get_format(logger)` | Return the current format; returns `CLOG_FMT_LOGFMT` for a `NULL` logger |
+| `clog_get_format(logger)` | Return the current format |
 | `clog_set_facility(logger, facility)` | Change the RFC 5424 syslog facility (e.g. `CLOG_SYSLOG_DAEMON`); affects all handles sharing the same fd; only meaningful with `CLOG_FMT_SYSLOG`; default is `CLOG_SYSLOG_USER`; thread-safe |
-| `clog_get_facility(logger)` | Return the current syslog facility; returns `CLOG_SYSLOG_USER` for a `NULL` logger |
+| `clog_get_facility(logger)` | Return the current syslog facility |
 
 **Structured Fields**
 
 | Function | Description |
 |---|---|
-| `clog_set_field(logger, key, value)` | Attach a persistent `key=value` field; updates the value if the key already exists |
+| `clog_set_field(logger, key, value)` | Attach a persistent `key=value` field; updates the value if the key already exists; silently ignored for an invalid or reserved key |
 | `clog_remove_field(logger, key)` | Remove a field; no-op if the key is absent |
 | `clog_clear_fields(logger)` | Remove all attached fields |
 
@@ -2297,6 +2448,10 @@ Every JSON value is represented by an opaque `cjson` handle.  The type tag is a 
 | `CJSON_LIST` | `cvec` of child `cjson` | JSON array |
 | `CJSON_DICTIONARY` | `chmap` of `char * -> cjson` | JSON object |
 
+> **Integer precision:** a JSON number with no decimal point or exponent is stored exactly as a `long long` (`CJSON_INTEGER`) as long as it fits in 64 bits. A larger integer literal (or any number with a decimal point or exponent) is stored as a `double` (`CJSON_FLOAT`) instead, which only represents integers exactly up to 2^53; a round-trip of a bare integer literal larger than `LLONG_MAX` through parse and serialize is not guaranteed to preserve its exact value. This matches the JSON number handling of most mainstream JSON libraries (JSON itself places no bound on numeric precision, but few parsers implement arbitrary-precision numbers by default).
+
+> **Locale independence:** `CJSON_FLOAT` values always parse and serialize with `.` as the decimal separator, per RFC 8259, regardless of the calling thread's ambient `LC_NUMERIC` locale setting (e.g. a locale that uses `,` for its own decimal point). A process that has called `setlocale()`/`uselocale()` elsewhere for its own purposes is unaffected: `cjson_parse`/`cjson_serialize` always produce and consume standard, portable JSON number syntax.
+
 ### Construction and parsing
 
 ```c
@@ -2324,6 +2479,8 @@ cjson_list_push(arr, cjson_create_string("two"));
 
 > **`\u0000` in string values:** The parser rejects the JSON escape sequence `\u0000` and returns `NULL` with a parse error. Because `cjson` stores all string values as null-terminated `char *` buffers, an embedded null byte would silently truncate the string at that position. Rejecting `\u0000` up-front prevents silent data corruption.
 
+> **Nesting depth:** A document nested more than 500 levels deep (arrays and/or objects, in any combination) is rejected with a parse error rather than recursed into further; this bounds worst-case parse-time stack usage against a pathologically or maliciously deeply-nested document. `cjson_clone` and `cjson_serialize`/`cjson_serialize_pretty` enforce the identical 500-level cap independently, since a tree built directly through `cjson_list_push`/`cjson_dictionary_set` is not otherwise bounded in depth the way a parsed document is; both report the cap the same way they report any other allocation failure (`NULL`). Ordinary JSON documents and trees never approach this depth.
+
 ### Serialization
 
 ```c
@@ -2333,16 +2490,17 @@ char *compact = cjson_serialize(doc);           /* compact serialization */
 char *pretty  = cjson_serialize_pretty(doc, 2); /* 2-space indent */
 cjson_serialize_free(compact);
 cjson_serialize_free(pretty);
-
-compact = cjson_serialize_mp(doc, mp);          /* compact using custom memory procs */
-pretty = cjson_serialize_pretty_mp(doc, 2, mp); /* 2-space indent using custom memory procs */
-cjson_serialize_free_mp(compact, mp);
-cjson_serialize_free_mp(pretty, mp);
 ```
+
+`cjson_serialize` and `cjson_serialize_pretty` take no separate allocator parameter: the output buffer is always allocated through the *root node's own* stored allocator (see "Custom memory management" below), so a tree built with `cjson_parse_mp`/`cjson_create_*_mp` is automatically serialized with that same `mp`. Free the returned string with `cjson_serialize_free_mp(s, mp)` (passing that same `mp`), or `cjson_serialize_free(s)` for the default allocator.
+
+A subtree nested more than 500 levels deep (arrays and/or objects, in any combination) is not serialized; both functions return `NULL` instead, the same as any other allocation failure.
 
 ### Path navigation - `cjson_get` and `cjson_set`
 
-Paths are dot-separated component strings.  A component that begins with `#` followed by **one or more decimal digits** addresses **an array element by index when the current node is an array**; otherwise it is treated as a **literal object key**.  A bare `#` with no trailing digits is always an error (`cjson_get` returns `NULL`; `cjson_set` returns `ccol_invalid_args`).
+Paths are dot-separated component strings.  A component that begins with `#` followed by **one or more decimal digits** addresses **an array element by index when the current node is an array**; otherwise it is treated as a **literal object key**.  A bare `#` with no trailing digits, or an empty path component (a leading, trailing, or doubled `.`), is always a syntax error (`cjson_get` returns `NULL`; `cjson_set` and `cjson_delete` return `ccol_invalid_args`).
+
+`cjson_set` creates a leaf that addresses an object key on demand.  A `#N` array-index leaf must already be in range: an array has no way to be auto-extended to fit an arbitrary index, so a syntactically valid but out-of-range one fails with `ccol_key_not_found` instead of being created (matching how a missing intermediate path component is reported).
 
 Two escape sequences are recognised inside path strings:
 
@@ -2377,7 +2535,7 @@ cjson_set(doc, "users.#0.label",  "champion");
 cjson_set(doc, "users.#0.name", 42);  /* name is now an integer */
 ```
 
-`cjson_set` accepts: `bool`, any integer type, `float`, `double`, `char *`, `const char *`, and string literals.  It detects the C type at compile time via `_Generic` and routes to the correct storage path.  Passing an untyped `NULL` literal sets the leaf to `CJSON_NULL`; a typed null pointer such as `(const char *)NULL` also produces `CJSON_NULL` because a null C string pointer maps to JSON null.  Non-finite `double` values (`INFINITY`, `-INFINITY`, `NAN`) are rejected and `ccol_invalid_args` is returned; the existing node is left untouched.  Signed integer types (including plain `char` on platforms where `char` is signed, e.g. x86-64 Linux) are sign-extended correctly to `long long`.
+`cjson_set` accepts: `bool`, any integer type, `float`, `double`, `char *`, `const char *`, and string literals.  It detects the C type at compile time via `_Generic` and routes to the correct storage path.  Passing `NULL` sets the leaf to `CJSON_NULL`; a typed null pointer such as `(const char *)NULL` also produces `CJSON_NULL` because a null C string pointer maps to JSON null.  A `void *` value that is not NULL (e.g. a `void *` variable holding a live pointer) is rejected with `ccol_invalid_args` rather than being silently written as `CJSON_NULL`: only a genuine NULL is treated as an intentional null.  Non-finite `double` values (`INFINITY`, `-INFINITY`, `NAN`) are rejected and `ccol_invalid_args` is returned; the existing node is left untouched.  Signed integer types (including plain `char` on platforms where `char` is signed, e.g. x86-64 Linux) are sign-extended correctly to `long long`.  Any C type outside this accepted list (`long double`, a struct, an enum, or any pointer type other than `char *` / `const char *`) is rejected the same way: `ccol_invalid_args` is returned and the target leaf is left untouched, rather than silently written as `CJSON_NULL`.
 
 Duplicate object keys set within the JSON object use **last-value-wins** semantics; the final occurrence of a key is retained and prior occurrences are deep-freed.
 
@@ -2458,10 +2616,11 @@ size_t      cjson_dictionary_size(cjson node);
 cjson_destroy(doc);   /* deep-frees the entire tree, NULLs the handle */
 ```
 
-- `cjson_list_push` **transfers ownership unconditionally**: on success the array owns the child; on failure `cjson_list_push` deep-frees it.  Do not free the child after calling this function regardless of the return value.
-- `cjson_dictionary_set` **transfers ownership unconditionally**: on success the object owns the child; on failure `cjson_dictionary_set` deep-frees it.  Do not free the child after calling this function regardless of the return value.
+- `cjson_list_push` and `cjson_dictionary_set` transfer ownership of the child on every outcome that touches it at all: on success the array/object owns it; on a failure caused by an invalid target (`arr`/`obj` NULL or the wrong type, or a NULL `key`) or an internal insertion failure, a freshly unattached child is deep-freed and must not be freed by the caller. The one class of failure that leaves the child completely untouched, still owned by whatever it was already attached to, is described next; this holds regardless of what else is wrong with the call, so an invalid `arr`/`obj`/`key` never causes an already-attached child to be destroyed.
+- The `child` passed to `cjson_list_push`/`cjson_dictionary_set` must not already be attached to a list/dictionary parent; it must be a freshly created node or a fresh `cjson_clone()`, never a **borrowed** reference from `cjson_get()`/`cjson_list_get()`/`cjson_dictionary_get()`, never the target container itself, and never a node removed via `cjson_list_remove()`/`cjson_dictionary_remove()` (both always deep-free the node they remove and never hand back a live reference to it). Passing an already-attached node is rejected with `ccol_invalid_args` and leaves it completely untouched (still owned by whatever it was already attached to); accepting it would give the same node two owners, each independently freeing it when its own parent is destroyed. The one exception is `cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k))` (setting a key to its own current value), which is a harmless no-op.
+- `child` must also not already contain the target container somewhere within its own subtree; attaching it would make the target both a new ancestor of `child` and an existing descendant of it, a cycle. This is rejected the same way (`ccol_invalid_args`, `child` untouched); if the check itself cannot complete under memory pressure, `ccol_not_enough_memory` is returned instead of silently risking an undetected cycle.
 - `cjson_get` returns a **non-owning** reference valid until the tree is mutated or destroyed.
-- `cjson_clone` returns a fully independent deep copy.
+- `cjson_clone` returns a fully independent deep copy, or `NULL` on allocation failure (including a source nested more than 500 levels deep; see the "Nesting depth" note above). Cloning a borrowed reference first is how to safely move a value that already lives somewhere else in a tree into a new location.
 
 ### Custom memory management
 
@@ -2499,24 +2658,35 @@ cjson_destroy(root);
 
 | Feature | Notes |
 |---|---|
-| Block mappings | Indentation-sensitive key: value pairs |
-| Block sequences | Indentation-sensitive `- item` lists |
-| Flow mappings | `{key: value, ...}` inline style |
-| Flow sequences | `[a, b, c]` inline style |
-| Plain scalars | Unquoted values |
-| Single-quoted scalars | No escape processing; `''` encodes a literal `'` |
-| Double-quoted scalars | Full YAML escape sequences including `\uXXXX` |
+| Block mappings | Indentation-sensitive key: value pairs, implicit (`key:`) and explicit (`? key` / `: value`) styles, freely mixed within one mapping |
+| Block sequences | Indentation-sensitive `- item` lists; a sequence value may sit at the same indentation as its parent mapping key |
+| Flow mappings | `{key: value, ...}` inline style, including a bare key with no `:` (value is `null`), a `:` with no value (also `null`), and an explicit `{? key: value}` entry whose key may itself span multiple lines |
+| Flow sequences | `[a, b, c]` inline style, including a bare `key: value` pair as a shorthand for a single-entry mapping element (`[foo: bar]` == `[{foo: bar}]`) and an explicit `[? key: value]` entry whose key may itself span multiple lines |
+| Plain scalars | Unquoted values; may span multiple lines, folded to a single space per line break (blank lines fold to newlines instead), following the same rules as a folded block scalar's own line folding |
+| Single-quoted scalars | No escape processing; `''` encodes a literal `'`; may span multiple lines with the same folding rules as a plain scalar |
+| Double-quoted scalars | Full YAML escape sequences including `\uXXXX`; may span multiple lines with the same folding rules as a plain scalar |
 | Literal block scalars | `|`; newlines preserved |
 | Folded block scalars | `>`; newlines folded to spaces except blank lines |
 | Block scalar chomping | `|+` keep, `|-` strip, `|` clip (default) |
-| Anchors and aliases | `&name` / `*name`; aliases resolve to deep clones; scoped per document |
+| Anchors and aliases | `&name` / `*name` on any node, including a mapping key itself; aliases resolve to deep clones; scoped per document; a node may carry at most one anchor and one tag (in either order), and an alias may never itself carry either |
+| Non-scalar dictionary keys | A sequence, mapping, or flow collection used directly as a dictionary key is canonicalized to its flow-style text representation (a mapping's own entries in sorted, lexicographic-by-key order at every nesting level, so construction order never affects the result), since this DOM's dictionaries always map `char * -> cyaml` |
+| Scalar dictionary key canonicalization | A key's own core-schema type is resolved before it is stored, exactly like an ordinary value position: `~`, `null`, `Null`, `NULL`, and an empty key all canonicalize to `"null"`; `true`/`True`/`TRUE`/`yes`/`on` (and their `false`/`no`/`off` counterparts) canonicalize to `"true"`/`"false"`; `0x10` canonicalizes to `"16"`. This is applied identically to an implicit key (`key:`), an explicit key (`? key`), a flow dictionary key, and a flow sequence's `key: value` shorthand, so every spelling of the same value collides on the same dictionary key regardless of which of the four key notations produced it. A quoted key (`"key"`, `'key'`) is never subject to this: its value is always exactly its own decoded text. |
+| Dictionary key order (serialization) | `cyaml_serialize()`/`cyaml_serialize_flow()` emit a dictionary's entries in this DOM's own internal storage order, which is unrelated to insertion order, parse order, or any other caller-visible ordering; a `CYAML_LIST`'s element order, by contrast, is always exactly the order its elements were pushed or parsed in. A caller needing a specific, stable key order in serialized output must arrange for it itself (e.g. by re-inserting keys into a fresh dictionary in the desired order immediately before serializing) |
+| Nesting limits | A document nesting mappings/sequences/explicit keys more than 500 levels deep, or a non-scalar dictionary key whose canonical text exceeds 64 KiB, is rejected with a parse error; `cyaml_serialize()`/`cyaml_serialize_flow()`/`cyaml_clone()` each carry the identical 500-level limit independently, since a tree need not have come from parsing at all, and return `NULL` for a tree nested past it |
+| Node count limit | A single `cyaml_parse()`/`cyaml_parse_n()` call rejects a document that would require allocating more than 4,000,000 DOM nodes in total, with a parse error naming the limit explicitly; reachable only by a document with millions of distinct scalar values, an extent no realistic hand-written or generated document approaches. Does not apply to a tree built directly via `cyaml_create_list()`/`cyaml_dictionary_set()` outside of parsing |
 | YAML 1.2 core schema | Implicit type resolution for null/bool/int/float |
-| Leading `---` / trailing `...` | Document-start and document-end markers |
+| `%YAML` directive | Validated against the `MAJOR.MINOR` grammar; at most one per document |
+| Leading `---` / trailing `...` | Document-start and document-end markers; block-structured content (a mapping or sequence) must start on its own line after `---`, not share its line, though a scalar or flow collection may |
 | Multi-document streams | Supported; see below |
 | Comments | `#` to end-of-line; silently ignored |
-| Tags | `!tag` / `!!tag`; silently ignored |
+| Tags | `!!str`, a custom `!foo`, or a `%TAG`-resolved shorthand/verbatim `!<...>` tag; resolved and queryable via `cyaml_node_tag()`; see "Tags" below |
+| `%TAG` directive | Shorthand-prefix scoping, tracked per document |
+| Merge keys | `<<:`; see "Merge keys" below |
+| Tab-as-indentation validation | A tab is rejected wherever it would be interpreted as block-structural indentation or a structural separator (leading indentation for a mapping/sequence/block-scalar line, immediately after a `-` / `?` / `:` indicator, or on a flow collection's own continuation line); a tab is accepted as ordinary whitespace everywhere else, including same-line separators, comments, quoted scalars, and literal content once a block scalar's own indentation is already established |
 
-**Not supported:** multi-line plain scalars (use `|` or `>` instead); merge keys (`<<:`).
+**Not supported:** embedded null bytes in strings (base64-encode any data that may contain one instead; `!!binary` is not given special decoding behavior for the same reason). Since a node's scalar value is a plain null-terminated `char *` with no separate length field, an embedded null byte would silently truncate the value; a double-quoted escape that would decode to codepoint zero (`\0`, `\x00`, `\u0000`, `\U00000000`) is therefore rejected as a parse error rather than silently truncating. Any other raw, unescaped C0 control byte (`0x00`-`0x1F` other than tab) or DEL (`0x7F`) is likewise rejected wherever it appears literally in scalar content, in any scalar style; a double-quoted scalar's own escape sequences (e.g. `\x01`, `\x7f`) remain the way to embed one of these bytes. Also not supported: a tag decorating a dictionary key (parsed for validity, but discarded, since this DOM's keys are plain strings, not nodes); a custom tag's original `%TAG` shorthand spelling across a serialize round-trip (always re-emitted in its fully-resolved, verbatim `!<...>` form); character encoding validation (input is treated as an opaque byte string, so a byte sequence that is not valid UTF-8 is accepted as literal scalar content and reproduced unchanged on serialize, since only a raw C0 control byte other than tab, or DEL, is ever rejected outright).
+
+An implicit block mapping key (`key: value`, with no `?`) must always fit on a single physical line, whether the key is a plain scalar, a quoted scalar, or a non-scalar flow collection; unlike an implicit value, which may fold across multiple lines. An explicit key (`? key`) has no such restriction.
 
 ### Multi-document streams
 
@@ -2542,12 +2712,58 @@ cyaml_destroy(root);
 
 Rules for multi-document streams:
 - The first document may appear with or without a leading `---` marker.
-- Every subsequent document **must** begin with `---`.
+- A later document may also omit `---` **only** when the document immediately
+  before it ended with an explicit `...` marker; otherwise it **must** begin
+  with `---`. Bare content directly following a document with no `...` is
+  ambiguous and is a parse error.
 - An optional `...` end marker may follow each document.
 - Anchors are scoped per document; a `*alias` cannot reference an `&anchor`
   from a different document.
 - An empty document (e.g. two consecutive `---` markers) yields a `CYAML_NULL`
   element in the list.
+
+### Tags
+
+```c
+char *err = NULL;
+cyaml doc = cyaml_parse("val: !!str 42\nother: !mytag foo\n", &err);
+
+cyaml val = cyaml_dictionary_get(doc, "val");
+cyaml_type(val);            /* CYAML_STRING, not CYAML_INTEGER: !!str forced it */
+cyaml_str_val(val);         /* "42" */
+cyaml_node_tag(val);        /* "tag:yaml.org,2002:str", == CYAML_TAG_STR */
+
+cyaml other = cyaml_dictionary_get(doc, "other");
+cyaml_type(other);          /* CYAML_STRING (implicit typing; !mytag doesn't force one) */
+cyaml_node_tag(other);      /* "!mytag" */
+
+cyaml_destroy(doc);
+```
+
+One of the five scalar core-schema tags (`!!null`, `!!bool`, `!!int`, `!!float`, `!!str`) forces that type on any scalar style, overriding whatever type the text would otherwise implicitly resolve to. `!!bool`, `!!int`, and `!!float` each validate their own scalar's text, reporting a hard parse failure for the whole document on a mismatch (e.g. `!!int` on text that isn't a valid integer); a scalar core-schema tag on actual collection syntax is likewise always a hard failure. `!!null` is the one exception: since there is no canonical "wrong" spelling for a value whose whole point is to carry no further information, `!!null` forces `CYAML_NULL` unconditionally, on any text whatsoever, exactly like a custom tag decorating a scalar never validates what it is attached to. `!!bool` accepts a wider, case-insensitive vocabulary than implicit bool typing (`true`/`false`, `yes`/`no`, `on`/`off`, but not single-letter `y`/`n`). A custom tag (anything other than the seven core-schema URIs, including `!!binary`) never forces a type; it is attached as metadata to whatever type the value already resolved to. `cyaml_node_tag()` returns `NULL` for an untagged node; `cyaml_node_set_tag()` attaches or clears a tag on a programmatically-constructed node without coercing its type. `CYAML_TAG_NULL`/`_BOOL`/`_INT`/`_FLOAT`/`_STR`/`_SEQ`/`_MAP` name the seven core-schema URIs. A core-schema tag is re-emitted by `cyaml_serialize()`/`cyaml_serialize_flow()` only when it does not match the node's actual type (this serializer's own output already round-trips a matching one unaided, so re-emitting it would be pure redundancy); a mismatched core-schema tag (only reachable by attaching one via `cyaml_node_set_tag()` to a node of a different type than the tag names) is preserved exactly like a custom tag, in its fully-resolved verbatim form, so it is never silently lost.
+
+### Merge keys
+
+```c
+char *err = NULL;
+cyaml doc = cyaml_parse(
+    "defaults: &defaults\n"
+    "  timeout: 30\n"
+    "  retries: 3\n"
+    "service:\n"
+    "  <<: *defaults\n"
+    "  timeout: 60\n",  /* explicit key wins over the merged-in default */
+    &err);
+
+cyaml service = cyaml_dictionary_get(doc, "service");
+cyaml_int_val(cyaml_dictionary_get(service, "timeout"));  /* 60 */
+cyaml_int_val(cyaml_dictionary_get(service, "retries"));  /* 3, merged in */
+cyaml_dictionary_get(service, "<<");                      /* NULL: expanded and removed */
+
+cyaml_destroy(doc);
+```
+
+A mapping entry whose key is the literal, unquoted, untagged plain scalar `<<` expands its value (a single mapping, or a sequence of mappings, e.g. `<<: [*a, *b]`) into that mapping in place, then removes the `<<` key itself. This applies equally in any mapping regardless of how it arose: the ordinary implicit style (`<<: *defaults`), the explicit `? <<` / `: value` style (block or flow), or the single-entry mapping produced by a block or flow sequence's own `key: value` compact-mapping shorthand (`- <<: *defaults`, `[<<: *defaults]`, `[? <<: *defaults]`); an anchor decorating the `<<` key itself does not disqualify it. Explicit keys already present always win over anything merged in; for a sequence of sources, earlier sources win over later ones on conflict. A merge source that is neither a mapping nor a sequence of mappings is a hard parse failure. A quoted (`"<<"`) or explicitly tagged (`!!str <<`) key spelled `<<` is always an ordinary literal key, never expanded, in any of those forms.
 
 ### Node types
 
@@ -2557,7 +2773,7 @@ Every YAML value is represented by an opaque `cyaml` handle.  The type tag is a 
 |---|---|---|
 | `CYAML_NULL` | none | `null`, `~`, or empty value |
 | `CYAML_BOOL` | `bool` | `true` / `false` and case variants |
-| `CYAML_INTEGER` | `long long` | Decimal, `0x` hex, `0o` octal |
+| `CYAML_INTEGER` | `long long` | Decimal, `0x` hex, `0o` octal; a literal outside the signed 64-bit range falls back to `CYAML_FLOAT` (or `CYAML_STRING`) rather than wrapping around |
 | `CYAML_FLOAT` | `double` | Decimal, exponent, `.inf`, `-.inf`, `.nan` |
 | `CYAML_STRING` | `char *` (heap) | All non-null scalars that do not match other rules |
 | `CYAML_LIST` | `cvec` of child `cyaml` | Ordered list |
@@ -2649,6 +2865,16 @@ Two escape sequences are recognised inside path strings:
 
 A `\` before any other character is passed through unchanged.
 
+An empty path component (nothing between two dots, or a leading/trailing
+dot, e.g. `"a..b"` or `"a."`) has no valid interpretation as either a
+literal empty-string key or a `#N` index: `cyaml_get` returns NULL for it,
+and `cyaml_set`/`cyaml_delete` return `ccol_invalid_args`, at any position
+in the path, not just the leaf.
+
+A NULL or empty path passed to `cyaml_get` returns `root` itself, so a
+zero-component path addresses the root the same way a leaf-only path (e.g.
+`"key"`) addresses a direct child of it.
+
 ```c
 /* Key named "a.b" (literal dot): */
 cyaml node = cyaml_get(doc, "a\\.b");
@@ -2666,6 +2892,10 @@ if (cyaml_type(name) == CYAML_STRING)
 cyaml_set(doc, "users.#0.active", (bool)true);
 cyaml_set(doc, "users.#0.score",  99);
 ```
+
+`cyaml_set` creates a leaf that addresses a dictionary key on demand.  A `#N` list-index leaf must already be in range: a list has no way to be auto-extended to fit an arbitrary index, so an out-of-range one fails with `ccol_key_not_found` instead of being created.  Creating a new leaf dictionary key can also fail with `ccol_container_full` if the parent dictionary has reached its maximum representable element count (not reachable in practice).
+
+`cyaml_set` accepts: `bool`, any integer type, `float`, `double`, `char *`, `const char *`, and string literals.  It detects the C type at compile time via `_Generic` and routes to the correct storage path.  Passing an untyped `NULL` literal sets the leaf to `CYAML_NULL`.  Any C type outside this accepted list (`long double`, a struct, an enum, or any pointer type other than `char *` / `const char *`) is rejected: `ccol_invalid_args` is returned and the target leaf is left untouched, rather than silently written as `CYAML_NULL`.
 
 ### Deleting nodes (`cyaml_delete`)
 
@@ -2720,7 +2950,8 @@ Aliases resolve to independent deep clones of the anchored node.  Modifying the 
 cyaml_destroy(doc);    /* frees all nodes; NULLs the pointer */
 
 /* RAII (GCC/Clang only): */
-cyaml_declare_scoped(doc2) = cyaml_parse("x: 1\n", NULL);
+cyaml_declare_scoped(doc2);
+doc2 = cyaml_parse("x: 1\n", NULL);
 /* doc2 is automatically freed when it goes out of scope */
 ```
 
@@ -2733,7 +2964,7 @@ cyaml_dictionary_set(doc, "key", cyaml_create_string_mp("val", &my_mprocs));
 cyaml_destroy(doc);
 ```
 
-The allocator is stamped on every node at creation time.  `cyaml_destroy()` uses each node's own stored allocator.  `cyaml_clone()` inherits the allocator from the source tree.
+The allocator is stamped on every node at creation time.  `cyaml_destroy()` uses each node's own stored allocator.  `cyaml_clone()` inherits the allocator from the source tree, and each node's own tag, if any, is carried over unchanged.
 
 **Node pool:** `cyaml` maintains a per-thread free-list (capped at 512 nodes) to amortize allocation cost.  Custom-allocator nodes bypass the pool entirely.  Default-allocator nodes use the pool; it is drained at thread exit with plain `free()`.
 
@@ -2750,7 +2981,13 @@ The queue mode is selected once at construction time by the `queue_capacity` par
 - `queue_capacity == 0` or `ccol_invalid_size` - unbounded queue: `ctpool_submit` never blocks on capacity; the only non-trivial failure path is out-of-memory.
 - `queue_capacity > 0` - bounded queue of that capacity: `ctpool_submit` blocks when the queue is full, applying natural backpressure to producers.
 
-`ctpool` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CTPOOL_INVALID` (or use a truthiness check; `CTPOOL_INVALID` is `0`, so `if (!pool)` works exactly as it did when this was a raw pointer). Internally, every use of a `ctpool` is resolved through a library-owned slot table before the underlying pool object is touched, so a stale handle (one whose pool has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `ctpool_destroy`/`__ctpool_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free.
+`ctpool` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CTPOOL_INVALID` (or use a truthiness check; `CTPOOL_INVALID` is `0`, so `if (!pool)` works as expected). Internally, every use of a `ctpool` is resolved through a library-owned slot table before the underlying pool object is touched, so a stale handle (one whose pool has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `ctpool_destroy`/`__ctpool_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free.
+
+Calling `ctpool_destroy`/`__ctpool_destroy` on `pool` from within a task (or that task's `on_complete` callback) currently executing on one of `pool`'s own worker threads is likewise a fatal error, for the same reason a stale handle is: a worker thread cannot join itself, so destroying its own pool from inside it would free the pool's memory while that worker is still using it. `ctpool_wait`, `ctpool_shutdown_drain`, and `ctpool_shutdown_immediate` handle this same situation gracefully instead of aborting: called this way, `ctpool_wait` returns immediately (waiting for the calling task's own completion would deadlock it against itself) and the two shutdown functions are a complete no-op (neither stops accepting new tasks nor joins any worker), leaving the pool fully usable so that a later, legitimate external call can still shut it down cleanly.
+
+`fork(2)` is safe with respect to `cthreadpool`'s own internal locking: a fresh `create_cthread_pool`/`_mp`/`ctpool_destroy`/`ctpool_submit`/`_try_submit`/`_timed_submit` (and the future/wait/shutdown variants) call, from any thread, in either the parent or a freshly forked child, never hangs waiting on a lock that some other (possibly no-longer-existing, since `fork()` duplicates only the calling thread) thread happened to hold at the instant of the fork. A pool that was already live across the fork is a different matter: `fork()` does not duplicate its worker threads, so an inherited pool can no longer run any queued or future task in the child regardless of this guarantee; the child should treat such a pool as inert (not usable for further submission) rather than keep submitting to it. `ctpool_wait` on such a pool in the child returns immediately rather than waiting for progress that can never happen, and `ctpool_destroy` still discards any work still queued at the moment of the fork exactly as `ctpool_shutdown_immediate` would (cancelling any queued futures, so a caller blocked in `ctpool_future_get` on one of them wakes up rather than hanging) before releasing the pool's own memory, even when called with no prior explicit shutdown call. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it; see "Compile-Time Configuration" in section 4.
+
+With a custom allocator (`create_cthread_pool_mp`), the small internal bookkeeping node backing each submitted task is recycled through a bounded per-pool cache rather than allocated and freed on every single submission; a caller relying on the supplied allocator to observe exactly one allocation and one free per submitted task (for example a tracking or instrumenting allocator) will instead see calls only when the cache is empty or already full.
 
 **Header:** `#include <cthreadpool.h>`
 
@@ -2808,6 +3045,8 @@ if (!f) { /* OOM or pool is shutting down */ }
 void *result = ctpool_future_get(f);   /* blocks until the worker finishes */
 ctpool_future_free(f);                 /* release the caller's reference */
 ```
+
+> **Result ownership:** the pool never allocates, copies, or frees the `void *` result; it only carries the pointer `fn` returned. `ctpool_future_free` releases the future's own handle, never the result. Once `ctpool_future_get` returns, the caller owns the result and is responsible for freeing it however `fn` allocated it.
 
 `ctpool_submit_future` blocks when a bounded queue is full. The same non-blocking and timed variants available for regular tasks also exist for futures:
 
@@ -2997,7 +3236,7 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 
 `chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: an internal `chttp1_parser` module drives request/response framing over raw sockets, TLS is provided by `ctls` (a reactor-agnostic OpenSSL wrapper), the reactor backing Tier 2/3's async engine is `event_loop` (from `cthreadcomm`), and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library. `chttpclient` has no dependency on any vendored third-party code.
 
-`chttpcli` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CHTTPCLI_INVALID` (or use a truthiness check; `CHTTPCLI_INVALID` is `0`, so `if (!cli)` works exactly as it did when this was a raw pointer). Internally, every use of a `chttpcli` is resolved through a library-owned slot table before the underlying client object is touched, so a stale handle (one whose client has already been destroyed) is always detected rather than silently dereferencing freed memory.
+`chttpcli` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CHTTPCLI_INVALID` (or use a truthiness check; `CHTTPCLI_INVALID` is `0`, so `if (!cli)` works as expected). Internally, every use of a `chttpcli` is resolved through a library-owned slot table before the underlying client object is touched, so a stale handle (one whose client has already been destroyed) is always detected rather than silently dereferencing freed memory.
 
 **Supported URL forms:** `http://`/`https://`, plus `http+unix://<percent-encoded-socket-path>[/path][?query]` for connecting to a server listening on a Unix domain socket (matching Python's `requests-unixsocket` convention; `https+unix://` is not supported). Both a plain hostname/IPv4 literal and a bracketed IPv6 literal (`https://[::1]:8443/path`) are accepted for the network forms. A URL may embed credentials (`http://user:pass@host/path`); they are turned into an `Authorization: Basic ...` header automatically unless the request already sets its own `Authorization` header (not supported for `http+unix://`, which has no established userinfo convention). A trailing `#fragment` is recognized and discarded (fragments are a client-side-only concept and are never sent to a server). See "Redirect Following" below for how embedded credentials interact with redirects to a different origin, and "Unix Domain Sockets" below for the `http+unix://` scheme in full.
 
@@ -3119,14 +3358,16 @@ onto the wire: only the most recently inserted one is sent, never both, so
 two `Host:` lines (a request RFC 7230 SS5.4 requires a server to reject
 outright) can never reach the wire this way.
 
-Neither a header name nor its value may contain an embedded CR or LF byte:
-`chttp_request_set_header` rejects such a call with `ccol_invalid_args`
-before storing anything, and the same check runs again as a backstop at
-request-serialization time (covering a `headers` map handed to
-`chttp_run_query` directly, bypassing `chttp_request_set_header`
-entirely) so a header value built from untrusted data (a forwarded token,
-a proxied header) can never split the request or inject extra header
-lines into it.
+A header value may not contain an embedded CR or LF byte, and a header
+name must be a non-empty RFC 7230 tchar-only token (letters, digits, and
+`!#$%&'*+-.^_`|~`): `chttp_request_set_header` rejects a call violating
+either rule with `ccol_invalid_args` before storing anything, and the
+same checks run again as a backstop at request-serialization time
+(covering a `headers` map handed to `chttp_run_query` directly, bypassing
+`chttp_request_set_header` entirely) so a header value built from
+untrusted data (a forwarded token, a proxied header) can never split the
+request or inject extra header lines into it, and a malformed name (a
+space or literal `:`, say) can never reach the wire either.
 
 A "Transfer-Encoding" header name is likewise always rejected (again with
 the identical set-time-plus-serialization-time-backstop treatment): this
@@ -3141,11 +3382,13 @@ A caller-set "Content-Length" header IS accepted (unlike Transfer-Encoding,
 `chttp_request_set_header` has no reason to reject it outright), but on a
 body-carrying request (POST, PUT, or PATCH) it is validated at
 request-serialization time against the body actually being sent, once
-the request reaches the wire: a value that does not exactly match the
-real body length is rejected with `ccol_invalid_args`, for the identical
-"declared framing disagrees with the wire" reason Transfer-Encoding is
-rejected outright above, just reached through a wrong length instead of
-a wrong transfer-coding. This is only checked for a body-carrying
+the request reaches the wire: a value that is not a plain unsigned decimal
+digit string (no leading `+`/`-`, no embedded whitespace) exactly matching
+the real body length is rejected with `ccol_invalid_args`, for the
+identical "declared framing disagrees with the wire" reason
+Transfer-Encoding is rejected outright above, just reached through a wrong
+or malformed length instead of a wrong transfer-coding. This is only
+checked for a body-carrying
 request; for any other method (GET, DELETE, HEAD, OPTIONS) a
 Content-Length header is stripped from the wire entirely (there is no
 body to describe), so there is no framing left for a mismatched value
@@ -3191,7 +3434,7 @@ ccol_retval_t rc = chttpclient_do(cli, req, &resp);
 chttp_request_free(req);
 ```
 
-The client sends only the request's headers first, then waits up to one second for the server's interim `100 Continue` response before sending the body; any OTHER interim 1xx status the server sends while waiting (e.g. `103 Early Hints` ahead of `100 Continue`) is discarded and the wait continues, still bounded by the same one-second budget. If the server answers with a final status directly instead (e.g. `417 Expectation Failed`), that response is delivered to the caller and the body is never sent. A server that never replies within the one-second window is assumed to simply not support the mechanism: the body is sent anyway and the request proceeds normally. This has no effect on a request with no body, and is a Tier 1 (`chttpclient_do`/`chttpclient_do_streaming`) feature only; `chttpclient_do_async` and everything built on it (Tiers 2/3) ignore `expect_continue` and send the body immediately.
+The client sends only the request's headers first, then waits up to one second for the server's interim `100 Continue` response before sending the body; any OTHER interim 1xx status the server sends while waiting (e.g. `103 Early Hints` ahead of `100 Continue`) is discarded and the wait continues, still bounded by the same one-second budget. If the server answers with a final status directly instead (e.g. `417 Expectation Failed`), that response is delivered to the caller and the body is never sent. A server that never replies within the one-second window is assumed to simply not support the mechanism: the body is sent anyway and the request proceeds normally. This has no effect on a request with no body. Every tier honors `expect_continue` identically: `chttpclient_do`/`chttpclient_do_streaming` (Tier 1) implement the wait as a blocking call; `chttpclient_do_async`/`chttpclient_do_async_streaming` and everything built on them (Tiers 2/3) implement the identical three-outcome protocol as part of their own non-blocking, event-driven dispatch. The 64-consecutive-discarded-interim-response cap described above applies independently to this wait and to the final response read that follows it: a "100 Continue" (or the wait simply timing out) is itself a genuine, non-discarded outcome, so it resets the count; a request using `expect_continue` may therefore discard up to 64 interim responses while waiting for "100 Continue" and up to 64 more while reading the final response, not merely 64 combined.
 
 Once the server has sent `100 Continue` and the body has been written to the connection, that connection is never silently retried again for this request: see the reused-connection retry note under "Keep-alive idle pool" below for why an explicit `100 Continue` permanently disqualifies a hop from the reused-connection retry-once safety net, even if the connection then dies before the real final response arrives.
 
@@ -3250,7 +3493,7 @@ This gives blocking-call ergonomics while sharing the engine's small, fixed-size
 To redirect the engine's own diagnostics (TLS handshake failures, connect errors) to a `clog` handle, call `chttpcli_set_engine_logger` before the first Tier 2/3 call anywhere in the process:
 
 ```c
-clog logger = clog_open_fd(2, CLOG_INFO);
+clog logger = clog_open_fd(2, CLOG_INFO, NULL);
 chttpcli_set_engine_logger(logger);   /* derive engine sub-logger; optional */
 ```
 
@@ -3302,7 +3545,7 @@ Firing many concurrent HTTPS requests through Tier 2/3 (`chttpclient_do_async`/`
 Each `chttpcli` handle has two independent layers:
 
 - **Concurrency limiter**; bounds the number of simultaneous in-flight requests. The limit defaults to the CPU count (`chttpclient_set_pool_size`); when the limit is reached, `chttpclient_do` blocks until a slot frees up, providing natural backpressure with no external semaphore required.
-- **Keep-alive idle pool**; after a request completes on an HTTP/1.1 keep-alive connection, the connection (and, for HTTPS, its already-established TLS session) is kept open and cached per origin (scheme + host + port) so a later request to the same origin can skip DNS resolution, the TCP handshake, and the TLS handshake entirely. A cheap liveness probe runs before reuse; a connection the peer has since closed is transparently discarded and replaced with a fresh one. Because the probe and the actual request are not atomic, the peer can still close the connection in between; if that happens, the request is transparently retried exactly once against a brand-new connection; this covers both a failed write and a failed (or empty) read, as long as no response bytes have been parsed or handed back to the caller yet, so nothing is ever silently duplicated. The one exception is a request using `Expect: 100-continue` (Tier 1 only; see that section above): once the server has explicitly confirmed readiness with `100 Continue` and the body has been written to the connection, that hop is no longer eligible for this retry, since the server has already proven it was alive and accepted the body, retrying would resend that body to an unrelated second connection, and a non-idempotent request could then be processed twice; a subsequent failure on that hop is reported to the caller instead. Idle connections are bounded per origin and in total, and expire after a short idle period; once the caps are hit, a completed connection is simply closed instead of cached, which only forfeits the reuse optimisation and never affects correctness.
+- **Keep-alive idle pool**; after a request completes on an HTTP/1.1 keep-alive connection, the connection (and, for HTTPS, its already-established TLS session) is kept open and cached per origin (scheme + host + port) so a later request to the same origin can skip DNS resolution, the TCP handshake, and the TLS handshake entirely. A cheap liveness probe runs before reuse; a connection the peer has since closed is transparently discarded and replaced with a fresh one. Because the probe and the actual request are not atomic, the peer can still close the connection in between; if that happens, the request is transparently retried exactly once against a brand-new connection; this covers both a failed write and a failed (or empty) read, as long as no response bytes have been parsed or handed back to the caller yet, so nothing is ever silently duplicated. The one exception is a request using `Expect: 100-continue` (see that section above; applies uniformly across every tier): once the server has explicitly confirmed readiness with `100 Continue` and the body has been written to the connection, that hop is no longer eligible for this retry, since the server has already proven it was alive and accepted the body, retrying would resend that body to an unrelated second connection, and a non-idempotent request could then be processed twice; a subsequent failure on that hop is reported to the caller instead. Idle connections are bounded per origin and in total, and expire after a short idle period; once the caps are hit, a completed connection is simply closed instead of cached, which only forfeits the reuse optimisation and never affects correctness.
 
 Buffered (non-streaming) response bodies have no size limit by default: `chttpclient_do`, `chttpclient_do_async` (and the pooled-sync wrappers built on it), and the `chttp_get`/`post`/`put`/`delete`/`patch`/`run_query` convenience wrappers will all buffer an entire response body into memory regardless of size. `chttpclient_set_max_response_body_size(cli, max_bytes)` caps this (`0`, the default, means unlimited): a response whose `Content-Length` alone already declares more than `max_bytes` is rejected immediately, before any body byte is read off the wire; a chunked or connection-close-delimited body (no declared length to check up front) is instead rejected the moment the bytes actually received so far would exceed `max_bytes`. Either case reports `ccol_msg_too_large` and the connection is not reused afterward. This cap has no effect on `chttpclient_do_streaming`/`chttpclient_do_async_streaming`/`chttpclient_do_pooled_streaming`: a streaming caller already controls its own memory via its `chttpcli_write_fn`'s return value. The up-front declared-length check only ever applies to the message that will actually deliver the caller's body: an intermediate redirect hop's own body is always exempt (its body is discarded regardless of length; see "Redirect Following" below), a discarded 1xx informational response's declared `Content-Length` (RFC 7230 SS3.3.2 says a compliant server should never send one, but a misbehaving or malicious server might) is likewise exempt since that response is never delivered to the caller, and a `HEAD` response's `Content-Length` (which describes what a `GET` would have returned, per RFC 7231 SS4.3.2, and is never followed by actual body bytes) is exempt as well.
 
@@ -3596,7 +3839,7 @@ int main(void) {
 To redirect the reactor's own diagnostics (TLS handshake failures, listen-socket bind failures, idle-timeout closures) to a `clog` handle, call `chttpsvr_set_engine_logger` at any time (it takes effect immediately, and again after any full stop/restart cycle):
 
 ```c
-clog logger = clog_open_fd(2, CLOG_INFO);
+clog logger = clog_open_fd(2, CLOG_INFO, NULL);
 chttpsvr_set_engine_logger(logger);   /* derive engine sub-logger; optional */
 ```
 
@@ -3614,7 +3857,7 @@ chttpsvr_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default 
 
 This may only be called before the first `chttpsvr_start` in the process (it returns `ccol_not_permitted` afterward): swapping allocators once the reactor has already allocated memory with the previous one would produce mismatched malloc/free pairs. Passing NULL later (also before the first start, or after the reactor has fully stopped) reverts to the default allocator. Note this is independent of the allocator each individual `chttpsvr` instance uses for its own connections/requests (configured via `create_chttpsvr_mp`, following the usual `_mp` convention); this setter only affects the one shared reactor's own construction.
 
-By default the reactor uses exactly 1 thread: a single dedicated thread that both polls and dispatches every callback inline. This is faster and more latency-consistent than multiple dispatch threads for both plain HTTP and TLS-with-connection-reuse traffic (the common case for a well-behaved client population). Multiple dispatch threads only pull ahead under sustained *connection churn* combined with TLS (many distinct clients each opening a connection for only one or a few requests, so a large fraction of traffic pays a fresh handshake's CPU cost instead of amortizing it away); real for some deployments (a public API absorbing many one-off anonymous clients, an IoT/device gateway with frequent reconnects, a webhook receiver) but not the typical shape, since most HTTP client software pools and reuses connections specifically to avoid this cost. See `chttpsvr_set_engine_num_reactor_threads(3)` for the full measurements. To raise the thread count for a deployment that knows its own traffic is churn-heavy, call it under the same "before the first `chttpsvr_start`, or after a full stop" restriction as the allocator setter above:
+By default the reactor uses exactly 1 thread: a single dedicated thread that both polls and dispatches every callback inline. This is faster and more latency-consistent than multiple dispatch threads for both plain HTTP and TLS-with-connection-reuse traffic (the common case for a well-behaved client population). Multiple dispatch threads only pull ahead under sustained *connection churn* combined with TLS (many distinct clients each opening a connection for only one or a few requests, so a large fraction of traffic pays a fresh handshake's CPU cost instead of amortizing it away); real for some deployments (a public API absorbing many one-off anonymous clients, an IoT/device gateway with frequent reconnects, a webhook receiver) but not the typical shape, since most HTTP client software pools and reuses connections specifically to avoid this cost. See `chttpsvr_set_engine_num_reactor_threads(3)` for the full breakdown by traffic shape. To raise the thread count for a deployment that knows its own traffic is churn-heavy, call it under the same "before the first `chttpsvr_start`, or after a full stop" restriction as the allocator setter above:
 
 ```c
 chttpsvr_set_engine_num_reactor_threads(4);   /* optional; 0 restores the default (1) */
@@ -3638,7 +3881,7 @@ int main(void) {
     signal(SIGINT,  _on_signal);
     signal(SIGTERM, _on_signal);
 
-    clog logger = clog_open_fd(2, CLOG_INFO);
+    clog logger = clog_open_fd(2, CLOG_INFO, NULL);
     chttpsvr_set_engine_logger(logger);   /* optional: route engine logs to logger */
 
     chttpsvr srv = create_chttpsvr(logger, NULL);
@@ -3668,7 +3911,7 @@ original `cl` handle (when non-NULL) is never touched and remains the
 caller's responsibility to close.
 
 ```c
-clog logger = clog_open_fd(2, CLOG_INFO);
+clog logger = clog_open_fd(2, CLOG_INFO, NULL);
 chttpsvr srv  = create_chttpsvr(logger, NULL);         /* default allocator; derives from logger */
 chttpsvr srv  = create_chttpsvr_mp(mp, logger, &err);  /* custom allocator; derives from logger */
 chttpsvr srv2 = create_chttpsvr(NULL, NULL);           /* internal stderr/FATAL-only logger */
@@ -3678,8 +3921,8 @@ cfg.host                 = "0.0.0.0";            /* listen address; or "unix:///
                                                     to bind a Unix domain socket instead (port
                                                     is then ignored); see Unix Domain Sockets below */
 cfg.port                 = 8080;
-cfg.max_body_size        = 4*1024*1024;          /* 4 MiB body limit; exceeding it
-                                                    is a 413 (buffered) or a stream
+cfg.max_body_size        = 4*1024*1024;          /* 4 MiB body limit (0 = unlimited);
+                                                    exceeding it is a 413 (buffered) or a stream
                                                     error the handler observes via
                                                     chttpsvr_req_stream_error()
                                                     (streaming); either way the
@@ -3703,13 +3946,19 @@ cfg.max_body_read_duration_ms = 0;               /* 0 = no cap (default); caps t
 cfg.response_write_timeout_ms = 0;               /* 0 = use stream_read_timeout_ms's value; bounds how
                                                     long a worker will wait per write(2)-equivalent call
                                                     while sending a response to a slow-reading client */
+cfg.max_response_write_duration_ms = 0;          /* 0 = no cap (default); caps the *total* time spent
+                                                    sending one response, closing the loophole a client
+                                                    that reads just fast enough to always beat
+                                                    response_write_timeout_ms would otherwise leave open */
 cfg.max_header_bytes    = 0;                     /* 0 = library default (64 KiB); a request whose combined
                                                     request-line + header block exceeds this is rejected
                                                     (connection reset, no HTTP response: the header
                                                     block itself couldn't be parsed far enough to answer) */
 cfg.max_connections     = 0;                     /* 0 = unlimited; once at capacity, new connections are
                                                     simply left pending in the kernel's own listen backlog
-                                                    rather than accepted and immediately rejected */
+                                                    rather than accepted and immediately rejected; the
+                                                    listener stops accepting until a slot frees, which can
+                                                    take up to about a second to be noticed */
 cfg.worker_thread_count  = 4;                    /* 0 = CPU core count */
 cfg.worker_queue_capacity = 128;                 /* 0 = default (1024 * threads); CHTTPSVR_QUEUE_UNBOUNDED = no limit */
 cfg.enable_keepalive     = false;                /* SO_KEEPALIVE on every accepted connection; no effect on
@@ -3805,6 +4054,12 @@ chttpsvr_register_handler(srv, CHTTP_PUT,  "/users/{id}", update_user,  NULL);
 
 **Thread safety:** Route and middleware registration (`chttpsvr_register_handler`, `chttpsvr_use`, `chttpsvr_router_on`, `chttpsvr_router_use`, `chttpsvr_subrouter`) is thread-safe and may be called at any time; before or after `chttpsvr_start`, and concurrently with `chttpsvr_destroy` of the same server from another thread (a registration call racing a destroy simply returns `ccol_invalid_args`/NULL rather than touching freed memory). A reader-writer lock protects the routing tables so concurrent requests are never blocked by rare registration writes.
 
+**Shutting a server down from within its own handler:** a request handler or middleware that wants to shut its own server down (e.g. an admin/shutdown endpoint) should call `chttpsvr_engine_stop()` and simply return, which is safe there by design. Calling `chttpsvr_destroy()` directly on the server currently running that handler is a fatal error instead (`abort()`/`SIGABRT`, the same class of misuse as a double-destroy): that worker thread's own in-flight request can never finish while it is itself blocked waiting to destroy the server it belongs to. Calling `chttpsvr_stop()` immediately followed by `chttpsvr_start()` to restart the server from within one of its own handlers hits the identical problem on the `chttpsvr_start()` half (`chttpsvr_stop()` alone is always safe there); `chttpsvr_start()` reports it gracefully with `ccol_not_permitted` instead of aborting, leaving the server in a safe, recoverable state that a later restart from a different thread can still complete normally. Calling `chttpsvr_engine_wait()` from within a handler or middleware running on any server's own worker pool is likewise a fatal error, for the same underlying reason: it would block the shared engine's own shutdown drain on this exact in-flight request finishing, which can never happen while it is the one blocked waiting.
+
+`fork(2)` is safe with respect to `chttpserver`'s own internal locking: a fresh `chttpsvr_start`/`_stop`/`_destroy`/`_register_handler`/`_register_streaming_handler`/`_use`/`_subrouter`/`chttpsvr_router_on`/`_on_stream`/`_use` call, from any thread, in either the parent or a freshly forked child, never hangs waiting on a lock that some other (possibly no-longer-existing, since `fork()` duplicates only the calling thread) thread happened to hold at the instant of the fork. This also covers a fork landing while some other thread was itself mid-way through starting, stopping, or destroying that exact handle, or through a `chttpsvr_engine_stop()`-driven shutdown of the whole shared engine: a fresh call in the child still completes rather than waiting forever for a signal only the now-vanished thread could ever have sent. Calling `fork()` immediately followed by `exec()` (the pattern behind `popen`/`system`/launching a subprocess from within a request handler) is fully supported regardless of whether any server is currently running: the exec'd program replaces its process image entirely, so no state this library left behind is ever touched by it.
+
+Reviving a server that was already live and actively running work at the moment of the fork is a different matter, and is explicitly out of scope: `fork()` does not duplicate its reactor, worker-pool, or idle-timeout-sweep threads, so an inherited, already-started server can no longer accept new connections or process in-flight work in the child regardless of the guarantee above, and calling `chttpsvr_stop()` followed by `chttpsvr_start()` on that exact handle in the child does not bring it back either: the call reports `ccol_success`, but the server still cannot serve, since the engine reference it already held going into the fork is reused as-is rather than rebuilt. This mirrors how other HTTP servers treat the same situation: `net/http`'s own runtime documentation disclaims a bare, un-exec'd `fork()` for a multi-threaded/goroutine program entirely, and nginx/Apache's own prefork worker models only ever fork before any worker thread starts listening, never while one is already serving. The supported way to run more than one process serving traffic with this library follows the same shape: `fork()` before any server in the process has been created and started, then have each resulting process (parent and child alike) call `create_chttpsvr_mp`/`chttpsvr_start` independently to build its own server from scratch, rather than forking an already-running one and hoping either side can keep using it. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it; see "Compile-Time Configuration" in section 4.
+
 `chttpsvr_register_handler` and `chttpsvr_router_on` return `ccol_invalid_args` if `srv` is `CHTTPSVR_INVALID` or a stale/already-destroyed handle, if `fn` is NULL, `pattern` is NULL, `pattern` does not start with `/`, `pattern` contains consecutive or trailing slashes, a `{name}` segment contains characters outside `[A-Za-z0-9_]`, or the same `{name}` is used more than once. `chttpsvr_register_streaming_handler` and `chttpsvr_router_on_stream` apply the same guards. `chttpsvr_use` and `chttpsvr_router_use` likewise return `ccol_invalid_args` for a NULL `fn`. `chttpsvr_subrouter` returns NULL if `srv` is `CHTTPSVR_INVALID` or a stale/already-destroyed handle, `prefix` is NULL, `prefix` does not start with `/`, or `prefix` contains consecutive slashes (e.g. `"//api"` or `"/a//b"`). `chttpsvr_router_on`, `chttpsvr_router_on_stream`, and `chttpsvr_router_use` also return `ccol_invalid_args` if the sub-router's owning server has since been destroyed.
 
 **Wildcard method (`CHTTP_ANY`):** Pass `CHTTP_ANY` as the method to register a single handler that matches every HTTP method on the given pattern. Inside the handler, call `chttpsvr_req_method(req)` to determine which method was actually used. Because routing is first-wins, a method-specific route registered before a `CHTTP_ANY` route on the same pattern takes precedence for its method, while `CHTTP_ANY` catches every other method:
@@ -3821,7 +4076,7 @@ chttpsvr_register_handler(srv, CHTTP_ANY,  "/users/{id}", any_user,  NULL);
 
 **Middleware limit:** Each router (the root router for global middleware, and each sub-router) caps its own middleware chain at 32 entries, enforced at registration time; `chttpsvr_use` / `chttpsvr_router_use` return `ccol_not_permitted` (without adding the entry) on the call that would exceed the cap for that router. Separately, dispatch time also enforces a combined cap of 32 for the effective chain of a given request (global middleware + the matched router's own middleware); since each side of that sum can independently reach 32, the combined count can still exceed 32 even when neither router hit its own registration-time cap, in which case the server responds with `500 Internal Server Error` on the affected request. In practice the limit is generous and is not expected to be reached.
 
-**Root-router shadowing:** Routes registered directly on the server (via `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler`) are part of the root router, which is always evaluated before any sub-router. A root-level route whose path conflicts with a sub-router pattern will always win, regardless of registration order. Avoid registering root-level routes whose paths overlap with a sub-router's prefix and pattern combination.
+**Root-router shadowing:** Routes registered directly on the server (via `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler`) are part of the root router, which is always evaluated before any sub-router. A root-level route whose path AND method both match a request wins outright, shadowing a same-path sub-router route completely. A root-level route that matches the same path but a different method does not shadow the sub-router: every other root-level route is still tried for a same-path, same-method match first, and only once the whole root router has been exhausted does matching fall through to the sub-router, where a route whose own method matches the request is served normally (the same 405-vs-404 priority two same-router routes registered under different methods already follow). Avoid registering root-level routes whose paths overlap with a sub-router's prefix and pattern combination for the same method.
 
 ### Streaming Handlers
 
@@ -3850,13 +4105,13 @@ static void upload_handler(chttpsvr_req *req, chttpsvr_resp *resp, void *ctx) {
 }
 ```
 
-`chttpsvr_req_read` blocks the calling worker thread (never the reactor) until at least one byte is available, the body ends, an error occurs, `chttpsvr_config_t.stream_read_timeout_ms` elapses with no new data, or (if set) `max_body_read_duration_ms` elapses. It returns `>0` bytes read, `0` at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics), or `-1` on error; call `chttpsvr_req_stream_error(req)` immediately afterward to distinguish a timeout (`ccol_timed_out`), an oversized body (`ccol_msg_too_large`), or a dropped connection (`ccol_http_transfer_aborted`). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1, and `chttpsvr_req_body` on a streaming handler returns `NULL`/0 (its body is never pre-extracted).
+`chttpsvr_req_read` blocks the calling worker thread (never the reactor) until at least one byte is available, the body ends, an error occurs, `chttpsvr_config_t.stream_read_timeout_ms` elapses with no new data, or (if set) `max_body_read_duration_ms` elapses. It returns `>0` bytes read, `0` at EOF or when `buflen` is 0 (a no-op, consistent with POSIX `read(2)` semantics), or `-1` on error; call `chttpsvr_req_stream_error(req)` immediately afterward to distinguish a timeout (`ccol_timed_out`), an oversized body (`ccol_msg_too_large`), or a dropped connection (`ccol_http_transfer_aborted`). Passing `NULL` for `buf` with `buflen == 0` is also valid and returns 0. Calling `chttpsvr_req_read` on a buffered (non-streaming) handler returns -1, and `chttpsvr_req_body` on a streaming handler returns `NULL`/0 (its body is never pre-extracted). A chunked body's trailer fields are indexed exactly like any other header and become retrievable through `chttpsvr_req_header` once they have actually been parsed: for a buffered handler this is transparent (the whole body, trailers included, is already read before the handler runs), while a streaming handler only sees a trailer field once its own `chttpsvr_req_read` calls have drained the body all the way to EOF (a return of 0); querying it any earlier returns `NULL`, indistinguishable from the field never having been sent.
 
 If a request carries `Expect: 100-continue` and actually has a body (a `Content-Length` or chunked `Transfer-Encoding` was present), the first call to `chttpsvr_req_read` for that request sends the interim `100 Continue` response before attempting to read anything. A streaming handler that instead rejects a request outright (bad auth, unacceptable `Content-Type`, ...) by writing a final response without ever calling `chttpsvr_req_read` skips that interim response entirely, so the client sees the real rejection directly and is never asked to upload a body the server was not going to read. A buffered handler has no equivalent choice, since its whole body is always read before the handler ever runs; `chttpsvr` sends the interim response for a buffered route immediately, before that read begins. Either way, a request that carries `Expect: 100-continue` but has no body at all never receives the interim response: there is nothing to invite the client to upload.
 
-`stream_read_timeout_ms` (default 30000ms) bounds how long a worker will wait for the *next* batch while reading a body, for both buffered and streaming routes; it exists because `read_timeout_ms`/`idle_timeout_ms` reset on any connection activity and so do not protect against a client that trickles bytes just fast enough to never trip them, tying up a worker thread indefinitely. Note that `stream_read_timeout_ms` itself resets on *any* new byte too, so a client that sends a byte or two just before each gap expires defeats it the same way; `max_body_read_duration_ms` (default 0, disabled) closes that loophole by capping the *total* time spent reading one request's body regardless of per-gap progress, independent of how many individual gaps it took to get there. Configuring `stream_read_timeout_ms`, `max_body_read_duration_ms`, and/or `response_write_timeout_ms` to `0` ("wait indefinitely") does not turn a stalled connection into a permanent liability: shutting the server down (`chttpsvr_stop` immediately followed by `chttpsvr_start`, `chttpsvr_destroy`, or `chttpsvr_engine_stop`) still completes in bounded time by forcibly closing any connection whose worker thread is still blocked on it once that shutdown's own bounded, graceful wait is exhausted; a request that is still making progress is never affected by this.
+`stream_read_timeout_ms` (default 30000ms) bounds how long a worker will wait for the *next* batch while reading a body, for both buffered and streaming routes; it exists because `read_timeout_ms`/`idle_timeout_ms` reset on any connection activity and so do not protect against a client that trickles bytes just fast enough to never trip them, tying up a worker thread indefinitely. Note that `stream_read_timeout_ms` itself resets on *any* new byte too, so a client that sends a byte or two just before each gap expires defeats it the same way; `max_body_read_duration_ms` (default 0, disabled) closes that loophole by capping the *total* time spent reading one request's body regardless of per-gap progress, independent of how many individual gaps it took to get there. The same asymmetry, and the same fix, exists on the response-send side: `response_write_timeout_ms` bounds only each individual `write(2)`-equivalent call, so a client that reads a byte or two just before every such call's own timeout expires can hold a worker thread for as long as it likes; `max_response_write_duration_ms` (default 0, disabled) caps the *total* time spent sending one response, closing that loophole the identical way. A courtesy rejection response (404/405/413/500/501/503, generated internally rather than by a handler) and the `Expect: 100-continue` interim `100 Continue` line are both additionally always bounded by a small internal ceiling regardless of `max_response_write_duration_ms`'s own value, including 0/disabled, since both are always a fixed, small shape with no legitimate reason to ever need longer; a smaller value configured there still applies in full. Configuring `stream_read_timeout_ms`, `max_body_read_duration_ms`, `response_write_timeout_ms`, and/or `max_response_write_duration_ms` to `0` ("wait indefinitely") does not turn a stalled connection into a permanent liability: shutting the server down (`chttpsvr_stop` immediately followed by `chttpsvr_start`, `chttpsvr_destroy`, or `chttpsvr_engine_stop`) still completes in bounded time by forcibly closing any connection whose worker thread is still blocked on it once that shutdown's own bounded, graceful wait is exhausted; a request that is still making progress is never affected by this.
 
-The server's `ctpool` is created at `chttpsvr_start` time. Its capacity is controlled by `chttpsvr_config_t.worker_thread_count` and `worker_queue_capacity`. If the queue is full when a request arrives, the server responds immediately with `503 Service Unavailable`; it never stalls the reactor thread. `chttpsvr_stop` only closes the listener; connections it already accepted keep running and may still dispatch further requests through the same handle, including across a subsequent `chttpsvr_start` restart. That restart drains and replaces the old `ctpool` only once every already-in-flight request has completed (bounded, per the paragraph above, even if one of them is genuinely stalled), so it is always safe to restart a server this way even while such a connection is still active.
+The server's `ctpool` is created at `chttpsvr_start` time. Its capacity is controlled by `chttpsvr_config_t.worker_thread_count` and `worker_queue_capacity`. If the queue is full when a request arrives, the server responds immediately with `503 Service Unavailable`; it never stalls the reactor thread. `chttpsvr_stop` only closes the listener; connections it already accepted keep running and may still dispatch further requests through the same handle, including across a subsequent `chttpsvr_start` restart. That restart drains and replaces the old `ctpool` only once every already-in-flight request has completed (bounded, per the paragraph above, even if one of them is genuinely stalled), so it is always safe to restart a server this way even while such a connection is still active. `chttpsvr_stop` and a `chttpsvr_start` restart of the same handle are also safe to call concurrently from two different threads: the restart waits for an in-flight `chttpsvr_stop` call's own teardown of the old listener to fully finish before binding a new one on the same host/port, rather than racing a `bind()` against a socket the stop has not yet closed. `chttpsvr_start` is also safe to race against a concurrent, engine-wide teardown (`chttpsvr_engine_stop`, or the shared reactor's own graceful shutdown when the last other server referencing it is destroyed): it transparently retries until that teardown has finished, rather than racing it.
 
 ### Middleware
 
@@ -3892,7 +4147,7 @@ chttpsvr_router_on(api, CHTTP_POST, "/items",     create_item, NULL);
 
 The prefix must begin with `'/'`. A trailing slash is stripped automatically so `"/api/v1"` and `"/api/v1/"` are equivalent.
 
-**The `"/"` prefix edge case:** After trailing-slash normalisation the prefix `"/"` is stored with `prefix_len = 1`. The match rule requires the character immediately after the prefix to be `'/'` or `'\0'`. For the exact path `"/"` the next character is `'\0'` (matches). For any path like `"/foo"` the next character is a letter, so those paths do **not** match a `"/"` sub-router and receive 404. If you need to catch all requests regardless of path, register routes directly on the server with `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler` rather than using a sub-router with prefix `"/"`.
+**The `"/"` prefix edge case:** After trailing-slash normalisation the prefix `"/"` is stored with `prefix_len = 1`. A `"/"` sub-router matches only the exact request path `"/"`; any other path, including one starting with a second slash (e.g. `"//foo"`), does **not** match and receives 404. If you need to catch all requests regardless of path, register routes directly on the server with `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler` rather than using a sub-router with prefix `"/"`.
 
 Global middleware (added via `chttpsvr_use`) runs before router middleware for all routes.
 
@@ -3939,9 +4194,9 @@ chttpsvr_resp_write_json(resp, json, len);   /* sets Content-Type + appends */
 
 The response is buffered and sent automatically when the handler returns. `chttpsvr_resp_write` uses an overflow-safe doubling strategy for buffer growth: it returns `ccol_not_enough_memory` when `len` would cause the total body length to overflow `size_t`, in addition to the normal allocator-failure case.
 
-`chttpsvr_resp_set_header` rejects a name or value containing a CR or LF byte with `ccol_invalid_args`, since both are written onto the wire with no further escaping: a handler that reflects request-controlled data (a query parameter, a path parameter, an echoed request header) into a response header must not be able to inject arbitrary extra header lines or split the response in two by way of an unsanitized `\r`/`\n` in that data.
+`chttpsvr_resp_set_header` rejects a value containing a CR or LF byte with `ccol_invalid_args`: name/value are written onto the wire with no further escaping, so a handler that reflects request-controlled data (a query parameter, a path parameter, an echoed request header) into a response header must not be able to inject arbitrary extra header lines or split the response in two by way of an unsanitized `\r`/`\n` in that data. `name` must be a non-empty RFC 7230 tchar-only token (letters, digits, and `!#$%&'*+-.^_`|~`); an empty name has no valid on-the-wire representation, and any other disallowed byte (a space or a literal `:`, say) is not itself a CRLF-injection vector but still produces a structurally malformed wire line a strict downstream parser could misread.
 
-`chttpsvr_resp_set_header` accepts (and validates) a `"Connection"` header like any other name, but never sends it: the server always emits its own `Connection` header, reflecting whether the connection is actually kept open afterward, since that decision is what drives real socket behavior and must never disagree with what the client is told.
+`chttpsvr_resp_set_header` accepts (and validates) a `"Connection"` or `"Content-Length"` header like any other name, but never sends either verbatim: the server always emits its own `Connection` header, reflecting whether the connection is actually kept open afterward, and always computes and emits its own `Content-Length` header from the response body actually written, since both decisions drive real wire framing and must never disagree with what the client is told. A `"Transfer-Encoding"` header name (case-insensitive) is rejected outright instead, with `ccol_invalid_args`: this server never transfer-codes a response body, so letting a handler-set Transfer-Encoding header reach the wire alongside the server's own auto-computed Content-Length header would produce an ambiguous framing an intermediary could misparse, mirroring `chttp_request_set_header`'s identical rejection on the client side.
 
 **HEAD requests:** a handler reachable via `CHTTP_HEAD` (explicitly, or through a `CHTTP_ANY` registration) may write a response body exactly as it would for `GET`; per RFC 7231, the server reports the real body length via `Content-Length` (matching what a `GET` would have reported) but never writes the actual body bytes to the wire for a `HEAD` request.
 
@@ -3972,10 +4227,12 @@ Pass a `chttp_tls_config_t` (from `chttp.h`) in the server config to enable TLS.
 chttp_tls_config_t tls = {
     .cert_path       = "/etc/certs/server.crt",
     .key_path        = "/etc/certs/server.key",
-    .ca_bundle_path  = NULL,   /* optional; used for mutual TLS */
+    .ca_bundle_path  = NULL,   /* optional; enables mutual TLS when set */
 };
 cfg.tls = &tls;
 ```
+
+`cert_path` and `key_path` are required together whenever `cfg.tls` is set: `chttpsvr_start` rejects any `cfg.tls` that does not have both non-NULL with `ccol_invalid_args`, rather than silently starting the server as plain, unencrypted HTTP. This covers a lone `cert_path`, a lone `key_path`, a `ca_bundle_path` set with the other two left NULL, and a `cfg.tls` left otherwise empty (for example `CHTTP_TLS_DEFAULT`, whose `cert_path`/`key_path` are both NULL, since that macro's verification-related fields are meant for the client side): a trust store, or a `chttp_tls_config_t` with no fields set at all, is never valid server-side configuration without a server identity certificate, unlike the client side (`chttpclient_set_tls`), where `ca_bundle_path` alone is the ordinary way to configure custom-CA verification with no client certificate involved. If the certificate/key pair, or `ca_bundle_path` when set, cannot actually be loaded (a missing/unreadable file or malformed contents), `chttpsvr_start` fails with `ccol_unexpected_failure` and no listener is registered; a `ca_bundle_path` that fails to load is never silently treated as "no mutual TLS configured", since a loaded CA bundle is what enables client-certificate verification on the resulting listener.
 
 ### API Reference
 
@@ -3985,24 +4242,24 @@ cfg.tls = &tls;
 |---|---|
 | `create_chttpsvr(cl, err)` | Create a server with the default allocator; `cl` may be NULL (an internal stderr/FATAL-only logger is used) or a parent logger to derive this server's logger from (tagged `component=http-server`); returns `CHTTPSVR_INVALID` on failure |
 | `create_chttpsvr_mp(mp, cl, err)` | Create a server with a custom allocator; same `cl` semantics as `create_chttpsvr` |
-| `__chttpsvr_destroy(srv)` | Destroy and free the server, including closing the server's own logger (`clog_close`); does not set the handle to `CHTTPSVR_INVALID`. Safe to call regardless of whether the shared engine is still running (releases this server's own reference, possibly triggering an asynchronous engine stop if it was the last one) or was already force-stopped via `chttpsvr_engine_stop()` while `srv` was still started (the server's own listener/connections/worker pool are quiesced exactly once either way). `srv` must be a currently-live handle: a stale handle (already destroyed, whether sequentially or concurrently) is a fatal error (`abort()`/`SIGABRT`), not a use-after-free/double-free; `CHTTPSVR_INVALID` itself remains a silent no-op |
+| `__chttpsvr_destroy(srv)` | Destroy and free the server, including closing the server's own logger (`clog_close`); does not set the handle to `CHTTPSVR_INVALID`. Safe to call regardless of whether the shared engine is still running (releases this server's own reference, possibly triggering an asynchronous engine stop if it was the last one) or was already force-stopped via `chttpsvr_engine_stop()` while `srv` was still started (the server's own listener/connections/worker pool are quiesced exactly once either way). `srv` must be a currently-live handle: a stale handle (already destroyed, whether sequentially or concurrently), or a call made from within one of `srv`'s own request handlers/middleware, is a fatal error (`abort()`/`SIGABRT`), not a use-after-free/double-free; `CHTTPSVR_INVALID` itself remains a silent no-op |
 | `chttpsvr_destroy(srv)` | Macro: calls `__chttpsvr_destroy` then sets the handle to `CHTTPSVR_INVALID` |
 
 **Engine Lifecycle (shared, process-level, independent of `chttpclient`'s own engine)**
 
 | Function | Description |
 |---|---|
-| `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-engine`) that receives the reactor's own diagnostics (TLS handshake failures, listen-socket bind failures, idle-timeout closures); may be called at any time, including after a full stop/restart cycle; returns `ccol_invalid_args` if `cl` is NULL |
+| `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-server-engine`) that receives the reactor's own diagnostics (TLS handshake failures, listen-socket bind failures, idle-timeout closures); may be called at any time, including after a full stop/restart cycle; returns `ccol_invalid_args` if `cl` is NULL |
 | `chttpsvr_set_engine_mem_mgmt_procs(mp)` | Redirect the reactor's own internal memory management to `mp`, or to the default allocator if `mp` is NULL; must be called before the first `chttpsvr_start` (may be called again once the reactor has fully stopped); returns `ccol_invalid_args` if `mp` is non-NULL but has a NULL function pointer, or `ccol_not_permitted` if the reactor is already running |
 | `chttpsvr_set_engine_num_reactor_threads(n)` | Pin the reactor to `n` OS threads, or restore the default (1) if `n` is 0; must be called before the first `chttpsvr_start` (may be called again once the reactor has fully stopped); returns `ccol_not_permitted` if the reactor is already running |
-| `chttpsvr_engine_stop()` | Signal the shared reactor to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler. Has no effect on `chttpclient`'s own, independent engine |
+| `chttpsvr_engine_stop()` | Signal the shared reactor to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler, including more than once (a repeated or overlapping call is a no-op). Has no effect on `chttpclient`'s own, independent engine |
 | `chttpsvr_engine_wait()` | Block until the shared reactor has fully stopped; use as an escape hatch when you need a synchronous guarantee (e.g. after an external shutdown signal, or before reusing a just-freed port) |
 
 **Per-Server Lifecycle**
 
 | Function | Description |
 |---|---|
-| `chttpsvr_start(srv, cfg)` | Start the server; on the first call in the process, lazily starts the shared reactor and idle-sweep thread; returns `ccol_invalid_args` if `srv` is `CHTTPSVR_INVALID` or a stale/already-destroyed handle, or if `cfg->port` is 0 and `cfg->host` is not a `"unix://"` path; returns `ccol_not_permitted` if already started |
+| `chttpsvr_start(srv, cfg)` | Start the server; on the first call in the process, lazily starts the shared reactor and idle-sweep thread; returns `ccol_invalid_args` if `srv` is `CHTTPSVR_INVALID` or a stale/already-destroyed handle, or if `cfg->port` is 0 and `cfg->host` is not a `"unix://"` path; returns `ccol_not_permitted` if already started, or if called from within one of `srv`'s own request handlers/middleware to restart the very server running that handler |
 | `chttpsvr_stop(srv)` | Close this server's listener; other servers continue running |
 
 **Route Registration (root router)**
@@ -4090,14 +4347,16 @@ The following components include their own internal synchronisation and are safe
 | `channel` | Two internal circular queues (one per direction) |
 | `clrucache` | Single mutex + per-entry condition variables; see constraints below |
 | `clogger` | Mutex on the shared backing store; all handles writing to the same fd are fully serialised; see constraints below |
-| `cthreadpool` | Internal mutex + condition variables; all public functions are safe to call concurrently except `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy`; see constraints below |
+| `cthreadpool` | Internal mutex + condition variables; every public function, including `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy`, is safe to call concurrently with any other on the same handle; see constraints below |
 | `chttpclient` | Internal pool mutex + condition variable; all public functions including `chttpclient_do`, `chttpclient_do_streaming`, `chttpclient_do_async`, `chttpclient_do_async_streaming`, `chttpclient_do_pooled`, and `chttpclient_do_pooled_streaming` are safe to call concurrently on the same handle |
 
 ### Per-Component Constraints
 
 **`clrucache` eviction callback.** The callback passed to `clru_construct` is invoked **while the cache mutex is held**. It must not call back into the same cache handle, doing so will deadlock. It may allocate memory or write to a logger, but must not call `clru_get` or `clru_set` on the cache that triggered the eviction.
 
-**`cthreadpool` shutdown and destroy.** `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy` must each be called at most once and must not be called concurrently with each other. All other public functions (`ctpool_submit`, `ctpool_try_submit`, `ctpool_timed_submit`, `ctpool_submit_future`, `ctpool_wait`, `ctpool_pending_count`, `ctpool_active_count`) are safe to call from multiple threads concurrently. The future functions (`ctpool_future_get`, `ctpool_future_done`, `ctpool_future_cancelled`, `ctpool_future_free`) are likewise safe to call concurrently on the same future object. `ctpool_future_create_detached` and `ctpool_future_fulfill` have no pool to serialise against at all; a detached future's only ordering requirement is that `ctpool_future_fulfill` is called exactly once.
+**`cthreadpool` shutdown and destroy.** `ctpool_shutdown_drain` and `ctpool_shutdown_immediate` are each idempotent: calling either one more than once, or calling both concurrently with each other on the same handle, is a safe no-op for whichever call arrives once shutdown has already started. `ctpool_destroy` may likewise be called concurrently with either shutdown function on the same still-live handle; it waits for that call to finish before releasing the pool's memory. The one hard restriction is `ctpool_destroy` itself: calling it a second time on a handle whose destroy has already completed, or racing it against a second, concurrent `ctpool_destroy` call on the very same still-live handle, is a fatal error rather than a safe no-op. All other public functions (`ctpool_submit`, `ctpool_try_submit`, `ctpool_timed_submit`, `ctpool_submit_future`, `ctpool_wait`, `ctpool_pending_count`, `ctpool_active_count`) are safe to call from multiple threads concurrently. The future functions (`ctpool_future_get`, `ctpool_future_done`, `ctpool_future_cancelled`, `ctpool_future_free`) are likewise safe to call concurrently on the same future object. `ctpool_future_create_detached` and `ctpool_future_fulfill` have no pool to serialise against at all; a detached future's only ordering requirement is that `ctpool_future_fulfill` is called exactly once.
+
+**`cthreadpool` self-calls from within a task.** Calling `ctpool_destroy` on a pool from within a task (or that task's `on_complete` callback) currently executing on one of that pool's own worker threads is a fatal error, exactly like a stale handle. `ctpool_wait` called this way returns immediately instead of deadlocking the calling task against itself; `ctpool_shutdown_drain`/`ctpool_shutdown_immediate` called this way are a complete no-op, leaving the pool fully usable for a later, external shutdown call.
 
 **`clogger` derived loggers.** `clog_derive` creates a sibling logger that shares the same fd, rotation state, and mutex as the root logger via the shared backing store. Writes from the root and all of its siblings are fully serialised with no additional locking required at the call site. The minimum-level check (`log_info`, `log_warn`, and similar macros) reads the per-logger level field without holding the mutex as a deliberate performance optimisation; a concurrent `clog_set_level` may therefore cause a single message near the boundary level to be inconsistently logged or dropped. This is intentional: the optimisation avoids mutex acquisition for every suppressed message, and the inconsistency window is not a data-corruption hazard.
 

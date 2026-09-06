@@ -326,135 +326,135 @@ typedef struct s32 {
  * Each case uses a packed struct assignment so the compiler emits the minimum
  * number of store instructions. This is always inlined to keep the switch
  * inside the hot path of mem_cpy rather than adding a call frame. */
-inline __attribute__((always_inline)) void mem_cpy_small(void* dst,
-                                                         const void* src,
+inline __attribute__((always_inline)) void mem_cpy_small(void *dst,
+                                                         const void *src,
                                                          size_t n) {
   // Handle common small sizes with direct assignments
   switch (n) {
     case 0:
       return;
     case 1:
-      *(uint8_t*)dst = *(uint8_t*)src;
+      *(uint8_t *)dst = *(uint8_t *)src;
       return;
     case 2:
-      *(uint16_t*)dst = *(uint16_t*)src;
+      *(uint16_t *)dst = *(uint16_t *)src;
       return;
     case 3: {
-      *(s3*)dst = *(s3*)src;
+      *(s3 *)dst = *(s3 *)src;
       return;
     }
     case 4:
-      *(uint32_t*)dst = *(uint32_t*)src;
+      *(uint32_t *)dst = *(uint32_t *)src;
       return;
     case 5: {
-      *(s5*)dst = *(s5*)src;
+      *(s5 *)dst = *(s5 *)src;
       return;
     }
     case 6: {
-      *(s6*)dst = *(s6*)src;
+      *(s6 *)dst = *(s6 *)src;
       return;
     }
     case 7: {
-      *(s7*)dst = *(s7*)src;
+      *(s7 *)dst = *(s7 *)src;
       return;
     }
     case 8:
-      *(uint64_t*)dst = *(uint64_t*)src;
+      *(uint64_t *)dst = *(uint64_t *)src;
       return;
     case 9: {
-      *(s9*)dst = *(s9*)src;
+      *(s9 *)dst = *(s9 *)src;
       return;
     }
     case 10: {
-      *(s10*)dst = *(s10*)src;
+      *(s10 *)dst = *(s10 *)src;
       return;
     }
     case 11: {
-      *(s11*)dst = *(s11*)src;
+      *(s11 *)dst = *(s11 *)src;
       return;
     }
     case 12: {
-      *(s12*)dst = *(s12*)src;
+      *(s12 *)dst = *(s12 *)src;
       return;
     }
     case 13: {
-      *(s13*)dst = *(s13*)src;
+      *(s13 *)dst = *(s13 *)src;
       return;
     }
     case 14: {
-      *(s14*)dst = *(s14*)src;
+      *(s14 *)dst = *(s14 *)src;
       return;
     }
     case 15: {
-      *(s15*)dst = *(s15*)src;
+      *(s15 *)dst = *(s15 *)src;
       return;
     }
     case 16: {
-      *(s16*)dst = *(s16*)src;
+      *(s16 *)dst = *(s16 *)src;
       return;
     }
     case 17: {
-      *(s17*)dst = *(s17*)src;
+      *(s17 *)dst = *(s17 *)src;
       return;
     }
     case 18: {
-      *(s18*)dst = *(s18*)src;
+      *(s18 *)dst = *(s18 *)src;
       return;
     }
     case 19: {
-      *(s19*)dst = *(s19*)src;
+      *(s19 *)dst = *(s19 *)src;
       return;
     }
     case 20: {
-      *(s20*)dst = *(s20*)src;
+      *(s20 *)dst = *(s20 *)src;
       return;
     }
     case 21: {
-      *(s21*)dst = *(s21*)src;
+      *(s21 *)dst = *(s21 *)src;
       return;
     }
     case 22: {
-      *(s22*)dst = *(s22*)src;
+      *(s22 *)dst = *(s22 *)src;
       return;
     }
     case 23: {
-      *(s23*)dst = *(s23*)src;
+      *(s23 *)dst = *(s23 *)src;
       return;
     }
     case 24: {
-      *(s24*)dst = *(s24*)src;
+      *(s24 *)dst = *(s24 *)src;
       return;
     }
     case 25: {
-      *(s25*)dst = *(s25*)src;
+      *(s25 *)dst = *(s25 *)src;
       return;
     }
     case 26: {
-      *(s26*)dst = *(s26*)src;
+      *(s26 *)dst = *(s26 *)src;
       return;
     }
     case 27: {
-      *(s27*)dst = *(s27*)src;
+      *(s27 *)dst = *(s27 *)src;
       return;
     }
     case 28: {
-      *(s28*)dst = *(s28*)src;
+      *(s28 *)dst = *(s28 *)src;
       return;
     }
     case 29: {
-      *(s29*)dst = *(s29*)src;
+      *(s29 *)dst = *(s29 *)src;
       return;
     }
     case 30: {
-      *(s30*)dst = *(s30*)src;
+      *(s30 *)dst = *(s30 *)src;
       return;
     }
     case 31: {
-      *(s31*)dst = *(s31*)src;
+      *(s31 *)dst = *(s31 *)src;
       return;
     }
     case 32: {
-      *(s32*)dst = *(s32*)src;
+      *(s32 *)dst = *(s32 *)src;
       return;
     }
   }
@@ -464,7 +464,7 @@ inline __attribute__((always_inline)) void mem_cpy_small(void* dst,
  * pointers is checked: if both satisfy uint64_t alignment the inlined
  * struct-assignment fast path is taken; otherwise the C library memcpy handles
  * the misaligned case. Larger buffers always delegate to memcpy. */
-void mem_cpy(void* dst, const void* src, size_t n) {
+void mem_cpy(void *dst, const void *src, size_t n) {
   if (n <= SMALL_CHUNKS_SIZE) {
     // Check if pointers are suitably aligned for fast path
     // Use pointer alignment check, since uint64_t is the largest direct access
@@ -484,133 +484,133 @@ void mem_cpy(void* dst, const void* src, size_t n) {
 
 /* Zeroes exactly n bytes (1-32) without calling into the C library, mirroring
  * the same packed struct technique used by mem_cpy_small. Always inlined. */
-inline __attribute__((always_inline)) void mem_zero_small(void* dst, size_t n) {
+inline __attribute__((always_inline)) void mem_zero_small(void *dst, size_t n) {
   // Handle common small sizes with direct assignments
   switch (n) {
     case 0:
       return;
     case 1:
-      *(uint8_t*)dst = 0;
+      *(uint8_t *)dst = 0;
       return;
     case 2:
-      *(uint16_t*)dst = 0;
+      *(uint16_t *)dst = 0;
       return;
     case 3: {
-      *(s3*)dst = (s3){0};
+      *(s3 *)dst = (s3){0};
       return;
     }
     case 4:
-      *(uint32_t*)dst = 0;
+      *(uint32_t *)dst = 0;
       return;
     case 5: {
-      *(s5*)dst = (s5){0};
+      *(s5 *)dst = (s5){0};
       return;
     }
     case 6: {
-      *(s6*)dst = (s6){0};
+      *(s6 *)dst = (s6){0};
       return;
     }
     case 7: {
-      *(s7*)dst = (s7){0};
+      *(s7 *)dst = (s7){0};
       return;
     }
     case 8:
-      *(uint64_t*)dst = 0;
+      *(uint64_t *)dst = 0;
       return;
     case 9: {
-      *(s9*)dst = (s9){0};
+      *(s9 *)dst = (s9){0};
       return;
     }
     case 10: {
-      *(s10*)dst = (s10){0};
+      *(s10 *)dst = (s10){0};
       return;
     }
     case 11: {
-      *(s11*)dst = (s11){0};
+      *(s11 *)dst = (s11){0};
       return;
     }
     case 12: {
-      *(s12*)dst = (s12){0};
+      *(s12 *)dst = (s12){0};
       return;
     }
     case 13: {
-      *(s13*)dst = (s13){0};
+      *(s13 *)dst = (s13){0};
       return;
     }
     case 14: {
-      *(s14*)dst = (s14){0};
+      *(s14 *)dst = (s14){0};
       return;
     }
     case 15: {
-      *(s15*)dst = (s15){0};
+      *(s15 *)dst = (s15){0};
       return;
     }
     case 16: {
-      *(s16*)dst = (s16){0};
+      *(s16 *)dst = (s16){0};
       return;
     }
     case 17: {
-      *(s17*)dst = (s17){0};
+      *(s17 *)dst = (s17){0};
       return;
     }
     case 18: {
-      *(s18*)dst = (s18){0};
+      *(s18 *)dst = (s18){0};
       return;
     }
     case 19: {
-      *(s19*)dst = (s19){0};
+      *(s19 *)dst = (s19){0};
       return;
     }
     case 20: {
-      *(s20*)dst = (s20){0};
+      *(s20 *)dst = (s20){0};
       return;
     }
     case 21: {
-      *(s21*)dst = (s21){0};
+      *(s21 *)dst = (s21){0};
       return;
     }
     case 22: {
-      *(s22*)dst = (s22){0};
+      *(s22 *)dst = (s22){0};
       return;
     }
     case 23: {
-      *(s23*)dst = (s23){0};
+      *(s23 *)dst = (s23){0};
       return;
     }
     case 24: {
-      *(s24*)dst = (s24){0};
+      *(s24 *)dst = (s24){0};
       return;
     }
     case 25: {
-      *(s25*)dst = (s25){0};
+      *(s25 *)dst = (s25){0};
       return;
     }
     case 26: {
-      *(s26*)dst = (s26){0};
+      *(s26 *)dst = (s26){0};
       return;
     }
     case 27: {
-      *(s27*)dst = (s27){0};
+      *(s27 *)dst = (s27){0};
       return;
     }
     case 28: {
-      *(s28*)dst = (s28){0};
+      *(s28 *)dst = (s28){0};
       return;
     }
     case 29: {
-      *(s29*)dst = (s29){0};
+      *(s29 *)dst = (s29){0};
       return;
     }
     case 30: {
-      *(s30*)dst = (s30){0};
+      *(s30 *)dst = (s30){0};
       return;
     }
     case 31: {
-      *(s31*)dst = (s31){0};
+      *(s31 *)dst = (s31){0};
       return;
     }
     case 32: {
-      *(s32*)dst = (s32){0};
+      *(s32 *)dst = (s32){0};
       return;
     }
   }
@@ -619,7 +619,7 @@ inline __attribute__((always_inline)) void mem_zero_small(void* dst, size_t n) {
 /* Fast memset-to-zero wrapper using the same alignment + size dispatch strategy
  * as mem_cpy: small aligned buffers use mem_zero_small, everything else falls
  * through to memset. */
-void mem_zero(void* dst, size_t n) {
+void mem_zero(void *dst, size_t n) {
   if (n <= SMALL_CHUNKS_SIZE) {
     // Check alignment for fast path
     if ((uintptr_t)dst & ALIGNMENT_MASK) {  // Not well aligned
@@ -632,4 +632,59 @@ void mem_zero(void* dst, size_t n) {
   }
 
   memset(dst, 0, n);
+}
+
+/* ========================================================================== */
+/*                         GROWABLE BYTE BUFFER                               */
+/* ========================================================================== */
+
+void ccol_growbuf_init(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp) {
+  b->m_procs = mp;
+  b->buf = _mem_alloc(mp, 256);
+  b->len = 0;
+  b->cap = b->buf ? 256 : 0;
+  b->oom = b->buf ? false : true;
+  if (b->buf) b->buf[0] = '\0';
+}
+
+void ccol_growbuf_init_hint(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp,
+                            size_t hint) {
+  size_t cap = hint + 1 > 64 ? hint + 1 : 64;
+  b->m_procs = mp;
+  b->buf = _mem_alloc(mp, cap);
+  b->len = 0;
+  b->cap = b->buf ? cap : 0;
+  b->oom = b->buf ? false : true;
+  if (b->buf) b->buf[0] = '\0';
+}
+
+/* Double the buffer capacity until it holds 'needed' bytes.
+ * Sets b->oom on reallocation failure or size_t overflow. */
+static void growbuf_grow(ccol_growbuf_t *b, size_t needed) {
+  if (b->oom) return;
+  size_t new_cap =
+      b->cap ? (b->cap > SIZE_MAX / 2 ? SIZE_MAX : b->cap * 2) : 256;
+  while (new_cap < needed) {
+    if (new_cap > SIZE_MAX / 2) {
+      b->oom = true;
+      return;
+    }
+    new_cap *= 2;
+  }
+  char *p = _mem_realloc(b->m_procs, b->buf, new_cap);
+  if (!p) {
+    b->oom = true;
+    return;
+  }
+  b->buf = p;
+  b->cap = new_cap;
+}
+
+void ccol_growbuf_append(ccol_growbuf_t *b, const char *data, size_t n) {
+  if (b->oom) return;
+  if (b->len + n + 1 > b->cap) growbuf_grow(b, b->len + n + 1);
+  if (b->oom) return;
+  memcpy(b->buf + b->len, data, n);
+  b->len += n;
+  b->buf[b->len] = '\0';
 }

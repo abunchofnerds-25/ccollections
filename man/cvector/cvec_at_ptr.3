@@ -1,0 +1,45 @@
+.TH CVEC_AT_PTR 3 "2026-08-15" "c_collections" "C Collections Library - Macros"
+.SH NAME
+cvec_at_ptr \- access element at index (type-safe, returns pointer or NULL)
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cvector.h>
+
+element_ptr = cvec_at_ptr(v, index);
+.fi
+.SH DESCRIPTION
+.nf
+Type-safe wrapper for cvector_at() that returns a pointer to the element,
+or NULL if index is out of bounds. Automatically casts to the correct
+type. Unlike cvec_at, does not terminate the program on an
+out-of-bounds index.
+.fi
+.SH PARAMETERS
+.nf
+v      Vector to access
+index  Zero-based index of element
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to element at index
+Returns NULL if index is out of bounds
+.fi
+.SH NOTES
+.nf
+Returns NULL if index is out of bounds (does not terminate)
+Returned pointer is only valid until the vector is resized
+.fi
+.SH EXAMPLES
+.nf
+cvec_construct(vec, int);
+cvec_push_rvalue(vec, 42);
+int *ptr = cvec_at_ptr(vec, 0);
+if (ptr) {
+  *ptr = 5; // Modify in-place
+}
+.fi
+.SH "SEE ALSO"
+.BR cvector_at (3),
+.BR cvec_at (3)

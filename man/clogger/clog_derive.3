@@ -12,9 +12,9 @@ clog clog_derive(clog parent);
 .SH DESCRIPTION
 .nf
 Creates a new derived logger that writes to the same file descriptor as
-parent and shares the same synchronisation mutex and log-rotation state.
+parent and shares the same log-rotation state and write-serialising lock.
 All writes from parent and every derived logger are therefore serialised
-by the same lock and land in the same destination.
+by that same lock and land in the same destination.
 
 At the moment of the call, the derived logger receives a snapshot of
 parent's structured fields and minimum log level.  After creation the
@@ -36,14 +36,17 @@ parent  Source logger to derive from.
 .SH RETURN VALUE
 .nf
 Returns a new derived logger handle on success.
-Returns NULL if memory allocation fails.
+Returns CLOG_INVALID if memory allocation fails.
 .fi
 .SH NOTES
 .nf
 Derived loggers inherit the output format and syslog facility from the
 shared backing store; changes to those settings via any handle are
 immediately visible to all handles writing to the same fd.
-Thread-safe: the field snapshot is taken under the shared mutex.
+Thread-safe: the field snapshot is synchronised against a concurrent
+clog_set_field(3)/clog_remove_field(3)/clog_clear_fields(3) call on
+parent, independently of any write in progress on a sibling logger.
+Asserts if parent is CLOG_INVALID, stale, or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_open_fd_mp (3),

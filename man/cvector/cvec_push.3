@@ -1,4 +1,4 @@
-.TH CVEC_PUSH 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CVEC_PUSH 3 "2026-08-25" "c_collections" "C Collections Library - Macros"
 .SH NAME
 cvec_push \- push an element onto the vector (type-safe)
 .SH LIBRARY
@@ -11,19 +11,35 @@ cvec_push(v, new_elem);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe wrapper for cvector_push_back() that automatically takes the
-address of the element. Calls fatal_err() on failure.
+Type-safe wrapper for cvector_push_back(). new_elem is converted to v's
+declared element type via ordinary C assignment/initialization (exactly
+as "T tmp = new_elem;" would do) before being copied into the vector, so
+the pushed value is what a plain C assignment would have produced, not
+new_elem's own raw byte representation. Calls fatal_err() on
+cvector_push_back() failure.
 .fi
 .SH PARAMETERS
 .nf
 v         Vector to push onto
-new_elem  Element to push (passed by reference automatically)
+new_elem  Element to push
 .fi
 .SH NOTES
 .nf
 Terminates program on failure
-Automatically takes address of new_elem
-Type is verified at compile time
+new_elem's value is converted to v's declared element type the same way
+a plain C assignment would (e.g. an int literal pushed into a
+cvec_construct(v, long) converts to the long value; a float pushed into
+a cvec_construct(v, int) truncates to an int the same way
+"int x = some_float;" would); new_elem's raw bit pattern is never copied
+verbatim into a differently-typed element, even when the two types
+happen to share the same size
+A new_elem whose type cannot be implicitly converted to v's declared
+element type at all is a compile error at this point, not a silently
+reinterpreted value
+new_elem may safely alias into v's own backing buffer (for example
+cvec_at(v, i)): its value is read into a private, non-aliasing temporary
+before v is ever touched, so a capacity expansion this call triggers can
+never invalidate it
 .fi
 .SH EXAMPLES
 .nf

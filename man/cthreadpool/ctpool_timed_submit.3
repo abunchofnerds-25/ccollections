@@ -20,6 +20,12 @@ most timeout for a free slot. The timeout is a relative duration;
 internally it is converted to an absolute deadline using CLOCK_REALTIME.
 
 Passing NULL as timeout is equivalent to ctpool_try_submit (no waiting).
+
+A non-NULL timeout whose tv_nsec field is outside [0, 999999999]
+(for example the un-normalised result of subtracting two struct
+timespec values) is normalised before use rather than producing
+undefined behaviour: {1, -500000000} is treated the same as a
+correctly-normalised {0, 500000000}.
 .fi
 .SH PARAMETERS
 .nf

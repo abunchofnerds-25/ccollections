@@ -26,11 +26,18 @@ Prefer the cyaml_delete() macro for all call sites.
 .SH RETURN VALUE
 .nf
 ccol_success           - node removed and freed.
-ccol_invalid_args      - root or path is NULL, path is empty, or the
-                         leaf component is not valid for the parent type
-                         (e.g. a non-'#N' component on a list parent).
-ccol_key_not_found     - any path component, including the parent path,
-                         is absent.
+ccol_invalid_args      - root or path is NULL, path is empty, a component
+                         is not valid for the node it addresses (e.g. a
+                         non-'#N' component on a list, or any component
+                         encountered under a scalar), malformed '#N'
+                         index syntax, or an empty component (nothing
+                         between two dots, or a leading or trailing
+                         dot); at any position in the path, not just
+                         the leaf.
+ccol_key_not_found     - a syntactically well-formed component (a
+                         dictionary key or a '#N' index) is absent; at any
+                         position, including a syntactically valid but
+                         out-of-range list index.
 ccol_not_enough_memory - internal strdup failed.
 .fi
 .SH "SEE ALSO"

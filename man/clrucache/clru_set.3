@@ -11,8 +11,17 @@ ccol_retval_t clru_set(name, key, val);
 .fi
 .SH DESCRIPTION
 .nf
-Type-safe GNU C statement expression that serialises key and val into
-cmap_pair values and calls clrucache_set_full().
+Type-safe GNU C statement expression that converts key and val to the
+cache's own declared KeyT/ValT (the same way a plain C assignment would),
+serialises the converted values into cmap_pair values, and calls
+clrucache_set_full().
+
+Converting val to ValT (rather than storing val's own natural expression
+type verbatim) means an int literal passed for a double-valued cache
+stores the double value 5.0, not a 4-byte copy of the int's own bit
+pattern; a val (or key) expression whose type cannot be implicitly
+converted to the cache's declared ValT (or KeyT) is a compile error at
+this point.
 
 If a remote setter was configured at construction it is called
 synchronously before the cache is updated. On setter failure the
@@ -20,9 +29,13 @@ function returns ccol_unexpected_failure and the cache is left unchanged.
 .fi
 .SH PARAMETERS
 .nf
-name  Cache variable
-key   Key expression. Must be an lvalue or a string literal.
-val   Value expression. Must be an lvalue or a string literal.
+name  Cache variable. Must be a plain variable declared with
+      clru_construct/clru_declare, or restored with clru_redeclare()
+      in the current scope (this is what supplies KeyT/ValT for the
+      conversion above); it cannot be an arbitrary expression such as
+      a struct member access.
+key   Key expression; any expression implicitly convertible to KeyT.
+val   Value expression; any expression implicitly convertible to ValT.
 .fi
 .SH RETURN VALUE
 .nf
@@ -46,8 +59,9 @@ clru_destroy(cache);
 .SH NOTES
 .nf
 Uses a GNU C statement expression ({...}); requires GCC or Clang.
-Both key and val must be lvalues; the macro takes their addresses
-internally. Assign literals or expressions to named variables first.
+When passing the cache handle across scopes (e.g. into a thread
+function), declare a local alias and call clru_redeclare() on it before
+calling clru_set(), the same as clru_get() requires; see clru_redeclare(3).
 .fi
 .SH "SEE ALSO"
 .BR clru_get (3),

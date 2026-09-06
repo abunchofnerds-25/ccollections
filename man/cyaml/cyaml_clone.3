@@ -1,4 +1,4 @@
-.TH CYAML_CLONE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CYAML_CLONE 3 "2026-09-06" "c_collections" "C Collections Library - Functions"
 .SH NAME
 cyaml_clone \- produce a deep independent copy of a DOM subtree
 .SH LIBRARY
@@ -12,8 +12,16 @@ cyaml cyaml_clone(cyaml node);
 .SH DESCRIPTION
 .nf
 Recursively copy node and all of its descendants.  The clone uses the
-same allocator as the source tree.  Mutating the clone does not affect
-the original and vice versa.
+same allocator as the source tree, and each node's own tag (see
+cyaml_node_tag(3)), if any, is carried over unchanged.  Mutating the
+clone does not affect the original and vice versa.
+
+node need not have come from cyaml_parse*(); a tree built directly via
+cyaml_create_list_mp(3)/cyaml_dictionary_set(3) is subject to the same
+500-level nesting limit cyaml_parse*(3) enforces at parse time (also
+the same limit cyaml_serialize(3)/cyaml_serialize_flow(3) enforce
+independently). If such a tree is nested past that limit, this
+function returns NULL rather than recursing without bound.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,7 +29,11 @@ node  Root of the subtree to copy.  NULL is accepted and returns NULL.
 .fi
 .SH RETURN VALUE
 .nf
-Root of the new tree (caller owns it), or NULL on allocation failure.
+Root of the new tree (caller owns it), or NULL on OOM or if node is
+nested more than 500 levels deep (the two failure causes are
+indistinguishable, since this function has no separate error-string
+channel).
 .fi
 .SH "SEE ALSO"
-.BR cyaml_destroy (3)
+.BR cyaml_destroy (3),
+.BR cyaml_node_tag (3)

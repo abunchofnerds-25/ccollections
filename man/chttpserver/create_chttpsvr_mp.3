@@ -34,6 +34,41 @@ automatically by __chttpsvr_destroy.
 
 On failure, err_str (if non-NULL) is set to a static diagnostic string
 and CHTTPSVR_INVALID is returned.
+
+A fresh create_chttpsvr_mp/chttpsvr_start/_stop/__chttpsvr_destroy/
+_register_handler/_register_streaming_handler/_use/_subrouter call,
+from any thread, in either the parent or a freshly forked child, never
+hangs on a lock some other (possibly no-longer-existing, since fork(2)
+duplicates only the calling thread) thread happened to hold at the
+instant of the fork. This also covers a fork landing while some other
+thread was itself mid-way through starting, stopping, or destroying
+that exact handle, or through a chttpsvr_engine_stop()-driven
+shutdown of the whole shared engine: a fresh call in the child still
+completes rather than waiting forever for a signal only the
+now-vanished thread could ever have sent. Calling fork(2) immediately
+followed by exec(3) (the pattern behind popen/system/launching a
+subprocess from within a request handler) is fully supported
+regardless of whether any server is currently running: the exec'd
+program replaces its process image entirely, so no state this
+library left behind is ever touched by it.
+
+Reviving a server already live and actively running work at the
+moment of the fork is a different matter, and is explicitly out of
+scope: its reactor, worker-pool, and idle-timeout-sweep threads are
+not duplicated into the child, so an inherited, already-started
+server can no longer accept new connections or process in-flight
+work there regardless of the guarantee above, and calling
+chttpsvr_stop() followed by chttpsvr_start() on that exact handle in
+the child does not bring it back either: the call reports
+ccol_success, but the server still cannot serve, since the engine
+reference it already held going into the fork is reused as-is rather
+than rebuilt. The supported way to run more than one process serving
+traffic with this library is to fork(2) before any server in the
+process has been created and started, then have each resulting
+process, parent and child alike, call
+create_chttpsvr_mp/chttpsvr_start independently to build its own
+server from scratch. This protection can be compiled out with
+-DFORK_SAFETY_REQUIRED=0 for a caller that has no need for it.
 .fi
 .SH RETURN VALUE
 .nf

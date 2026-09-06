@@ -31,6 +31,9 @@ Does nothing if requested capacity <= current capacity
 Actual capacity may be larger due to power-of-2 rounding
 Does not change element count
 Asserts if v is NULL
+The cvec_reserve(3) macro evaluates new_capacity_count exactly once,
+including on the failure path, so a side-effecting expression is safe
+to pass
 .fi
 .SH "SEE ALSO"
 .BR cvec_reserve (3)

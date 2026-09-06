@@ -19,10 +19,23 @@ created if absent (its immediate parent must already exist).  If the
 leaf exists its type is changed unconditionally and any composite
 (array, object) resources it previously owned are deep-freed.
 
+type must be one of CJSON_NULL, CJSON_BOOL, CJSON_INTEGER, CJSON_FLOAT,
+or CJSON_STRING; any other value (including CJSON_LIST / CJSON_DICTIONARY,
+or the internal sentinel cjson_set's own _Generic dispatch produces for a
+C type outside its accepted-type list) is rejected with ccol_invalid_args
+before the target node is touched.
+
 raw is a void pointer to the C value; raw_size is sizeof the original
 C expression.  For string values, raw points to a const char * variable
 unless raw_is_char_array is true, in which case raw points directly at
 the char[] bytes of a string literal.
+
+For type == CJSON_NULL with raw pointing at a full pointer-sized payload
+(raw_size == sizeof(void *), exactly what the cjson_set() macro always
+supplies for this type), the pointed-to void * value itself must be NULL;
+a non-NULL void * is rejected with ccol_invalid_args rather than being
+silently written as CJSON_NULL.  A direct call passing raw == NULL /
+raw_size == 0 for a genuine "no payload" null is unaffected by this check.
 
 Escape sequences in path components:
   \e.   -> literal '.' in the key (not a path separator)
@@ -31,8 +44,22 @@ A '\e' before any other character is left unchanged.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success, ccol_invalid_args, ccol_key_not_found, or
-ccol_not_enough_memory.
+ccol_success            - leaf created or updated.
+ccol_invalid_args       - NULL root/path, an empty path or path
+                           component (leading, trailing, or
+                           consecutive dots), a parent type
+                           incompatible with the leaf component, a
+                           malformed "#N" index (non-numeric,
+                           negative, or bare '#'), type/raw is not
+                           one of the accepted scalar forms, or
+                           type == CJSON_NULL with a non-NULL
+                           void * payload (see above).
+ccol_key_not_found      - the parent path, or a syntactically valid
+                           but out-of-range list index, is absent.
+ccol_not_enough_memory  - allocation failure.
+ccol_container_full     - the parent dictionary has already reached
+                           its maximum element count (creating a new
+                           key only).
 .fi
 .SH "SEE ALSO"
 .BR cjson_set (macro) (3),

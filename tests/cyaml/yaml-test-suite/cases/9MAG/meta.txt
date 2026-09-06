@@ -1,0 +1,2 @@
+fail=1
+name=Flow sequence with invalid comma at the beginning

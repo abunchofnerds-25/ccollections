@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cthreadcomm.h>
 
-ccol_retval_t event_loop_remove(event_loop loop, event_reg *reg);
+ccol_retval_t event_loop_remove(event_loop loop, event_reg reg);
 .fi
 .SH DESCRIPTION
 .nf
@@ -26,12 +26,25 @@ Does not close an fd or affect a queue's own lifetime; only the
 event_loop's registration bookkeeping is released, mirroring
 selectable_from_fd's existing "caller owns the fd" contract.
 
-Idempotent: calling event_loop_remove() a second time on an
-already-removed reg returns ccol_success without side effects.  The reg
-handle itself remains safe to pass to a subsequent event_loop_modify()
-or event_loop_remove() call after removal (both are documented to
-detect this and return gracefully), but must not be otherwise
-dereferenced by the caller once removed.
+Safe to call more than once on the same reg, whether sequentially or
+genuinely concurrently from different threads, and the reg handle
+itself remains safe to pass to a subsequent event_loop_modify(),
+event_loop_pause()/_resume(), event_loop_reg_generation(), or
+event_loop_remove() call after removal: reg is resolved against its
+own loop's registration table before anything is dereferenced, so an
+already-removed or otherwise stale handle is always detected rather
+than risking a use-after-free. The two repeat-call cases return
+differently, though. A call made strictly after an earlier
+event_loop_remove() on the same reg has already returned finds reg_h
+no longer resolves at all (that earlier call already released reg's
+own slot before returning) and gets ccol_invalid_args, the same
+outcome event_loop_modify()/_pause()/_resume()/event_loop_reg_
+generation() already give for an already-removed reg. A call that
+genuinely races another event_loop_remove() on the same reg is
+different: if its own resolve still succeeds (a narrow window, since
+reg's slot has not yet been released by the other call), it observes
+reg already marked removed and returns ccol_success as a no-op
+instead.
 .fi
 .SH PARAMETERS
 .nf
@@ -40,9 +53,14 @@ reg   Registration to remove.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success        Removed (or was already removed).
+ccol_success        Removed (or a genuinely concurrent racing call
+                    against the same reg already removed it first;
+                    see DESCRIPTION).
 ccol_invalid_args   loop is EVENT_LOOP_INVALID or a stale/already-
-                    destroyed handle, or reg is NULL.
+                    destroyed handle, or reg is EVENT_REG_INVALID or
+                    otherwise fails to resolve, including because an
+                    earlier, already-returned event_loop_remove() call
+                    already removed it.
 .fi
 .SH THREAD SAFETY
 .nf

@@ -30,10 +30,10 @@ req->expect_continue = true) to send "Expect: 100-continue" and wait
 for the server's interim response before sending the body; see
 chttpclient_do(3) for the full protocol. Has no effect on a request
 with no body, or one that already has an explicit "Expect" header set
-via chttp_request_set_header. Tier 1 (chttpclient_do/
-chttpclient_do_streaming) only; chttpclient_do_async and everything
-built on it ignore this field and send the body immediately, exactly
-as if it were false.
+via chttp_request_set_header. Honored uniformly by every tier
+(chttpclient_do/chttpclient_do_streaming, chttpclient_do_async/
+chttpclient_do_async_streaming, and chttpclient_do_pooled/
+chttpclient_do_pooled_streaming).
 .fi
 .SH PARAMETERS
 .nf

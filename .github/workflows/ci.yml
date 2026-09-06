@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux-x86_64-gcc:
+    name: Linux x86_64 (GCC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev valgrind
+      - name: make test
+        run: make test
+      - name: make memtest (valgrind)
+        run: make memtest
+
+  linux-x86_64-clang:
+    name: Linux x86_64 (Clang)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev valgrind
+      - name: make test
+        run: make CC=clang test
+      - name: make memtest (valgrind)
+        run: make CC=clang memtest
+
+  linux-x86_64-sanitizers:
+    name: Linux x86_64 (ASan + UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang libssl-dev zlib1g-dev
+      - name: make test (EXTRA_CFLAGS=-fsanitize=address,undefined -fno-sanitize-recover=undefined)
+        # ASan's shadow-memory instrumentation and valgrind's own
+        # instrumentation are fundamentally incompatible, so this job never
+        # runs `make memtest` on top of a sanitizer build.
+        #
+        # -fno-sanitize-recover=undefined: without it, UBSan reports a
+        # detected UB to stderr and keeps running, so a real, live UB finding
+        # here would not fail this job at all -- the process still exits 0.
+        run: make CC=clang EXTRA_CFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined" test
+
+  linux-x86_64-tsan:
+    name: Linux x86_64 (ThreadSanitizer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev zlib1g-dev
+      - name: cthreadcomm test_tsan
+        run: cd tests/cthreadcomm && make test_tsan
+      - name: chttpclient test_tsan
+        run: cd tests/chttpclient && make test_tsan
+      - name: chttpserver test_tsan
+        run: cd tests/chttpserver && make test_tsan
+      - name: chttpserver test_engine_stop_tsan
+        run: cd tests/chttpserver && make test_engine_stop_tsan
+
+  linux-i386-gcc:
+    name: Linux i386 (GCC, gcc -m32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib libssl-dev:i386 zlib1g-dev:i386
+      - name: make test
+        # No `make memtest` leg here: valgrind cannot run a 32-bit process on
+        # this runner without an additional 32-bit debuginfo package
+        # (libc6-dbg:i386) that this job does not install.
+        run: make CC="gcc -m32" test
+
+  linux-aarch64-gcc:
+    name: Linux aarch64 (cross-compile + QEMU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user libssl-dev:arm64 zlib1g-dev:arm64
+      - name: Cross-build and run each module's test suite under qemu-aarch64
+        # The per-module test/memtest targets hardcode a bare `./tests`
+        # invocation with no prefix-injection point, so an aarch64 binary
+        # built via CC=aarch64-linux-gnu-gcc cannot simply be run through
+        # `make test` on this x86_64 runner -- it would try to execute an
+        # ARM binary directly and fail immediately with "cannot execute
+        # binary file". Each module is instead built via the existing
+        # `build` target (unmodified) and its resulting `./tests` binary run
+        # directly through qemu-aarch64. No `make memtest` (valgrind) leg:
+        # running valgrind nested inside qemu-user emulation is not a
+        # reliably supported combination.
+        run: |
+          set -e
+          for dir in tests/*/; do
+            mod=$(basename "$dir")
+            [ "$mod" = "tau" ] && continue
+            echo "::group::$mod"
+            (cd "$dir" && make CC=aarch64-linux-gnu-gcc build)
+            qemu-aarch64 -L /usr/aarch64-linux-gnu "$dir/tests"
+            echo "::endgroup::"
+          done

@@ -1,0 +1,2 @@
+fail=1
+name=Wrong indented sequence item

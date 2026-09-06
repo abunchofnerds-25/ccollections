@@ -15,6 +15,16 @@ Reports the reason the most recent chttpsvr_req_read call on req
 returned -1.  Meaningful only immediately after such a -1 return;
 otherwise the result is unspecified.
 
+Distinguishes only chttpsvr_req_read's genuine, data-dependent
+transfer errors (see chttpsvr_req_read(3)).  It reports ccol_success,
+indistinguishable from "no error," when the -1 was instead caused by
+caller misuse (buf was NULL with buflen > 0, or the request's route
+was not registered with chttpsvr_register_streaming_handler); both
+are static programming errors reachable on every call to the
+offending code rather than only sometimes, so a caller hitting one is
+expected to find and fix it during ordinary testing rather than
+diagnose it at runtime.
+
 Return values:
   ccol_timed_out             stream_read_timeout_ms elapsed while
                               waiting for the next batch, or the
@@ -25,9 +35,14 @@ Return values:
                               size (chunked Transfer-Encoding) exceeded
                               max_body_size before any of that chunk's
                               data was read.
+  ccol_not_enough_memory     An internal allocation failed while
+                              growing the body buffer; not caused by
+                              the client.
   ccol_http_transfer_aborted The connection was closed or reset, or
                               the body's framing was malformed.
-  ccol_success               No error is on record for req.
+  ccol_success               No error is on record for req, or the -1
+                              was actually caused by one of the
+                              caller-misuse cases above.
   ccol_unexpected_failure    req is NULL or its handle is invalid.
 .fi
 .SH "SEE ALSO"

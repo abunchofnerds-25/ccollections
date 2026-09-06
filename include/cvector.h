@@ -61,7 +61,9 @@ typedef cvector *cvec;
  * The vector starts with a minimum capacity of 4 elements and automatically
  * resizes as needed.
  *
- * @param elem_size Size of each element in bytes (must be > 0)
+ * @param elem_size Size of each element in bytes (must be > 0, and must not
+ * exceed SIZE_MAX / 4, since the initial 4-element backing buffer allocation
+ * would otherwise overflow)
  * @param mmgmt_procs Custom memory management procedures, or NULL to use
  * default malloc/free
  * @param err Optional pointer to receive error string on failure (pass NULL to
@@ -103,6 +105,8 @@ cvector_create(size_t elem_size, char **err) {
  * @param v Vector to query
  *
  * @return Pointer to memory management procedures, or NULL if using default
+ *
+ * @note Will assert if v is NULL
  */
 ccol_memmgmt_procs_t *cvector_get_mprocs(cvec v);
 
@@ -155,6 +159,9 @@ void __cvector_destroy(cvec v);
  * @note Element is copied into the vector
  * @note Capacity doubles when full (2x scaling factor)
  * @note Will assert if v is NULL
+ * @note new_elem may safely alias into v's own backing buffer (for example a
+ *       pointer returned by cvector_data_ptr(v) or cvector_at(v, i)); any
+ *       capacity expansion this call triggers will not invalidate it
  *
  * @see cvector_pop_back
  * @see cvec_push
@@ -289,6 +296,13 @@ bool cvector_reserve(cvec v, size_t new_capacity_count);
  * @note Returns false if result would exceed max_elem_count
  * @note Returns false if elem_count would cause overflow
  * @note Will assert if v is NULL
+ * @note arr_ptr may safely alias into v's own backing buffer (for example a
+ *       pointer returned by cvector_data_ptr(v) or cvector_at(v, i)); any
+ *       capacity expansion this call triggers will not invalidate it
+ * @note The source and destination byte ranges are allowed to overlap (for
+ *       example when arr_ptr aliases v's own buffer and elem_count reads
+ *       past v's current element count into already-reserved capacity);
+ *       the copy is overlap-safe
  *
  * @see cvector_append_cvector
  * @see cvec_append_array
@@ -424,7 +438,7 @@ size_t cvector_find(cvec v, const void *elem, ccol_comparison_proc_t cmp);
  * macros (@c ccol_iter_key_ptr / @c ccol_iter_val_ptr) bypass the map SSO
  * path and return typed pointers straight into the buffer.
  *
- * @param v    Vector to iterate (must not be NULL)
+ * @param v    Vector to iterate
  * @param err  Optional pointer to receive an error string on failure
  *
  * @return Pointer to a @c cmap_iterator, or NULL if the vector is empty or
@@ -433,6 +447,12 @@ size_t cvector_find(cvec v, const void *elem, ccol_comparison_proc_t cmp);
  * @note The iterator is destroyed automatically when cvec_iter_next() reaches
  *       the end, or call ccol_iter_destroy() to abort early.
  * @note Modifying the vector during iteration invalidates the iterator.
+ * @note A NULL v is treated the same as an empty vector (returns NULL, not
+ * an error); this is intentional, not merely permissive, matching
+ * chashmap_begin_iter()/cbmap_begin_iter()'s identical NULL-tolerance, so a
+ * lazily-created container field left uninitialized because nothing has
+ * been inserted into it yet can be iterated directly without every caller
+ * needing its own NULL guard first
  *
  * @see cvec_begin
  * @see ccol_iter_next
@@ -642,15 +662,33 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
 /**
  * @brief Push an element onto the vector (type-safe)
  *
- * Type-safe wrapper for cvector_push_back() that automatically takes the
- * address of the element. Calls fatal_err() on failure.
+ * Type-safe wrapper for cvector_push_back(). new_elem is converted to v's
+ * declared element type via ordinary C assignment/initialization (exactly as
+ * `T tmp = new_elem;` would do) before being copied into the vector, then
+ * that converted copy is what's actually pushed. Calls fatal_err() on
+ * cvector_push_back() failure.
  *
  * @param v Vector to push to
- * @param new_elem Element value to push (lvalue)
+ * @param new_elem Element value to push
  *
  * @note Terminates program on failure
- * @note Element must be an addressable lvalue
- * @note For rvalues, use cvec_push_rvalue()
+ * @note For rvalues (literals, expressions with no addressable storage),
+ * cvec_push_rvalue() is equivalent; both macros behave identically today
+ * since neither takes new_elem's address directly any more
+ * @note new_elem may safely alias into v's own backing buffer (for example
+ * cvec_at(v, i)): its value is read into a private, non-aliasing temporary
+ * before v is ever touched, so a capacity expansion this call triggers can
+ * never invalidate it
+ * @note new_elem's value is converted to v's declared element type the same
+ * way a plain C assignment would (e.g. an int literal pushed into a
+ * cvec_construct(v, long) converts to the long value, and a float pushed
+ * into a cvec_construct(v, int) truncates to an int the same way `int x =
+ * some_float;` would); new_elem's raw bit pattern is never copied verbatim
+ * into a differently-typed element, even when the two types happen to share
+ * the same size. A new_elem whose type cannot be implicitly converted to v's
+ * declared element type at all (e.g. two unrelated struct types, however
+ * identically laid out) is a compile error at this point, not a silently
+ * reinterpreted value
  *
  * @see cvec_push_rvalue
  * @see cvector_push_back
@@ -662,20 +700,66 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * cvec_push(vec, x);
  * @endcode
  */
-#define cvec_push(v, new_elem)                                                \
-  do {                                                                        \
-    ccol_retval_t r = cvector_push_back((v), (const void *)&(new_elem));      \
-    if (r != ccol_success) {                                                  \
-      fatal_err("cvec_push('%s'): r: %d (%s)", #v, r, ccol_retval_to_str(r)); \
-    }                                                                         \
+/* The result-holding local below is deliberately named __cvec_push_r, not the
+ * far more tempting plain 'r' (this project's own house style for a retval
+ * local): 'r' is declared in the SAME statement whose initializer embeds the
+ * caller's own new_elem expression via macro substitution, and C's
+ * declarator-scope rule ("the scope of an identifier begins right after its
+ * own declarator", i.e. before the initializer is even evaluated; the same
+ * rule that makes `int x = x;` a self-reference, not a copy of an outer x)
+ * means a caller who happens to name their own pushed variable 'r' would
+ * silently take the address of this macro's own not-yet-initialized 'r'
+ * instead of their own, reproduced as real, silent data corruption with
+ * zero compiler warnings at any optimization level before this was renamed.
+ * A name this unlikely to ever collide with a real caller identifier is the
+ * only practical fix available to a non-hygienic C macro. The same reasoning
+ * applies to __cvec_push_val below it: it is declared in its own statement
+ * (not nested inside new_elem's own expansion), so it has no declarator-scope
+ * hazard of its own, but it is still named with the double-underscore prefix
+ * C reserves for implementation use, so no conforming caller-supplied
+ * identifier can ever collide with it either.
+ *
+ * __cvec_push_val itself is not merely a hygiene device: it is what fixes a
+ * real, previously-shipped bug. This macro used to take &(new_elem) directly
+ * and hand that raw pointer straight to cvector_push_back(), guarded only by
+ * a sizeof() _Static_assert. That assert caught a differently-SIZED new_elem
+ * (preventing an out-of-bounds read) but did nothing for a differently-TYPED
+ * new_elem of the *same* size (e.g. pushing a `float` into a
+ * cvec_construct(v, int)): the assert passed (sizeof(float) ==
+ * sizeof(int) on every mainstream platform) and cvector_push_back() copied
+ * the float's raw 4-byte IEEE-754 bit pattern into the vector's storage
+ * verbatim, so reading it back as int produced the float's reinterpreted
+ * bits (e.g. 1077936128 for 3.0f), not the value 3 an ordinary C assignment
+ * would have produced; silent data corruption with zero compiler
+ * diagnostics at any optimization level. Declaring __cvec_push_val as v's
+ * own declared element type and initializing it from new_elem routes that
+ * conversion through the C compiler's own assignment rules instead of a raw
+ * byte copy, which is what makes the result correct for every implicitly
+ * convertible new_elem type and a compile error for every genuinely
+ * incompatible one; it also makes the sizeof()-only _Static_assert both
+ * unnecessary (a mismatched-size new_elem can no longer cause an
+ * out-of-bounds read, since __cvec_push_val is always exactly v's own
+ * element size) and actively wrong (it would reject a legitimate, safe
+ * conversion like an int literal into a cvec_construct(v, long)), so it was
+ * removed rather than kept alongside the fix. */
+#define cvec_push(v, new_elem)                                    \
+  do {                                                            \
+    typeof(*v##__ccol_val_type_var) __cvec_push_val = (new_elem); \
+    ccol_retval_t __cvec_push_r =                                 \
+        cvector_push_back((v), (const void *)&__cvec_push_val);   \
+    if (__cvec_push_r != ccol_success) {                          \
+      fatal_err("cvec_push('%s'): r: %d (%s)", #v, __cvec_push_r, \
+                ccol_retval_to_str(__cvec_push_r));               \
+    }                                                             \
   } while (0)
 
 /**
  * @brief Push an rvalue element onto the vector (type-safe)
  *
  * Type-safe wrapper for cvector_push_back() that can handle rvalue expressions
- * that cannot be directly addressed. Creates a temporary compound literal.
- * Calls fatal_err() on failure.
+ * that cannot be directly addressed. Creates a temporary, typed as v's own
+ * declared element type and initialized from new_elem via a GNU C compound
+ * literal, and pushes that. Calls fatal_err() on cvector_push_back() failure.
  *
  * @param v Vector to push to
  * @param new_elem Element value to push (can be rvalue)
@@ -683,6 +767,15 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * @note Terminates program on failure
  * @note Can push literal values and expressions
  * @note Uses GNU C compound literal extension
+ * @note new_elem's value is converted to v's declared element type the same
+ * way a plain C assignment would (e.g. an unsuffixed int literal like 5
+ * pushed into a cvec_construct(v, long) converts to the long value 5, and a
+ * float expression pushed into a cvec_construct(v, int) truncates to an int
+ * the same way `int x = some_float;` would); new_elem's raw bit pattern is
+ * never copied verbatim into a differently-typed element, even when the two
+ * types happen to share the same size. A new_elem whose type cannot be
+ * implicitly converted to v's declared element type at all is a compile
+ * error at this point, not a silently reinterpreted value
  *
  * @see cvec_push
  * @see cvector_push_back
@@ -694,13 +787,46 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * cvec_push_rvalue(vec, x + y);
  * @endcode
  */
-#define cvec_push_rvalue(v, new_elem)                                          \
-  do {                                                                         \
-    ccol_retval_t r = cvector_push_back((v), &(typeof(new_elem)){(new_elem)}); \
-    if (r != ccol_success) {                                                   \
-      fatal_err("cvec_push_rvalue('%s'): r: %d (%s)", #v, r,                   \
-                ccol_retval_to_str(r));                                        \
-    }                                                                          \
+/* See cvec_push's own comment just above it for why this local is named
+ * __cvec_push_rvalue_r rather than plain 'r': new_elem's expansion sits
+ * inside this same declaration's initializer (now doubly so, since it is
+ * also the compound literal's own initializer), so a caller-supplied
+ * expression containing the bare identifier 'r' would otherwise resolve to
+ * this macro's own not-yet-initialized local instead of the caller's.
+ *
+ * The compound literal itself is typed as v's own declared element type
+ * (typeof(*v##__ccol_val_type_var)), not typeof(new_elem); mirrors
+ * cvec_find's own compound literal a few macros down, for the identical
+ * reason. Typing it as new_elem's own type used to be a real, shipped bug:
+ * it made the compound literal's initialization a same-type copy (or, for a
+ * literal like 5, an int-to-int copy) instead of a genuine conversion to v's
+ * element type, so a same-sized-but-differently-typed new_elem (e.g. a
+ * `float` pushed into a cvec_construct(v, int)) had its raw bit pattern
+ * copied into the vector verbatim rather than being converted the way a
+ * plain C assignment would; reading it back produced the float's
+ * reinterpreted bits (e.g. 1077936128 for 3.0f), not the value 3, with zero
+ * compiler diagnostics at any optimization level. The sizeof()-based
+ * _Static_assert this macro used to carry only ever caught a differently-
+ * SIZED new_elem (preventing an out-of-bounds read past a too-small compound
+ * literal); it did nothing for this same-size-different-type case, and gave
+ * a false impression of type safety while doing so. Typing the compound
+ * literal as v's own element type fixes both problems at once: the literal
+ * is always exactly v's element size (no out-of-bounds read is possible
+ * regardless of new_elem's own size), and its initializer goes through the
+ * C compiler's real conversion rules instead of a raw byte copy, so the
+ * _Static_assert became both unnecessary and, for a legitimate conversion
+ * like an int literal into a cvec_construct(v, long), actively wrong (it
+ * would have rejected a now-safe, correct push); it was removed rather than
+ * kept alongside the fix. */
+#define cvec_push_rvalue(v, new_elem)                         \
+  do {                                                        \
+    ccol_retval_t __cvec_push_rvalue_r = cvector_push_back(   \
+        (v), &(typeof(*v##__ccol_val_type_var)){(new_elem)}); \
+    if (__cvec_push_rvalue_r != ccol_success) {               \
+      fatal_err("cvec_push_rvalue('%s'): r: %d (%s)", #v,     \
+                __cvec_push_rvalue_r,                         \
+                ccol_retval_to_str(__cvec_push_rvalue_r));    \
+    }                                                         \
   } while (0)
 
 /**
@@ -726,32 +852,64 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * int val = cvec_pop(vec);  // val == 42
  * @endcode
  */
-#define cvec_pop(v)                                                           \
-  ({                                                                          \
-    typeof(*v##__ccol_val_type_var) _tmp;                                     \
-    ccol_retval_t r = cvector_pop_back((v), &_tmp);                           \
-    if (r != ccol_success) {                                                  \
-      fatal_err("cvec_pop('%s'): r: %d (%s)%s", #v, r, ccol_retval_to_str(r), \
-                r == ccol_container_empty ? "; vector is empty" : "");        \
-    }                                                                         \
-    _tmp;                                                                     \
+/* Both locals below use the __cvec_pop_ prefix rather than the more obvious
+ * '_tmp'/'r': v's own expansion (e.g. a vector variable a caller happened to
+ * name '_tmp') appears inside _tmp's own later use as an address-of target,
+ * and r's declaration/initializer has the identical hazard cvec_push's own
+ * comment documents in full. A name this specific to this one macro is
+ * exceedingly unlikely to ever collide with a real caller identifier. */
+#define cvec_pop(v)                                                         \
+  ({                                                                        \
+    typeof(*v##__ccol_val_type_var) __cvec_pop_tmp;                         \
+    ccol_retval_t __cvec_pop_r = cvector_pop_back((v), &__cvec_pop_tmp);    \
+    if (__cvec_pop_r != ccol_success) {                                     \
+      fatal_err(                                                            \
+          "cvec_pop('%s'): r: %d (%s)%s", #v, __cvec_pop_r,                 \
+          ccol_retval_to_str(__cvec_pop_r),                                 \
+          __cvec_pop_r == ccol_container_empty ? "; vector is empty" : ""); \
+    }                                                                       \
+    __cvec_pop_tmp;                                                         \
   })
+
+/**
+ * @brief Terminates via fatal_err() when ptr is NULL (used by cvec_at)
+ *
+ * Internal helper, not meant to be called directly. Kept as a plain function
+ * so the diagnostic-formatting logic itself lives in one place; cvec_at is
+ * the one that wraps it in a statement expression (to evaluate index exactly
+ * once), and that wrapping still composes correctly both as an rvalue and as
+ * an assignment target and does not trip -Wunused-value when the result is
+ * discarded, since the outer expression is still a plain pointer dereference.
+ */
+static inline __attribute__((always_inline)) void *_cvec_at_checked(
+    void *ptr, const char *vec_name, size_t index, size_t elem_count) {
+  if (!ptr) {
+    fatal_err("cvec_at('%s'): index %lu out of bounds (size: %lu)", vec_name,
+              (unsigned long)index, (unsigned long)elem_count);
+  }
+  return ptr;
+}
 
 /**
  * @brief Access element at index (type-safe, returns reference)
  *
  * Type-safe wrapper for cvector_at() that returns the element reference (not
- * pointer). Automatically casts to the correct type.
+ * pointer). Automatically casts to the correct type. Terminates the program
+ * via fatal_err() if index is out of bounds, matching every other type-safe
+ * macro's "aborting convenience API" contract; use cvec_at_ptr for a
+ * non-terminating, NULL-on-out-of-bounds alternative.
  *
  * @param v Vector to access
- * @param index Zero-based index of element
+ * @param index Zero-based index of element; evaluated exactly once, so a
+ * side-effecting expression (e.g. cvec_at(vec, i++)) is safe to pass
  *
  * @return Element reference at index
  *
  * @note Returns reference, not pointer
- * @note No bounds checking - will cause a SIGSEGV, if index out of bounds
+ * @note Terminates the program via fatal_err() if index is out of bounds
  *
  * @see cvector_at
+ * @see cvec_at_ptr
  *
  * Example:
  * @code
@@ -761,8 +919,61 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * cvec_at(vec, 0) = 5;        // now the first element is 5
  * @endcode
  */
-#define cvec_at(v, index) \
-  (*(typeof(*v##__ccol_val_type_var) *)(cvector_at((v), (index))))
+/* index is captured into a local (__cvec_at_index) exactly once, before
+ * being handed to both cvector_at() and _cvec_at_checked()'s own
+ * diagnostic-only re-read. Passing (index) directly to both, as this macro
+ * used to, evaluates it twice as two separate arguments of the same
+ * _cvec_at_checked() call (unsequenced relative to each other), which is
+ * undefined behavior for any side-effecting index expression (an
+ * indeterminate final value for e.g. a bare `i++`, and in practice each
+ * loop iteration advancing the index variable by 2 instead of 1, since both
+ * evaluations' increments apply). Reproduced directly: `cvec_at(vec, j++)`
+ * in an ordinary loop advanced j by 2 per call and walked off the end of
+ * the vector, hitting the out-of-bounds fatal_err() below despite the call
+ * site looking correct; GCC's own -Wsequence-point flags the pre-fix
+ * expansion. __cvec_at_index uses the same double-underscore,
+ * macro-specific naming this header already relies on elsewhere (e.g.
+ * __cvec_push_val) so no real caller identifier can plausibly collide with
+ * it. The statement expression still composes as an lvalue: `*ptr_expr` is
+ * an lvalue regardless of whether ptr_expr's own computation used a
+ * statement expression, so `cvec_at(v, i) = x;` keeps working. */
+#define cvec_at(v, index)                                                   \
+  (*(typeof(*v##__ccol_val_type_var) *)({                                   \
+    size_t __cvec_at_index = (index);                                       \
+    _cvec_at_checked(cvector_at((v), __cvec_at_index), #v, __cvec_at_index, \
+                     cvector_elem_count(v));                                \
+  }))
+
+/**
+ * @brief Access element at index (type-safe, returns pointer or NULL)
+ *
+ * Type-safe wrapper for cvector_at() that returns a pointer to the element,
+ * or NULL if index is out of bounds. Unlike cvec_at, does not terminate the
+ * program on an out-of-bounds index.
+ *
+ * @param v Vector to access
+ * @param index Zero-based index of element
+ *
+ * @return Pointer to element at index, or NULL if index is out of bounds
+ *
+ * @note Returns NULL if index is out of bounds (does not terminate)
+ * @note Returned pointer is only valid until the vector is resized
+ *
+ * @see cvector_at
+ * @see cvec_at
+ *
+ * Example:
+ * @code
+ * cvec_construct(vec, int);
+ * cvec_push_rvalue(vec, 42);
+ * int *ptr = cvec_at_ptr(vec, 0);
+ * if (ptr) {
+ *   *ptr = 5; // Modify in-place
+ * }
+ * @endcode
+ */
+#define cvec_at_ptr(v, index) \
+  ((typeof(*v##__ccol_val_type_var) *)(cvector_at((v), (index))))
 
 /**
  * @brief Get the number of elements (type-safe wrapper)
@@ -794,19 +1005,33 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * Type-safe wrapper for cvector_reserve() that calls fatal_err() on failure.
  *
  * @param v Vector to reserve capacity for
- * @param new_capacity_count Minimum number of elements to reserve
+ * @param new_capacity_count Minimum number of elements to reserve; evaluated
+ * exactly once (including on the failure path), so a side-effecting
+ * expression is safe to pass
  *
  * @note Terminates program if reservation fails
  *
  * @see cvector_reserve
  */
+/* new_capacity_count is captured into __cvec_reserve_count exactly once,
+ * before either use (the real cvector_reserve() call and the diagnostic
+ * message), for the same reason documented at length next to cvec_push's own
+ * internal locals just above: a macro parameter embedded via textual
+ * substitution into more than one place in the expansion is evaluated once
+ * per place it appears, so a side-effecting new_capacity_count (e.g. a
+ * function call reading from a queue, or a non-deterministic value) used to
+ * be evaluated a second time solely to build the fatal_err() message on the
+ * failure path; silently reporting a different value than was actually
+ * passed to cvector_reserve(), and duplicating any real side effect right
+ * before the process aborts. */
 #define cvec_reserve(v, new_capacity_count)                             \
   do {                                                                  \
-    if (!cvector_reserve((v), (new_capacity_count))) {                  \
+    size_t __cvec_reserve_count = (new_capacity_count);                 \
+    if (!cvector_reserve((v), __cvec_reserve_count)) {                  \
       fatal_err(                                                        \
           "cvec_reserve('%s'): failed to reserve %lu elements; out of " \
           "memory?",                                                    \
-          #v, (size_t)(new_capacity_count));                            \
+          #v, (unsigned long)__cvec_reserve_count);                     \
     }                                                                   \
   } while (0)
 
@@ -818,19 +1043,27 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  *
  * @param v Vector to append to
  * @param arr_ptr Pointer to array of elements
- * @param elem_count Number of elements in array
+ * @param elem_count Number of elements in array; evaluated exactly once
+ * (including on the failure path), so a side-effecting expression is safe to
+ * pass
  *
  * @note Terminates program if append fails
  *
  * @see cvector_append_array
  */
+/* elem_count is captured into __cvec_append_array_count exactly once, before
+ * either use, for the identical reason documented next to cvec_reserve's own
+ * matching fix just above: embedding the same macro parameter into both the
+ * real call and the fatal_err() diagnostic evaluates it twice on the failure
+ * path otherwise. */
 #define cvec_append_array(v, arr_ptr, elem_count)                           \
   do {                                                                      \
-    if (!cvector_append_array((v), (arr_ptr), (elem_count))) {              \
+    size_t __cvec_append_array_count = (elem_count);                        \
+    if (!cvector_append_array((v), (arr_ptr), __cvec_append_array_count)) { \
       fatal_err(                                                            \
           "cvec_append_array('%s'): failed to append %lu elements; out of " \
           "memory?",                                                        \
-          #v, (size_t)(elem_count));                                        \
+          #v, (unsigned long)__cvec_append_array_count);                    \
     }                                                                       \
   } while (0)
 
@@ -869,6 +1102,25 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
 #define cvec_data_ptr(v) cvector_data_ptr((v))
 
 /**
+ * @brief Type-correct csort_item_getter_proc_t adapter for cvector_at()
+ *
+ * cvector_at() is declared to take a cvec (i.e. cvector *) as its first
+ * parameter, not void *, while csort_item_getter_proc_t requires exactly
+ * void *(*)(void *, size_t). Passing cvector_at() to csort_sort() via a
+ * function pointer cast to csort_item_getter_proc_t calls it through a
+ * pointer to an incompatible function type, which is undefined behavior per
+ * C11 6.3.2.3p8 regardless of cvec and void * sharing identical
+ * representation on every mainstream ABI (confirmed via Clang's
+ * -fsanitize=function, which flags every such call). This adapter has the
+ * exact csort_item_getter_proc_t signature itself, so it can be handed to
+ * csort_sort() directly with no cast at all, closing the UB.
+ */
+static inline __attribute__((always_inline)) void *_cvec_sort_getter(
+    void *collection, size_t index) {
+  return cvector_at((cvec)collection, index);
+}
+
+/**
  * @brief Sort vector using custom comparison function
  *
  * Sorts the vector in-place using the csort library with a custom comparison
@@ -882,6 +1134,14 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * @note O(n log n) time complexity, O(n) space complexity
  * @note Will assert if v is NULL
  * @note Uses csort for sorting
+ * @note Calls fatal_err() if comparison_proc is NULL (for cvec_sort, this
+ * means no default comparator is available for the vector's element type;
+ * pass an explicit comparison function to this macro directly instead)
+ * @note Calls fatal_err() if the sort's internal temporary buffer could not
+ * be allocated, matching every other mutating type-safe macro in this header
+ * (cvec_push, cvec_reserve, cvec_append_array, ...); the vector is left
+ * completely unsorted (and unmodified) in that case, so this never silently
+ * hands back a partially- or un-sorted vector as if nothing had gone wrong
  *
  * @see cvec_sort
  *
@@ -895,16 +1155,39 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * cvector_sort_with_comparison_proc(vec, compare_ints);
  * @endcode
  */
-#define cvector_sort_with_comparison_proc(v, comparison_proc)              \
-  do {                                                                     \
-    if (!(v)) {                                                            \
-      fatal_err("cvector_sort_with_comparison_proc('%s'): vector is NULL", \
-                #v);                                                       \
-    }                                                                      \
-    csort_sort((v), cvector_elem_count((v)),                               \
-               sizeof(*(v##__ccol_val_type_var)),                          \
-               (csort_item_getter_proc_t)cvector_at, (comparison_proc),    \
-               cvector_get_mprocs((v)));                                   \
+#define cvector_sort_with_comparison_proc(v, comparison_proc)                \
+  do {                                                                       \
+    if (!(v)) {                                                              \
+      fatal_err("cvector_sort_with_comparison_proc('%s'): vector is NULL",   \
+                #v);                                                         \
+    }                                                                        \
+    /* Evaluated into a plain pointer variable, rather than tested via       \
+     * !(comparison_proc) directly, so that a caller passing a bare named    \
+     * comparator function (as opposed to a variable already holding one,    \
+     * e.g. cvec_sort's own use of this macro) does not trip -Werror=address \
+     * ("the address of 'X' will always evaluate as 'true'"); GCC/Clang      \
+     * can prove a *named function's* address is never NULL, but not a       \
+     * pointer variable's, even one initialised from that exact same         \
+     * function. This also means comparison_proc's own expression is         \
+     * evaluated exactly once, matching this header's existing single-       \
+     * evaluation convention for a macro's other arguments. */               \
+    ccol_comparison_proc_t __cvec_sort_cmp = (comparison_proc);              \
+    if (!__cvec_sort_cmp) {                                                  \
+      fatal_err(                                                             \
+          "cvector_sort_with_comparison_proc('%s'): comparison_proc is "     \
+          "NULL (no default comparator is available for this element "       \
+          "type; pass an explicit comparison function to "                   \
+          "cvector_sort_with_comparison_proc instead of using cvec_sort)",   \
+          #v);                                                               \
+    }                                                                        \
+    if (!csort_sort((v), cvector_elem_count((v)),                            \
+                    sizeof(*(v##__ccol_val_type_var)), _cvec_sort_getter,    \
+                    __cvec_sort_cmp, cvector_get_mprocs((v)))) {             \
+      fatal_err(                                                             \
+          "cvector_sort_with_comparison_proc('%s'): out of memory; vector "  \
+          "left unsorted",                                                   \
+          #v);                                                               \
+    }                                                                        \
   } while (0)
 
 /**
@@ -919,7 +1202,12 @@ cmap_iterator *cvector_begin_iter(cvec v, char **err);
  * @note Sorts in-place using stable mergesort algorithm
  * @note O(n log n) time complexity, O(n) space complexity
  * @note Uses default comparison for the element type
- * @note Supported types depend on csort library defaults
+ * @note Supported types depend on csort library defaults; calls fatal_err()
+ * with a clear diagnostic if the element type has no default comparator
+ * (use cvector_sort_with_comparison_proc directly with an explicit
+ * comparison function for such a type)
+ * @note Calls fatal_err() on allocation failure, like every other mutating
+ * type-safe macro in this header; see cvector_sort_with_comparison_proc
  *
  * @see cvector_sort_with_comparison_proc
  *

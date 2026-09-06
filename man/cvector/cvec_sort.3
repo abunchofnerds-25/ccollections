@@ -25,6 +25,13 @@ Sorts in-place using stable mergesort algorithm
 O(n log n) time complexity, O(n) space complexity
 Uses default comparison for the element type
 Supported types depend on csort library defaults
+Calls fatal_err() with a clear diagnostic if the element type has no
+default comparator (use cvector_sort_with_comparison_proc directly with
+an explicit comparison function for such a type)
+Calls fatal_err() if the sort's internal temporary buffer could not be
+allocated, matching every other mutating type-safe macro in cvector.h
+(cvec_push, cvec_reserve, cvec_append_array, ...); the vector is left
+completely unsorted in that case.
 .fi
 .SH EXAMPLES
 .nf

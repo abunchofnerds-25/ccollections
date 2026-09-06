@@ -1,0 +1,2 @@
+fail=0
+name=Doublequoted scalar starting with a tab

@@ -1,0 +1,39 @@
+.TH CYAML_NODE_TAG 3 "2026-08-17" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cyaml_node_tag \- return a node's YAML tag
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cyaml.h>
+
+const char *cyaml_node_tag(cyaml node);
+.fi
+.SH DESCRIPTION
+.nf
+Return node's YAML tag, or NULL if it carries none.
+
+A node parsed from a document with an explicit tag ("!!str", a custom
+"!foo", or a %TAG-resolved shorthand/verbatim tag) carries the fully
+resolved tag string here: one of the seven CYAML_TAG_* constants
+(CYAML_TAG_NULL, _BOOL, _INT, _FLOAT, _STR, _SEQ, _MAP), or a custom
+tag string.  An untagged node, including one whose type was
+determined purely by implicit core-schema resolution, returns NULL.
+
+A dictionary key can never carry a tag: this DOM's keys are plain
+strings, not nodes (see cyaml_dictionary_get(3)), so a tag decorating
+a key is parsed for validity but has nowhere to be stored and is
+discarded.
+.fi
+.SH PARAMETERS
+.nf
+node  DOM node handle; may be NULL (returns NULL).
+.fi
+.SH RETURN VALUE
+.nf
+Borrowed, non-owning tag string, or NULL.
+.fi
+.SH "SEE ALSO"
+.BR cyaml_node_set_tag (3),
+.BR cyaml_type (3),
+.BR cyaml_dictionary_get (3)

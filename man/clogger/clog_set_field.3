@@ -21,7 +21,17 @@ Both key and value are copied internally; the caller may free or
 modify them after this call without affecting the logger.
 
 If key already exists its value is replaced. Otherwise a new field is
-prepended to the field list.
+added to the field set.
+
+A key must consist entirely of printable US-ASCII characters
+(0x21-0x7e) excluding '=', ']', '"', and '\e\e'; a key that is empty,
+contains any of those excluded characters, contains whitespace or an
+ASCII control character, or contains any non-ASCII byte is silently
+ignored. So is a key that names one of the fixed tokens every log
+line already carries: ts, level, proc, src, func, msg, bt, bt_error.
+Allowing one of those through would produce a duplicate key= token in
+logfmt, a duplicate JSON key, or a duplicate RFC 5424 SD-PARAM-NAME
+within the same SD-ELEMENT.
 
 Values that contain spaces, '=', '"', '\e\e', or ASCII control
 characters are automatically double-quoted and backslash-escaped in
@@ -29,20 +39,35 @@ the output:
   - '"' -> \e"
   - '\e\e' -> \e\e
   - control chars -> \exNN
+
+The exact escape syntax differs by output format (see
+clog_set_format(3)): JSON uses \euNNNN Unicode escapes, and RFC 5424
+syslog escapes '"', '\e\e', and ']' in addition to control characters.
+When the output format is CLOG_FMT_JSON, a value that is not
+well-formed UTF-8 has each invalid byte replaced with the Unicode
+replacement character (U+FFFD) rather than being embedded raw, since
+JSON text must be valid Unicode.
+An RFC 5424 SD-PARAM-NAME longer than 32 characters is shortened to
+its first 23 characters followed by '~' and an 8-hex-digit hash of the
+full key, rather than a bare 32-character prefix, so two distinct long
+keys sharing a common prefix still get distinct SD-PARAM-NAMEs.
+In every format, control characters (including a literal newline or
+carriage return) are always neutralized, so a field value can never
+split a single record across multiple lines.
 .fi
 .SH PARAMETERS
 .nf
 logger  Logger handle.
-key     Field name. Copied internally. Should not contain '=' or
-        whitespace (no enforcement, but the resulting logfmt line
-        would be malformed).
+key     Field name. Copied internally. Silently ignored if empty,
+        invalid, or one of the reserved names listed above.
 value   Field value. Copied internally. May be arbitrary text.
 .fi
 .SH NOTES
 .nf
 Thread-safe: protected by the per-logger mutex.
-The field list is a linked list. For large field sets, iteration is
-O(n) per write; prefer a small number of long-lived fields.
+Every emitted line visits each attached field once; keep the field
+count small if logging is a hot path.
+Asserts if logger is CLOG_INVALID, stale, or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_remove_field (3),

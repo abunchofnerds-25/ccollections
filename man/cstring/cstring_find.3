@@ -17,12 +17,13 @@ zero-based starting index.
 .SH PARAMETERS
 .nf
 s        String to search
-needle   Substring to find (must not be NULL)
+needle   Substring to find
 .fi
 .SH RETURN VALUE
 .nf
 Zero-based index of the first occurrence
-ccol_invalid_size ((size_t)-1) if needle is not found
+0 if needle is an empty string (matches at the start)
+ccol_invalid_size ((size_t)-1) if needle is not found, or if needle is NULL
 .fi
 .SH NOTES
 .nf

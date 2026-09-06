@@ -34,19 +34,19 @@ SOFTWARE.
  * callers that need all three containers at once.
  *
  * Public API:
- *   ccol_begin(container)              — begin iterator (type-dispatched)
- *   ccol_end                           — end sentinel (NULL)
- *   ccol_for_each(container, it, body) — range-for loop
- *   ccol_iter_declare(container, it)   — typed iterator declaration (RAII)
- *   ccol_iter_next(it)                 — advance and return next iterator
- *   ccol_iter_key_ptr(it)              — typed const pointer to current key
- *   ccol_iter_val_ptr(it)              — typed pointer to current value
- *   ccol_iter_destroy(it)              — explicit early destruction
+ *   ccol_begin(container)              - begin iterator (type-dispatched)
+ *   ccol_end                           - end sentinel (NULL)
+ *   ccol_for_each(container, it, body) - range-for loop
+ *   ccol_iter_declare(container, it)   - typed iterator declaration (RAII)
+ *   ccol_iter_next(it)                 - advance and return next iterator
+ *   ccol_iter_key_ptr(it)              - typed const pointer to current key
+ *   ccol_iter_val_ptr(it)              - typed pointer to current value
+ *   ccol_iter_destroy(it)              - explicit early destruction
  */
 
 #include <common.h>
 
-/* Forward declarations — only pointer-to-incomplete-struct is needed for
+/* Forward declarations; only pointer-to-incomplete-struct is needed for
  * _Generic type matching and for the begin_iter function prototypes below.
  * Full struct definitions live in each container's own header. */
 struct cvector;
@@ -177,7 +177,7 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
 /* ========================================================================== */
 
 /* All three wrappers take void* so every __builtin_choose_expr branch is
- * type-compatible regardless of which container type is passed — only the
+ * type-compatible regardless of which container type is passed; only the
  * selected branch is ever executed. */
 static inline __attribute__((always_inline)) cmap_iterator *__ccol_cvec_begin(
     void *v, char **err) {

@@ -1,0 +1,2 @@
+fail=1
+name=Block scalar with more spaces than first content line

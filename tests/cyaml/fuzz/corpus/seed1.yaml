@@ -1,0 +1,9 @@
+key: value
+list:
+  - a
+  - b
+  - 1
+  - 2.5
+nested:
+  foo: bar
+  baz: [1, 2, 3]

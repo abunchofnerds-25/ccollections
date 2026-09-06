@@ -1,4 +1,4 @@
-.TH CVEC_PUSH_RVALUE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CVEC_PUSH_RVALUE 3 "2026-08-25" "c_collections" "C Collections Library - Macros"
 .SH NAME
 cvec_push_rvalue \- push an rvalue onto the vector (type-safe)
 .SH LIBRARY
@@ -12,8 +12,9 @@ cvec_push_rvalue(v, new_elem);
 .SH DESCRIPTION
 .nf
 Type-safe wrapper for cvector_push_back() that accepts rvalues (literals,
-expressions). Creates a temporary variable and takes its address. Calls
-fatal_err() on failure.
+expressions). Creates a temporary, typed as v's own declared element
+type and initialized from new_elem via a GNU C compound literal, and
+pushes that. Calls fatal_err() on cvector_push_back() failure.
 .fi
 .SH PARAMETERS
 .nf
@@ -24,7 +25,17 @@ new_elem  Expression or literal to push
 .nf
 Terminates program on failure
 Accepts expressions and literals
-Uses GNU C statement expression extension
+Uses GNU C compound literal extension
+new_elem's value is converted to v's declared element type the same way
+a plain C assignment would (e.g. an unsuffixed int literal like 5
+pushed into a cvec_construct(v, long) converts to the long value 5; a
+float expression pushed into a cvec_construct(v, int) truncates to an
+int the same way "int x = some_float;" would); new_elem's raw bit
+pattern is never copied verbatim into a differently-typed element, even
+when the two types happen to share the same size
+A new_elem whose type cannot be implicitly converted to v's declared
+element type at all is a compile error at this point, not a silently
+reinterpreted value
 .fi
 .SH EXAMPLES
 .nf

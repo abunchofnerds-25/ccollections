@@ -1,0 +1,2 @@
+fail=0
+name=Spec Example 5.4. Flow Collection Indicators

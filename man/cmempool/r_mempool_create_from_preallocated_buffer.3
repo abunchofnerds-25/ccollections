@@ -1,0 +1,63 @@
+.TH R_MEMPOOL_CREATE_FROM_PREALLOCATED_BUFFER 3 "2026-08-28" "c_collections" "C Collections Library - Functions"
+.SH NAME
+r_mempool_create_from_preallocated_buffer \- create ranged pool from user buffer
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+r_mempool *r_mempool_create_from_preallocated_buffer(
+    void *buffer,
+    size_t buf_size,
+    uint8_t smallest_size_power_of_two,
+    uint8_t largest_size_power_of_two,
+    uint8_t number_of_smallest_size_elems_power_of_two,
+    r_memory_fallback_policy_t fb_policy,
+    bool single_threaded,
+    ccol_memmgmt_procs_t *mmgmt_procs,
+    char **err);
+.fi
+.SH DESCRIPTION
+.nf
+Creates a ranged memory pool using a user-provided buffer instead of
+allocating sub-pool storage from the heap. The buffer is divided into
+contiguous segments, one per size tier, using the same size/count
+progression as r_mempool_create(). Useful for embedded systems.
+.fi
+.SH PARAMETERS
+.nf
+buffer                     Pointer to preallocated buffer
+buf_size                   Size of buffer in bytes (must match
+                          CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
+                          exactly)
+smallest_size_power_of_two              Exponent for smallest pool size
+largest_size_power_of_two               Exponent for largest pool size
+number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
+fb_policy                 Fallback policy for exhausted pools
+single_threaded           If true, omit locking
+mmgmt_procs               Custom memory management, or NULL
+err                       Optional pointer to receive error string
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to newly created ranged memory pool on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+Buffer size must exactly match CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
+Buffer is not freed by r_mempool_destroy() (user manages buffer lifetime)
+Pool structs are still allocated via mmgmt_procs
+Buffer contains all sub-pools in adjacent segments
+Returns NULL with error if buffer is not sufficiently aligned for the
+  pool's internal per-element header (a size_t plus a pointer); a
+  buffer declared via DECLARE_PREALLOCATED_RMEMPOOL_BUFFER is always
+  properly aligned, a hand-rolled buffer must be aligned to at least
+  _Alignof(max_align_t)
+Same power-of-two size/count constraints as r_mempool_create() apply
+.fi
+.SH "SEE ALSO"
+.BR DECLARE_PREALLOCATED_RMEMPOOL_BUFFER (3),
+.BR r_mempool_create (3),
+.BR r_mempool_destroy (3)

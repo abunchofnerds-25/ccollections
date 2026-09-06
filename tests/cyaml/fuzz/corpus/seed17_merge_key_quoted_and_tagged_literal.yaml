@@ -1,0 +1,9 @@
+defaults: &defaults
+  a: 1
+literal1:
+  "<<": not_a_merge
+literal2:
+  !!str <<: also_not_a_merge
+explicit_form:
+  ? <<
+  : *defaults

@@ -96,6 +96,15 @@ SOFTWARE.
  * shutdown signal such as SIGTERM triggers chttpsvr_engine_stop() from a
  * signal handler), call chttpsvr_engine_wait().
  *
+ * A request handler wanting to shut its own server down from within itself
+ * (e.g. an admin/shutdown endpoint) should call chttpsvr_engine_stop(),
+ * which is safe there by design; calling chttpsvr_destroy() or
+ * chttpsvr_stop()+chttpsvr_start() directly on the server currently running
+ * that handler is refused/fatal instead (see their own doc comments).
+ * chttpsvr_engine_wait() is refused/fatal there too, for the same reason:
+ * such a handler should call chttpsvr_engine_stop() and simply return, not
+ * also wait for the drain it just triggered to finish on the same thread.
+ *
  * Multiple servers may run concurrently; each listens on its own port and
  * has its own routes, middleware, worker pool, and clog handle.
  *
@@ -129,10 +138,19 @@ SOFTWARE.
  * Routes and routers are evaluated in registration order.  The root router
  * (routes registered directly with chttpsvr_register_handler /
  * chttpsvr_register_streaming_handler) is always checked first, before any
- * sub-router.  A root-level route that matches the same path as a sub-router's
- * route will therefore always win, shadowing the sub-router route completely.
- * To avoid unintentional shadowing, do not register root-level routes whose
- * paths overlap with a sub-router's prefix + pattern combination.
+ * sub-router.  A root-level route whose path AND method both match wins
+ * outright, shadowing a same-path sub-router route completely.  If a
+ * root-level route matches the same path but a DIFFERENT method, it does
+ * not shadow the sub-router route: every other root-level route is still
+ * tried for a same-path, same-method match first, and only once the whole
+ * root router has been exhausted does matching fall through to the
+ * sub-router, where a route whose own method matches the request is served
+ * normally.  (This mirrors how two same-router routes registered for the
+ * same path under different methods already behave; see README.md's routing
+ * section for the 405-vs-404 mechanism this shares.)  To avoid unintentional
+ * shadowing, do not register
+ * root-level routes whose paths overlap with a sub-router's prefix +
+ * pattern combination for the same method.
  *
  * ### Route patterns
  *
@@ -160,8 +178,8 @@ typedef struct chttpserver chttpserver;
  * pair), not a pointer; it must never be cast to/from void*, compared via
  * a pointer cast, or otherwise treated as an address. Compare it directly
  * against CHTTPSVR_INVALID (or use it in a truthiness check; CHTTPSVR_INVALID
- * is 0, so `if (!srv)` still works exactly as it did when this was a raw
- * pointer). Internally, every use of a chttpsvr is resolved through a
+ * is 0, so `if (!srv)` works too). Internally, every use of a chttpsvr is
+ * resolved through a
  * library-owned slot table before the underlying server object is touched:
  * a handle whose slot has since been freed (or reused for an unrelated,
  * later server) is always detected, rather than silently dereferencing
@@ -207,8 +225,12 @@ typedef void (*chttpsvr_handler_fn)(chttpsvr_req *req, chttpsvr_resp *resp,
  *
  * Call to advance to the next middleware in the chain (or to the final
  * handler if no more middleware remain).  Calling it zero times short-circuits
- * the chain; calling it more than once will invoke the tail of the chain
- * multiple times and must be avoided.
+ * the chain.  Calling it more than once from the same invocation skips
+ * whatever step the first call already invoked and instead advances the
+ * chain a second time, invoking the step after that one (the final handler
+ * itself, invoked repeatedly, only if this call is already the last
+ * middleware in the chain); this is never a useful pattern and must be
+ * avoided.
  */
 typedef void (*chttpsvr_next_fn)(chttpsvr_req *req, chttpsvr_resp *resp);
 
@@ -260,13 +282,14 @@ typedef struct chttpsvr_config {
   const char *host;
   /** Listening port (default 8080). Ignored when host is a "unix://" path. */
   uint16_t port;
-  /** Max request body in bytes (default 4 MiB). A buffered route whose body
-   *  exceeds this is rejected with 413 before the handler ever runs; a
-   *  streaming route's handler is always invoked, and chttpsvr_req_read()
-   *  returns -1 with chttpsvr_req_stream_error() == ccol_msg_too_large once
-   *  the limit is crossed. Either way the connection is closed after the
-   *  resulting response (Connection: close) rather than kept alive, since
-   *  the excess body bytes beyond the limit are discarded, not drained. */
+  /** Max request body in bytes (default 4 MiB); 0 = unlimited. A buffered
+   *  route whose body exceeds this is rejected with 413 before the handler
+   *  ever runs; a streaming route's handler is always invoked, and
+   *  chttpsvr_req_read() returns -1 with chttpsvr_req_stream_error() ==
+   *  ccol_msg_too_large once the limit is crossed. Either way the
+   *  connection is closed after the resulting response (Connection: close)
+   *  rather than kept alive, since the excess body bytes beyond the limit
+   *  are discarded, not drained. */
   size_t max_body_size;
   /** Per-connection read timeout in ms; 0 = disabled (no idle timeout).
    *  Used as the idle-timeout sweep's threshold when idle_timeout_ms is 0;
@@ -322,6 +345,35 @@ typedef struct chttpsvr_config {
    *  stream_read_timeout_ms's own doc comment describes: it does not make
    *  server shutdown wait forever on a stalled peer either. */
   unsigned response_write_timeout_ms;
+  /** Bounds the *total* wall-clock time a worker thread will spend sending
+   *  one response, in ms; 0 = no limit. Unlike response_write_timeout_ms
+   *  (which only bounds each individual write(2)-equivalent call, and so
+   *  never fires against a client that reads a byte or two just before
+   *  every such call's own timeout expires), this caps the sum of all such
+   *  waits for a single response; closing the identical trickle-forever
+   *  loophole max_body_read_duration_ms closes on the read side, so a
+   *  handful of slow-reading connections cannot pin the entire worker pool
+   *  indefinitely by trickling reads of an otherwise large response. On
+   *  expiry the response send fails and the connection is closed (the
+   *  client sees a truncated response or a reset, having already received
+   *  as much as it read before the deadline). Default 0 (disabled) so
+   *  existing deployments are unaffected until this is explicitly opted
+   *  into.
+   *
+   *  A courtesy rejection response (404/405/413/500/501/503, generated
+   *  internally rather than by a handler) and the "Expect: 100-continue"
+   *  interim "100 Continue" line are both additionally always bounded by a
+   *  small internal ceiling (currently 2 seconds) regardless of this
+   *  setting's own value, including 0/disabled: both are always a fixed,
+   *  small shape (no body, or a single 25-byte status line) with no
+   *  legitimate reason to ever need longer, and a slow-reading peer must
+   *  never be able to hold a worker thread on one indefinitely just because
+   *  the operator left this knob at its own default for their handler-
+   *  controlled responses. A value set here smaller than that internal
+   *  ceiling still applies in full; only a value of 0 or larger than the
+   *  ceiling is narrowed for these two internally-generated writes
+   *  specifically. */
+  unsigned max_response_write_duration_ms;
   /** Maximum combined size, in bytes, of a request's header block (request
    *  line + all header lines). 0 = use the library's built-in default
    *  (64 KiB). A request whose headers exceed this is rejected (the
@@ -333,7 +385,9 @@ typedef struct chttpsvr_config {
    *  listener; 0 = unlimited. Once at capacity, new connections are simply
    *  left pending in the kernel's own listen backlog (accept(2) is not
    *  called again for this listener until a connection closes and frees a
-   *  slot) rather than accepted and immediately rejected. */
+   *  slot) rather than accepted and immediately rejected. Resumption is not
+   *  instantaneous: it is noticed by a periodic sweep, with a worst case of
+   *  about one second between a slot freeing and the listener resuming. */
   size_t max_connections;
   /** TLS config; NULL = plaintext. */
   const chttp_tls_config_t *tls;
@@ -388,6 +442,7 @@ typedef struct chttpsvr_config {
       .stream_read_timeout_ms = 30000,       \
       .max_body_read_duration_ms = 0,        \
       .response_write_timeout_ms = 0,        \
+      .max_response_write_duration_ms = 0,   \
       .max_header_bytes = 0,                 \
       .max_connections = 0,                  \
       .tls = NULL,                           \
@@ -421,12 +476,12 @@ typedef struct chttpsvr_config {
  * install a more verbose one.
  *
  * Internally this function derives a logger from cl via clog_derive() and
- * adds the field component=http-engine.  The previously registered engine
- * logger (if any) is closed.  The caller retains ownership of cl and must
- * keep it alive for as long as any server may be running.
+ * adds the field component=http-server-engine.  The previously registered
+ * engine logger (if any) is closed.  The caller retains ownership of cl and
+ * must keep it alive for as long as any server may be running.
  *
- * @param cl  Parent logger to derive from; must not be NULL.
- * @return ccol_success or ccol_invalid_args (cl is NULL).
+ * @param cl  Parent logger to derive from; must not be CLOG_INVALID.
+ * @return ccol_success or ccol_invalid_args (cl is CLOG_INVALID).
  */
 ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 
@@ -484,30 +539,27 @@ ccol_retval_t chttpsvr_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
  * (cthreadcomm.h): one dedicated polling thread plus (num_threads - 1)
  * separate dispatch worker threads that actually run callbacks.
  *
- * The default is 1, not an auto-detected CPU count, because it measured
- * better for the common case, not merely simpler. Benchmarked (not
- * assumed) against a real HTTP/HTTPS workload on a 22-core machine, across
- * three traffic shapes:
+ * The default is 1, not an auto-detected CPU count, because it performs
+ * better for the common case:
  *
  *   - Plain HTTP, connections reused (typical browser/API-client
- *     traffic): num_threads == 1 measured ~3% higher throughput than
- *     CPU-count dispatch threads. There is essentially no CPU-bound work
- *     in the dispatch phase for plain HTTP (a fast header parse), so
- *     spreading it across threads only adds hand-off overhead with
- *     nothing to parallelize.
+ *     traffic): a single thread gives the best throughput. There is
+ *     essentially no CPU-bound work in the dispatch phase for plain HTTP
+ *     (a fast header parse), so spreading it across threads only adds
+ *     hand-off overhead with nothing to parallelize.
  *   - TLS, connections reused (typical HTTPS traffic once a client's
  *     connection pooling is accounted for): a genuine trade, not a clean
- *     win either way. num_threads == 1 measured ~4% lower throughput but
- *     a clearly better and more consistent p99 latency than CPU-count
+ *     win either way. A single thread gives lower throughput but a
+ *     clearly better and more consistent p99 latency than multiple
  *     dispatch threads. Most of a TLS connection's requests hit the same
  *     cheap steady-state path plain HTTP does; only the connection's own
  *     handshake pays the expensive part, and that cost is amortized
  *     across however many requests the connection goes on to serve.
  *   - TLS with no connection reuse at all (every request pays a brand-new
- *     handshake; a deliberately extreme synthetic case, not typical
- *     traffic): CPU-count dispatch threads won by ~8-9% throughput and
- *     ~10-15% p99 latency, since a TLS handshake's asymmetric-crypto cost
- *     (the server's private-key operation) is genuine CPU-bound work that
+ *     handshake; a deliberately extreme case, not typical traffic):
+ *     multiple dispatch threads give both higher throughput and lower p99
+ *     latency, since a TLS handshake's asymmetric-crypto cost (the
+ *     server's private-key operation) is genuine CPU-bound work that
  *     benefits from being spread across cores when there is enough of it.
  *
  * The scenario where a larger num_threads is worth its cost is
@@ -561,6 +613,15 @@ ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
  * that the engine has fully exited (e.g. right before process exit, so an
  * engine-installed logger via chttpsvr_set_engine_logger() is not still
  * reachable), call chttpsvr_engine_wait() explicitly after chttpsvr_destroy().
+ *
+ * Calling this from within a request handler or middleware currently running
+ * on ANY server's own worker pool is fatal, immediately (rather than hanging):
+ * draining that server's worker pool can never complete while this exact
+ * in-flight request is itself blocked waiting for the engine to finish
+ * exiting, deadlocking the entire shared engine's shutdown, not just one
+ * server. An admin/shutdown endpoint that wants to fully drain before
+ * responding should call chttpsvr_engine_stop() and return normally instead;
+ * chttpsvr_engine_wait() must be called from a separate thread.
  */
 void chttpsvr_engine_wait(void);
 
@@ -570,6 +631,11 @@ void chttpsvr_engine_wait(void);
  * Non-blocking and async-signal-safe: safe to call from a signal handler.
  * The engine drains in-flight requests and exits; chttpsvr_engine_wait() can
  * be used to block until that drain completes.
+ *
+ * Safe to call more than once, including while an earlier call's own drain
+ * is still in progress (e.g. two SIGTERMs delivered moments apart, or a
+ * defensive extra call from application shutdown code): a repeated or
+ * overlapping call is a no-op, never a second, redundant teardown attempt.
  *
  * The library does not install any signal handlers.  Applications are
  * responsible for wiring this function into whatever signal or shutdown
@@ -591,11 +657,12 @@ void chttpsvr_engine_stop(void);
  *
  * The server always manages its own logger, distinct from any handle passed
  * in by the caller:
- *   - cl == NULL:  an internal logger writing only FATAL messages to stderr
- *                  is created.
- *   - cl != NULL:  a new logger is derived from cl (clog_derive()) with the
- *                  field component=http-server set on it.  The caller's cl
- *                  is left untouched and remains owned by the caller.
+ *   - cl == CLOG_INVALID: an internal logger writing only FATAL messages to
+ *                  stderr is created.
+ *   - cl != CLOG_INVALID: a new logger is derived from cl (clog_derive())
+ *                  with the field component=http-server set on it.  The
+ *                  caller's cl is left untouched and remains owned by the
+ *                  caller.
  * Either way, the resulting server-owned logger is closed automatically by
  * chttpsvr_destroy().
  *
@@ -640,6 +707,26 @@ create_chttpsvr(clog cl, char **err_str) {
  * concurrent one. CHTTPSVR_INVALID (0) is the one exception and remains a
  * silent no-op, matching chttpsvr_destroy's own "destroy NULLs the handle"
  * idiom.
+ *
+ * Calling this from within a request handler or middleware currently
+ * running on srv's own worker pool (i.e. destroying the very server a
+ * handler is executing for, from inside that same handler) is the
+ * identical fatal misuse: this thread's own in-flight request can never
+ * finish while it is itself blocked here waiting to destroy the server it
+ * belongs to, and this function's own worker pool teardown could otherwise
+ * never make progress either way. Detected immediately and reported the
+ * same way as a stale handle, rather than hanging. To shut a server down
+ * from within one of its own handlers, either destroy it from a different
+ * thread, or call chttpsvr_engine_stop() (safe to call from within a
+ * handler; see its own doc comment) if a full engine shutdown is the goal.
+ *
+ * Safe to call concurrently with a chttpsvr_engine_stop() that is still
+ * force-stopping this same server on its own background reaper thread
+ * (e.g. a signal handler triggering chttpsvr_engine_stop() while an
+ * application thread independently calls this function on the same
+ * handle): whichever of the two finishes tearing srv down first, the other
+ * waits for that teardown to fully complete before proceeding, rather than
+ * racing it.
  */
 void __chttpsvr_destroy(chttpsvr srv);
 
@@ -665,7 +752,9 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  * if this is the last running server, stops the shared engine. Calling
  * this a second time on an independently-held copy of the same handle
  * value (whether concurrently, or later, after the first call has already
- * completed) is a fatal error; see __chttpsvr_destroy's own doc comment.
+ * completed), or calling it from within one of this server's own request
+ * handlers/middleware, is a fatal error; see __chttpsvr_destroy's own doc
+ * comment.
  */
 #define chttpsvr_destroy(name)  \
   do {                          \
@@ -751,18 +840,59 @@ static inline __attribute__((always_inline)) void ___chttpsvr_destroy(
  * worker_queue_capacity queue depth) at this point.  If the server was
  * previously started and stopped, the old pool is drained and replaced.
  *
+ * Restarting srv (chttpsvr_stop() followed by this function) is safe even
+ * when a different thread's chttpsvr_stop() call on the same handle is
+ * still in flight: this function waits for that call's own teardown of the
+ * old listener to fully finish before binding a new one on the same
+ * host:port, rather than racing a bind() against a socket the old call has
+ * not yet closed.
+ *
+ * This function is also safe to race against a concurrent, engine-wide
+ * teardown (chttpsvr_engine_stop(), or the shared reactor's own graceful
+ * shutdown when the last other server referencing it is destroyed): it
+ * transparently retries until that teardown has finished, rather than
+ * racing it.
+ *
  * Returns immediately; use chttpsvr_engine_wait() to block on engine exit.
+ *
+ * Calling this from within one of srv's own request handlers/middleware to
+ * restart the very server that handler is running on (typically preceded
+ * by that same handler calling chttpsvr_stop()) is refused with
+ * ccol_not_permitted rather than attempted: this thread's own in-flight
+ * request can never finish while it is itself blocked draining that exact
+ * request, so the restart could never safely proceed. Refusing it leaves
+ * srv in a perfectly safe, recoverable state (its previous configuration,
+ * or, if chttpsvr_stop() already ran, simply stopped); a later,
+ * legitimate call to this function from a different thread still restarts
+ * it normally.
  *
  * @param srv  Server handle.
  * @param cfg  Startup configuration.  If NULL, CHTTPSVR_CONFIG_DEFAULT is used.
  * @return ccol_success            Listener bound and registered.
  *         ccol_invalid_args       srv is CHTTPSVR_INVALID, a stale/already-
- *                                 destroyed handle, or cfg->port is 0.
+ *                                 destroyed handle, cfg->port is 0 (unless
+ *                                 cfg->host is a "unix://" path, where port
+ *                                 is ignored), or cfg->tls is set without
+ *                                 both cert_path and key_path also set (a
+ *                                 server certificate and its private key
+ *                                 are a pair: neither one alone, nor
+ *                                 ca_bundle_path by itself, nor an
+ *                                 otherwise-empty chttp_tls_config_t such as
+ *                                 CHTTP_TLS_DEFAULT, is ever valid
+ *                                 server-side TLS configuration).
  *         ccol_not_permitted      The server is already running (stop it first
- *                                 with chttpsvr_stop() before restarting).
- *         ccol_not_enough_memory  Internal allocation failed.
- *         ccol_unexpected_failure The listener socket could not be bound, or
- *                                 the engine thread could not be started.
+ *                                 with chttpsvr_stop() before restarting), or
+ *                                 this call was made from within one of
+ *                                 srv's own request handlers/middleware.
+ *         ccol_not_enough_memory  Internal allocation failed, or the shared
+ *                                 engine (its reactor threads or its own
+ *                                 diagnostics logger) could not be created.
+ *         ccol_unexpected_failure The listener socket could not be bound,
+ *                                 the listener could not be registered with
+ *                                 the shared reactor, the shared idle-timeout
+ *                                 sweep thread could not be started, or
+ *                                 cfg->tls was set but its certificate/key
+ *                                 pair or ca_bundle_path could not be loaded.
  */
 ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg);
 
@@ -777,7 +907,12 @@ ccol_retval_t chttpsvr_start(chttpsvr srv, const chttpsvr_config_t *cfg);
  * resources, call chttpsvr_destroy() (which waits internally).
  *
  * A silent no-op if srv is CHTTPSVR_INVALID or a stale/already-destroyed
- * handle, matching this function's existing "srv is NULL" behavior.
+ * handle.
+ *
+ * Safe to call concurrently with a chttpsvr_start() call restarting the same
+ * handle on a different thread: the restart waits for this call's own
+ * teardown of the old listener to fully finish before binding a new one,
+ * rather than racing it.
  *
  * Synchronous and NOT async-signal-safe: unlike chttpsvr_engine_stop(), do
  * not call this function directly from a signal handler (it takes internal
@@ -817,8 +952,9 @@ void chttpsvr_stop(chttpsvr srv);
  * @return ccol_success, ccol_invalid_args (srv is CHTTPSVR_INVALID, a
  *         stale/already-destroyed handle, or pattern/fn is NULL; pattern
  *         does not start with '/'; pattern contains consecutive or
- *         trailing slashes; or the same {name} is used more than once),
- *         or ccol_not_enough_memory.
+ *         trailing slashes; a {name} segment is malformed (missing closing
+ *         '}') or contains a character outside [A-Za-z0-9_]; or the same
+ *         {name} is used more than once), or ccol_not_enough_memory.
  */
 ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
                                         const char *pattern,
@@ -849,8 +985,9 @@ ccol_retval_t chttpsvr_register_handler(chttpsvr srv, chttp_method_t method,
  * @return ccol_success, ccol_invalid_args (srv is CHTTPSVR_INVALID, a
  *         stale/already-destroyed handle, or pattern/fn is NULL; pattern
  *         does not start with '/'; pattern contains consecutive or
- *         trailing slashes; or the same {name} is used more than once),
- *         or ccol_not_enough_memory.
+ *         trailing slashes; a {name} segment is malformed (missing closing
+ *         '}') or contains a character outside [A-Za-z0-9_]; or the same
+ *         {name} is used more than once), or ccol_not_enough_memory.
  */
 ccol_retval_t chttpsvr_register_streaming_handler(chttpsvr srv,
                                                   chttp_method_t method,
@@ -896,23 +1033,21 @@ ccol_retval_t chttpsvr_use(chttpsvr srv, chttpsvr_middleware_fn fn, void *ctx);
  * registration call racing a concurrent chttpsvr_destroy() of the owning
  * server simply returns ccol_invalid_args rather than touching freed memory.
  *
-
  * IMPORTANT; the "/" prefix edge case:
  *   A prefix of "/" undergoes no trailing-slash removal (the strip loop only
  *   runs when the prefix length exceeds one character), so it is stored as-is
- *   with prefix_len = 1.  The matcher checks path[prefix_len], i.e. path[1],
- *   which must be either '/' or '\0'.  For the root path "/" the character at
- *   index 1 is '\0', so the router is entered.  For any other path such as
- *   "/foo", path[1] is 'f', which fails the check, so the router is skipped
- *   entirely.  All routes registered on a "/" sub-router are therefore only
- *   reachable from the exact path "/".
+ *   with prefix_len = 1.  A "/" sub-router matches only the exact request
+ *   path "/"; any other path, including one starting with a second slash
+ *   (e.g. "//foo"), does not match and falls through to the next router.
+ *   All routes registered on a "/" sub-router are therefore only reachable
+ *   from the exact path "/".
  *
  *   If you want a catch-all sub-router that receives every request, register
  *   routes directly on the server with chttpsvr_register_handler /
- * chttpsvr_register_streaming_handler instead of using a sub-router with prefix
- * "/".
+ *   chttpsvr_register_streaming_handler instead of using a sub-router with
+ *   prefix "/".
  *
- * @param srv     Server handle (must not be NULL).
+ * @param srv     Server handle (must not be CHTTPSVR_INVALID).
  * @param prefix  Path prefix (e.g. "/api/v1"); must be non-NULL and start
  *                with '/'.  Consecutive slashes (e.g. "//api" or "/a//b") are
  *                rejected.  A trailing slash, if present, is stripped
@@ -943,8 +1078,10 @@ chttpsvr_router *chttpsvr_subrouter(chttpsvr srv, const char *prefix);
  * @param ctx      Opaque user data passed to fn.
  * @return ccol_success, ccol_invalid_args (router/pattern/fn NULL; pattern
  *         does not start with '/'; pattern contains consecutive or trailing
- *         slashes; the same {name} is used more than once; or router's
- *         owning server has since been destroyed), or ccol_not_enough_memory.
+ *         slashes; a {name} segment is malformed (missing closing '}') or
+ *         contains a character outside [A-Za-z0-9_]; the same {name} is used
+ *         more than once; or router's owning server has since been
+ *         destroyed), or ccol_not_enough_memory.
  */
 ccol_retval_t chttpsvr_router_on(chttpsvr_router *router, chttp_method_t method,
                                  const char *pattern, chttpsvr_handler_fn fn,
@@ -964,8 +1101,10 @@ ccol_retval_t chttpsvr_router_on(chttpsvr_router *router, chttp_method_t method,
  * @param ctx     Opaque user data passed to fn.
  * @return ccol_success, ccol_invalid_args (router/pattern/fn NULL; pattern
  *         does not start with '/'; pattern contains consecutive or trailing
- *         slashes; the same {name} is used more than once; or router's
- *         owning server has since been destroyed), or ccol_not_enough_memory.
+ *         slashes; a {name} segment is malformed (missing closing '}') or
+ *         contains a character outside [A-Za-z0-9_]; the same {name} is used
+ *         more than once; or router's owning server has since been
+ *         destroyed), or ccol_not_enough_memory.
  */
 ccol_retval_t chttpsvr_router_on_stream(chttpsvr_router *router,
                                         chttp_method_t method,
@@ -1016,12 +1155,26 @@ const char *chttpsvr_req_path(const chttpsvr_req *req);
  *
  * @param req   Request handle.
  * @param name  Header name (e.g. "Content-Type").
- * @return Pointer to the value string, or NULL if not present.
+ * @return Pointer to the value string, or NULL if not present. If the
+ *         client sent the same header name more than once, the LAST
+ *         occurrence (in wire order) is returned.
  *
  * Lifetime note: the returned pointer is valid for the duration of the handler
  * call only.  Do NOT store it beyond the handler's return; it points into
  * the pre-copied header array owned by the request context, which is released
  * when the request is torn down.
+ *
+ * A chunked request body's trailer fields (RFC 7230 SS4.1.2) are indexed
+ * exactly like any other header and become retrievable through this same
+ * function once they have actually been parsed; there is no separate
+ * trailer-specific accessor. For a buffered route this is transparent: the
+ * handler is only ever invoked once the whole body, trailers included, has
+ * already been read, so a trailer field is always retrievable from the very
+ * start of the handler. For a streaming route, a trailer field becomes
+ * retrievable only once the handler's own chttpsvr_req_read() calls have
+ * drained the body all the way to its natural end (a return of 0);
+ * querying it any earlier returns NULL, indistinguishable from the field
+ * never having been sent at all.
  */
 const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name);
 
@@ -1030,7 +1183,10 @@ const char *chttpsvr_req_header(const chttpsvr_req *req, const char *name);
  *
  * @param req      Request handle.
  * @param len_out  If non-NULL, receives the body length in bytes.
- * @return Pointer to the body bytes (not NUL-terminated), or NULL if empty.
+ * @return Pointer to the body bytes (not NUL-terminated), or NULL if empty
+ *         or if req's own route is a streaming route (use
+ *         chttpsvr_req_read() there instead; this function always returns
+ *         NULL/0 for it, never a partial or stale view of the body).
  *         Valid for the lifetime of the request.
  */
 const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
@@ -1049,12 +1205,19 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
  * If buflen is 0 the function returns 0 immediately regardless of buf (the
  * call is a no-op, consistent with POSIX read(2) semantics).
  *
- * Returns -1 for hard errors (req is NULL, buf is NULL with buflen > 0, or
- * the handler was registered with chttpsvr_register_handler rather than
- * chttpsvr_register_streaming_handler) as well as for a broken connection,
- * an exceeded stream_read_timeout_ms or max_body_read_duration_ms, or a body
- * that exceeds max_body_size mid-stream; call chttpsvr_req_stream_error()
- * immediately afterward to distinguish these.
+ * Returns -1 both for caller misuse (req is NULL, buf is NULL with
+ * buflen > 0, or the handler was registered with chttpsvr_register_handler
+ * rather than chttpsvr_register_streaming_handler) and for a genuine,
+ * data-dependent transfer error (a broken connection, an exceeded
+ * stream_read_timeout_ms or max_body_read_duration_ms, or a body that
+ * exceeds max_body_size mid-stream). chttpsvr_req_stream_error(), called
+ * immediately afterward, distinguishes only the latter, data-dependent
+ * group (plus a NULL/invalid req itself); it reports ccol_success, not a
+ * distinct code, for the buf-is-NULL and non-streaming-route misuse cases,
+ * since both are static programming errors a caller can only have made by
+ * violating this function's own documented preconditions (reachable on
+ * every single call to the offending code, not intermittently) rather
+ * than a condition needing runtime diagnosis.
  *
  * If the request carried "Expect: 100-continue" AND actually has a body to
  * receive (a Content-Length or chunked Transfer-Encoding was present), the
@@ -1079,17 +1242,30 @@ const void *chttpsvr_req_body(const chttpsvr_req *req, size_t *len_out);
 ssize_t chttpsvr_req_read(chttpsvr_req *req, void *buf, size_t buflen);
 
 /**
- * @brief Report why the most recent chttpsvr_req_read() call returned -1.
+ * @brief Report why the most recent chttpsvr_req_read() call returned -1,
+ *        for the subset of causes that need runtime diagnosis.
  *
  * Meaningful only immediately after a -1 return from chttpsvr_req_read();
  * otherwise the result is unspecified (there may be no error to report).
+ *
+ * Distinguishes only chttpsvr_req_read()'s genuine, data-dependent transfer
+ * errors (see that function's own doc comment). It returns ccol_success,
+ * indistinguishable from "no error at all," when the -1 was instead caused
+ * by caller misuse (buf was NULL with buflen > 0, or the request's route
+ * was not registered with chttpsvr_register_streaming_handler); both are
+ * static programming errors, reachable on every call to the offending code
+ * rather than only sometimes, so a caller hitting one is expected to find
+ * and fix it during ordinary testing rather than diagnose it at runtime.
  *
  * @param req  Request handle.
  * @return ccol_timed_out (stream_read_timeout_ms or
  *         max_body_read_duration_ms elapsed),
  *         ccol_msg_too_large (max_body_size exceeded mid-stream),
+ *         ccol_not_enough_memory (an internal allocation failed while
+ *         growing the body buffer; not a client-caused error),
  *         ccol_http_transfer_aborted (connection closed or malformed
- *         framing), ccol_success (no error recorded), or
+ *         framing), ccol_success (no error recorded, OR the -1 was actually
+ *         caused by one of the caller-misuse cases above), or
  *         ccol_unexpected_failure (req or its handle is invalid).
  */
 ccol_retval_t chttpsvr_req_stream_error(const chttpsvr_req *req);
@@ -1139,12 +1315,14 @@ const char **chttpsvr_req_query(chttpsvr_req *req, const char *key,
  *
  * @param req      Request handle.
  * @param key      Query parameter name.
- * @param val_out  On success, receives a pointer to the value string.
+ * @param val_out  On success, receives a pointer to the value string; reset
+ *                 to NULL (if non-NULL itself) on every failure return.
  * @return ccol_success            Exactly one value found; *val_out is set.
- *         ccol_key_not_found     Key is absent.
- *         ccol_not_permitted     Key has multiple values.
- *         ccol_not_enough_memory Query-string parse buffer could not be
- * allocated. ccol_invalid_args      req or key is NULL.
+ *         ccol_key_not_found      Key is absent.
+ *         ccol_not_permitted      Key has multiple values.
+ *         ccol_not_enough_memory  Query-string parse buffer could not be
+ *                                 allocated.
+ *         ccol_invalid_args       req or key is NULL.
  */
 ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req, const char *key,
                                      const char **val_out);
@@ -1158,12 +1336,17 @@ ccol_retval_t chttpsvr_req_query_one(chttpsvr_req *req, const char *key,
 const char *chttpsvr_req_raw_query(const chttpsvr_req *req);
 
 /**
- * @brief Return true if chttpsvr_req_query ran out of memory while building
- *        the result array for this request.
+ * @brief Return true if a query-string allocation for this request has
+ *        failed under OOM: either chttpsvr_req_query's own result-array
+ *        growth, or the request's one-time, shared query-string parse that
+ *        chttpsvr_req_query and chttpsvr_req_query_one each lazily trigger
+ *        on first use. chttpsvr_req_raw_query never triggers this parse (it
+ *        returns the raw string captured directly from the request line),
+ *        so it has no bearing on this flag.
  *
  * chttpsvr_req_query returns (NULL, count=0) both when the requested key is
- * absent AND when the internal result array could not be grown due to OOM.
- * After any NULL return from chttpsvr_req_query, call this function to
+ * absent AND when either of the above allocations failed under OOM. After
+ * any NULL return from chttpsvr_req_query, call this function to
  * distinguish the two cases.
  *
  * The flag is latching: once set it stays true for the lifetime of the
@@ -1179,6 +1362,15 @@ bool chttpsvr_req_query_oom(const chttpsvr_req *req);
 
 /**
  * @brief Set the HTTP response status code (default: 200).
+ *
+ * status_code is stored verbatim, with no validation here; a value outside
+ * the valid HTTP status-code range 100-999 is silently sent as 500 on the
+ * wire instead, at actual response-send time.
+ *
+ * Setting status_code to a 1xx, 204, or 304 value silences whatever body
+ * was already (or is later) written via chttpsvr_resp_write / _write_str /
+ * _printf / _write_json, regardless of call order; see chttpsvr_resp_write's
+ * own doc comment.
  */
 void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
 
@@ -1194,28 +1386,53 @@ void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
  * should be aware of this behaviour.
  *
  * All three arguments must be non-NULL; passing NULL for any returns
- * ccol_invalid_args without modifying the response.
+ * ccol_invalid_args without modifying the response. name must also be a
+ * non-empty RFC 7230 SS3.2.6 tchar-only token: every byte must be an ASCII
+ * letter, digit, or one of "!#$%&'*+-.^_`|~". A zero-length name has no
+ * valid on-the-wire representation; a name containing any other byte (e.g.
+ * a space or a literal ':') is not itself a CRLF-injection vector but
+ * still produces a structurally malformed wire line a strict downstream
+ * parser could misread (e.g. "X Foo: bar" as a name puts
+ * "X Foo:bar:baz\r\n" on the wire, not a genuine two-field split).
  *
- * name/value must not contain a CR or LF byte; either is written verbatim
- * onto the wire with no further escaping, so an embedded CR/LF would let a
- * caller that reflects request-controlled data (a query parameter, a path
- * parameter, an echoed request header) into a response header inject
- * arbitrary extra header lines or split the response in two on behalf of
- * whoever controls that data. Rejected with ccol_invalid_args rather than
- * silently stripped or truncated.
+ * value must not contain a CR or LF byte; both name and value are written
+ * verbatim onto the wire with no further escaping, so an embedded CR/LF in
+ * value would let a caller that reflects request-controlled data (a query
+ * parameter, a path parameter, an echoed request header) into a response
+ * header inject arbitrary extra header lines or split the response in two
+ * on behalf of whoever controls that data. Rejected with ccol_invalid_args
+ * rather than silently stripped or truncated.
  *
- * "Connection" is the one header this function accepts (name/value are still
- * validated and stored like any other) but never sends: the server always
- * decides and emits its own Connection header, reflecting whether the
- * connection is actually kept open afterward, since that decision is what
- * drives real socket behavior and a caller-supplied value could otherwise
- * silently disagree with it.
+ * "Connection" and "Content-Length" are accepted (name/value are still
+ * validated and stored like any other header) but never sent verbatim: the
+ * server always decides and emits its own Connection header, reflecting
+ * whether the connection is actually kept open afterward, and always
+ * computes and emits its own Content-Length header from the response body
+ * actually written via chttpsvr_resp_write / _write_str / _printf /
+ * _write_json, since both decisions drive real wire framing and a
+ * caller-supplied value could otherwise silently disagree with what the
+ * server actually does, desynchronizing a kept-alive connection's framing
+ * for whichever request follows.
+ *
+ * "Transfer-Encoding" is rejected outright with ccol_invalid_args instead:
+ * this server never transfer-codes a response body, so honoring a
+ * caller-set Transfer-Encoding header is impossible, and letting one reach
+ * the wire would pair it with this function's own auto-computed
+ * Content-Length header over a body that was never actually transfer-coded:
+ * an ambiguous framing an intermediary that honors Transfer-Encoding
+ * over Content-Length (RFC 7230 SS3.3.3) could misparse, the same class of
+ * response-splitting hazard the Connection/Content-Length handling above
+ * exists to prevent. Mirrors chttp_request_set_header's identical
+ * Transfer-Encoding rejection on the client side (chttpclient.h).
  *
  * @param resp   Response handle (must not be NULL).
- * @param name   Header name (must not be NULL, must not contain CR/LF).
+ * @param name   Header name (must not be NULL or empty, must contain only
+ *               RFC 7230 tchar bytes, and must not be "Transfer-Encoding").
  * @param value  Header value (must not be NULL, must not contain CR/LF).
- * @return ccol_success, ccol_invalid_args (resp/name/value is NULL, or
- *         name/value contains a CR or LF byte), or ccol_not_enough_memory.
+ * @return ccol_success, ccol_invalid_args (resp/name/value is NULL; name is
+ *         empty or contains a byte outside the RFC 7230 tchar set; value
+ *         contains a CR or LF byte; or name is "Transfer-Encoding",
+ *         case-insensitive), or ccol_not_enough_memory.
  */
 ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
                                        const char *value);
@@ -1225,6 +1442,21 @@ ccol_retval_t chttpsvr_resp_set_header(chttpsvr_resp *resp, const char *name,
  *
  * Multiple calls accumulate.  The complete buffer is flushed when the handler
  * returns.
+ *
+ * The accumulated body is silently never written to the wire, regardless of
+ * how much was appended here, if the response's final status code (whatever
+ * chttpsvr_resp_set_status last set by the time the handler returns) is a
+ * 1xx, 204, or 304: RFC 9110 6.4.1/15.2.1/15.4.5 forbid all three from ever
+ * carrying a body. This function itself still returns ccol_success for a
+ * genuinely successful append; nothing in this API reports an error for the
+ * body having been discarded this way, so a handler that writes diagnostic
+ * or informational body content and only later (e.g. via a cache-validation
+ * middleware) has the status downgraded to one of these codes will not see
+ * that content reach the client, with no error signal anywhere to catch it.
+ * A 1xx or 204 additionally never gets an auto-injected Content-Length
+ * header at all; a 304, unlike those two, still reports one matching the
+ * length of the body that was written here, even though the body bytes
+ * themselves are withheld the same way.
  *
  * @param resp  Response handle.
  * @param data  Data to write.
@@ -1236,6 +1468,9 @@ ccol_retval_t chttpsvr_resp_write(chttpsvr_resp *resp, const void *data,
 
 /**
  * @brief Append a NUL-terminated string to the response body.
+ *
+ * See chttpsvr_resp_write's own doc comment for the 1xx/204/304
+ * body-discard interaction, which applies identically here.
  */
 ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp, const char *str);
 
@@ -1244,7 +1479,8 @@ ccol_retval_t chttpsvr_resp_write_str(chttpsvr_resp *resp, const char *str);
  *
  * Equivalent to formatting `format`/`...` with printf semantics and passing
  * the result to chttpsvr_resp_write_str(), without an intermediate
- * caller-visible allocation.
+ * caller-visible allocation. See chttpsvr_resp_write's own doc comment for
+ * the 1xx/204/304 body-discard interaction, which applies identically here.
  *
  * @param resp    Response handle (must not be NULL).
  * @param fmt  printf-style format string (must not be NULL).
@@ -1270,6 +1506,9 @@ ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp, const char *fmt, ...)
  * (a zero-length JSON body with Content-Type set is semantically invalid;
  * the function rejects it rather than silently setting the header with no
  * body bytes).
+ *
+ * See chttpsvr_resp_write's own doc comment for the 1xx/204/304
+ * body-discard interaction, which applies identically here.
  *
  * @param resp  Response handle.
  * @param json  JSON data (must be non-NULL).

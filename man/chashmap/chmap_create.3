@@ -37,8 +37,10 @@ Returns NULL on failure
 .SH NOTES
 .nf
 Minimum bucket count is 16 (always power-of-2)
-Open-addressing: Fibonacci hashing for integers, XXHash64 for buffers
-Separate chaining: XXHash64 for all types
+Default hashing is selected by key type, not by backend: Fibonacci
+hashing for integral/float/double/pointer keys, XXHash64 for string
+and other buffer-like keys, regardless of whether open-addressing or
+separate chaining ends up selected
 Map must be destroyed with chmap_destroy() when done
 .fi
 .SH "SEE ALSO"

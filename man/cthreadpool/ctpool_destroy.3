@@ -30,8 +30,11 @@ pool  Thread pool variable to destroy (set to CTPOOL_INVALID after
 Safe to call when pool is CTPOOL_INVALID (no-op). Calling this on a
 stale handle (one already destroyed, sequentially by an earlier
 call or concurrently by another thread) is a FATAL ERROR
-(abort()/SIGABRT), not a silent double-free; see __ctpool_destroy(3)
-for further detail.
+(abort()/SIGABRT), not a silent double-free. Calling this on pool
+from within a task (or that task's on_complete callback) currently
+executing on one of pool's own worker threads is also a FATAL
+ERROR, for the same reason; see __ctpool_destroy(3) for further
+detail on both cases.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_construct (3),

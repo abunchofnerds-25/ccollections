@@ -21,6 +21,14 @@ by another thread, a forged value, or garbage) is a FATAL ERROR:
 this function calls fatal_err() (abort()/SIGABRT) rather than risk
 a use-after-free or double-free.
 
+Calling this function on pool from within a task (or that task's
+on_complete callback) currently executing on one of pool's own
+worker threads is likewise a FATAL ERROR. Destroying pool there
+would free its mutex, condition variables, and struct while the
+calling worker thread is still on its way back through its own
+dispatch loop, which touches all of them again immediately
+afterward.
+
 On a live handle, waits for every in-flight resolved use of the
 handle to finish (a ctpool_submit/_try_submit/_timed_submit/
 _submit_future/_try_submit_future/_timed_submit_future/_wait/

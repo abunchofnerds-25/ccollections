@@ -3,8 +3,12 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS
 SRC_FILES = ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
-CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
-	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror
+EXTRA_CFLAGS ?=
+CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
+	-Wl,-z,relro,-z,now \
+	-fstack-clash-protection \
+	-D_FORTIFY_SOURCE=3 \
+	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 LFLAGS = -lpthread
 

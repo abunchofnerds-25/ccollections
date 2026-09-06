@@ -1,0 +1,2 @@
+fail=0
+name=Spec Example 7.4. Double Quoted Implicit Keys

@@ -27,6 +27,7 @@ Returns NULL if pool exhausted and no fallback enabled
 O(1) complexity
 Zeros only the user-visible portion (not the internal entry header)
 Thread-safe if pool created with single_threaded=false
+Will assert if mp is NULL
 .fi
 .SH "SEE ALSO"
 .BR mempool_alloc_entry (3),

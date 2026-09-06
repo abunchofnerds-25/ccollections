@@ -19,7 +19,8 @@ automatically manages capacity.
 .fi
 .SH PARAMETERS
 .nf
-elem_size     Size of each element in bytes (must be > 0)
+elem_size     Size of each element in bytes (must be > 0, and must not
+              exceed SIZE_MAX / 4)
 mmgmt_procs   Custom memory management procedures, or NULL for
               default malloc/free
 err           Optional pointer to receive error string on failure
@@ -27,7 +28,8 @@ err           Optional pointer to receive error string on failure
 .SH RETURN VALUE
 .nf
 Returns pointer to newly created vector on success
-Returns NULL on failure
+Returns NULL on failure (including if elem_size is 0, or large enough
+that the initial 4-element backing buffer allocation would overflow)
 .fi
 .SH NOTES
 .nf

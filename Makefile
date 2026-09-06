@@ -21,17 +21,35 @@ COVERAGE_TEST_FOLDERS = $(shell ls -1d tests/*/ | grep -vE '/tau/|/mixed/')
 
 _create_object_dir := $(shell mkdir -p $(OBJECT_DIR))
 
+EXTRA_CFLAGS ?=
+# -Wl,-z,relro,-z,now is a *linker* flag (the -Wl, prefix passes it straight
+# through to ld), not a compiler flag: it belongs in SHARED_LDFLAGS, applied
+# at the actual link step that produces libccollections.so, not here in
+# COMMON_CFLAGS, which this Makefile only ever uses for the separate,
+# link-less `$(CC) -c ...` object-compile steps below. Putting it here meant
+# it was silently discarded before ever reaching a real link invocation --
+# providing no actual RELRO/BIND_NOW hardening at all -- and, under clang
+# specifically (whose driver treats an unused linker argument passed to a
+# compile-only invocation as an error under -Werror, unlike gcc's silent
+# tolerance of the same mistake), broke the build outright. See
+# SHARED_LDFLAGS below for where it now actually takes effect. A static
+# archive (STATIC_LDFLAGS, built via `ar`, not a real linker invocation at
+# all) has no equivalent: RELRO/BIND_NOW are properties of a real ELF
+# executable/shared object, and applying them is the responsibility of
+# whatever a caller of libccollections.a itself ultimately links into.
 COMMON_CFLAGS = -I$(INCLUDE_DIR) \
-	-fstack-protector-all \
+	-fstack-protector-strong \
+	-fstack-clash-protection \
+	-D_FORTIFY_SOURCE=3 \
 	-Wstrict-overflow -Wformat=2 -Wformat-security -Wall -Wextra \
-	-g -O3 -Werror -fPIC
+	-g -O3 -Werror -fPIC $(EXTRA_CFLAGS)
 
 # Separate cflags for shared and static builds
 SHARED_CFLAGS = $(COMMON_CFLAGS)
 STATIC_CFLAGS = $(COMMON_CFLAGS)
 
 # Separate ldflags for shared and static builds
-SHARED_LDFLAGS = -shared -lpthread -lz -lssl -lcrypto -lm
+SHARED_LDFLAGS = -Wl,-z,relro,-z,now -shared -lpthread -lz -lssl -lcrypto -lm
 STATIC_LDFLAGS =
 
 SOURCE_FILES = $(wildcard $(SOURCE_DIR)/*.c)
@@ -42,10 +60,10 @@ OBJ_FILES_STATIC = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.static.o)
 default: all
 
 test:
-	$(foreach folder,$(TEST_FOLDERS),cd $(folder) && make test && cd -;)
+	$(foreach folder,$(TEST_FOLDERS),(cd $(folder) && make test) &&) true
 
 memtest:
-	$(foreach folder,$(TEST_FOLDERS),cd $(folder) && make memtest && cd -;)
+	$(foreach folder,$(TEST_FOLDERS),(cd $(folder) && make memtest) &&) true
 
 generate_coverage_report:
 	$(foreach folder,$(COVERAGE_TEST_FOLDERS),cd $(folder) && make generate_coverage_report && cd -;)

@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cthreadcomm.h>
 
-ccol_retval_t event_loop_pause(event_loop loop, event_reg *reg);
+ccol_retval_t event_loop_pause(event_loop loop, event_reg reg);
 .fi
 .SH DESCRIPTION
 .nf
@@ -18,10 +18,16 @@ Unlike event_loop_remove (which fully unregisters reg and defers it
 for freeing), event_loop_pause leaves reg fully intact: it still
 occupies its slot on the underlying fd's shared epoll entry, still
 counts toward event_loop_reg_count, and still carries the same
-event_loop_reg_generation.  Only the fd's combined epoll interest mask
-is recomputed, via a single EPOLL_CTL_MOD call, to exclude reg.  No
-on_readable/on_writable/on_error callback fires for reg while paused;
-the other direction on the same fd (if any) is unaffected.
+event_loop_reg_generation.  The fd's combined epoll interest mask is
+recomputed to exclude reg; if the other direction on the same fd (if
+any) is itself live and unpaused, this is a single EPOLL_CTL_MOD call,
+otherwise (every direction on the fd is now paused) the fd is removed
+from the kernel's own epoll interest set entirely, so it produces zero
+further wakeups of any kind for as long as it stays fully paused,
+including on its own error/hangup condition (which the kernel would
+otherwise keep reporting regardless of the requested interest mask).
+No on_readable/on_writable/on_error callback fires for reg while
+paused; the other direction on the same fd (if any) is unaffected.
 
 This is the cheap alternative to an event_loop_remove immediately
 followed by a later event_loop_add, for a caller pattern where the
@@ -51,9 +57,10 @@ reg   Registration to pause.
 .nf
 ccol_success        Paused (or already paused).
 ccol_invalid_args   loop is EVENT_LOOP_INVALID or a stale/already-
-                    destroyed handle; reg is NULL; reg is a queue/
-                    channel registration; or reg was concurrently
-                    removed.
+                    destroyed handle; reg is EVENT_REG_INVALID or
+                    otherwise fails to resolve (including because it
+                    was concurrently removed); or reg is a queue/
+                    channel registration.
 .fi
 .SH THREAD SAFETY
 .nf

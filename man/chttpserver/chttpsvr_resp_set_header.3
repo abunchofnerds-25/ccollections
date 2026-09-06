@@ -1,4 +1,4 @@
-.TH CHTTPSVR_RESP_SET_HEADER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHTTPSVR_RESP_SET_HEADER 3 "2026-09-01" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chttpsvr_resp_set_header \- set a response header
 .SH LIBRARY
@@ -24,28 +24,49 @@ this does not affect correctness, but callers who read back stored header
 names directly should account for this behaviour.
 
 All three arguments must be non-NULL; passing NULL for any of them
-returns ccol_invalid_args without modifying the response.
+returns ccol_invalid_args without modifying the response.  name must
+also be a non-empty RFC 7230 SS3.2.6 tchar-only token: every byte must be
+an ASCII letter, digit, or one of "!#$%&'*+-.^_`|~".  A zero-length name
+has no valid on-the-wire representation; a name containing any other
+byte (e.g. a space or a literal ':') is not itself a CRLF-injection
+vector but still produces a structurally malformed wire line a strict
+downstream parser could misread.
 
-name and value must not contain a CR or LF byte.  Both are written onto
-the wire verbatim (as "name:value\r\n"), with no further escaping, so an
-embedded CR/LF would let a caller that reflects request-controlled data
-(a query parameter, a path parameter, an echoed request header) into a
-response header inject arbitrary extra header lines, or split the
-response into two, on behalf of whoever controls that data (HTTP
-response splitting / CRLF injection).  Rejected with ccol_invalid_args
-rather than silently stripped or truncated.
+value must not contain a CR or LF byte.  Both name and value are written
+onto the wire verbatim (as "name:value\r\n"), with no further escaping,
+so an embedded CR/LF in value would let a caller that reflects
+request-controlled data (a query parameter, a path parameter, an echoed
+request header) into a response header inject arbitrary extra header
+lines, or split the response into two, on behalf of whoever controls
+that data (HTTP response splitting / CRLF injection).  Rejected with
+ccol_invalid_args rather than silently stripped or truncated.
 
-A "Connection" header is accepted and validated like any other name, but
-is never sent: the server always emits its own Connection header,
-reflecting whether the connection is actually kept open afterward, since
-that decision drives real socket behavior and must never disagree with
-what the client is told.
+A "Connection" or "Content-Length" header is accepted and validated like
+any other name, but is never sent verbatim: the server always emits its
+own Connection header, reflecting whether the connection is actually kept
+open afterward, and always computes and emits its own Content-Length
+header from the response body actually written (via chttpsvr_resp_write
+and its variants), since both decisions drive real wire framing and must
+never disagree with what the client is told.
+
+A name of "Transfer-Encoding" (case-insensitive) is rejected outright
+instead of being accepted-but-filtered: this server never transfer-codes
+a response body (every response is Content-Length-framed), so honoring a
+caller-set Transfer-Encoding header is impossible, and letting one reach
+the wire would pair it with this function's own auto-computed
+Content-Length header over a body that was never actually
+transfer-coded; an ambiguous framing (RFC 7230 SS3.3.3) an
+intermediary that honors Transfer-Encoding over Content-Length could
+misparse, the same class of hazard the Connection/Content-Length
+handling above exists to prevent.  Mirrors chttp_request_set_header's
+identical Transfer-Encoding rejection on the client side.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if resp, name, or value is NULL, or if name or value
-contains a CR or LF byte.
+ccol_invalid_args if resp, name, or value is NULL; name is empty or
+contains a byte outside the RFC 7230 tchar set; value contains a CR or
+LF byte; or name is "Transfer-Encoding" (case-insensitive).
 ccol_not_enough_memory if the underlying allocation fails.
 .fi
 .SH "SEE ALSO"

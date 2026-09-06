@@ -192,11 +192,27 @@ void *chttp_base64_decode_mp(ccol_memmgmt_procs_t *mp, const char *b64_input,
  * @brief Build a "Basic <base64(username:password)>" header value (custom
  * allocator).
  */
-char *chttp_basic_auth_mp(ccol_memmgmt_procs_t *mp, const char *username,
-                          const char *password) {
-  if (!username || !password) return NULL;
-
-  size_t combined_len = strlen(username) + 1 + strlen(password);
+/* Does the actual work for chttp_basic_auth_mp, taking user_len/pass_len as
+ * explicit parameters (rather than computing them via strlen() internally)
+ * so the overflow guard below can be exercised directly from a white-box
+ * test with a fake length pair, without needing to actually construct a
+ * multi-exabyte input string; see
+ * _chttp_basic_auth_overflow_guard_for_tests below. */
+static char *_chttp_basic_auth_len(ccol_memmgmt_procs_t *mp,
+                                   const char *username, size_t user_len,
+                                   const char *password, size_t pass_len) {
+  /* Overflow guard on the "needed size" computation below, mirroring
+   * chttp_base64_encode_mp's own identical guard just above: user_len and
+   * pass_len are two independently caller-supplied string lengths, so their
+   * sum reaching close to SIZE_MAX does not require either string alone to
+   * be implausibly large. Leaves room for both the ':' separator below and
+   * the final allocation's own NUL terminator. Unreachable in practice
+   * (would need multi-exabyte input strings), but this project treats a
+   * reducible/unguarded overflow in a size computation as a real bug
+   * regardless of how large an input is needed to trigger it. */
+  if (pass_len > SIZE_MAX - user_len || user_len + pass_len > SIZE_MAX - 2)
+    return NULL;
+  size_t combined_len = user_len + 1 + pass_len;
   char *combined = (char *)_mem_alloc(mp, combined_len + 1);
   if (!combined) return NULL;
   snprintf(combined, combined_len + 1, "%s:%s", username, password);
@@ -216,3 +232,34 @@ char *chttp_basic_auth_mp(ccol_memmgmt_procs_t *mp, const char *username,
   _mem_free(mp, b64);
   return out;
 }
+
+char *chttp_basic_auth_mp(ccol_memmgmt_procs_t *mp, const char *username,
+                          const char *password) {
+  if (!username || !password) return NULL;
+  return _chttp_basic_auth_len(mp, username, strlen(username), password,
+                               strlen(password));
+}
+
+#ifdef RUNNING_UNIT_TESTS
+/*
+ * White-box test helper exposing _chttp_basic_auth_len's overflow guard
+ * directly. ONLY safe to call with a fake_user_len/fake_pass_len pair that
+ * actually exceeds the guard's own threshold, so the guard rejects before
+ * snprintf ever reads past username/password's own real, short contents.
+ * Not part of the public API; gated so this symbol does not leak into a
+ * production build of libccollections.so, matching every white-box helper
+ * already established elsewhere in this project (e.g. chttpclient.c's
+ * _chttp_ob_append_overflow_guard_for_tests).
+ */
+bool _chttp_basic_auth_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
+                                                const char *username,
+                                                size_t fake_user_len,
+                                                const char *password,
+                                                size_t fake_pass_len) {
+  char *r = _chttp_basic_auth_len(mp, username, fake_user_len, password,
+                                  fake_pass_len);
+  bool rejected = (r == NULL);
+  _mem_free(mp, r);
+  return rejected;
+}
+#endif /* RUNNING_UNIT_TESTS */

@@ -76,7 +76,13 @@ chmaps allocated up front.
 .SH PARAMETERS
 .nf
 max_events_per_wait  Size of the epoll_wait batch buffer the polling
-                      thread uses (must be >= 1).
+                      thread uses (must be between 1 and INT_MAX
+                      inclusive, and small enough that
+                      max_events_per_wait * sizeof(struct epoll_event)
+                      does not overflow size_t, since the value is
+                      narrowed to epoll_wait(2)'s own int maxevents
+                      parameter and used to size the polling thread's
+                      events buffer).
 num_lock_stripes     Number of independent lock stripes for the fd/entry
                       registry (must be >= 1).  1 means a single shared
                       lock.  No upper bound is enforced.
@@ -94,8 +100,10 @@ err_str               Optional pointer to receive an error string on
 .SH RETURN VALUE
 .nf
 Returns a new event_loop handle on success.
-Returns EVENT_LOOP_INVALID on failure: max_events_per_wait is 0,
-num_lock_stripes is 0, num_reactor_threads is 0, mmgmt_procs is
+Returns EVENT_LOOP_INVALID on failure: max_events_per_wait is 0, exceeds
+INT_MAX, or would overflow size_t when multiplied by
+sizeof(struct epoll_event), num_lock_stripes is 0, num_reactor_threads
+is 0, mmgmt_procs is
 malformed (some but not all of malloc/calloc/realloc/free set),
 allocation failure, epoll_create1(2)/eventfd(2)/pthread_create(3)
 failure, or failure to allocate a handle slot (the poller thread, and
@@ -117,6 +125,17 @@ one of them (a kernel-level thundering herd; EPOLLEXCLUSIVE does not
 help here, since it governs the same fd registered across multiple
 SEPARATE epoll instances, not many threads sharing one), wasting
 dispatch latency on a single, otherwise-uncontended connection.
+
+A fresh event_loop_create_with_mprocs/_add/_remove/_modify/_pause/
+_resume/_destroy call, from any thread, in either the parent or a
+freshly forked child, never hangs on a lock some other (possibly
+no-longer-existing, since fork(2) duplicates only the calling thread)
+thread happened to hold at the instant of the fork. A loop already
+live across the fork is a different matter: its polling and dispatch
+threads are not duplicated into the child, so an inherited loop can no
+longer dispatch anything there regardless of this guarantee; treat
+such a loop as inert in the child (safe to event_loop_destroy, not
+usable for further dispatch).
 .fi
 .SH THREAD SAFETY
 .nf

@@ -31,6 +31,16 @@ Safe to call concurrently from multiple threads; each blocks until
 the reactor is confirmed fully stopped, regardless of which caller's
 release or chttpsvr_engine_stop() call was the one that triggered it.
 
+Calling this from within a request handler or middleware currently
+running on ANY chttpsvr instance's own worker pool is a FATAL error
+(fatal_err(), abort()/SIGABRT), reported immediately rather than
+hanging: draining that server's worker pool can never complete while
+this exact in-flight request is itself blocked here waiting for the
+engine to finish exiting, deadlocking the entire shared engine's
+shutdown, not just one server. An admin/shutdown endpoint that wants
+to fully drain before responding should call chttpsvr_engine_stop()
+and simply return instead; call this function from a separate thread.
+
 After this function returns, the engine logger (see
 chttpsvr_set_engine_logger) has been closed; if engine-level logging is
 wanted again after a subsequent chttpsvr_start, chttpsvr_set_engine_logger

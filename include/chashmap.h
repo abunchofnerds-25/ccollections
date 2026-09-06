@@ -36,9 +36,11 @@ SOFTWARE.
  * Provides a hash map implementation with automatic selection between two
  * strategies:
  *
- * **Open-addressing** (used when both key and value are integral types ≤8
+ * **Open-addressing** (used when both key and value are integral types <=8
  * bytes):
- * - Compact 17-byte slots (8-byte key + 8-byte value + 1-byte metadata)
+ * - Compact 24-byte slots (8-byte key + 8-byte value + 1-byte metadata,
+ * padded to a 24-byte multiple of 8 so key/value storage stays naturally
+ * aligned for direct in-place access, e.g. via chmap_get_ptr)
  * - Linear probing with Fibonacci hashing for integers
  * - Load factor thresholds: 0.70 (grow) / 0.25 (shrink)
  * - Zero allocations per entry (contiguous array)
@@ -62,8 +64,9 @@ SOFTWARE.
  * - Average complexity: O(1) for insert/get/delete
  *
  * Implementation selection examples:
- * - int→int, long→double, float→uint32_t: Open-addressing
- * - string→int, int→string, string→string, int→long double: Separate chaining
+ * - int->int, long->double, float->uint32_t: Open-addressing
+ * - string->int, int->string, string->string, int->long double: Separate
+ * chaining
  */
 
 /** @brief Default initial bucket array size */
@@ -98,14 +101,44 @@ typedef chashmap *chmap;
  * @return Pointer to newly created hash map, or NULL on failure
  *
  * @note Implementation selection:
- *       - Open-addressing: Both key and value are integral types ≤8 bytes
+ *       - Open-addressing: Both key and value are integral types <=8 bytes
  *       - Separate chaining: Either key or value is non-integral or >8 bytes
  * @note Integral types: char, short, int, long, long long (signed/unsigned),
  * float, double
  * @note Excludes long double from open-addressing (can be 10-16 bytes)
- * @note Open-addressing uses Fibonacci hashing for integers, XXHash64 for
- * buffers
- * @note Separate chaining default is XXHash64 for all types
+ * @note Default hashing is selected by key type, not by backend: Fibonacci
+ * hashing for integral/float/double/pointer keys, XXHash64 for string and
+ * other buffer-like keys. A separate-chaining map with an integral key type
+ * (e.g. a double key paired with a non-integral value) still gets Fibonacci
+ * hashing for that key, the same as an open-addressing map would.
+ * @note For a float or double key_type, a -0.0 key is always canonicalized
+ * to 0.0 before it is hashed, stored, or compared, so the two collide into a
+ * single key exactly as `-0.0 == 0.0` does in C. This applies unconditionally,
+ * including when custom_hashing_proc is non-NULL: the custom function always
+ * receives the already-canonicalized bit pattern, never a raw -0.0, and the
+ * canonicalized value is what ends up stored (and later observed via
+ * iteration), not the exact bit pattern originally passed to chmap_insert.
+ * @note For a long double key_type (always separate chaining; see the
+ * Excludes long double from open-addressing note above), key equality and
+ * hashing are based on the key's numeric VALUE rather than its raw byte
+ * representation, unlike every other key type: `-0.0L` and `0.0L` collide
+ * into a single key exactly like `-0.0`/`0.0` do for float/double, and two
+ * keys holding the identical value remain the same key even if their
+ * platform-defined padding bits differ (a real possibility for long double
+ * specifically, since its in-memory representation is not fully significant
+ * on most platforms). Every NaN long double collapses into one single key,
+ * a deliberate divergence from float/double's own distinct-NaN-payload
+ * policy forced by that same padding: no padding byte belonging to a NaN
+ * long double is ever read, since it is routinely genuine uninitialized
+ * memory rather than merely unspecified content. This value-based handling
+ * is bypassed entirely when custom_hashing_proc is non-NULL: the custom
+ * function receives the raw, uncanonicalized bytes (padding included) for
+ * a long double key exactly like it would for any other type, so a custom
+ * hash function for a long double key type must itself be value-based
+ * (ignore padding, e.g. hash the result of frexpl()) to keep hash-bucket
+ * selection consistent with this map's own always-value-based key equality;
+ * otherwise two representations of the same numeric value can select
+ * different buckets and a lookup can spuriously report the key as absent.
  * @note Map must be destroyed with chmap_destroy() when done
  *
  * @see chmap_create
@@ -220,7 +253,9 @@ size_t chmap_elem_count(chmap chm);
  * @note All elements are destroyed regardless of return value
  * @note If new_bucket_array_size is 0, array size remains unchanged
  * @note If new_bucket_array_size < 16, it's set to 16
- * @note Otherwise rounded to nearest_power_of_2(new_bucket_array_size)
+ * @note Otherwise rounded UP to the nearest power of two that is >=
+ * new_bucket_array_size (a ceiling, not a round-to-nearest-in-either-
+ * direction)
  * @note Will assert if chm is NULL
  *
  * @see chmap_destroy
@@ -238,8 +273,17 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
  * @param key_pair Key to insert (ptr and size must be valid)
  * @param val_pair Value to insert (ptr and size must be valid)
  *
- * @return ccol_success on success
- * @return ccol_invalid_args if any pointer is NULL or size is 0
+ * @return ccol_success if a genuinely new key was inserted
+ * @return ccol_key_already_present if the key already existed and its value
+ * was updated in place; this is a successful upsert, not an error, and both
+ * this value and ccol_success must be treated as success by the caller
+ * @return ccol_invalid_args if any pointer is NULL, size is 0, key_pair->size
+ * does not exactly match the byte size of the key type when that type is a
+ * fixed-width numeric type (char, short, int, long, long long, their
+ * unsigned counterparts, float, double, long double, or a pointer type)
+ * regardless of which backend the map uses, or (for a map using the
+ * open-addressing backend specifically) val_pair->size does not exactly
+ * match the byte size of the value type the map was created with
  * @return ccol_container_full if max_elem_count reached
  * @return ccol_not_enough_memory if allocation fails
  *
@@ -247,7 +291,8 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size);
  * @note Open-addressing: O(n) worst case for linear probing
  * @note Separate chaining: O(n) worst case per bucket (where n is chain length)
  * @note Key and value data are copied (not referenced)
- * @note If key exists, only value is updated (key remains unchanged)
+ * @note If key exists, only value is updated (key remains unchanged); this
+ * path reports ccol_key_already_present rather than ccol_success (see above)
  * @note Open-addressing: Triggers resize at 0.70 load factor
  * @note Separate chaining: Triggers resize if elem_count >= (bucket_count + 1)
  * * 1.5
@@ -272,7 +317,11 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair *key_pair,
  * @param target_buf_size Size of target buffer
  *
  * @return ccol_success if key found and value copied
- * @return ccol_invalid_args if any pointer is NULL or size is 0
+ * @return ccol_invalid_args if any pointer is NULL, size is 0, or
+ * key_pair->size does not exactly match the byte size of the key type when
+ * that type is a fixed-width numeric type (char, short, int, long, long
+ * long, their unsigned counterparts, float, double, long double, or a
+ * pointer type) regardless of which backend the map uses
  * @return ccol_key_not_found if key does not exist
  *
  * @note O(1) average complexity
@@ -280,6 +329,8 @@ ccol_retval_t chmap_insert_elem(chmap chm, const cmap_pair *key_pair,
  * @note Separate chaining: O(n) worst case per bucket (where n is chain length)
  * @note Copies min(actual_value_size, target_buf_size) bytes
  * @note Safe to use with undersized buffers (partial copy)
+ * @note If target_buf_size is larger than the stored value, the remaining
+ * bytes of target_buf beyond the copied value are zeroed, not left untouched
  *
  * @see chmap_get_elem_ref
  * @see chmap_insert_elem
@@ -299,13 +350,20 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair *key_pair,
  * @param val_pair Output parameter to receive pointer to value pair
  *
  * @return ccol_success if key found
- * @return ccol_invalid_args if any pointer is NULL or key size is 0
+ * @return ccol_invalid_args if any pointer is NULL, key size is 0, or
+ * key_pair->size does not exactly match the byte size of the key type when
+ * that type is a fixed-width numeric type (char, short, int, long, long
+ * long, their unsigned counterparts, float, double, long double, or a
+ * pointer type) regardless of which backend the map uses
  * @return ccol_key_not_found if key does not exist
  *
  * @note O(1) average complexity
  * @note Open-addressing: O(n) worst case for linear probing
  * @note Separate chaining: O(n) worst case per bucket (where n is chain length)
- * @note Returned pointer is invalidated by insert/delete/resize operations
+ * @note Returned pointer is invalidated by insert/delete/resize operations,
+ * never by an unrelated chmap_get_elem_ref/chmap_get/chmap_get_ptr call for
+ * a different key; two or more references returned for distinct keys may be
+ * held concurrently and each remains valid independently
  * @note Do not free the returned pointer - it's owned by the map
  * @note Can modify value in-place, but do not change size
  *
@@ -325,7 +383,11 @@ ccol_retval_t chmap_get_elem_ref(chmap chm, const cmap_pair *key_pair,
  * @param key_pair Key to delete
  *
  * @return ccol_success if key found and deleted
- * @return ccol_invalid_args if any pointer is NULL or key size is 0
+ * @return ccol_invalid_args if any pointer is NULL, key size is 0, or
+ * key_pair->size does not exactly match the byte size of the key type when
+ * that type is a fixed-width numeric type (char, short, int, long, long
+ * long, their unsigned counterparts, float, double, long double, or a
+ * pointer type) regardless of which backend the map uses
  * @return ccol_key_not_found if key does not exist
  *
  * @note O(1) average complexity
@@ -365,7 +427,11 @@ ccol_retval_t chmap_delete_elem(chmap chm, const cmap_pair *key_pair);
  * @note Iterator must be destroyed with chmap_iter_destroy() or will
  * auto-destroy at end
  * @note Modifying map during iteration invalidates the iterator
- * @note Will assert if chm is NULL
+ * @note A NULL chm is treated the same as an empty map (returns NULL, not
+ * an error); this is intentional, not merely permissive, so that a
+ * lazily-created map field left uninitialized because nothing has been
+ * inserted into it yet can be iterated directly without every caller
+ * needing its own NULL guard first
  * @note Returns NULL if map is empty (not an error)
  *
  * @see chmap_begin (macro wrapper)
@@ -388,6 +454,49 @@ void __chmap_iterator_destroy(cmap_iterator *iter);
  * @warning Do not call directly - use chmap_destroy() macro instead
  */
 void __chmap_destroy(chmap chm);
+
+/**
+ * @brief Destroy a hash map, invoking a destructor on every value first,
+ * without ever allocating memory to do so
+ *
+ * Behaves like __chmap_destroy(), except that val_dtor (when non-NULL) is
+ * invoked once per live entry, passing that entry's own value as a
+ * cmap_pair, immediately before the entry itself is freed. Unlike
+ * enumerating the map via chashmap_begin_iter() first and destroying it
+ * afterward, this never allocates anything at all: it walks the map's own
+ * internal bucket/slot storage directly, the same way __chmap_destroy()
+ * already does internally, with the destructor call threaded into that
+ * same walk.
+ *
+ * Intended for a map whose values are themselves owned pointers to a
+ * larger structure needing its own recursive teardown (e.g. a nested
+ * dictionary of dictionaries). Destroying such a map by enumerating it via
+ * chashmap_begin_iter(), running a value destructor per entry, and only
+ * then destroying the (by then already emptied) map has a real gap under
+ * memory pressure: chashmap_begin_iter()'s own small internal allocation
+ * can itself fail, in which case that approach has no way left to reach
+ * and free the values it still owns. This function has no such gap: it
+ * cannot fail to reach every value, since it performs no allocation of
+ * its own.
+ *
+ * @param chm Hash map to destroy
+ * @param val_dtor Destructor invoked once per live value before that
+ *   entry is freed, or NULL to behave identically to __chmap_destroy()
+ * @param dtor_ctx Opaque pointer forwarded unchanged to every val_dtor call
+ *
+ * @note Safe to call with a NULL chm (a no-op)
+ * @note Does not NULL the chm handle; matches __chmap_destroy()'s own raw,
+ *   internal convention
+ * @note val_dtor must not itself mutate chm; the map is mid-teardown for
+ *   the whole duration of this call
+ *
+ * @see __chmap_destroy
+ * @see chashmap_begin_iter
+ */
+void chmap_destroy_with_dtor(chmap chm,
+                             void (*val_dtor)(cmap_pair *val_pair,
+                                              void *dtor_ctx),
+                             void *dtor_ctx);
 
 /**
  * @brief Internal cleanup function for automatic map destruction
@@ -599,18 +708,19 @@ static inline void ___chmap_destroy(chmap *chm) {
  * @param val_t Value type
  *
  * @note Terminates program on failure
- * @note Open-addressing used for: int→int, long→double, float→uint32_t, etc.
- * @note Separate chaining used for: string→int, int→string, string→string, etc.
+ * @note Open-addressing used for: int->int, long->double, float->uint32_t, etc.
+ * @note Separate chaining used for: string->int, int->string, string->string,
+ * etc.
  *
  * Example:
  * @code
- * chmap_construct(ages, char*, int);      // string→int: separate chaining
+ * chmap_construct(ages, char*, int);      // string->int: separate chaining
  * chmap_insert(ages, "Alice", 30);
  * chmap_insert(ages, "Bob", 25);
  * int age = chmap_get(ages, "Alice");     // age == 30
  * chmap_destroy(ages);
  *
- * chmap_construct(counters, int, int);    // int→int: open-addressing
+ * chmap_construct(counters, int, int);    // int->int: open-addressing
  * chmap_insert(counters, 1, 100);
  * int count = chmap_get(counters, 1);     // count == 100
  * chmap_destroy(counters);
@@ -908,7 +1018,7 @@ static inline void ___chmap_destroy(chmap *chm) {
       val = (typeof(*hm_name##__ccol_val_type_var) *)&(val_pair->ptr);      \
     } else if (val_pair->size != sizeof(*val)) {                            \
       fatal_err(                                                            \
-          "chmap_get('%s'): value size mismatch — stored: %lu bytes, "      \
+          "chmap_get('%s'): value size mismatch - stored: %lu bytes, "      \
           "requested: %lu bytes; wrong type or missing chmap_redeclare()?", \
           #hm_name, (unsigned long)val_pair->size,                          \
           (unsigned long)sizeof(*val));                                     \
@@ -961,7 +1071,7 @@ static inline void ___chmap_destroy(chmap *chm) {
         val = (typeof(*hm_name##__ccol_val_type_var) *)&(val_pair->ptr);      \
       } else if (val_pair->size != sizeof(*val)) {                            \
         fatal_err(                                                            \
-            "chmap_get_ptr('%s'): value size mismatch — stored: %lu bytes, "  \
+            "chmap_get_ptr('%s'): value size mismatch - stored: %lu bytes, "  \
             "requested: %lu bytes; wrong type or missing chmap_redeclare()?", \
             #hm_name, (unsigned long)val_pair->size,                          \
             (unsigned long)sizeof(*val));                                     \

@@ -49,9 +49,26 @@ SOFTWARE.
  *   void *result = ctpool_future_get(f);
  *   ctpool_future_free(f);
  *
- * Thread safety: all public functions are safe to call concurrently except
- * ctpool_shutdown_drain, ctpool_shutdown_immediate, and __ctpool_destroy, which
- * must each be called at most once and not concurrently with each other.
+ * Result ownership: the pool has no knowledge of what the void* result
+ * points to or how it was allocated, so it never allocates, copies, or
+ * frees it. ctpool_future_free only releases the future's own bookkeeping
+ * (the handle returned by ctpool_submit_future), never the result payload;
+ * whoever calls ctpool_future_get owns that payload from that point on and
+ * is responsible for freeing it however the task function itself allocated
+ * it (this also holds for ctpool_future_fulfill's result argument, for a
+ * detached future).
+ *
+ * Thread safety: every public function is safe to call concurrently with
+ * every other one on the same live handle, including ctpool_shutdown_drain,
+ * ctpool_shutdown_immediate, and __ctpool_destroy racing one another (an
+ * internal resolve/pin mechanism makes this safe; see __ctpool_destroy's own
+ * doc comment). ctpool_shutdown_drain and ctpool_shutdown_immediate are each
+ * idempotent: a second call to either one, whether sequential or concurrent
+ * with the first, is a safe no-op once shutdown has already started. The one
+ * hard restriction is __ctpool_destroy itself: calling it a second time on a
+ * handle whose destroy has already fully completed, or racing it against a
+ * second, concurrent __ctpool_destroy call on the very same still-live
+ * handle, is a fatal error rather than a safe no-op.
  */
 
 /* ========================================================================== */
@@ -129,6 +146,13 @@ create_cthread_pool(size_t num_threads, size_t queue_capacity, char **err_str) {
  * double-free, for both a purely sequential double-destroy and a
  * temporally-overlapping concurrent one.
  *
+ * Calling this function on pool from within a task (or that task's
+ * on_complete callback) currently executing on one of pool's own worker
+ * threads is likewise a FATAL ERROR: destroying it there would free the
+ * pool's mutex, condition variables, and struct while that very worker is
+ * still on its way back through its own dispatch loop, which touches all
+ * of them again immediately afterward.
+ *
  * On a live handle, waits for every in-flight resolved use of the handle
  * to finish (a ctpool_submit/_try_submit/_timed_submit/_submit_future/
  * _try_submit_future/_timed_submit_future/_wait/_shutdown_drain/
@@ -157,7 +181,10 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
  * Calling this on a stale handle - one already destroyed, whether
  * sequentially by an earlier call or concurrently by another thread
  * racing this one - is a FATAL ERROR (abort()/SIGABRT), not a silent
- * double-free; see __ctpool_destroy(3) for the full account.
+ * double-free. Calling this on pool from within a task (or that task's
+ * on_complete callback) currently executing on one of pool's own worker
+ * threads is also a FATAL ERROR, for the same reason; see
+ * __ctpool_destroy(3) for the full account of both cases.
  */
 #define ctpool_destroy(pool)  \
   do {                        \
@@ -226,8 +253,9 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
 /**
  * @brief Submit a task (blocking when bounded queue is full)
  *
- * For unbounded queues this never blocks on capacity; the only failure path
- * other than ccol_invalid_args is ccol_not_enough_memory.
+ * For unbounded queues this never blocks on capacity; the only failure paths
+ * are ccol_invalid_args, ccol_not_permitted (pool is shutting down), and
+ * ccol_not_enough_memory.
  * For bounded queues this blocks until space is available.
  *
  * @param pool        Thread pool handle
@@ -261,7 +289,10 @@ ccol_retval_t ctpool_try_submit(ctpool pool, void (*fn)(void *), void *arg,
  *
  * Blocks up to timeout waiting for space in a bounded queue. The timeout is a
  * relative duration (converted to an absolute deadline internally using
- * CLOCK_REALTIME).
+ * CLOCK_REALTIME). A non-NULL timeout whose tv_nsec is outside
+ * [0, 999999999] (e.g. the un-normalised result of subtracting two
+ * struct timespec values) is normalised before use rather than producing
+ * undefined behaviour.
  *
  * @param timeout Relative duration to wait; NULL is treated as zero (try-only)
  * @return ccol_success, ccol_invalid_args (pool is CTPOOL_INVALID or a
@@ -322,7 +353,10 @@ ccol_retval_t ctpool_try_submit_future(ctpool pool, void *(*fn)(void *),
  * Blocks up to timeout waiting for space in a bounded queue. The timeout is a
  * relative duration (converted to an absolute deadline internally using
  * CLOCK_REALTIME). Passing NULL as timeout is equivalent to
- * ctpool_try_submit_future (no waiting).
+ * ctpool_try_submit_future (no waiting). A non-NULL timeout whose tv_nsec is
+ * outside [0, 999999999] (e.g. the un-normalised result of subtracting two
+ * struct timespec values) is normalised before use rather than producing
+ * undefined behaviour.
  *
  * @param pool    Thread pool handle
  * @param fn      Task function returning a void* result (must not be NULL)
@@ -343,7 +377,9 @@ ccol_retval_t ctpool_timed_submit_future(ctpool pool, void *(*fn)(void *),
  * @brief Block until the future has a result and return it
  *
  * Returns NULL if the task was cancelled due to ctpool_shutdown_immediate.
- * Does not free the future; call ctpool_future_free afterwards.
+ * Does not free the future; call ctpool_future_free afterwards. The caller
+ * owns the returned result from this point on; see this header's own
+ * "Result ownership" note for what ctpool_future_free does and does not free.
  */
 void *ctpool_future_get(ctpool_future *f);
 
@@ -437,6 +473,11 @@ ccol_retval_t ctpool_future_fulfill(ctpool_future *f, void *result);
  * indefinite blocking.
  *
  * A no-op if pool is CTPOOL_INVALID or a stale (already-destroyed) handle.
+ * Also a no-op (returns immediately) when called on pool from within a task
+ * (or that task's on_complete callback) currently executing on one of
+ * pool's own worker threads: the calling task is itself still counted
+ * among pool's active tasks until it returns, so waiting here would
+ * otherwise deadlock the calling worker against itself.
  */
 void ctpool_wait(ctpool pool);
 
@@ -448,6 +489,11 @@ void ctpool_wait(ctpool pool);
  * ctpool_shutdown_immediate was called instead.
  *
  * A no-op if pool is CTPOOL_INVALID or a stale (already-destroyed) handle.
+ * Also a no-op when called on pool from within a task (or that task's
+ * on_complete callback) currently executing on one of pool's own worker
+ * threads: a worker thread cannot join itself, so this call would neither
+ * stop accepting new tasks nor join any worker in that case, leaving pool
+ * fully usable for a later, legitimate external shutdown call instead.
  */
 void ctpool_shutdown_drain(ctpool pool);
 
@@ -459,6 +505,9 @@ void ctpool_shutdown_drain(ctpool pool);
  * until all worker threads have exited.
  *
  * A no-op if pool is CTPOOL_INVALID or a stale (already-destroyed) handle.
+ * Also a no-op when called on pool from within a task (or that task's
+ * on_complete callback) currently executing on one of pool's own worker
+ * threads, for the same reason as ctpool_shutdown_drain.
  */
 void ctpool_shutdown_immediate(ctpool pool);
 

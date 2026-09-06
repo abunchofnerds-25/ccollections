@@ -1,0 +1,2 @@
+fail=0
+name=Multiline plain flow mapping key without value

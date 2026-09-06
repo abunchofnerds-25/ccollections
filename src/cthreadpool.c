@@ -395,6 +395,47 @@ static void _ctpool_atfork_release_impl(bool is_child) {
        * own fork() call) is an inherent limitation of calling fork() from
        * inside a held pin at all, not a regression this introduces. */
       atomic_store(&pool->pending_resolve_count, (size_t)0);
+
+      /* The real, previously-missing fix: a live pool's own worker threads
+       * spend most of their lives blocked in cond_var_wait(pool->not_empty,
+       * pool->mu) (see worker_thread_fn's main loop), which -- unlike a
+       * plain mutex_lock -- releases pool->mu for the duration of the wait.
+       * _ctpool_atfork_prepare locking pool->mu therefore proves nothing
+       * about whether some OTHER, vanished-in-the-child thread was, at the
+       * exact instant of fork(), sitting inside pthread_cond_wait's own
+       * internal waiter bookkeeping (glibc's condvar implementation tracks
+       * registered waiters via state private to the condvar itself, e.g.
+       * an internal waiter-reference count and generation/group counters,
+       * entirely independent of whatever external mutex it happens to be
+       * paired with). fork() duplicates that bookkeeping's raw memory as-is;
+       * with the thread it belonged to now gone, a LATER cond_var_signal/
+       * _broadcast call on the very same (copied) condvar in the child can
+       * hang trying to interact with that stale, never-to-be-resolved
+       * internal state (confirmed directly: this test's own diagnostic
+       * capture caught a hung child stuck inside pthread_cond_signal,
+       * called from submit_internal's ordinary cond_var_signal(pool->
+       * not_empty) after enqueueing a task -- not inside pool->mu at all).
+       * Unlike a plain "normal" pthread mutex (no owner tracking, so a bare
+       * unlock from a different thread fully and correctly clears it, per
+       * this function's own header comment), a condition variable has no
+       * such safe "just unlock" equivalent for potentially-stale internal
+       * waiter state; the fix, mirroring this same codebase's identical
+       * rwlock-reinit-instead-of-unlock precedent in clogger.c (see
+       * tests/clogger/tsan_rwlock_reinit.supp's own doc comment), is to
+       * unconditionally REINITIALIZE every one of this pool's condvars here,
+       * in the child's sole surviving thread, before any application code
+       * in this process can reach them. This is safe specifically because
+       * this handler runs single-threaded, synchronously, before fork()
+       * ever returns to application code: no concurrent access to these
+       * condvars is possible yet, and a freshly-initialized condvar with
+       * zero real waiters is exactly the correct state for an inherited
+       * pool, whose real worker threads (the only ones that could ever have
+       * been genuine waiters) are all, unconditionally, gone in this
+       * process regardless of what fork() caught them doing. */
+      cond_var_init(pool->not_empty);
+      cond_var_init(pool->not_full);
+      cond_var_init(pool->idle_cv);
+      cond_var_init(pool->pin_cv);
     }
 
     mutex_unlock(pool->mu);

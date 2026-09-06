@@ -1081,6 +1081,14 @@ typedef struct {
   int key;
   int result;
   ccol_retval_t retval;
+  /* Waited on, if non-NULL, immediately before calling clru_get: see this
+   * field's own use at its multi-thread-racing-the-same-key call sites
+   * below for why a fixed remote-getter sleep alone is not a reliable way
+   * to get every thread actually contending for the cache's own mutex
+   * before the first one's fetch completes. NULL (the default for any
+   * aggregate-initialized instance with fewer initializers than members)
+   * for every single-thread or distinct-key use, where no such race exists. */
+  pthread_barrier_t *start_barrier;
 } getter_arg_t;
 
 static _Atomic int coalesce_getter_calls = 0;
@@ -1110,6 +1118,7 @@ static void *getter_thread(void *arg) {
   getter_arg_t *ga = (getter_arg_t *)arg;
   clru_cache cache = ga->cache;
   clru_redeclare(cache, int, int);
+  if (ga->start_barrier) pthread_barrier_wait(ga->start_barrier);
   ga->retval = clru_get(cache, ga->key, &ga->result);
   return NULL;
 }
@@ -1119,6 +1128,8 @@ TEST(concurrency, multiple_getters_coalesce_to_single_remote_fetch) {
   clru_construct(cache, int, int, 16, slow_remote_getter, NULL, NULL);
 
 #define N_THREADS 8
+  pthread_barrier_t barrier;
+  REQUIRE_EQ(pthread_barrier_init(&barrier, NULL, N_THREADS), 0);
   getter_arg_t args[N_THREADS];
   pthread_t tids[N_THREADS];
   for (int i = 0; i < N_THREADS; i++) {
@@ -1126,24 +1137,36 @@ TEST(concurrency, multiple_getters_coalesce_to_single_remote_fetch) {
     args[i].key = 42;
     args[i].result = 0;
     args[i].retval = ccol_unexpected_failure;
+    args[i].start_barrier = &barrier;
     pthread_create(&tids[i], NULL, getter_thread, &args[i]);
   }
 
   for (int i = 0; i < N_THREADS; i++) {
     pthread_join(tids[i], NULL);
   }
+  pthread_barrier_destroy(&barrier);
+
+  /* Cleanup runs unconditionally before the assertions below: REQUIRE_*
+   * returns from this function immediately on the first failure, which
+   * would otherwise leak the cache. */
+  int calls = coalesce_getter_calls;
+  ccol_retval_t retvals[N_THREADS];
+  int results[N_THREADS];
+  for (int i = 0; i < N_THREADS; i++) {
+    retvals[i] = args[i].retval;
+    results[i] = args[i].result;
+  }
+  clru_destroy(cache);
 
   /* Only one remote call should have been made */
-  REQUIRE_EQ(coalesce_getter_calls, 1);
+  REQUIRE_EQ(calls, 1);
 
   /* All threads should have received the correct value */
   for (int i = 0; i < N_THREADS; i++) {
-    REQUIRE_EQ(args[i].retval, ccol_success);
-    REQUIRE_EQ(args[i].result, 1042); /* key 42 + 1000 */
+    REQUIRE_EQ(retvals[i], ccol_success);
+    REQUIRE_EQ(results[i], 1042); /* key 42 + 1000 */
   }
 #undef N_THREADS
-
-  clru_destroy(cache);
 }
 
 /* ========================================================================== */
@@ -1526,22 +1549,33 @@ TEST(concurrency, concurrent_getters_different_keys) {
     args[i].key = 100 + i; /* distinct keys; no coalescing should happen */
     args[i].result = 0;
     args[i].retval = ccol_unexpected_failure;
+    args[i].start_barrier = NULL; /* no shared-key race here to remove */
     pthread_create(&tids[i], NULL, getter_thread, &args[i]);
   }
   for (int i = 0; i < N_UNIQUE_KEYS; i++) {
     pthread_join(tids[i], NULL);
   }
 
+  /* Cleanup runs unconditionally before the assertions below: REQUIRE_*
+   * returns from this function immediately on the first failure, which
+   * would otherwise leak the cache. */
+  int calls = coalesce_getter_calls;
+  ccol_retval_t retvals[N_UNIQUE_KEYS];
+  int results[N_UNIQUE_KEYS];
+  for (int i = 0; i < N_UNIQUE_KEYS; i++) {
+    retvals[i] = args[i].retval;
+    results[i] = args[i].result;
+  }
+  clru_destroy(cache);
+
   /* Each unique key must have triggered exactly one remote call */
-  REQUIRE_EQ(coalesce_getter_calls, N_UNIQUE_KEYS);
+  REQUIRE_EQ(calls, N_UNIQUE_KEYS);
 
   for (int i = 0; i < N_UNIQUE_KEYS; i++) {
-    REQUIRE_EQ(args[i].retval, ccol_success);
-    REQUIRE_EQ(args[i].result, 100 + i + 1000); /* key + 1000 */
+    REQUIRE_EQ(retvals[i], ccol_success);
+    REQUIRE_EQ(results[i], 100 + i + 1000); /* key + 1000 */
   }
 #undef N_UNIQUE_KEYS
-
-  clru_destroy(cache);
 }
 
 /* ========================================================================== */
@@ -1694,7 +1728,7 @@ TEST(concurrency,
 
     /* Thread A: the fetcher for key 1 (via clru_get -> __clrucache_get_into);
      * gates inside the remote getter, well outside the cache mutex. */
-    getter_arg_t farg = {cache, 1, 0, ccol_unexpected_failure};
+    getter_arg_t farg = {cache, 1, 0, ccol_unexpected_failure, NULL};
     pthread_t ftid;
     pthread_create(&ftid, NULL, getter_thread, &farg);
     while (!atomic_load(&fetch_gate_started)) usleep(1000);
@@ -1952,7 +1986,7 @@ TEST(concurrency, size_zero_while_fetch_in_progress) {
 
   REQUIRE_EQ(clrucache_size(cache), (size_t)0);
 
-  getter_arg_t arg = {cache, 55, 0, ccol_unexpected_failure};
+  getter_arg_t arg = {cache, 55, 0, ccol_unexpected_failure, NULL};
   pthread_t tid;
   pthread_create(&tid, NULL, getter_thread, &arg);
 
@@ -1993,6 +2027,8 @@ TEST(concurrency, multiple_getters_coalesce_on_failed_fetch) {
   clru_construct(cache, int, int, 16, slow_failing_getter, NULL, NULL);
 
 #define N_FAIL_THREADS 6
+  pthread_barrier_t barrier;
+  REQUIRE_EQ(pthread_barrier_init(&barrier, NULL, N_FAIL_THREADS), 0);
   getter_arg_t args[N_FAIL_THREADS];
   pthread_t tids[N_FAIL_THREADS];
   for (int i = 0; i < N_FAIL_THREADS; i++) {
@@ -2000,22 +2036,31 @@ TEST(concurrency, multiple_getters_coalesce_on_failed_fetch) {
     args[i].key = 11;
     args[i].result = 0;
     args[i].retval = ccol_success; /* sentinel; must be overwritten */
+    args[i].start_barrier = &barrier;
     pthread_create(&tids[i], NULL, getter_thread, &args[i]);
   }
   for (int i = 0; i < N_FAIL_THREADS; i++) {
     pthread_join(tids[i], NULL);
   }
+  pthread_barrier_destroy(&barrier);
+
+  /* Cleanup runs unconditionally before the assertions below: REQUIRE_*
+   * returns from this function immediately on the first failure, which
+   * would otherwise leak the cache. */
+  int calls = fail_getter_call_count;
+  ccol_retval_t retvals[N_FAIL_THREADS];
+  for (int i = 0; i < N_FAIL_THREADS; i++) retvals[i] = args[i].retval;
+  size_t final_size = clrucache_size(cache);
+  clru_destroy(cache);
 
   /* Only one remote call, regardless of how many threads entered */
-  REQUIRE_EQ(fail_getter_call_count, 1);
+  REQUIRE_EQ(calls, 1);
 
   for (int i = 0; i < N_FAIL_THREADS; i++) {
-    REQUIRE_EQ(args[i].retval, ccol_key_not_found);
+    REQUIRE_EQ(retvals[i], ccol_key_not_found);
   }
-  REQUIRE_EQ(clrucache_size(cache), (size_t)0);
+  REQUIRE_EQ(final_size, (size_t)0);
 #undef N_FAIL_THREADS
-
-  clru_destroy(cache);
 }
 
 /*
@@ -2055,7 +2100,7 @@ TEST(concurrency,
 
   /* Thread A: clru_get -> __clrucache_get_into for an int-valued cache;
    * gates inside the remote getter, well outside the cache mutex. */
-  getter_arg_t farg = {cache, 1, 0, ccol_success};
+  getter_arg_t farg = {cache, 1, 0, ccol_success, NULL};
   pthread_t ftid;
   pthread_create(&ftid, NULL, getter_thread, &farg);
   while (!atomic_load(&mismatch_gate_started)) usleep(1000);
@@ -2102,7 +2147,7 @@ TEST(concurrency, setter_waits_for_active_fetch_then_succeeds) {
                  recording_remote_setter, NULL);
 
   /* Thread A: get key=7; triggers a 100 ms remote fetch */
-  getter_arg_t garg = {cache, 7, 0, ccol_unexpected_failure};
+  getter_arg_t garg = {cache, 7, 0, ccol_unexpected_failure, NULL};
   pthread_t gtid;
   pthread_create(&gtid, NULL, getter_thread, &garg);
 

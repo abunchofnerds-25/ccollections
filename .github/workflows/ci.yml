@@ -123,3 +123,46 @@ jobs:
             qemu-aarch64 -L /usr/aarch64-linux-gnu "$dir/tests"
             echo "::endgroup::"
           done
+
+  linux-arm32-gcc:
+    name: Linux arm32 (cross-compile + QEMU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        # armhf is a ports architecture, exactly like arm64 above: its
+        # package indices live on ports.ubuntu.com, not on the primary/
+        # security archive mirrors this runner's default sources point at.
+        # Restrict the default sources to amd64 and add a dedicated armhf
+        # source pointed at ports.ubuntu.com, mirroring the aarch64 job's
+        # own identical fix.
+        run: |
+          sudo dpkg --add-architecture armhf
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          sudo tee /etc/apt/sources.list.d/armhf-ports.list > /dev/null <<'EOF'
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf qemu-user libssl-dev:armhf zlib1g-dev:armhf
+      - name: Cross-build and run each module's test suite under qemu-arm
+        # Same shape as the aarch64 job above: build each module via the
+        # existing `build` target with CC=arm-linux-gnueabihf-gcc and run the
+        # resulting ./tests binary directly through qemu-arm, since this
+        # x86_64 runner cannot execute an armhf binary on its own. No `make
+        # memtest` (valgrind) leg, for the same reason the aarch64 job has
+        # none: valgrind nested inside qemu-user emulation is not a
+        # reliably supported combination.
+        run: |
+          set -e
+          for dir in tests/*/; do
+            mod=$(basename "$dir")
+            [ "$mod" = "tau" ] && continue
+            echo "::group::$mod"
+            (cd "$dir" && make CC=arm-linux-gnueabihf-gcc build)
+            qemu-arm -L /usr/arm-linux-gnueabihf "$dir/tests"
+            echo "::endgroup::"
+          done

@@ -3491,12 +3491,19 @@ TEST(chash_maps, long_double_key_size_mismatch_returns_invalid_args) {
   chmap_construct(hm, long double, int);
   REQUIRE_NE((void *)hm, NULL);
 
-  uint8_t *tiny_key_buf = (uint8_t *)malloc(sizeof(double));
+  // One byte short of sizeof(long double), not a hardcoded sizeof(double):
+  // long double's own size is platform/ABI-dependent (see this codebase's
+  // own "long double memory layout" portability note), and on at least one
+  // real target (armhf, where long double has no extended precision at all
+  // and is bit-for-bit identical to double) sizeof(double) IS the correct,
+  // exact size, which would make this buffer accidentally valid instead of
+  // undersized. One byte short is wrong on every platform by construction.
+  size_t tiny_size = sizeof(long double) - 1;
+  uint8_t *tiny_key_buf = (uint8_t *)malloc(tiny_size);
   REQUIRE_NE((void *)tiny_key_buf, NULL);
-  double d = 1.0;
-  memcpy(tiny_key_buf, &d, sizeof(d));
+  memset(tiny_key_buf, 0, tiny_size);
 
-  cmap_pair bad_key = {.ptr = tiny_key_buf, .size = sizeof(double)};
+  cmap_pair bad_key = {.ptr = tiny_key_buf, .size = tiny_size};
   int val = 5;
   cmap_pair val_pair = {.ptr = &val, .size = sizeof(val)};
 

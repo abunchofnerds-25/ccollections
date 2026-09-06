@@ -2163,12 +2163,19 @@ typedef struct {
   int key;
   char *result;
   ccol_retval_t retval;
+  /* Waited on, if non-NULL, immediately before calling clru_get: see this
+   * field's own use at the two call sites below for why a fixed remote-
+   * getter sleep alone is not a reliable way to get every thread racing the
+   * same key actually contending for the cache's own mutex before the
+   * first one's fetch completes. */
+  pthread_barrier_t *start_barrier;
 } str_getter_arg_t;
 
 static void *str_getter_thread(void *arg) {
   str_getter_arg_t *ga = (str_getter_arg_t *)arg;
   clru_cache cache = ga->cache;
   clru_redeclare(cache, int, char *);
+  if (ga->start_barrier) pthread_barrier_wait(ga->start_barrier);
   ga->retval = clru_get(cache, ga->key, &ga->result);
   return NULL;
 }
@@ -2178,6 +2185,8 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce) {
   clru_construct(cache, int, char *, 16, slow_char_ptr_getter, NULL, NULL);
 
 #define N_STR_THREADS 6
+  pthread_barrier_t barrier;
+  REQUIRE_EQ(pthread_barrier_init(&barrier, NULL, N_STR_THREADS), 0);
   str_getter_arg_t args[N_STR_THREADS];
   pthread_t tids[N_STR_THREADS];
   for (int i = 0; i < N_STR_THREADS; i++) {
@@ -2185,22 +2194,39 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce) {
     args[i].key = 77;
     args[i].result = NULL;
     args[i].retval = ccol_unexpected_failure;
+    args[i].start_barrier = &barrier;
     pthread_create(&tids[i], NULL, str_getter_thread, &args[i]);
   }
   for (int i = 0; i < N_STR_THREADS; i++) {
     pthread_join(tids[i], NULL);
   }
+  pthread_barrier_destroy(&barrier);
 
-  REQUIRE_EQ(char_ptr_coalesce_calls, 1);
+  /* Every cleanup (cache + any allocated result string) runs unconditionally
+   * before the assertions below: REQUIRE_* returns from this function
+   * immediately on the first failure, which would otherwise leak the cache
+   * and every args[i].result the loop had not yet freed. */
+  int calls = char_ptr_coalesce_calls;
+  ccol_retval_t retvals[N_STR_THREADS];
+  char results_copy[N_STR_THREADS][64];
+  bool has_result[N_STR_THREADS];
   for (int i = 0; i < N_STR_THREADS; i++) {
-    REQUIRE_EQ(args[i].retval, ccol_success);
-    REQUIRE_NOT_NULL(args[i].result);
-    REQUIRE_STREQ(args[i].result, "str_77");
-    free(args[i].result);
+    retvals[i] = args[i].retval;
+    has_result[i] = args[i].result != NULL;
+    if (has_result[i]) {
+      snprintf(results_copy[i], sizeof(results_copy[i]), "%s", args[i].result);
+      free(args[i].result);
+    }
+  }
+  clru_destroy(cache);
+
+  REQUIRE_EQ(calls, 1);
+  for (int i = 0; i < N_STR_THREADS; i++) {
+    REQUIRE_EQ(retvals[i], ccol_success);
+    REQUIRE_TRUE(has_result[i]);
+    REQUIRE_STREQ(results_copy[i], "str_77");
   }
 #undef N_STR_THREADS
-
-  clru_destroy(cache);
 }
 
 /*
@@ -2227,6 +2253,8 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
                  NULL);
 
 #define N_FAIL_STR_THREADS 6
+  pthread_barrier_t barrier;
+  REQUIRE_EQ(pthread_barrier_init(&barrier, NULL, N_FAIL_STR_THREADS), 0);
   str_getter_arg_t args[N_FAIL_STR_THREADS];
   pthread_t tids[N_FAIL_STR_THREADS];
   for (int i = 0; i < N_FAIL_STR_THREADS; i++) {
@@ -2234,23 +2262,36 @@ TEST(concurrency, multiple_char_ptr_getters_coalesce_on_failed_fetch) {
     args[i].key = 22;
     args[i].result = NULL;
     args[i].retval = ccol_success; /* sentinel; must be overwritten */
+    args[i].start_barrier = &barrier;
     pthread_create(&tids[i], NULL, str_getter_thread, &args[i]);
   }
   for (int i = 0; i < N_FAIL_STR_THREADS; i++) {
     pthread_join(tids[i], NULL);
   }
+  pthread_barrier_destroy(&barrier);
+
+  /* Every cleanup runs unconditionally before the assertions below:
+   * REQUIRE_* returns from this function immediately on the first failure,
+   * which would otherwise leak the cache. */
+  int calls = slow_fail_char_ptr_getter_calls;
+  ccol_retval_t retvals[N_FAIL_STR_THREADS];
+  bool has_result[N_FAIL_STR_THREADS];
+  for (int i = 0; i < N_FAIL_STR_THREADS; i++) {
+    retvals[i] = args[i].retval;
+    has_result[i] = args[i].result != NULL;
+    if (has_result[i]) free(args[i].result);
+  }
+  size_t final_size = clrucache_size(cache);
+  clru_destroy(cache);
 
   /* Only one remote call, regardless of how many threads entered */
-  REQUIRE_EQ(slow_fail_char_ptr_getter_calls, 1);
-
+  REQUIRE_EQ(calls, 1);
   for (int i = 0; i < N_FAIL_STR_THREADS; i++) {
-    REQUIRE_EQ(args[i].retval, ccol_key_not_found);
-    REQUIRE_NULL(args[i].result);
+    REQUIRE_EQ(retvals[i], ccol_key_not_found);
+    REQUIRE_FALSE(has_result[i]);
   }
-  REQUIRE_EQ(clrucache_size(cache), (size_t)0);
+  REQUIRE_EQ(final_size, (size_t)0);
 #undef N_FAIL_STR_THREADS
-
-  clru_destroy(cache);
 }
 
 /* ========================================================================== */

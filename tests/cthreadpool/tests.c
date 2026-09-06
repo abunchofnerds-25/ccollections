@@ -2501,8 +2501,13 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
       /* Bounds this child's own lifetime in case the hazard this test
        * guards against somehow still fires, rather than hanging the whole
        * suite; the parent below distinguishes this from a clean exit via
-       * WIFEXITED. */
-      alarm(1);
+       * WIFEXITED. 5 seconds, not 1: a genuine deadlock on an inherited
+       * locked mutex hangs forever regardless of the bound chosen, so this
+       * buys headroom against ordinary post-fork scheduling delay (a busy,
+       * oversubscribed, or virtualized CI host can leave a freshly forked
+       * child unscheduled for over a second with nothing actually wrong)
+       * without weakening what the test actually catches. */
+      alarm(5);
 
       /* The exact call shape (ctpool_submit/_try_submit -> submit_internal
        * -> mutex_lock(pool->mu)) a real application would use right after

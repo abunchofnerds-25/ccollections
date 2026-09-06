@@ -22,6 +22,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+/* pthread_tryjoin_np() (a non-blocking join used to opportunistically reap
+ * already-finished mock-server connection threads below) is a glibc
+ * extension, not declared by <pthread.h> without this. */
+#define _GNU_SOURCE
+
 #include <arpa/inet.h>
 #include <chttpclient.h>
 #include <common.h>
@@ -121,6 +126,36 @@ static atomic_int g_accept_count = 0;
 static pthread_t g_conn_threads[MAX_CONN_THREADS];
 static int g_conn_thread_count = 0;
 static pthread_mutex_t g_conn_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/* Registers a freshly-created connection thread in g_conn_threads, first
+ * opportunistically reaping (non-blocking join) any earlier entry that has
+ * already finished. Every connection thread here is short-lived, but a
+ * finished-and-unjoined thread keeps its stack mapping allocated until
+ * joined; without this, the registry only ever grows and the whole binary's
+ * un-freed thread-stack footprint climbs for as long as the mock server
+ * (started once, for the entire process) keeps accepting connections across
+ * hundreds of sequential test cases, until stop_test_server's own
+ * process-exit join finally catches up. On a 32-bit build, whose usable
+ * address space is far tighter than a 64-bit one's, that accumulation alone
+ * is enough to spuriously exhaust it well before any other resource limit
+ * is hit. */
+static void register_conn_thread(pthread_t tid) {
+  pthread_mutex_lock(&g_conn_mutex);
+  int kept = 0;
+  for (int i = 0; i < g_conn_thread_count; i++) {
+    if (pthread_tryjoin_np(g_conn_threads[i], NULL) != 0) {
+      g_conn_threads[kept++] = g_conn_threads[i];
+    }
+  }
+  g_conn_thread_count = kept;
+
+  if (g_conn_thread_count < MAX_CONN_THREADS) {
+    g_conn_threads[g_conn_thread_count++] = tid;
+  } else {
+    pthread_detach(tid); /* registry full: fall back to detach */
+  }
+  pthread_mutex_unlock(&g_conn_mutex);
+}
 
 /*
  * Send a complete HTTP response. keep_alive controls whether "Connection:
@@ -1298,12 +1333,7 @@ static void *srv_accept_loop(void *arg) {
                        (void *)(intptr_t)conn_fd) != 0) {
       close(conn_fd);
     } else {
-      pthread_mutex_lock(&g_conn_mutex);
-      if (g_conn_thread_count < MAX_CONN_THREADS)
-        g_conn_threads[g_conn_thread_count++] = tid;
-      else
-        pthread_detach(tid); /* registry full: fall back to detach */
-      pthread_mutex_unlock(&g_conn_mutex);
+      register_conn_thread(tid);
     }
   }
   return NULL;
@@ -1324,12 +1354,7 @@ static void *srv_accept_loop6(void *arg) {
                        (void *)(intptr_t)conn_fd) != 0) {
       close(conn_fd);
     } else {
-      pthread_mutex_lock(&g_conn_mutex);
-      if (g_conn_thread_count < MAX_CONN_THREADS)
-        g_conn_threads[g_conn_thread_count++] = tid;
-      else
-        pthread_detach(tid); /* registry full: fall back to detach */
-      pthread_mutex_unlock(&g_conn_mutex);
+      register_conn_thread(tid);
     }
   }
   return NULL;
@@ -1350,12 +1375,7 @@ static void *srv_accept_loop_unix(void *arg) {
                        (void *)(intptr_t)conn_fd) != 0) {
       close(conn_fd);
     } else {
-      pthread_mutex_lock(&g_conn_mutex);
-      if (g_conn_thread_count < MAX_CONN_THREADS)
-        g_conn_threads[g_conn_thread_count++] = tid;
-      else
-        pthread_detach(tid); /* registry full: fall back to detach */
-      pthread_mutex_unlock(&g_conn_mutex);
+      register_conn_thread(tid);
     }
   }
   return NULL;
@@ -11026,6 +11046,28 @@ static pthread_t g_tls_conn_threads[MAX_TLS_CONN_THREADS];
 static int g_tls_conn_thread_count = 0;
 static pthread_mutex_t g_tls_conn_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+/* TLS counterpart of register_conn_thread: opportunistically reaps an
+ * already-finished connection thread before registering a new one, so this
+ * registry does not simply grow for as long as the TLS mock server (also
+ * started once, for the entire process) keeps accepting connections. */
+static void register_tls_conn_thread(pthread_t tid) {
+  pthread_mutex_lock(&g_tls_conn_mutex);
+  int kept = 0;
+  for (int i = 0; i < g_tls_conn_thread_count; i++) {
+    if (pthread_tryjoin_np(g_tls_conn_threads[i], NULL) != 0) {
+      g_tls_conn_threads[kept++] = g_tls_conn_threads[i];
+    }
+  }
+  g_tls_conn_thread_count = kept;
+
+  if (g_tls_conn_thread_count < MAX_TLS_CONN_THREADS) {
+    g_tls_conn_threads[g_tls_conn_thread_count++] = tid;
+  } else {
+    pthread_detach(tid);
+  }
+  pthread_mutex_unlock(&g_tls_conn_mutex);
+}
+
 /* Generates a throwaway self-signed cert/key pair into a fresh mkdtemp()
  * directory via the openssl CLI (same approach as tests/chttpserver_tls).
  * Returns 0 on success, -1 on any failure; callers must treat -1 as "TLS
@@ -11186,13 +11228,7 @@ static void *_tls_accept_loop(void *arg) {
       close(fd);
       continue;
     }
-    pthread_mutex_lock(&g_tls_conn_mutex);
-    if (g_tls_conn_thread_count < MAX_TLS_CONN_THREADS) {
-      g_tls_conn_threads[g_tls_conn_thread_count++] = tid;
-    } else {
-      pthread_detach(tid);
-    }
-    pthread_mutex_unlock(&g_tls_conn_mutex);
+    register_tls_conn_thread(tid);
   }
   return NULL;
 }

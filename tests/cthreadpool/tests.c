@@ -1,6 +1,7 @@
 #include <common.h>
 #include <common_invariants.h>
 #include <cthreadpool.h>
+#include <execinfo.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
@@ -24,6 +25,98 @@ extern struct cthread_pool *_ctpool_resolve_for_tests(ctpool h);
 extern size_t _ctpool_slot_table_capacity_for_tests(void);
 extern size_t _ctpool_task_free_list_size_for_tests(struct cthread_pool *pool);
 extern size_t _ctpool_task_free_list_cap_for_tests(struct cthread_pool *pool);
+
+/* ========================================================================== */
+/*                    FORK-HANG DIAGNOSTIC CAPTURE                            */
+/* ========================================================================== */
+
+/* Diagnostic aid for fork_does_not_inherit_a_locked_ctpool_mutex below: when
+ * that test's own alarm(5) bound fires in a forked child, letting the
+ * default SIGALRM disposition kill the child tells us only THAT it hung,
+ * never WHERE. Instead, a custom handler captures the child's own raw call
+ * stack and writes it, as plain addresses (no symbol resolution: resolving
+ * symbols can itself call malloc()/dlopen() internally, which would recurse
+ * into the exact kind of lock this diagnostic exists to investigate if that
+ * lock is what's actually stuck), down a pipe to the parent. The parent,
+ * running in a completely ordinary, non-signal-handler, non-hung context,
+ * resolves and prints them via backtrace_symbols() (safe there), so a real
+ * hang shows the child's own stuck call site directly in this test's own
+ * output rather than only a bare "it didn't return" verdict.
+ *
+ * backtrace() itself is warmed up once (_diag_warm_up_backtrace, called at
+ * the top of the test below, well before any fork() happens): glibc's
+ * unwinder lazily dlopen()s (and therefore malloc()s) its own internal
+ * unwind-info machinery on its OWN first invocation in the process, and
+ * doing that for the first time from inside a signal handler in a child
+ * that might itself be stuck on the malloc lock this diagnostic is trying
+ * to catch would just recreate the same hang inside the "diagnostic"
+ * instead of reporting it. */
+static volatile sig_atomic_t diag_write_fd = -1;
+
+static void _diag_warm_up_backtrace(void) {
+  void *dummy[4];
+  int n = backtrace(dummy, 4);
+  int devnull = open("/dev/null", O_WRONLY);
+  if (devnull >= 0) {
+    backtrace_symbols_fd(dummy, n, devnull);
+    close(devnull);
+  }
+}
+
+/* Async-signal-safe: backtrace() only reads already-unwound stack frames
+ * into a caller-supplied buffer (no allocation, given the warm-up above
+ * already forced its own one-time lazy setup), and write() is
+ * async-signal-safe by POSIX definition. No symbol resolution happens here
+ * on purpose (see this section's own doc comment above). */
+static void _diag_alarm_handler(int sig) {
+  (void)sig;
+  int fd = (int)diag_write_fd;
+  if (fd >= 0) {
+    void *frames[32];
+    int n = backtrace(frames, 32);
+    ssize_t written = write(fd, frames, (size_t)n * sizeof(frames[0]));
+    (void)written;
+  }
+  _exit(66); /* distinct sentinel: "diagnostic capture fired", not a plain
+                unhandled-signal kill, so the parent can tell the two apart
+                and knows a backtrace is waiting to be read from the pipe */
+}
+
+/* Arms the diagnostic SIGALRM handler and starts the same alarm(5) bound
+ * this test always used; call from the child, right after fork(), before
+ * doing the operation under test. write_fd is the pipe write end this
+ * child's own handler reports through (the read end is this function's
+ * caller's problem, in the parent, after waitpid). */
+static void _diag_arm(int write_fd) {
+  diag_write_fd = write_fd;
+  struct sigaction sa = {0};
+  sa.sa_handler = _diag_alarm_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0; /* no SA_RESTART: a syscall interrupted by this signal
+                       must not silently retry, or the handler firing would
+                       never actually stop the stuck call */
+  sigaction(SIGALRM, &sa, NULL);
+  alarm(5);
+}
+
+/* Parent-side: reads whatever raw addresses _diag_alarm_handler wrote (a
+ * plain unhandled-signal kill, or a clean exit, leaves the pipe empty,
+ * which is fine -- got <= 0 below) and prints them resolved via
+ * backtrace_symbols(), safe here since the parent is a completely
+ * ordinary, unstuck process. */
+static void _diag_report(int read_fd) {
+  void *frames[32];
+  ssize_t got = read(read_fd, frames, sizeof(frames));
+  if (got <= 0) return;
+  int n = (int)(got / (ssize_t)sizeof(frames[0]));
+  if (n <= 0) return;
+  char **syms = backtrace_symbols(frames, n);
+  fprintf(stderr, "  [diagnostic] child was stuck at:\n");
+  for (int i = 0; i < n; i++) {
+    fprintf(stderr, "    %s\n", syms && syms[i] ? syms[i] : "???");
+  }
+  if (syms) free(syms);
+}
 
 /* ========================================================================== */
 /*                         SHARED TASK FUNCTIONS                              */
@@ -2483,15 +2576,20 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
    * made it too slow under valgrind). */
   enum { BURST = 8 };
   int hangs = 0;
+  _diag_warm_up_backtrace();
   for (int i = 0; i < TRIALS; i++) {
     for (int b = 0; b < BURST; b++) {
       REQUIRE_EQ(ctpool_try_submit(pool, inc_counter, &counter, NULL),
                  ccol_success);
     }
 
+    int diagfd[2];
+    REQUIRE_EQ(pipe(diagfd), 0);
+
     pid_t pid = fork();
     REQUIRE_NE(pid, -1);
     if (pid == 0) {
+      close(diagfd[0]);
       int dn = open("/dev/null", O_WRONLY);
       if (dn >= 0) {
         dup2(dn, STDOUT_FILENO);
@@ -2506,8 +2604,11 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
        * buys headroom against ordinary post-fork scheduling delay (a busy,
        * oversubscribed, or virtualized CI host can leave a freshly forked
        * child unscheduled for over a second with nothing actually wrong)
-       * without weakening what the test actually catches. */
-      alarm(5);
+       * without weakening what the test actually catches. _diag_arm installs
+       * a diagnostic SIGALRM handler (see that section's own doc comment)
+       * instead of relying on the default kill-on-SIGALRM disposition, so a
+       * real hang reports WHERE the child was stuck, not just THAT it was. */
+      _diag_arm(diagfd[1]);
 
       /* The exact call shape (ctpool_submit/_try_submit -> submit_internal
        * -> mutex_lock(pool->mu)) a real application would use right after
@@ -2517,10 +2618,21 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
       ctpool_try_submit(pool, inc_counter, &local_counter, NULL);
       _exit(0); /* reached only if the call above returned at all */
     }
+    close(diagfd[1]);
 
     int status = 0;
     REQUIRE_EQ(waitpid(pid, &status, 0), pid);
-    if (!WIFEXITED(status)) hangs++;
+    bool diag_fired = WIFEXITED(status) && WEXITSTATUS(status) == 66;
+    if (!WIFEXITED(status) || diag_fired) {
+      hangs++;
+      fprintf(stderr,
+              "trial %d: hang detected (WIFEXITED=%d WEXITSTATUS=%d "
+              "WIFSIGNALED=%d WTERMSIG=%d)\n",
+              i, WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+              WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : -1);
+      if (diag_fired) _diag_report(diagfd[0]);
+    }
+    close(diagfd[0]);
   }
 
   REQUIRE_EQ(hangs, 0);

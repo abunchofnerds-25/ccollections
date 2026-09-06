@@ -84,8 +84,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
+        # arm64 is a ports architecture: its package indices live on
+        # ports.ubuntu.com, not on the primary/security archive mirrors this
+        # runner's default sources point at. Restrict the default sources to
+        # amd64 (they carry no arm64 indices at all) and add a dedicated
+        # arm64 source pointed at ports.ubuntu.com, or `apt-get update`
+        # 404s trying to fetch nonexistent arm64 indices from the default
+        # mirrors once arm64 is registered as a foreign architecture.
         run: |
           sudo dpkg --add-architecture arm64
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null <<'EOF'
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user libssl-dev:arm64 zlib1g-dev:arm64
       - name: Cross-build and run each module's test suite under qemu-aarch64

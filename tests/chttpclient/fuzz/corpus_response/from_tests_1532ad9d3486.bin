@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+X-A: 1
+X-B: 2
+X-C: 3
+Content-Length: 0
+

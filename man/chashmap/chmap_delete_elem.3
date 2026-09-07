@@ -23,7 +23,13 @@ key_pair   Key to remove
 .SH RETURN VALUE
 .nf
 ccol_success        - Key removed successfully
-ccol_invalid_args   - chm or key_pair is NULL or key size is 0
+ccol_invalid_args   - chm or key_pair is NULL or key size is 0; also
+                      returned when key_pair->size does not exactly
+                      match the byte size of the key type, for any
+                      fixed-width numeric key type (char, short, int,
+                      long, long long, their unsigned counterparts,
+                      float, double, long double, or a pointer type),
+                      regardless of which backend the map uses
 ccol_key_not_found  - Key does not exist in map
 .fi
 .SH NOTES
@@ -32,7 +38,12 @@ Average O(1) complexity
 Frees memory for key and value
 Open-addressing: shrinks when load factor < 0.25 (scale 0.5x)
 Separate chaining: shrinks when elem_count < (bucket_count + 1) / 8 (scale 0.25x)
+For a float or double key, see chmap_construct(3) for the map's
+key equality contract (bitwise, except -0.0 canonicalized to 0.0)
+For a long double key, see chmap_construct(3) for the map's key
+equality contract (value-based, unlike every other key type)
 .fi
 .SH "SEE ALSO"
 .BR chmap_remove (3),
-.BR chmap_insert_elem (3)
+.BR chmap_insert_elem (3),
+.BR chmap_construct (3)

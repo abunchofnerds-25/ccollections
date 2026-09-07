@@ -7,17 +7,17 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cbstmap.h>
 
-cbmap cbmap_create(bool keys_are_signed_ints, char **err);
+cbmap cbmap_create(ccol_data_type key_type, char **err);
 .fi
 .SH DESCRIPTION
 .nf
 Creates a self-balancing binary search tree map (AVL tree) with default
-memory management and default comparison based on key signedness.
+memory management and default comparison based on the key type.
 .fi
 .SH PARAMETERS
 .nf
-keys_are_signed_ints  If true, treat integer keys as signed for comparison
-err                   Optional pointer to receive error string on failure
+key_type  Type of the keys stored in the map
+err       Optional pointer to receive error string on failure
 .fi
 .SH RETURN VALUE
 .nf
@@ -26,8 +26,15 @@ Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-Default comparison for unsigned: memcmp(key1, key2, size)
-Default comparison for signed: proper signed integer comparison
+Default comparison for char: this platform's own native char comparison
+  (signed or unsigned, matching however char behaves on this platform)
+Default comparison for the other signed integer types: signed integer
+  comparison
+Default comparison for unsigned integer types: unsigned integer comparison
+Default comparison for float/double/long double: numeric comparison; a NaN
+  key sorts as greater than every non-NaN key and equal to every other NaN
+  key
+Default comparison for ccol_string: strcmp-equivalent lexicographic order
 Map maintains AVL balance: |height(left) - height(right)| <= 1
 All operations are O(log n) for balanced tree
 Map must be destroyed with cbmap_destroy() when done

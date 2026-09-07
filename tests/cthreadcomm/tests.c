@@ -2,11 +2,14 @@
 #include <cthreadcomm.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <tau/tau.h>
@@ -20,6 +23,21 @@ extern bool _event_loop_resolve_pin_and_sleep_for_tests(event_loop h, int ms);
 
 extern void add_duration_to_timespec(struct timespec *target,
                                      struct timespec *duration);
+
+/* Every write(2) call in this file is a small (a handful of bytes), single
+ * fixed-size best-effort signal into a pipe this same test already owns
+ * (a result/notify fd), never a partial-transfer-prone bulk transfer; so,
+ * like src/cthreadcomm.c's own _eventfd_notify(), the only failure worth
+ * looping on is EINTR. A bare (void) cast used to be enough to document
+ * "deliberately unchecked" here, but _FORTIFY_SOURCE's fortified write(2)
+ * wrapper marks itself warn_unused_result in a way a (void) cast does not
+ * reliably suppress, so the return value must be genuinely consumed. */
+static void test_write_retry_eintr(int fd, const void *buf, size_t n) {
+  ssize_t rv;
+  do {
+    rv = write(fd, buf, n);
+  } while (rv < 0 && errno == EINTR);
+}
 
 TEST(add_duration_to_timespec, edge_cases) {
   {
@@ -133,6 +151,52 @@ TEST(add_duration_to_timespec, duration_not_mutated) {
   REQUIRE_EQ(d.tv_nsec, 1500000000);
 }
 
+/* Regression tests: a caller-supplied duration (or an already-computed
+ * target) with a negative tv_nsec (a malformed, non-normalised struct
+ * timespec no legitimate internal call in this file ever produces, but
+ * nothing previously rejected either) used to flow straight through
+ * un-normalised, since the pre-fix code only ever checked tv_nsec >=
+ * 1000000000, never tv_nsec < 0. A negative tv_nsec surviving into the
+ * result would reach cond_var_timedwait (via circq_timed_send_zc/
+ * circq_timed_recv_zc/dynmq_timed_recv_zc, all of which pass a caller's own
+ * timeout straight into this function), itself undefined behaviour per
+ * POSIX for a struct timespec outside [0, 999999999]. Fixed by borrowing
+ * whole seconds until tv_nsec is non-negative, the mirror image of the
+ * pre-existing >= max_nsecs normalisation. */
+TEST(add_duration_to_timespec, negative_tv_nsec_in_duration_normalised) {
+  struct timespec t = {.tv_sec = 5, .tv_nsec = 0};
+  struct timespec d = {.tv_sec = 2, .tv_nsec = -1};
+  add_duration_to_timespec(&t, &d);
+  REQUIRE_EQ(t.tv_sec, 6);
+  REQUIRE_EQ(t.tv_nsec, 999999999);
+  REQUIRE_GE(t.tv_nsec, 0L);
+}
+
+TEST(add_duration_to_timespec, negative_tv_nsec_in_target_normalised) {
+  struct timespec t = {.tv_sec = 5, .tv_nsec = -500000000};
+  struct timespec d = {.tv_sec = 0, .tv_nsec = 0};
+  add_duration_to_timespec(&t, &d);
+  REQUIRE_EQ(t.tv_sec, 4);
+  REQUIRE_EQ(t.tv_nsec, 500000000);
+  REQUIRE_GE(t.tv_nsec, 0L);
+}
+
+TEST(add_duration_to_timespec,
+     negative_tv_nsec_spanning_multiple_seconds_normalised) {
+  /* -1500000000ns == -2s + 500000000ns: exercises the general borrow-count
+   * computation (more than a single second's worth of borrowing), not just
+   * the single-second case above. Also confirms the duration struct itself
+   * stays unmutated by this function's own copy-before-normalise
+   * discipline, mirroring duration_not_mutated above. */
+  struct timespec t = {.tv_sec = 10, .tv_nsec = 0};
+  struct timespec d = {.tv_sec = 0, .tv_nsec = -1500000000};
+  add_duration_to_timespec(&t, &d);
+  REQUIRE_EQ(t.tv_sec, 8);
+  REQUIRE_EQ(t.tv_nsec, 500000000);
+  REQUIRE_EQ(d.tv_sec, 0);
+  REQUIRE_EQ(d.tv_nsec, -1500000000);
+}
+
 // CIRCULAR_QUEUE TESTS
 
 TEST(circular_queues, create_fails) {
@@ -153,6 +217,68 @@ TEST(circular_queues, create_fails) {
       &err_str);
   REQUIRE_EQ((void *)cq, NULL);
   REQUIRE_NE((void *)err_str, NULL);
+}
+
+/* Regression test for a real, reproduced heap-buffer-overflow: prior to the
+ * max_size > SIZE_MAX / sizeof(c_message_t) guard in
+ * verify_circular_queue_create_inputs, any max_size in roughly
+ * [max_elem_count / 16, max_elem_count] (i.e. the top slice of the
+ * documented-valid "1 to max_elem_count" range) made
+ * max_size * sizeof(c_message_t) wrap size_t, so the queue believed it had
+ * room for max_size messages while msg_array's real allocation was tiny (or
+ * exactly 0 bytes for max_size == 2^60); the very first send corrupted the
+ * heap. Confirmed via a standalone AddressSanitizer repro against the
+ * pre-fix code before this test was written. Both rejected values below are
+ * well within max_elem_count, so only the new overflow guard (not the
+ * pre-existing max_size > max_elem_count check) can be what rejects them;
+ * NULL mmgmt_procs (the default allocator) is used throughout, since the
+ * guard must reject both before ever calling malloc(3) at all. */
+TEST(circular_queues,
+     create_rejects_max_size_that_would_overflow_the_backing_array_size) {
+  char *err_str = NULL;
+
+  size_t smallest_overflowing = SIZE_MAX / sizeof(c_message_t) + 1;
+  REQUIRE_LT(smallest_overflowing, max_elem_count);
+  circular_queue *cq =
+      circular_queue_create_with_mprocs(smallest_overflowing, NULL, &err_str);
+  REQUIRE_EQ((void *)cq, NULL);
+  REQUIRE_NE((void *)err_str, NULL);
+
+  /* The exact value confirmed, before this guard existed, to wrap
+   * max_size * sizeof(c_message_t) to exactly 0 and corrupt the heap on the
+   * very first send; still comfortably inside max_elem_count. Only
+   * constructible on a platform where size_t is wider than 32 bits: `(size_t)1
+   * << 60` is a shift by more than the width of a 32-bit size_t (e.g. i386),
+   * undefined behavior and a compile error under -Werror=shift-count-overflow
+   * regardless of what runtime branch would have contained it, so this half
+   * of the test is guarded with a compile-time #if rather than skipped at
+   * runtime. smallest_overflowing above already covers the identical overflow
+   * guard on every platform, size_t width included, so no coverage is lost
+   * for a 32-bit build; this second case only adds a second, independently
+   * confirmed data point that happens to require a wider size_t to express. */
+#if SIZE_MAX > 0xFFFFFFFFu
+  size_t known_bad = (size_t)1 << 60;
+  REQUIRE_LT(known_bad, max_elem_count);
+  err_str = NULL;
+  cq = circular_queue_create_with_mprocs(known_bad, NULL, &err_str);
+  REQUIRE_EQ((void *)cq, NULL);
+  REQUIRE_NE((void *)err_str, NULL);
+#endif
+}
+
+/* A max_size large enough that max_size * sizeof(c_message_t) is itself a
+ * sizeable allocation, but nowhere near overflowing, must still be
+ * accepted; the overflow guard must not be over-strict. Mirrors
+ * tests/cvector/tests.c's own create_succeeds_with_large_elem_size
+ * precedent for the identical class of guard. */
+TEST(circular_queues, create_succeeds_with_large_non_overflowing_max_size) {
+  char *err_str = NULL;
+  size_t large_max_size = 1024 * 1024; /* 16 MiB of c_message_t slots */
+  circular_queue *cq =
+      circular_queue_create_with_mprocs(large_max_size, NULL, &err_str);
+  REQUIRE_NE((void *)cq, NULL);
+  REQUIRE_EQ((void *)err_str, NULL);
+  circular_queue_destroy(cq);
 }
 
 TEST(circular_queues, create_and_destroy_no_mem_procs) {
@@ -426,6 +552,120 @@ TEST(circular_queues, timed_args_null_timeout) {
   circular_queue_destroy(cq);
 }
 
+TEST(circular_queues, timed_send_reports_unexpected_failure_on_condvar_error) {
+  /* Regression test: circq_timed_send_zc's wait loop must not report
+   * ccol_unexpected_failure unconditionally on any non-ETIMEDOUT
+   * cond_var_timedwait return without first re-checking whether space
+   * actually became available; that re-check is exercised separately by
+   * the racing test right below. This test just confirms the ordinary,
+   * still-genuinely-full case: a forced error with nothing racing it must
+   * still be reported as ccol_unexpected_failure, not silently ignored or
+   * retried forever (a large configured timeout with a tight elapsed-time
+   * bound proves it returns promptly on the forced error). */
+  circular_queue *cq = circular_queue_create(1, NULL);
+  c_message_t filler = {.data = malloc(1), .size = 1};
+  REQUIRE_EQ(circq_try_send_zc(cq, &filler), ccol_success);
+
+  circq_test_force_next_send_condvar_wait_error();
+
+  c_message_t m = {.data = malloc(1), .size = 1};
+  struct timespec timeout = {.tv_sec = 5, .tv_nsec = 0};
+  struct timespec before, after;
+  getWallTime(before);
+  REQUIRE_EQ(circq_timed_send_zc(cq, &m, &timeout), ccol_unexpected_failure);
+  getWallTime(after);
+  REQUIRE_LT(diffTimeUSec(before, after), 500000);
+  REQUIRE_NE(m.data, NULL);  // caller retains ownership on failure
+  free(m.data);
+
+  c_message_t drained = {.data = NULL, .size = 0};
+  REQUIRE_EQ(circq_try_recv_zc(cq, &drained), ccol_success);
+  free(drained.data);
+  circular_queue_destroy(cq);
+}
+
+TEST(circular_queues, timed_send_condvar_error_racing_freed_slot_still_sends) {
+  /* Regression test for the same class of bug already fixed in
+   * ccol_select's own _sel_wait_condvar (see
+   * ccol_select.timed_wait_ready_racing_condvar_error_still_succeeds):
+   * circq_timed_send_zc's FAILURE branch used to report
+   * ccol_unexpected_failure unconditionally, even when a concurrent
+   * consumer's own receive had already freed a slot in the very same
+   * instant (cond_var_timedwait always re-acquires cq->mutex before
+   * returning, success or failure, so this interleaving is genuinely
+   * possible in production). Uses the dedicated test hook to simulate
+   * exactly that interleaving deterministically, since a real consumer
+   * thread cannot actually race into this exact window on its own (the
+   * hook replaces cond_var_timedwait outright rather than releasing
+   * cq->mutex). Before the fix, this fails with ccol_unexpected_failure
+   * and the message is never sent at all. */
+  circular_queue *cq = circular_queue_create(1, NULL);
+  c_message_t filler = {.data = malloc(sizeof(int)), .size = sizeof(int)};
+  *(int *)filler.data = 42;
+  REQUIRE_EQ(circq_try_send_zc(cq, &filler), ccol_success);
+
+  circq_test_force_next_send_condvar_wait_error_racing_ready();
+
+  c_message_t m = {.data = malloc(1), .size = 1};
+  struct timespec timeout = {.tv_sec = 5, .tv_nsec = 0};
+  REQUIRE_EQ(circq_timed_send_zc(cq, &m, &timeout), ccol_success);
+  REQUIRE_EQ(m.data, NULL);  // ownership transferred on success
+
+  c_message_t raced_out = circq_test_take_race_freed_msg();
+  REQUIRE_NE(raced_out.data, NULL);
+  REQUIRE_EQ(*(int *)raced_out.data, 42);
+  free(raced_out.data);
+
+  REQUIRE_EQ(circq_msg_count(cq), (size_t)1);
+  c_message_t recv_m = {.data = NULL, .size = 0};
+  REQUIRE_EQ(circq_try_recv_zc(cq, &recv_m), ccol_success);
+  free(recv_m.data);
+  circular_queue_destroy(cq);
+}
+
+TEST(circular_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
+  /* Mirrors timed_send_reports_unexpected_failure_on_condvar_error for the
+   * receive side: a forced error on an empty queue, with nothing racing
+   * it, must still be reported as ccol_unexpected_failure promptly. */
+  circular_queue *cq = circular_queue_create(1, NULL);
+
+  circq_test_force_next_recv_condvar_wait_error();
+
+  c_message_t m = {.data = NULL, .size = 0};
+  struct timespec timeout = {.tv_sec = 5, .tv_nsec = 0};
+  struct timespec before, after;
+  getWallTime(before);
+  REQUIRE_EQ(circq_timed_recv_zc(cq, &m, &timeout), ccol_unexpected_failure);
+  getWallTime(after);
+  REQUIRE_LT(diffTimeUSec(before, after), 500000);
+
+  circular_queue_destroy(cq);
+}
+
+TEST(circular_queues, timed_recv_condvar_error_racing_message_still_receives) {
+  /* Regression test for the receive-side analogue of
+   * timed_send_condvar_error_racing_freed_slot_still_sends: a concurrent
+   * producer's own send completing in the same instant an unrelated
+   * cond_var_timedwait error is (forced to be) reported must still be
+   * received, not discarded and reported as ccol_unexpected_failure.
+   * Before the fix, this fails with ccol_unexpected_failure and the
+   * sentinel message the hook enqueued is silently lost inside the queue
+   * forever (msg_count would stay at 1 with nothing ever able to receive
+   * it, since the caller already gave up). */
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  circq_test_force_next_recv_condvar_wait_error_racing_ready();
+
+  c_message_t m = {.data = (void *)1, .size = 1};  // clobbered on success
+  struct timespec timeout = {.tv_sec = 5, .tv_nsec = 0};
+  REQUIRE_EQ(circq_timed_recv_zc(cq, &m, &timeout), ccol_success);
+  REQUIRE_EQ(m.data, NULL);  // the {NULL, 0} sentinel the hook enqueued
+  REQUIRE_EQ(m.size, (size_t)0);
+  REQUIRE_EQ(circq_msg_count(cq), (size_t)0);
+
+  circular_queue_destroy(cq);
+}
+
 TEST(circular_queues, recv_drains_successfully_after_disable) {
   // Messages already in the queue must still be receivable after sending is
   // disabled. Once the queue is empty a timed recv must time out rather than
@@ -551,6 +791,129 @@ TEST(circular_queues, send_and_receive_thread) {
   pthread_join(tid, NULL);
 
   circular_queue_destroy(cq);
+}
+
+/* Regression tests for a real use-after-free hazard: destroying a queue
+ * while it still has a linked ccol_select()/event_loop waiter left that
+ * waiter's own node holding a dangling pointer into the queue's
+ * about-to-be-freed mutex, with nothing to catch it (unlike the existing
+ * msg_count > 0 check, which only ever caught leftover messages). Both
+ * __circular_queue_destroy and __dynamic_queue_destroy now assert if either
+ * sel_read_waiters_head or sel_write_waiters_head is still non-NULL. Run in
+ * a forked child since the resulting ccol_assert()/abort() aborts the whole
+ * process. */
+TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    /* Bounds this child's own lifetime so an unexpected hang here fails this
+     * one test loudly and fast (the default SIGALRM disposition terminates
+     * the process, which the parent's own waitpid below then simply
+     * observes as WIFSIGNALED/SIGALRM rather than SIGABRT), instead of the
+     * parent's unbounded waitpid hanging the entire test binary -- and
+     * whatever CI job is running it -- indefinitely. */
+    alarm(10);
+    circular_queue *cq = circular_queue_create(4, NULL);
+    if (!cq) _exit(2);
+    event_loop loop = event_loop_create(8, 1, 1, NULL);
+    if (loop == EVENT_LOOP_INVALID) _exit(2);
+    event_handlers_t handlers = {0};
+    char *err = NULL;
+    event_reg reg =
+        event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
+                       handlers, NULL, &err);
+    if (reg == EVENT_REG_INVALID) _exit(2);
+    /* The actual misuse under test: the registration above is never removed
+     * (and the loop never destroyed) before this call. */
+    circular_queue_destroy(cq);
+    _exit(0); /* unreachable if the assert fired as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+typedef struct cq_select_waiter_args {
+  circular_queue *cq;
+} cq_select_waiter_args;
+
+static void *cq_select_waiter_thread(void *arg) {
+  cq_select_waiter_args *a = (cq_select_waiter_args *)arg;
+  size_t idx;
+  /* Long enough that the main thread's own destroy call (racing this) is
+   * always what ends the process first; this call itself never needs to
+   * return. */
+  ccol_select_timed_va(&idx, 5000,
+                       selectable_from_circq(a->cq, ccol_select_read));
+  return NULL;
+}
+
+TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    /* Bounds this child's own lifetime so an unexpected hang here fails
+     * this one test loudly and fast instead of the parent's unbounded
+     * waitpid hanging the entire test binary -- and whatever CI job is
+     * running it -- indefinitely; see this alarm's identical use in the
+     * sibling test above for the full rationale. */
+    alarm(10);
+    circular_queue *cq = circular_queue_create(4, NULL);
+    if (!cq) _exit(2);
+
+    cq_select_waiter_args wargs = {.cq = cq};
+    pthread_t waiter;
+    pthread_create(&waiter, NULL, cq_select_waiter_thread, &wargs);
+
+    /* Poll for the waiter thread to have ACTUALLY linked itself into cq's
+     * own read-waiter list (real synchronization on the condition this test
+     * needs, not a fixed sleep guessing at it): pthread_create() returning
+     * gives no guarantee the new thread has been scheduled at all yet, let
+     * alone reached its own first mutex_lock/link step inside ccol_select_
+     * timed's Phase 1. A fixed-sleep hand-off here (this test's own former
+     * design) previously lost this race under qemu-user emulation's much
+     * higher and more variable thread-start scheduling latency: destroy()
+     * ran first, correctly saw no waiters linked yet (nothing to catch),
+     * froze cq, and the late-arriving waiter thread then dereferenced that
+     * freed memory the moment it was finally scheduled -- a genuine
+     * use-after-free whose undefined behaviour manifested as the whole
+     * child hanging forever, which this test's own then-unbounded waitpid
+     * below had no way to ever notice. 200 iterations * 10ms = 2s bound,
+     * comfortably above any realistic scheduling delay while still being a
+     * hard bound; if it's never satisfied, the REQUIRE_TRUE below fails
+     * this test cleanly instead of proceeding into the same race. */
+    bool linked = false;
+    for (int i = 0; i < 200 && !linked; i++) {
+      linked = circq_test_has_sel_read_waiter_for_tests(cq);
+      if (!linked) {
+        struct timespec ts = {0, 10000000}; /* 10ms */
+        nanosleep(&ts, NULL);
+      }
+    }
+    if (!linked) _exit(3); /* unreachable in practice; see REQUIRE_TRUE below */
+
+    /* The actual misuse under test: the waiter thread above is confirmed
+     * still linked into cq's own waiter list when this destroys cq. */
+    circular_queue_destroy(cq);
+    _exit(0); /* unreachable if the assert fired as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
 // DYNAMIC_QUEUE TESTS
@@ -774,6 +1137,52 @@ TEST(dynamic_queues, send_and_timed_receive) {
   dynamic_queue_destroy(dq);
 }
 
+TEST(dynamic_queues, timed_recv_reports_unexpected_failure_on_condvar_error) {
+  /* Mirrors circular_queues.timed_recv_reports_unexpected_failure_on_
+   * condvar_error: a forced error on an empty queue, with nothing racing
+   * it, must still be reported as ccol_unexpected_failure promptly. */
+  dynamic_queue *dq = dynamic_queue_create(NULL);
+
+  dynmq_test_force_next_recv_condvar_wait_error();
+
+  c_message_t m = {.data = NULL, .size = 0};
+  struct timespec timeout = {.tv_sec = 5, .tv_nsec = 0};
+  struct timespec before, after;
+  getWallTime(before);
+  REQUIRE_EQ(dynmq_timed_recv_zc(dq, &m, &timeout), ccol_unexpected_failure);
+  getWallTime(after);
+  REQUIRE_LT(diffTimeUSec(before, after), 500000);
+
+  dynamic_queue_destroy(dq);
+}
+
+TEST(dynamic_queues, timed_recv_condvar_error_racing_message_still_receives) {
+  /* Regression test for the same class of bug already fixed in
+   * ccol_select's own _sel_wait_condvar: dynmq_timed_recv_zc's FAILURE
+   * branch used to report ccol_unexpected_failure unconditionally, even
+   * when a concurrent producer's own send had already enqueued a message
+   * in the very same instant (cond_var_timedwait always re-acquires
+   * dq->mutex before returning, success or failure, so this interleaving
+   * is genuinely possible in production). Uses the dedicated test hook to
+   * simulate exactly that interleaving deterministically, since a real
+   * producer thread cannot actually race into this exact window on its
+   * own. Before the fix, this fails with ccol_unexpected_failure and the
+   * sentinel message the hook enqueued is silently lost inside the queue
+   * forever. */
+  dynamic_queue *dq = dynamic_queue_create(NULL);
+
+  dynmq_test_force_next_recv_condvar_wait_error_racing_ready();
+
+  c_message_t m = {.data = (void *)1, .size = 1};  // clobbered on success
+  struct timespec timeout = {.tv_sec = 5, .tv_nsec = 0};
+  REQUIRE_EQ(dynmq_timed_recv_zc(dq, &m, &timeout), ccol_success);
+  REQUIRE_EQ(m.data, NULL);  // the {NULL, 0} sentinel the hook enqueued
+  REQUIRE_EQ(m.size, (size_t)0);
+  REQUIRE_EQ(dynmq_msg_count(dq), (size_t)0);
+
+  dynamic_queue_destroy(dq);
+}
+
 TEST(dynamic_queues, enable_disable_sending) {
   dynamic_queue *dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 
@@ -924,6 +1333,39 @@ TEST(dynamic_queues, send_and_receive_thread) {
   pthread_join(tid, NULL);
 
   dynamic_queue_destroy(dq);
+}
+
+/* dynamic_queue counterpart of
+ * circular_queues.destroy_with_live_event_loop_registration_is_fatal above;
+ * see that test's own comment. */
+TEST(dynamic_queues, destroy_with_live_event_loop_registration_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    dynamic_queue *dq = dynamic_queue_create(NULL);
+    if (!dq) _exit(2);
+    event_loop loop = event_loop_create(8, 1, 1, NULL);
+    if (loop == EVENT_LOOP_INVALID) _exit(2);
+    event_handlers_t handlers = {0};
+    char *err = NULL;
+    event_reg reg = event_loop_add(
+        loop, selectable_from_dynq(dq, ccol_select_read), handlers, NULL, &err);
+    if (reg == EVENT_REG_INVALID) _exit(2);
+    /* The actual misuse under test: the registration above is never removed
+     * (and the loop never destroyed) before this call. */
+    dynamic_queue_destroy(dq);
+    _exit(0); /* unreachable if the assert fired as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
 
 // CHANNEL TESTS
@@ -1296,6 +1738,43 @@ TEST(channels, enable_disable_sending) {
   channel_destroy(ch);
 }
 
+/* channel counterpart of
+ * circular_queues.destroy_with_live_event_loop_registration_is_fatal above:
+ * __channel_destroy destroys both underlying circular queues, so it
+ * inherits the identical assert via whichever direction still has a live
+ * event_loop registration watching it. */
+TEST(channels, destroy_with_live_event_loop_registration_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    channel *ch = channel_create(4, NULL);
+    if (!ch) _exit(2);
+    event_loop loop = event_loop_create(8, 1, 1, NULL);
+    if (loop == EVENT_LOOP_INVALID) _exit(2);
+    event_handlers_t handlers = {0};
+    char *err = NULL;
+    /* This thread is the channel's owner, so ccol_select_read here resolves
+     * to workers_to_owner_cq (see selectable_from_chan's own doc comment). */
+    event_reg reg = event_loop_add(
+        loop, selectable_from_chan(ch, ccol_select_read), handlers, NULL, &err);
+    if (reg == EVENT_REG_INVALID) _exit(2);
+    /* The actual misuse under test: the registration above is never removed
+     * (and the loop never destroyed) before this call. */
+    channel_destroy(ch);
+    _exit(0); /* unreachable if the assert fired as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
 // CCOL_SELECT TESTS
 
 // --- helpers ---
@@ -1390,6 +1869,61 @@ TEST(ccol_select, returns_invalid_args_on_bad_inputs) {
 
   ccol_selectable null_sel = selectable_from_circq(NULL, ccol_select_read);
   REQUIRE_EQ(ccol_select(&idx, 1, &null_sel), ccol_invalid_args);
+
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select,
+     timed_n_too_large_rejected_before_any_allocation_or_oob_read) {
+  /* Regression test for the size_t-overflow guard in _sel_validate_args:
+   * ccol_select_timed() backs its own per-selectable waiter-node array with
+   * a single, plain malloc(n * sizeof(internal waiter node)) call with no
+   * calloc-style overflow checking of its own. n == SIZE_MAX is guaranteed
+   * to exceed SIZE_MAX / sizeof(that struct) for any struct larger than one
+   * byte (it has several pointer-sized fields), so this must be rejected
+   * with ccol_invalid_args, and, just as importantly, rejected BEFORE the
+   * overflowing multiplication is ever formed and before selectables[i] is
+   * ever indexed for any i > 0: a genuinely 1-element selectables array is
+   * passed deliberately (n claims far more elements than the array
+   * actually holds), so a regression that checked n only after starting to
+   * scan the array would read out of bounds here rather than merely
+   * mis-sizing an allocation. */
+  circular_queue *cq = circular_queue_create(4, NULL);
+  ccol_selectable sel = selectable_from_circq(cq, ccol_select_read);
+
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_timed(&idx, SIZE_MAX, &sel, 0), ccol_invalid_args);
+  REQUIRE_EQ(idx, (size_t)99);
+
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select,
+     timed_n_exceeding_int_max_rejected_before_any_allocation_or_oob_read) {
+  /* Regression test for the n > INT_MAX guard in _sel_validate_args:
+   * _sel_phase1_scan_register narrows a matched selectable's own index (a
+   * size_t, 0..n-1) into a plain `int` (its `found` local, doubling as the
+   * -1/-2 "nothing found yet"/"system error" sentinels), which
+   * ccol_select_timed then widens back via `(size_t)found`. An n large
+   * enough to let a match land beyond INT_MAX would silently narrow to a
+   * negative or wrapped value there, corrupting *ready_index. This n value
+   * is far below the pre-existing SIZE_MAX / sizeof(internal waiter node)
+   * guard tested above (INT_MAX is ~2^31, that guard's own ceiling is
+   * several orders of magnitude higher on any 64-bit platform), so this
+   * exercises the INT_MAX-specific guard in isolation, not the earlier one.
+   * Just as importantly, rejected BEFORE selectables[i] is ever indexed for
+   * any i > 0: a genuinely 1-element selectables array is passed
+   * deliberately (n claims far more elements than the array actually
+   * holds), so a regression that checked n only after starting to scan the
+   * array would read out of bounds here rather than merely mis-sizing an
+   * allocation. */
+  circular_queue *cq = circular_queue_create(4, NULL);
+  ccol_selectable sel = selectable_from_circq(cq, ccol_select_read);
+
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_timed(&idx, (size_t)INT_MAX + 1, &sel, 0),
+             ccol_invalid_args);
+  REQUIRE_EQ(idx, (size_t)99);
 
   circular_queue_destroy(cq);
 }
@@ -2014,6 +2548,85 @@ TEST(ccol_select, timed_out_deregisters_waiter_node) {
   circular_queue_destroy(cq);
 }
 
+TEST(ccol_select, timed_wait_reports_unexpected_failure_on_condvar_error) {
+  /* Regression test: in ccol_select_timed's no-fd-selectables wait path,
+   * _sel_wait_condvar's deadline branch must not spin forever retrying the
+   * same call when cond_var_timedwait itself returns an error other than 0
+   * or ETIMEDOUT; it must report ccol_unexpected_failure instead, the same
+   * way circq_timed_send_zc/circq_timed_recv_zc/dynmq_timed_recv_zc already
+   * do for the identical class of failure. Uses a test-only hook to force
+   * exactly one such error deterministically, since no legitimate deadline
+   * this library computes internally can ever trigger a genuine EINVAL from
+   * cond_var_timedwait. A large configured timeout (5s) with a tight
+   * elapsed-time bound proves the call returns promptly on the forced
+   * error rather than either waiting out the full deadline or hanging
+   * indefinitely (the pre-fix behavior, which this test would otherwise
+   * never return from at all). */
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  ccol_select_test_force_next_condvar_wait_error();
+
+  size_t idx = 99;
+  struct timespec before, after;
+  getWallTime(before);
+  REQUIRE_EQ(ccol_select_timed_va(&idx, 5000 /* ms */,
+                                  selectable_from_circq(cq, ccol_select_read)),
+             ccol_unexpected_failure);
+  getWallTime(after);
+  REQUIRE_LT(diffTimeUSec(before, after), 500000);
+  REQUIRE_EQ(idx, (size_t)99);
+
+  circular_queue_destroy(cq);
+}
+
+TEST(ccol_select, timed_wait_ready_racing_condvar_error_still_succeeds) {
+  /* Regression test for a real bug in _sel_wait_condvar's deadline branch:
+   * its FAILURE outcome was reported unconditionally on any non-zero,
+   * non-ETIMEDOUT return from cond_var_timedwait, unlike the sibling
+   * ETIMEDOUT branch right above it, which already re-checks *ready before
+   * declaring a real timeout. Since cond_var_timedwait always re-acquires
+   * its mutex before returning (success or failure), a producer's own
+   * notify can legitimately complete and set *ready = true an instant
+   * before an unrelated, spurious wait error is also reported; without the
+   * FAILURE branch's own matching re-check, that already-delivered wakeup
+   * was silently discarded and ccol_select_timed reported
+   * ccol_unexpected_failure instead of resuming and eventually succeeding.
+   *
+   * Uses the dedicated test hook to simulate exactly that interleaving
+   * (forcing both the error and *ready = true in the same instant), since a
+   * real producer thread cannot actually race into this exact window on its
+   * own (the hook replaces cond_var_timedwait outright rather than
+   * releasing sel_mtx, so nothing else could acquire it meanwhile). A
+   * second, genuine background send (racing the call's own re-scan after
+   * the hook fires) is what lets the call actually complete successfully
+   * either way: if the fixed code correctly resumes instead of bailing out,
+   * it either sees this message immediately or falls through to an
+   * ordinary, already-well-tested real wait for it. Before the fix, this
+   * test fails deterministically with ccol_unexpected_failure, never
+   * ccol_success. */
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  sel_circq_args args = {.cq = cq, .delay_us = 50000, .value = 77};
+  pthread_t tid;
+  pthread_create(&tid, NULL, thr_send_to_circq, &args);
+
+  ccol_select_test_force_next_condvar_wait_error_racing_ready();
+
+  size_t idx = 99;
+  REQUIRE_EQ(ccol_select_timed_va(&idx, 2000 /* ms */,
+                                  selectable_from_circq(cq, ccol_select_read)),
+             ccol_success);
+  REQUIRE_EQ(idx, (size_t)0);
+
+  c_message_t recv_msg = {.data = NULL, .size = 0};
+  REQUIRE_EQ(circq_try_recv_zc(cq, &recv_msg), ccol_success);
+  REQUIRE_EQ(*(int *)recv_msg.data, 77);
+  free(recv_msg.data);
+
+  pthread_join(tid, NULL);
+  circular_queue_destroy(cq);
+}
+
 TEST(ccol_select, write_circq_timed_out_when_sending_disabled) {
   /* A disabled queue must cause a write-direction ccol_select_timed to wait
    * out the full timeout rather than return ccol_not_permitted immediately.
@@ -2160,6 +2773,133 @@ TEST(ccol_select,
   circular_queue_destroy(cq);
 }
 
+/* Regression tests for a real bug: _sel_setup_epoll used to call
+ * epoll_ctl(EPOLL_CTL_ADD) once per fd selectable with no de-duplication,
+ * so two selectables sharing one real fd (any mix of directions, including
+ * an outright duplicate) always failed the second EPOLL_CTL_ADD with
+ * EEXIST, making the whole ccol_select/ccol_select_timed call fail with
+ * ccol_unexpected_failure, even for the ordinary, common pattern of
+ * watching one connected socket for both readability and writability at
+ * once. Fixed by grouping fd selectables by fd (via a sort, not a linear
+ * scan, to stay O(n log n) rather than degrading to O(n^2) for the much
+ * more common case of many distinct fds) and registering one combined
+ * epoll_ctl call per unique fd, then resolving a fired combined event back
+ * to whichever member selectable's own direction it actually satisfies. */
+TEST(ccol_select, fd_same_fd_two_directions_writable_wins) {
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+
+  size_t idx = 999;
+  ccol_selectable sels[2] = {
+      selectable_from_fd(sv[0], ccol_select_read),
+      selectable_from_fd(sv[0], ccol_select_write),
+  };
+  /* A freshly connected socket is immediately writable and has nothing to
+   * read yet, so this must resolve to the write-direction selectable
+   * specifically, not merely succeed. */
+  ccol_retval_t rv = ccol_select_timed(&idx, 2, sels, 500);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_EQ(idx, (size_t)1);
+
+  close(sv[0]);
+  close(sv[1]);
+}
+
+TEST(ccol_select, fd_same_fd_two_directions_both_ready_resolves_to_a_member) {
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+  char byte = 'x';
+  REQUIRE_EQ(write(sv[1], &byte, 1), (ssize_t)1);
+
+  size_t idx = 999;
+  ccol_selectable sels[2] = {
+      selectable_from_fd(sv[0], ccol_select_read),
+      selectable_from_fd(sv[0], ccol_select_write),
+  };
+  /* Both directions are genuinely ready now (one byte queued to read, send
+   * buffer still has room); either member may legitimately win, but the
+   * call itself must succeed and pick one of the two real members, not the
+   * EEXIST failure this combining fix exists to close. */
+  ccol_retval_t rv = ccol_select_timed(&idx, 2, sels, 500);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(idx == 0 || idx == 1);
+
+  char buf[8];
+  REQUIRE_EQ(read(sv[0], buf, sizeof(buf)), (ssize_t)1);
+  close(sv[0]);
+  close(sv[1]);
+}
+
+TEST(ccol_select, fd_duplicate_selectable_same_direction_still_succeeds) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  size_t idx = 999;
+  ccol_selectable sels[2] = {
+      selectable_from_fd(pfd[1], ccol_select_write),
+      selectable_from_fd(pfd[1], ccol_select_write),
+  };
+  ccol_retval_t rv = ccol_select_timed(&idx, 2, sels, 500);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_TRUE(idx == 0 || idx == 1);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(ccol_select, fd_duplicate_selectable_neither_ready_times_out) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  size_t idx = 999;
+  /* Nothing was ever written; watching the read end for read-readiness
+   * twice must still behave like an ordinary single registration and time
+   * out, not spuriously succeed or fail with an unrelated error. */
+  ccol_selectable sels[2] = {
+      selectable_from_fd(pfd[0], ccol_select_read),
+      selectable_from_fd(pfd[0], ccol_select_read),
+  };
+  ccol_retval_t rv = ccol_select_timed(&idx, 2, sels, 100);
+  REQUIRE_EQ(rv, ccol_timed_out);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(ccol_select, fd_grouped_registration_coexists_with_ready_queue) {
+  /* A not-ready fd registered twice (sharing one epoll_ctl group under the
+   * fix) alongside a genuinely ready queue selectable in the same call:
+   * confirms the fd-grouping change didn't disturb ccol_select's existing,
+   * unrelated queue-selectable handling. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  circular_queue *cq = circular_queue_create(4, NULL);
+  REQUIRE_NE((void *)cq, NULL);
+  int *data = malloc(sizeof(int));
+  REQUIRE_NE((void *)data, NULL);
+  *data = 42;
+  c_message_t msg = {.data = data, .size = sizeof(int)};
+  REQUIRE_EQ(circq_send_zc(cq, &msg), ccol_success);
+
+  size_t idx = 999;
+  ccol_selectable sels[3] = {
+      selectable_from_fd(pfd[0], ccol_select_read),
+      selectable_from_fd(pfd[0], ccol_select_read),
+      selectable_from_circq(cq, ccol_select_read),
+  };
+  ccol_retval_t rv = ccol_select_timed(&idx, 3, sels, 500);
+  REQUIRE_EQ(rv, ccol_success);
+  REQUIRE_EQ(idx, (size_t)2);
+
+  c_message_t out;
+  REQUIRE_EQ(circq_try_recv_zc(cq, &out), ccol_success);
+  free(out.data);
+  circular_queue_destroy(cq);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
 // --- event_loop test helpers ---
 
 typedef struct evl_sync_ctx {
@@ -2171,7 +2911,7 @@ typedef struct evl_sync_ctx {
   c_message_t last_msg;
   bool last_msg_valid;
   ccol_select_dir last_dir_seen;
-  event_reg *self_reg; /* for self-removal tests */
+  event_reg self_reg; /* for self-removal tests */
   event_loop self_loop;
 } evl_sync_ctx;
 
@@ -2183,7 +2923,7 @@ static void evl_sync_ctx_init(evl_sync_ctx *c) {
   c->error_count = 0;
   c->last_msg = (c_message_t){.data = NULL, .size = 0};
   c->last_msg_valid = false;
-  c->self_reg = NULL;
+  c->self_reg = EVENT_REG_INVALID;
   c->self_loop = EVENT_LOOP_INVALID;
 }
 
@@ -2250,7 +2990,17 @@ static void evl_on_error(event_loop loop, ccol_selectable *sel, void *arg) {
 static void evl_on_readable_self_remove(event_loop loop, ccol_selectable *sel,
                                         void *arg) {
   evl_sync_ctx *c = (evl_sync_ctx *)arg;
-  REQUIRE_EQ(event_loop_remove(c->self_loop, c->self_reg), ccol_success);
+  /* assert(), not REQUIRE_EQ: this callback runs on event_loop's own
+   * reactor/dispatch thread, concurrently with the main test thread's own
+   * REQUIRE_EQ calls. Tau's assertion machinery is backed by plain,
+   * unlocked, non-thread-local globals (see tau.h), so calling it from
+   * here would be a genuine data race the instant this assertion ever
+   * actually fails (exactly the scenario it exists to catch), and would
+   * not even abort the enclosing TEST() the way a top-level REQUIRE_EQ
+   * does (only this function's own stack frame would return early).
+   * Every other background-thread helper in this file already follows
+   * this same assert()-only convention for exactly this reason. */
+  assert(event_loop_remove(c->self_loop, c->self_reg) == ccol_success);
   evl_on_readable(loop, sel, arg);
 }
 
@@ -2339,10 +3089,10 @@ TEST(event_loop, fd_on_readable_fires) {
     event_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
                        handlers, &ctx, &err);
-    REQUIRE_NE((void *)reg, NULL);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
     REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
 
     int val = 42;
@@ -2391,10 +3141,10 @@ TEST(event_loop, fd_on_writable_fires) {
     event_handlers_t handlers = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(loop, selectable_from_fd(pfd[1], ccol_select_write),
                        handlers, &ctx, &err);
-    REQUIRE_NE((void *)reg, NULL);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
 
     /* A fresh pipe write end is always immediately writable. */
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
@@ -2432,13 +3182,13 @@ TEST(event_loop, fd_both_directions_combine_and_recombine) {
     event_handlers_t wh = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    event_reg *rreg = event_loop_add(
+    event_reg rreg = event_loop_add(
         loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
-    REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg =
+    REQUIRE_NE(rreg, EVENT_REG_INVALID);
+    event_reg wreg =
         event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
                        &write_ctx, &err);
-    REQUIRE_NE((void *)wreg, NULL);
+    REQUIRE_NE(wreg, EVENT_REG_INVALID);
     REQUIRE_EQ(event_loop_reg_count(loop), (size_t)2);
 
     /* sv[0] is immediately writable (empty send buffer). */
@@ -2484,13 +3234,13 @@ TEST(event_loop, fd_simultaneous_readable_and_writable) {
     event_handlers_t wh = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    event_reg *rreg = event_loop_add(
+    event_reg rreg = event_loop_add(
         loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
-    REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg =
+    REQUIRE_NE(rreg, EVENT_REG_INVALID);
+    event_reg wreg =
         event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
                        &write_ctx, &err);
-    REQUIRE_NE((void *)wreg, NULL);
+    REQUIRE_NE(wreg, EVENT_REG_INVALID);
 
     /* Drain the initial "immediately writable" dispatch before writing data,
      * so the later wait unambiguously observes the combined batch. */
@@ -2535,13 +3285,13 @@ TEST(event_loop, fd_on_error_fires_for_both_directions) {
     event_handlers_t wh = {
         .on_readable = NULL, .on_writable = NULL, .on_error = evl_on_error};
     char *err = NULL;
-    event_reg *rreg = event_loop_add(
+    event_reg rreg = event_loop_add(
         loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
-    REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg =
+    REQUIRE_NE(rreg, EVENT_REG_INVALID);
+    event_reg wreg =
         event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
                        &write_ctx, &err);
-    REQUIRE_NE((void *)wreg, NULL);
+    REQUIRE_NE(wreg, EVENT_REG_INVALID);
 
     close(sv[1]); /* peer hangs up */
 
@@ -2557,6 +3307,112 @@ TEST(event_loop, fd_on_error_fires_for_both_directions) {
   close(sv[0]);
 }
 
+/* Regression test for a real, asymmetric dispatch-priority bug (see
+ * src/cthreadcomm.c's own has_writer comment in _event_loop_handle_event
+ * for the full mechanism): EPOLLOUT and EPOLLERR/EPOLLHUP are not mutually
+ * exclusive any more than EPOLLIN and EPOLLERR/EPOLLHUP are (see
+ * fd_on_error_fires_for_both_directions's own setup just above, which this
+ * mirrors): a socket whose peer has just hung up is reported both
+ * writable (the local send buffer still has room, so write(2) on it would
+ * return immediately with an error rather than block) and erroring at
+ * once, confirmed directly against this exact socketpair shape via a
+ * standalone epoll probe before writing this test. A write-only
+ * registration (on_writable set, on_error == NULL; an explicitly
+ * documented supported pattern; see event_handlers_t's own doc comment,
+ * "a write-only producer that never expects on_error may pass NULL
+ * there") must still see on_writable fire for such an event, not be
+ * silently, permanently starved of it with nothing to report the
+ * co-occurring error either. num_reactor_threads == 1 here exercises
+ * _event_loop_handle_event's own copy of the fix; see the _multi_thread
+ * sibling test below for _event_loop_poller_collect's identical copy. */
+TEST(event_loop,
+     fd_write_only_registration_still_fires_on_writable_when_peer_hangs_up) {
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  int error_count_seen;
+
+  {
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment;
+     * a hung-up peer's EPOLLHUP condition persists (level-triggered) until
+     * the fd is removed, so the reactor thread keeps re-dispatching
+     * on_writable until then. */
+    event_loop_construct_scoped(loop, 8, 1, 1);
+
+    event_handlers_t wh = {
+        .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+    char *err = NULL;
+    event_reg wreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &ctx, &err);
+    REQUIRE_NE(wreg, EVENT_REG_INVALID);
+
+    close(sv[1]); /* peer hangs up: sv[0] becomes both EPOLLOUT and EPOLLHUP */
+
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+
+    pthread_mutex_lock(&ctx.mtx);
+    error_count_seen = ctx.error_count;
+    pthread_mutex_unlock(&ctx.mtx);
+
+    event_loop_remove(loop, wreg);
+  }
+
+  /* on_error is NULL on this registration; nothing was ever there to
+   * consume the co-occurring error condition with, so it must never have
+   * been dispatched. */
+  REQUIRE_EQ(error_count_seen, 0);
+
+  evl_sync_ctx_destroy(&ctx);
+  close(sv[0]);
+}
+
+/* Identical to the test just above, except num_reactor_threads == 3, which
+ * routes dispatch through _event_loop_poller_collect/
+ * _event_loop_dispatch_job_fn instead of _event_loop_handle_event; that
+ * path carries its own, separate copy of the identical has_writer fix
+ * (deliberately near-duplicated, not shared, to keep the
+ * num_reactor_threads == 1 path byte-for-byte unchanged; see this module's
+ * own standing design note on that duplication), which needs its own
+ * regression coverage rather than being assumed correct by extension. */
+TEST(
+    event_loop,
+    fd_write_only_registration_still_fires_on_writable_when_peer_hangs_up_multi_thread) {
+  int sv[2];
+  REQUIRE_EQ(socketpair(AF_UNIX, SOCK_STREAM, 0, sv), 0);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  int error_count_seen;
+
+  {
+    event_loop_construct_scoped(loop, 8, 1, 3);
+
+    event_handlers_t wh = {
+        .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+    char *err = NULL;
+    event_reg wreg = event_loop_add(
+        loop, selectable_from_fd(sv[0], ccol_select_write), wh, &ctx, &err);
+    REQUIRE_NE(wreg, EVENT_REG_INVALID);
+
+    close(sv[1]);
+
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+
+    pthread_mutex_lock(&ctx.mtx);
+    error_count_seen = ctx.error_count;
+    pthread_mutex_unlock(&ctx.mtx);
+
+    event_loop_remove(loop, wreg);
+  }
+
+  REQUIRE_EQ(error_count_seen, 0);
+
+  evl_sync_ctx_destroy(&ctx);
+  close(sv[0]);
+}
+
 TEST(event_loop, fd_duplicate_direction_rejected) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -2565,14 +3421,14 @@ TEST(event_loop, fd_duplicate_direction_rejected) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg1 = event_loop_add(
+  event_reg reg1 = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg1, NULL);
+  REQUIRE_NE(reg1, EVENT_REG_INVALID);
 
   err = NULL;
-  event_reg *reg2 = event_loop_add(
+  event_reg reg2 = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_EQ((void *)reg2, NULL);
+  REQUIRE_EQ(reg2, EVENT_REG_INVALID);
   REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
 
   event_loop_remove(loop, reg1);
@@ -2588,12 +3444,12 @@ TEST(event_loop, fd_modify_rejects_occupied_direction) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *rreg = event_loop_add(
+  event_reg rreg = event_loop_add(
       loop, selectable_from_fd(sv[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)rreg, NULL);
-  event_reg *wreg = event_loop_add(
+  REQUIRE_NE(rreg, EVENT_REG_INVALID);
+  event_reg wreg = event_loop_add(
       loop, selectable_from_fd(sv[0], ccol_select_write), handlers, NULL, &err);
-  REQUIRE_NE((void *)wreg, NULL);
+  REQUIRE_NE(wreg, EVENT_REG_INVALID);
 
   /* Flipping rreg to write would collide with wreg. */
   REQUIRE_EQ(event_loop_modify(loop, rreg, ccol_select_write),
@@ -2628,10 +3484,10 @@ TEST(event_loop, fd_modify_flips_direction_and_updates_sel) {
                                  .on_writable = evl_on_writable,
                                  .on_error = NULL};
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write),
                        handlers, &ctx, &err);
-    REQUIRE_NE((void *)reg, NULL);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
     REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
 
     REQUIRE_EQ(event_loop_modify(loop, reg, ccol_select_read), ccol_success);
@@ -2675,9 +3531,9 @@ TEST(event_loop, fd_modify_after_remove_returns_invalid_args) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
   REQUIRE_EQ(event_loop_modify(loop, reg, ccol_select_write),
@@ -2685,6 +3541,37 @@ TEST(event_loop, fd_modify_after_remove_returns_invalid_args) {
 
   close(pfd[0]);
   close(pfd[1]);
+}
+
+TEST(event_loop, fd_modify_rejects_queue_selectable) {
+  /* event_loop_modify is fd-only, mirroring event_loop_pause/_resume's
+   * identical restriction (see pause_and_resume_reject_queue_selectable):
+   * a queue/channel registration's direction is part of its identity
+   * (remove and re-add instead of flipping it in place), so this must be
+   * rejected with ccol_invalid_args rather than silently doing nothing or
+   * corrupting the registration. The type check runs unconditionally,
+   * before event_loop_modify's own "already in the requested direction"
+   * idempotence check, so even a same-direction call is rejected the same
+   * way, not treated as a no-op success. This exact negative path had no
+   * direct test before, unlike its pause/resume siblings. */
+  event_loop_construct_scoped(loop, 8, 1, 1);
+  circular_queue *cq = circular_queue_create(4, NULL);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_circq(cq, ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  REQUIRE_EQ(event_loop_modify(loop, reg, ccol_select_write),
+             ccol_invalid_args);
+  /* Even requesting the direction the registration already has must be
+   * rejected the same way, not treated as a same-direction no-op. */
+  REQUIRE_EQ(event_loop_modify(loop, reg, ccol_select_read), ccol_invalid_args);
+
+  event_loop_remove(loop, reg);
+  circular_queue_destroy(cq);
 }
 
 TEST(event_loop, queue_circq_readable_delivers_message) {
@@ -2696,9 +3583,9 @@ TEST(event_loop, queue_circq_readable_delivers_message) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_circq(cq, ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   int *payload = malloc(sizeof(int));
   *payload = 123;
@@ -2716,7 +3603,6 @@ TEST(event_loop, queue_circq_readable_delivers_message) {
 }
 
 TEST(event_loop, queue_circq_writable_fires_without_consuming) {
-  event_loop_construct_scoped(loop, 8, 1, 1);
   circular_queue *cq = circular_queue_create(1, NULL);
 
   /* Fill the queue so write-direction isn't immediately satisfiable. */
@@ -2727,34 +3613,63 @@ TEST(event_loop, queue_circq_writable_fires_without_consuming) {
 
   evl_sync_ctx ctx;
   evl_sync_ctx_init(&ctx);
-  event_handlers_t handlers = {
-      .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
-  char *err = NULL;
-  event_reg *reg = event_loop_add(
-      loop, selectable_from_circq(cq, ccol_select_write), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
 
-  /* Free the slot; on_writable must fire, but must NOT have consumed
-   * anything (queue still has room, not a message); the callback itself
-   * is responsible for the actual send. */
-  c_message_t recvd;
-  REQUIRE_EQ(circq_recv_zc(cq, &recvd), ccol_success);
-  free(recvd.data);
+  {
+    /* Nested block: see fd_on_readable_fires's identical pattern/comment.
+     * evl_on_writable never consumes or produces anything on cq (by design,
+     * to prove the reactor never does that on the callback's own behalf),
+     * so the circq_try_send_zc/circq_recv_zc round trip below, performed
+     * by the test itself after the first wait already succeeded, re-opens
+     * write-readiness on cq; a second on_writable dispatch can therefore
+     * still be genuinely in flight on the reactor thread at the exact
+     * moment this function would otherwise go on to remove the
+     * registration and tear ctx/cq down (event_loop_remove only blocks a
+     * FUTURE dispatch from starting; it does not wait for one already
+     * in flight to finish - see _event_loop_run_callback's own comment).
+     * Neither ctx nor cq may be destroyed, nor may this function return,
+     * until that's guaranteed to have stopped, which only this block's
+     * join (event_loop_construct_scoped's own scope-exit destructor)
+     * guarantees. Confirmed as a real, reproducible race, not a
+     * theoretical one: ThreadSanitizer caught ctx.mtx/ctx.cond being
+     * destroyed by the main thread while evl_on_writable was still using
+     * them on the reactor thread, in roughly 1 of every 4-9 runs, before
+     * this nested-block fix was applied. */
+    event_loop_construct_scoped(loop, 8, 1, 1);
 
-  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
+    event_handlers_t handlers = {
+        .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
+    char *err = NULL;
+    event_reg reg =
+        event_loop_add(loop, selectable_from_circq(cq, ccol_select_write),
+                       handlers, &ctx, &err);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
 
-  int *payload = malloc(sizeof(int));
-  *payload = 55;
-  c_message_t msg = {.data = payload, .size = sizeof(int)};
-  REQUIRE_EQ(circq_try_send_zc(cq, &msg), ccol_success);
-  REQUIRE_EQ(circq_msg_count(cq), (size_t)1);
+    /* Free the slot; on_writable must fire, but must NOT have consumed
+     * anything (queue still has room, not a message); the callback itself
+     * is responsible for the actual send. */
+    c_message_t recvd;
+    REQUIRE_EQ(circq_recv_zc(cq, &recvd), ccol_success);
+    free(recvd.data);
 
-  c_message_t out;
-  REQUIRE_EQ(circq_recv_zc(cq, &out), ccol_success);
-  REQUIRE_EQ(*(int *)out.data, 55);
-  free(out.data);
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.writable_count, 1, 2000));
 
-  event_loop_remove(loop, reg);
+    int *payload = malloc(sizeof(int));
+    *payload = 55;
+    c_message_t msg = {.data = payload, .size = sizeof(int)};
+    REQUIRE_EQ(circq_try_send_zc(cq, &msg), ccol_success);
+    REQUIRE_EQ(circq_msg_count(cq), (size_t)1);
+
+    c_message_t out;
+    REQUIRE_EQ(circq_recv_zc(cq, &out), ccol_success);
+    REQUIRE_EQ(*(int *)out.data, 55);
+    free(out.data);
+
+    event_loop_remove(loop, reg);
+
+    /* loop shuts down and its one reactor thread is joined here, at block
+     * exit; ctx/cq are guaranteed quiescent from this point on. */
+  }
+
   evl_sync_ctx_destroy(&ctx);
   circular_queue_destroy(cq);
 }
@@ -2768,9 +3683,9 @@ TEST(event_loop, queue_dynq_readable_delivers_message) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_dynq(dq, ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   int *payload = malloc(sizeof(int));
   *payload = 321;
@@ -2816,9 +3731,9 @@ TEST(event_loop, queue_channel_selectable) {
   /* This thread is the channel's owner; owner reads from workers_to_owner,
    * so a worker (a separate thread) must send for the owner-side read
    * registration to fire. */
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_chan(ch, ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   evl_chan_sender_args sargs = {.ch = ch, .value = 88};
   pthread_t tid;
@@ -2846,9 +3761,9 @@ TEST(event_loop, queue_persistent_across_multiple_cycles) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_circq(cq, ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   for (int i = 0; i < 5; i++) {
     int *payload = malloc(sizeof(int));
@@ -2882,9 +3797,9 @@ TEST(event_loop, queue_already_pending_message_at_registration_time) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_circq(cq, ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
   REQUIRE_EQ(*(int *)ctx.last_msg.data, 999);
@@ -2892,6 +3807,353 @@ TEST(event_loop, queue_already_pending_message_at_registration_time) {
   event_loop_remove(loop, reg);
   evl_sync_ctx_destroy(&ctx);
   circular_queue_destroy(cq);
+}
+
+typedef struct evl_two_readers_ctx {
+  _Atomic size_t calls;
+} evl_two_readers_ctx;
+
+/* Deliberately slower than a continuously-refilling feeder can keep up
+ * with (same shape as evl_bounded_hot_queue_on_readable further below), so
+ * a real backlog of 2+ pending messages reliably exists behind this
+ * registration by the time it dispatches; this is what gives
+ * _event_loop_queue_cascade_notify_next something real to forward toward
+ * whichever registration is linked behind this one. */
+static void evl_two_readers_slow_on_readable(event_loop loop,
+                                             ccol_selectable *sel, void *arg) {
+  (void)loop;
+  evl_two_readers_ctx *c = (evl_two_readers_ctx *)arg;
+  c_message_t msg = {.data = NULL, .size = 0};
+  (void)circq_try_recv_zc(sel->cq, &msg);
+  struct timespec ts = {0, 500000}; /* 0.5ms */
+  nanosleep(&ts, NULL);
+  atomic_fetch_add(&c->calls, 1);
+}
+
+static void evl_two_readers_fast_on_readable(event_loop loop,
+                                             ccol_selectable *sel, void *arg) {
+  (void)loop;
+  evl_two_readers_ctx *c = (evl_two_readers_ctx *)arg;
+  c_message_t msg = {.data = NULL, .size = 0};
+  (void)circq_try_recv_zc(sel->cq, &msg);
+  atomic_fetch_add(&c->calls, 1);
+}
+
+typedef struct evl_two_readers_feeder_args {
+  circular_queue *cq;
+  int iterations;
+} evl_two_readers_feeder_args;
+
+static void *evl_two_readers_feeder_thread(void *arg) {
+  evl_two_readers_feeder_args *a = (evl_two_readers_feeder_args *)arg;
+  for (int i = 0; i < a->iterations; i++) {
+    c_message_t msg = {.data = NULL, .size = 0};
+    /* Blocking: the queue's own finite capacity is what reliably keeps this
+     * feeder from racing arbitrarily far ahead of both registrations, while
+     * still building up a real backlog against the slow registration. */
+    (void)circq_send_zc(a->cq, &msg);
+  }
+  return NULL;
+}
+
+TEST(event_loop, queue_second_registration_on_same_queue_is_not_starved) {
+  /* Regression test for a real, silent starvation bug found via manual code
+   * review: notify_one_sel_waiter() always wakes only the CURRENT head of a
+   * queue's own waiter list, and a ccol_select() waiter only "cascades"
+   * that wake onward correctly because it always unlinks itself before
+   * re-checking readiness. An event_loop registration's waiter_node stays
+   * linked into the list PERMANENTLY (until event_loop_remove), so before
+   * _event_loop_queue_cascade_notify_next existed, a second live
+   * registration on the same queue+direction, linked BEHIND another one
+   * that never unlinks, could receive ZERO notifications forever,
+   * regardless of how much traffic the queue saw.
+   *
+   * r1 is registered FIRST here specifically so it ends up linked behind
+   * r2 (the most-recently-added registration always becomes the new list
+   * head; see event_loop_add's own "prepend to head" linking). Without the
+   * fix, ctx1.calls is deterministically stuck at 0 forever in this exact
+   * scenario, not merely flaky, since nothing but a cascade forward could
+   * ever reach a registration sitting behind a permanently-linked head;
+   * confirmed by temporarily reverting the fix and re-running this test,
+   * which then hangs against the bounded wait below until it times out
+   * with ctx1.calls still 0, rather than occasionally passing. */
+  circular_queue *cq = circular_queue_create(64, NULL);
+
+  evl_two_readers_ctx ctx1, ctx2;
+  atomic_init(&ctx1.calls, (size_t)0);
+  atomic_init(&ctx2.calls, (size_t)0);
+
+  {
+    event_loop_construct_scoped(loop, 8, 1, 1);
+
+    event_handlers_t handlers1 = {
+        .on_readable = evl_two_readers_fast_on_readable,
+        .on_writable = NULL,
+        .on_error = NULL};
+    char *err = NULL;
+    event_reg r1 =
+        event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
+                       handlers1, &ctx1, &err);
+    REQUIRE_NE(r1, EVENT_REG_INVALID);
+
+    /* r2 is added second, so it becomes the list's new head; its own
+     * deliberately slow callback is what reliably lets a backlog build up
+     * for it to then cascade-forward toward r1. */
+    event_handlers_t handlers2 = {
+        .on_readable = evl_two_readers_slow_on_readable,
+        .on_writable = NULL,
+        .on_error = NULL};
+    event_reg r2 =
+        event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
+                       handlers2, &ctx2, &err);
+    REQUIRE_NE(r2, EVENT_REG_INVALID);
+
+    evl_two_readers_feeder_args feeder_args = {.cq = cq, .iterations = 300};
+    pthread_t feeder;
+    pthread_create(&feeder, NULL, evl_two_readers_feeder_thread, &feeder_args);
+    pthread_join(feeder, NULL);
+
+    /* Bounded wait (r2, the slow head, is expected to dominate the count;
+     * the fix's own contribution being tested is that r1, the tail, gets
+     * ANY turn at all rather than none). */
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 3;
+    for (;;) {
+      if (atomic_load(&ctx1.calls) > 0 && atomic_load(&ctx2.calls) > 0) break;
+      struct timespec now;
+      clock_gettime(CLOCK_REALTIME, &now);
+      if (now.tv_sec > deadline.tv_sec ||
+          (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) {
+        break;
+      }
+      struct timespec ts = {0, 2000000}; /* 2ms */
+      nanosleep(&ts, NULL);
+    }
+
+    REQUIRE_GT(atomic_load(&ctx1.calls), (size_t)0);
+    REQUIRE_GT(atomic_load(&ctx2.calls), (size_t)0);
+
+    event_loop_remove(loop, r1);
+    event_loop_remove(loop, r2);
+
+    /* loop shuts down and its one reactor thread is joined here, at block
+     * exit; cq is only safe to touch/destroy after this point, since an
+     * already-in-flight dispatch (an ordinary on_readable callback, or this
+     * fix's own cascade forward) could otherwise still be using it, exactly
+     * the same pre-existing hazard already documented and guarded against
+     * by remove_from_different_thread_concurrent_with_dispatch above. */
+  }
+
+  /* Drain whatever's left (a small leftover is expected and fine, matching
+   * the already-documented, unrelated coalescing characteristic; see
+   * multi_thread_hot_queue_dispatch_pool_pending_stays_bounded's own
+   * comment); circular_queue_destroy asserts on any remaining message. */
+  c_message_t leftover = {.data = NULL, .size = 0};
+  while (circq_try_recv_zc(cq, &leftover) == ccol_success) {
+    /* nothing to free: every sent message here has data == NULL */
+  }
+  circular_queue_destroy(cq);
+}
+
+/* Feeds one message at a time, sleeping between sends so the queue always
+ * has time to drain fully before the next one arrives; deliberately the
+ * OPPOSITE traffic shape from evl_two_readers_feeder_thread above (which
+ * floods the queue as fast as possible specifically to build up a backlog).
+ * No backlog ever existing is exactly the condition under which the
+ * readiness-contingent cascade (_event_loop_queue_cascade_notify_next) has
+ * nothing to forward, so this is what actually exercises the round-robin
+ * rotor fix in notify_one_sel_waiter rather than the cascade. */
+static void *evl_two_readers_no_backlog_feeder_thread(void *arg) {
+  evl_two_readers_feeder_args *a = (evl_two_readers_feeder_args *)arg;
+  for (int i = 0; i < a->iterations; i++) {
+    c_message_t msg = {.data = NULL, .size = 0};
+    (void)circq_send_zc(a->cq, &msg);
+    struct timespec ts = {0, 200000}; /* 0.2ms */
+    nanosleep(&ts, NULL);
+  }
+  return NULL;
+}
+
+TEST(event_loop, queue_multiple_registrations_share_traffic_fairly) {
+  /* Regression test for a real, silent starvation bug found via manual code
+   * review and confirmed with a standalone reproduction against the built
+   * library: notify_one_sel_waiter() used to always wake the CURRENT HEAD of
+   * a queue's waiter list, and since an event_loop registration's
+   * waiter_node stays linked PERMANENTLY (never re-links, unlike a
+   * ccol_select() caller's own transient node), whichever registration was
+   * added LAST (and therefore became, and permanently stayed, head) was the
+   * ONLY one ever directly notified for as long as it remained registered.
+   * The pre-existing cascade mechanism only forwards a wake when the queue
+   * is STILL ready right after the notified registration's own callback
+   * returns; a callback that keeps up with traffic (even a plain,
+   * non-looping single circq_try_recv_zc() per call, an explicitly
+   * documented, ordinary pattern; exactly what both registrations below
+   * do) routinely leaves nothing to forward, so every OTHER live
+   * registration received ZERO callbacks, for as long as traffic kept
+   * flowing, directly contradicting event_loop_add's own documented "no
+   * live listener is ever passed over indefinitely" guarantee. Confirmed
+   * via a standalone repro before the fix: two registrations, 2000 messages
+   * fed one at a time, produced calls1=0 calls2=2000 every single run, not
+   * merely occasionally. Fixed by giving each queue+direction's waiter list
+   * its own round-robin rotor (see notify_one_sel_waiter's own doc comment),
+   * so every live registration is revisited once per full rotation instead
+   * of the same one winning forever. */
+  circular_queue *cq = circular_queue_create(64, NULL);
+
+  evl_two_readers_ctx ctx1, ctx2;
+  atomic_init(&ctx1.calls, (size_t)0);
+  atomic_init(&ctx2.calls, (size_t)0);
+
+  {
+    event_loop_construct_scoped(loop, 8, 1, 1);
+
+    /* Both registrations use the same "fast", non-looping, single-recv
+     * callback deliberately: this is the exact pairing under which the
+     * pre-fix code produced total starvation (a "slow" head, as the
+     * sibling test above uses, artificially builds a backlog the old
+     * cascade mechanism could still ride to reach r1; two equally-fast
+     * callbacks build no such backlog at all). */
+    event_handlers_t handlers1 = {
+        .on_readable = evl_two_readers_fast_on_readable,
+        .on_writable = NULL,
+        .on_error = NULL};
+    char *err = NULL;
+    event_reg r1 =
+        event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
+                       handlers1, &ctx1, &err);
+    REQUIRE_NE(r1, EVENT_REG_INVALID);
+
+    event_handlers_t handlers2 = {
+        .on_readable = evl_two_readers_fast_on_readable,
+        .on_writable = NULL,
+        .on_error = NULL};
+    event_reg r2 =
+        event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
+                       handlers2, &ctx2, &err);
+    REQUIRE_NE(r2, EVENT_REG_INVALID);
+
+    evl_two_readers_feeder_args feeder_args = {.cq = cq, .iterations = 400};
+    pthread_t feeder;
+    pthread_create(&feeder, NULL, evl_two_readers_no_backlog_feeder_thread,
+                   &feeder_args);
+    pthread_join(feeder, NULL);
+
+    /* Bounded wait for any final in-flight dispatch to settle. */
+    struct timespec ts = {0, 50000000}; /* 50ms */
+    nanosleep(&ts, NULL);
+
+    /* Both registrations must have received a genuinely fair share, not
+     * merely "more than zero": the pre-fix bug produced an exact 0/N split,
+     * so a loose ">0" bound alone would already be a meaningful regression
+     * check, but asserting each side got at least a quarter of a perfectly-
+     * even (1/2 each) split gives real margin against scheduling jitter
+     * while still failing hard against the old all-or-nothing behavior. */
+    size_t c1 = atomic_load(&ctx1.calls);
+    size_t c2 = atomic_load(&ctx2.calls);
+    REQUIRE_GE(c1 + c2, (size_t)350);
+    REQUIRE_GT(c1, (size_t)(feeder_args.iterations / 8));
+    REQUIRE_GT(c2, (size_t)(feeder_args.iterations / 8));
+
+    event_loop_remove(loop, r1);
+    event_loop_remove(loop, r2);
+  }
+
+  c_message_t leftover = {.data = NULL, .size = 0};
+  while (circq_try_recv_zc(cq, &leftover) == ccol_success) {
+    /* nothing to free: every sent message here has data == NULL */
+  }
+  circular_queue_destroy(cq);
+}
+
+/* dynamic_queue analogue of the circular_queue test above: the rotor fix
+ * applies identically to dynamic_queue's own sel_read_rotor/sel_write_rotor
+ * fields via the exact same notify_one_sel_waiter()/_sel_unlink_waiter()
+ * code paths, so this exercises that half of the fix directly rather than
+ * relying on circular_queue coverage alone. */
+typedef struct evl_dynq_two_readers_ctx {
+  _Atomic size_t calls;
+} evl_dynq_two_readers_ctx;
+
+static void evl_dynq_two_readers_on_readable(event_loop loop,
+                                             ccol_selectable *sel, void *arg) {
+  (void)loop;
+  evl_dynq_two_readers_ctx *c = (evl_dynq_two_readers_ctx *)arg;
+  c_message_t msg = {.data = NULL, .size = 0};
+  if (dynmq_try_recv_zc(sel->dq, &msg) == ccol_success) {
+    atomic_fetch_add(&c->calls, 1);
+  }
+}
+
+typedef struct evl_dynq_feeder_args {
+  dynamic_queue *dq;
+  int iterations;
+} evl_dynq_feeder_args;
+
+static void *evl_dynq_no_backlog_feeder_thread(void *arg) {
+  evl_dynq_feeder_args *a = (evl_dynq_feeder_args *)arg;
+  for (int i = 0; i < a->iterations; i++) {
+    c_message_t msg = {.data = NULL, .size = 0};
+    (void)dynmq_send_zc(a->dq, &msg);
+    struct timespec ts = {0, 200000}; /* 0.2ms */
+    nanosleep(&ts, NULL);
+  }
+  return NULL;
+}
+
+TEST(event_loop, dynq_multiple_registrations_share_traffic_fairly) {
+  dynamic_queue *dq = dynamic_queue_create(NULL);
+
+  evl_dynq_two_readers_ctx ctx1, ctx2;
+  atomic_init(&ctx1.calls, (size_t)0);
+  atomic_init(&ctx2.calls, (size_t)0);
+
+  {
+    event_loop_construct_scoped(loop, 8, 1, 1);
+
+    event_handlers_t handlers1 = {
+        .on_readable = evl_dynq_two_readers_on_readable,
+        .on_writable = NULL,
+        .on_error = NULL};
+    char *err = NULL;
+    event_reg r1 =
+        event_loop_add(loop, selectable_from_dynq(dq, ccol_select_read),
+                       handlers1, &ctx1, &err);
+    REQUIRE_NE(r1, EVENT_REG_INVALID);
+
+    event_handlers_t handlers2 = {
+        .on_readable = evl_dynq_two_readers_on_readable,
+        .on_writable = NULL,
+        .on_error = NULL};
+    event_reg r2 =
+        event_loop_add(loop, selectable_from_dynq(dq, ccol_select_read),
+                       handlers2, &ctx2, &err);
+    REQUIRE_NE(r2, EVENT_REG_INVALID);
+
+    evl_dynq_feeder_args feeder_args = {.dq = dq, .iterations = 400};
+    pthread_t feeder;
+    pthread_create(&feeder, NULL, evl_dynq_no_backlog_feeder_thread,
+                   &feeder_args);
+    pthread_join(feeder, NULL);
+
+    struct timespec ts = {0, 50000000}; /* 50ms */
+    nanosleep(&ts, NULL);
+
+    size_t c1 = atomic_load(&ctx1.calls);
+    size_t c2 = atomic_load(&ctx2.calls);
+    REQUIRE_GE(c1 + c2, (size_t)350);
+    REQUIRE_GT(c1, (size_t)(feeder_args.iterations / 8));
+    REQUIRE_GT(c2, (size_t)(feeder_args.iterations / 8));
+
+    event_loop_remove(loop, r1);
+    event_loop_remove(loop, r2);
+  }
+
+  c_message_t leftover = {.data = NULL, .size = 0};
+  while (dynmq_try_recv_zc(dq, &leftover) == ccol_success) {
+    /* nothing to free: every sent message here has data == NULL */
+  }
+  dynamic_queue_destroy(dq);
 }
 
 TEST(event_loop, remove_from_within_callback) {
@@ -2905,9 +4167,9 @@ TEST(event_loop, remove_from_within_callback) {
                                .on_writable = NULL,
                                .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_circq(cq, ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
   ctx.self_reg = reg;
 
   int *payload = malloc(sizeof(int));
@@ -2936,7 +4198,7 @@ TEST(event_loop, remove_from_within_callback) {
 
 typedef struct evl_remover_args {
   event_loop loop;
-  event_reg *reg;
+  event_reg reg;
   int delay_us;
 } evl_remover_args;
 
@@ -2988,10 +4250,10 @@ TEST(event_loop, remove_from_different_thread_concurrent_with_dispatch) {
                                    .on_writable = NULL,
                                    .on_error = NULL};
       char *err = NULL;
-      event_reg *reg =
+      event_reg reg =
           event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
                          handlers, ctx, &err);
-      REQUIRE_NE((void *)reg, NULL);
+      REQUIRE_NE(reg, EVENT_REG_INVALID);
 
       evl_remover_args rargs = {.loop = loop, .reg = reg, .delay_us = 0};
       pthread_t rtid;
@@ -3036,9 +4298,9 @@ TEST(event_loop, shutdown_with_pending_registrations) {
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   REQUIRE_EQ(event_loop_shutdown(loop), ccol_success);
   /* Idempotent: calling again must not hang or double-join. */
@@ -3064,9 +4326,9 @@ TEST(event_loop, destroy_while_queue_registration_pending_queue_outlives_loop) {
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_circq(cq, ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   /* Destroy the loop with the registration still pending; must unlink
    * from cq's waiter list before freeing, not after. */
@@ -3094,9 +4356,9 @@ TEST(event_loop, reg_count_tracks_add_remove) {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
   REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
   REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
   REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
   REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
@@ -3105,11 +4367,121 @@ TEST(event_loop, reg_count_tracks_add_remove) {
   close(pfd[1]);
 }
 
+/* Regression test for a real, reasoned-through (not previously crash-
+ * reproduced) hazard fixed in event_loop_add: reg used to be wired into the
+ * fd/queue registry (making it fully live and dispatchable, purely through
+ * the raw event_reg_s* the registry stores) BEFORE its own public handle
+ * was minted via _event_reg_slot_acquire. If slot acquisition then failed
+ * (its only failure mode, an allocation failure growing loop->reg_slots),
+ * event_loop_add reported EVENT_REG_INVALID to the caller, who, believing
+ * no registration was ever created, had no reason to think a callback
+ * might already be running (or, for num_reactor_threads > 1, queued on a
+ * ctpool worker) against the arg pointer it had just supplied, and could
+ * free it immediately: a genuine use-after-free, needing only an ordinary
+ * allocation failure to coincide with the target fd already being ready.
+ * Fixed by acquiring the slot BEFORE ever wiring reg into the registry, so
+ * a slot-acquire failure now always finds reg fully unwired, with no
+ * dispatch possible.
+ *
+ * The primary assertion below (last_forced_..._reg_count == 0) proves the
+ * ORDERING directly and deterministically, independent of any actual
+ * thread-scheduling race: event_loop_test_last_forced_slot_acquire_failure_
+ * reg_count() reports event_loop_reg_count()'s own value as it stood at the
+ * exact moment inside _event_reg_slot_acquire that the forced failure
+ * fired, before any rollback could run. A pre-fix ordering (wire first,
+ * acquire the slot last) would have already incremented reg_count for this
+ * registration by that point, so this snapshot would read 1, not 0; a
+ * post-return check of event_loop_reg_count() alone cannot distinguish the
+ * two orderings, since a post-wiring failure's own rollback also restores
+ * it to 0 by the time event_loop_add returns either way. This is why a
+ * naive live-dispatch race (arm the hook, keep a genuinely ready fd sitting
+ * next to it, and check whether a callback fires) is not by itself a
+ * reliable regression guard here: confirmed directly, by temporarily
+ * reordering event_loop_add back to the pre-fix "wire, then acquire" shape
+ * while keeping this same hook; the window between releasing the stripe
+ * lock and the (immediately following, unforced-work) slot-acquire call
+ * turned out to be too narrow in practice for even an already-running,
+ * already-blocked-in-epoll_wait poller thread on a separate core to
+ * reliably win, across 5 consecutive full runs with num_reactor_threads =
+ * 3 and pfd[0] already holding data before the call. The reg_count
+ * snapshot below has no such timing dependency: it reads the ordering
+ * directly off event_loop_add's own already-completed work at the instant
+ * the hook fires, not a race between two threads. The live-dispatch checks
+ * further down are kept anyway, as a secondary, best-effort corroboration
+ * (and because they exercise the module's actual end-to-end behavior),
+ * but the reg_count snapshot is what this test's own correctness rests on. */
+TEST(event_loop, add_slot_acquire_failure_leaves_nothing_wired_or_dispatched) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  int one = 1;
+  REQUIRE_EQ(write(pfd[1], &one, sizeof(one)), (ssize_t)sizeof(one));
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+
+  {
+    /* num_reactor_threads = 3: exercises the strictly more dangerous
+     * async-dispatch-pool path (a ctpool worker could run the callback
+     * well after event_loop_add's own caller has already moved on),
+     * not just the inline num_reactor_threads == 1 path. */
+    event_loop_construct_scoped(loop, 8, 1, 3);
+
+    event_handlers_t handlers = {
+        .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+
+    event_loop_test_force_next_reg_slot_acquire_failure();
+
+    char *err = NULL;
+    event_reg reg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, &ctx, &err);
+    REQUIRE_EQ(reg, EVENT_REG_INVALID);
+    REQUIRE_NE((void *)err, NULL);
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+
+    /* The deterministic proof: see this test's own leading comment. */
+    REQUIRE_EQ(event_loop_test_last_forced_slot_acquire_failure_reg_count(),
+               (size_t)0);
+
+    /* Best-effort corroboration: pfd[0] is already, and remains, genuinely
+     * readable; if the failed registration had left anything wired, the
+     * poller (and, on this num_reactor_threads > 1 loop, a dispatch_pool
+     * worker) would have every opportunity to dispatch it during this
+     * bounded wait. Not itself relied upon to catch a regression (see this
+     * test's own leading comment); a real bug here would still show up as
+     * a crash/UAF under valgrind/ASan long before this assertion's own
+     * timing margin became the limiting factor. */
+    REQUIRE_FALSE(evl_wait_for(&ctx, &ctx.readable_count, 1, 300));
+    pthread_mutex_lock(&ctx.mtx);
+    REQUIRE_EQ(ctx.readable_count, 0);
+    pthread_mutex_unlock(&ctx.mtx);
+
+    /* The hook is one-shot: a normal call right after must succeed,
+     * confirming it only ever affected the single call above. */
+    err = NULL;
+    event_reg reg2 =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, &ctx, &err);
+    REQUIRE_NE(reg2, EVENT_REG_INVALID);
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)1);
+    REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+
+    event_loop_remove(loop, reg2);
+
+    /* loop shuts down and every one of its threads is joined here, at
+     * block exit; ctx is guaranteed quiescent from this point on. */
+  }
+
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
 TEST(event_loop, high_add_remove_churn_stress) {
   event_loop_construct_scoped(loop, 32, 1, 1);
   const int n = 200;
   int pfds[200][2];
-  event_reg *regs[200];
+  event_reg regs[200];
 
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
@@ -3120,7 +4492,7 @@ TEST(event_loop, high_add_remove_churn_stress) {
     regs[i] =
         event_loop_add(loop, selectable_from_fd(pfds[i][0], ccol_select_read),
                        handlers, NULL, &err);
-    REQUIRE_NE((void *)regs[i], NULL);
+    REQUIRE_NE(regs[i], EVENT_REG_INVALID);
   }
   REQUIRE_EQ(event_loop_reg_count(loop), (size_t)n);
 
@@ -3157,14 +4529,14 @@ TEST(event_loop, multiple_independent_instances) {
     event_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
     char *err = NULL;
-    event_reg *reg_a =
+    event_reg reg_a =
         event_loop_add(loop_a, selectable_from_fd(pfd_a[0], ccol_select_read),
                        handlers, &ctx_a, &err);
-    REQUIRE_NE((void *)reg_a, NULL);
-    event_reg *reg_b =
+    REQUIRE_NE(reg_a, EVENT_REG_INVALID);
+    event_reg reg_b =
         event_loop_add(loop_b, selectable_from_fd(pfd_b[0], ccol_select_read),
                        handlers, &ctx_b, &err);
-    REQUIRE_NE((void *)reg_b, NULL);
+    REQUIRE_NE(reg_b, EVENT_REG_INVALID);
 
     int val_a = 1, val_b = 2;
     REQUIRE_EQ((ssize_t)sizeof(val_a), write(pfd_a[1], &val_a, sizeof(val_a)));
@@ -3203,6 +4575,71 @@ TEST(event_loop, num_lock_stripes_zero_returns_null) {
   REQUIRE_EQ(loop, EVENT_LOOP_INVALID);
 }
 
+/* Regression tests for a real gap: max_events_per_wait had no upper-bound
+ * validation at all, even though it is narrowed to a plain `int` for
+ * epoll_wait(2)'s own maxevents parameter and used, unchecked, to size the
+ * poller thread's events buffer allocation (max_events_per_wait *
+ * sizeof(struct epoll_event)), both in _event_loop_thread_fn. A value
+ * whose low 32 bits, reinterpreted as a signed int, were non-positive made
+ * epoll_wait fail with EINVAL on the very first call; a merely huge value
+ * could instead make the events-buffer allocation fail. Either way, the
+ * poller thread's own error handling treated this as an ordinary, silent,
+ * permanent thread exit (nothing distinguishes it from any other
+ * unexpected epoll_wait/allocation failure): the constructor still
+ * returned what looked like a perfectly valid, live event_loop handle
+ * (event_loop_add kept succeeding), but no callback would ever fire
+ * again, with nothing surfaced to the caller. Fixed by rejecting any
+ * max_events_per_wait above INT_MAX, and any value that would overflow
+ * size_t when multiplied by sizeof(struct epoll_event) (the latter is the
+ * binding guard specifically on an ILP32 platform, where INT_MAX alone
+ * does not rule out that multiplication overflowing a 32-bit size_t). */
+TEST(event_loop, create_rejects_max_events_per_wait_exceeding_int_max) {
+  char *err = NULL;
+  event_loop loop = event_loop_create((size_t)INT_MAX + 1, 1, 1, &err);
+  REQUIRE_EQ(loop, EVENT_LOOP_INVALID);
+  REQUIRE_NE((void *)err, NULL);
+}
+
+TEST(
+    event_loop,
+    create_rejects_max_events_per_wait_that_would_overflow_events_buffer_size) {
+  char *err = NULL;
+  size_t smallest_overflowing = SIZE_MAX / sizeof(struct epoll_event) + 1;
+  event_loop loop = event_loop_create(smallest_overflowing, 1, 1, &err);
+  REQUIRE_EQ(loop, EVENT_LOOP_INVALID);
+  REQUIRE_NE((void *)err, NULL);
+}
+
+/* A max_events_per_wait comfortably within both new guards must still be
+ * accepted, and the resulting loop must actually dispatch, so the fix
+ * above is confirmed not to be over-strict. */
+TEST(event_loop, create_succeeds_with_a_large_but_valid_max_events_per_wait) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+
+  event_loop loop = event_loop_create(4096, 1, 1, NULL);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  int val = 1;
+  REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+
+  event_loop_remove(loop, reg);
+  event_loop_destroy(loop);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
 TEST(event_loop, fd_both_directions_combine_and_recombine_multi_stripe) {
   /* Same scenario as fd_both_directions_combine_and_recombine, but with
    * num_lock_stripes > 1: read and write directions on the SAME fd must
@@ -3226,13 +4663,13 @@ TEST(event_loop, fd_both_directions_combine_and_recombine_multi_stripe) {
     event_handlers_t wh = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
     char *err = NULL;
-    event_reg *rreg = event_loop_add(
+    event_reg rreg = event_loop_add(
         loop, selectable_from_fd(sv[0], ccol_select_read), rh, &read_ctx, &err);
-    REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg =
+    REQUIRE_NE(rreg, EVENT_REG_INVALID);
+    event_reg wreg =
         event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write), wh,
                        &write_ctx, &err);
-    REQUIRE_NE((void *)wreg, NULL);
+    REQUIRE_NE(wreg, EVENT_REG_INVALID);
     REQUIRE_EQ(event_loop_reg_count(loop), (size_t)2);
 
     REQUIRE_TRUE(evl_wait_for(&write_ctx, &write_ctx.writable_count, 1, 2000));
@@ -3278,9 +4715,9 @@ TEST(event_loop, fd_modify_after_remove_returns_invalid_args_multi_stripe) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
   REQUIRE_EQ(event_loop_modify(loop, reg, ccol_select_write),
@@ -3316,9 +4753,9 @@ TEST(event_loop, pause_stops_delivery_then_resume_restores_it) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
 
@@ -3369,10 +4806,10 @@ TEST(event_loop, pause_write_direction) {
   /* A pipe's write end is writable the moment it has room, which it does
    * immediately; no priming needed, unlike the circq_writable test above
    * (which had to fill the queue first to make write-readiness meaningful). */
-  event_reg *reg =
+  event_reg reg =
       event_loop_add(loop, selectable_from_fd(pfd[1], ccol_select_write),
                      handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
 
@@ -3398,9 +4835,9 @@ TEST(event_loop, pause_is_idempotent) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
   REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
@@ -3420,9 +4857,9 @@ TEST(event_loop, resume_never_paused_is_idempotent_and_harmless) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   /* Never paused; must succeed as a no-op and not disturb delivery. */
   REQUIRE_EQ(event_loop_resume(loop, reg), ccol_success);
@@ -3444,9 +4881,9 @@ TEST(event_loop, pause_and_resume_reject_queue_selectable) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_circq(cq, ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   /* Same fd-only restriction as event_loop_modify: a queue/channel
    * registration's bridge eventfd has no "temporarily stop caring, but keep
@@ -3466,14 +4903,14 @@ TEST(event_loop, pause_and_resume_null_args_rejected) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   REQUIRE_EQ(event_loop_pause(EVENT_LOOP_INVALID, reg), ccol_invalid_args);
-  REQUIRE_EQ(event_loop_pause(loop, NULL), ccol_invalid_args);
+  REQUIRE_EQ(event_loop_pause(loop, EVENT_REG_INVALID), ccol_invalid_args);
   REQUIRE_EQ(event_loop_resume(EVENT_LOOP_INVALID, reg), ccol_invalid_args);
-  REQUIRE_EQ(event_loop_resume(loop, NULL), ccol_invalid_args);
+  REQUIRE_EQ(event_loop_resume(loop, EVENT_REG_INVALID), ccol_invalid_args);
 
   event_loop_remove(loop, reg);
   close(pfd[0]);
@@ -3494,13 +4931,44 @@ TEST(event_loop, resume_after_remove_returns_invalid_args) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
   REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
   REQUIRE_EQ(event_loop_resume(loop, reg), ccol_invalid_args);
+
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, sequential_double_remove_returns_invalid_args_not_success) {
+  /* Pins the documented contract precisely: a SECOND event_loop_remove()
+   * call made strictly after an earlier one on the same reg has already
+   * returned is not a no-op success; that earlier call already released
+   * reg's own slot before returning (see _event_reg_slot_release, called
+   * unconditionally on the successful-removal path before this function
+   * returns), so reg_h no longer resolves at all by the time this second,
+   * purely sequential call runs, and it reports ccol_invalid_args instead,
+   * the same outcome event_loop_modify()/_pause()/_resume()/event_loop_
+   * reg_generation() already give for an already-removed reg. Only a call
+   * that genuinely RACES the first one, resolving reg before that first
+   * call's own slot release, can observe ccol_success from a second
+   * removal; see reg_handle_survives_concurrent_remove_vs_accessor_race
+   * below for that separate, narrower window. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 1);
+
+  event_handlers_t handlers = {0};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
+  REQUIRE_EQ(event_loop_remove(loop, reg), ccol_invalid_args);
 
   close(pfd[0]);
   close(pfd[1]);
@@ -3518,30 +4986,199 @@ TEST(event_loop, pause_resume_preserve_reg_count_and_generation) {
   event_handlers_t handlers = {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   size_t count_before = event_loop_reg_count(loop);
-  uint64_t gen_before = event_loop_reg_generation(reg);
+  uint64_t gen_before = event_loop_reg_generation(loop, reg);
 
   REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
   REQUIRE_EQ(event_loop_reg_count(loop), count_before);
-  REQUIRE_EQ(event_loop_reg_generation(reg), gen_before);
+  REQUIRE_EQ(event_loop_reg_generation(loop, reg), gen_before);
 
   REQUIRE_EQ(event_loop_resume(loop, reg), ccol_success);
   REQUIRE_EQ(event_loop_reg_count(loop), count_before);
-  REQUIRE_EQ(event_loop_reg_generation(reg), gen_before);
+  REQUIRE_EQ(event_loop_reg_generation(loop, reg), gen_before);
 
   event_loop_remove(loop, reg);
   close(pfd[0]);
   close(pfd[1]);
 }
 
+/* Regression test for a real, previously-undetected bug: EPOLLERR/EPOLLHUP
+ * are reported by the kernel unconditionally, regardless of the registered
+ * interest mask (even mask 0 still gets them), so a registration paused
+ * via event_loop_pause could not, before the fix, ever be fully silenced
+ * against its own fd entering (or already being in) an error/hangup
+ * condition: level-triggered epoll_wait kept reporting it on every single
+ * call, forever, with the callback itself correctly skipped by reg->paused's
+ * own re-check but nothing else stopping the reactor from re-observing and
+ * re-collecting it; an unbounded, silent CPU-spin busy loop, directly
+ * contradicting event_loop_pause's own documented "no callback fires,
+ * exactly as if it had been removed" contract: an actually-removed
+ * registration produces zero further wakeups (EPOLL_CTL_DEL), while a
+ * merely mask-narrowed paused one could not, since ERR/HUP cannot be opted
+ * out of via the interest mask. Fixed in _event_loop_rearm_entry_locked by
+ * actually removing the fd from the epoll interest set (EPOLL_CTL_DEL)
+ * whenever every live direction on it is currently paused (tracked via the
+ * new event_entry.epoll_added field, since a fd removed this way must be
+ * re-added via EPOLL_CTL_ADD, not EPOLL_CTL_MOD, once some direction wants
+ * real interest again).
+ *
+ * Verified via event_loop_poller_iterations_for_tests (a direct count of
+ * completed epoll_wait calls) rather than wall-clock/CPU measurement: with
+ * the bug present, this counter races into the thousands within the sleep
+ * window below; with the fix, the poller is genuinely blocked in
+ * epoll_wait for the whole window (nothing else is registered with this
+ * loop), so the count barely moves. Confirmed to fail (a delta orders of
+ * magnitude larger than the bound below) against a scratch revert of just
+ * the epoll_added-based DEL/ADD logic before this fix was reapplied. */
+TEST(event_loop,
+     pause_does_not_spin_when_fd_hangs_up_while_paused_single_thread) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 1, 1);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {.on_readable = evl_on_readable,
+                               .on_writable = NULL,
+                               .on_error = evl_on_error};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
+
+  /* Put the fd into a persistent, level-triggered hangup condition while
+   * paused: closing the write end makes the read end report EPOLLHUP. */
+  close(pfd[1]);
+
+  /* Give a pre-fix busy loop a real chance to run away before the first
+   * sample, then measure the delta across a further, generous window. */
+  usleep(50000);
+  uint64_t before = event_loop_poller_iterations_for_tests(loop);
+  usleep(150000);
+  uint64_t after = event_loop_poller_iterations_for_tests(loop);
+
+  REQUIRE_LT(after - before, (uint64_t)20);
+
+  pthread_mutex_lock(&ctx.mtx);
+  REQUIRE_EQ(ctx.readable_count, 0);
+  REQUIRE_EQ(ctx.error_count, 0);
+  pthread_mutex_unlock(&ctx.mtx);
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+}
+
+/* Multi-threaded reactor counterpart: with dispatch_pool present, the
+ * fully-paused mask includes EPOLLONESHOT alone (still no real interest
+ * bits), and the spin, before the fix, took the shape of a continuous
+ * epoll_wait -> ctpool submit -> worker dequeue -> skip -> re-arm cycle
+ * instead of a tight single-thread loop, but was just as unbounded; the
+ * same poller_iterations_for_tests counter catches it identically, since
+ * it counts completed epoll_wait calls on the one and only poller thread
+ * regardless of num_reactor_threads. */
+TEST(event_loop,
+     pause_does_not_spin_when_fd_hangs_up_while_paused_multi_thread) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 3);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {.on_readable = evl_on_readable,
+                               .on_writable = NULL,
+                               .on_error = evl_on_error};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
+
+  close(pfd[1]);
+
+  usleep(50000);
+  uint64_t before = event_loop_poller_iterations_for_tests(loop);
+  usleep(150000);
+  uint64_t after = event_loop_poller_iterations_for_tests(loop);
+
+  REQUIRE_LT(after - before, (uint64_t)20);
+
+  pthread_mutex_lock(&ctx.mtx);
+  REQUIRE_EQ(ctx.readable_count, 0);
+  REQUIRE_EQ(ctx.error_count, 0);
+  pthread_mutex_unlock(&ctx.mtx);
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+}
+
+/* Companion to the two spin-regression tests above, covering the other
+ * half of the same fix: once every direction on a fully-paused fd is
+ * removed from the epoll interest set (EPOLL_CTL_DEL), resuming it must
+ * re-add it via EPOLL_CTL_ADD, not EPOLL_CTL_MOD (MOD on a fd not
+ * currently registered fails with ENOENT); see event_entry.epoll_added's
+ * own field comment. Confirms the still-persistent hangup condition is
+ * correctly observed and dispatched once resumed, proving the re-add path
+ * actually works rather than merely leaving the fd silently unregistered. */
+TEST(event_loop, resume_after_hangup_while_paused_delivers_dispatch) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 1, 1);
+
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t handlers = {.on_readable = evl_on_readable,
+                               .on_writable = NULL,
+                               .on_error = evl_on_error};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  REQUIRE_EQ(event_loop_pause(loop, reg), ccol_success);
+  close(pfd[1]);
+  /* Let the (now fixed) reactor settle with the fd fully de-registered
+   * before resuming. */
+  usleep(100000);
+
+  REQUIRE_EQ(event_loop_resume(loop, reg), ccol_success);
+
+  /* An empty pipe whose write end has been closed reports EPOLLHUP alone
+   * (confirmed directly against this kernel via a standalone epoll_ctl/
+   * epoll_wait reproduction; no EPOLLIN/EPOLLRDHUP bit accompanies it here,
+   * unlike the socket-oriented "peer writes then closes" scenario
+   * documented on _event_loop_handle_event's own has_reader comment), so
+   * this dispatches as an error, not a readable, event. */
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.error_count, 1, 2000));
+
+  event_loop_remove(loop, reg);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+}
+
 typedef struct {
   evl_sync_ctx *ctx;
   event_loop loop;
-  event_reg *reg;
+  /* _Atomic: reg is only known once event_loop_add (below) returns, so it is
+   * necessarily published to this struct AFTER the registration is already
+   * live and could in principle be dispatched from another thread. In this
+   * test's own exact sequence the callback can never actually observe reg
+   * unset (the fd genuinely has nothing to read until this test's own later
+   * write() call, issued strictly after reg is published), but a plain,
+   * unsynchronized struct field read on one thread with no happens-before
+   * edge to the write on another is still a real data race by the C memory
+   * model regardless of that data-dependent timing guarantee; caught by
+   * ThreadSanitizer, not by inspection. Atomic store/load establishes the
+   * missing synchronization without changing any actual behavior. */
+  _Atomic(event_reg) reg;
 } evl_pause_from_callback_args;
 
 /* Pauses its own registration from inside the callback, exactly matching
@@ -3550,7 +5187,11 @@ typedef struct {
 static void evl_on_readable_pause_self(event_loop loop, ccol_selectable *sel,
                                        void *arg) {
   evl_pause_from_callback_args *a = (evl_pause_from_callback_args *)arg;
-  REQUIRE_EQ(event_loop_pause(a->loop, a->reg), ccol_success);
+  /* assert(), not REQUIRE_EQ: see evl_on_readable_self_remove's own
+   * comment above for why calling a Tau assertion macro from a callback
+   * running on event_loop's own reactor/dispatch thread (concurrently
+   * with the main test thread's own REQUIRE_* calls) is unsafe. */
+  assert(event_loop_pause(a->loop, atomic_load(&a->reg)) == ccol_success);
   evl_on_readable(loop, sel, a->ctx);
 }
 
@@ -3571,11 +5212,11 @@ TEST(event_loop, pause_from_within_callback_then_resume_from_another_thread) {
                                .on_writable = NULL,
                                .on_error = NULL};
   char *err = NULL;
-  event_reg *reg =
+  event_reg reg =
       event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
                      handlers, &cb_args, &err);
-  REQUIRE_NE((void *)reg, NULL);
-  cb_args.reg = reg;
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+  atomic_store(&cb_args.reg, reg);
 
   int val = 1;
   REQUIRE_EQ(write(pfd[1], &val, sizeof(val)), (ssize_t)sizeof(val));
@@ -3623,6 +5264,12 @@ typedef struct {
    * after the whole loop, and every worker thread, has been joined. */
   evl_sync_ctx **ctx_log;
   int ctx_log_count;
+  /* Queue-worker only: the circular_queue paired with ctx_log[j] at the
+   * same index j, deferred and freed alongside it for the identical
+   * reason (see ctx_log's own comment above and
+   * evl_stripe_stress_queue_worker's own use of this field). Unused
+   * (left NULL) by the fd worker. */
+  circular_queue **cq_log;
 } evl_stripe_stress_args;
 
 static void *evl_stripe_stress_fd_worker(void *arg) {
@@ -3633,13 +5280,13 @@ static void *evl_stripe_stress_fd_worker(void *arg) {
     evl_sync_ctx *ctx = malloc(sizeof(*ctx));
     evl_sync_ctx_init(ctx);
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(a->loop, selectable_from_fd(a->pfd[0], ccol_select_read),
                        handlers, ctx, &err);
     if (reg) {
       a->ctx_log[a->ctx_log_count++] = ctx;
       int val = a->thread_id;
-      (void)write(a->pfd[1], &val, sizeof(val));
+      test_write_retry_eintr(a->pfd[1], &val, sizeof(val));
       evl_wait_for(ctx, &ctx->readable_count, 1, 2000);
       event_loop_remove(a->loop, reg);
     } else {
@@ -3707,22 +5354,35 @@ static void *evl_stripe_stress_queue_worker(void *arg) {
       .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
   for (int i = 0; i < a->iterations; i++) {
     circular_queue *cq = circular_queue_create(4, NULL);
-    evl_sync_ctx ctx;
-    evl_sync_ctx_init(&ctx);
+    evl_sync_ctx *ctx = malloc(sizeof(*ctx));
+    evl_sync_ctx_init(ctx);
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(a->loop, selectable_from_circq(cq, ccol_select_read),
-                       handlers, &ctx, &err);
+                       handlers, ctx, &err);
     if (reg) {
+      /* Logged, not destroyed inline: event_loop_remove can return while
+       * an in-flight callback for the removed reg is still running (see
+       * evl_stripe_stress_args's own ctx_log/cq_log field comments), so
+       * destroying ctx's mutex/cond or freeing cq immediately after
+       * remove() returns can race that callback, exactly like
+       * evl_stripe_stress_fd_worker's own identical deferred-cleanup
+       * pattern. Freed by the TEST function only after the whole loop,
+       * and every worker thread, has been joined. */
+      a->ctx_log[a->ctx_log_count] = ctx;
+      a->cq_log[a->ctx_log_count] = cq;
+      a->ctx_log_count++;
       int *payload = malloc(sizeof(int));
       *payload = a->thread_id;
       c_message_t msg = {.data = payload, .size = sizeof(int)};
       circq_send_zc(cq, &msg);
-      evl_wait_for(&ctx, &ctx.readable_count, 1, 2000);
+      evl_wait_for(ctx, &ctx->readable_count, 1, 2000);
       event_loop_remove(a->loop, reg);
+    } else {
+      evl_sync_ctx_destroy(ctx);
+      free(ctx);
+      circular_queue_destroy(cq);
     }
-    evl_sync_ctx_destroy(&ctx);
-    circular_queue_destroy(cq);
   }
   return NULL;
 }
@@ -3732,23 +5392,46 @@ TEST(event_loop, multi_threaded_multi_queue_stress_with_stripes) {
    * queues (hence many distinct bridge_efds, each round-robin-assigned to
    * a stripe via loop->next_queue_stripe) registered/removed concurrently
    * across threads. */
-  event_loop_construct_scoped(loop, 32, 16, 1);
   const int n_threads = 8;
   const int iterations = 25;
   pthread_t threads[8];
   evl_stripe_stress_args args[8];
 
   for (int i = 0; i < n_threads; i++) {
-    args[i].loop = loop;
     args[i].thread_id = i;
     args[i].iterations = iterations;
-    pthread_create(&threads[i], NULL, evl_stripe_stress_queue_worker, &args[i]);
-  }
-  for (int i = 0; i < n_threads; i++) {
-    pthread_join(threads[i], NULL);
+    args[i].ctx_log = malloc(sizeof(evl_sync_ctx *) * (size_t)iterations);
+    args[i].cq_log = malloc(sizeof(circular_queue *) * (size_t)iterations);
+    args[i].ctx_log_count = 0;
   }
 
-  REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+  {
+    /* Nested block: see the other multi-thread tests' identical pattern;
+     * this loop's destructor joins every reactor thread at this block's
+     * closing brace, which is what makes freeing every logged ctx/cq
+     * afterward, below, actually safe. */
+    event_loop_construct_scoped(loop, 32, 16, 1);
+    for (int i = 0; i < n_threads; i++) {
+      args[i].loop = loop;
+      pthread_create(&threads[i], NULL, evl_stripe_stress_queue_worker,
+                     &args[i]);
+    }
+    for (int i = 0; i < n_threads; i++) {
+      pthread_join(threads[i], NULL);
+    }
+
+    REQUIRE_EQ(event_loop_reg_count(loop), (size_t)0);
+  }
+
+  for (int i = 0; i < n_threads; i++) {
+    for (int j = 0; j < args[i].ctx_log_count; j++) {
+      evl_sync_ctx_destroy(args[i].ctx_log[j]);
+      free(args[i].ctx_log[j]);
+      circular_queue_destroy(args[i].cq_log[j]);
+    }
+    free(args[i].ctx_log);
+    free(args[i].cq_log);
+  }
 }
 
 TEST(event_loop, destroy_frees_registrations_across_multiple_stripes) {
@@ -3769,16 +5452,16 @@ TEST(event_loop, destroy_frees_registrations_across_multiple_stripes) {
 
     for (int i = 0; i < n; i++) {
       REQUIRE_EQ(pipe(pfds[i]), 0);
-      event_reg *reg =
+      event_reg reg =
           event_loop_add(loop, selectable_from_fd(pfds[i][0], ccol_select_read),
                          handlers, NULL, &err);
-      REQUIRE_NE((void *)reg, NULL);
+      REQUIRE_NE(reg, EVENT_REG_INVALID);
 
       queues[i] = circular_queue_create(4, NULL);
-      event_reg *qreg = event_loop_add(
+      event_reg qreg = event_loop_add(
           loop, selectable_from_circq(queues[i], ccol_select_read), handlers,
           NULL, &err);
-      REQUIRE_NE((void *)qreg, NULL);
+      REQUIRE_NE(qreg, EVENT_REG_INVALID);
     }
     REQUIRE_EQ(event_loop_reg_count(loop), (size_t)(2 * n));
 
@@ -3819,10 +5502,10 @@ TEST(event_loop, multi_thread_basic_smoke) {
     event_handlers_t handlers = {
         .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
                        handlers, &ctx, &err);
-    REQUIRE_NE((void *)reg, NULL);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
 
     int val = 7;
     REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
@@ -3924,10 +5607,10 @@ TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
         .on_writable = NULL,
         .on_error = NULL};
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
                        handlers, &ctx, &err);
-    REQUIRE_NE((void *)reg, NULL);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
 
     evl_feeder_args feeder_args = {.write_fd = pfd[1], .iterations = 4000};
     pthread_t feeder;
@@ -4047,14 +5730,14 @@ TEST(event_loop, multi_thread_cross_direction_serialization) {
                                        .on_writable = evl_cross_dir_on_writable,
                                        .on_error = NULL};
     char *err = NULL;
-    event_reg *rreg =
+    event_reg rreg =
         event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_read),
                        read_handlers, &ctx, &err);
-    REQUIRE_NE((void *)rreg, NULL);
-    event_reg *wreg =
+    REQUIRE_NE(rreg, EVENT_REG_INVALID);
+    event_reg wreg =
         event_loop_add(loop, selectable_from_fd(sv[0], ccol_select_write),
                        write_handlers, &ctx, &err);
-    REQUIRE_NE((void *)wreg, NULL);
+    REQUIRE_NE(wreg, EVENT_REG_INVALID);
 
     evl_feeder_args feeder_args = {.write_fd = sv[1], .iterations = 4000};
     pthread_t feeder;
@@ -4083,7 +5766,7 @@ TEST(event_loop, multi_thread_cross_direction_serialization) {
 }
 
 typedef struct evl_reuse_ctx {
-  event_reg *reg;
+  event_reg reg;
   uint64_t expected_generation;
   _Atomic int mismatch_count;
   _Atomic int call_count;
@@ -4091,7 +5774,6 @@ typedef struct evl_reuse_ctx {
 
 static void evl_reuse_on_readable(event_loop loop, ccol_selectable *sel,
                                   void *arg) {
-  (void)loop;
   evl_reuse_ctx *c = (evl_reuse_ctx *)arg;
   char buf[16];
   ssize_t n = read(sel->fd, buf, sizeof(buf));
@@ -4099,7 +5781,7 @@ static void evl_reuse_on_readable(event_loop loop, ccol_selectable *sel,
   /* If a stale batch entry from a PREVIOUS (already-removed) registration
    * on a recycled fd number ever misdispatched into this callback with the
    * WRONG ctx/reg pairing, this would observe a generation mismatch. */
-  if (event_loop_reg_generation(c->reg) != c->expected_generation) {
+  if (event_loop_reg_generation(loop, c->reg) != c->expected_generation) {
     atomic_fetch_add(&c->mismatch_count, 1);
   }
   atomic_fetch_add(&c->call_count, 1);
@@ -4154,7 +5836,7 @@ static void *evl_reuse_driver_thread(void *arg) {
     evl_reuse_ctx *ctx = malloc(sizeof(*ctx));
     memset(ctx, 0, sizeof(*ctx));
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(a->loop, selectable_from_fd(a->pfd[0], ccol_select_read),
                        handlers, ctx, &err);
     if (!reg) {
@@ -4162,7 +5844,7 @@ static void *evl_reuse_driver_thread(void *arg) {
       continue;
     }
     ctx->reg = reg;
-    ctx->expected_generation = event_loop_reg_generation(reg);
+    ctx->expected_generation = event_loop_reg_generation(a->loop, reg);
     a->ctx_log[a->ctx_log_count++] = ctx;
 
     int val = i;
@@ -4363,9 +6045,9 @@ TEST(event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
                                .on_writable = NULL,
                                .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   int val = 7;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
@@ -4399,7 +6081,8 @@ TEST(event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
 TEST(event_loop, reg_generation_semantics) {
   /* NULL reg reads as generation 0 (reserved, never minted for a real
    * registration). */
-  REQUIRE_EQ(event_loop_reg_generation(NULL), (uint64_t)0);
+  REQUIRE_EQ(event_loop_reg_generation(EVENT_LOOP_INVALID, EVENT_REG_INVALID),
+             (uint64_t)0);
 
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -4423,34 +6106,34 @@ TEST(event_loop, reg_generation_semantics) {
     char *err = NULL;
 
     /* Both directions on the same fd share one generation. */
-    event_reg *rreg =
+    event_reg rreg =
         event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
                        handlers, &ctx, &err);
-    REQUIRE_NE((void *)rreg, NULL);
-    uint64_t rgen = event_loop_reg_generation(rreg);
+    REQUIRE_NE(rreg, EVENT_REG_INVALID);
+    uint64_t rgen = event_loop_reg_generation(loop, rreg);
     REQUIRE_GT(rgen, (uint64_t)0);
 
     event_handlers_t write_handlers = {
         .on_readable = NULL, .on_writable = evl_on_writable, .on_error = NULL};
-    event_reg *wreg =
+    event_reg wreg =
         event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_write),
                        write_handlers, &ctx, &err);
-    REQUIRE_NE((void *)wreg, NULL);
-    REQUIRE_EQ(event_loop_reg_generation(wreg), rgen);
+    REQUIRE_NE(wreg, EVENT_REG_INVALID);
+    REQUIRE_EQ(event_loop_reg_generation(loop, wreg), rgen);
 
     /* event_loop_modify (direction flip) keeps the same generation; it's
      * the same underlying fd/connection, just a different direction. */
     event_loop_remove(loop, wreg);
     REQUIRE_EQ(event_loop_modify(loop, rreg, ccol_select_write), ccol_success);
-    REQUIRE_EQ(event_loop_reg_generation(rreg), rgen);
+    REQUIRE_EQ(event_loop_reg_generation(loop, rreg), rgen);
     REQUIRE_EQ(event_loop_modify(loop, rreg, ccol_select_read), ccol_success);
 
     /* A different fd gets a different generation. */
-    event_reg *reg2 =
+    event_reg reg2 =
         event_loop_add(loop, selectable_from_fd(pfd2[0], ccol_select_read),
                        handlers, &ctx, &err);
-    REQUIRE_NE((void *)reg2, NULL);
-    REQUIRE_NE(event_loop_reg_generation(reg2), rgen);
+    REQUIRE_NE(reg2, EVENT_REG_INVALID);
+    REQUIRE_NE(event_loop_reg_generation(loop, reg2), rgen);
 
     event_loop_remove(loop, rreg);
     event_loop_remove(loop, reg2);
@@ -4461,6 +6144,121 @@ TEST(event_loop, reg_generation_semantics) {
   close(pfd[1]);
   close(pfd2[0]);
   close(pfd2[1]);
+}
+
+/* No-op: registered purely to keep the poller looping (epoll_wait
+ * returning, poller_batch_gen advancing, epoll_wait being re-entered)
+ * continuously and as fast as possible for the duration of
+ * reg_handle_survives_concurrent_remove_vs_accessor_race below; a pipe's
+ * write end is writable from the instant it exists and stays that way
+ * forever, so registering several of them for write-interest is enough to
+ * keep the reactor busy without needing a second thread to keep feeding
+ * it. */
+static void evl_reg_race_hot_writable(event_loop loop, ccol_selectable *sel,
+                                      void *arg) {
+  (void)loop;
+  (void)sel;
+  (void)arg;
+}
+
+typedef struct evl_reg_race_args {
+  event_loop loop;
+  event_reg reg;
+} evl_reg_race_args;
+
+static void *evl_reg_race_remover_thread(void *arg) {
+  evl_reg_race_args *a = (evl_reg_race_args *)arg;
+  event_loop_remove(a->loop, a->reg);
+  return NULL;
+}
+
+static void *evl_reg_race_accessor_thread(void *arg) {
+  evl_reg_race_args *a = (evl_reg_race_args *)arg;
+  /* Genuinely racing event_loop_remove on the other thread for the exact
+   * same reg: any return value from any of these five calls is acceptable
+   * (ccol_success/ccol_not_permitted/ccol_invalid_args, or generation 0),
+   * entirely dependent on which thread the scheduler lets win. What this
+   * test actually verifies (via a clean run, and especially via a clean
+   * `make memtest` run) is that none of them ever touches memory the
+   * reclaimer has already freed out from under them; see struct
+   * event_loop_s's own reg_slots field comment. */
+  event_loop_modify(a->loop, a->reg, ccol_select_write);
+  event_loop_pause(a->loop, a->reg);
+  event_loop_resume(a->loop, a->reg);
+  (void)event_loop_reg_generation(a->loop, a->reg);
+  event_loop_remove(a->loop, a->reg);
+  return NULL;
+}
+
+TEST(event_loop, reg_handle_survives_concurrent_remove_vs_accessor_race) {
+  /* Regression test for a real bug: event_loop_modify/_pause/_resume/
+   * _remove/event_loop_reg_generation all used to dereference the
+   * caller-supplied reg pointer directly (starting with reg->stripe_idx,
+   * just to find out which stripe lock would protect the rest of the
+   * call) with no protection at all against a concurrent poller reclaim
+   * of that exact reg, which could complete on the very next poller loop
+   * iteration after a DIFFERENT thread's event_loop_remove() deferred it;
+   * a genuine use-after-free for two threads racing on the same reg, not
+   * merely a theoretical concern. Fixed by making event_reg an opaque,
+   * generation-checked VALUE handle resolved through its own loop's
+   * registration table before anything is dereferenced, exactly
+   * mirroring how event_loop's own handle already works; see struct
+   * event_loop_s's own reg_slots field comment for the full design.
+   *
+   * A handful of always-ready write-direction "hot" registrations keep
+   * the poller cycling continuously for this whole test, maximizing how
+   * often the old, unprotected window would actually get exercised; many
+   * short-lived fd registrations are then raced, back to back, between
+   * one thread that removes each one and a second thread that
+   * concurrently calls every other reg-accessor entry point on that
+   * exact same reg. This is the single most direct way to catch a
+   * regression of the fix: run under `make memtest`, a reintroduced
+   * version of the bug reliably reports a real, valgrind-detected
+   * use-after-free here, not just an intermittent failure. */
+  event_loop_construct_scoped(loop, 64, 4, 4);
+
+  enum { N_HOT = 4 };
+  int hot_pfd[N_HOT][2];
+  event_reg hot_reg[N_HOT];
+  event_handlers_t hot_handlers = {.on_readable = NULL,
+                                   .on_writable = evl_reg_race_hot_writable,
+                                   .on_error = NULL};
+  for (int i = 0; i < N_HOT; i++) {
+    REQUIRE_EQ(pipe(hot_pfd[i]), 0);
+    char *err = NULL;
+    hot_reg[i] = event_loop_add(
+        loop, selectable_from_fd(hot_pfd[i][1], ccol_select_write),
+        hot_handlers, NULL, &err);
+    REQUIRE_NE(hot_reg[i], EVENT_REG_INVALID);
+  }
+
+  const int iterations = 300;
+  event_handlers_t reg_handlers = {0};
+  for (int i = 0; i < iterations; i++) {
+    int pfd[2];
+    REQUIRE_EQ(pipe(pfd), 0);
+    char *err = NULL;
+    event_reg reg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       reg_handlers, NULL, &err);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+    evl_reg_race_args shared = {loop, reg};
+    pthread_t remover, accessor;
+    pthread_create(&remover, NULL, evl_reg_race_remover_thread, &shared);
+    pthread_create(&accessor, NULL, evl_reg_race_accessor_thread, &shared);
+    pthread_join(remover, NULL);
+    pthread_join(accessor, NULL);
+
+    close(pfd[0]);
+    close(pfd[1]);
+  }
+
+  for (int i = 0; i < N_HOT; i++) {
+    event_loop_remove(loop, hot_reg[i]);
+    close(hot_pfd[i][0]);
+    close(hot_pfd[i][1]);
+  }
 }
 
 typedef struct evl_bounded_ctx {
@@ -4523,10 +6321,10 @@ TEST(event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
                                  .on_writable = NULL,
                                  .on_error = NULL};
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
                        handlers, &ctx, &err);
-    REQUIRE_NE((void *)reg, NULL);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
 
     /* Deliberately modest: at ~0.5ms/dispatch this fully drains within the
      * grace period below, matching multi_thread_no_double_dispatch_same_
@@ -4618,10 +6416,10 @@ TEST(event_loop, multi_thread_hot_queue_dispatch_pool_pending_stays_bounded) {
         .on_writable = NULL,
         .on_error = NULL};
     char *err = NULL;
-    event_reg *reg =
+    event_reg reg =
         event_loop_add(loop, selectable_from_circq(cq, ccol_select_read),
                        handlers, &ctx, &err);
-    REQUIRE_NE((void *)reg, NULL);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
 
     evl_bounded_queue_feeder_args feeder_args = {.cq = cq, .iterations = 1000};
     pthread_t feeder;
@@ -4712,9 +6510,9 @@ TEST(event_loop,
                                .on_writable = NULL,
                                .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   int val = 7;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
@@ -4757,9 +6555,9 @@ TEST(event_loop,
                                .on_writable = NULL,
                                .on_error = NULL};
   char *err = NULL;
-  event_reg *reg = event_loop_add(
+  event_reg reg = event_loop_add(
       loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
-  REQUIRE_NE((void *)reg, NULL);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
 
   int val = 7;
   REQUIRE_EQ((ssize_t)sizeof(val), write(pfd[1], &val, sizeof(val)));
@@ -4812,6 +6610,107 @@ TEST(event_loop_handle_lifecycle, sequential_double_destroy_is_fatal) {
            EVENT_LOOP_INVALID, but `stale` still holds the original value */
     __event_loop_destroy(stale); /* the actual misuse under test: a second,
         purely sequential destroy of a handle already fully torn down */
+    _exit(0); /* unreachable if fatal_err() aborted as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+static void evl_self_destroy_on_readable(event_loop loop, ccol_selectable *sel,
+                                         void *arg) {
+  (void)sel;
+  (void)arg;
+  event_loop_destroy(loop); /* the actual misuse under test */
+}
+
+/* Calling event_loop_destroy on a loop from within a callback currently
+ * dispatching on that loop's own thread (the poller thread for
+ * num_reactor_threads == 1, or a dispatch_pool worker for > 1) must be a
+ * fatal error, exactly like the sequential/concurrent double-destroy cases
+ * above, not a silently-skipped teardown: __event_loop_destroy's own
+ * internal event_loop_shutdown call already detects and rejects a self-join
+ * here (see shutdown_from_within_callback_returns_not_permitted_* above),
+ * but that alone is not enough, since __event_loop_destroy has no way to
+ * propagate that rejection to its own void-returning, macro-driven
+ * contract; without an explicit guard of its own, it would free every live
+ * registration and the loop struct itself out from under the
+ * still-executing callback regardless, a genuine use-after-free rather than
+ * a mere deadlock. Run in a forked child since fatal_err aborts the whole
+ * process. */
+TEST(event_loop_handle_lifecycle,
+     destroy_from_within_callback_is_fatal_single_thread) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    int pfd[2];
+    if (pipe(pfd) != 0) _exit(2);
+    evl_set_nonblocking(pfd[0]);
+
+    event_loop loop = event_loop_create(8, 1, 1, NULL);
+    if (loop == EVENT_LOOP_INVALID) _exit(2);
+
+    event_handlers_t handlers = {.on_readable = evl_self_destroy_on_readable,
+                                 .on_writable = NULL,
+                                 .on_error = NULL};
+    event_reg reg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, NULL, NULL);
+    if (reg == EVENT_REG_INVALID) _exit(2);
+
+    int val = 7;
+    if (write(pfd[1], &val, sizeof(val)) != (ssize_t)sizeof(val)) _exit(2);
+
+    /* Bounds the child's own lifetime in case fatal_err somehow does not
+     * fire as expected, rather than hanging the whole suite. */
+    struct timespec ts = {1, 0};
+    nanosleep(&ts, NULL);
+    _exit(0); /* unreachable if fatal_err() aborted as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+TEST(event_loop_handle_lifecycle,
+     destroy_from_within_callback_is_fatal_multi_thread) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    int pfd[2];
+    if (pipe(pfd) != 0) _exit(2);
+    evl_set_nonblocking(pfd[0]);
+
+    event_loop loop = event_loop_create(8, 4, 4, NULL);
+    if (loop == EVENT_LOOP_INVALID) _exit(2);
+
+    event_handlers_t handlers = {.on_readable = evl_self_destroy_on_readable,
+                                 .on_writable = NULL,
+                                 .on_error = NULL};
+    event_reg reg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, NULL, NULL);
+    if (reg == EVENT_REG_INVALID) _exit(2);
+
+    int val = 7;
+    if (write(pfd[1], &val, sizeof(val)) != (ssize_t)sizeof(val)) _exit(2);
+
+    struct timespec ts = {1, 0};
+    nanosleep(&ts, NULL);
     _exit(0); /* unreachable if fatal_err() aborted as expected */
   }
   REQUIRE_NE(pid, -1);
@@ -5006,3 +6905,617 @@ TEST(event_loop_handle_lifecycle, bounded_slot_reuse_under_churn) {
 
   REQUIRE_EQ(_event_loop_slot_table_capacity_for_tests(), capacity_after_first);
 }
+
+/* ========================================================================== */
+/*                       FORK SAFETY (pthread_atfork)                         */
+/* ========================================================================== */
+
+/* This entire remainder of the file exercises src/cthreadcomm.c's own
+ * pthread_atfork()-based fork() safety machinery (both event_loop's own and
+ * the merged circular_queue/dynamic_queue mutex registry), which is itself
+ * compiled out when FORK_SAFETY_REQUIRED is 0 (see that macro's own doc
+ * comment in common.h); without that machinery these tests' own premises (a
+ * forked child never inheriting a locked event_loop/queue mutex, and never
+ * hitting the AB-BA lock-ordering hazard two independent registrations used
+ * to have) no longer hold, so they are compiled out along with it rather
+ * than left in to hang or fail. */
+#if FORK_SAFETY_REQUIRED
+
+static void fork_safety_hot_fd_on_readable(event_loop loop,
+                                           ccol_selectable *sel, void *arg) {
+  (void)loop;
+  (void)arg;
+  char buf[64];
+  while (read(sel->fd, buf, sizeof(buf)) > 0) {
+  }
+}
+
+typedef struct {
+  /* _Atomic, not plain volatile: volatile alone guarantees neither
+   * atomicity nor any C11 memory-model ordering between the main test
+   * thread's write (churn.stop = 1;) and this thread's read, only that
+   * the compiler won't cache the read in a register. A genuine, if
+   * low-impact, data race under the C11 memory model; every other
+   * cross-thread handshake flag in this file already uses _Atomic for
+   * exactly this reason. */
+  _Atomic int stop;
+} fork_safety_churn_arg_t;
+
+/* Continuously creates and destroys throwaway event_loop instances,
+ * completely unrelated to the loop the main test thread keeps busy below;
+ * its only purpose is to keep SOME thread inside event_loop_slot_table's
+ * own mutex (via event_loop_create/_destroy) as often as possible, racing
+ * this test's own repeated fork() calls. */
+static void *fork_safety_churn_thread(void *arg) {
+  fork_safety_churn_arg_t *a = (fork_safety_churn_arg_t *)arg;
+  while (!atomic_load(&a->stop)) {
+    char *err = NULL;
+    event_loop l = event_loop_create_with_mprocs(4, 1, 1, NULL, &err);
+    if (l != EVENT_LOOP_INVALID) {
+      int pfd[2];
+      if (pipe(pfd) == 0) {
+        event_handlers_t h = {0};
+        event_reg r = event_loop_add(
+            l, selectable_from_fd(pfd[0], ccol_select_read), h, NULL, NULL);
+        (void)r;
+        close(pfd[0]);
+        close(pfd[1]);
+      }
+      event_loop_destroy(l);
+    }
+  }
+  return NULL;
+}
+
+/* Regression test for a real, reproducible fork-safety hang (see
+ * src/cthreadcomm.c's own _event_loop_atfork_prepare doc comment for the
+ * full mechanism): fork() duplicates only the calling thread, so
+ * event_loop_slot_table's own mutex and any live loop's own
+ * shutdown_lock/reg_slot_mutex/stripes[].lock could previously be
+ * inherited by a child already locked, with no thread left alive in that
+ * child that could ever unlock it.
+ *
+ * Recreates both demonstrated shapes of this hazard at once, in a single
+ * bounded test: a churn thread continuously creating/destroying throwaway
+ * event_loop instances (touching event_loop_slot_table's own mutex) races
+ * repeated fork() calls of a process that ALSO keeps one single-stripe,
+ * multi-threaded event_loop continuously busy dispatching a hot fd (so its
+ * poller/dispatch threads are constantly acquiring and releasing that
+ * loop's one and only stripe lock). Each forked child immediately tries
+ * one more event_loop_add on the exact loop it just inherited, guarded by
+ * alarm(3): before the fix, this reproduced a hung child in the large
+ * majority of trials (a single stripe maximizes the odds fork() lands
+ * mid-critical-section on it), which this test would otherwise never
+ * finish at all rather than fail visibly. */
+TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
+  fork_safety_churn_arg_t churn = {.stop = 0};
+  pthread_t churn_tid;
+  REQUIRE_EQ(pthread_create(&churn_tid, NULL, fork_safety_churn_thread, &churn),
+             0);
+
+  char *err = NULL;
+  event_loop loop = event_loop_create_with_mprocs(16, 1, 3, NULL, &err);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
+
+  int hotfd[2];
+  REQUIRE_EQ(pipe(hotfd), 0);
+  evl_set_nonblocking(hotfd[0]);
+  event_handlers_t h = {.on_readable = fork_safety_hot_fd_on_readable,
+                        .on_writable = NULL,
+                        .on_error = NULL};
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(hotfd[0], ccol_select_read), h, NULL, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  enum { TRIALS = 30 };
+  int hangs = 0;
+  for (int i = 0; i < TRIALS; i++) {
+    char byte = 'x';
+    REQUIRE_EQ(write(hotfd[1], &byte, 1), 1);
+
+    pid_t pid = fork();
+    REQUIRE_NE(pid, -1);
+    if (pid == 0) {
+      int dn = open("/dev/null", O_WRONLY);
+      if (dn >= 0) {
+        dup2(dn, STDOUT_FILENO);
+        dup2(dn, STDERR_FILENO);
+        close(dn);
+      }
+      /* Bounds this child's own lifetime in case the hazard this test
+       * guards against somehow still fires, rather than hanging the whole
+       * suite; the parent below distinguishes this from a clean exit via
+       * WIFEXITED. */
+      alarm(3);
+
+      int fd2[2];
+      if (pipe(fd2) != 0) _exit(2);
+      evl_set_nonblocking(fd2[0]);
+      event_handlers_t h2 = {0};
+      event_reg r2 = event_loop_add(
+          loop, selectable_from_fd(fd2[0], ccol_select_read), h2, NULL, NULL);
+      int rc = r2 ? 0 : 1;
+      if (r2 != EVENT_REG_INVALID) event_loop_remove(loop, r2);
+      _exit(rc);
+    }
+
+    int status = 0;
+    REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+    if (!WIFEXITED(status)) hangs++;
+  }
+
+  REQUIRE_EQ(hangs, 0);
+
+  atomic_store(&churn.stop, 1);
+  pthread_join(churn_tid, NULL);
+
+  event_loop_remove(loop, reg);
+  event_loop_destroy(loop);
+  close(hotfd[0]);
+  close(hotfd[1]);
+}
+
+typedef struct {
+  circular_queue *cq;
+  _Atomic bool locked;
+  int hold_ms;
+} queue_fork_lock_arg_t;
+
+static void *queue_fork_lock_thread(void *arg) {
+  queue_fork_lock_arg_t *a = (queue_fork_lock_arg_t *)arg;
+  circq_test_lock_mutex_for_tests(a->cq);
+  atomic_store(&a->locked, true);
+  /* Releases on its own fixed schedule, entirely independent of anything
+   * the forking thread does below: pthread_atfork's own prepare() handler
+   * is what MUST block on this exact mutex until this thread releases it
+   * (see _queue_atfork_prepare), so the forking thread must never be the
+   * one signalling this thread to let go; that would make the two
+   * threads wait on each other in a genuine cycle (fork() blocked in
+   * prepare() waiting for this thread to unlock; this thread waiting for a
+   * signal the forking thread can only send once fork() has returned), a
+   * self-inflicted deadlock in the test itself, not anything to do with
+   * the fix under test. */
+  struct timespec ts = {.tv_sec = a->hold_ms / 1000,
+                        .tv_nsec = (long)(a->hold_ms % 1000) * 1000000L};
+  nanosleep(&ts, NULL);
+  circq_test_unlock_mutex_for_tests(a->cq);
+  return NULL;
+}
+
+/* Regression test for the queue-mutex fork-safety gap fixed alongside this
+ * test: circular_queue/dynamic_queue/channel's own internal mutex was never
+ * walked by any pthread_atfork() handler, unlike every lock event_loop
+ * itself owns (see fork_does_not_inherit_a_locked_event_loop_mutex above
+ * and _queue_atfork_prepare's own doc comment in src/cthreadcomm.c). A
+ * cq->mutex held by some thread OTHER than the one calling fork() at the
+ * exact instant of fork() would previously be inherited by the child
+ * already locked, with no thread left alive there to ever unlock it,
+ * hanging every future operation on that same queue in the child.
+ *
+ * Unlike the event_loop regression test above (which relies on many
+ * repeated fork() trials racing a real, naturally-short critical section),
+ * this reproduces the hazard deterministically: circq_test_lock_mutex_for_
+ * tests/circq_test_unlock_mutex_for_tests (RUNNING_UNIT_TESTS-only) let a
+ * dedicated holder thread keep cq->mutex locked for a fixed, much-longer-
+ * than-any-real-critical-section window (HOLD_MS) before releasing it on
+ * its own schedule. The forking thread only calls fork() once it has
+ * confirmed the lock is genuinely held; with the fix's atfork prepare()
+ * handler in place, fork() itself must then BLOCK until the holder
+ * releases (its own mutex_lock(cq->mutex) cannot return before then),
+ * which is asserted below via a wall-clock lower bound on fork()'s own
+ * duration, proving the fix's blocking behaviour actually engaged this
+ * run, not merely that the race happened not to matter. */
+TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
+  char *err = NULL;
+  circular_queue *cq = circular_queue_create(4, &err);
+  REQUIRE_NE((void *)cq, NULL);
+
+  enum { HOLD_MS = 300 };
+  queue_fork_lock_arg_t arg = {.cq = cq, .locked = false, .hold_ms = HOLD_MS};
+  pthread_t holder;
+  REQUIRE_EQ(pthread_create(&holder, NULL, queue_fork_lock_thread, &arg), 0);
+
+  while (!atomic_load(&arg.locked)) {
+    /* Wait for the holder thread to confirm it has acquired cq->mutex
+     * before forking; a short, bounded spin (the holder thread does
+     * nothing else before this store) natively, but a bare atomic-load
+     * spin with no yield is not actually cheap under valgrind: memcheck
+     * time-slices every thread through one single instrumented execution
+     * engine rather than giving them true multi-core parallelism (see
+     * tests/cthreadpool/tests.c's own ctp_fork_feeder_thread for the
+     * identical finding), so this loop's own iteration count, however
+     * cheap each one is natively, still made this test's own `make
+     * memtest` run take tens of seconds to multiple minutes rather than a
+     * fraction of a second. sched_yield() caps this thread's own
+     * achievable spin rate to whatever the scheduler's own time-slice
+     * granularity allows, letting the holder thread actually get
+     * scheduled promptly instead of being starved by this thread
+     * continuously re-winning the single instrumented engine's turn. */
+    sched_yield();
+  }
+
+  /* The child reports its own result over a pipe rather than via its own
+   * process exit status: under make memtest, a forked child's own
+   * WEXITSTATUS as observed by the parent's waitpid() is not reliably the
+   * value the child itself passed to _exit(): valgrind's own
+   * --errors-for-leak-kinds=all/--error-exitcode machinery can override it
+   * based on whatever it finds "reachable" in the child's own inherited
+   * process image at exit time, unrelated to this test's own logic
+   * (confirmed directly: a debug build proved the child's own rv was
+   * genuinely ccol_success on every run, yet WEXITSTATUS still
+   * intermittently came back non-zero under valgrind). This mirrors
+   * clogger.c's own documented, independently-confirmed precedent for the
+   * identical mechanism (see its fork_safety section's
+   * child_can_log_after_fork history); only WIFEXITED is asserted below
+   * for the same reason: it still reliably distinguishes a genuine
+   * regression (re-hanging past alarm(3), or a real ccol_assert()/
+   * fatal_err() abort raising SIGABRT) from a clean exit, unlike
+   * WEXITSTATUS. */
+  int result_pipe[2];
+  REQUIRE_EQ(pipe(result_pipe), 0);
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+
+  pid_t pid = fork();
+  REQUIRE_NE(pid, -1);
+  if (pid == 0) {
+    /* `holder` does not exist here (fork() duplicates only the calling
+     * thread). This child process could only come into existence once the
+     * parent's own fork() call returned, which, per the fix, requires
+     * _queue_atfork_prepare's own mutex_lock(cq->mutex) to have already
+     * succeeded, i.e. the (vanished, in this process) holder thread must
+     * have already released it. cq->mutex is therefore unlocked here; this
+     * call returns immediately. Without the fix, cq->mutex was never
+     * touched by any atfork handler at all, so fork() would have returned
+     * near-instantly regardless of the still-live parent-side holder
+     * thread, handing this child a mutex snapshot that was still genuinely
+     * locked, hanging this exact call until alarm(3) kills the child. */
+    close(result_pipe[0]);
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    alarm(3);
+    c_message_t msg = {.data = NULL, .size = 0};
+    ccol_retval_t rv = circq_try_send_zc(cq, &msg);
+    char byte = (rv == ccol_success) ? 1 : 0;
+    test_write_retry_eintr(result_pipe[1], &byte, 1);
+    close(result_pipe[1]);
+    _exit(0);
+  }
+  close(result_pipe[1]);
+
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000LL + (t1.tv_nsec - t0.tv_nsec) / 1000000LL;
+  /* Proves the fix's own blocking behaviour actually engaged: fork() must
+   * have waited for close to the holder's own HOLD_MS before returning,
+   * not returned near-instantly while the lock was still genuinely held. */
+  REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
+
+  /* A short, bounded read: if the child hung past alarm(3) and was killed
+   * without ever writing, its copy of the write end closes with it, and
+   * this read returns 0 (EOF) rather than blocking forever, since the
+   * parent already closed its own write-end copy above. */
+  char byte = 0;
+  ssize_t n = read(result_pipe[0], &byte, 1);
+  close(result_pipe[0]);
+  REQUIRE_EQ((int)n, 1);
+  REQUIRE_EQ((int)byte, 1);
+
+  int status = 0;
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+  REQUIRE_TRUE(WIFEXITED(status));
+
+  pthread_join(holder, NULL);
+  circular_queue_destroy(cq);
+}
+
+static void fork_safety2_noop_readable(event_loop loop, ccol_selectable *sel,
+                                       void *arg) {
+  (void)loop;
+  (void)sel;
+  (void)arg;
+}
+
+typedef struct {
+  circular_queue *cq;
+  _Atomic bool started;
+} fork_safety2_sender_arg_t;
+
+static void *fork_safety2_sender_thread(void *arg) {
+  fork_safety2_sender_arg_t *a = (fork_safety2_sender_arg_t *)arg;
+  atomic_store(&a->started, true);
+  c_message_t msg = {.data = NULL, .size = 0};
+  circq_send_zc(a->cq, &msg);
+  return NULL;
+}
+
+/* Regression test for a real, reproduced AB-BA deadlock in an EARLIER
+ * version of the queue-mutex fork-safety fix above: that version registered
+ * its own queue-mutex atfork handling via a SEPARATE, independent
+ * at_fork() call from event_loop's own pre-existing one. pthread_atfork's
+ * prepare handlers run in REVERSE registration order, so which of two
+ * independent handler sets runs first at fork() time is purely an accident
+ * of which subsystem (a circular_queue, or an event_loop) happens to be
+ * used first in a given process; with a queue created before the first
+ * event_loop (registering the queue's own atfork triple first, so
+ * event_loop's own prepare (registered second) ran FIRST at fork()
+ * time), event_loop's prepare locked a queue-backed registration's own
+ * wait_mtx, and the queue registry's own (separate) prepare then tried to
+ * lock that SAME queue's cq->mutex: the reverse of the order
+ * _notify_waiter (called from any ordinary circq_send_zc/recv_zc from a
+ * concurrently running, unrelated thread) always uses. Confirmed via a
+ * standalone reproduction, gdb-verified: the forking thread deadlocked
+ * inside fork() itself (blocked locking cq->mutex from what was then a
+ * second, independent atfork prepare), while a concurrent sender thread
+ * was simultaneously blocked locking wait_mtx from inside _notify_waiter,
+ * a textbook cycle. Fixed by merging both subsystems' locking into ONE
+ * at_fork() registration (_cthreadcomm_atfork_prepare/_release/
+ * _child_release; see that function's own three-phase design comment in
+ * src/cthreadcomm.c), so there is no "which of two independent handler
+ * sets happens to run first" accident left to depend on.
+ *
+ * This test forces exactly the dangerous construction order (a circular_
+ * queue created before the first event_loop in a fresh process) and uses
+ * _notify_waiter_test_set_delay_us (RUNNING_UNIT_TESTS-only) to widen the
+ * real, otherwise only a handful of instructions long, window inside
+ * _notify_waiter between "cq->mutex already held" and "about to lock
+ * wait_mtx" to a duration a concurrent fork() call reliably lands inside,
+ * rather than relying on timing luck against a window this narrow.
+ *
+ * The entire scenario runs inside its own forked, alarm-bounded child
+ * process (mirroring this file's own established "isolate a risky
+ * operation, bound it from the parent via alarm+waitpid" precedent used
+ * elsewhere for fatal_err()-triggering tests): unlike every OTHER
+ * fork_safety test in this file, a regression here deadlocks the FORKING
+ * THREAD ITSELF, inside fork()'s own prepare() handler, before fork() ever
+ * returns to userspace, not merely a spawned child, which a plain
+ * alarm(3) inside that child could bound on its own. Isolating the whole
+ * scenario in its own child process, bounded by ITS OWN alarm(30), keeps a
+ * regression from ever hanging the outer test suite itself.
+ *
+ * Reports success over a pipe rather than via the child's own exit status,
+ * for the identical, independently-confirmed reason
+ * fork_does_not_inherit_a_locked_circular_queue_mutex's own doc comment
+ * above already documents (a forked child's WEXITSTATUS as observed by
+ * waitpid() is not reliably what the child itself passed to _exit() under
+ * make memtest's own --errors-for-leak-kinds=all/--error-exitcode
+ * machinery); only WIFEXITED is meaningful and even that is only used to
+ * reap the process here, since a hung child's own alarm(30) makes it exit
+ * via SIGALRM (WIFSIGNALED), and the pipe read (bounded by that same
+ * alarm, since the parent already closed its own write-end copy) is what
+ * actually distinguishes success from a reproduced regression. */
+TEST(fork_safety,
+     fork_does_not_deadlock_with_queue_registered_before_event_loop) {
+  int result_pipe[2];
+  REQUIRE_EQ(pipe(result_pipe), 0);
+
+  pid_t outer_pid = fork();
+  REQUIRE_NE(outer_pid, -1);
+  if (outer_pid == 0) {
+    close(result_pipe[0]);
+    /* A generous bound, not a tight one: this widened window (matching this
+     * project's own established precedent for valgrind-specific timing
+     * margin, e.g. chttpclient's async tests) must comfortably absorb
+     * valgrind's own real, substantial per-fork() overhead under a fully
+     * loaded test run (168 other tests' worth of accumulated heap/shadow-
+     * memory state ahead of this one), confirmed to occasionally approach
+     * several real seconds on its own with no bug involved at all; a
+     * regression this test exists to catch is expected to hang
+     * indefinitely regardless, so widening this costs nothing but a
+     * slower failure report on an actual regression. */
+    alarm(180);
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+
+    char byte = 0; /* 0 = failure/regression, unless proven otherwise below */
+
+    /* Forces the dangerous construction order: this is the first-ever
+     * circular_queue/event_loop use in this freshly forked process, so
+     * creating the queue before the loop deterministically makes the
+     * queue-mutex registry's own lazy init (and, pre-fix, its own separate
+     * at_fork() registration) happen first. */
+    char *err = NULL;
+    circular_queue *cq = circular_queue_create(4, &err);
+    event_loop loop =
+        cq ? event_loop_create(16, 1, 1, &err) : EVENT_LOOP_INVALID;
+    event_reg reg = EVENT_REG_INVALID;
+    if (cq && loop) {
+      event_handlers_t h = {.on_readable = fork_safety2_noop_readable};
+      reg = event_loop_add(loop, selectable_from_circq(cq, ccol_select_read), h,
+                           NULL, &err);
+    }
+
+    if (cq && loop && reg) {
+      _notify_waiter_test_set_delay_us(300000);
+
+      fork_safety2_sender_arg_t sarg = {.cq = cq, .started = false};
+      pthread_t sender;
+      pthread_create(&sender, NULL, fork_safety2_sender_thread, &sarg);
+      while (!atomic_load(&sarg.started)) {
+        /* Wait for the sender to confirm it is about to call
+         * circq_send_zc, before forking below. A bare atomic-load spin
+         * with no yield is not actually cheap under valgrind: memcheck
+         * time-slices every thread through one single instrumented
+         * execution engine rather than giving them true multi-core
+         * parallelism (see fork_does_not_inherit_a_locked_circular_
+         * queue_mutex's own identical fix above, and tests/cthreadpool/
+         * tests.c's own ctp_fork_feeder_thread), so this loop's own
+         * iteration count, however cheap each one is natively, made this
+         * test's own `make memtest` run take well over a minute (up to,
+         * and sometimes past, this test's own 30-second alarm) rather
+         * than a fraction of a second. sched_yield() caps this thread's
+         * own achievable spin rate to whatever the scheduler's own
+         * time-slice granularity allows, letting the sender thread
+         * actually get scheduled promptly instead of being starved by
+         * this thread continuously re-winning the single instrumented
+         * engine's turn. */
+        sched_yield();
+      }
+      /* Give the sender a moment to acquire cq->mutex and enter the
+       * widened _notify_waiter delay before the risky fork() call. */
+      usleep(50000);
+
+      pid_t inner_pid = fork();
+      if (inner_pid == 0) {
+        _exit(0);
+      } else if (inner_pid > 0) {
+        /* Reaching here at all (rather than hanging until alarm(30) above
+         * kills this process) is the actual thing under test. */
+        int inner_status = 0;
+        waitpid(inner_pid, &inner_status, 0);
+        byte = 1;
+      }
+
+      _notify_waiter_test_set_delay_us(0);
+      pthread_join(sender, NULL);
+    }
+
+    test_write_retry_eintr(result_pipe[1], &byte, 1);
+    close(result_pipe[1]);
+
+    if (reg != EVENT_REG_INVALID) event_loop_remove(loop, reg);
+    if (cq) {
+      c_message_t drain = {0};
+      circq_try_recv_zc(cq, &drain);
+      circular_queue_destroy(cq);
+    }
+    if (loop != EVENT_LOOP_INVALID) event_loop_destroy(loop);
+    _exit(0);
+  }
+
+  close(result_pipe[1]);
+  char byte = 0;
+  ssize_t n = read(result_pipe[0], &byte, 1);
+  close(result_pipe[0]);
+
+  int status = 0;
+  REQUIRE_EQ(waitpid(outer_pid, &status, 0), outer_pid);
+
+  REQUIRE_EQ((int)n, 1);
+  REQUIRE_EQ((int)byte, 1);
+}
+
+/* Regression test closing a real, previously-untested gap: no test in this
+ * suite ever actually called event_loop_shutdown/event_loop_destroy on an
+ * event_loop INHERITED across fork() (every existing fork test either only
+ * event_loop_add/_remove's on the inherited loop, or destroys a loop
+ * created fresh inside the child itself). This is exactly the scenario
+ * struct event_loop_s's own foreign_since_fork field exists to fix: fork()
+ * duplicates only the calling thread, so a forked child's own
+ * poller_thread field names a pthread_t this process never created and can
+ * never join, and loop->shutdown_efd is a real, kernel-level object still
+ * shared (not copied) with the parent's own genuinely-live poller thread.
+ * Per this module's own history, an event_loop_destroy() of an inherited,
+ * num_reactor_threads > 1 loop in a forked child reliably (5/5)
+ * SIGSEGV'd inside glibc's own __pthread_clockjoin_ex before the
+ * foreign_since_fork fixup existed, reached via ctpool_shutdown_drain's own
+ * worker-thread join loop; that reproduction was, at the time, only ever a
+ * standalone throwaway script, never a permanent regression test, leaving
+ * this exact crash unguarded against a future regression (e.g. a change to
+ * where the foreign_since_fork check sits relative to the self-call guard,
+ * or to cthreadpool.c's own analogous fixup this mechanism depends on).
+ *
+ * Also verifies the other half of the fix: destroying the loop in the
+ * child must not disturb the PARENT's still-live loop at all (in
+ * particular, it must never write loop->shutdown_efd, a kernel object
+ * shared across fork(), which would otherwise incorrectly wake the
+ * parent's own poller thread); checked by confirming the parent's
+ * identical, still-registered fd selectable keeps dispatching normally
+ * after the child has fully torn its own copy down. */
+TEST(fork_safety, event_loop_destroy_of_inherited_loop_in_child_is_safe) {
+  int result_pipe[2];
+  REQUIRE_EQ(pipe(result_pipe), 0);
+
+  char *err = NULL;
+  event_loop loop = event_loop_create_with_mprocs(8, 2, 3, NULL, &err);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
+
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  evl_set_nonblocking(pfd[0]);
+  evl_sync_ctx ctx;
+  evl_sync_ctx_init(&ctx);
+  event_handlers_t h = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), h, &ctx, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  pid_t pid = fork();
+  REQUIRE_NE(pid, -1);
+  if (pid == 0) {
+    close(result_pipe[0]);
+    close(pfd[0]);
+    close(pfd[1]);
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    /* Bounds this child's own lifetime in case the hazard this test guards
+     * against somehow still fires (a hang rather than a crash), rather
+     * than hanging the whole suite; the parent below distinguishes this
+     * from a clean exit via WIFEXITED, mirroring this file's own
+     * established convention for these fork-safety tests. */
+    alarm(5);
+
+    /* The actual misuse under test: destroying the exact, fully inherited
+     * loop handle, with its dispatch_pool workers and poller thread
+     * existing in this process only as inert, copy-on-write memory. */
+    event_loop_destroy(loop);
+
+    char byte = 1;
+    test_write_retry_eintr(result_pipe[1], &byte, 1);
+    close(result_pipe[1]);
+    _exit(0);
+  }
+
+  close(result_pipe[1]);
+  char byte = 0;
+  ssize_t n = read(result_pipe[0], &byte, 1);
+  close(result_pipe[0]);
+
+  int status = 0;
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+
+  /* Reaching a clean exit with the byte actually written is the real
+   * assertion: a SIGSEGV (the historically-reproduced regression) makes
+   * both fail (WIFSIGNALED, and the read() above returns 0 once the pipe's
+   * only writer dies without ever writing). Only WIFEXITED is checked on
+   * status itself, not WEXITSTATUS, mirroring this file's own established
+   * precedent elsewhere (a forked child's WEXITSTATUS as observed by the
+   * parent's waitpid() is not reliably what the child itself passed to
+   * _exit() under make memtest's own --errors-for-leak-kinds=all/
+   * --error-exitcode machinery; see e.g.
+   * fork_does_not_inherit_a_locked_circular_queue_mutex's own comment). */
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_EQ((int)n, 1);
+  REQUIRE_EQ((int)byte, 1);
+
+  /* The parent's OWN loop must still be fully alive and dispatching
+   * normally: the child's destroy of its own inherited copy must not have
+   * written the shared shutdown_efd (which would have woken the parent's
+   * still-live poller) or otherwise disturbed the parent's kernel-level
+   * epoll instance. */
+  char val = 'x';
+  REQUIRE_EQ(write(pfd[1], &val, 1), 1);
+  REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
+
+  event_loop_remove(loop, reg);
+  event_loop_destroy(loop);
+  evl_sync_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+#endif /* FORK_SAFETY_REQUIRED */

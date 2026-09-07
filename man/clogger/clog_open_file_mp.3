@@ -9,15 +9,21 @@ C Collections (libccollections, \-lccollections)
 
 clog clog_open_file_mp(const char *path, clog_level_t min_level,
                     const clog_rotation_cfg_t *cfg,
+                    const clog_async_cfg_t *async_cfg,
                     ccol_memmgmt_procs_t *mprocs);
 .fi
 .SH DESCRIPTION
 .nf
 Creates a new logger that writes to the file at path. The file is
 created if it does not exist (mode 0644) and opened for appending if
-it does. When the file already exists its current size is read via
-fstat(2) so that size-based rotation thresholds are applied correctly
-even when appending to a pre-existing log.
+it does. When the file already exists its current size is determined
+(via fstat(2), falling back to lseek(2) to the end of the file) so
+that size-based rotation thresholds are applied correctly even when
+appending to a pre-existing log. If cfg->size_rotation_enabled is
+true and the current size cannot be determined by either method, the
+call fails and returns CLOG_INVALID rather than silently starting the
+byte counter from zero and risking the file growing well past
+cfg->max_file_size before its first rotation.
 
 Log rotation is enabled only when cfg is non-NULL. Both size-based
 and time-based rotation may be enabled independently:
@@ -32,9 +38,16 @@ rotation (or since the logger was created). Checked before each write.
 
 When a rotation fires, the current file is atomically renamed to
 <path>.<YYYYMMDDHHMMSS>. If a file with that name already exists a
-collision suffix _1, _2, ... (up to _9999) is appended. A new empty
-log file is then opened. When cfg->max_rotated_files > 0, the oldest
-rotated files beyond the limit are deleted automatically.
+zero-padded collision suffix _0001, _0002, ... (up to _9999) is
+appended. A new empty log file is then opened. The oldest rotated
+files beyond cfg->max_rotated_files are then deleted automatically
+once the new live file is confirmed open; a rotation attempt that
+fails to open the new file never deletes any rotated file on that
+attempt's account. Only files whose name exactly
+matches <path>.<YYYYMMDDHHMMSS>[_NNNN][.gz] are ever considered for
+deletion or compression, so an unrelated file placed in the same
+directory (even one that starts with a similarly-formatted timestamp)
+is never touched.
 
 When cfg->compress_rotated is true, each rotated file is gzip-
 compressed via zlib immediately after rotation. The compressed file
@@ -49,28 +62,36 @@ Requires linking the application with -lz.
 path       Destination log file path. Copied internally.
 min_level  Messages below this level are silently dropped.
 cfg        Rotation configuration, or NULL to disable rotation.
-           Fields with value 0 fall back to their respective
+           Fields with value <= 0 fall back to their respective
            CLOG_DEFAULT_* constant:
              size_rotation_enabled  - enable size-based rotation
-             max_file_size          - bytes threshold (0 = 10 MiB)
+             max_file_size          - bytes threshold (<= 0 = 10 MiB)
              time_rotation_enabled  - enable time-based rotation
-             rotation_interval_secs - seconds (0 = 86400 = 1 day)
-             max_rotated_files      - files kept; 0 = no limit
+             rotation_interval_secs - seconds (<= 0 = 86400 = 1 day)
+             max_rotated_files      - files kept (<= 0 = 7)
              compress_rotated       - gzip-compress each rotated file
+async_cfg  Async logging configuration, or NULL for synchronous
+           logging. When non-NULL, log_*() calls only format their
+           own message and hand the rest off to a dedicated writer
+           thread; see clog_open_fd_mp(3) for the full field list.
+           Unlike cfg above, an all-zero struct still enables async
+           mode (every zero field falls back to its own default);
+           only a literal NULL keeps logging synchronous.
 mprocs     Custom allocator (malloc/free/calloc/realloc function
            pointers), or NULL to use the default system allocator.
            All four pointers must be set when mprocs is non-NULL;
            a partially-populated struct causes the call to return
-           NULL without creating a logger. The struct is copied
-           internally; the caller may free it after this call.
+           CLOG_INVALID without creating a logger. The struct is
+           copied internally; the caller may free it after this call.
            The allocator is inherited by all loggers derived from
            this one via clog_derive().
 .fi
 .SH RETURN VALUE
 .nf
 Returns a new logger handle on success.
-Returns NULL on failure (bad path, permission error, invalid mprocs,
-allocation failure, etc.).
+Returns CLOG_INVALID on failure (bad path, permission error, invalid mprocs,
+allocation failure, size rotation enabled but the pre-existing file's
+current size could not be determined, etc.).
 .fi
 .SH NOTES
 .nf
@@ -81,10 +102,22 @@ so no log lines are lost or interleaved across the rotation boundary.
 When compress_rotated is true, the gzip compression step runs after
 the new fd is already in use, outside the mutex, to avoid stalling
 concurrent log writers during the compression I/O.
+A handle open at the time of fork() remains fully usable in the
+child: logging, deriving, and closing it all continue to work
+correctly on both sides of the fork. A logger's async writer thread
+does not exist in a forked child; an async-enabled handle inherited
+into a child transparently falls back to synchronous logging there.
+
+When async_cfg is non-NULL, a batch built by the writer thread can
+span several records logged moments apart; a batch that happens to
+straddle a rotation boundary is written to whichever file is current
+at flush time, not split precisely at each record's own logging
+moment.
 .fi
 .SH "SEE ALSO"
 .BR clog_open_fd_mp (3),
 .BR clog_close (3),
+.BR clog_flush (3),
 .BR CLOG_DEFAULT_MAX_FILE_SIZE (3),
 .BR CLOG_DEFAULT_ROTATION_INTERVAL (3),
 .BR CLOG_DEFAULT_MAX_ROTATED_FILES (3)

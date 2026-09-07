@@ -7,8 +7,8 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <csort.h>
 
-csort_sort(collection, length, elem_size, getter_proc,
-           comparison_proc, mprocs);
+bool sorted = csort_sort(collection, length, elem_size, getter_proc,
+                          comparison_proc, mprocs);
 .fi
 .SH DESCRIPTION
 .nf
@@ -25,7 +25,19 @@ length          Number of elements in collection
 elem_size       Size of each element in bytes
 getter_proc     Function to get element at index
 comparison_proc Function to compare two elements
-mprocs          Memory management procedures, or NULL for default
+mprocs          Memory management procedures, or NULL for default; if
+                non-NULL, malloc/free/calloc/realloc must all be set
+.fi
+.SH RETURN VALUE
+.nf
+Returns true on success (including the trivial cases of a NULL
+collection, a length of 0 or 1, or an elem_size of 0, none of which
+have anything to do).
+Returns false if length exceeds the library's maximum element count,
+mprocs is non-NULL but does not have all four of malloc/free/calloc/
+realloc populated, the internal temporary merge buffer could not be
+allocated, or if length * elem_size would overflow size_t; the
+collection is left completely untouched in that case.
 .fi
 .SH NOTES
 .nf
@@ -33,6 +45,13 @@ Stable sort (preserves relative order of equal elements)
 O(n log n) time complexity in all cases
 O(n) space complexity for temporary merge buffer
 Iterative implementation (no recursion)
+
+getter_proc and comparison_proc must both be non-NULL whenever
+collection is non-NULL and length is 2 or greater. This holds even
+when elem_size is 0, a case where neither one would actually end up
+being called. Only a NULL collection or a length of 0 or 1 exempts a
+call from needing genuine, non-NULL procs. Violating this asserts
+(aborts the process); it does not return false.
 .fi
 .SH EXAMPLES
 .nf
@@ -40,7 +59,7 @@ Iterative implementation (no recursion)
 int arr[] = {3, 1, 2};
 void *getter(void *col, size_t i) { return &((int*)col)[i]; }
 int cmp(const void *a, const void *b) {
-  return *(int*)a - *(int*)b;
+  return (*(int*)a > *(int*)b) - (*(int*)a < *(int*)b);
 }
 csort_sort(arr, 3, sizeof(int), getter, cmp, NULL);
 .fi

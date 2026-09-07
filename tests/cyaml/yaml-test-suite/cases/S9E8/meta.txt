@@ -1,0 +1,2 @@
+fail=0
+name=Spec Example 5.3. Block Structure Indicators

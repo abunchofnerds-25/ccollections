@@ -46,8 +46,10 @@ typedef signed __int64 tau_i64;
 
 #else
 #ifdef __cplusplus
+#include <cstddef>
 #include <cstdint>
 #else
+#include <stddef.h>
 #include <stdint.h>
 #endif  // __cplusplus
 
@@ -81,8 +83,15 @@ typedef tau_u64 tau_ull;
 typedef tau_i64 tau_ll;
 #endif  // _WIN64
 #else
-typedef tau_u64 tau_ull;
-typedef tau_i64 tau_ll;
+// Previously hardcoded to tau_u64/tau_i64 unconditionally, which contradicts
+// this block's own "tau_ull --> size_t" / "tau_ll --> ptrdiff_t" comment and
+// the static assertions below it: on a 32-bit target (e.g. i386), size_t and
+// ptrdiff_t are 4 bytes while tau_u64/tau_i64 are always 8, so the assertions
+// that tau_ull/tau_ll match tau_uptr/tau_iptr's width failed to even compile.
+// Defined directly in terms of size_t/ptrdiff_t instead, matching the
+// documented intent and what the assertions actually check for.
+typedef size_t tau_ull;
+typedef ptrdiff_t tau_ll;
 #endif  // _MSC_VER
 
 // (U)Intptr is only here for semantic reasons really as this library will only

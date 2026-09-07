@@ -75,7 +75,15 @@ SOFTWARE.
  * - cjson_create_*(), cjson_parse(), cjson_parse_mp(), and cjson_clone()
  *   return fully owned trees.
  * - cjson_list_push() and cjson_dictionary_set() transfer ownership of the
- * child to the parent; do not free it afterwards.
+ *   child to the parent; do not free it afterwards. The child must not
+ *   already be attached to a list/dictionary parent, and must not already
+ *   contain the target container within its own subtree (a fresh node or a
+ *   fresh cjson_clone() is fine; a borrowed reference from
+ *   cjson_get()/cjson_list_get()/cjson_dictionary_get(), the target
+ *   container itself, an ancestor of the target container, or a node
+ *   removed via cjson_list_remove()/cjson_dictionary_remove() (which
+ *   always deep-frees what it removes) is not); see each function's own
+ *   doc comment for the exact rule and its one no-op exception.
  * - cjson_get() returns a NON-OWNING reference valid until the tree is mutated
  *   or destroyed.
  * - cjson_destroy() recursively frees the entire subtree and NULLs the handle.
@@ -216,6 +224,9 @@ static inline cjson cjson_create_dictionary(void) {
  * @param mp        Custom allocator for all nodes in the resulting tree,
  *                  or NULL for the default allocator.
  * @return Root cjson node on success, NULL on parse failure.
+ *
+ * Number parsing always treats '.' as the decimal separator, per RFC 8259,
+ * regardless of the calling thread's ambient LC_NUMERIC locale setting.
  */
 cjson cjson_parse_mp(const char *json_str, char **err_str,
                      ccol_memmgmt_procs_t *mp);
@@ -256,6 +267,10 @@ static inline cjson cjson_parse_n(const char *json_str, size_t len,
  * The returned buffer is allocated with the same allocator as the root node.
  * Free it with cjson_serialize_free(), passing the same mp that was used to
  * create the tree (NULL for the default allocator).
+ *
+ * A float/double value is always formatted with '.' as the decimal
+ * separator, per RFC 8259, regardless of the calling thread's ambient
+ * LC_NUMERIC locale setting.
  *
  * @param node  Root of the (sub-)tree.
  * @return Heap-allocated null-terminated string; free with
@@ -371,9 +386,33 @@ size_t cjson_dictionary_size(cjson node);
  *
  * Ownership of @p child transfers to @p arr; do not free it afterwards.
  *
+ * @p child must not already be attached to a list/dictionary parent (it must
+ * be a freshly created node, or a fresh cjson_clone(); never a borrowed
+ * reference returned by cjson_get()/cjson_list_get()/cjson_dictionary_get(),
+ * and never @p arr itself). Note that cjson_list_remove() and
+ * cjson_dictionary_remove() always deep-free the node they remove and never
+ * hand back a live handle to it, so a removed node is never a valid @p child
+ * either. Passing an already-attached node is rejected with
+ * ccol_invalid_args and @p child is left completely untouched, still owned
+ * by whatever it was already attached to; accepting it would give the same
+ * node two owners, each of which would independently free it when its own
+ * parent is destroyed.
+ *
+ * @p child must also not already contain @p arr somewhere within its own
+ * subtree (i.e. @p child must not be an ancestor of @p arr in the tree as it
+ * stands today): attaching it would make @p arr both a new ancestor of
+ * @p child (via this call) and an existing descendant of it, a graph cycle.
+ * This is rejected the same way (ccol_invalid_args, @p child untouched); if
+ * the check itself cannot be completed under memory pressure,
+ * ccol_not_enough_memory is returned instead, since silently proceeding
+ * could let an undetected cycle through.
+ *
  * @param arr    Target list node (must be CJSON_LIST).
  * @param child  Child to append.
- * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ * @return ccol_success, ccol_invalid_args (arr/child NULL or wrong type,
+ *         child already attached elsewhere, or child already contains arr),
+ *         ccol_not_enough_memory, or ccol_container_full if arr has already
+ *         reached its maximum element count.
  */
 ccol_retval_t cjson_list_push(cjson arr, cjson child);
 
@@ -386,13 +425,33 @@ cjson cjson_list_get(cjson arr, size_t index);
 /**
  * @brief Set (insert or replace) a key in an dictionary.
  *
- * Ownership of @p child transfers to @p obj.  If the key already exists the
- * previous child is deep-freed before the new one is stored.
+ * Ownership of @p child transfers to @p obj.  If the key already exists, the
+ * new child is stored first and the previous child is deep-freed only once
+ * it is safely in place, so a failed insert never leaves the slot dangling.
+ *
+ * @p child must not already be attached to a list/dictionary parent, with
+ * one exception: passing back the exact node already stored under @p key
+ * (e.g. `cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k))`) is a
+ * harmless no-op. Any other already-attached @p child (stored under a
+ * different key, in a different container, or @p obj itself) is rejected
+ * with ccol_invalid_args and left completely untouched, for the same reason
+ * described on cjson_list_push(), which also covers cjson_list_remove()
+ * and cjson_dictionary_remove(): both always deep-free the node they
+ * remove, so a removed node is never a valid @p child either.
+ *
+ * @p child must also not already contain @p obj somewhere within its own
+ * subtree (i.e. @p child must not be an ancestor of @p obj in the tree as it
+ * stands today); see cjson_list_push()'s own doc comment for why this is
+ * rejected the same way a double-attach is, and why the check itself can
+ * fail with ccol_not_enough_memory under memory pressure.
  *
  * @param obj    Target dictionary node (must be CJSON_DICTIONARY).
  * @param key    Null-terminated key string; a copy is stored internally.
  * @param child  Value node.
- * @return ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ * @return ccol_success, ccol_invalid_args (obj/key/child NULL or wrong type,
+ *         child already attached elsewhere, or child already contains obj),
+ *         ccol_not_enough_memory, or ccol_container_full if obj has already
+ *         reached its maximum element count.
  */
 ccol_retval_t cjson_dictionary_set(cjson obj, const char *key, cjson child);
 
@@ -475,7 +534,8 @@ cjson cjson_clone(cjson node);
  * Example:
  * @code
  * {
- *   cjson_declare_scoped(root) = cjson_parse("{\"k\":1}", NULL);
+ *   cjson_declare_scoped(root);
+ *   root = cjson_parse("{\"k\":1}", NULL);
  *   // root is freed here automatically
  * }
  * @endcode
@@ -487,7 +547,7 @@ cjson cjson_clone(cjson node);
 /*                         DESTRUCTION                                        */
 /* ========================================================================== */
 
-/** @brief Recursively free a DOM tree (internal — prefer the macro). */
+/** @brief Recursively free a DOM tree (internal; prefer the macro). */
 void __cjson_destroy(cjson node);
 
 /** @brief RAII cleanup helper for use with _ccol_destructor. */
@@ -502,7 +562,7 @@ static inline void ___cjson_destroy(cjson *node) {
  * @brief Recursively free a DOM tree and NULL the handle.
  *
  * Safe to call on NULL.  Uses each node's stored allocator (m_procs) to free
- * its own memory — no external allocator parameter needed.
+ * its own memory; no external allocator parameter needed.
  */
 #define cjson_destroy(node)  \
   do {                       \
@@ -513,7 +573,7 @@ static inline void ___cjson_destroy(cjson *node) {
   } while (0)
 
 /* ========================================================================== */
-/*                         PATH NAVIGATION — BACK-END                        */
+/*                         PATH NAVIGATION - BACK-END                        */
 /* ========================================================================== */
 
 /**
@@ -536,8 +596,11 @@ cjson _cjson_get(cjson root, const char *path);
  * _cjson_set_typed, including escape sequences.
  *
  * @return ccol_success on success.
- *         ccol_invalid_args for a NULL/empty path or wrong parent type.
- *         ccol_key_not_found if any path component is absent.
+ *         ccol_invalid_args for a NULL/empty path, an empty path component
+ *         (leading, trailing, or consecutive dots), a wrong parent type, or
+ *         a malformed "#N" index.
+ *         ccol_key_not_found if the parent path, or a syntactically valid
+ *         leaf key / index, is absent.
  *         ccol_not_enough_memory on allocation failure.
  */
 ccol_retval_t _cjson_delete(cjson root, const char *path);
@@ -561,8 +624,17 @@ ccol_retval_t _cjson_delete(cjson root, const char *path);
  *                         (e.g. a string literal captured via typeof); false
  *                         when raw points at a const char * variable.  Used
  *                         only when type == CJSON_STRING.
- * @return ccol_success on success, ccol_invalid_args / ccol_key_not_found /
- *         ccol_not_enough_memory on failure.
+ * @return ccol_success on success.
+ *         ccol_invalid_args for a NULL root/path, an empty path or path
+ *         component (leading, trailing, or consecutive dots), a wrong
+ *         parent type, a malformed "#N" index, an unsupported C type, or a
+ *         non-NULL void * value (only a bare NULL is accepted for that C
+ *         type; see cjson_set()'s own doc comment).
+ *         ccol_key_not_found if the parent path, or a syntactically valid
+ *         but out-of-range list index, is absent.
+ *         ccol_not_enough_memory on allocation failure.
+ *         ccol_container_full if the parent dictionary has already reached
+ *         its maximum element count (creating a new key only).
  */
 ccol_retval_t _cjson_set_typed(cjson root, const char *path,
                                cjson_node_type_t type, void *raw,
@@ -572,6 +644,28 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
 /* ========================================================================== */
 /*                         COMPILE-TIME TYPE HELPERS                         */
 /* ========================================================================== */
+
+/**
+ * @brief Sentinel returned by _cjson_type_of() for a C type that is not one of
+ * the types cjson_set() documents as accepted (bool, any integer type, float,
+ * double, char *, const char *, or a bare NULL); e.g. long double, a
+ * struct, or any other type _Generic's default association below catches.
+ * A bare `NULL` literal (type void *) is deliberately given its own explicit
+ * association below rather than falling into this default, since passing it
+ * is documented, intentional usage (cjson_set's own doc comment: "Passing
+ * NULL sets the leaf to CJSON_NULL"), not a caller mistake.
+ *
+ * This is deliberately NOT a real cjson_node_type_t enumerator: it is never
+ * stored in a node or returned by cjson_type(), only ever passed transiently
+ * as the `type` argument of _cjson_set_typed(), whose existing type-validation
+ * switch (node_reinit_scalar() in cjson.c) already rejects any value outside
+ * {CJSON_NULL, CJSON_BOOL, CJSON_INTEGER, CJSON_FLOAT, CJSON_STRING} with
+ * ccol_invalid_args before touching the target node. Using a value distinct
+ * from every real enumerator (rather than defaulting to CJSON_NULL) is what
+ * makes that guard actually fire for an unsupported type instead of being
+ * silently bypassed by one that happens to already be on the accept-list.
+ */
+#define _CJSON_TYPE_UNSUPPORTED ((cjson_node_type_t)0x7f)
 
 /**
  * @brief Map a C expression's compile-time type to cjson_node_type_t.
@@ -598,7 +692,8 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
         double: CJSON_FLOAT,                                                \
         char *: CJSON_STRING,                                               \
         const char *: CJSON_STRING,                                         \
-        default: CJSON_NULL);                                               \
+        void *: CJSON_NULL,                                                 \
+        default: _CJSON_TYPE_UNSUPPORTED);                                  \
     _Pragma("GCC diagnostic pop");                                          \
     _cjt;                                                                   \
   })
@@ -621,7 +716,8 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
       double: CJSON_FLOAT,               \
       char *: CJSON_STRING,              \
       const char *: CJSON_STRING,        \
-      default: CJSON_NULL)
+      void *: CJSON_NULL,                \
+      default: _CJSON_TYPE_UNSUPPORTED)
 #endif
 
 /**
@@ -687,10 +783,14 @@ ccol_retval_t _cjson_set_typed(cjson root, const char *path,
  * @brief Write a C scalar to the DOM leaf addressed by a dot-separated path.
  *
  * Accepted value types: bool, any integer type, float, double, char *,
- * const char *.  Passing NULL sets the leaf to CJSON_NULL.
+ * const char *.  Passing NULL sets the leaf to CJSON_NULL.  A non-NULL
+ * void * value (e.g. a variable of type void * that does not happen to hold
+ * NULL) is rejected with ccol_invalid_args rather than being silently
+ * written as CJSON_NULL: only the literal/valued NULL is treated as an
+ * intentional null.
  *
  * The leaf is created when absent (its immediate parent must already exist).
- * If the leaf exists its type is changed unconditionally — existing list or
+ * If the leaf exists its type is changed unconditionally; existing list or
  * dictionary subtrees are deep-freed automatically.
  *
  * @param root  Root cjson handle.

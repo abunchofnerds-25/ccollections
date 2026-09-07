@@ -6,33 +6,44 @@
 # TLS handshake).
 #
 # These blocks are allocated via OpenSSL's own CRYPTO_malloc/CRYPTO_zalloc
-# wrappers and kept alive for the lifetime of the process by libcrypto's own
-# internal static/thread-local state; they are only released by an explicit
+# wrappers (or, depending on the exact libcrypto build, malloc/realloc
+# called directly from a caller those wrappers were inlined into) and kept
+# alive for the lifetime of the process by libcrypto's own internal
+# static/thread-local state; they are only released by an explicit
 # OPENSSL_cleanup() call, which this codebase does not make (calling it
 # unconditionally at process exit is not safe in a library meant to be
 # embedded in a larger application that may still have other OpenSSL
 # handles in use). They are not leaks, matching the same category already
 # documented in tests/ctls/openssl_internal.supp (this file's origin) and
 # tests/chttpclient/ld_so_dlopen.supp (glibc's own NSS module loading).
-
+#
+# Matched by the allocation's own ORIGIN LIBRARY rather than a specific
+# wrapper function name: whether CRYPTO_malloc/CRYPTO_zalloc/CRYPTO_strdup/
+# CRYPTO_strndup/BN_MONT_CTX_new/OPENSSL_sk_deep_copy (and others) show up as
+# their own separate frame between malloc/realloc and the rest of the stack,
+# or get inlined away entirely, is a distro/compiler/optimization-level
+# choice of however that particular libcrypto.so.3 was built, not something
+# this codebase controls or can rely on being stable across environments;
+# confirmed directly (same libcrypto version and test, different distro
+# builds) to vary exactly this way. Any "still reachable" block whose
+# backtrace includes at least one frame inside libcrypto.so.3 or
+# libssl.so.3 is, by construction, memory this codebase's own code did not
+# allocate and cannot safely free, regardless of which of OpenSSL's own many
+# internal call paths produced it or how many of its own wrapper frames that
+# particular build happened to inline away.
 {
-   openssl_internal_rsa_bn_caches_still_reachable
+   openssl_internal_still_reachable_via_libcrypto
    Memcheck:Leak
    match-leak-kinds: reachable
-   fun:malloc
-   fun:CRYPTO_malloc
+   ...
+   obj:*/libcrypto.so.3
    ...
 }
-
-# Same category, reached through OpenSSL 3's provider/encoder framework
-# (OSSL_ENCODER_CTX_new_for_pkey, via X509_set_pubkey -> X509_PUBKEY_set),
-# which grows an internal cache via realloc rather than a fresh malloc.
 {
-   openssl_internal_encoder_cache_still_reachable
+   openssl_internal_still_reachable_via_libssl
    Memcheck:Leak
    match-leak-kinds: reachable
-   fun:realloc
    ...
-   fun:OSSL_ENCODER_CTX_new_for_pkey
+   obj:*/libssl.so.3
    ...
 }

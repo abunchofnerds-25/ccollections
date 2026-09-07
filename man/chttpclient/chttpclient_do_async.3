@@ -37,18 +37,29 @@ Any interim informational (1xx) response the server sends is
 transparently discarded, and reading continues on the same
 connection for the real response; the future is never fulfilled
 with a 1xx status as though it were the final answer. RFC 8297 "103
-Early Hints" is the most common real-world example. (chttpclient_do_
-async never sends "Expect: 100-continue" itself; see chttp_request_t.
-expect_continue's own doc comment.) A server that never stops
-sending interim responses is not tolerated indefinitely: after 64
+Early Hints" is the most common real-world example. A request with
+req->expect_continue set (see chttp_request_t's own doc comment)
+sends "Expect: 100-continue" and withholds the body until the
+server's interim response, exactly like chttpclient_do; the wait is
+implemented as part of this function's own non-blocking dispatch
+rather than a blocking call. A server that never stops sending
+interim responses is not tolerated indefinitely: after 64
 consecutive discarded interim responses on one hop, the future is
 fulfilled with ccol_http_transfer_aborted instead of waiting
-forever.
+forever. This cap applies independently to the wait for "100
+Continue" and to the final response read that follows it: a "100
+Continue" (or the wait simply timing out) is itself a genuine,
+non-discarded outcome, so it resets the count; a hop using
+req->expect_continue may therefore discard up to 64 interim
+responses while waiting for "100 Continue" and up to 64 more while
+reading the final response, not merely 64 combined.
 
 A request header (or, on a request with a body, body.content_type)
 containing an embedded CR or LF byte, or a body-carrying request
-(POST, PUT, or PATCH) whose caller-set Content-Length header does
-not exactly match the actual body length, is a distinct case: it can
+(POST, PUT, or PATCH) whose caller-set Content-Length header is not
+a plain unsigned decimal digit string (no leading '+'/'-', no
+embedded whitespace) exactly matching the actual body length, is a
+distinct case: it can
 only be detected once the request is actually serialised for the
 wire, which happens after the future already exists (unlike a
 malformed URL or unusable TLS config, both checked up front). Such a

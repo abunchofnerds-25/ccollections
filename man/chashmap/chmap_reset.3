@@ -20,7 +20,7 @@ after reset regardless of whether the resize succeeds.
 chm                      Hash map to reset
 new_bucket_array_size    New bucket count (0 = keep current size;
                          values < 16 are raised to 16; otherwise
-                         rounded to the nearest power of two)
+                         rounded up to the next power of two)
 .fi
 .SH RETURN VALUE
 .nf

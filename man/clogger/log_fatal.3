@@ -38,8 +38,21 @@ fmt    printf-style format string.
 .SH NOTES
 .nf
 Backtrace requires the binary to be linked with -rdynamic.  On
-platforms without execinfo.h the backtrace lines are silently omitted
-but the process still terminates.
+platforms without execinfo.h, or on a transient allocation failure
+while resolving symbol names, capture itself fails but the process
+still terminates; a single "backtrace unavailable" marker line (or, in
+CLOG_FMT_SYSLOG mode, marker record) is emitted in place of the usual
+per-frame output, so the omission is visible rather than silent.
+Under sustained memory pressure, or when the record's own content
+already leaves little room before the internal buffer cap, an
+individual backtrace frame that cannot be formatted is likewise
+omitted (in favor of any shorter frame that follows) rather than
+written incomplete; every line that is written is always a complete,
+well-formed record.  If none of the frames fit at all, the same
+"backtrace unavailable" marker used on capture failure takes their
+place.  In CLOG_FMT_JSON mode, if the backtrace cannot be embedded at
+all under such pressure, a "bt_error":"unavailable" key takes the
+place of "bt" so the omission is visible rather than silent.
 
 Because log_fatal terminates the process immediately, any logger
 handles that have not been closed are not explicitly freed.  This is

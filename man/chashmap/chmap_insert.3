@@ -27,6 +27,12 @@ val      Value to associate with key
 Terminates program only on true failure, not on existing-key update
 Automatically takes address of key and value
 Handles both value types and string types correctly
+For a float or double key, equality is bitwise except that -0.0 and
+0.0 are canonicalized to the same key; NaN keys follow bitwise
+equality, not IEEE 754 equality (see chmap_construct(3))
+For a long double key, equality is value-based (native ==) rather
+than bitwise, unlike every other key type; every NaN long double
+collapses into a single key (see chmap_construct(3))
 .fi
 .SH EXAMPLES
 .nf

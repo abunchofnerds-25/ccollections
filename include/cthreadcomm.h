@@ -72,7 +72,9 @@ typedef struct c_message_t {
  * Send operations block when the queue is full until space becomes available.
  *
  * @param max_size Maximum number of messages the queue can hold (1 to
- * max_elem_count)
+ * SIZE_MAX / sizeof(c_message_t); rejected with ccol_invalid_args if larger,
+ * since the queue is backed by a single max_size * sizeof(c_message_t)
+ * array and a larger value would overflow that computation)
  * @param mmgmt_procs Custom memory management procedures, or NULL to use
  * default malloc/free
  * @param err_str Optional pointer to receive error string on failure (pass NULL
@@ -115,18 +117,28 @@ void __circular_queue_destroy(circular_queue *cq);
  * @brief Destroy a circular queue and set pointer to NULL
  *
  * Frees all resources associated with the queue. If there are any messages
- * still in the queue, the function __circular_queue_destroy which is called
- * by this macro will assert - drain the queue before destroying.
+ * still in the queue, or if a ccol_select()/ccol_select_timed() call or an
+ * event_loop registration (event_loop_add with selectable_from_circq/
+ * selectable_from_chan) is still watching this queue, the function
+ * __circular_queue_destroy which is called by this macro will assert -
+ * drain the queue, and call event_loop_remove() (or let every
+ * ccol_select()/ccol_select_timed() call watching this queue return) before
+ * destroying.
  *
  * @param cq Circular queue to destroy (will be set to NULL after destruction)
  *
  * @warning Messages remaining in the queue are not automatically freed
+ * @warning Destroying a queue that a ccol_select()/ccol_select_timed() call
+ * or an event_loop registration is still watching would otherwise be a
+ * use-after-free (the watcher's own waiter node still references this
+ * queue's mutex); asserted against instead, the same way a non-empty queue
+ * already is
  * @note Safe to call with NULL pointer
  */
 #define circular_queue_destroy(cq)  \
   do {                              \
     __circular_queue_destroy((cq)); \
-    cq = NULL;                      \
+    (cq) = NULL;                    \
   } while (0)
 
 /**
@@ -379,19 +391,28 @@ void __dynamic_queue_destroy(dynamic_queue *dq);
  * @brief Destroy a dynamic queue and set pointer to NULL
  *
  * Frees all resources associated with the queue including all linked list
- * nodes. If there are any messages still in the queue, the function
- * __dynamic_queue_destroy which is called by this macro will assert - drain
- * the queue before destroying.
+ * nodes. If there are any messages still in the queue, or if a
+ * ccol_select()/ccol_select_timed() call or an event_loop registration
+ * (event_loop_add with selectable_from_dynq/selectable_from_chan) is still
+ * watching this queue, the function __dynamic_queue_destroy which is called
+ * by this macro will assert - drain the queue, and call event_loop_remove()
+ * (or let every ccol_select()/ccol_select_timed() call watching this queue
+ * return) before destroying.
  *
  * @param dq Dynamic queue to destroy (will be set to NULL after destruction)
  *
  * @warning Messages remaining in the queue are not automatically freed
+ * @warning Destroying a queue that a ccol_select()/ccol_select_timed() call
+ * or an event_loop registration is still watching would otherwise be a
+ * use-after-free (the watcher's own waiter node still references this
+ * queue's mutex); asserted against instead, the same way a non-empty queue
+ * already is
  * @note Safe to call with NULL pointer
  */
 #define dynamic_queue_destroy(dq)  \
   do {                             \
     __dynamic_queue_destroy((dq)); \
-    dq = NULL;                     \
+    (dq) = NULL;                   \
   } while (0)
 
 /**
@@ -545,7 +566,10 @@ size_t dynmq_msg_count(dynamic_queue *dq);
  * thread becomes the owner. Direction is automatically selected based on
  * the calling thread's ID.
  *
- * @param max_size Maximum number of messages each direction can hold
+ * @param max_size Maximum number of messages each direction can hold; subject
+ * to the same bound as circular_queue_create_with_mprocs's own max_size
+ * (at most SIZE_MAX / sizeof(c_message_t)), since each direction is backed
+ * by one such queue
  * @param mmgmt_procs Custom memory management procedures, or NULL to use
  * default malloc/free
  * @param err_str Optional pointer to receive error string on failure (pass NULL
@@ -557,6 +581,11 @@ size_t dynmq_msg_count(dynamic_queue *dq);
  * @note Creating thread is designated as owner; all others are workers
  * @note Direction is automatically selected based on thread ID
  * @note The channel must be destroyed with channel_destroy() when done
+ * @note The owner thread must remain alive for as long as the channel is in
+ * use: routing is decided by comparing the calling thread's ID against the
+ * ID captured at creation time, and the underlying OS thread-ID type may be
+ * reused for an unrelated, later thread once the original owner exits,
+ * which would then be silently misrouted as the owner too
  *
  * @see channel_create
  * @see channel_destroy
@@ -592,18 +621,27 @@ void __channel_destroy(channel *ch);
  *
  * Frees all resources associated with the channel including both internal
  * circular queues. If there are any messages still in any of the underlying
- * queues, the function __channel_destroy which is called by this macro will
- * assert - drain the both directions before destroying.
+ * queues, or if a ccol_select()/ccol_select_timed() call or an event_loop
+ * registration (event_loop_add with selectable_from_chan) is still watching
+ * either direction, the function __channel_destroy which is called by this
+ * macro will assert - drain both directions, and call event_loop_remove()
+ * (or let every ccol_select()/ccol_select_timed() call watching either
+ * direction return) before destroying.
  *
  * @param ch Channel to destroy (will be set to NULL after destruction)
  *
  * @warning Messages remaining in either direction are not automatically freed
+ * @warning Destroying a channel that a ccol_select()/ccol_select_timed() call
+ * or an event_loop registration is still watching would otherwise be a
+ * use-after-free (the watcher's own waiter node still references the
+ * underlying queue's mutex); asserted against instead, the same way
+ * messages remaining in either direction already are
  * @note Safe to call with NULL pointer
  */
 #define channel_destroy(ch)  \
   do {                       \
     __channel_destroy((ch)); \
-    ch = NULL;               \
+    (ch) = NULL;             \
   } while (0)
 
 /**
@@ -836,7 +874,9 @@ typedef enum {
  * ccol_select_read;  wait until the queue has at least one message to receive.
  * ccol_select_write; wait until the queue has room to accept at least one send
  *                   (circular_queue: msg_count < max_size && !writing_disabled;
- *                    dynamic_queue: !writing_disabled).
+ *                    dynamic_queue: !writing_disabled && msg_count <
+ *                    max_elem_count, the same ccol_container_full ceiling
+ *                    dynmq_send_zc() itself enforces).
  *
  * Neither direction is consumed or reserved by ccol_select() itself; the
  * caller must call circq_try_recv_zc/dynmq_try_recv_zc (read-direction win)
@@ -969,13 +1009,20 @@ ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir);
  *
  * @param ready_index Set to the index of the selectable that became ready
  *                    (valid only when ccol_success is returned)
- * @param n           Number of selectables (must be >= 1)
+ * @param n           Number of selectables (must be >= 1 and <= INT_MAX; the
+ * matched selectable's own index is narrowed through a plain int internally,
+ * so a larger n is rejected outright rather than risking a truncated
+ * *ready_index. Also, separately, no larger than SIZE_MAX / sizeof(internal
+ * waiter node), since this call backs its own per-selectable waiter-node
+ * array with a single n-sized allocation; no realistic caller can reach
+ * either ceiling)
  * @param selectables Array of n ccol_selectable values to monitor
  *
  * @return ccol_success           A selectable is ready; *ready_index is set.
  *                                The caller must perform its own explicit
  *                                receive/send afterward (see above).
- * @return ccol_invalid_args      Any argument is NULL/zero; a queue selectable
+ * @return ccol_invalid_args      Any argument is NULL/zero; n too large (see
+ *                                the n parameter above); a queue selectable
  *                                contains a NULL queue pointer; an fd
  * selectable has fd < 0; or an unknown type/dir value
  * @return ccol_not_enough_memory Internal waiter-node allocation (one node per
@@ -1001,18 +1048,25 @@ ccol_retval_t ccol_select(size_t *ready_index, size_t n,
  *                    Valid when ccol_success is returned.
  *                    Unmodified on ccol_timed_out, ccol_invalid_args,
  *                    ccol_not_enough_memory, or ccol_unexpected_failure.
- * @param n           Number of selectables (must be >= 1)
+ * @param n           Number of selectables (see ccol_select's own n
+ *                    parameter for the exact bound)
  * @param selectables Array of n ccol_selectable values to monitor
  * @param timeout_ms  Maximum time to wait in milliseconds.  Pass -1 for an
  *                    infinite wait (same behaviour as ccol_select).  Pass 0
- *                    to poll without blocking.
+ *                    to poll without blocking. Any other negative value is
+ *                    also treated as an infinite wait, identically to -1.
  *
  * @return ccol_success           A selectable is ready; *ready_index is set.
  * @return ccol_timed_out         timeout_ms elapsed without any selectable
  *                                becoming ready; *ready_index is unmodified.
  * @return ccol_invalid_args      (same conditions as ccol_select)
  * @return ccol_not_enough_memory (same conditions as ccol_select)
- * @return ccol_unexpected_failure (same conditions as ccol_select)
+ * @return ccol_unexpected_failure epoll_create1, eventfd, or epoll_ctl
+ *                                failed (same as ccol_select); or, when no
+ *                                fd selectables are present and timeout_ms
+ *                                is non-negative, the internal timed
+ *                                condition-variable wait itself reported an
+ *                                unexpected system error
  *
  * @note Uses CLOCK_MONOTONIC for the deadline so system time adjustments do
  *       not affect the timeout.
@@ -1128,6 +1182,20 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
  *    code that calls event_loop_modify from within an in-flight callback
  *    (a supported, commonly-used pattern) does not race a second,
  *    concurrently-collected dispatch for that same registration.
+ *
+ * A third property holds independently of num_reactor_threads, for every
+ * configuration: event_loop_modify/_pause/_resume/_remove/
+ * event_loop_reg_generation may all be called concurrently, from different
+ * threads, against the very same event_reg (e.g. one thread removing a
+ * registration while another thread, racing it, tries to modify or query
+ * the same one), and, more generally, at any time at all, no matter how
+ * long after some other thread's event_loop_remove() of that same
+ * registration. Every use of an event_reg handle is resolved through that
+ * loop's own generation-tagged slot table before anything is dereferenced
+ * (see event_reg's own doc comment), so a stale or already-removed handle
+ * is always detected as such, deterministically, never a use-after-free;
+ * the losing side of a race simply sees the registration as already
+ * removed (ccol_invalid_args, or generation 0).
  * See event_loop_reg_generation() for the caller-visible identity token this
  * makes available for a registration's own defensive bookkeeping across fd
  * reuse; a separate, additional concern from the two guarantees above,
@@ -1156,8 +1224,28 @@ typedef uint64_t event_loop;
 /** @brief Sentinel value for "no loop"; the event_loop analogue of NULL. */
 #define EVENT_LOOP_INVALID ((event_loop)0)
 
-/** @brief Opaque handle to a single event_loop registration */
-typedef struct event_reg event_reg;
+/**
+ * @brief Opaque handle to a single event_loop registration.
+ *
+ * event_reg is an opaque VALUE handle (a packed {slot index, generation}
+ * pair, scoped to the specific event_loop it was returned from), not a
+ * pointer; it must never be cast to/from void*, compared via a pointer
+ * cast, or otherwise treated as an address. Compare it directly against
+ * EVENT_REG_INVALID (or use it in a truthiness check; EVENT_REG_INVALID is
+ * 0). Internally, every use of an event_reg is resolved through that
+ * loop's own reg slot table before the underlying struct is touched: a
+ * handle whose slot has since been freed (by event_loop_remove, whether
+ * from this thread or a genuinely concurrent one racing it) is always
+ * detected, and the corresponding entry point returns ccol_invalid_args
+ * (or 0, for event_loop_reg_generation) rather than a use-after-free.
+ * This mirrors event_loop's own handle design exactly, scoped to one loop
+ * instead of the whole process.
+ */
+typedef uint64_t event_reg;
+
+/** @brief Sentinel value for "no registration"; the event_reg analogue of
+ * NULL. */
+#define EVENT_REG_INVALID ((event_reg)0)
 
 /**
  * @brief Callback invoked when a registration becomes readable
@@ -1170,6 +1258,13 @@ typedef struct event_reg event_reg;
  * may have already claimed the data (a TOCTOU race inherent to the design,
  * same as ccol_select's own write-direction contract); the callback's own
  * explicit receive call may find nothing, and must handle that gracefully.
+ * For a queue selectable specifically, a notification is not guaranteed to
+ * correspond to exactly one message: several sends that outrun dispatch
+ * can be observed as a single notification. A callback that must not leave
+ * messages stranded under bursty traffic should call
+ * circq_try_recv_zc()/dynmq_try_recv_zc() in a loop until it returns
+ * ccol_container_empty, rather than assuming one notification means one
+ * message.
  *
  * @param loop The event_loop this registration belongs to
  * @param sel  The ccol_selectable this registration was created from
@@ -1200,10 +1295,37 @@ typedef void (*event_writable_fn)(event_loop loop, ccol_selectable *sel,
 /**
  * @brief Callback invoked on a fatal condition for a registration
  *
- * For fd selectables, fires on EPOLLERR/EPOLLHUP (the fd itself is broken;
- * if both directions are registered on the same fd, both receive an error
- * dispatch). Queue selectables never produce an error condition and never
- * invoke this callback.
+ * For fd selectables, fires on EPOLLERR/EPOLLHUP whenever the corresponding
+ * direction has no handler to hand the co-occurring condition to instead
+ * (see the two warnings below): a read-direction registration with
+ * on_readable set may receive on_readable instead of on_error for the same
+ * EPOLLERR/EPOLLHUP event if data is also available, and a write-direction
+ * registration with on_writable set may receive on_writable instead for the
+ * same reason. If both directions are registered on the same fd, each is
+ * evaluated independently and may each receive an error dispatch. Queue
+ * selectables never produce an error condition and never invoke this
+ * callback.
+ *
+ * @warning A read-direction registration with on_readable == NULL (an
+ * "error-only" reader, watching only for the fd to die) must genuinely
+ * never receive ordinary data with no accompanying error: the fd remaining
+ * readable with real, undrained bytes and no EPOLLERR/EPOLLHUP is neither
+ * dispatched as readable (no on_readable to call) nor as an error (no error
+ * condition exists), so level-triggered epoll keeps re-reporting it as
+ * ready on every poll cycle with nothing to show for it, a silent,
+ * unbounded dispatch spin. Only safe when the peer is known to either stay
+ * silent or close/error, never send data this registration has no callback
+ * to consume.
+ *
+ * @warning The identical hazard applies to a write-direction registration
+ * with on_writable == NULL (an "error-only" writer): a socket that has
+ * entered an error state is reported writable too (write(2) on it would
+ * return immediately with an error rather than block), so such a
+ * registration must genuinely never become writable with no accompanying
+ * error either, or it is silently, permanently starved of any dispatch once
+ * that co-occurrence happens. Only safe when the fd is known to never
+ * become writable while error-free without also having on_writable set to
+ * consume that writability.
  *
  * @param loop The event_loop this registration belongs to
  * @param sel  The ccol_selectable this registration was created from
@@ -1272,8 +1394,13 @@ typedef struct event_handlers {
  * thread count controls dispatch concurrency.
  *
  * @param max_events_per_wait Size of the epoll_wait batch buffer the poller
- * thread uses (must be >= 1); bounds how many ready events a single
- * epoll_wait call drains, not the number of registrations the loop can hold
+ * thread uses (must be between 1 and INT_MAX inclusive, and small enough
+ * that max_events_per_wait * sizeof(struct epoll_event) does not overflow
+ * size_t; this function returns NULL for a value outside that range, since
+ * it is narrowed to epoll_wait's own int maxevents parameter and used to
+ * size the poller thread's events buffer allocation); bounds how many
+ * ready events a single epoll_wait call drains, not the number of
+ * registrations the loop can hold
  * @param num_lock_stripes Number of independent lock stripes for the fd/
  * entry registry (must be >= 1). 1 matches this module's original
  * single-lock behavior; pass a larger value to reduce
@@ -1331,6 +1458,24 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
  * read registrations on one fd, for example) is rejected with
  * ccol_not_permitted.
  *
+ * Unlike an fd, a queue/channel selectable has no such restriction: any
+ * number of event_loop_add calls for the same queue+direction (across one
+ * or more event_loop instances), and any mix of those with a concurrent
+ * ccol_select() call on the same queue+direction, are all live at once and
+ * all eventually get a turn, mirroring ccol_select's own "any number of
+ * threads may simultaneously watch the same queue" guarantee. A message
+ * that arrives while more than one such listener is registered wakes
+ * exactly one of them per producer/consumer call (never all of them at
+ * once, to avoid a thundering herd); whichever one is woken checks, after
+ * its own callback returns, whether the queue is still ready for its
+ * direction and, if so, forwards the wake to the next listener down the
+ * line. A backlog deeper than the number of live listeners on that
+ * queue+direction may still need a further, unrelated send/receive to
+ * fully drain, the same "notifications are not guaranteed strictly
+ * one-to-one with messages" characteristic a single listener already has;
+ * what this guarantees is that no live listener is ever passed over
+ * indefinitely.
+ *
  * @param loop     event_loop to register with
  * @param sel      What to watch (see above)
  * @param handlers Callback bundle (individual callbacks may be NULL)
@@ -1338,7 +1483,7 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
  *                 registration
  * @param err_str  Optional pointer to receive error string on failure
  *
- * @return New registration handle, or NULL on failure
+ * @return New registration handle, or EVENT_REG_INVALID on failure
  *
  * @note Thread-safe; may be called concurrently with event_loop_remove,
  *       event_loop_modify, and from within a callback running on the
@@ -1347,8 +1492,8 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
  * @see event_loop_remove
  * @see event_loop_modify
  */
-event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
-                          event_handlers_t handlers, void *arg, char **err_str);
+event_reg event_loop_add(event_loop loop, ccol_selectable sel,
+                         event_handlers_t handlers, void *arg, char **err_str);
 
 /**
  * @brief Caller-visible identity token for a registration's underlying fd
@@ -1372,16 +1517,22 @@ event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
  * caller ever calls this function at all (see the event_loop struct's own
  * doc comment).
  *
- * Safe to call even on an already-removed reg: like event_loop_reg_count's
- * sibling accessors, this reads a field set once at registration and never
- * written again, protected by reg's own deferred-free contract rather than
- * requiring reg to still be live.
+ * Safe to call at any time on any event_reg value ever returned by
+ * event_loop_add for this loop, including one already removed (whether by
+ * this thread earlier or a genuinely concurrent one racing right now): reg
+ * is resolved through loop's own generation-tagged slot table before
+ * anything is dereferenced, so an already-removed or otherwise stale
+ * handle is always detected as such and reported as generation 0, never a
+ * use-after-free.
  *
- * @param reg Registration to query (must not be NULL)
- * @return The generation value, or 0 if reg is NULL (0 is never a valid
- * generation for a real registration, since the counter starts at 1)
+ * @param loop event_loop reg belongs to
+ * @param reg Registration to query
+ * @return The generation value, or 0 if reg is EVENT_REG_INVALID, already
+ * removed, or loop is EVENT_LOOP_INVALID or a stale/already-destroyed
+ * handle (0 is never a valid generation for a real registration, since the
+ * counter starts at 1)
  */
-uint64_t event_loop_reg_generation(const event_reg *reg);
+uint64_t event_loop_reg_generation(event_loop loop, event_reg reg);
 
 /**
  * @brief Change an existing fd registration's direction
@@ -1400,15 +1551,17 @@ uint64_t event_loop_reg_generation(const event_reg *reg);
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if loop is EVENT_LOOP_INVALID or a stale/
- * already-destroyed handle, reg is NULL, reg is a queue/channel
- * registration, new_dir is invalid, or reg was concurrently removed
+ * already-destroyed handle, reg is EVENT_REG_INVALID or otherwise fails to
+ * resolve (including because it was already removed, whether by this
+ * thread or a genuinely concurrent one), reg is a queue/channel
+ * registration, or new_dir is invalid
  * @return ccol_not_permitted if the target direction is already occupied by
  * a different registration on the same fd
  *
  * @note Thread-safe; may be called concurrently with event_loop_remove and
  *       from within a callback running on the reactor thread
  */
-ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
+ccol_retval_t event_loop_modify(event_loop loop, event_reg reg,
                                 ccol_select_dir new_dir);
 
 /**
@@ -1446,8 +1599,10 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if loop is EVENT_LOOP_INVALID or a stale/
- * already-destroyed handle, reg is NULL, reg is a queue/channel
- * registration, or reg was concurrently removed
+ * already-destroyed handle, reg is EVENT_REG_INVALID or otherwise fails to
+ * resolve (including because it was already removed, whether by this
+ * thread or a genuinely concurrent one), or reg is a queue/channel
+ * registration
  *
  * @note Thread-safe; may be called concurrently with event_loop_remove and
  *       from within a callback running on the reactor thread
@@ -1455,7 +1610,7 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
  * @see event_loop_resume
  * @see event_loop_remove
  */
-ccol_retval_t event_loop_pause(event_loop loop, event_reg *reg);
+ccol_retval_t event_loop_pause(event_loop loop, event_reg reg);
 
 /**
  * @brief Resume event delivery for a registration previously paused by
@@ -1471,8 +1626,8 @@ ccol_retval_t event_loop_pause(event_loop loop, event_reg *reg);
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if loop is EVENT_LOOP_INVALID or a stale/
- * already-destroyed handle, reg is NULL, reg is a queue/channel
- * registration, or reg was concurrently removed (e.g. the connection was
+ * already-destroyed handle, reg is EVENT_REG_INVALID or otherwise fails to
+ * resolve, or reg is a queue/channel registration (e.g. the connection was
  * closed while the caller still thought it owned a paused registration to
  * resume)
  *
@@ -1481,7 +1636,7 @@ ccol_retval_t event_loop_pause(event_loop loop, event_reg *reg);
  *
  * @see event_loop_pause
  */
-ccol_retval_t event_loop_resume(event_loop loop, event_reg *reg);
+ccol_retval_t event_loop_resume(event_loop loop, event_reg reg);
 
 /**
  * @brief Deregister a selectable from the event loop
@@ -1504,13 +1659,30 @@ ccol_retval_t event_loop_resume(event_loop loop, event_reg *reg);
  * @param loop event_loop the registration belongs to
  * @param reg  Registration to remove
  *
- * @return ccol_success on success
+ * Safe to call more than once on the same reg, whether sequentially or
+ * genuinely concurrently from different threads: never a use-after-free
+ * either way. The two cases return differently, though. A call made
+ * strictly after an earlier event_loop_remove() on the same reg has
+ * already returned sees reg_h no longer resolve at all (that earlier
+ * call already released reg's own slot before returning) and gets
+ * ccol_invalid_args, the same outcome event_loop_modify()/_pause()/
+ * _resume()/event_loop_reg_generation() already document for an
+ * already-removed reg. A call that genuinely races another
+ * event_loop_remove() on the same reg is different: if its own resolve
+ * still succeeds (a narrow window, since reg's slot has not yet been
+ * released by the other call), it observes reg already marked removed
+ * and returns ccol_success as a no-op instead.
+ *
+ * @return ccol_success on success (including a losing call in the
+ * genuinely-concurrent race window described above)
  * @return ccol_invalid_args if loop is EVENT_LOOP_INVALID or a stale/
- * already-destroyed handle, or reg is NULL
+ * already-destroyed handle, or reg is EVENT_REG_INVALID or otherwise
+ * fails to resolve (including because an earlier, already-returned call
+ * already removed it)
  *
  * @note Thread-safe
  */
-ccol_retval_t event_loop_remove(event_loop loop, event_reg *reg);
+ccol_retval_t event_loop_remove(event_loop loop, event_reg reg);
 
 /**
  * @brief Number of currently-registered event_reg handles
@@ -1560,7 +1732,14 @@ ccol_retval_t event_loop_shutdown(event_loop loop);
  * Shuts the reactor thread down (if not already shut down) and frees every
  * remaining registration; for queue-backed registrations this correctly
  * unlinks each one from its queue's own waiter list first, so a queue that
- * outlives this event_loop is never left with a dangling waiter pointer.
+ * outlives this event_loop is never left with a dangling waiter pointer. The
+ * reverse ordering is the caller's own responsibility: a queue registered
+ * via selectable_from_circq/selectable_from_dynq/selectable_from_chan must
+ * still be registered with (or have every ccol_select()/ccol_select_timed()
+ * call watching it returned) by the time it is destroyed; destroying it
+ * first is a caller bug that circular_queue_destroy()/dynamic_queue_destroy()/
+ * channel_destroy() detect and assert against, since the still-linked waiter
+ * node would otherwise reference the queue's own, about-to-be-freed mutex.
  *
  * loop must be a currently-live handle (one returned by
  * event_loop_create/_with_mprocs and not yet destroyed). A stale handle
@@ -1572,6 +1751,15 @@ ccol_retval_t event_loop_shutdown(event_loop loop);
  * and a temporally-overlapping concurrent one. EVENT_LOOP_INVALID (0) is the
  * one exception and remains a silent no-op, matching event_loop_destroy's
  * own "destroy NULLs the handle" idiom.
+ *
+ * Calling this on loop from within a callback currently running on one of
+ * loop's own threads (the poller thread, or, for num_reactor_threads > 1, a
+ * dispatch worker) is also a fatal error, for the identical reason: that
+ * thread is the one this call would otherwise need to join (via an internal
+ * event_loop_shutdown), and freeing every registration and the loop struct
+ * itself out from under a still-executing callback on that same thread
+ * would be a use-after-free, not merely a deadlock. Defer destruction to
+ * another thread, or to after the callback returns, instead.
  *
  * @param loop event_loop to destroy
  *
@@ -1606,6 +1794,11 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  *             destruction)
  *
  * @note Safe to call with an EVENT_LOOP_INVALID handle
+ * @warning Must not be called on loop from within a callback currently
+ * dispatching on one of loop's own threads (a self-destroy hazard, the
+ * destroy-side analogue of event_loop_shutdown's own self-join hazard);
+ * this is a fatal error (abort()/SIGABRT), not a silent no-op or a deadlock.
+ * Defer destruction to another thread, or to after the callback returns.
  */
 #define event_loop_destroy(loop)  \
   do {                            \
@@ -1632,14 +1825,17 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  * Example:
  * @code
  * event_loop_construct(loop, 32, 1, 1);
- * event_reg *r = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
- *                                handlers, NULL, NULL);
+ * event_reg r = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
+ *                              handlers, NULL, NULL);
  * event_loop_destroy(loop);
  * @endcode
  *
  * @param name               Variable name for the event_loop handle
  * @param max_events_per_wait Size of the epoll_wait batch buffer (must be
- *                            >= 1)
+ *                            between 1 and INT_MAX inclusive, and small
+ *                            enough that max_events_per_wait *
+ *                            sizeof(struct epoll_event) does not overflow
+ *                            size_t)
  * @param num_lock_stripes   Number of lock stripes for the fd/entry
  *                           registry (must be >= 1; 1 matches the original
  *                           single-lock behavior)
@@ -1666,7 +1862,10 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  *
  * @param name               Variable name for the event_loop handle
  * @param max_events_per_wait Size of the epoll_wait batch buffer (must be
- *                            >= 1)
+ *                            between 1 and INT_MAX inclusive, and small
+ *                            enough that max_events_per_wait *
+ *                            sizeof(struct epoll_event) does not overflow
+ *                            size_t)
  * @param num_lock_stripes   Number of lock stripes for the fd/entry
  *                           registry (must be >= 1; 1 matches the original
  *                           single-lock behavior)
@@ -1694,6 +1893,46 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
 
 #ifdef RUNNING_UNIT_TESTS
 /**
+ * @brief Force the very next internal event_reg handle-slot allocation to
+ *        report failure, for testing
+ *
+ * Arms a one-shot, auto-disarming, process-wide flag: the very next time
+ * event_loop_add would mint a public event_reg handle for a newly created
+ * registration, that step reports failure (as if the underlying slot-table
+ * growth allocation had failed) regardless of which allocator the target
+ * loop actually uses, and event_loop_add returns EVENT_REG_INVALID with
+ * nothing wired into the registry. Lets a test deterministically exercise
+ * this otherwise-impractical-to-fault-inject failure mode: the slot table
+ * is pre-allocated to a nonzero minimum capacity at loop-creation time, and
+ * shares its allocator with every other allocation this loop makes.
+ *
+ * @note Has no effect once consumed by the next event_loop_add call; call
+ *       again to arm a second one.
+ */
+void event_loop_test_force_next_reg_slot_acquire_failure(void);
+
+/**
+ * @brief Read the loop-wide registration count as it stood at the exact
+ *        moment the most recent forced slot-acquire failure fired, for
+ *        testing
+ *
+ * Lets a test directly, deterministically prove event_loop_add's own
+ * ordering (that reg's handle slot is acquired BEFORE reg is ever wired
+ * into the fd/queue registry, not after) rather than only being able to
+ * observe the two possible orderings' identical end state (event_loop_add
+ * returning EVENT_REG_INVALID with event_loop_reg_count() back at 0 either
+ * way, since a post-wiring failure's own rollback also restores it). A
+ * snapshot of 0 proves the registration this call was attempting had not
+ * yet been counted (i.e. not yet wired) at the moment the forced failure
+ * was observed.
+ *
+ * @return The snapshot taken by the most recent forced slot-acquire
+ * failure (see event_loop_test_force_next_reg_slot_acquire_failure), or 0
+ * if none has fired yet in this process.
+ */
+size_t event_loop_test_last_forced_slot_acquire_failure_reg_count(void);
+
+/**
  * @brief Expose the number of dispatch jobs currently queued or executing
  *        on loop's own dispatch_pool, for testing
  *
@@ -1707,4 +1946,233 @@ static inline __attribute__((always_inline)) void ___event_loop_destroy(
  * @return      Number of pending/in-flight dispatch jobs
  */
 size_t event_loop_dispatch_pool_pending_count_for_tests(event_loop loop);
+
+/**
+ * @brief Expose how many times loop's own poller thread has completed an
+ *        epoll_wait call so far, for testing
+ *
+ * Lets a test directly detect a reactor busy-spin (this counter racing
+ * ahead by a large amount within a short, bounded sampling window) instead
+ * of relying on flaky wall-clock/CPU-usage measurement: sample this twice
+ * across a bounded interval and compare the delta.
+ *
+ * @param loop  event_loop to query
+ * @return      Total completed epoll_wait call count, or 0 for an invalid/
+ * stale loop handle
+ */
+uint64_t event_loop_poller_iterations_for_tests(event_loop loop);
+
+/**
+ * @brief Force the next cond_var_timedwait call inside ccol_select_timed's
+ *        no-fd-selectables wait path to report an unexpected (non-
+ *        ETIMEDOUT) error, for testing
+ *
+ * Arms a one-shot, auto-disarming flag: the very next time
+ * ccol_select_timed's internal condvar-only wait would call
+ * cond_var_timedwait (only reachable with a deadline set and no fd
+ * selectables in the call), it reports EINVAL instead of actually waiting.
+ * Lets a test deterministically exercise the "cond_var_timedwait itself
+ * failed" path (ccol_unexpected_failure), which no legitimate call from
+ * this library's own deadline computation can otherwise trigger.
+ *
+ * @note Has no effect once consumed by the next such call; call again to
+ *       arm a second one.
+ */
+void ccol_select_test_force_next_condvar_wait_error(void);
+
+/**
+ * @brief Like ccol_select_test_force_next_condvar_wait_error, but also marks
+ *        the internal wait as satisfied at the same instant, for testing
+ *
+ * Arms the identical one-shot forced-EINVAL behaviour as
+ * ccol_select_test_force_next_condvar_wait_error, but additionally sets the
+ * internal "ready" flag true in the same critical section the forced error
+ * is reported in, simulating a producer's notify having legitimately
+ * completed an instant before the unrelated, forced error is observed (a
+ * real cond_var_timedwait call always re-acquires its mutex before
+ * returning, whether it succeeds or fails, so this interleaving is
+ * genuinely possible in production; it just cannot be reproduced
+ * deterministically from a test any other way, since this hook replaces the
+ * real wait call outright rather than actually releasing the mutex for a
+ * concurrent producer thread to race into).
+ *
+ * Lets a test deterministically verify that a wakeup which raced a spurious,
+ * unrelated cond_var_timedwait failure still counts as a successful wakeup
+ * (ccol_select_timed re-scanning and eventually succeeding) rather than
+ * being discarded and reported as ccol_unexpected_failure.
+ *
+ * @note Has no effect once consumed by the next such call; call again to
+ *       arm a second one.
+ */
+void ccol_select_test_force_next_condvar_wait_error_racing_ready(void);
+
+/**
+ * @brief Force the next cond_var_timedwait call inside circq_timed_send_zc's
+ *        own wait loop to report an unexpected (non-ETIMEDOUT) error, for
+ *        testing
+ *
+ * Mirrors ccol_select_test_force_next_condvar_wait_error, scoped to
+ * circq_timed_send_zc instead: the very next wait it would perform reports
+ * EINVAL instead of actually waiting, then auto-disarms.
+ *
+ * @note Has no effect once consumed by the next such call; call again to
+ *       arm a second one.
+ * @see circq_test_force_next_send_condvar_wait_error_racing_ready
+ */
+void circq_test_force_next_send_condvar_wait_error(void);
+
+/**
+ * @brief Test-only: widens the window inside _notify_waiter() between a
+ *        queue's own mutex already being held and this function's own
+ *        wait_mtx lock attempt, to an arbitrarily long, precisely
+ *        controlled duration (in microseconds; 0 disables the widening,
+ *        the default).
+ *
+ * Lets a test deterministically land a concurrent fork() call inside this
+ * exact window, reproducing the queue-mutex/wait_mtx lock-ordering hazard
+ * the merged event_loop/queue-registry atfork handler exists to prevent,
+ * rather than relying on timing luck against a window that, in production,
+ * is normally only a handful of instructions long.
+ *
+ * @warning Affects every _notify_waiter() call process-wide for as long as
+ * it is armed (there is no per-queue scoping); a test must disarm it
+ * (pass 0) once done, or every subsequent circq_send_zc/recv_zc/
+ * dynmq_send_zc/etc. call anywhere in the same process pays this delay.
+ */
+void _notify_waiter_test_set_delay_us(int us);
+
+/**
+ * @brief Test-only: locks cq's own internal mutex directly, bypassing every
+ *        public API function.
+ *
+ * Lets a test hold cq's mutex locked for an arbitrarily long, precisely
+ * controlled window, long enough to deterministically land a fork() call
+ * inside it, rather than relying on timing luck against a real critical
+ * section that, in production, is normally only a handful of instructions
+ * long. Used by the queue-mutex fork-safety regression test.
+ *
+ * @warning Must always be paired with a later circq_test_unlock_mutex_
+ * for_tests call on the same cq, from the same thread; nothing else in this
+ * file expects cq's mutex to still be held once this call returns.
+ *
+ * @see circq_test_unlock_mutex_for_tests
+ */
+void circq_test_lock_mutex_for_tests(circular_queue *cq);
+
+/**
+ * @brief Test-only: unlocks cq's own internal mutex; see
+ *        circq_test_lock_mutex_for_tests.
+ */
+void circq_test_unlock_mutex_for_tests(circular_queue *cq);
+
+/**
+ * @brief Test-only: reports whether a ccol_select() caller is genuinely
+ *        linked into cq's own read-waiter list right now.
+ *
+ * A single, self-contained lock/check/unlock. Lets a test that needs a
+ * select-waiter thread to have actually reached its own Phase 1 mutex_lock/
+ * link step poll this in a bounded loop, instead of guessing that a fixed
+ * sleep after pthread_create() is long enough margin for the OS to have
+ * scheduled the new thread that far -- pthread_create() returning gives no
+ * such guarantee.
+ */
+bool circq_test_has_sel_read_waiter_for_tests(circular_queue *cq);
+
+/**
+ * @brief Like circq_test_force_next_send_condvar_wait_error, but also frees
+ *        one queued message's slot at the same instant, for testing
+ *
+ * Arms the identical one-shot forced-EINVAL behaviour, but additionally
+ * performs the exact bookkeeping a real concurrent consumer's own receive
+ * would (freeing one slot, signalling write_cond) under the same mutex the
+ * forced error is reported in, simulating that consumer's wakeup having
+ * legitimately completed an instant before the unrelated, forced error is
+ * observed. Lets a test verify that a slot which became available this way
+ * is still used to complete the send, rather than being discarded and
+ * reported as ccol_unexpected_failure.
+ *
+ * @note Has no effect once consumed by the next such call; call again to
+ *       arm a second one.
+ */
+void circq_test_force_next_send_condvar_wait_error_racing_ready(void);
+
+/**
+ * @brief Retrieve the message freed by the most recent
+ *        circq_test_force_next_send_condvar_wait_error_racing_ready-induced
+ *        race, for testing
+ *
+ * The simulated concurrent consumer's own receive (see
+ * circq_test_force_next_send_condvar_wait_error_racing_ready) has nowhere
+ * else to hand off the message it dequeues; this retrieves it exactly once
+ * (returning {NULL, 0} thereafter) so a test can free its data pointer,
+ * mirroring the ownership a real caller of circq_recv_zc/_try_recv_zc would
+ * already have.
+ *
+ * @return The freed message, or {NULL, 0} if none is pending
+ */
+c_message_t circq_test_take_race_freed_msg(void);
+
+/**
+ * @brief Force the next cond_var_timedwait call inside circq_timed_recv_zc's
+ *        own wait loop to report an unexpected (non-ETIMEDOUT) error, for
+ *        testing
+ *
+ * Mirrors ccol_select_test_force_next_condvar_wait_error, scoped to
+ * circq_timed_recv_zc instead.
+ *
+ * @note Has no effect once consumed by the next such call; call again to
+ *       arm a second one.
+ * @see circq_test_force_next_recv_condvar_wait_error_racing_ready
+ */
+void circq_test_force_next_recv_condvar_wait_error(void);
+
+/**
+ * @brief Like circq_test_force_next_recv_condvar_wait_error, but also
+ *        enqueues a sentinel message at the same instant, for testing
+ *
+ * Arms the identical one-shot forced-EINVAL behaviour, but additionally
+ * enqueues a {NULL, 0} sentinel message (via the same internal path a real
+ * concurrent producer's send would use) under the same mutex the forced
+ * error is reported in, simulating that producer's wakeup having
+ * legitimately completed an instant before the unrelated, forced error is
+ * observed. Lets a test verify that a message which arrived this way is
+ * still received, rather than being discarded and reported as
+ * ccol_unexpected_failure.
+ *
+ * @note Has no effect once consumed by the next such call; call again to
+ *       arm a second one.
+ */
+void circq_test_force_next_recv_condvar_wait_error_racing_ready(void);
+
+/**
+ * @brief Force the next cond_var_timedwait call inside dynmq_timed_recv_zc's
+ *        own wait loop to report an unexpected (non-ETIMEDOUT) error, for
+ *        testing
+ *
+ * Mirrors ccol_select_test_force_next_condvar_wait_error, scoped to
+ * dynmq_timed_recv_zc instead.
+ *
+ * @note Has no effect once consumed by the next such call; call again to
+ *       arm a second one.
+ * @see dynmq_test_force_next_recv_condvar_wait_error_racing_ready
+ */
+void dynmq_test_force_next_recv_condvar_wait_error(void);
+
+/**
+ * @brief Like dynmq_test_force_next_recv_condvar_wait_error, but also
+ *        enqueues a sentinel message at the same instant, for testing
+ *
+ * Arms the identical one-shot forced-EINVAL behaviour, but additionally
+ * enqueues a {NULL, 0} sentinel message (via the same internal path a real
+ * concurrent producer's send would use) under the same mutex the forced
+ * error is reported in, simulating that producer's wakeup having
+ * legitimately completed an instant before the unrelated, forced error is
+ * observed. Lets a test verify that a message which arrived this way is
+ * still received, rather than being discarded and reported as
+ * ccol_unexpected_failure.
+ *
+ * @note Has no effect once consumed by the next such call; call again to
+ *       arm a second one.
+ */
+void dynmq_test_force_next_recv_condvar_wait_error_racing_ready(void);
 #endif

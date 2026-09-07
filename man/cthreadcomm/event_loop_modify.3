@@ -7,7 +7,7 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cthreadcomm.h>
 
-ccol_retval_t event_loop_modify(event_loop loop, event_reg *reg,
+ccol_retval_t event_loop_modify(event_loop loop, event_reg reg,
                         ccol_select_dir new_dir);
 .fi
 .SH DESCRIPTION
@@ -28,8 +28,13 @@ On success:
     current when it was collected, rather than racing this update).
   - reg moves to the other slot on its underlying fd's shared epoll
     entry.
-  - The fd's combined epoll interest mask is recomputed via a single
-    EPOLL_CTL_MOD call.
+  - The fd's combined epoll interest mask is recomputed fresh from the
+    live state of both directions.  Ordinarily this is a single
+    EPOLL_CTL_MOD call; if reg itself is currently paused (see
+    event_loop_pause(3)) and the fd has no other, unpaused direction,
+    the mask still carries no real interest and the fd (already
+    outside the kernel's own epoll interest set from the pause) simply
+    stays that way, with no epoll_ctl call needed at all.
 
 This is only valid when the target direction's slot is not already
 occupied by a different registration on the same fd; use this to
@@ -47,12 +52,16 @@ new_dir  ccol_select_read or ccol_select_write.
 .nf
 ccol_success        Direction changed.
 ccol_invalid_args   loop is EVENT_LOOP_INVALID or a stale/already-
-                    destroyed handle; reg is NULL; reg is a queue/
-                    channel registration; new_dir is neither
-                    ccol_select_read nor ccol_select_write; or reg was
-                    concurrently removed (by another thread, or by
+                    destroyed handle; reg is EVENT_REG_INVALID or
+                    otherwise fails to resolve; reg is a queue/channel
+                    registration; or new_dir is neither ccol_select_read
+                    nor ccol_select_write. reg failing to resolve
+                    covers both an outright invalid handle and one that
+                    was concurrently removed (by another thread, or by
                     reg's own callback self-removing) between the
-                    caller obtaining it and this call.
+                    caller obtaining it and this call; either case is
+                    detected and rejected cleanly through reg's own
+                    registration table, never a use-after-free.
 ccol_not_permitted  The target direction is already occupied by a
                     different registration on the same fd.
 .fi
@@ -64,8 +73,8 @@ callback running on one of the reactor threads.
 .SH EXAMPLES
 .nf
 event_handlers_t handlers = { .on_writable = on_connected, .on_readable = on_data };
-event_reg *reg = event_loop_add(loop, selectable_from_fd(sock, ccol_select_write),
-                                handlers, ctx, NULL);
+event_reg reg = event_loop_add(loop, selectable_from_fd(sock, ccol_select_write),
+                               handlers, ctx, NULL);
 /* ... inside on_connected, once the non-blocking connect completes ... */
 event_loop_modify(loop, reg, ccol_select_read);
 .fi

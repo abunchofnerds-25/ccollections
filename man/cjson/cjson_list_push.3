@@ -12,14 +12,48 @@ ccol_retval_t cjson_list_push(cjson arr, cjson child);
 .SH DESCRIPTION
 .nf
 Appends child to the end of arr.  Ownership of child transfers to arr
-unconditionally: on success the array owns child; on failure child is
-deep-freed by cjson_list_push.  Do not free child after calling this
-function regardless of the return value.
+on every outcome that touches child at all: on success the array owns
+child; on a failure caused by arr being invalid (NULL or not
+CJSON_LIST) or by an internal insertion failure, a freshly unattached
+child is deep-freed by cjson_list_push and must not be freed by the
+caller.  The one class of failure that leaves child completely
+untouched, still owned by whatever it was already attached to (or
+still a free-standing tree of its own), is described next; this holds
+regardless of what else is wrong with the call, so an invalid arr
+never causes an already-attached child to be destroyed.
+
+child must not already be attached to a list/dictionary parent, and
+must not already contain arr somewhere within its own subtree.  This
+call fails with ccol_invalid_args, leaving child completely untouched,
+if child is already a child of arr or of any other list/dictionary
+node, if child is arr itself, or if arr is already reachable by
+descending from child (attaching child would then make arr both a new
+ancestor of child and an existing descendant of it, a cycle).  If that
+last check cannot be completed under memory pressure,
+ccol_not_enough_memory is returned instead of silently risking an
+undetected cycle.
+.fi
+.SH PARAMETERS
+.nf
+arr    Target list node (must be CJSON_LIST).
+child  Node to append; must not already be attached elsewhere, and
+       must not already contain arr in its own subtree.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
+ccol_container_full if arr has already reached its maximum element
+count.
+.fi
+.SH NOTES
+.nf
+A node returned by cjson_get(), cjson_list_get(), or
+cjson_dictionary_get() is a borrowed reference into an existing tree,
+not a freshly owned node, and must never be passed as child directly.
+Use cjson_clone() first to obtain an independent copy that is safe to
+push.
 .fi
 .SH "SEE ALSO"
 .BR cjson_list_get (3),
-.BR cjson_create_list (3)
+.BR cjson_create_list (3),
+.BR cjson_clone (3)

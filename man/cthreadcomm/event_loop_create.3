@@ -18,7 +18,10 @@ mmgmt_procs = NULL (standard malloc/free).
 .SH PARAMETERS
 .nf
 max_events_per_wait  Size of the epoll_wait batch buffer each reactor
-                      thread uses (must be >= 1).  Bounds how many ready
+                      thread uses (must be between 1 and INT_MAX
+                      inclusive, and small enough that
+                      max_events_per_wait * sizeof(struct epoll_event)
+                      does not overflow size_t).  Bounds how many ready
                       events a single epoll_wait call drains, not the
                       number of registrations the loop can hold.
 num_lock_stripes     Number of independent lock stripes for the fd/entry

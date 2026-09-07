@@ -1,0 +1,4 @@
+---
+val: &anchor 42
+---
+ref: *anchor

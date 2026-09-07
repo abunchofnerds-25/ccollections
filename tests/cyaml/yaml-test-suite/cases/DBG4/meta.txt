@@ -1,0 +1,2 @@
+fail=0
+name=Spec Example 7.10. Plain Characters

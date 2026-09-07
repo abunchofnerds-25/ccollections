@@ -15,9 +15,17 @@ Returns the default comparison function for a given type. Uses C11
 _Generic to select the appropriate comparison based on the type of the
 dummy variable.
 
-Supports all standard C integral types (char, short, int, long, long long,
-unsigned variants) and floating-point types (float, double, long double),
-as well as strings (char*).
+Supports all standard C integral types (char, signed char, short, int,
+long, long long, unsigned variants) and floating-point types (float,
+double, long double), as well as strings (char*, const char*).
+
+A fixed-size char array (char[N]), as opposed to a char* pointer variable,
+is not a supported type and returns NULL, the same as any other
+unsupported type; such an array's own inline byte content is not a char*
+value, so csort_default_string_comparison_proc's pointer-dereferencing
+contract does not apply to it. Sort a collection of fixed-size string
+buffers with an explicit, hand-written comparator passed directly to
+cvector_sort_with_comparison_proc() / csort_sort() instead.
 .fi
 .SH PARAMETERS
 .nf
@@ -30,9 +38,17 @@ Returns NULL if type is not supported
 .fi
 .SH NOTES
 .nf
-Variable is only used for type deduction, not evaluated
-For strings, returns csort_default_string_comparison_proc
+Variable is only used for type deduction, not evaluated; dummy_var may be
+any expression of the type you want to compare, including an rvalue
+(a cast, a literal, ...), not only an addressable variable
+For a genuine char* / const char* pointer variable, returns
+csort_default_string_comparison_proc
+For a fixed-size char array (char[N]), returns NULL, not
+csort_default_string_comparison_proc
 For integral types, uses three-way comparison: (a > b) - (a < b)
+For floating-point types (float, double, long double), a NaN operand
+compares greater than every non-NaN value and equal only to another NaN,
+so the result is always a genuine total order
 .fi
 .SH EXAMPLES
 .nf

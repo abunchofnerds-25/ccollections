@@ -121,11 +121,12 @@ cstring_new(const char *initial) {
  *
  * @param s  String to query
  * @return   Pointer to memory management procedures, or NULL if using defaults
+ * @note     Will assert if s is NULL
  */
 ccol_memmgmt_procs_t *cstring_get_mprocs(cstr s);
 
 /**
- * @brief Destroy a string (internal – do not call directly)
+ * @brief Destroy a string (internal; do not call directly)
  *
  * @param s  String to destroy
  * @warning  Use the cstring_destroy() macro instead
@@ -242,7 +243,7 @@ ccol_retval_t cstring_prepend(cstr s, const char *str);
  * Characters at positions >= @p pos are shifted right to make room.
  *
  * @param s    String to modify
- * @param pos  Insertion position (0 … length, inclusive)
+ * @param pos  Insertion position (0 ... length, inclusive)
  * @param str  C string to insert (must not be NULL)
  *
  * @return ccol_success on success
@@ -261,6 +262,9 @@ ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str);
  *
  * @return ccol_success on success
  * @return ccol_invalid_args if str is NULL
+ * @return ccol_container_full if str is too large to represent (not
+ * reachable in practice: would require a str spanning the entire address
+ * space)
  * @return ccol_not_enough_memory if reallocation fails
  * @note   Will assert if s is NULL
  */
@@ -347,9 +351,10 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
  * Semantics identical to strcmp().
  *
  * @param s    String to compare
- * @param str  C string to compare against (must not be NULL)
+ * @param str  C string to compare against
  *
  * @return Negative / zero / positive if s < / == / > str
+ * @return 1 if str is NULL (a non-null string is considered greater)
  * @note   Will assert if s is NULL
  */
 int cstring_compare(cstr s, const char *str);
@@ -369,9 +374,10 @@ bool cstring_equals(cstr s, const char *str);
  * @brief Check whether the string begins with @p prefix
  *
  * @param s       String to test
- * @param prefix  Prefix to look for (must not be NULL)
+ * @param prefix  Prefix to look for
  *
  * @return true if the string starts with @p prefix
+ * @return false if @p prefix is NULL
  * @note   An empty prefix always matches
  * @note   Will assert if s is NULL
  */
@@ -381,9 +387,10 @@ bool cstring_starts_with(cstr s, const char *prefix);
  * @brief Check whether the string ends with @p suffix
  *
  * @param s       String to test
- * @param suffix  Suffix to look for (must not be NULL)
+ * @param suffix  Suffix to look for
  *
  * @return true if the string ends with @p suffix
+ * @return false if @p suffix is NULL
  * @note   An empty suffix always matches
  * @note   Will assert if s is NULL
  */
@@ -393,10 +400,11 @@ bool cstring_ends_with(cstr s, const char *suffix);
  * @brief Find the first occurrence of @p needle
  *
  * @param s       String to search
- * @param needle  Substring to find (must not be NULL)
+ * @param needle  Substring to find
  *
- * @return Zero-based index of the first occurrence, or ccol_invalid_size if
- * not found
+ * @return Zero-based index of the first occurrence
+ * @return 0 if @p needle is an empty string (matches at the start)
+ * @return ccol_invalid_size if not found, or if @p needle is NULL
  * @note   Will assert if s is NULL
  */
 size_t cstring_find(cstr s, const char *needle);
@@ -405,10 +413,12 @@ size_t cstring_find(cstr s, const char *needle);
  * @brief Find the last occurrence of @p needle
  *
  * @param s       String to search
- * @param needle  Substring to find (must not be NULL)
+ * @param needle  Substring to find
  *
- * @return Zero-based index of the last occurrence, or ccol_invalid_size if
- * not found
+ * @return Zero-based index of the last occurrence
+ * @return cstring_length(s) if @p needle is an empty string (the past-the-end
+ * position, matching C++'s std::string::rfind("") convention)
+ * @return ccol_invalid_size if not found, or if @p needle is NULL
  * @note   Will assert if s is NULL
  */
 size_t cstring_rfind(cstr s, const char *needle);
@@ -594,63 +604,83 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
 /*                         OPERATION MACROS                                   */
 /* ========================================================================== */
 
+/* Every retval local below is deliberately named with a macro-specific,
+ * double-underscore-prefixed identifier rather than the shorter '_r'. Each
+ * one is declared in the same statement whose initializer embeds the
+ * caller's own arguments via macro substitution, and C's declarator-scope
+ * rule ("the scope of an identifier begins right after its own declarator",
+ * i.e. before the initializer is even evaluated; the same rule that makes
+ * `int x = x;` a self-reference, not a copy of an outer x) means a caller
+ * who happens to name one of their own arguments identically to the local
+ * would silently bind to this macro's own not-yet-initialized local instead
+ * of their own. For cstr_append/_prepend/_set/_replace the shadowed
+ * parameters are all `const char *`, so such a collision with a short,
+ * plausible name like '_r' would at least fail to compile (an enum used
+ * where a pointer is expected); for cstr_insert's `pos` (a size_t, silently
+ * convertible from an enum with no diagnostic guaranteed under every
+ * caller's own compiler and warning flags) it would not. A name this
+ * specific to its own one macro is the only practical fix available to a
+ * non-hygienic C macro. */
+
 /** @brief Append @p str; calls fatal_err() on failure */
-#define cstr_append(s, str)                              \
-  do {                                                   \
-    ccol_retval_t _r = cstring_append((s), (str));       \
-    if (_r != ccol_success) {                            \
-      fatal_err("cstr_append('%s'): r: %d (%s)", #s, _r, \
-                ccol_retval_to_str(_r));                 \
-    }                                                    \
+#define cstr_append(s, str)                                        \
+  do {                                                              \
+    ccol_retval_t __cstr_append_r = cstring_append((s), (str));     \
+    if (__cstr_append_r != ccol_success) {                          \
+      fatal_err("cstr_append('%s'): r: %d (%s)", #s, __cstr_append_r, \
+                ccol_retval_to_str(__cstr_append_r));                \
+    }                                                                \
   } while (0)
 
 /** @brief Prepend @p str; calls fatal_err() on failure */
-#define cstr_prepend(s, str)                              \
-  do {                                                    \
-    ccol_retval_t _r = cstring_prepend((s), (str));       \
-    if (_r != ccol_success) {                             \
-      fatal_err("cstr_prepend('%s'): r: %d (%s)", #s, _r, \
-                ccol_retval_to_str(_r));                  \
-    }                                                     \
+#define cstr_prepend(s, str)                                          \
+  do {                                                                \
+    ccol_retval_t __cstr_prepend_r = cstring_prepend((s), (str));     \
+    if (__cstr_prepend_r != ccol_success) {                           \
+      fatal_err("cstr_prepend('%s'): r: %d (%s)", #s, __cstr_prepend_r, \
+                ccol_retval_to_str(__cstr_prepend_r));                 \
+    }                                                                  \
   } while (0)
 
 /** @brief Insert @p str at @p pos; calls fatal_err() on failure */
-#define cstr_insert(s, pos, str)                          \
-  do {                                                    \
-    ccol_retval_t _r = cstring_insert((s), (pos), (str)); \
-    if (_r != ccol_success) {                             \
-      fatal_err("cstr_insert('%s'): r: %d (%s)", #s, _r,  \
-                ccol_retval_to_str(_r));                  \
-    }                                                     \
+#define cstr_insert(s, pos, str)                                        \
+  do {                                                                  \
+    ccol_retval_t __cstr_insert_r = cstring_insert((s), (pos), (str));  \
+    if (__cstr_insert_r != ccol_success) {                              \
+      fatal_err("cstr_insert('%s'): r: %d (%s)", #s, __cstr_insert_r,   \
+                ccol_retval_to_str(__cstr_insert_r));                   \
+    }                                                                   \
   } while (0)
 
 /** @brief Replace entire content with @p str; calls fatal_err() on failure */
-#define cstr_set(s, str)                                                       \
-  do {                                                                         \
-    ccol_retval_t _r = cstring_set((s), (str));                                \
-    if (_r != ccol_success) {                                                  \
-      fatal_err("cstr_set('%s'): r: %d (%s)", #s, _r, ccol_retval_to_str(_r)); \
-    }                                                                          \
-  } while (0)
-
-/** @brief Replace all occurrences of @p needle; calls fatal_err() on failure */
-#define cstr_replace(s, needle, replacement)                          \
+#define cstr_set(s, str)                                             \
   do {                                                                \
-    ccol_retval_t _r = cstring_replace((s), (needle), (replacement)); \
-    if (_r != ccol_success) {                                         \
-      fatal_err("cstr_replace('%s'): r: %d (%s)", #s, _r,             \
-                ccol_retval_to_str(_r));                              \
+    ccol_retval_t __cstr_set_r = cstring_set((s), (str));             \
+    if (__cstr_set_r != ccol_success) {                               \
+      fatal_err("cstr_set('%s'): r: %d (%s)", #s, __cstr_set_r,       \
+                ccol_retval_to_str(__cstr_set_r));                    \
     }                                                                 \
   } while (0)
 
+/** @brief Replace all occurrences of @p needle; calls fatal_err() on failure */
+#define cstr_replace(s, needle, replacement)                              \
+  do {                                                                    \
+    ccol_retval_t __cstr_replace_r =                                      \
+        cstring_replace((s), (needle), (replacement));                   \
+    if (__cstr_replace_r != ccol_success) {                               \
+      fatal_err("cstr_replace('%s'): r: %d (%s)", #s, __cstr_replace_r,   \
+                ccol_retval_to_str(__cstr_replace_r));                    \
+    }                                                                     \
+  } while (0)
+
 /** @brief Reserve at least @p cap bytes; calls fatal_err() on failure */
-#define cstr_reserve(s, cap)                                                  \
-  do {                                                                        \
-    if (!cstring_reserve((s), (cap))) {                                       \
-      fatal_err(                                                              \
-          "cstr_reserve('%s'): failed to reserve %zu bytes — out of memory?", \
-          #s, (size_t)(cap));                                                 \
-    }                                                                         \
+#define cstr_reserve(s, cap)                                                \
+  do {                                                                      \
+    if (!cstring_reserve((s), (cap))) {                                     \
+      fatal_err(                                                            \
+          "cstr_reserve('%s'): failed to reserve %zu bytes (out of memory?)", \
+          #s, (size_t)(cap));                                               \
+    }                                                                       \
   } while (0)
 
 /** @brief Create a new cstring that contains the content of [start,start+len)
@@ -698,4 +728,40 @@ cvec cstring_split(cstr s, const char *delimiter, char **err);
  * @return   Number of bytes currently allocated for the data buffer
  */
 size_t cstring_get_capacity(cstr s);
+
+/**
+ * @brief Expose the internal size_t-wraparound guard used by every mutating
+ * function for testing
+ *
+ * Lets a test exercise the guard that rejects a length of exactly SIZE_MAX
+ * (which would otherwise silently wrap to 0 once 1 is added for the null
+ * terminator) directly, without needing to construct a string spanning the
+ * entire address space to reach it through the public API.
+ *
+ * @param length  Candidate content length (in bytes, excluding '\0')
+ * @return        true if length + 1 fits in a size_t, false if length is
+ * exactly SIZE_MAX
+ */
+bool cstring_length_fits_with_terminator_for_tests(size_t length);
+
+/**
+ * @brief Expose cstring_replace()'s internal overflow-checked length
+ * arithmetic for testing
+ *
+ * Lets a test exercise cstring_replace()'s ccol_container_full overflow
+ * guards directly, without needing to construct real multi-gigabyte strings
+ * to reach them through the public API.
+ *
+ * @param orig_length  Length the string would have had before the replace
+ * @param nlen         Needle length
+ * @param rlen         Replacement length
+ * @param count        Number of non-overlapping occurrences (must be > 0)
+ * @param new_len_out  Receives the computed new length on ccol_success
+ *
+ * @return ccol_success on success
+ * @return ccol_container_full if the computation would overflow size_t
+ */
+ccol_retval_t cstring_replace_compute_new_length_for_tests(
+    size_t orig_length, size_t nlen, size_t rlen, size_t count,
+    size_t *new_len_out);
 #endif

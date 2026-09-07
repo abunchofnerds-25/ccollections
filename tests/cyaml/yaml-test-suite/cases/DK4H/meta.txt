@@ -1,0 +1,2 @@
+fail=1
+name=Implicit key followed by newline

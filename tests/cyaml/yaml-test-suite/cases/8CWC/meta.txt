@@ -1,0 +1,2 @@
+fail=0
+name=Plain mapping key ending with colon

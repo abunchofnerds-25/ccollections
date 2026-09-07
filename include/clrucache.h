@@ -63,8 +63,13 @@ SOFTWARE.
  * Called when the requested key is not in the cache and a remote source
  * exists. On success the implementation must heap-allocate the value data,
  * assign it to val->ptr, and set val->size to the byte length. The cache
- * takes ownership of val->ptr and will free it. On failure the callback
- * must leave val->ptr as NULL and return false.
+ * takes ownership of val->ptr and will free it with the cache's own
+ * allocator (the custom ccol_memmgmt_procs_t passed to
+ * clrucache_create_full, or malloc()/free() if none was configured); the
+ * allocation made here MUST use that same allocator (its malloc/calloc if
+ * one was configured, or plain malloc() otherwise) or the cache's eventual
+ * free of val->ptr will corrupt the heap. On failure the callback must
+ * leave val->ptr as NULL and return false.
  *
  * @param key  Key pair (ptr + size)
  * @param val  Output pair to populate on success (ptr + size)
@@ -169,13 +174,21 @@ clru_cache clrucache_create_full(size_t capacity, ccol_data_type key_type,
 void __clrucache_destroy(clru_cache cache);
 
 /**
- * @brief Copy a value directly into a caller-provided buffer (internal —
+ * @brief Copy a value directly into a caller-provided buffer (internal;
  *        use clru_get() macro instead)
  *
  * Unlike clrucache_get_full(), this function performs no heap allocation: it
  * copies the stored value into buf while holding the cache mutex and returns.
- * buf_size must be >= the stored value size; the clru_get() macro satisfies
- * this by passing sizeof(*val_ptr), which always matches ValT.
+ * buf_size must exactly equal the stored value's size; the clru_get() macro
+ * satisfies this by passing sizeof(ValT) (via a ValT-typed temporary it reads
+ * into and then assigns, converted, into *val_ptr), not sizeof(*val_ptr);
+ * *val_ptr's own type may legitimately differ from ValT (e.g. a double* out-
+ * param for an int-valued cache), in which case the two sizes differ too. A
+ * stored value of any other size (larger OR smaller) than ValT is rejected with
+ * ccol_unexpected_failure and buf is left completely untouched, rather than
+ * copying a partial value into it: this only happens if the value in the
+ * cache did not actually come from a getter/setter that consistently
+ * produces sizeof(ValT)-sized values for this key.
  */
 ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
                                    void *buf, size_t buf_size);
@@ -198,16 +211,21 @@ ccol_retval_t __clrucache_get_into(clru_cache cache, const cmap_pair *key_pair,
  * concurrent getters for the same key block until it completes). The fetched
  * value is stored in the cache and returned to all waiters.
  *
- * Blocks if a setter is in progress for this key (both sync and async modes
- * block until the cache is in a consistent state).
+ * Blocks if a setter is in progress for this key, until the cache is in a
+ * consistent state.
  *
  * @param cache     Cache handle
  * @param key_pair  Key to look up
  * @param val_out   On success: val_out->ptr is a heap-allocated copy of the
  *                  value (caller must free it with the cache's allocator);
  *                  val_out->size is the stored value size
- * @return ccol_success, ccol_key_not_found, ccol_invalid_args, or
- *         ccol_not_enough_memory
+ * @return ccol_success, ccol_key_not_found, ccol_invalid_args,
+ *         ccol_not_enough_memory, ccol_unexpected_failure (this call
+ *         coalesced onto another thread's cache-miss fetch that populated
+ *         a value inconsistent in size with what that other thread's own
+ *         caller expected), or (on a cache miss, if the cache's internal
+ *         bookkeeping has reached its own maximum element count)
+ *         ccol_container_full
  */
 ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
                                  cmap_pair *val_out);
@@ -225,8 +243,10 @@ ccol_retval_t clrucache_get_full(clru_cache cache, const cmap_pair *key_pair,
  * @param cache    Cache handle
  * @param key_pair Key to set
  * @param val_pair Value to associate with the key
- * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
- *         ccol_unexpected_failure (sync remote failure)
+ * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory,
+ *         ccol_unexpected_failure (sync remote failure), or (when setting a
+ *         brand-new key, if the cache's internal bookkeeping has reached
+ *         its own maximum element count) ccol_container_full
  */
 ccol_retval_t clrucache_set_full(clru_cache cache, const cmap_pair *key_pair,
                                  const cmap_pair *val_pair);
@@ -383,10 +403,19 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
 /**
  * @brief Get a value by key (type-safe convenience wrapper)
  *
- * For non-char* val types: copies the value into *val_ptr and frees the
- * internal heap allocation. For char* val types: transfers ownership of the
+ * For non-char* val types: converts the stored value to *val_ptr's own type
+ * the same way a plain C assignment would (e.g. a cache storing int values
+ * read into a double* out-param converts the int to a double, rather than
+ * copying its raw bytes), then frees the internal heap allocation; a
+ * *val_ptr type that cannot be implicitly converted from the cache's
+ * declared ValT is a compile error at this point, not a silently
+ * reinterpreted value. For char* val types: transfers ownership of the
  * heap-allocated string to *(char **)val_ptr; the caller must free it using
  * the cache's custom allocator if one was provided, or free() otherwise.
+ *
+ * key is likewise converted to the cache's own declared KeyT the same way a
+ * plain C assignment would, rather than looked up using key's own natural
+ * expression type.
  *
  * When passing the cache across scopes (e.g. into a thread function), declare
  * a local alias and use clru_redeclare() before calling clru_get() so that
@@ -397,8 +426,9 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
  * @param key      Key expression (lvalue or literal string)
  * @param val_ptr  Pointer to the value type (ValT *), NOT cmap_pair *.
  *                 For non-char* val types: e.g. double * for a double-valued
- *                 cache; the value is copied in and the internal allocation
- *                 freed — no heap visible to the caller.
+ *                 cache; the value is copied in (converted to *val_ptr's own
+ *                 type) and the internal allocation freed; no heap visible
+ *                 to the caller.
  *                 For char* val types: pointer to a char* variable; ownership
  *                 of the heap-allocated string is transferred to the caller,
  *                 who must free it with the cache's custom allocator if one
@@ -416,7 +446,7 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
  */
 #define clru_get(name, key, val_ptr)                                          \
   ({                                                                          \
-    __typeof__(key) _clru_k = (key);                                          \
+    typeof(*(name##__clru_key_type_var)) _clru_k = (key);                     \
     cmap_pair _clru_kp = {};                                                  \
     _populate_cmap_pair(&_clru_kp, _clru_k);                                  \
     ccol_retval_t _clru_r;                                                    \
@@ -431,9 +461,19 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
         mem_cpy((val_ptr), &_clru_str_out, sizeof(void *));                   \
       }                                                                       \
     } else {                                                                  \
-      /* Non-char* path: copy directly into *val_ptr — no heap allocation */  \
-      _clru_r = __clrucache_get_into((name), &_clru_kp, (val_ptr),            \
-                                     sizeof(*(val_ptr)));                     \
+      /* Non-char* path: read into a temporary typed as the cache's own       \
+       * declared ValT (not *val_ptr's own type), then assign it into         \
+       * *val_ptr; this routes the conversion through the C compiler's own    \
+       * assignment rules instead of a raw byte copy, so a *val_ptr whose     \
+       * type differs from ValT (e.g. a double* out-param for an int-valued   \
+       * cache) gets a genuine numeric conversion rather than ValT's raw      \
+       * bytes reinterpreted as *val_ptr's type. Left untouched on failure,   \
+       * matching __clrucache_get_into's own "buf untouched on failure"       \
+       * contract. */                                                         \
+      typeof(*(name##__clru_val_type_var)) _clru_vtmp;                        \
+      _clru_r = __clrucache_get_into((name), &_clru_kp, &_clru_vtmp,          \
+                                     sizeof(_clru_vtmp));                     \
+      if (_clru_r == ccol_success) *(val_ptr) = _clru_vtmp;                   \
     }                                                                         \
     _clru_r;                                                                  \
   })
@@ -441,7 +481,22 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
 /**
  * @brief Set a value by key (type-safe convenience wrapper)
  *
- * Uses the policy chosen at construction (clru_set_sync / clru_set_async).
+ * If a remote setter was provided at construction, it is called synchronously
+ * before the cache is updated (see clrucache_set_full()).
+ *
+ * key and val are converted to the cache's own declared KeyT/ValT the same
+ * way a plain C assignment would (e.g. an int literal passed as val for a
+ * double-valued cache converts to the double value, rather than having its
+ * raw bytes stored verbatim); a val (or key) expression whose type cannot be
+ * implicitly converted to the cache's declared ValT (or KeyT) is a compile
+ * error at this point, not a silently reinterpreted value.
+ *
+ * name must be a plain variable declared with clru_construct/clru_declare,
+ * or restored with clru_redeclare() (this is what supplies the KeyT/ValT
+ * used for the conversion above); it cannot be an arbitrary expression like
+ * a struct member access. When passing the cache across scopes (e.g. into a
+ * thread function), declare a local alias and use clru_redeclare() first,
+ * the same as clru_get() requires.
  *
  * @param name   Cache variable
  * @param key    Key expression
@@ -454,15 +509,15 @@ static inline __attribute__((always_inline)) void ___clrucache_destroy(
  * clru_set(cache, k, v);
  * @endcode
  */
-#define clru_set(name, key, val)                      \
-  ({                                                  \
-    __typeof__(key) _clru_k = (key);                  \
-    __typeof__(val) _clru_v = (val);                  \
-    cmap_pair _clru_kp = {};                          \
-    cmap_pair _clru_vp = {};                          \
-    _populate_cmap_pair(&_clru_kp, _clru_k);          \
-    _populate_cmap_pair(&_clru_vp, _clru_v);          \
-    clrucache_set_full((name), &_clru_kp, &_clru_vp); \
+#define clru_set(name, key, val)                          \
+  ({                                                      \
+    typeof(*(name##__clru_key_type_var)) _clru_k = (key); \
+    typeof(*(name##__clru_val_type_var)) _clru_v = (val); \
+    cmap_pair _clru_kp = {};                              \
+    cmap_pair _clru_vp = {};                              \
+    _populate_cmap_pair(&_clru_kp, _clru_k);              \
+    _populate_cmap_pair(&_clru_vp, _clru_v);              \
+    clrucache_set_full((name), &_clru_kp, &_clru_vp);     \
   })
 
 /**

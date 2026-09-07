@@ -11,17 +11,59 @@ ccol_retval_t cjson_dictionary_set(cjson obj, const char *key, cjson child);
 .fi
 .SH DESCRIPTION
 .nf
-Inserts or replaces the value for key in obj.  Ownership of child
-transfers to obj unconditionally: on success the object owns child;
-on failure child is deep-freed by cjson_dictionary_set.  Do not free
-child after calling this function regardless of the return value.
-If a previous child existed under key it is deep-freed before the
-new one is stored.
+Inserts or replaces the value for key in obj.  If a previous child
+existed under key, the new child is stored first and the previous
+child is deep-freed only once it is safely in place, so a failed
+insert never leaves the slot dangling.
+
+Ownership of child transfers to obj on every outcome that touches
+child at all: on success the object owns child; on a failure caused
+by obj/key being invalid (obj is NULL or not CJSON_DICTIONARY, key is
+NULL) or by an internal insertion failure, a freshly unattached child
+is deep-freed by cjson_dictionary_set and must not be freed by the
+caller.  The one class of failure that leaves child completely
+untouched, still owned by whatever it was already attached to, is an
+already-attached child (see below); this holds regardless of what
+else is wrong with the call, so an invalid obj/key never causes an
+already-attached child to be destroyed.
+
+child must not already be attached to a list/dictionary parent, and
+must not already contain obj somewhere within its own subtree, with
+one exception: passing the exact node already stored under key back
+in (e.g. cjson_dictionary_set(obj, k, cjson_dictionary_get(obj, k)))
+is a harmless no-op that returns ccol_success without modifying obj.
+Any other already-attached child (stored under a different key, in
+a different container, or obj itself) is rejected with
+ccol_invalid_args, leaving child completely untouched and still owned
+by whatever it was already attached to.  Likewise, if obj is already
+reachable by descending from child (attaching child would then make
+obj both a new ancestor of child and an existing descendant of it, a
+cycle), the call fails with ccol_invalid_args; if that check cannot be
+completed under memory pressure, ccol_not_enough_memory is returned
+instead of silently risking an undetected cycle.
+.fi
+.SH PARAMETERS
+.nf
+obj    Target dictionary node (must be CJSON_DICTIONARY).
+key    Null-terminated key string; a copy is stored internally.
+child  Value node; must not already be attached elsewhere, and must
+       not already contain obj in its own subtree (see above).
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success, ccol_invalid_args, or ccol_not_enough_memory.
+ccol_success, ccol_invalid_args, ccol_not_enough_memory, or
+ccol_container_full if obj has already reached its maximum element
+count.
+.fi
+.SH NOTES
+.nf
+A node returned by cjson_get(), cjson_list_get(), or
+cjson_dictionary_get() is a borrowed reference into an existing tree,
+not a freshly owned node, and must never be passed as child unless it
+is the value already stored under key (see above).  Use cjson_clone()
+first to obtain an independent copy that is safe to store elsewhere.
 .fi
 .SH "SEE ALSO"
 .BR cjson_dictionary_get (3),
-.BR cjson_create_dictionary (3)
+.BR cjson_create_dictionary (3),
+.BR cjson_clone (3)

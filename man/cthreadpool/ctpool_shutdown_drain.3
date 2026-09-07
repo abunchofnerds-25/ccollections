@@ -29,6 +29,13 @@ ctpool_submit and ctpool_submit_future return ccol_not_permitted after
 this call.
 Any thread blocked in ctpool_submit on a full bounded queue is woken
 and will receive ccol_not_permitted.
+
+Calling ctpool_shutdown_drain on pool from within a task (or that
+task's on_complete callback) currently executing on one of pool's own
+worker threads is a complete no-op: it neither stops accepting new
+tasks nor joins any worker. A worker thread cannot join itself, so
+proceeding could never actually wait for the calling thread to exit,
+only for every other worker.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_shutdown_immediate (3),

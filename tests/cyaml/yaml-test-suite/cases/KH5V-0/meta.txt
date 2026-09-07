@@ -1,0 +1,2 @@
+fail=0
+name=Inline tabs in double quoted

@@ -32,6 +32,13 @@ result.  Both conditions produce (NULL, count=0).  Call
 chttpsvr_req_query_oom(req) after a NULL return to distinguish the two
 cases.  Alternatively, use chttpsvr_req_query_one for single-valued
 keys; that function returns ccol_not_enough_memory on OOM.
+
+A query string component with a "=" but an empty key half (e.g.
+"?=hello") is a real, retrievable pair: key "" maps to value "hello".
+A genuinely empty component instead (nothing at all between two "&"
+characters, or before a leading/after a trailing one, e.g.
+"?a=1&&b=2" or "?&a=1") is skipped outright rather than parsed as a
+spurious key=""/value="" entry.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_query_one (3),

@@ -1,0 +1,9 @@
+literal: |
+  line1
+  line2
+folded: >
+  word1
+  word2
+anchor: &a
+  x: 1
+alias: *a

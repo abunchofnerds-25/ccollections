@@ -23,7 +23,12 @@ Current minimum level.
 .fi
 .SH NOTES
 .nf
-Thread-safe: protected by the per-logger mutex.
+Thread-safe: the minimum level is a per-logger, atomically updated
+value, independent of the lock that serialises writes/rotation for
+the shared output target, so reading one logger's level never
+contends with a write in progress on a sibling logger sharing the
+same target.
+Asserts if logger is CLOG_INVALID, stale, or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_set_level (3)

@@ -8,6 +8,7 @@ C Collections (libccollections, \-lccollections)
 #include <clogger.h>
 
 clog clog_open_fd_mp(int fd, clog_level_t min_level,
+                  const clog_async_cfg_t *async_cfg,
                   ccol_memmgmt_procs_t *mprocs);
 .fi
 .SH DESCRIPTION
@@ -17,24 +18,63 @@ The file descriptor is not owned by the logger and will NOT be closed
 when clog_close() is called. Log rotation is unavailable for fd-backed
 loggers.
 
-Use fd=1 for stdout, fd=2 for stderr, or any other open writable fd.
+Use fd=1 for stdout, fd=2 for stderr, or any other open writable fd,
+including a pipe or a connected socket (see clog_set_format(3) for the
+CLOG_FMT_SYSLOG case). From the moment the first logger of any kind is
+created in the process, SIGPIPE is ignored; if fd's peer end later
+goes away, a subsequent write is dropped silently instead of
+terminating the process.
+
+fd may be opened in either blocking or non-blocking mode. If fd is
+non-blocking and a write would otherwise block (EAGAIN/EWOULDBLOCK),
+the calling thread waits for fd to become writable again and retries,
+rather than dropping the remainder of the record; a record is only
+ever dropped on a genuinely unrecoverable write error.
 .fi
 .SH PARAMETERS
 .nf
 fd         Open, writable file descriptor. Must be >= 0.
 min_level  Messages below this level are silently dropped. Use
            CLOG_OFF to suppress all output.
+async_cfg  Async logging configuration, or NULL for synchronous
+           logging. When non-NULL, log_*() calls only format their
+           own message and hand the rest off to a dedicated writer
+           thread; see clog_async_cfg_t below. Unlike a rotation
+           config, an all-zero struct still enables async mode (with
+           every zero field falling back to its own default); only a
+           literal NULL keeps logging synchronous.
+             clog_async_cfg_t fields:
+               queue_size        - message-queue capacity; 0 means an
+                                    unbounded queue that never blocks
+                                    a caller on send; > 0 means a
+                                    bounded queue of this many
+                                    messages, where a full queue
+                                    BLOCKS the caller until space
+                                    frees up (never drops a message)
+               flush_buffer_size - bytes; the writer thread flushes
+                                    once its aggregation buffer
+                                    reaches this size; 0 ->
+                                    CLOG_DEFAULT_ASYNC_FLUSH_BUFFER_SIZE.
+                                    A value above the library's own
+                                    internal 16 MiB per-record cap is
+                                    honored: the aggregation buffer's
+                                    own growth ceiling follows it.
+               flush_interval_ms - milliseconds; the writer thread
+                                    flushes at least this often even
+                                    if flush_buffer_size has not been
+                                    reached; 0 ->
+                                    CLOG_DEFAULT_ASYNC_FLUSH_INTERVAL_MS
 mprocs     Custom allocator (malloc/free/calloc/realloc function
            pointers), or NULL to use the default system allocator.
            All four pointers must be set when mprocs is non-NULL;
            a partially-populated struct causes the call to return
-           NULL without creating a logger. The struct is copied
-           internally; the caller may free it after this call.
+           CLOG_INVALID without creating a logger. The struct is
+           copied internally; the caller may free it after this call.
 .fi
 .SH RETURN VALUE
 .nf
 Returns a new logger handle on success.
-Returns NULL if fd < 0, if mprocs is invalid, or if memory
+Returns CLOG_INVALID if fd < 0, if mprocs is invalid, or if memory
 allocation fails.
 .fi
 .SH NOTES
@@ -42,9 +82,22 @@ allocation fails.
 The fd is not duplicated; the caller is responsible for keeping it
 open for the lifetime of the logger.
 All public functions are fully thread-safe via a per-logger mutex.
+A handle open at the time of fork() remains fully usable in the
+child: logging, deriving, and closing it all continue to work
+correctly on both sides of the fork. A logger's async writer thread
+does not exist in a forked child; an async-enabled handle inherited
+into a child transparently falls back to synchronous logging there.
+
+When async_cfg is non-NULL, CLOG_FMT_SYSLOG output is exempt from
+batching regardless of queue_size/flush_buffer_size/flush_interval_ms:
+every record and every backtrace frame still keeps its own write()
+call. A CLOG_FATAL call always bypasses the queue: it drains
+everything already queued from earlier calls, then writes the fatal
+record itself synchronously, before terminating the process.
 .fi
 .SH "SEE ALSO"
 .BR clog_open_file_mp (3),
 .BR clog_close (3),
+.BR clog_flush (3),
 .BR log_info (3),
 .BR log_error (3)

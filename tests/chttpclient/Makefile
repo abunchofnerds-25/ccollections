@@ -9,13 +9,12 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS
 # cthreadpool.c is a transitive dependency of the async engine's DNS/connect
 # worker pool (g_client_dns_pool).
 #
-# Two binaries are built from this shared source set: `tests` (the main
-# suite, tests.c) and `tests_tls` (tests_tls.c), a dedicated suite that
-# drives a real TLS handshake against a genuine self-signed cert generated
-# at test-startup via the `openssl` CLI. tests_tls remains its own SEPARATE
-# BINARY, matching this project's established precedent for a TLS-handshake-
-# focused suite, even though ctls.c itself never aborts the process on bad
-# input.
+# One binary, `tests` (tests.c), covers this whole directory's main suite,
+# including a real TLS handshake against a genuine self-signed cert generated
+# at test-startup via the `openssl` CLI. That TLS coverage used to live in
+# its own separate tests_tls binary; ctls.c (unlike the vendored TLS layer it
+# replaced) never aborts the process on bad input, so the isolation a
+# separate binary bought is no longer needed, and the two were merged.
 COMMON_SRC_FILES = ../../src/chttpclient.c \
 	../../src/chttp1_parser.c \
 	../../src/chttp.c \
@@ -27,54 +26,107 @@ COMMON_SRC_FILES = ../../src/chttpclient.c \
 	../../src/ctls.c \
 	../../src/common.c
 
-CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
-	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O0 -Werror
+EXTRA_CFLAGS ?=
+CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
+	-Wl,-z,relro,-z,now \
+	-fstack-clash-protection \
+	-D_FORTIFY_SOURCE=3 \
+	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O0 -Werror $(EXTRA_CFLAGS)
+TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fsanitize=thread -Wall -Wextra -g -O1
 
 LFLAGS = -lpthread -lssl -lcrypto -lz -lm
 
 build:
 	$(CC) $(CFLAGS) tests.c $(COMMON_SRC_FILES) -o tests $(LFLAGS)
 
-build_tls:
-	$(CC) $(CFLAGS) tests_tls.c $(COMMON_SRC_FILES) -o tests_tls $(LFLAGS)
+# Separate ThreadSanitizer build of the main suite only (the multi-threaded
+# async engine is what this is meant to catch races in), kept out of the
+# default -Werror build, mirroring tests/cthreadcomm/Makefile's identical
+# build_tsan/test_tsan pattern.
+build_tsan:
+	$(CC) $(TSAN_CFLAGS) tests.c $(COMMON_SRC_FILES) -o tests_tsan $(LFLAGS) -fsanitize=thread
+
+# die_after_fork=0: this suite's own concurrent_double_destroy_is_fatal test
+# forks, then creates two NEW pthreads in the child to race a double-destroy.
+# chttpclient's async engine keeps a persistent, process-wide multi-threaded
+# event_loop reactor alive for the whole suite, so by the time this test
+# runs, the parent is multi-threaded at fork() time -- exactly the condition
+# TSan's own default die_after_fork=1 treats as unsafe for a child that then
+# creates further threads, silently making the child exit normally instead
+# of reaching this test's own expected fatal_err()/SIGABRT (verified: the
+# child's chttpclient_destroy logic itself is correct and race-free under
+# gcc/clang, -O0/-O1, TSan or not; only fork()-then-new-threads under TSan's
+# own safety net is affected, confirmed via TSAN_OPTIONS=die_after_fork=0
+# reproducibly fixing it, and via TSan's own diagnostic output showing this
+# process is not single-threaded at fork time, unlike tests/cthreadcomm's
+# otherwise-identical test, whose event_loop instances are torn down between
+# tests, keeping ITS OWN parent single-threaded by the time it forks).
+#
+# suppressions=tsan_openssl.supp: see that file's own comment for the one
+# known, third-party-only OpenSSL race it suppresses (concurrent client
+# handshakes verifying against one shared trust store).
+test_tsan: build_tsan
+	TSAN_OPTIONS="die_after_fork=0 suppressions=tsan_openssl.supp" ./tests_tsan
 
 # Destroying the handle chttp_default_client() returns is a one-shot,
 # process-global, unrecoverable action (default_client_bundler.client is
 # never rebuilt once cleared; see chttp_default_client's own doc comment),
 # so it must not run inside tests.c, where it would permanently break every
 # other test's use of chttp_do/chttp_get for the rest of that process.
-# Mirrors the tests_tls/tests_parser precedent of an additional binary
-# within this same directory rather than a new top-level tests/ directory.
+# Mirrors the tests_parser precedent of an additional binary within this
+# same directory rather than a new top-level tests/ directory.
 build_default_client:
 	$(CC) $(CFLAGS) tests_default_client.c $(COMMON_SRC_FILES) \
 		-o tests_default_client $(LFLAGS)
 
 # tests_parser exercises chttp1_parser.c directly (no chttpclient.c at all)
 # with hand-crafted byte sequences, including malformed/hostile input the
-# real-socket-based tests/tests_tls binaries structurally cannot reach
-# (their mock servers only ever send well-formed responses); its own
-# "stream" test group uses local AF_UNIX socketpairs to exercise
-# chttp1_stream_t, but this remains fully independent of any real network
-# traffic. chttp1_parser.c links ctls.c (+ its own chashmap.c/common.c
-# dependencies) now that chttp1_stream_t optionally drives a TLS connection
-# via ctls_conn_read/_write -- see chttp1_parser.h's own module doc comment.
-# Kept as its own binary in this same directory, mirroring the tests_tls
-# precedent, rather than a new top-level tests/ directory.
+# real-socket-based tests binary structurally cannot reach (its mock server
+# only ever sends well-formed responses); its own "stream" test group uses
+# local AF_UNIX socketpairs to exercise chttp1_stream_t, but this remains
+# fully independent of any real network traffic. chttp1_parser.c links
+# ctls.c (+ its own chashmap.c/common.c dependencies) now that
+# chttp1_stream_t optionally drives a TLS connection via ctls_conn_read/
+# _write -- see chttp1_parser.h's own module doc comment. Kept as its own
+# binary in this same directory rather than a new top-level tests/
+# directory.
 build_parser:
 	$(CC) $(CFLAGS) tests_parser.c ../../src/chttp1_parser.c ../../src/ctls.c \
 		../../src/chashmap.c ../../src/common.c -o tests_parser $(LFLAGS)
 
-test: build build_tls build_parser build_default_client
+# libFuzzer targets for chttp1_parser.c, request and response mode
+# separately (see fuzz/fuzz_common.h for why: request-line and status-line
+# grammars are different enough to warrant separate corpora, not one shared
+# pile). Requires clang (libFuzzer is a Clang/LLVM feature). Mirrors
+# tests/cyaml/Makefile's own `fuzz` target exactly, including its own
+# .PHONY rationale: a fuzz/corpus_request or fuzz/corpus_response directory
+# already exists on disk, which would otherwise make Make consider a bare
+# `fuzz_request`/`fuzz_response` target already satisfied and skip the
+# recipe entirely. Run ./fuzz_chttp1_request fuzz/corpus_request
+# [-max_total_time=N] etc; see the libFuzzer docs for flags.
+FUZZ_CC = clang
+FUZZ_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fsanitize=fuzzer,address,undefined -g3 -O1
+FUZZ_PARSER_SRC_FILES = ../../src/chttp1_parser.c ../../src/ctls.c \
+	../../src/chashmap.c ../../src/common.c
+
+.PHONY: fuzz_request fuzz_response
+fuzz_request:
+	$(FUZZ_CC) $(FUZZ_CFLAGS) fuzz/fuzz_chttp1_request.c $(FUZZ_PARSER_SRC_FILES) \
+		-o fuzz_chttp1_request $(LFLAGS)
+
+fuzz_response:
+	$(FUZZ_CC) $(FUZZ_CFLAGS) fuzz/fuzz_chttp1_response.c $(FUZZ_PARSER_SRC_FILES) \
+		-o fuzz_chttp1_response $(LFLAGS)
+
+test: build build_parser build_default_client
 	./tests
-	./tests_tls
 	./tests_parser
 	./tests_default_client
 
-memtest: build build_tls build_parser build_default_client
+memtest: build build_parser build_default_client
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
-		--error-exitcode=1 --child-silent-after-fork=yes --suppressions=ld_so_dlopen.supp ./tests
-	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
-		--error-exitcode=1 ./tests_tls
+		--error-exitcode=1 --child-silent-after-fork=yes --suppressions=ld_so_dlopen.supp \
+		--suppressions=openssl_internal.supp ./tests
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 --suppressions=openssl_internal.supp ./tests_parser
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
@@ -89,14 +141,6 @@ generate_coverage_report:
 	--output-file chttpclient.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpclient.c.info --output-directory coverage/tests && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests
-	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_tls.c \
-		$(COMMON_SRC_FILES) -o tests_tls $(LFLAGS) && \
-	./tests_tls && \
-	gcov -d -w tests_tls-chttpclient && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent --capture --directory . \
-	--output-file chttpclient_tls.c.info && \
-	genhtml --ignore-errors inconsistent -s chttpclient_tls.c.info --output-directory coverage/tests_tls && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info tests_tls
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_parser.c ../../src/chttp1_parser.c \
 		../../src/ctls.c ../../src/chashmap.c ../../src/common.c -o tests_parser $(LFLAGS) && \
 	./tests_parser && \
@@ -106,9 +150,10 @@ generate_coverage_report:
 	genhtml --ignore-errors inconsistent -s chttp1_parser.c.info --output-directory coverage/tests_parser && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests_parser
 
-all: build build_tls build_parser build_default_client test memtest generate_coverage_report
+all: build build_parser build_default_client build_tsan test test_tsan memtest generate_coverage_report
 
 clean:
-	rm -rf tests tests_tls tests_parser tests_default_client third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
+	rm -rf tests tests_tls tests_parser tests_default_client tests_tsan third_party_obj coverage *.gcno *.gcda *.gcov *.c.info \
+		fuzz_chttp1_request fuzz_chttp1_response
 
-default: build build_tls build_parser build_default_client
+default: build build_parser build_default_client

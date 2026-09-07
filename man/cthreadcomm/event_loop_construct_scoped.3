@@ -23,7 +23,10 @@ call.
 .nf
 name                  Variable name for the event_loop handle.
 max_events_per_wait   Size of the epoll_wait batch buffer each reactor
-                      thread uses (must be >= 1).
+                      thread uses (must be between 1 and INT_MAX
+                      inclusive, and small enough that
+                      max_events_per_wait * sizeof(struct epoll_event)
+                      does not overflow size_t).
 num_lock_stripes      Number of independent lock stripes for the fd/entry
                       registry (must be >= 1).  1 means a single
                       shared lock.
@@ -45,7 +48,7 @@ return, which this scope's implicit shutdown is equally subject to.
 .nf
 {
     event_loop_construct_scoped(loop, 32, 1, 1);
-    event_reg *reg = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
+    event_reg reg = event_loop_add(loop, selectable_from_fd(fd, ccol_select_read),
                                     handlers, NULL, NULL);
     /* ... */
 }  /* loop is automatically shut down (every reactor thread joined) and

@@ -14,10 +14,26 @@ ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
 .fi
 .SH DESCRIPTION
 .nf
-Write a scalar value to the leaf addressed by path.  The leaf is
-created if absent (its immediate parent must already exist).  If the
-leaf exists its type is replaced unconditionally; any composite
-(list, dictionary) resources it previously held are deep-freed.
+Write a scalar value to the leaf addressed by path.  For a dictionary
+leaf, the key is created if absent (its immediate parent dictionary
+must already exist).  For a list leaf ("#N"), the index must already
+be in range; a list has no way to be auto-extended to fit an
+arbitrary index, so a syntactically valid but out-of-range one fails
+with ccol_key_not_found, and malformed "#N" syntax fails with
+ccol_invalid_args.  Resolving the parent path (every component before
+the leaf) applies the identical distinction at each intermediate
+component: a missing dictionary key, or a syntactically valid but
+out-of-range list index, fails with ccol_key_not_found; a non-container
+(wrong-type) node or malformed "#N" syntax fails with
+ccol_invalid_args.  Either way, if the leaf already exists its type is
+replaced unconditionally; any composite (list, dictionary) resources
+it previously held are deep-freed.
+
+type must be one of CYAML_NULL, CYAML_BOOL, CYAML_INTEGER,
+CYAML_FLOAT, or CYAML_STRING; any other value (including CYAML_LIST /
+CYAML_DICTIONARY, or the internal sentinel cyaml_set's own _Generic
+dispatch produces for a C type outside its accepted-type list) is
+rejected with ccol_invalid_args before the target node is touched.
 
 raw is a void pointer to the C value; raw_size is sizeof the original
 C expression.  For string values, raw points to a const char * variable
@@ -45,8 +61,24 @@ raw_is_char_array  true when raw points directly at a char[] array.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success, ccol_invalid_args, ccol_key_not_found, or
-ccol_not_enough_memory.
+ccol_success           - value written.
+ccol_invalid_args      - root or path is NULL, path is empty, a
+                         non-container (wrong-type) node encountered
+                         before the leaf, malformed '#N' index
+                         syntax, or an empty component (nothing
+                         between two dots, or a leading or trailing
+                         dot); at any position in the path, not just
+                         the leaf.
+ccol_key_not_found     - a list index (leaf or intermediate) is
+                         syntactically well-formed but out of range, or
+                         an intermediate dictionary key needed to
+                         resolve the parent path is absent (a missing
+                         dictionary key at the leaf itself is not an
+                         error: it is created).
+ccol_not_enough_memory - internal allocation failed.
+ccol_container_full    - creating a new leaf dictionary key would
+                         exceed the parent's maximum representable
+                         element count (not reachable in practice).
 .fi
 .SH "SEE ALSO"
 .BR cyaml_set (macro) (3),

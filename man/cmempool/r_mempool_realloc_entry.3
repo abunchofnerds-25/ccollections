@@ -11,9 +11,12 @@ void *r_mempool_realloc_entry(r_mempool *rmp, void *addr, size_t size);
 .fi
 .SH DESCRIPTION
 .nf
-Changes the size of an allocated entry. If the new size maps to the same
-pool as the old size, returns the original pointer. Otherwise, allocates
-a new entry, copies min(old_size, new_size) bytes, and frees the old entry.
+Changes the size of an allocated entry. If the new size does not require
+moving to a differently-sized underlying allocation, returns the original
+pointer unchanged (no copy); this applies whether the entry is served by
+one of the pool's own fixed-size tiers or by the dynamic/heap fallback
+path. Otherwise, allocates a new entry sized for the request, copies
+min(old_size, new_size) bytes, and frees the old entry.
 .fi
 .SH PARAMETERS
 .nf
@@ -29,11 +32,18 @@ Returns NULL on failure
 .SH NOTES
 .nf
 If addr is NULL, equivalent to r_mempool_alloc_entry()
-If new size maps to same pool, returns original pointer (no copy)
+If the new size does not require a differently-sized allocation, returns
+the original pointer unchanged (no copy)
 Otherwise, allocates new, copies data, frees old
 Copies min(old_user_size, new_user_size) bytes
 Old entry is automatically freed if reallocation succeeds
 Thread-safe if pool created with single_threaded=false
+Returns NULL if size is 0 or > largest_size, WITHOUT touching addr: a
+  non-NULL addr is neither freed nor moved when size itself is invalid,
+  exactly as if the call had never been made
+Will assert if addr is non-NULL and was not obtained from this
+r_mempool (corruption/foreign-pointer detection, mirroring
+r_mempool_free_entry())
 .fi
 .SH "SEE ALSO"
 .BR r_mempool_alloc_entry (3),

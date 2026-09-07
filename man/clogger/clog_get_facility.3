@@ -24,6 +24,7 @@ Current facility code.
 .SH NOTES
 .nf
 Thread-safe: protected by the shared backing-store mutex.
+Asserts if logger is CLOG_INVALID, stale, or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_set_facility (3),

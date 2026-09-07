@@ -21,8 +21,10 @@ child  Node to append.
 .fi
 .SH RETURN VALUE
 .nf
-ccol_success, ccol_invalid_args (if seq is not a list), or
-ccol_not_enough_memory.
+ccol_success, ccol_invalid_args (if seq is not a list),
+ccol_not_enough_memory, or ccol_container_full (the list has
+reached its maximum representable element count; not reachable
+in practice).
 .fi
 .SH "SEE ALSO"
 .BR cyaml_list_get (3),

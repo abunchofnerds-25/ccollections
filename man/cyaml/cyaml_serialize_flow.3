@@ -1,4 +1,4 @@
-.TH CYAML_SERIALIZE_FLOW 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CYAML_SERIALIZE_FLOW 3 "2026-09-06" "c_collections" "C Collections Library - Functions"
 .SH NAME
 cyaml_serialize_flow \- serialize a DOM tree to flow-style YAML
 .SH LIBRARY
@@ -16,11 +16,29 @@ Lists are rendered as [a, b, c].  dictionaries are rendered as
 {key: value, ...}.  Scalars follow the same quoting rules as
 cyaml_serialize().  The output is typically a single line.
 
+A dictionary's own key order in the output is unspecified, exactly
+like cyaml_serialize(3)'s own identical note; see that page's own
+DESCRIPTION for the full reasoning.
+
+Tag emission follows the same rule as cyaml_serialize(): a custom
+tag, or a core-schema tag that does not match the node's own type,
+is emitted verbatim as "!<...>"; a core-schema tag that does match
+its node's type is never emitted.
+
 Free the returned string with cyaml_serialize_free().
+
+node is subject to the same 500-level nesting limit as cyaml_serialize(3);
+see that page's own DESCRIPTION for why this applies even to a tree that
+never went through cyaml_parse*(3).
+
+A NULL node serializes as if it were a CYAML_NULL node ("~"); this is
+a successful, non-NULL return, not a failure signal (unlike
+cyaml_clone(3), which returns NULL for a NULL node).
 .fi
 .SH RETURN VALUE
 .nf
-Heap-allocated null-terminated string on success, NULL on OOM.
+Heap-allocated null-terminated string on success, NULL on OOM or if node
+is nested more than 500 levels deep.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_serialize (3),

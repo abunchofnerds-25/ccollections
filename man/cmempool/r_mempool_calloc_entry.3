@@ -28,6 +28,7 @@ Returns NULL on failure
 .nf
 Zeros exactly 'size' bytes (not the full pool element)
 Thread-safe if pool created with single_threaded=false
+Will assert if rmp is NULL
 .fi
 .SH "SEE ALSO"
 .BR r_mempool_alloc_entry (3),

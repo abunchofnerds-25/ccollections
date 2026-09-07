@@ -22,6 +22,12 @@ internally it is converted to an absolute deadline using CLOCK_REALTIME.
 Passing NULL as timeout is equivalent to ctpool_try_submit_future (no
 waiting).
 
+A non-NULL timeout whose tv_nsec field is outside [0, 999999999]
+(for example the un-normalised result of subtracting two struct
+timespec values) is normalised before use rather than producing
+undefined behaviour: {1, -500000000} is treated the same as a
+correctly-normalised {0, 500000000}.
+
 On success *out is set to a new ctpool_future handle with a reference
 count of 2 (caller + queued task). The caller must call
 ctpool_future_free exactly once when done.

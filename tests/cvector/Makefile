@@ -4,8 +4,12 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS
 SRC_FILE_PREFIX = cvector
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/common.c ../../src/csort.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
-CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
-	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror
+EXTRA_CFLAGS ?=
+CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
+	-Wl,-z,relro,-z,now \
+	-fstack-clash-protection \
+	-D_FORTIFY_SOURCE=3 \
+	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
 LFLAGS = -lpthread
 
@@ -16,7 +20,7 @@ test: build
 	./tests
 
 memtest: build
-	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests
+	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests
 
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \

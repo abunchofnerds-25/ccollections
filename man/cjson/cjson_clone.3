@@ -15,10 +15,18 @@ Returns a fully independent copy of the subtree rooted at node.
 All strings are duplicated, all arrays and objects are recursively
 cloned.  The clone uses the same allocator as the source (taken from
 the root node's stored m_procs).
+
+A subtree nested more than 500 levels deep (arrays and/or objects, in
+any combination) is rejected rather than recursing further; a tree
+built directly through the construction API (cjson_list_push(),
+cjson_dictionary_set()) is not otherwise bounded in depth the way a
+parsed document is, so this cap applies independently of cjson_parse().
+Ordinary trees never approach this depth.
 .fi
 .SH RETURN VALUE
 .nf
-New root node on success (caller owns it), or NULL on allocation failure.
+New root node on success (caller owns it).  NULL on allocation failure,
+or if node is nested more than 500 levels deep.
 .fi
 .SH "SEE ALSO"
 .BR cjson_destroy (3)

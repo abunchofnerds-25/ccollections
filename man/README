@@ -2,8 +2,7 @@ C COLLECTIONS LIBRARY - MAN PAGE TREE
 ======================================
 
 This directory holds real troff/groff manual pages for the library, one
-file per documented symbol, replacing the old man_pages_for_functions.txt
-and man_pages_for_macros.txt bundles.
+file per documented symbol.
 
 Layout
 ------

@@ -388,22 +388,33 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
  *       not worked around here (no extra locking around the verification
  *       step): that would serialise concurrent handshakes and defeat the
  *       whole point of this engine multiplexing several of them at once,
- *       to paper over what is very likely someone else's bug. Confirmed
- *       harmless in practice across every test run so far (every
- *       concurrent-HTTPS test in tests/chttpclient/tests_tls.c passes
- *       reliably under both plain and -fsanitize=thread builds); revisit
- *       if it is ever seen to actually corrupt a handshake's outcome
- *       rather than just being flagged by the race detector.
+ *       to paper over what is very likely someone else's bug. Every
+ *       concurrent-HTTPS handshake in tests/chttpclient/tests.c's own
+ *       sync_tls/async_tls test groups (that file's own former separate
+ *       tests_tls.c binary, merged in 2026-08-16) has always completed
+ *       successfully in practice, under both plain and -fsanitize=thread
+ *       builds, including every run that also triggered this exact race;
+ *       revisit if it is ever seen to actually corrupt a handshake's
+ *       outcome rather than just being flagged by the race detector, not
+ *       merely because the race itself is detected.
  */
 ctls_handshake_result_t ctls_conn_handshake_step(ctls_conn_t *conn);
 
 /**
  * @brief Reads decrypted application data from conn.
  *
- * Behaves like a non-blocking read(2): returns the number of bytes read
- * (which may be less than len), 0 on a clean peer-initiated TLS shutdown
- * (close_notify), or -1 with errno set to EWOULDBLOCK/EAGAIN (try again
- * once the fd is readable) or another errno for a fatal I/O/protocol error.
+ * Behaves like a non-blocking read(2), with one deliberate exception: -1
+ * with errno EWOULDBLOCK/EAGAIN does NOT always mean "try again once the fd
+ * is readable" the way a real read(2) would. OpenSSL can need to WRITE
+ * before this call can make progress (e.g. flushing a deferred TLS 1.3
+ * post-handshake session ticket, or a TLS 1.2 renegotiation), in which case
+ * this same EWOULDBLOCK return means "try again once the fd is writable"
+ * instead; call ctls_conn_wants_write() immediately afterward to tell the
+ * two apart before deciding which direction to wait for. Returns the
+ * number of bytes read (which may be less than len), 0 on a clean
+ * peer-initiated TLS shutdown (close_notify), or -1/errno for a fatal I/O/
+ * protocol error (ctls_conn_wants_write()'s own return value is
+ * meaningless in that case).
  *
  * Only valid after ctls_conn_handshake_step() has returned
  * CTLS_HANDSHAKE_DONE.
@@ -413,15 +424,40 @@ ssize_t ctls_conn_read(ctls_conn_t *conn, void *buf, size_t len);
 /**
  * @brief Writes application data to conn, encrypting it.
  *
- * Behaves like a non-blocking write(2): returns the number of bytes
- * consumed (which may be less than len; SSL_MODE_ENABLE_PARTIAL_WRITE is
- * always set), or -1 with errno set to EWOULDBLOCK/EAGAIN (try again once
- * the fd is writable) or another errno for a fatal I/O/protocol error.
+ * Behaves like a non-blocking write(2), with the same deliberate exception
+ * ctls_conn_read() documents: a -1/EWOULDBLOCK return can mean "try again
+ * once the fd is READABLE" instead of writable (OpenSSL needing to read
+ * before this call can make progress, e.g. during a TLS 1.2
+ * renegotiation); call ctls_conn_wants_write() immediately afterward to
+ * tell the two apart. Returns the number of bytes consumed (which may be
+ * less than len; SSL_MODE_ENABLE_PARTIAL_WRITE is always set), or -1/errno
+ * for a fatal I/O/protocol error.
  *
  * Only valid after ctls_conn_handshake_step() has returned
  * CTLS_HANDSHAKE_DONE.
  */
 ssize_t ctls_conn_write(ctls_conn_t *conn, const void *buf, size_t len);
+
+/**
+ * @brief Reports which direction the most recent ctls_conn_read()/
+ *        ctls_conn_write() call on conn actually needs, when that call
+ *        returned -1/EWOULDBLOCK.
+ *
+ * @param conn Connection handle; NULL is tolerated and reports false.
+ * @return true if that call needs the fd to become WRITABLE before being
+ *         retried; false if it needs the fd to become READABLE (the
+ *         ordinary case for ctls_conn_read(), and the assumed default for
+ *         any conn with no classified I/O call yet).
+ *
+ * Meaningful only immediately after a ctls_conn_read()/ctls_conn_write()
+ * call that itself returned -1 with errno EWOULDBLOCK/EAGAIN; a caller that
+ * always waits for the "home" direction of whichever function it called
+ * (read-direction for ctls_conn_read(), write-direction for
+ * ctls_conn_write()) without checking this can leave a connection stalled
+ * indefinitely the one time OpenSSL genuinely needs the opposite direction;
+ * see ctls_conn_read()'s own doc comment for the underlying mechanism.
+ */
+bool ctls_conn_wants_write(const ctls_conn_t *conn);
 
 /**
  * @brief Returns the peer certificate verification result (an OpenSSL

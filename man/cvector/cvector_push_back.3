@@ -33,6 +33,9 @@ Amortized O(1) complexity
 Element is copied into the vector
 Capacity doubles when full (2x scaling factor)
 Asserts if v is NULL
+new_elem may safely point into v's own backing buffer (for example a
+pointer returned by cvector_data_ptr(3) or cvector_at(3)); any
+capacity expansion this call triggers will not invalidate it
 .fi
 .SH "SEE ALSO"
 .BR cvector_pop_back (3),

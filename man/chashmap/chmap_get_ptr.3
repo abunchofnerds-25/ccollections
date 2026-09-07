@@ -30,8 +30,14 @@ Returns NULL if key not found
 Returns NULL if key not found (does not terminate)
 Terminates program if value size doesn't match type size
 Returns pointer to value for in-place modification
+Pointer is correctly aligned for the value's type regardless of which
+internal backend the map uses
 Pointer invalidated by later insert/delete/resize operations
 For strings, returns pointer to the char* itself
+For a float or double key, see chmap_construct(3) for the map's
+key equality contract (bitwise, except -0.0 canonicalized to 0.0)
+For a long double key, see chmap_construct(3) for the map's key
+equality contract (value-based, unlike every other key type)
 .fi
 .SH EXAMPLES
 .nf
@@ -44,4 +50,5 @@ if (ptr) {
 .fi
 .SH "SEE ALSO"
 .BR chmap_get (3),
-.BR chmap_get_elem_ref (3)
+.BR chmap_get_elem_ref (3),
+.BR chmap_construct (3)

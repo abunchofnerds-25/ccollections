@@ -28,7 +28,12 @@ Return values:
         dropped or reset; stream_read_timeout_ms or
         max_body_read_duration_ms elapsed; or the body exceeded
         max_body_size mid-stream.  Call chttpsvr_req_stream_error
-        immediately afterward to distinguish these.
+        immediately afterward to distinguish the last four (genuine,
+        data-dependent transfer errors) from each other; it reports
+        ccol_success, indistinguishable from "no error," for the
+        buf-is-NULL and wrong-handler-type cases, since both are
+        static programming errors reachable on every call to the
+        offending code rather than only sometimes.
 
 When buflen is 0 the function returns 0 immediately regardless of the
 value of buf.  Passing NULL for buf with buflen == 0 is therefore
@@ -52,8 +57,14 @@ server was not going to read.  A request that carries "Expect:
 100-continue" but has no body at all never receives the interim
 response either, for the identical reason: there is nothing to invite
 the client to upload.
+
+For a chunked request body, a trailer field (RFC 7230 4.1.2) only
+becomes retrievable via chttpsvr_req_header once this function has
+returned 0 (end of body), since trailer parsing happens as part of
+reaching that natural end.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_body (3),
+.BR chttpsvr_req_header (3),
 .BR chttpsvr_req_stream_error (3),
 .BR chttpsvr_register_streaming_handler (3)

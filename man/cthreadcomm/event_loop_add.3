@@ -7,9 +7,9 @@ C Collections (libccollections, \-lccollections)
 .nf
 #include <cthreadcomm.h>
 
-event_reg *event_loop_add(event_loop loop, ccol_selectable sel,
-                        event_handlers_t handlers, void *arg,
-                        char **err_str);
+event_reg event_loop_add(event_loop loop, ccol_selectable sel,
+                       event_handlers_t handlers, void *arg,
+                       char **err_str);
 .fi
 .SH DESCRIPTION
 .nf
@@ -31,6 +31,32 @@ registration plus event_loop_modify(3).  Registering a second selectable
 for a direction already occupied on the same fd (two read registrations
 on one fd, for example) is rejected with ccol_not_permitted.
 
+A queue/channel selectable has no such restriction: any number of
+event_loop_add() calls for the same queue+direction (across one or more
+event_loop instances), and any mix of those with a concurrent
+ccol_select() call on the same queue+direction, are all live at once and
+all eventually get a turn, mirroring ccol_select()'s own guarantee that
+any number of threads may simultaneously watch the same queue.  A message
+that arrives while more than one such listener is registered wakes
+exactly one of them per producer/consumer call; whichever one is woken
+checks, once its own callback returns, whether the queue is still ready
+for its direction and, if so, forwards the wake to the next listener in
+line, so no live listener is ever passed over indefinitely.  A backlog
+deeper than the number of live listeners may still need a further,
+unrelated send/receive to fully drain (see handlers.on_readable's own
+note below on notifications not being guaranteed one-to-one with
+messages).
+
+A queue registered this way must outlive its registration:
+circular_queue_destroy(3)/dynamic_queue_destroy(3)/channel_destroy(3)
+assert if the queue still has a live registration (or an in-progress
+ccol_select()/ccol_select_timed() call) watching it, since the
+still-linked waiter would otherwise reference the queue's own,
+about-to-be-freed mutex. Call event_loop_remove() before destroying the
+queue; destroying the loop first is fine, since event_loop_destroy()/
+event_loop_remove() always unlink a queue's waiter before it is ever
+touched again.
+
 handlers.on_readable reports readiness only, for every selectable type:
 event_loop never performs the receive itself.  For fd selectables, the
 callback performs its own read(2)/recv(2) on sel->fd.  For queue/channel
@@ -39,12 +65,37 @@ dynmq_try_recv_zc() on sel->cq/sel->dq.  Either way a concurrent consumer
 may have already claimed the data (a TOCTOU race inherent to the design,
 same as ccol_select()'s own write-direction contract); the callback's
 own explicit receive call may find nothing, and must handle that
-gracefully.  handlers.on_writable fires with no payload for either kind
+gracefully.  For a queue selectable specifically, a notification is not
+guaranteed to correspond to exactly one message (several sends that
+outrun dispatch can be observed as a single notification); a callback
+that must not leave messages stranded under bursty traffic should call
+circq_try_recv_zc()/dynmq_try_recv_zc() in a loop until it returns
+ccol_container_empty.  handlers.on_writable fires with no payload for either kind
 (caller performs its own write(2)/send(2), or its own non-blocking
 try-send for queues).  handlers.on_error fires only for fd selectables,
-on EPOLLERR/EPOLLHUP; queue selectables never produce an error
-condition.  Any of the three callbacks may be NULL, in which case that
-class of event is silently dropped for this registration.
+on EPOLLERR/EPOLLHUP, whenever the corresponding direction has no
+handler to hand the co-occurring condition to instead: a read
+registration with on_readable set may receive on_readable instead of
+on_error for the same EPOLLERR/EPOLLHUP event if data is also
+available (EPOLLIN/EPOLLRDHUP and EPOLLERR/EPOLLHUP are not mutually
+exclusive), and a write registration with on_writable set may likewise
+receive on_writable instead if the fd is also writable (EPOLLOUT and
+EPOLLERR/EPOLLHUP are not mutually exclusive either: a socket that has
+entered an error state is reported writable too, since write(2) on it
+returns immediately with an error rather than blocking).  Queue
+selectables never produce an error condition.  Any of the three
+callbacks may be NULL, in which case that class of event is silently
+dropped for this registration.  A read registration with on_readable
+set to NULL (an "error only" reader, watching solely for the fd to
+die) must genuinely never receive ordinary data with no accompanying
+error: the fd remaining readable with real, undrained bytes and no
+EPOLLERR/EPOLLHUP is then neither dispatched as readable (no
+on_readable to call) nor as an error (no error condition exists), so
+it keeps being reported ready on every poll cycle with nothing to show
+for it, a silent, unbounded dispatch spin.  The identical hazard
+applies to a write registration with on_writable set to NULL (an
+"error only" writer): it must genuinely never become writable with no
+accompanying error either.
 
 Callbacks run on one of loop's own background reactor threads, never on
 the calling thread.  A callback must not block.
@@ -71,10 +122,23 @@ err_str   Optional pointer to receive an error string on failure.
 .SH RETURN VALUE
 .nf
 Returns a new registration handle on success.
-Returns NULL on failure: loop is EVENT_LOOP_INVALID or a stale/
-already-destroyed handle, sel is malformed (invalid type/dir, NULL
+Returns EVENT_REG_INVALID on failure: loop is EVENT_LOOP_INVALID or a
+stale/already-destroyed handle, sel is malformed (invalid type/dir, NULL
 queue pointer, or negative fd), the direction is already occupied on
 that fd (ccol_not_permitted), or allocation/epoll_ctl failure.
+.fi
+.SH NOTES
+.nf
+event_reg, like event_loop itself, is an opaque VALUE handle, not a
+pointer: never cast it to/from void*, compare it via a pointer cast, or
+treat it as an address. Compare it against EVENT_REG_INVALID (or use a
+truthiness check; EVENT_REG_INVALID is 0). Every use of an event_reg is
+resolved against its own loop's registration table before anything is
+dereferenced, so a stale or already-removed handle is always detected
+and rejected cleanly rather than risking a use-after-free, even when
+racing a concurrent event_loop_modify/_pause/_resume/_remove/
+event_loop_reg_generation call on the very same registration from
+another thread.
 .fi
 .SH THREAD SAFETY
 .nf
@@ -92,8 +156,8 @@ void on_msg(event_loop loop, ccol_selectable *sel, void *arg) {
 
 circular_queue *jobs = circular_queue_create(64, NULL);
 event_handlers_t handlers = { .on_readable = on_msg };
-event_reg *reg = event_loop_add(loop, selectable_from_circq(jobs, ccol_select_read),
-                                handlers, NULL, NULL);
+event_reg reg = event_loop_add(loop, selectable_from_circq(jobs, ccol_select_read),
+                               handlers, NULL, NULL);
 .fi
 .SH "SEE ALSO"
 .BR event_loop_create (3),
@@ -105,4 +169,7 @@ event_reg *reg = event_loop_add(loop, selectable_from_circq(jobs, ccol_select_re
 .BR selectable_from_fd (3),
 .BR selectable_from_circq (3),
 .BR selectable_from_dynq (3),
-.BR selectable_from_chan (3)
+.BR selectable_from_chan (3),
+.BR circular_queue_destroy (3),
+.BR dynamic_queue_destroy (3),
+.BR channel_destroy (3)

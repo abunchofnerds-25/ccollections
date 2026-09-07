@@ -1,0 +1,9 @@
+flow: {a: 1, b: [2, 3], c: "quoted 'string'"}
+bool1: true
+bool2: false
+nul: null
+tilde: ~
+hexnum: 0x1F
+float1: .inf
+float2: -.inf
+float3: .nan

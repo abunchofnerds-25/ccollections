@@ -23,6 +23,9 @@ str   New content (must not be NULL)
 .nf
 ccol_success              - Set succeeded
 ccol_invalid_args         - str is NULL
+ccol_container_full       - str is too large to represent (not reachable
+                            in practice: would require a str spanning the
+                            entire address space)
 ccol_not_enough_memory    - Reallocation failed
 .fi
 .SH NOTES

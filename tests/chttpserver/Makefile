@@ -43,13 +43,47 @@ COMMON_SRC_FILES = ../../src/chttpserver.c \
 	../../src/ctls.c \
 	../../src/common.c
 
-CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
-	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O0 -Werror -fPIC
+EXTRA_CFLAGS ?=
+CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
+	-Wl,-z,relro,-z,now \
+	-fstack-clash-protection \
+	-D_FORTIFY_SOURCE=3 \
+	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O0 -Werror -fPIC $(EXTRA_CFLAGS)
+TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fsanitize=thread -Wall -Wextra -g -O1 -fPIC
 
-LFLAGS = -lpthread -lssl -lcrypto -lm -lz
+LFLAGS = -lpthread -lssl -lcrypto -lm -lz -rdynamic
 
 build:
 	$(CC) $(CFLAGS) tests.c $(COMMON_SRC_FILES) -o tests $(LFLAGS)
+
+# Separate ThreadSanitizer build of the main suite only, kept out of the
+# default -Werror build, mirroring tests/cthreadcomm/Makefile's identical
+# build_tsan/test_tsan pattern.
+build_tsan:
+	$(CC) $(TSAN_CFLAGS) tests.c $(COMMON_SRC_FILES) -o tests_tsan $(LFLAGS) -fsanitize=thread
+
+# die_after_fork=0: see tests/chttpclient/Makefile's identical comment on
+# its own test_tsan target -- the same root cause (a persistent, process-wide
+# multi-threaded event_loop reactor alive at fork() time, tripping TSan's own
+# die_after_fork=1 default the moment concurrent_double_destroy_is_fatal's
+# forked child creates its own two racing pthreads) applies here too,
+# verified the same way.
+test_tsan: build_tsan
+	TSAN_OPTIONS="die_after_fork=0" ./tests_tsan
+
+# Separate ThreadSanitizer build of tests_engine_stop.c, mirroring build_tsan/
+# test_tsan above exactly: this is by far the most fork/thread-race-heavy of
+# the four binaries in this directory (reaper-vs-destroy, start-vs-stop,
+# listener-dispatch, and concurrent-destroy-vs-engine_stop races, each driven
+# by dedicated white-box arm/wait/release hooks built specifically to
+# manufacture data races deterministically), so it is exactly the suite most
+# worth running under the one tool best suited to catch the class of bug it
+# is designed to reproduce; previously had no TSan coverage of its own at all.
+build_engine_stop_tsan:
+	$(CC) $(TSAN_CFLAGS) tests_engine_stop.c $(COMMON_SRC_FILES) -o tests_engine_stop_tsan $(LFLAGS) -fsanitize=thread
+
+test_engine_stop_tsan: build_engine_stop_tsan
+	TSAN_OPTIONS="die_after_fork=0" ./tests_engine_stop_tsan
 
 build_tls:
 	$(CC) $(CFLAGS) tests_tls.c $(COMMON_SRC_FILES) -o tests_tls $(LFLAGS)
@@ -74,7 +108,7 @@ memtest: build build_tls build_mem_mgmt build_engine_stop
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 ./tests_mem_mgmt
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
-		--error-exitcode=1 ./tests_engine_stop
+		--error-exitcode=1 --child-silent-after-fork=yes ./tests_engine_stop
 
 generate_coverage_report:
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests.c $(COMMON_SRC_FILES) \
@@ -114,9 +148,9 @@ generate_coverage_report:
 		--output-directory coverage/tests_engine_stop && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info tests_engine_stop
 
-all: build build_tls build_mem_mgmt build_engine_stop test memtest generate_coverage_report
+all: build build_tls build_mem_mgmt build_engine_stop build_tsan test test_tsan build_engine_stop_tsan test_engine_stop_tsan memtest generate_coverage_report
 
 clean:
-	rm -rf tests tests_tls tests_mem_mgmt tests_engine_stop third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
+	rm -rf tests tests_tls tests_mem_mgmt tests_engine_stop tests_tsan tests_engine_stop_tsan third_party_obj coverage *.gcno *.gcda *.gcov *.c.info
 
 default: build build_tls build_mem_mgmt build_engine_stop

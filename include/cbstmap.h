@@ -37,30 +37,20 @@ SOFTWARE.
  * - O(log n) insert, delete, and search operations
  * - In-order iteration (sorted key order)
  * - Custom comparison function support
- * - Type-safe macros for common operations with signed/unsigned key handling
+ * - Type-safe macros for common operations across signed, unsigned,
+ *   floating-point, and string key types
  *
  * Key characteristics:
- * - AVL tree maintains balance factor |height(left) - height(right)| ≤ 1
+ * - AVL tree maintains balance factor |height(left) - height(right)| <= 1
  * - Single and double rotations for rebalancing
  * - Keys stored in sorted order (ascending)
  * - Iterator traverses in-order (left, root, right)
- * - All tree operations are iterative using explicit stacks
- * - Default comparison: memcmp for unsigned, proper signed comparison
+ * - All tree operations are iterative using fixed-size stacks (no
+ *   recursion, no heap allocation for tree traversal/rebalancing)
+ * - Default comparison: signed/unsigned integer comparison, numeric
+ *   floating-point comparison, strcmp-equivalent for strings, and a raw
+ *   memcmp fallback for any other key type
  */
-
-/**
- * @brief Check if a key type-variable pointer denotes a char-pointer key type
- *
- * Analogous to __is_signed_int_ptr: the key type-variable has type key_t*, so
- * for char* keys the type-variable has type char** — that is what this checks.
- */
-#define __is_char_ptr_key(_ptr)     \
-  _Generic((_ptr),                  \
-      char **: true,                \
-      const char **: true,          \
-      unsigned char **: true,       \
-      const unsigned char **: true, \
-      default: false)
 
 /** @brief Opaque binary search tree map structure */
 typedef struct cbinarymap cbinarymap;
@@ -76,10 +66,10 @@ typedef cbinarymap *cbmap;
  * @brief Create a balanced BST map with full customization
  *
  * Creates a new self-balancing binary search tree map with specified key
- * signedness, custom memory management, and custom comparison function.
+ * type, custom memory management, and custom comparison function.
  *
- * @param keys_are_signed_ints If true, treat integer keys as signed for
- * comparison
+ * @param key_type Type of the keys stored in the map (selects the default
+ * comparison strategy)
  * @param mmgmt_procs Custom memory management procedures, or NULL for default
  * malloc/free
  * @param custom_comparison_proc Custom comparison function, or NULL for default
@@ -87,11 +77,26 @@ typedef cbinarymap *cbmap;
  *
  * @return Pointer to newly created BST map, or NULL on failure
  *
- * @note Default comparison for unsigned: memcmp(key1, key2, size)
- * @note Default comparison for signed: proper signed integer comparison (1, 2,
- * 4, 8 bytes only, when used for other sizes the behaviour is undefined)
+ * @note Default comparison for ccol_char: native `char` comparison (signed
+ * or unsigned matches whatever this platform's own `char` type is)
+ * @note Default comparison for ccol_signed_char (a scalar `signed char` or
+ * its typedef `int8_t`, as opposed to a `signed char *` string key, which is
+ * ccol_string) and short/int/long/long_long: proper signed integer
+ * comparison, independent of this platform's own `char` signedness
+ * @note Default comparison for the unsigned integer types and ccol_pointer:
+ * proper unsigned integer comparison
+ * @note Default comparison for ccol_float/double/long_double: proper
+ * floating-point comparison; a NaN key sorts as greater than every non-NaN
+ * key and equal to every other NaN key, so NaN keys remain fully usable
+ * (found, updated, deleted) via a well-defined total order rather than
+ * colliding with an unrelated key
+ * @note Default comparison for ccol_string: lexicographic byte comparison
+ * @note For ccol_other_types (e.g. a struct key type), the default (no
+ * custom_comparison_proc) falls back to a raw memcmp of the representation,
+ * comparing indeterminate padding bytes and any pointer members by address
+ * rather than by pointee; provide custom_comparison_proc for a struct key
  * @note Custom comparison receives void* pointers to key data
- * @note Map maintains AVL balance: |height(left) - height(right)| ≤ 1
+ * @note Map maintains AVL balance: abs(height(left) - height(right)) <= 1
  * @note All operations are O(log n) for balanced tree
  * @note Map must be destroyed with cbmap_destroy() when done
  *
@@ -100,7 +105,7 @@ typedef cbinarymap *cbmap;
  * @see cbmap_create_ch
  * @see cbmap_destroy
  */
-cbmap cbmap_create_full(bool keys_are_signed_ints, bool keys_are_strings,
+cbmap cbmap_create_full(ccol_data_type key_type,
                         ccol_memmgmt_procs_t *mmgmt_procs,
                         ccol_comparison_proc_t custom_comparison_proc,
                         char **err);
@@ -109,16 +114,16 @@ cbmap cbmap_create_full(bool keys_are_signed_ints, bool keys_are_strings,
  * @brief Create a BST map with default settings
  *
  * Convenience wrapper for cbmap_create_full() with default memory management
- * and default comparison (based on key signedness).
+ * and default comparison (based on key type).
  *
- * @param keys_are_signed_ints If true, treat integer keys as signed
+ * @param key_type Type of the keys stored in the map
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created BST map, or NULL on failure
  */
 static inline __attribute__((always_inline)) cbmap
-cbmap_create(bool keys_are_signed_ints, char **err) {
-  return cbmap_create_full(keys_are_signed_ints, false, NULL, NULL, err);
+cbmap_create(ccol_data_type key_type, char **err) {
+  return cbmap_create_full(key_type, NULL, NULL, err);
 }
 
 /**
@@ -127,15 +132,15 @@ cbmap_create(bool keys_are_signed_ints, char **err) {
  * Convenience wrapper for cbmap_create_full() with custom memory management
  * but default comparison.
  *
- * @param keys_are_signed_ints If true, treat integer keys as signed
+ * @param key_type Type of the keys stored in the map
  * @param mmgmt_procs Custom memory management procedures
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created BST map, or NULL on failure
  */
 static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
-    bool keys_are_signed_ints, ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
-  return cbmap_create_full(keys_are_signed_ints, false, mmgmt_procs, NULL, err);
+    ccol_data_type key_type, ccol_memmgmt_procs_t *mmgmt_procs, char **err) {
+  return cbmap_create_full(key_type, mmgmt_procs, NULL, err);
 }
 
 /**
@@ -144,20 +149,19 @@ static inline __attribute__((always_inline)) cbmap cbmap_create_mp(
  * Convenience wrapper for cbmap_create_full() with custom comparison function
  * but default memory management.
  *
- * @param keys_are_signed_ints If true, treat integer keys as signed (ignored if
- * custom_comparison_proc provided)
+ * @param key_type Type of the keys stored in the map (ignored if
+ * custom_comparison_proc is provided)
  * @param custom_comparison_proc Custom comparison function
  * @param err Optional pointer to receive error string on failure
  *
  * @return Pointer to newly created BST map, or NULL on failure
  *
- * @note keys_are_signed_ints is ignored when custom_comparison_proc is provided
+ * @note key_type is ignored when custom_comparison_proc is provided
  */
 static inline __attribute__((always_inline)) cbmap
-cbmap_create_ch(bool keys_are_signed_ints,
+cbmap_create_ch(ccol_data_type key_type,
                 ccol_comparison_proc_t custom_comparison_proc, char **err) {
-  return cbmap_create_full(keys_are_signed_ints, false, NULL,
-                           custom_comparison_proc, err);
+  return cbmap_create_full(key_type, NULL, custom_comparison_proc, err);
 }
 
 /* ========================================================================== */
@@ -209,6 +213,8 @@ ccol_retval_t cbmap_reset(cbmap cbm);
  * @param val_pair Value to insert (ptr and size must be valid)
  *
  * @return ccol_success on success
+ * @return ccol_key_already_present if the key already existed (its value was
+ * updated successfully; the key itself is left unchanged)
  * @return ccol_container_full if max_elem_count reached
  * @return ccol_not_enough_memory if allocation fails
  *
@@ -326,7 +332,11 @@ ccol_retval_t cbmap_delete_elem(cbmap cbm, const cmap_pair *key_pair);
  * @note Iterator uses a stack to track path through tree
  * @note Iterator must be destroyed with cbmap_iter_destroy()
  * @note Modifying map during iteration invalidates the iterator
- * @note Will assert if cbm is NULL
+ * @note A NULL cbm is treated the same as an empty map (returns NULL, not
+ * an error); this is intentional, not merely permissive, so that a
+ * lazily-created map field left uninitialized because nothing has been
+ * inserted into it yet can be iterated directly without every caller
+ * needing its own NULL guard first
  * @note Returns NULL if map is empty (not an error)
  *
  * @see cbmap_begin (macro wrapper)
@@ -440,27 +450,27 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @brief Initialize a BST map with defaults
  *
  * Initializes a previously declared BST map with default settings.
- * Automatically determines key signedness from type variable.
+ * Automatically determines the key type from the type variable.
  *
  * @param hm_name BST map variable to initialize
  *
  * @note Terminates program on failure
  * @note Uses default memory management
- * @note Automatically detects signed vs unsigned keys
+ * @note Automatically detects the key type (signedness, float, string, struct)
  *
  * @see cbmap_declare
  * @see cbmap_construct
  */
-#define cbmap_init(hm_name)                                                 \
-  do {                                                                      \
-    char *err = NULL;                                                       \
-    hm_name = cbmap_create_full(                                            \
-        __is_signed_int_ptr(hm_name##__ccol_key_type_var),                  \
-        __is_char_ptr_key(hm_name##__ccol_key_type_var), NULL, NULL, &err); \
-    if (!hm_name) {                                                         \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,              \
-                err ? err : "unknown error");                               \
-    }                                                                       \
+#define cbmap_init(hm_name)                                                  \
+  do {                                                                       \
+    char *err = NULL;                                                        \
+    hm_name = cbmap_create_full(                                             \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, NULL, \
+        &err);                                                               \
+    if (!hm_name) {                                                          \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
+                err ? err : "unknown error");                                \
+    }                                                                        \
   } while (0)
 
 /**
@@ -472,19 +482,18 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @param mmgmt_procs Custom memory management procedures
  *
  * @note Terminates program on failure
- * @note Automatically detects signed vs unsigned keys
+ * @note Automatically detects the key type (signedness, float, string, struct)
  */
-#define cbmap_init_mp(hm_name, mmgmt_procs)                                  \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name =                                                                \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__ccol_key_type_var), \
-                          __is_char_ptr_key(hm_name##__ccol_key_type_var),   \
-                          (mmgmt_procs), NULL, &err);                        \
-    if (!hm_name) {                                                          \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                \
-    }                                                                        \
+#define cbmap_init_mp(hm_name, mmgmt_procs)                      \
+  do {                                                           \
+    char *err = NULL;                                            \
+    hm_name = cbmap_create_full(                                 \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var), \
+        (mmgmt_procs), NULL, &err);                              \
+    if (!hm_name) {                                              \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,   \
+                err ? err : "unknown error");                    \
+    }                                                            \
   } while (0)
 
 /**
@@ -498,17 +507,16 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @note Terminates program on failure
  * @note Uses default memory management
  */
-#define cbmap_init_cc(hm_name, custom_comparison_proc)                       \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name =                                                                \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__ccol_key_type_var), \
-                          __is_char_ptr_key(hm_name##__ccol_key_type_var),   \
-                          NULL, (custom_comparison_proc), &err);             \
-    if (!hm_name) {                                                          \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                \
-    }                                                                        \
+#define cbmap_init_cc(hm_name, custom_comparison_proc)                 \
+  do {                                                                 \
+    char *err = NULL;                                                  \
+    hm_name = cbmap_create_full(                                       \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, \
+        (custom_comparison_proc), &err);                               \
+    if (!hm_name) {                                                    \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,         \
+                err ? err : "unknown error");                          \
+    }                                                                  \
   } while (0)
 
 /**
@@ -523,17 +531,16 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  *
  * @note Terminates program on failure
  */
-#define cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc)        \
-  do {                                                                       \
-    char *err = NULL;                                                        \
-    hm_name =                                                                \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__ccol_key_type_var), \
-                          __is_char_ptr_key(hm_name##__ccol_key_type_var),   \
-                          (mmgmt_procs), (custom_comparison_proc), &err);    \
-    if (!hm_name) {                                                          \
-      fatal_err("Failed to create BST map '%s': %s", #hm_name,               \
-                err ? err : "unknown error");                                \
-    }                                                                        \
+#define cbmap_init_full(hm_name, mmgmt_procs, custom_comparison_proc) \
+  do {                                                                \
+    char *err = NULL;                                                 \
+    hm_name = cbmap_create_full(                                      \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var),      \
+        (mmgmt_procs), (custom_comparison_proc), &err);               \
+    if (!hm_name) {                                                   \
+      fatal_err("Failed to create BST map '%s': %s", #hm_name,        \
+                err ? err : "unknown error");                         \
+    }                                                                 \
   } while (0)
 
 /**
@@ -546,7 +553,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
  * @param val_t Value type
  *
  * @note Terminates program on failure
- * @note Automatically detects signed vs unsigned keys
+ * @note Automatically detects the key type (signedness, float, string, struct)
+ * @note For a struct key_t, this falls back to a raw memcmp ordering (see
+ * cbmap_create_full); use cbmap_construct_cc for a struct key type
  *
  * Example:
  * @code
@@ -568,8 +577,8 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        __is_signed_int_ptr(hm_name##__ccol_key_type_var),                    \
-        __is_char_ptr_key(hm_name##__ccol_key_type_var), NULL, NULL, &err);   \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, NULL,  \
+        &err);                                                                \
     if (!hm_name) {                                                           \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
                 err ? err : "unknown error");                                 \
@@ -579,12 +588,12 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
 #define cbmap_construct_scoped(hm_name, key_t, val_t)                         \
   typeof(key_t) *hm_name##__ccol_key_type_var __attribute__((unused)) = NULL; \
   typeof(val_t) *hm_name##__ccol_val_type_var __attribute__((unused)) = NULL; \
-  cbmap hm_name _ccol_destructor(___cbmap_destroy);                           \
+  cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
   do {                                                                        \
     char *err = NULL;                                                         \
     hm_name = cbmap_create_full(                                              \
-        __is_signed_int_ptr(hm_name##__ccol_key_type_var),                    \
-        __is_char_ptr_key(hm_name##__ccol_key_type_var), NULL, NULL, &err);   \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL, NULL,  \
+        &err);                                                                \
     if (!hm_name) {                                                           \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
                 err ? err : "unknown error");                                 \
@@ -609,10 +618,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
   do {                                                                        \
     char *err = NULL;                                                         \
-    hm_name =                                                                 \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__ccol_key_type_var),  \
-                          __is_char_ptr_key(hm_name##__ccol_key_type_var),    \
-                          (mmgmt_procs), NULL, &err);                         \
+    hm_name = cbmap_create_full(                                              \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
+        (mmgmt_procs), NULL, &err);                                           \
     if (!hm_name) {                                                           \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
                 err ? err : "unknown error");                                 \
@@ -625,10 +633,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
   do {                                                                        \
     char *err = NULL;                                                         \
-    hm_name =                                                                 \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__ccol_key_type_var),  \
-                          __is_char_ptr_key(hm_name##__ccol_key_type_var),    \
-                          (mmgmt_procs), NULL, &err);                         \
+    hm_name = cbmap_create_full(                                              \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
+        (mmgmt_procs), NULL, &err);                                           \
     if (!hm_name) {                                                           \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
                 err ? err : "unknown error");                                 \
@@ -653,10 +660,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
   do {                                                                        \
     char *err = NULL;                                                         \
-    hm_name =                                                                 \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__ccol_key_type_var),  \
-                          __is_char_ptr_key(hm_name##__ccol_key_type_var),    \
-                          NULL, (custom_comparison_proc), &err);              \
+    hm_name = cbmap_create_full(                                              \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,        \
+        (custom_comparison_proc), &err);                                      \
     if (!hm_name) {                                                           \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
                 err ? err : "unknown error");                                 \
@@ -670,10 +676,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
   do {                                                                        \
     char *err = NULL;                                                         \
-    hm_name =                                                                 \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__ccol_key_type_var),  \
-                          __is_char_ptr_key(hm_name##__ccol_key_type_var),    \
-                          NULL, (custom_comparison_proc), &err);              \
+    hm_name = cbmap_create_full(                                              \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var), NULL,        \
+        (custom_comparison_proc), &err);                                      \
     if (!hm_name) {                                                           \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
                 err ? err : "unknown error");                                 \
@@ -701,10 +706,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   cbmap hm_name /* _ccol_destructor(___cbmap_destroy) = NULL; */ = NULL;      \
   do {                                                                        \
     char *err = NULL;                                                         \
-    hm_name =                                                                 \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__ccol_key_type_var),  \
-                          __is_char_ptr_key(hm_name##__ccol_key_type_var),    \
-                          (mmgmt_procs), (custom_comparison_proc), &err);     \
+    hm_name = cbmap_create_full(                                              \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
+        (mmgmt_procs), (custom_comparison_proc), &err);                       \
     if (!hm_name) {                                                           \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
                 err ? err : "unknown error");                                 \
@@ -718,10 +722,9 @@ static inline void ___cbmap_destroy(cbmap *cbm) {
   cbmap hm_name _ccol_destructor(___cbmap_destroy) = NULL;                    \
   do {                                                                        \
     char *err = NULL;                                                         \
-    hm_name =                                                                 \
-        cbmap_create_full(__is_signed_int_ptr(hm_name##__ccol_key_type_var),  \
-                          __is_char_ptr_key(hm_name##__ccol_key_type_var),    \
-                          (mmgmt_procs), (custom_comparison_proc), &err);     \
+    hm_name = cbmap_create_full(                                              \
+        determine_ccol_data_type(*hm_name##__ccol_key_type_var),              \
+        (mmgmt_procs), (custom_comparison_proc), &err);                       \
     if (!hm_name) {                                                           \
       fatal_err("Failed to create BST map '%s': %s", #hm_name,                \
                 err ? err : "unknown error");                                 \

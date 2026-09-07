@@ -20,7 +20,10 @@ NULL memory management procedures.
 .fi
 .SH PARAMETERS
 .nf
-max_size  Maximum number of messages the queue can hold (1 to max_elem_count)
+max_size  Maximum number of messages the queue can hold (1 to
+          SIZE_MAX / sizeof(c_message_t); a larger value is rejected,
+          since the queue is backed by a single max_size * sizeof(c_message_t)
+          array and a larger value would overflow that computation)
 err_str   Optional pointer to receive error string on failure
 .fi
 .SH RETURN VALUE
@@ -32,6 +35,11 @@ Returns NULL on failure
 .nf
 All operations on this queue are thread-safe
 Queue must be destroyed with circular_queue_destroy() when done
+fork(2) is safe with respect to this queue's own internal locking: a
+lock held by some other thread at the instant of the fork is never
+inherited by the child already locked. The queue owns no thread of
+its own, so one already live and in active use across the fork
+remains fully usable on both sides afterward.
 .fi
 .SH "SEE ALSO"
 .BR circular_queue_create_with_mprocs (3),

@@ -30,6 +30,12 @@ Tasks that are already executing when this is called are allowed to
 finish normally.
 ctpool_submit and ctpool_submit_future return ccol_not_permitted after
 this call.
+
+Calling ctpool_shutdown_immediate on pool from within a task (or that
+task's on_complete callback) currently executing on one of pool's own
+worker threads is a complete no-op, for the same reason as the
+identical case documented for ctpool_shutdown_drain: a worker thread
+cannot join itself.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_shutdown_drain (3),

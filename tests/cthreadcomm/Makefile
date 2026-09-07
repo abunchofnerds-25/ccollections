@@ -10,8 +10,12 @@ SRC_FILE_PREFIX = cthreadcomm
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \
             ../../src/cthreadpool.c ../../src/cvector.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
-CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-all -Wstrict-overflow \
-	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror
+EXTRA_CFLAGS ?=
+CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
+	-Wl,-z,relro,-z,now \
+	-fstack-clash-protection \
+	-D_FORTIFY_SOURCE=3 \
+	-Wformat=2 -Wformat-security -Wall -Wextra -g3 -O3 -Werror $(EXTRA_CFLAGS)
 TSAN_CFLAGS = $(INCLUDES) $(DEFINITIONS) -fsanitize=thread -Wall -Wextra -g -O1
 COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 LFLAGS = -lpthread
@@ -28,8 +32,17 @@ build_tsan:
 test: build
 	./tests
 
+# die_after_fork=0: this suite's own event_loop_handle_lifecycle tests fork
+# and create new pthreads in the child (see tests/chttpclient/Makefile's
+# fuller comment on its own test_tsan target for the exact TSan mechanism).
+# This module's event_loop instances are torn down between tests, keeping
+# the parent single-threaded at fork() time in practice, so this has not
+# been observed to matter here the way it does for chttpclient/chttpserver's
+# own persistent, process-wide reactors -- set for consistency across all
+# three fork-and-spawn-new-threads suites, and as a safeguard against a
+# future test addition making this parent multi-threaded at fork time too.
 test_tsan: build_tsan
-	./tests_tsan
+	TSAN_OPTIONS="die_after_fork=0" ./tests_tsan
 
 memtest: build
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests

@@ -31,9 +31,11 @@ a key name, consistent with cjson_get and cjson_set.
 .SH RETURN VALUE
 .nf
 ccol_retval_t.  Returns ccol_success on success.
-ccol_invalid_args if root or path is NULL, path is empty, or the leaf
-component is not valid for the parent type.
-ccol_key_not_found if any path component (parent or leaf) is absent.
+ccol_invalid_args if root or path is NULL, an empty path or path
+component (leading, trailing, or consecutive dots), the leaf
+component is not valid for the parent type, or a malformed "#N" index.
+ccol_key_not_found if the parent path, or a syntactically valid leaf
+key / index, is absent.
 ccol_not_enough_memory on internal allocation failure.
 .fi
 .SH EXAMPLE

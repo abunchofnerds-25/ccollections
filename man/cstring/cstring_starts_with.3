@@ -17,11 +17,12 @@ always matches.
 .SH PARAMETERS
 .nf
 s        String to test
-prefix   Prefix to look for (must not be NULL)
+prefix   Prefix to look for
 .fi
 .SH RETURN VALUE
 .nf
-true if the string starts with prefix, false otherwise
+true if the string starts with prefix
+false if the string does not start with prefix, or if prefix is NULL
 .fi
 .SH NOTES
 .nf

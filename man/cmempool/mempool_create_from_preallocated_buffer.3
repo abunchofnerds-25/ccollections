@@ -1,4 +1,4 @@
-.TH MEMPOOL_CREATE_FROM_PREALLOCATED_BUFFER 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH MEMPOOL_CREATE_FROM_PREALLOCATED_BUFFER 3 "2026-08-28" "c_collections" "C Collections Library - Functions"
 .SH NAME
 mempool_create_from_preallocated_buffer \- create pool from user buffer
 .SH LIBRARY
@@ -26,7 +26,10 @@ undesirable.
 .nf
 buffer                     Pointer to preallocated buffer
 buf_size                   Size of buffer in bytes
-elem_size                  Size of each element in bytes
+elem_size                  Size of each element in bytes (must be > 0;
+                          if smaller than sizeof(uintptr_t) it is rounded
+                          up, mirroring mempool_create(); maximum
+                          SIZE_MAX minus the internal header overhead)
 fallback_to_dynamic_memory If true, allocate from heap when pool exhausted
 single_threaded           If true, omit locking
 mmgmt_procs               Custom memory management, or NULL
@@ -39,10 +42,22 @@ Returns NULL on failure
 .fi
 .SH NOTES
 .nf
-Element count is calculated as buf_size / (elem_size + header_overhead)
+Element count is calculated as buf_size / stride, where stride is
+  elem_size + header_overhead further rounded up so every element in the
+  pool is correctly aligned, not just the first (the same stride
+  DECLARE_PREALLOCATED_MEMPOOL_BUFFER sizes its own buffer with)
 Buffer is not freed by mempool_destroy() (user manages buffer lifetime)
 Pool struct itself is still allocated via mmgmt_procs
-If elem_size < sizeof(uintptr_t), it is adjusted
+Returns NULL with error if elem_size is zero
+If elem_size is nonzero but < sizeof(uintptr_t), it is rounded up
+  (same as mempool_create())
+Returns NULL with error if elem_size would overflow size_t once the
+header overhead and alignment rounding are added
+Returns NULL with error if buffer is not sufficiently aligned for the
+  pool's internal per-element header (a size_t plus a pointer); a buffer
+  declared via DECLARE_PREALLOCATED_MEMPOOL_BUFFER is always properly
+  aligned, a hand-rolled buffer must be aligned to at least
+  _Alignof(max_align_t)
 .fi
 .SH "SEE ALSO"
 .BR DECLARE_PREALLOCATED_MEMPOOL_BUFFER (3),

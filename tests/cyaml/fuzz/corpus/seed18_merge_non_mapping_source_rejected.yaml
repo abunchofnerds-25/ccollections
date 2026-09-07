@@ -1,0 +1,6 @@
+bad: &bad
+  - 1
+  - 2
+target:
+  <<: *bad
+  a: 1

@@ -42,6 +42,9 @@ ccol_invalid_args        cache is CLRU_CACHE_INVALID or a stale
                          (already-destroyed) handle; or key_pair or
                          val_pair is NULL; or val_pair->size is 0.
 ccol_not_enough_memory   Memory allocation for the new value failed.
+ccol_container_full      When storing a brand-new key, the cache's own
+                         internal bookkeeping has reached its maximum
+                         element count; not reachable in practice.
 .fi
 .SH NOTES
 .nf

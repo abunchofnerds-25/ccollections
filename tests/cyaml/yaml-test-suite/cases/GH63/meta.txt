@@ -1,0 +1,2 @@
+fail=0
+name=Mixed Block Mapping (explicit to implicit)

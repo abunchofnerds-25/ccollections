@@ -1,4 +1,4 @@
-.TH DECLARE_PREALLOCATED_MEMPOOL_BUFFER 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH DECLARE_PREALLOCATED_MEMPOOL_BUFFER 3 "2026-08-28" "c_collections" "C Collections Library - Macros"
 .SH NAME
 DECLARE_PREALLOCATED_MEMPOOL_BUFFER \- declare buffer for memory pool
 .SH LIBRARY
@@ -26,6 +26,22 @@ elem_size   Size of each element in bytes
 .nf
 Buffer is allocated on stack or in static storage depending on context
 Useful for embedded systems or avoiding heap allocation
+Buffer is declared with the alignment the pool's internal per-element
+  header (a size_t plus a pointer) requires, so it can be handed
+  directly to mempool_create_from_preallocated_buffer() with no
+  further alignment considerations
+elem_size smaller than sizeof(uintptr_t) is rounded up to fit the
+  free-list pointer before the buffer's size is computed, the same
+  way mempool_create_from_preallocated_buffer() itself rounds it, so
+  the declared buffer always holds exactly elem_count elements once
+  passed to that constructor with the same elem_size
+The resulting per-element stride is further rounded up to the pool's
+  internal per-element header's own alignment requirement, again
+  matching mempool_create_from_preallocated_buffer() exactly, so every
+  element in the resulting pool is correctly aligned, not just the first
+elem_count must be nonzero; rejected at compile time (via a
+  _Static_assert) if elem_count is zero, or if elem_count times the
+  rounded and aligned elem_size would overflow size_t
 .fi
 .SH EXAMPLES
 .nf

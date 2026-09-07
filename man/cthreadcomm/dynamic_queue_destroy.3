@@ -22,6 +22,12 @@ dq   Dynamic queue to destroy (will be set to NULL)
 .nf
 Messages remaining in the queue cause assertion failure
 Drain the queue before destroying
+A ccol_select()/ccol_select_timed() call or an event_loop registration
+(selectable_from_dynq/selectable_from_chan) still watching this queue
+also causes assertion failure; the still-linked waiter would otherwise
+reference this queue's own, about-to-be-freed mutex
+Call event_loop_remove(), or let every watching ccol_select()/
+ccol_select_timed() call return, before destroying
 .fi
 .SH NOTES
 .nf

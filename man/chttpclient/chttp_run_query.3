@@ -58,8 +58,9 @@ framing over a body that was never actually transfer-coded.
 
 A "Content-Length" key IS accepted in headers, but, on a
 body-carrying request (POST, PUT, or PATCH), is rejected with
-ccol_invalid_args if its value does not exactly match the actual
-body length being sent, once the request reaches the wire; see
+ccol_invalid_args if its value is not a plain unsigned decimal digit
+string (no leading '+'/'-', no embedded whitespace) exactly matching
+the actual body length being sent, once the request reaches the wire; see
 chttpclient_do(3) and chttp_request_set_header(3) for the identical
 check and the same "declared framing disagrees with the wire"
 reasoning.

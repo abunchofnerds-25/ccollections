@@ -165,9 +165,59 @@ struct ctls_conn {
   bool is_server;
   bool handshake_done;
   void *udata;
-  const char
-      *alpn_selected_name; /* points into an ctx alpn_entry's name, or NULL */
+  const char *alpn_selected_name; /* points into alpn_selected_buf below
+                                      once a selection is made, or NULL */
   size_t alpn_selected_len;
+  /* Owned copy of the selected ALPN protocol name (ctls_ctx_alpn_add's own
+   * documented 1-255 byte limit, plus one byte of headroom), populated by
+   * _ctls_alpn_select_cb (server mode) or _ctls_record_client_alpn (client
+   * mode) instead of pointing alpn_selected_name directly into the owning
+   * ctls_ctx_t's own tls->alpn[] storage: that storage is mutable (a
+   * concurrent ctls_ctx_alpn_add() call replacing or adding a protocol can
+   * _mem_free() an existing entry's own name buffer, or _mem_realloc() the
+   * whole array), and ctls_ctx_retain()'s own doc comment documents exactly
+   * this kind of concurrent reconfiguration under live traffic as a
+   * supported use case, not a hypothetical one; so a conn's own selected-
+   * protocol name must not remain a raw pointer into it for the life of the
+   * connection. */
+  char alpn_selected_buf[256];
+  /* Set by _ctls_classify_io_result whenever ctls_conn_read()/ctls_conn_
+   * write() returns -1/EWOULDBLOCK, to the actual direction OpenSSL
+   * reported wanting (SSL_ERROR_WANT_READ vs SSL_ERROR_WANT_WRITE) for that
+   * specific call; see ctls_conn_wants_write()'s own doc comment in ctls.h
+   * for why this exists: post-handshake SSL_read()/SSL_write() can each
+   * need the OPPOSITE direction from the one the call's own name suggests
+   * (e.g. a deferred TLS 1.3 session-ticket flush during SSL_read(), or a
+   * TLS 1.2 renegotiation-driven read during SSL_write()), unlike a plain
+   * read(2)/write(2), whose own EWOULDBLOCK never means anything but "wait
+   * for this exact same direction." Left at whatever it was on the last
+   * classified call; only meaningful immediately after a read/write call
+   * that itself returned -1/EWOULDBLOCK. */
+  bool last_io_wants_write;
+  /* An extra, independent reference (SSL_CTX_up_ref) on whichever SSL_CTX*
+   * ctx->ctx_default was at the moment SSL_new() was called for this
+   * connection, released via SSL_CTX_free() in ctls_conn_destroy(). This is
+   * needed on top of whatever reference SSL_new()/SSL_free() themselves
+   * manage internally, because SSL_set_SSL_CTX() (called by
+   * _ctls_servername_cb on the server side, mid-handshake, to dispatch a
+   * matched named/SNI certificate) only ever reassigns and re-references
+   * the connection's own SSL_get_SSL_CTX() field; OpenSSL's separate,
+   * internal "session context" bookkeeping stays pointing at the ORIGINAL
+   * default SSL_CTX* for the connection's entire lifetime regardless, with
+   * no reference of its own surviving that reassignment to keep it alive.
+   * Reproduced directly with ThreadSanitizer: a concurrent
+   * ctls_ctx_cert_add()/_trust()/_alpn_add() call on the same ctx (a
+   * documented, supported use case per ctls_ctx_retain()'s own doc
+   * comment, and one that unconditionally rebuilds and replaces
+   * ctx->ctx_default on every call, not only when the default certificate
+   * itself changed) freeing the original ctx_default raced a still-live,
+   * post-SNI-dispatch server connection's own later handshake/read/write
+   * steps touching that same, no-longer-independently-referenced object.
+   * Pinning it here, independently of SSL_new/SSL_free's own bookkeeping,
+   * closes the gap regardless of exactly how OpenSSL itself accounts for
+   * the two fields internally. NULL if SSL_new() itself failed before this
+   * could be taken. */
+  SSL_CTX *pinned_ctx_default;
 };
 
 /* ========================================================================== */
@@ -379,39 +429,76 @@ static int _ctls_alpn_select_cb(SSL *ssl, const unsigned char **out,
                                 unsigned int inlen, void *arg) {
   ctls_ctx_t *tls = (ctls_ctx_t *)arg;
   ctls_conn_t *conn = (ctls_conn_t *)SSL_get_ex_data(ssl, _ctls_conn_ex_idx());
-  if (tls->alpn_count == 0) return SSL_TLSEXT_ERR_NOACK;
+  /* conn is always non-NULL in practice (this callback is only ever
+   * installed on a ctx this module itself built, and ctls_conn_create_
+   * server() always sets this ex_data before the handshake that could
+   * reach here); the defensive NULL check exists only because there is
+   * nowhere safe to copy a selected protocol name to without it (see
+   * below), not because a real code path is known to leave it unset. */
+  if (!conn) return SSL_TLSEXT_ERR_NOACK;
+
+  /* tls->lock guards the read of tls->alpn[]/tls->alpn_count below for the
+   * identical reason _ctls_record_client_alpn's own client-side mirror
+   * already locks around its own read of the same fields: tls->alpn is
+   * mutable storage a concurrent ctls_ctx_alpn_add() call can _mem_free()
+   * (replacing an existing entry) or _mem_realloc() (growing the array)
+   * out from under an in-progress handshake, and that is a documented,
+   * supported use case (see ctls_ctx_retain()'s own doc comment), not a
+   * hypothetical one. The matched entry's name/name_len/on_selected/udata
+   * are all copied into locals (crucially including a copy of the NAME
+   * BYTES THEMSELVES into conn->alpn_selected_buf, not just a pointer to
+   * them) before unlocking, so neither *out (which OpenSSL itself still
+   * needs to read, from inside this same SSL_accept() call, after this
+   * callback returns) nor conn->alpn_selected_name (which a caller may
+   * read at any later point in conn's own lifetime, long after this
+   * handshake and any number of further ctls_ctx_alpn_add() calls) can
+   * ever end up pointing at memory tls->lock's own protection has already
+   * moved on from. on_selected itself is invoked only after unlocking,
+   * matching _ctls_record_client_alpn's identical discipline: an
+   * application callback that re-enters this same ctx (e.g. its own
+   * ctls_ctx_alpn_add() call) must not deadlock against a lock this
+   * function no longer needs to hold. */
+  mutex_lock(tls->lock);
+  if (tls->alpn_count == 0) {
+    mutex_unlock(tls->lock);
+    return SSL_TLSEXT_ERR_NOACK;
+  }
+  ctls_alpn_entry *matched = NULL;
   const unsigned char *p = in;
   const unsigned char *end = in + inlen;
-  while (p < end) {
+  while (p < end && !matched) {
     uint8_t l = p[0];
     const unsigned char *name = p + 1;
     p += (size_t)l + 1;
     for (size_t i = 0; i < tls->alpn_count; ++i) {
       ctls_alpn_entry *e = &tls->alpn[i];
       if (e->name_len == l && memcmp(e->name, name, l) == 0) {
-        *out = (const unsigned char *)e->name;
-        *outlen = l;
-        if (conn) {
-          conn->alpn_selected_name = e->name;
-          conn->alpn_selected_len = e->name_len;
-        }
-        if (e->on_selected)
-          e->on_selected(conn, e->name, e->name_len, e->udata);
-        return SSL_TLSEXT_ERR_OK;
+        matched = e;
+        break;
       }
     }
   }
   /* No overlap: fall back to the default (first-registered) protocol's
    * callback anyway, even though the wire negotiation itself reports
    * NOACK. */
-  ctls_alpn_entry *def = &tls->alpn[0];
-  if (conn) {
-    conn->alpn_selected_name = def->name;
-    conn->alpn_selected_len = def->name_len;
+  bool had_overlap = matched != NULL;
+  if (!matched) matched = &tls->alpn[0];
+
+  memcpy(conn->alpn_selected_buf, matched->name, matched->name_len);
+  conn->alpn_selected_buf[matched->name_len] = '\0';
+  conn->alpn_selected_name = conn->alpn_selected_buf;
+  conn->alpn_selected_len = matched->name_len;
+  ctls_alpn_selected_fn cb = matched->on_selected;
+  size_t name_len = matched->name_len;
+  void *udata = matched->udata;
+  mutex_unlock(tls->lock);
+
+  if (had_overlap) {
+    *out = (const unsigned char *)conn->alpn_selected_buf;
+    *outlen = (unsigned char)name_len;
   }
-  if (def->on_selected)
-    def->on_selected(conn, def->name, def->name_len, def->udata);
-  return SSL_TLSEXT_ERR_NOACK;
+  if (cb) cb(conn, conn->alpn_selected_buf, name_len, udata);
+  return had_overlap ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_NOACK;
 }
 
 static bool _ctls_apply_alpn(SSL_CTX *ctx, ctls_ctx_t *tls) {
@@ -473,10 +560,25 @@ static int _ctls_servername_cb(SSL *ssl, int *ad, void *arg) {
   ctls_ctx_t *tls = (ctls_ctx_t *)arg;
   const char *name = SSL_get_servername(ssl, TLSEXT_NAMETYPE_host_name);
   if (!name) return SSL_TLSEXT_ERR_OK;
+  /* SSL_set_SSL_CTX() must run in the SAME critical section as the lookup
+   * that produced matched, not after releasing tls->lock: matched is a raw
+   * SSL_CTX* into a named cert's own built_ctx field, and
+   * ctls_ctx_retain()'s own doc comment states pinning a context against a
+   * concurrent ctls_ctx_cert_add()/_trust()/etc. reconfiguration on another
+   * thread (hot certificate rotation under live traffic) is an explicitly
+   * supported use case, not a hypothetical one. _ctls_ctx_rebuild_locked()
+   * (itself always called with tls->lock held) frees the OLD built_ctx for
+   * a rotated named cert as part of its own commit step; releasing the
+   * lock here before actually using matched would let that free happen in
+   * the window between the lookup and the use, handing SSL_set_SSL_CTX() a
+   * dangling pointer; a real use-after-free on a live handshake, not
+   * merely a theoretical one. Mirrors ctls_conn_create_client/_server's own
+   * established discipline of calling SSL_new() on the default context
+   * while still holding tls->lock, for the identical reason. */
   mutex_lock(tls->lock);
   SSL_CTX *matched = _ctls_find_named_ctx(tls, name);
-  mutex_unlock(tls->lock);
   if (matched) SSL_set_SSL_CTX(ssl, matched);
+  mutex_unlock(tls->lock);
   return SSL_TLSEXT_ERR_OK;
 }
 
@@ -553,9 +655,9 @@ static bool _ctls_ctx_rebuild_locked(ctls_ctx_t *tls) {
      * here can only mean it failed to allocate the iterator itself (OOM),
      * not "nothing to iterate". ok must start false in that case: with it
      * true unconditionally, the while loop below correctly never executes
-     * (it is NULL), but new_named_ctxs/new_named_entries -- allocated via
-     * _mem_alloc just above, not _mem_calloc, so still fully uninitialized
-     * -- would then be read as if fully populated by the commit loop
+     * (it is NULL), but new_named_ctxs/new_named_entries (allocated via
+     * _mem_alloc just above, not _mem_calloc, so still fully uninitialized)
+     * would then be read as if fully populated by the commit loop
      * further down, dereferencing garbage pointers. Found by clang's
      * static analyzer, not by any dynamic test (needs an OOM injected
      * exactly inside chashmap_begin_iter with named/SNI certs configured,
@@ -751,8 +853,29 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
     nc->key_len = key_len;
     nc->pk_password = pw_copy;
     nc->self_signed = self_signed;
-    if (self_signed)
+    if (self_signed) {
       nc->self_signed_name = _ctls_strdup(ctx->m_procs, lower_name);
+      if (!nc->self_signed_name) {
+        /* Unlike every other allocation in this function, a failure here
+         * was previously left unchecked: nc->self_signed_name stayed NULL,
+         * but nc->self_signed stayed true, and nothing downstream ever
+         * re-examines self_signed_name for NULL before using it;
+         * _ctls_ctx_rebuild_locked -> _ctls_build_one_ctx would go on to
+         * call _ctls_create_self_signed(NULL), which unconditionally calls
+         * strlen(server_name), a real crash under sustained memory
+         * pressure rather than the documented, graceful
+         * ccol_not_enough_memory this function's every other allocation
+         * failure already reports. nc is not yet reachable from
+         * ctx->named_certs at this point (the map insert happens further
+         * below), so _ctls_named_cert_destroy(ctx, nc) here is a clean,
+         * complete unwind; it also frees cert_pem/key_pem/pw_copy, which
+         * nc already owns as of the assignments just above. */
+        _ctls_named_cert_destroy(ctx, nc);
+        _mem_free(ctx->m_procs, lower_name);
+        mutex_unlock(ctx->lock);
+        return ccol_not_enough_memory;
+      }
+    }
 
     cmap_pair kp = {.ptr = lower_name, .size = strlen(lower_name) + 1};
     cmap_pair *old_vp = NULL;
@@ -764,7 +887,12 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
     cmap_pair vp = {.ptr = &nc, .size = sizeof(nc)};
     rv = chmap_insert_elem(ctx->named_certs, &kp, &vp);
     _mem_free(ctx->m_procs, lower_name);
-    if (rv != ccol_success) {
+    /* ccol_key_already_present means the map's value slot for this
+     * hostname was successfully updated to point at nc (the entry already
+     * existed, e.g. this is a certificate rotation for a name added
+     * earlier); it is not a failure, and nc must not be destroyed here, or
+     * the map would be left holding a dangling pointer to it. */
+    if (rv != ccol_success && rv != ccol_key_already_present) {
       _ctls_named_cert_destroy(ctx, nc);
       mutex_unlock(ctx->lock);
       return rv;
@@ -799,7 +927,7 @@ ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
      * ctx->trust_pems's own copy of that pointer. Deferring the commit
      * until both reallocs were known to succeed left ctx->trust_pems
      * dangling whenever this first call succeeded (moving the block) but
-     * the second one failed -- a genuine use-after-free on this ctx's next
+     * the second one failed; a genuine use-after-free on this ctx's next
      * access to trust_pems, on top of leaking new_pems itself, which
      * clang's static analyzer caught (the leak; not the dangling-pointer
      * half, which needed reading the realloc semantics by hand). */
@@ -991,6 +1119,14 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
 
   mutex_lock(ctx->lock);
   SSL *ssl = SSL_new(ctx->ctx_default);
+  if (ssl) {
+    /* See struct ctls_conn's own pinned_ctx_default doc comment: taken
+     * under ctx->lock, in the same critical section as the SSL_new() call
+     * that reads ctx->ctx_default, so this always pins whichever object
+     * this connection's own SSL* was actually created against. */
+    SSL_CTX_up_ref(ctx->ctx_default);
+    conn->pinned_ctx_default = ctx->ctx_default;
+  }
   mutex_unlock(ctx->lock);
   if (!ssl) {
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
@@ -1004,6 +1140,7 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
   BIO *bio = BIO_new_socket(fd, 0);
   if (!bio) {
     SSL_free(ssl);
+    SSL_CTX_free(conn->pinned_ctx_default);
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
     ctls_ctx_release(ctx);
     _mem_free(mp, conn);
@@ -1032,6 +1169,7 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
       }
       if (!ok) {
         SSL_free(ssl); /* also frees the one bio ref set0_rbio/wbio each took */
+        SSL_CTX_free(conn->pinned_ctx_default);
         ccol_memmgmt_procs_t *mp = ctx->m_procs;
         ctls_ctx_release(ctx);
         _mem_free(mp, conn);
@@ -1063,6 +1201,14 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
 
   mutex_lock(ctx->lock);
   SSL *ssl = SSL_new(ctx->ctx_default);
+  if (ssl) {
+    /* See struct ctls_conn's own pinned_ctx_default doc comment: taken
+     * under ctx->lock, in the same critical section as the SSL_new() call
+     * that reads ctx->ctx_default, so this always pins whichever object
+     * this connection's own SSL* was actually created against. */
+    SSL_CTX_up_ref(ctx->ctx_default);
+    conn->pinned_ctx_default = ctx->ctx_default;
+  }
   mutex_unlock(ctx->lock);
   if (!ssl) {
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
@@ -1076,6 +1222,7 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
   BIO *bio = BIO_new_socket(fd, 0);
   if (!bio) {
     SSL_free(ssl);
+    SSL_CTX_free(conn->pinned_ctx_default);
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
     ctls_ctx_release(ctx);
     _mem_free(mp, conn);
@@ -1111,14 +1258,22 @@ static void _ctls_record_client_alpn(ctls_conn_t *conn) {
     }
   }
   if (!matched) matched = &tls->alpn[0]; /* fallback, mirroring server side */
-  conn->alpn_selected_name = matched->name;
+  /* Copy the name BYTES into conn's own owned buffer, not just a pointer
+   * to matched->name, for the identical reason _ctls_alpn_select_cb's own
+   * server-side mirror does: tls->alpn is mutable storage a concurrent
+   * ctls_ctx_alpn_add() call can free or reallocate out from under a
+   * caller that reads conn->alpn_selected_name at some later point in
+   * conn's own lifetime, long after this handshake completes and this
+   * lock is released. */
+  memcpy(conn->alpn_selected_buf, matched->name, matched->name_len);
+  conn->alpn_selected_buf[matched->name_len] = '\0';
+  conn->alpn_selected_name = conn->alpn_selected_buf;
   conn->alpn_selected_len = matched->name_len;
   ctls_alpn_selected_fn cb = matched->on_selected;
-  const char *name = matched->name;
   size_t name_len = matched->name_len;
   void *udata = matched->udata;
   mutex_unlock(tls->lock);
-  if (cb) cb(conn, name, name_len, udata);
+  if (cb) cb(conn, conn->alpn_selected_buf, name_len, udata);
 }
 
 ctls_handshake_result_t ctls_conn_handshake_step(ctls_conn_t *conn) {
@@ -1151,10 +1306,16 @@ ctls_handshake_result_t ctls_conn_handshake_step(ctls_conn_t *conn) {
  * not busy-loop as EWOULDBLOCK, SSL_ERROR_SSL is a fatal record-layer
  * problem and not the same as a clean close, and ERR_clear_error() must run
  * before every SSL_get_error() classification on a codebase where many
- * unrelated connections' TLS I/O shares a small set of threads. */
-static ssize_t _ctls_classify_io_result(SSL *ssl, int ret) {
+ * unrelated connections' TLS I/O shares a small set of threads.
+ *
+ * Also records, on conn itself, which direction OpenSSL actually reported
+ * wanting (SSL_ERROR_WANT_READ vs SSL_ERROR_WANT_WRITE) whenever this
+ * classifies to -1/EWOULDBLOCK; see ctls_conn_wants_write()'s own doc
+ * comment for why a caller cannot simply assume the direction matches
+ * whichever of ctls_conn_read()/_write() it just called. */
+static ssize_t _ctls_classify_io_result(ctls_conn_t *conn, int ret) {
   if (ret > 0) return ret;
-  int err = SSL_get_error(ssl, ret);
+  int err = SSL_get_error(conn->ssl, ret);
   switch (err) {
     case SSL_ERROR_ZERO_RETURN:
       return 0;
@@ -1164,7 +1325,14 @@ static ssize_t _ctls_classify_io_result(SSL *ssl, int ret) {
     case SSL_ERROR_SYSCALL:
       if (!errno) errno = ECONNRESET;
       return -1;
+    case SSL_ERROR_WANT_WRITE:
+      conn->last_io_wants_write = true;
+      errno = EWOULDBLOCK;
+      return -1;
     default:
+      /* SSL_ERROR_WANT_READ and every other non-fatal outcome: the
+       * pre-existing, "assume read" default. */
+      conn->last_io_wants_write = false;
       errno = EWOULDBLOCK;
       return -1;
   }
@@ -1177,7 +1345,7 @@ ssize_t ctls_conn_read(ctls_conn_t *conn, void *buf, size_t len) {
   }
   ERR_clear_error();
   int ret = SSL_read(conn->ssl, buf, (int)len);
-  return _ctls_classify_io_result(conn->ssl, ret);
+  return _ctls_classify_io_result(conn, ret);
 }
 
 ssize_t ctls_conn_write(ctls_conn_t *conn, const void *buf, size_t len) {
@@ -1187,7 +1355,11 @@ ssize_t ctls_conn_write(ctls_conn_t *conn, const void *buf, size_t len) {
   }
   ERR_clear_error();
   int ret = SSL_write(conn->ssl, buf, (int)len);
-  return _ctls_classify_io_result(conn->ssl, ret);
+  return _ctls_classify_io_result(conn, ret);
+}
+
+bool ctls_conn_wants_write(const ctls_conn_t *conn) {
+  return conn && conn->last_io_wants_write;
 }
 
 long ctls_conn_verify_result(const ctls_conn_t *conn) {
@@ -1214,6 +1386,12 @@ void ctls_conn_destroy(ctls_conn_t *conn) {
     SSL_shutdown(conn->ssl);
     SSL_free(conn->ssl);
   }
+  /* Release the independent reference struct ctls_conn's own
+   * pinned_ctx_default field holds; see that field's doc comment. Safe to
+   * call unconditionally: SSL_CTX_free() itself is NULL-safe (a documented
+   * no-op), matching every other _free()-style call throughout this
+   * codebase. */
+  SSL_CTX_free(conn->pinned_ctx_default);
   /* Capture m_procs before releasing our reference: ctx may be freed by
    * ctls_ctx_release() if this was the last reference, so reading
    * conn->ctx->m_procs afterward would be a use-after-free. */

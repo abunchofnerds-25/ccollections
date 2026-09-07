@@ -1,0 +1,2 @@
+fail=1
+name=Comment without whitespace after doublequoted scalar

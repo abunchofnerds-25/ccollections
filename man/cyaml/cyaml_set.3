@@ -21,12 +21,26 @@ Accepted C types for val and the resulting CYAML node type:
   float / double            -> CYAML_FLOAT (stored as double)
   char * / const char *     -> CYAML_STRING (heap copy made)
   string literal ("...")    -> CYAML_STRING
-  NULL or unrecognized ptr  -> CYAML_NULL
+  a bare NULL literal       -> CYAML_NULL
 
-The leaf is created when absent; its immediate parent must already
-exist.  If the leaf exists its type is replaced unconditionally:
-existing list or dictionary subtrees are deep-freed before the new
-value is written.
+Any other C type (long double, a struct, an enum, or any pointer
+type other than char * / const char *) is rejected: cyaml_set
+returns ccol_invalid_args and the target leaf is left untouched
+(created leaves are not left behind as CYAML_NULL for an unsupported
+type; an existing leaf's value is not overwritten).
+
+A char[N] ARRAY VARIABLE (as opposed to a string literal written
+directly at the call site) cannot be passed directly; cast it to
+(char *) first.  This is a plain C language restriction (the macro
+copies val into a same-typed local, which is not possible for a
+non-literal array), not a cyaml-specific one.
+
+For a dictionary leaf, the key is created when absent; its immediate
+parent dictionary must already exist.  For a list leaf ("#N"), the
+index must already be in range; a list has no way to be
+auto-extended to fit an arbitrary index.  Either way, if the leaf
+exists its type is replaced unconditionally: existing list or
+dictionary subtrees are deep-freed before the new value is written.
 
 Non-finite doubles (Inf, -Inf, NaN) are accepted and stored (unlike
 cyaml_set on a cjson DOM).  They serialize as .inf, -.inf, .nan.
@@ -46,10 +60,18 @@ val    C value; type is resolved at compile time.
 .SH RETURN VALUE
 .nf
 ccol_retval_t: ccol_success on success.
-ccol_invalid_args; empty path, type incompatible at a path step, or
-                      list index out of bounds.
-ccol_key_not_found; a non-leaf component of the path does not exist.
+ccol_invalid_args; empty path, type incompatible at a path step,
+                      malformed "#N" list-index syntax, an empty path
+                      component (nothing between two dots, or a
+                      leading or trailing dot), or val's C type is
+                      not one of the accepted types listed above.
+ccol_key_not_found; a non-leaf component of the path does not exist,
+                      or a leaf "#N" list index is syntactically
+                      valid but out of range.
 ccol_not_enough_memory; allocation failure.
+ccol_container_full; creating a new leaf dictionary key would exceed
+                      the parent's maximum representable element
+                      count (not reachable in practice).
 .fi
 .SH EXAMPLES
 .nf

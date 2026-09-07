@@ -1,4 +1,4 @@
-.TH CYAML_SERIALIZE 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CYAML_SERIALIZE 3 "2026-09-06" "c_collections" "C Collections Library - Functions"
 .SH NAME
 cyaml_serialize \- serialize a DOM tree to block-style YAML
 .SH LIBRARY
@@ -18,15 +18,50 @@ double-quoted.  Lists use "- value" block notation.  Dictionaries use
 "key: value" block notation.  Nested structures are indented by two
 spaces per level.
 
+A dictionary's own key order in the output is unspecified: it follows
+this DOM's internal storage order, which is unrelated to insertion
+order, parse order, or any other caller-visible ordering, so a
+parse-then-serialize round trip is not guaranteed to reproduce the
+source document's own key order. A list's element order, by
+contrast, is always exactly the order its elements were pushed or
+parsed in. A caller needing a specific, stable key order in
+serialized output must arrange for it itself (e.g. by re-inserting
+keys into a fresh dictionary in the desired order immediately before
+serializing).
+
+A node's tag (see cyaml_node_tag(3)) is emitted as a leading
+"!<...>" verbatim tag whenever it is a custom tag, or a core-schema
+tag (CYAML_TAG_NULL, _BOOL, _INT, _FLOAT, _STR, _SEQ, or _MAP) that
+does not actually match the node's own type; a core-schema tag that
+does match its node's type is never emitted, since the surrounding
+quoting/formatting rules already guarantee the value round-trips to
+that same type without it.  A mismatched core-schema tag (only
+reachable via cyaml_node_set_tag(3), which permits attaching one to a
+node of a different type) is therefore never silently lost.
+
 The returned buffer is allocated using the root node's stored allocator.
 It must be freed with cyaml_serialize_free() (or cyaml_serialize_free_mp()
 if a custom allocator was used).
+
+node need not have come from cyaml_parse*(); a tree built directly via
+cyaml_create_list_mp(3)/cyaml_dictionary_set(3) is subject to the same
+500-level nesting limit cyaml_parse*(3) enforces at parse time. If such
+a tree is nested past that limit, this function returns NULL rather than
+recursing without bound.
+
+A NULL node serializes as if it were a CYAML_NULL node ("~\en"); this
+is a successful, non-NULL return, not a failure signal (unlike
+cyaml_clone(3), which returns NULL for a NULL node).
 .fi
 .SH RETURN VALUE
 .nf
-Heap-allocated null-terminated YAML string on success, NULL on OOM.
+Heap-allocated null-terminated YAML string on success, NULL on OOM or if
+node is nested more than 500 levels deep (the two failure causes are
+indistinguishable, since this function has no separate error-string
+channel).
 .fi
 .SH "SEE ALSO"
 .BR cyaml_serialize_flow (3),
 .BR cyaml_serialize_free (3),
-.BR cyaml_serialize_free_mp (3)
+.BR cyaml_serialize_free_mp (3),
+.BR cyaml_node_tag (3)

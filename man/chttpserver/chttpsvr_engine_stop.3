@@ -26,12 +26,17 @@ instance still registered in the process (regardless of whether it is
 still started) is quiesced exactly as chttpsvr_destroy() would quiesce
 it on its own: listener closed, in-flight requests drained, idle
 connections closed, worker pool shut down, and the instance's own
-reference to the engine released.  This makes the documented
-signal-handler shutdown pattern below safe even though
-chttpsvr_destroy(srv) is called after the engine has already been torn
-down: __chttpsvr_destroy is idempotent per server (see its own
-documentation), so it only frees the remaining per-server memory at
-that point rather than repeating any teardown work.
+reference to the engine released.  This makes the ONE, single
+chttpsvr_destroy(srv) call in the documented signal-handler shutdown
+pattern below safe even though it runs after the engine has already
+been torn down: srv was already quiesced above, so this call only
+frees the remaining per-server memory (see __chttpsvr_destroy's own
+documentation) rather than repeating any teardown work.  This does not
+make repeated destroy calls on the same handle safe; calling
+chttpsvr_destroy(srv) (or __chttpsvr_destroy) a second time on a
+handle already destroyed by an earlier call, through this path or any
+other, remains a fatal error, exactly as __chttpsvr_destroy's own
+documentation describes.
 
     static void on_signal(int sig) { (void)sig; chttpsvr_engine_stop(); }
     /* ... */
@@ -50,6 +55,12 @@ responsible for wiring this function into whatever signal or shutdown
 mechanism they use.
 
 Safe to call before the reactor has ever started (no-op).
+
+Safe to call more than once, including while an earlier call's own
+drain is still in progress (e.g. two SIGTERMs delivered moments apart,
+or a defensive extra call from application shutdown code): a repeated
+or overlapping call is a no-op, never a second, redundant teardown
+attempt.
 .fi
 .SH "SEE ALSO"
 .BR chttpsvr_engine_wait (3),

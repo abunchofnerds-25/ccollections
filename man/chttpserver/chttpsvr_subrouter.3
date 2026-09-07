@@ -40,23 +40,29 @@ chttpsvr_start is running.
 .nf
 The "/" prefix is a special case.  The trailing-slash strip loop runs
 only when the prefix length exceeds one character, so "/" is retained
-as-is with prefix_len = 1.  The match rule checks path[prefix_len],
-i.e. path[1], which must be '/' or '\e0'.  For the exact path "/" the
-character at index 1 is '\e0' (matches).  For any other path beginning
-with '/' (e.g. "/foo"), path[1] is a letter, which fails the check:
-those paths do NOT match and receive 404.
+as-is with prefix_len = 1.  A "/" sub-router matches only the exact
+request path "/"; any other path, including one beginning with a
+second slash (e.g. "//foo"), does NOT match and receives 404.
 
 Use prefix "/" only when you intend to match only the exact root path
 "/".  To catch all requests regardless of path, register routes directly
 on the server with chttpsvr_register_handler or chttpsvr_register_streaming_handler instead.
 
 Root-router shadowing: routes registered directly on the server via
-chttpsvr_register_handler or chttpsvr_register_streaming_handler (i.e. on the root router) are always
-evaluated before any sub-router.  A root-level route whose path
-conflicts with a sub-router pattern will always win, regardless of
-registration order.  To avoid unintentional shadowing, do not register
-root-level routes whose paths overlap with a sub-router's prefix and
-pattern.
+chttpsvr_register_handler or chttpsvr_register_streaming_handler (i.e.
+on the root router) are always evaluated before any sub-router.  A
+root-level route whose path AND method both match a request wins
+outright, shadowing a same-path sub-router route completely.  A
+root-level route that matches the same path but a different method
+does not shadow the sub-router: every other root-level route is still
+tried for a same-path, same-method match first, and only once the
+whole root router has been exhausted does matching fall through to
+the sub-router, where a route whose own method matches the request is
+served normally (the same 405-vs-404 priority two same-router routes
+registered under different methods already follow; see
+chttpsvr_register_handler(3)).  To avoid unintentional shadowing, do
+not register root-level routes whose paths overlap with a sub-router's
+prefix and pattern for the same method.
 .fi
 .SH RETURN VALUE
 .nf

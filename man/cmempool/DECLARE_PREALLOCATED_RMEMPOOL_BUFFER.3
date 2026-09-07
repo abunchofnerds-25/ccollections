@@ -1,0 +1,50 @@
+.TH DECLARE_PREALLOCATED_RMEMPOOL_BUFFER 3 "2026-08-28" "c_collections" "C Collections Library - Macros"
+.SH NAME
+DECLARE_PREALLOCATED_RMEMPOOL_BUFFER \- declare buffer for ranged memory pool
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(
+    name,
+    smallest_size_power_of_two,
+    largest_size_power_of_two,
+    number_of_smallest_size_elems_power_of_two);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a uint8_t array sized correctly for a ranged memory pool with
+the specified parameters. The buffer can then be passed to
+r_mempool_create_from_preallocated_buffer(). Automatically includes
+header overhead for every sub-pool in the size calculation; the buffer
+contains all sub-pools in contiguous memory.
+.fi
+.SH PARAMETERS
+.nf
+name                                     Variable name for the buffer
+smallest_size_power_of_two               Exponent for smallest pool size
+largest_size_power_of_two                Exponent for largest pool size
+number_of_smallest_size_elems_power_of_two  Exponent for smallest pool count
+.fi
+.SH NOTES
+.nf
+Buffer is allocated on stack or in static storage depending on context
+Useful for embedded systems or avoiding heap allocation
+Buffer is declared with the alignment the pool's internal per-element
+  header (a size_t plus a pointer) requires, so it can be handed
+  directly to r_mempool_create_from_preallocated_buffer() with no
+  further alignment considerations; every individual sub-pool segment
+  within the buffer stays correctly aligned as a consequence
+Size is computed via CALCULATE_PREALLOCATED_RMEMPOOL_BUFFER_SIZE
+.fi
+.SH EXAMPLES
+.nf
+DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(my_buffer, 4, 8, 10);
+r_mempool *rmp = r_mempool_create_from_preallocated_buffer(
+    my_buffer, sizeof(my_buffer), 4, 8, 10,
+    fallback_disabled, false, NULL, NULL);
+.fi
+.SH "SEE ALSO"
+.BR r_mempool_create_from_preallocated_buffer (3)

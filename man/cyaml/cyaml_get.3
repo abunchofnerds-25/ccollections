@@ -1,4 +1,4 @@
-.TH CYAML_GET 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
+.TH CYAML_GET 3 "2026-09-06" "c_collections" "C Collections Library - Macros"
 .SH NAME
 cyaml_get \- navigate to a DOM node via a dot-separated path
 .SH LIBRARY
@@ -20,11 +20,20 @@ Path syntax:
     digits indexes into a CYAML_LIST by position (e.g. "#0" is
     the first element).
   - All other components are treated as literal CYAML_DICTIONARY keys.
-  - A bare '#' with no trailing digits is always treated as a literal
-    key (unlike cjson which returns an error).
+  - A bare '#' with no trailing digits has no valid index
+    interpretation: when the current node is a CYAML_DICTIONARY it is
+    used as a literal key (e.g. addressing a key literally named
+    "#"), exactly like any other non-"#N" component; when the current
+    node is a CYAML_LIST, there is no literal-key fallback for a list
+    at all, so navigation fails and NULL is returned, matching cjson's
+    own bare-'#' rejection for that case.
   - Escape sequences: '\e.' -> literal '.' in the key (not a
     separator); '\e\e' -> literal '\e' in the key.  A '\e' before any
     other character is left unchanged.
+  - An empty component (nothing between two dots, or a leading or
+    trailing dot) has no valid interpretation as either a literal
+    empty-string key or a "#N" index, at any position in the path;
+    navigation fails.
 
 The returned reference is NON-OWNING.  It becomes invalid if the
 containing node is mutated or destroyed.
@@ -36,8 +45,9 @@ path  Dot-separated path string literal or char *.
 .fi
 .SH RETURN VALUE
 .nf
-Non-owning cyaml handle at the target, or NULL if any component along
-the path is missing or the node type is incompatible.
+Non-owning cyaml handle at the target, or NULL if root is NULL, any
+component along the path is missing, the node type is incompatible,
+or the path contains an empty component.
 .fi
 .SH EXAMPLES
 .nf

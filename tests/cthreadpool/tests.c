@@ -1,7 +1,10 @@
 #include <common.h>
+#include <common_invariants.h>
 #include <cthreadpool.h>
+#include <execinfo.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -20,6 +23,100 @@ TAU_MAIN()
 
 extern struct cthread_pool *_ctpool_resolve_for_tests(ctpool h);
 extern size_t _ctpool_slot_table_capacity_for_tests(void);
+extern size_t _ctpool_task_free_list_size_for_tests(struct cthread_pool *pool);
+extern size_t _ctpool_task_free_list_cap_for_tests(struct cthread_pool *pool);
+
+/* ========================================================================== */
+/*                    FORK-HANG DIAGNOSTIC CAPTURE                            */
+/* ========================================================================== */
+
+/* Diagnostic aid for fork_does_not_inherit_a_locked_ctpool_mutex below: when
+ * that test's own alarm(5) bound fires in a forked child, letting the
+ * default SIGALRM disposition kill the child tells us only THAT it hung,
+ * never WHERE. Instead, a custom handler captures the child's own raw call
+ * stack and writes it, as plain addresses (no symbol resolution: resolving
+ * symbols can itself call malloc()/dlopen() internally, which would recurse
+ * into the exact kind of lock this diagnostic exists to investigate if that
+ * lock is what's actually stuck), down a pipe to the parent. The parent,
+ * running in a completely ordinary, non-signal-handler, non-hung context,
+ * resolves and prints them via backtrace_symbols() (safe there), so a real
+ * hang shows the child's own stuck call site directly in this test's own
+ * output rather than only a bare "it didn't return" verdict.
+ *
+ * backtrace() itself is warmed up once (_diag_warm_up_backtrace, called at
+ * the top of the test below, well before any fork() happens): glibc's
+ * unwinder lazily dlopen()s (and therefore malloc()s) its own internal
+ * unwind-info machinery on its OWN first invocation in the process, and
+ * doing that for the first time from inside a signal handler in a child
+ * that might itself be stuck on the malloc lock this diagnostic is trying
+ * to catch would just recreate the same hang inside the "diagnostic"
+ * instead of reporting it. */
+static volatile sig_atomic_t diag_write_fd = -1;
+
+static void _diag_warm_up_backtrace(void) {
+  void *dummy[4];
+  int n = backtrace(dummy, 4);
+  int devnull = open("/dev/null", O_WRONLY);
+  if (devnull >= 0) {
+    backtrace_symbols_fd(dummy, n, devnull);
+    close(devnull);
+  }
+}
+
+/* Async-signal-safe: backtrace() only reads already-unwound stack frames
+ * into a caller-supplied buffer (no allocation, given the warm-up above
+ * already forced its own one-time lazy setup), and write() is
+ * async-signal-safe by POSIX definition. No symbol resolution happens here
+ * on purpose (see this section's own doc comment above). */
+static void _diag_alarm_handler(int sig) {
+  (void)sig;
+  int fd = (int)diag_write_fd;
+  if (fd >= 0) {
+    void *frames[32];
+    int n = backtrace(frames, 32);
+    ssize_t written = write(fd, frames, (size_t)n * sizeof(frames[0]));
+    (void)written;
+  }
+  _exit(66); /* distinct sentinel: "diagnostic capture fired", not a plain
+                unhandled-signal kill, so the parent can tell the two apart
+                and knows a backtrace is waiting to be read from the pipe */
+}
+
+/* Arms the diagnostic SIGALRM handler and starts the same alarm(5) bound
+ * this test always used; call from the child, right after fork(), before
+ * doing the operation under test. write_fd is the pipe write end this
+ * child's own handler reports through (the read end is this function's
+ * caller's problem, in the parent, after waitpid). */
+static void _diag_arm(int write_fd) {
+  diag_write_fd = write_fd;
+  struct sigaction sa = {0};
+  sa.sa_handler = _diag_alarm_handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = 0; /* no SA_RESTART: a syscall interrupted by this signal
+                       must not silently retry, or the handler firing would
+                       never actually stop the stuck call */
+  sigaction(SIGALRM, &sa, NULL);
+  alarm(5);
+}
+
+/* Parent-side: reads whatever raw addresses _diag_alarm_handler wrote (a
+ * plain unhandled-signal kill, or a clean exit, leaves the pipe empty,
+ * which is fine -- got <= 0 below) and prints them resolved via
+ * backtrace_symbols(), safe here since the parent is a completely
+ * ordinary, unstuck process. */
+static void _diag_report(int read_fd) {
+  void *frames[32];
+  ssize_t got = read(read_fd, frames, sizeof(frames));
+  if (got <= 0) return;
+  int n = (int)(got / (ssize_t)sizeof(frames[0]));
+  if (n <= 0) return;
+  char **syms = backtrace_symbols(frames, n);
+  fprintf(stderr, "  [diagnostic] child was stuck at:\n");
+  for (int i = 0; i < n; i++) {
+    fprintf(stderr, "    %s\n", syms && syms[i] ? syms[i] : "???");
+  }
+  if (syms) free(syms);
+}
 
 /* ========================================================================== */
 /*                         SHARED TASK FUNCTIONS                              */
@@ -454,6 +551,24 @@ TEST(timed_submit, null_timeout_acts_as_try_submit) {
   ctpool_destroy(pool);
 }
 
+TEST(timed_submit, null_timeout_with_invalid_args_still_reports_invalid_args) {
+  /* Coverage gap found while factoring ctpool_submit/_try_submit/
+   * _timed_submit into a shared internal helper: no existing test combined
+   * a NULL timeout (the delegation path straight to ctpool_try_submit) with
+   * an invalid pool or a NULL fn. Both must still report ccol_invalid_args
+   * via the delegated call, exactly as they would via a direct
+   * ctpool_try_submit call. */
+  ctpool_construct(pool, 2, 0);
+
+  REQUIRE_EQ(ctpool_timed_submit(CTPOOL_INVALID, inc_counter, NULL, NULL, NULL),
+             ccol_invalid_args);
+  REQUIRE_EQ(ctpool_timed_submit(pool, NULL, NULL, NULL, NULL),
+             ccol_invalid_args);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
 TEST(timed_submit, unbounded_queue_never_blocks_on_capacity) {
   /* For an unbounded queue the timeout is irrelevant: ctpool_timed_submit must
    * always succeed immediately regardless of how short the timeout is. */
@@ -469,6 +584,58 @@ TEST(timed_submit, unbounded_queue_never_blocks_on_capacity) {
 
   ctpool_wait(pool);
   REQUIRE_EQ(atomic_load(&counter), 20);
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
+TEST(timed_submit, malformed_negative_tv_nsec_normalized_correctly) {
+  /* Regression coverage for a real bug in make_abs_deadline: a
+   * caller-supplied timeout whose tv_nsec is negative (a malformed,
+   * non-normalised struct timespec that POSIX never itself produces, but
+   * which nothing here previously rejected; e.g. the result of
+   * subtracting two timespecs to compute a remaining budget without
+   * separately normalising that subtraction's own result) used to flow
+   * straight through into the absolute deadline handed to
+   * cond_var_timedwait with no correction, leaving that deadline's own
+   * tv_nsec also possibly negative: undefined behaviour per POSIX. This
+   * mirrors the identical hazard already found and fixed for
+   * add_duration_to_timespec in cthreadcomm.c.
+   *
+   * {1, -500000000} means "0.5 seconds" once correctly normalised (borrow
+   * one second, add it back as +1e9 ns): with a 1-slot bounded queue kept
+   * full by a task sleeping much longer than that, this must time out at
+   * around 500ms, not fail immediately with some platform-specific error
+   * arising from handing an out-of-range tv_nsec to the underlying pthread
+   * call, and not hang. */
+  atomic_int gate = 0;
+  atomic_int started = 0;
+  atomic_int counter = 0;
+  gate_ctx_t ctx = {.gate = &gate, .started = &started};
+
+  ctpool_construct(pool, 1, 1);
+  ctpool_submit(pool, blocker_fn, &ctx, NULL);
+  while (!atomic_load(&started)) sleep_ms(1);
+  ctpool_submit(pool, inc_counter, &counter, NULL); /* fills the 1-slot queue */
+
+  struct timespec bad_timeout = {.tv_sec = 1, .tv_nsec = -500000000L};
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  ccol_retval_t r =
+      ctpool_timed_submit(pool, inc_counter, &counter, NULL, &bad_timeout);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+
+  REQUIRE_EQ(r, ccol_timed_out);
+  /* Comfortably wide bounds around the intended ~500ms: must not return
+   * near-instantly (proving the malformed value was actually normalised
+   * and used to compute a real, future deadline, not merely rejected or
+   * swallowed as an immediate error) and must not take anywhere near the
+   * full, un-normalised 1 second either. */
+  REQUIRE_GT(elapsed_ms, 200L);
+  REQUIRE_LT(elapsed_ms, 900L);
+
+  atomic_store(&gate, 1);
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);
 }
@@ -641,6 +808,47 @@ TEST(futures, timed_submit_future_times_out) {
   ctpool_destroy(pool);
 }
 
+TEST(futures, timed_submit_future_malformed_negative_tv_nsec_normalized) {
+  /* Same make_abs_deadline fix as timed_submit's own
+   * malformed_negative_tv_nsec_normalized_correctly test, exercised through
+   * ctpool_timed_submit_future specifically, since it computes its own
+   * absolute deadline through the identical shared helper. */
+  atomic_int gate = 0;
+  atomic_int started = 0;
+  gate_ctx_t ctx = {.gate = &gate, .started = &started};
+
+  ctpool_construct(pool, 1, 1);
+  ctpool_submit(pool, blocker_fn, &ctx, NULL);
+  while (!atomic_load(&started)) sleep_ms(1);
+
+  int dummy = 0;
+  ctpool_future *f1 = ctpool_submit_future(pool, identity_fn, &dummy);
+  REQUIRE_NE((void *)f1, NULL); /* fills the 1-slot queue */
+
+  ctpool_future *f2 = NULL;
+  struct timespec bad_timeout = {.tv_sec = 1, .tv_nsec = -500000000L};
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+  ccol_retval_t r =
+      ctpool_timed_submit_future(pool, identity_fn, &dummy, &bad_timeout, &f2);
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000L + (t1.tv_nsec - t0.tv_nsec) / 1000000L;
+
+  REQUIRE_EQ(r, ccol_timed_out);
+  REQUIRE_EQ((void *)f2, NULL);
+  REQUIRE_GT(elapsed_ms, 200L);
+  REQUIRE_LT(elapsed_ms, 900L);
+
+  atomic_store(&gate, 1);
+  void *res = ctpool_future_get(f1);
+  REQUIRE_EQ(res, (void *)&dummy);
+  ctpool_future_free(f1);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
 TEST(futures, timed_submit_future_null_timeout_acts_as_try) {
   atomic_int gate = 0;
   atomic_int started = 0;
@@ -664,6 +872,27 @@ TEST(futures, timed_submit_future_null_timeout_acts_as_try) {
   void *res = ctpool_future_get(f1);
   REQUIRE_EQ(res, (void *)&dummy);
   ctpool_future_free(f1);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
+TEST(futures, timed_submit_future_null_timeout_with_invalid_args) {
+  /* Same coverage gap as timed_submit's identical companion test, for the
+   * future variant's own NULL-timeout delegation path. */
+  ctpool_construct(pool, 2, 0);
+  int value = 0;
+
+  ctpool_future *f = (ctpool_future *)0x1;
+  REQUIRE_EQ(
+      ctpool_timed_submit_future(CTPOOL_INVALID, identity_fn, &value, NULL, &f),
+      ccol_invalid_args);
+  REQUIRE_EQ((void *)f, NULL);
+
+  f = (ctpool_future *)0x1;
+  REQUIRE_EQ(ctpool_timed_submit_future(pool, NULL, &value, NULL, &f),
+             ccol_invalid_args);
+  REQUIRE_EQ((void *)f, NULL);
 
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);
@@ -746,6 +975,48 @@ TEST(futures, invalid_args) {
   REQUIRE_EQ((void *)ctpool_submit_future(CTPOOL_INVALID, identity_fn, &value),
              NULL);
   REQUIRE_EQ((void *)ctpool_submit_future(pool, NULL, &value), NULL);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
+/* Regression coverage for a real contract violation: ctpool_try_submit_future
+ * and ctpool_timed_submit_future both document "out ... set to NULL on
+ * failure", unconditionally, but used to leave *out completely untouched on
+ * their two earliest failure paths (an invalid/stale pool handle, or a NULL
+ * fn); only their later failure paths (a full queue, OOM, ...) actually
+ * zeroed it first. futures.invalid_args above cannot catch this: it always
+ * pre-initialises f to NULL before every call, so a garbage-*out regression
+ * would still read back as NULL by coincidence. This test instead poisons
+ * *out with a distinctive non-NULL sentinel immediately before each call
+ * that must fail on one of those two earliest paths, so the failure would be
+ * visible even though the return code alone is unaffected either way. */
+TEST(futures, out_param_zeroed_even_on_earliest_failure_paths) {
+  ctpool_construct(pool, 2, 16);
+  int value = 0;
+  struct timespec ts = {.tv_sec = 1, .tv_nsec = 0};
+  ctpool_future *const poison = (ctpool_future *)(uintptr_t)0xdeadbeefu;
+
+  ctpool_future *f = poison;
+  REQUIRE_EQ(ctpool_try_submit_future(CTPOOL_INVALID, identity_fn, &value, &f),
+             ccol_invalid_args);
+  REQUIRE_EQ((void *)f, NULL);
+
+  f = poison;
+  REQUIRE_EQ(ctpool_try_submit_future(pool, NULL, &value, &f),
+             ccol_invalid_args);
+  REQUIRE_EQ((void *)f, NULL);
+
+  f = poison;
+  REQUIRE_EQ(
+      ctpool_timed_submit_future(CTPOOL_INVALID, identity_fn, &value, &ts, &f),
+      ccol_invalid_args);
+  REQUIRE_EQ((void *)f, NULL);
+
+  f = poison;
+  REQUIRE_EQ(ctpool_timed_submit_future(pool, NULL, &value, &ts, &f),
+             ccol_invalid_args);
+  REQUIRE_EQ((void *)f, NULL);
 
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);
@@ -946,6 +1217,47 @@ TEST(wait, returns_when_idle_after_burst) {
 
   ctpool_wait(pool);
   REQUIRE_EQ(atomic_load(&counter), 50);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
+// ========================================================================
+// INVARIANT TESTS (randomized operation sequences)
+// ========================================================================
+
+// Runs several bursts of a random number of tasks (each incrementing a
+// shared atomic counter), draining with ctpool_wait after every burst and
+// checking three things hold every time: ctpool_pending_count and
+// ctpool_active_count are both back to zero, and the counter's cumulative
+// total exactly matches the cumulative number of tasks submitted so far -
+// i.e. every submitted task runs exactly once, no more, no less, and the
+// pool always reports fully idle once drained.
+TEST(cthreadpool, invariants_random_ops) {
+  ccol_invariants_rng_t rng;
+  uint64_t seed = CCOL_INVARIANTS_DEFAULT_SEED;
+  ccol_invariants_seed(&rng, seed);
+  ccol_invariants_print_seed("cthreadpool.invariants_random_ops", seed);
+
+  atomic_int counter = 0;
+  ctpool_construct(pool, 4, 0);
+
+  int total_submitted = 0;
+  const int num_bursts = 30;
+  for (int b = 0; b < num_bursts; ++b) {
+    int burst_size = (int)ccol_invariants_next_bounded(&rng, 100) + 1;
+    for (int i = 0; i < burst_size; ++i) {
+      ccol_retval_t r = ctpool_submit(pool, inc_counter, &counter, NULL);
+      REQUIRE_EQ(r, ccol_success);
+    }
+    total_submitted += burst_size;
+
+    ctpool_wait(pool);
+
+    REQUIRE_EQ(ctpool_pending_count(pool), (size_t)0);
+    REQUIRE_EQ(ctpool_active_count(pool), (size_t)0);
+    REQUIRE_EQ(atomic_load(&counter), total_submitted);
+  }
 
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);
@@ -1276,6 +1588,136 @@ TEST(custom_mprocs, allocations_go_through_custom_procs) {
   REQUIRE_EQ(atomic_load(&g_alloc_count), atomic_load(&g_free_count));
 }
 
+/* Regression/documentation-contract coverage: cthreadpool.h's own "Result
+ * ownership" doc comment and alloc_future_task's own implementation comment
+ * both document that a ctpool_future is always heap-allocated with plain
+ * malloc/calloc, independent of the pool's custom allocator; only the
+ * internal ctpool_task node it is submitted with goes through
+ * pool->m_procs. No existing test actually distinguishes this from the
+ * alternative design (the future ALSO going through the custom procs):
+ * futures.submit_future_returns_null_on_oom's own comment explicitly notes
+ * it cannot exercise the future's own allocation at all, since an
+ * OOM-failing custom allocator makes *f == NULL either way, regardless of
+ * which of the two designs is actually implemented. A COUNTING (rather than
+ * failing) custom allocator closes this gap directly: one
+ * ctpool_submit_future call must increase g_alloc_count by exactly 1 (the
+ * task node only), not 2, which is what a regression routing the future
+ * itself through the custom calloc would produce instead. */
+TEST(custom_mprocs, future_struct_uses_plain_allocator_not_custom_procs) {
+  atomic_store(&g_alloc_count, 0);
+  atomic_store(&g_free_count, 0);
+
+  ccol_memmgmt_procs_t mp = {.malloc = tracked_malloc,
+                             .free = tracked_free,
+                             .calloc = tracked_calloc,
+                             .realloc = tracked_realloc};
+  char *err = NULL;
+  ctpool pool = create_cthread_pool_mp(1, 0, &mp, &err);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
+
+  int before_alloc = atomic_load(&g_alloc_count);
+  int value = 42;
+  ctpool_future *f = ctpool_submit_future(pool, identity_fn, &value);
+  REQUIRE_NE((void *)f, NULL);
+  int after_submit_alloc = atomic_load(&g_alloc_count);
+
+  REQUIRE_EQ(after_submit_alloc - before_alloc, 1); /* task node only */
+
+  REQUIRE_EQ(ctpool_future_get(f), (void *)&value);
+  ctpool_future_free(f);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+
+  /* Every tracked allocation this whole test made (pool construction, the
+   * one task node) must have a matching tracked free; the future's own
+   * alloc/free never appear in either count at all. */
+  REQUIRE_EQ(atomic_load(&g_alloc_count), atomic_load(&g_free_count));
+}
+
+/* Direct verification of the task-node recycling optimization: submitting
+ * tasks one at a time, waiting for each to fully complete (and therefore be
+ * freed, i.e. recycled into the pool's own free list, since ctpool_wait
+ * cannot observe active_count reach 0 until after the worker's own
+ * task_free call has already returned) before submitting the next, must
+ * NOT trigger a fresh custom-allocator call for any submission after the
+ * very first one, which alone finds the free list empty. */
+TEST(custom_mprocs, task_nodes_are_recycled_not_reallocated_each_time) {
+  atomic_store(&g_alloc_count, 0);
+  atomic_store(&g_free_count, 0);
+
+  ccol_memmgmt_procs_t mp = {.malloc = tracked_malloc,
+                             .free = tracked_free,
+                             .calloc = tracked_calloc,
+                             .realloc = tracked_realloc};
+  char *err = NULL;
+  ctpool pool = create_cthread_pool_mp(1, 0, &mp, &err);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
+
+  atomic_int counter = 0;
+  REQUIRE_EQ(ctpool_submit(pool, inc_counter, &counter, NULL), ccol_success);
+  ctpool_wait(pool);
+  int alloc_after_first = atomic_load(&g_alloc_count);
+  REQUIRE_GT(alloc_after_first, 0); /* pool construction plus this one node */
+
+  enum { N = 20 };
+  for (int i = 0; i < N; i++) {
+    REQUIRE_EQ(ctpool_submit(pool, inc_counter, &counter, NULL), ccol_success);
+    ctpool_wait(pool);
+  }
+  REQUIRE_EQ(atomic_load(&counter), N + 1);
+
+  /* No further tracked allocation should have happened: every one of the
+   * N later submissions reused the exact node the previous submission's own
+   * task_free recycled. */
+  REQUIRE_EQ(atomic_load(&g_alloc_count), alloc_after_first);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+
+  REQUIRE_EQ(atomic_load(&g_alloc_count), atomic_load(&g_free_count));
+}
+
+/* Direct verification that the free list is actually bounded by
+ * task_free_list_cap, using the white-box accessors rather than only
+ * inferring it indirectly through allocator call counts: a burst of tasks
+ * queued up behind a gate-blocked single worker, released all at once so
+ * the worker frees them back-to-back with no intervening submission to
+ * reuse any of them, must never leave more than the configured cap sitting
+ * in the free list. */
+TEST(custom_mprocs, task_free_list_is_bounded_by_cap) {
+  atomic_int gate = 0;
+  atomic_int started = 0;
+  gate_ctx_t ctx = {.gate = &gate, .started = &started};
+
+  ctpool_construct(pool, 1, 0);
+  struct cthread_pool *raw = _ctpool_resolve_for_tests(pool);
+  REQUIRE_NE((void *)raw, NULL);
+  size_t cap = _ctpool_task_free_list_cap_for_tests(raw);
+  REQUIRE_EQ(cap, (size_t)4); /* num_threads(1) * 4, per the constructor */
+
+  ctpool_submit(pool, blocker_fn, &ctx, NULL);
+  while (!atomic_load(&started)) sleep_ms(1);
+
+  /* Queue comfortably more tasks than the cap while the sole worker is
+   * still blocked on the gate, so none of them can be reused by a later
+   * submission before the whole burst is freed. */
+  enum { BURST = 3 * 4 /* 3x cap */ };
+  atomic_int counter = 0;
+  for (int i = 0; i < BURST; i++) {
+    REQUIRE_EQ(ctpool_submit(pool, inc_counter, &counter, NULL), ccol_success);
+  }
+
+  atomic_store(&gate, 1);
+  ctpool_wait(pool);
+  REQUIRE_EQ(atomic_load(&counter), BURST);
+
+  REQUIRE_EQ(_ctpool_task_free_list_size_for_tests(raw), cap);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
 /* ========================================================================== */
 /*                         CONCURRENT LOAD                                   */
 /* ========================================================================== */
@@ -1552,6 +1994,47 @@ TEST(ctpool_handle_lifecycle, resolve_unpin_race_stress) {
   }
 }
 
+static void *ctp_concurrent_shutdown_immediate_thread(void *arg) {
+  ctp_concurrent_destroy_arg_t *a = (ctp_concurrent_destroy_arg_t *)arg;
+  ctpool_shutdown_immediate(a->h);
+  return NULL;
+}
+
+/* Regression coverage for a real data race _ctpool_teardown_raw used to
+ * have: it peeked at pool->shutdown_started with no lock held at all
+ * before deciding whether to run a drain shutdown, racing a concurrently
+ * pinned, in-flight ctpool_shutdown_immediate/_drain call's own, properly
+ * locked write to that same field (see src/cthreadpool.c's own
+ * _ctpool_teardown_raw comment for the full account; fixed by always
+ * calling the already-idempotent _ctpool_shutdown_drain_internal
+ * unconditionally instead of peeking first). Races an explicit
+ * ctpool_shutdown_immediate call on one thread against __ctpool_destroy on
+ * another, on the same still-live handle, repeated under stress: must not
+ * crash, hang, or corrupt state regardless of which thread reaches
+ * pool->mu first. */
+TEST(ctpool_handle_lifecycle,
+     shutdown_immediate_races_concurrent_destroy_stress) {
+  enum { ITERATIONS = 25 };
+  for (int i = 0; i < ITERATIONS; i++) {
+    char *err = NULL;
+    ctpool pool = create_cthread_pool(2, 0, &err);
+    REQUIRE_NE(pool, CTPOOL_INVALID);
+
+    ctp_concurrent_destroy_arg_t shutdown_arg = {.h = pool};
+    ctp_concurrent_destroy_arg_t destroy_arg = {.h = pool};
+    pthread_t shutdown_tid, destroy_tid;
+    REQUIRE_EQ(
+        pthread_create(&shutdown_tid, NULL,
+                       ctp_concurrent_shutdown_immediate_thread, &shutdown_arg),
+        0);
+    REQUIRE_EQ(pthread_create(&destroy_tid, NULL, ctp_concurrent_destroy_thread,
+                              &destroy_arg),
+               0);
+    pthread_join(shutdown_tid, NULL);
+    pthread_join(destroy_tid, NULL);
+  }
+}
+
 /* Legitimate slot reuse must never be confused with a stale handle to the
  * slot's previous occupant; the whole point of the generation counter. */
 TEST(ctpool_handle_lifecycle,
@@ -1601,3 +2084,728 @@ TEST(ctpool_handle_lifecycle, bounded_slot_reuse_under_churn) {
 
   REQUIRE_EQ(_ctpool_slot_table_capacity_for_tests(), capacity_after_first);
 }
+
+/* ========================================================================== */
+/*                    SELF-CALL FROM WITHIN A TASK                           */
+/* ========================================================================== */
+
+/* Regression coverage for a real, deterministic use-after-free: a task (or
+ * its on_complete callback) calling ctpool_destroy on the very pool it is
+ * executing on used to free the pool's mutex/condvars/struct while the
+ * calling worker thread was still on its way back through worker_thread_fn
+ * (task_free, then a lock/decrement/broadcast/unlock against the just-freed
+ * object); pthread_join on the calling thread's own id returns
+ * EDEADLK immediately instead of blocking, and that return value was never
+ * checked, so the shutdown's own "join every worker before freeing anything"
+ * guarantee silently did not apply to the calling worker itself. Now a fatal
+ * error, mirroring how a stale/already-destroyed handle is already fatal.
+ * Run in a forked child since fatal_err aborts the whole process. */
+typedef struct {
+  ctpool pool;
+} ctp_self_destroy_ctx_t;
+
+static void self_destroy_task(void *arg) {
+  ctp_self_destroy_ctx_t *ctx = (ctp_self_destroy_ctx_t *)arg;
+  ctpool_destroy(ctx->pool); /* the actual misuse under test */
+  /* Unreachable if fatal_err() aborted as expected; if it somehow is
+   * reached, worker_thread_fn's own post-task code (task_free, then
+   * pool->mu-protected bookkeeping) would otherwise run against a freed
+   * pool immediately after this function returns. */
+}
+
+TEST(ctpool_handle_lifecycle, destroy_from_within_own_task_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    /* Bounds this child's own lifetime in case the fix somehow regressed
+     * into a hang rather than a crash (see the ctpool_wait call below); the
+     * parent below only ever checks WTERMSIG against SIGABRT, so a SIGALRM
+     * termination here still fails the test cleanly rather than hanging the
+     * whole suite. */
+    alarm(2);
+
+    char *err = NULL;
+    ctpool pool = create_cthread_pool(1, 0, &err);
+    if (pool == CTPOOL_INVALID) _exit(2);
+    ctp_self_destroy_ctx_t ctx = {.pool = pool};
+    ctpool_submit(pool, self_destroy_task, &ctx, NULL);
+    /* Deterministic rather than a fixed sleep for the expected (fix holds)
+     * case: the worker aborts the whole process via SIGABRT well before
+     * this could ever return, so it does not matter what this thread is
+     * doing at that instant. Guarded by alarm() above, not relied upon
+     * alone, in case a future regression corrupts pool in some way that
+     * makes ctpool_wait itself misbehave rather than cleanly resolving it
+     * as stale. */
+    ctpool_wait(pool);
+    _exit(0); /* unreachable if fatal_err() aborted as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+/* Same hazard, reached via on_complete instead of the task function itself:
+ * on_complete runs on the same worker thread, before task_free, so it is
+ * exactly as much "within" the pool's own worker as fn is. */
+static void self_destroy_on_complete(void *arg) {
+  ctp_self_destroy_ctx_t *ctx = (ctp_self_destroy_ctx_t *)arg;
+  ctpool_destroy(ctx->pool);
+}
+
+TEST(ctpool_handle_lifecycle, destroy_from_within_own_on_complete_is_fatal) {
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    /* See destroy_from_within_own_task_is_fatal's identical alarm() comment
+     * above. */
+    alarm(2);
+
+    char *err = NULL;
+    ctpool pool = create_cthread_pool(1, 0, &err);
+    if (pool == CTPOOL_INVALID) _exit(2);
+    ctp_self_destroy_ctx_t ctx = {.pool = pool};
+    ctpool_submit(pool, noop_fn, &ctx, self_destroy_on_complete);
+    /* See destroy_from_within_own_task_is_fatal's identical comment above:
+     * deterministic either way, not a fixed-sleep guess, and bounded by
+     * alarm() above regardless. */
+    ctpool_wait(pool);
+    _exit(0); /* unreachable if fatal_err() aborted as expected */
+  }
+  REQUIRE_NE(pid, -1);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+}
+
+/* Regression coverage for the related, milder self-shutdown_drain hazard: a
+ * task calling ctpool_shutdown_drain on its own pool must be a complete
+ * no-op (not merely non-crashing) rather than actually setting
+ * shutdown_drain/shutdown_started; setting those from within the self-call
+ * would (a) reject this test's own subsequent, legitimate ctpool_submit call
+ * with ccol_not_permitted, and (b) permanently prevent any LATER, real
+ * external shutdown/destroy call from ever retrying the join this worker's
+ * own self-join silently skipped (thread_join on one's own id returns
+ * EDEADLK instead of blocking), leaking that worker thread's OS resources
+ * for the remaining life of the process. This test would fail on point (a)
+ * alone without the fix. */
+typedef struct {
+  ctpool pool;
+  atomic_int *task_returned;
+} ctp_self_shutdown_ctx_t;
+
+static void self_shutdown_drain_task(void *arg) {
+  ctp_self_shutdown_ctx_t *ctx = (ctp_self_shutdown_ctx_t *)arg;
+  ctpool_shutdown_drain(ctx->pool); /* must be a no-op from within own task */
+  atomic_store(ctx->task_returned, 1);
+}
+
+TEST(ctpool_handle_lifecycle, shutdown_drain_from_within_own_task_is_a_noop) {
+  ctpool_construct(pool, 1, 0);
+  atomic_int task_returned = 0;
+  ctp_self_shutdown_ctx_t ctx = {.pool = pool, .task_returned = &task_returned};
+
+  REQUIRE_EQ(ctpool_submit(pool, self_shutdown_drain_task, &ctx, NULL),
+             ccol_success);
+  ctpool_wait(pool);
+  REQUIRE_EQ(atomic_load(&task_returned), 1);
+
+  /* The pool must still be fully alive and accept new work: a self-call
+   * must not have actually shut anything down. */
+  atomic_int counter = 0;
+  REQUIRE_EQ(ctpool_submit(pool, inc_counter, &counter, NULL), ccol_success);
+  ctpool_wait(pool);
+  REQUIRE_EQ(atomic_load(&counter), 1);
+
+  /* A real, external shutdown/destroy afterward must still work cleanly,
+   * proving no worker thread was left permanently un-joinable by the
+   * earlier self-call. */
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
+/* Same no-op requirement for ctpool_shutdown_immediate. */
+static void self_shutdown_immediate_task(void *arg) {
+  ctp_self_shutdown_ctx_t *ctx = (ctp_self_shutdown_ctx_t *)arg;
+  ctpool_shutdown_immediate(
+      ctx->pool); /* must be a no-op from within own task */
+  atomic_store(ctx->task_returned, 1);
+}
+
+TEST(ctpool_handle_lifecycle,
+     shutdown_immediate_from_within_own_task_is_a_noop) {
+  ctpool_construct(pool, 1, 0);
+  atomic_int task_returned = 0;
+  ctp_self_shutdown_ctx_t ctx = {.pool = pool, .task_returned = &task_returned};
+
+  REQUIRE_EQ(ctpool_submit(pool, self_shutdown_immediate_task, &ctx, NULL),
+             ccol_success);
+  ctpool_wait(pool);
+  REQUIRE_EQ(atomic_load(&task_returned), 1);
+
+  atomic_int counter = 0;
+  REQUIRE_EQ(ctpool_submit(pool, inc_counter, &counter, NULL), ccol_success);
+  ctpool_wait(pool);
+  REQUIRE_EQ(atomic_load(&counter), 1);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
+/* Regression coverage for the analogous ctpool_wait self-call hazard: a task
+ * waiting on its own pool would otherwise deadlock forever, since the
+ * calling task is itself still counted in active_count until it returns.
+ * Run in a forked child, bounded by alarm(), so a regression here fails the
+ * test rather than hanging the whole suite. */
+typedef struct {
+  ctpool pool;
+  atomic_int *waited_ok;
+} ctp_self_wait_ctx_t;
+
+static void self_wait_task(void *arg) {
+  ctp_self_wait_ctx_t *ctx = (ctp_self_wait_ctx_t *)arg;
+  ctpool_wait(ctx->pool); /* must return immediately (no-op), not deadlock */
+  atomic_store(ctx->waited_ok, 1);
+}
+
+TEST(ctpool_handle_lifecycle, wait_from_within_own_task_does_not_hang) {
+  /* The child reports its own outcome through a pipe rather than through its
+   * own process exit code: under make memtest, valgrind overrides a forked
+   * child's real exit code with its own --error-exitcode the instant it
+   * finds ANY "still reachable" allocation in that child's inherited process
+   * image at exit time (which every child forked mid-suite always has,
+   * since the rest of this suite has not quiesced yet), so the exit code
+   * cannot reliably carry this result; see
+   * fork_safety.destroy_of_foreign_pool_with_queued_future_frees_queue_and_cancels_future's
+   * own identical reasoning a few tests below, and
+   * tests/clogger/tests.c's own fork_safety group for the original,
+   * independently-confirmed account of this exact valgrind behaviour. */
+  int pipefd[2];
+  REQUIRE_EQ(pipe(pipefd), 0);
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    close(pipefd[0]);
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    alarm(2); /* bounds this child's own lifetime if the fix regresses */
+
+    char *err = NULL;
+    ctpool pool = create_cthread_pool(1, 0, &err);
+    char ok = 0;
+    if (pool != CTPOOL_INVALID) {
+      atomic_int waited_ok = 0;
+      ctp_self_wait_ctx_t ctx = {.pool = pool, .waited_ok = &waited_ok};
+      ctpool_submit(pool, self_wait_task, &ctx, NULL);
+
+      ctpool_wait(pool); /* from the main (non-worker) thread; must not hang */
+      ok = (atomic_load(&waited_ok) == 1) ? 1 : 0;
+    }
+    ssize_t written = write(pipefd[1], &ok, 1);
+    (void)written;
+    close(pipefd[1]);
+    _exit(0);
+  }
+  close(pipefd[1]);
+
+  char ok = 0;
+  ssize_t n = read(pipefd[0], &ok, 1);
+  close(pipefd[0]);
+
+  int status = 0;
+  pid_t waited = waitpid(pid, &status, 0);
+
+  REQUIRE_EQ(waited, pid);
+  /* Not WEXITSTATUS (see this test's own comment above); WIFEXITED alone
+   * still catches a real regression re-hanging (turns into WIFSIGNALED via
+   * the alarm above) or a genuine crash. */
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_EQ(n, (ssize_t)1);
+  REQUIRE_EQ(ok, 1);
+}
+
+/* Regression coverage for a genuinely distinct interaction between the
+ * self-call guard above and the fork-safety machinery elsewhere in this
+ * file: a task that calls fork() itself (not the test's own top-level
+ * fork()) leaves the child's sole surviving thread as an exact continuation
+ * of that same worker call frame, with pool now marked foreign_since_fork
+ * (since it was in_use at the instant of fork(), walked by
+ * _ctpool_atfork_prepare/_release like every other live pool) but with this
+ * thread's own ctpool_worker_key_bundle TLS value still pointing at pool
+ * (inherited via fork(), which duplicates the calling thread's entire
+ * state, TLS included). Calling ctpool_destroy(pool) from there must still
+ * be detected as a self-call and rejected: __ctpool_destroy checks this
+ * before ever dispatching to _ctpool_teardown_raw's foreign-vs-non-foreign
+ * branches, so a real self-destroy is never masked by the pool's own
+ * foreign status. Confirmed via a standalone reproduction outside this
+ * suite before being added here: reverting just the self-call check (while
+ * leaving the foreign-pool machinery untouched) turns this into a real
+ * use-after-free in the child, since _ctpool_teardown_raw's foreign branch
+ * frees pool's own struct while this exact thread is still on its way back
+ * through worker_thread_fn's tail code. */
+typedef struct {
+  ctpool pool;
+  _Atomic pid_t grandchild_pid; /* -1 until the task's own fork() returns in
+                                    the parent side; reported back since a
+                                    task has no return value of its own */
+} ctp_fork_from_task_ctx_t;
+
+static void fork_from_task_then_self_destroy(void *arg) {
+  ctp_fork_from_task_ctx_t *ctx = (ctp_fork_from_task_ctx_t *)arg;
+  pid_t pid = fork();
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    alarm(2); /* bounds this grandchild's own lifetime if the fix regresses */
+    ctpool_destroy(ctx->pool); /* self-destroy of a now-foreign pool, from
+        within the exact worker call frame that was executing pre-fork */
+    _exit(0); /* unreachable if fatal_err() aborted as expected */
+  }
+  /* Parent side: still the pool's own genuine worker thread, unaffected by
+   * anything the child does to its own, independent post-fork copy of pool.
+   */
+  atomic_store(&ctx->grandchild_pid, pid);
+}
+
+TEST(ctpool_handle_lifecycle,
+     destroy_from_within_own_task_is_fatal_even_after_forking_first) {
+  ctpool_construct(pool, 1, 0);
+  ctp_fork_from_task_ctx_t ctx = {.pool = pool, .grandchild_pid = -1};
+  REQUIRE_EQ(ctpool_submit(pool, fork_from_task_then_self_destroy, &ctx, NULL),
+             ccol_success);
+
+  pid_t pid = -1;
+  for (int i = 0; i < 500 && pid == -1; i++) {
+    pid = atomic_load(&ctx.grandchild_pid);
+    if (pid == -1) sleep_ms(2);
+  }
+  REQUIRE_NE(pid, -1);
+
+  int status = 0;
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+  REQUIRE_TRUE(WIFSIGNALED(status));
+  REQUIRE_EQ(WTERMSIG(status), SIGABRT);
+
+  /* The parent's own copy of pool is completely unaffected by whatever the
+   * grandchild did to its own, independent (post-fork COW) copy; the
+   * original task itself (fork_from_task_then_self_destroy) has already
+   * returned by this point in the parent, since fork() itself returns
+   * immediately there. */
+  ctpool_wait(pool);
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
+/* ========================================================================== */
+/*                              FORK SAFETY                                   */
+/* ========================================================================== */
+
+/* The entire remainder of this file exercises the pthread_atfork()-based
+ * fork() safety machinery in src/cthreadpool.c, which is itself compiled out
+ * when FORK_SAFETY_REQUIRED is 0 (see that macro's own doc comment in
+ * common.h); without that machinery these tests' own premises (a forked
+ * child never inheriting a locked ctpool mutex, a pool surviving as
+ * "foreign" rather than being torn down unsafely) no longer hold, so they
+ * are compiled out along with it rather than left in to fail or hang. */
+#if FORK_SAFETY_REQUIRED
+
+typedef struct {
+  _Atomic int stop;
+} ctp_fork_stop_arg_t;
+
+/* Continuously creates and destroys throwaway ctpool instances, completely
+ * unrelated to the pool the main test thread keeps busy below; its only
+ * purpose is to keep SOME thread inside ctpool_slot_table's own mutex (via
+ * create_cthread_pool/ctpool_destroy) as often as possible, racing this
+ * test's own repeated fork() calls. Mirrors
+ * tests/cthreadcomm/tests.c's own fork_safety_churn_thread exactly, adapted
+ * to ctpool instead of event_loop. */
+static void *ctp_fork_churn_thread(void *arg) {
+  ctp_fork_stop_arg_t *a = (ctp_fork_stop_arg_t *)arg;
+  while (!atomic_load(&a->stop)) {
+    char *err = NULL;
+    ctpool p = create_cthread_pool(1, 0, &err);
+    if (p != CTPOOL_INVALID) ctpool_destroy(p);
+  }
+  return NULL;
+}
+
+typedef struct {
+  ctpool pool;
+  _Atomic int stop;
+} ctp_fork_feeder_arg_t;
+
+/* A single background thread repeatedly querying the busy pool the main
+ * test thread forks against below, widening the pool->mu contention window
+ * beyond what the trial loop's own submit-burst-then-fork technique alone
+ * provides. sched_yield() after every call is load-bearing, not a nicety:
+ * a bare `while (!stop) ctpool_pending_count(pool);` loop (tried first)
+ * reproduces the pre-fix hang just as reliably natively, but iterates fast
+ * enough to execute many millions of times even over a short test run,
+ * and valgrind's memcheck does not give threads true multi-core
+ * parallelism (it time-slices every thread through one single instrumented
+ * execution engine instead), so that many iterations of anything, however
+ * cheap each one is, still made this test catastrophically slow under
+ * valgrind (confirmed directly: tens of seconds to multiple minutes for
+ * this one test alone). Yielding after every call caps this thread's own
+ * achievable call rate to whatever the scheduler's own time-slice
+ * granularity allows, several orders of magnitude fewer calls for the same
+ * wall-clock window, while still contending often enough in practice to
+ * keep the race reproducible (see the test's own comment below for the
+ * measured trade-off this lands on). */
+static void *ctp_fork_feeder_thread(void *arg) {
+  ctp_fork_feeder_arg_t *a = (ctp_fork_feeder_arg_t *)arg;
+  while (!atomic_load(&a->stop)) {
+    (void)ctpool_pending_count(a->pool);
+    sched_yield();
+  }
+  return NULL;
+}
+
+/* Regression test for a real fork-safety hang this module's own
+ * ctpool_slot_table.mutex and every live pool's own mu previously had no
+ * protection against (see src/cthreadpool.c's own _ctpool_atfork_prepare
+ * doc comment for the full mechanism): fork() duplicates only the calling
+ * thread, so a pool's own mu (taken by ctpool_submit/_try_submit, by a
+ * worker thread picking up or finishing a task, and by ctpool_destroy's own
+ * shutdown/teardown sequence) could previously be inherited by a child
+ * already locked, with no thread left alive in that child that could ever
+ * unlock it. The same class of hazard already has a fix and regression test
+ * for event_loop's own locks (see tests/cthreadcomm/tests.c's
+ * fork_does_not_inherit_a_locked_event_loop_mutex); this module needed the
+ * identical fix independently, since event_loop's own dispatch_pool
+ * (created whenever a caller configures num_reactor_threads > 1) is exactly
+ * such a ctpool, reachable through this exact mechanism, and event_loop has
+ * no way to reach into this module's own opaque internals to protect it
+ * from outside.
+ *
+ * A churn thread continuously creating/destroying throwaway ctpool
+ * instances races ctpool_slot_table.mutex in the background, mirroring
+ * fork_does_not_inherit_a_locked_event_loop_mutex's own identically-shaped
+ * churn thread exactly (confirmed cheap under valgrind on its own: that
+ * existing test, doing the same real create/destroy work at the same
+ * duration, runs in under a second there). A single yield-throttled feeder
+ * thread (see ctp_fork_feeder_thread's own comment) separately races the
+ * busy pool's own mu in the background. Each trial then additionally
+ * bursts several real task submissions to that same pool immediately
+ * before forking, deliberately timing the fork() to land while some
+ * worker thread may still be mid-dequeue (racing to acquire pool->mu after
+ * one of the burst's own wakeup signals): several submissions, not one,
+ * because a single submit's own pool->mu window proved too narrow to
+ * reliably overlap a fork() called immediately afterward by itself
+ * (confirmed directly: one-submit-per-trial with no feeder thread at all
+ * reproduced zero hangs across 300 trials).
+ *
+ * Two earlier drafts of this test used a differently-shaped feeder thread
+ * (or several of them) and no burst at all: first one or more threads
+ * calling real, allocating ctpool_try_submit continuously; then, after
+ * that proved even worse, one or more threads calling allocation-free
+ * ctpool_pending_count/_active_count continuously, with no sched_yield()
+ * between iterations. Every one of those reliably reproduced the pre-fix
+ * hang in well under a second natively, but each turned catastrophically
+ * slow under valgrind (tens of seconds to multiple minutes for this one
+ * test alone, even with the real fix in place and zero hangs to report).
+ * Root cause, confirmed by direct experimentation rather than assumed:
+ * valgrind's memcheck does not give threads true multi-core parallelism at
+ * all, it time-slices all of them through its own single instrumented
+ * execution engine, so an unthrottled loop iterating as fast as the CPU
+ * allows for the test's own full duration does not divide that work across
+ * cores the way it would natively, it just hands valgrind an astronomically
+ * larger total instrumented instruction count to simulate for the exact
+ * same wall-clock window. The current design bounds that cost two ways:
+ * the one feeder thread yields after every single lock/unlock, capping its
+ * own achievable call rate to whatever the scheduler's own time-slice
+ * granularity allows rather than the CPU's raw instruction rate; and the
+ * trial loop's own burst is a small, fixed-size, non-spinning sequence of
+ * blocking calls per trial, so that half of the contention scales with
+ * TRIALS, not with wall-clock duration, and pays no such multiplier
+ * either. */
+TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
+  ctp_fork_stop_arg_t churn = {.stop = 0};
+  pthread_t churn_tid;
+  REQUIRE_EQ(pthread_create(&churn_tid, NULL, ctp_fork_churn_thread, &churn),
+             0);
+
+  char *err = NULL;
+  ctpool pool = create_cthread_pool(3, 0, &err);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
+  atomic_int counter = 0;
+
+  ctp_fork_feeder_arg_t feeder = {.pool = pool, .stop = 0};
+  pthread_t feeder_tid;
+  REQUIRE_EQ(pthread_create(&feeder_tid, NULL, ctp_fork_feeder_thread, &feeder),
+             0);
+
+  /* 60 trials, not hundreds: this configuration's own empirically-measured
+   * pre-fix hang rate (roughly 10-20% of trials, confirmed directly by
+   * temporarily neutering _ctpool_atfork_prepare/_release's bodies while
+   * keeping them registered, then rerunning this exact test dozens of
+   * times) already makes the odds of a full run seeing zero hangs purely by
+   * chance well under 1% without paying for hundreds of trials' worth of
+   * fork()+waitpid() overhead on every ordinary (post-fix, zero-hang) test
+   * run. */
+  enum { TRIALS = 60 };
+  /* Several submissions right before each fork(), not just one: a single
+   * submit's own pool->mu window is too narrow to reliably overlap a fork()
+   * called immediately afterward (confirmed directly: one-submit-per-trial
+   * alone reproduced zero hangs across 300 trials); bursting several gives
+   * several independent workers a near-simultaneous dequeue race to win,
+   * multiplying the odds at least one is still inside pool->mu at the exact
+   * fork() instant, without needing a perpetually-spinning background
+   * thread (tried first; see this test's own comment above for why that
+   * made it too slow under valgrind). */
+  enum { BURST = 8 };
+  int hangs = 0;
+  _diag_warm_up_backtrace();
+  for (int i = 0; i < TRIALS; i++) {
+    for (int b = 0; b < BURST; b++) {
+      REQUIRE_EQ(ctpool_try_submit(pool, inc_counter, &counter, NULL),
+                 ccol_success);
+    }
+
+    int diagfd[2];
+    REQUIRE_EQ(pipe(diagfd), 0);
+
+    pid_t pid = fork();
+    REQUIRE_NE(pid, -1);
+    if (pid == 0) {
+      close(diagfd[0]);
+      int dn = open("/dev/null", O_WRONLY);
+      if (dn >= 0) {
+        dup2(dn, STDOUT_FILENO);
+        dup2(dn, STDERR_FILENO);
+        close(dn);
+      }
+      /* Bounds this child's own lifetime in case the hazard this test
+       * guards against somehow still fires, rather than hanging the whole
+       * suite; the parent below distinguishes this from a clean exit via
+       * WIFEXITED. 5 seconds, not 1: a genuine deadlock on an inherited
+       * locked mutex hangs forever regardless of the bound chosen, so this
+       * buys headroom against ordinary post-fork scheduling delay (a busy,
+       * oversubscribed, or virtualized CI host can leave a freshly forked
+       * child unscheduled for over a second with nothing actually wrong)
+       * without weakening what the test actually catches. _diag_arm installs
+       * a diagnostic SIGALRM handler (see that section's own doc comment)
+       * instead of relying on the default kill-on-SIGALRM disposition, so a
+       * real hang reports WHERE the child was stuck, not just THAT it was. */
+      _diag_arm(diagfd[1]);
+
+      /* The exact call shape (ctpool_submit/_try_submit -> submit_internal
+       * -> mutex_lock(pool->mu)) a real application would use right after
+       * inheriting a pool across a fork, so it is what this test should
+       * actually prove is safe. */
+      atomic_int local_counter = 0;
+      ctpool_try_submit(pool, inc_counter, &local_counter, NULL);
+      _exit(0); /* reached only if the call above returned at all */
+    }
+    close(diagfd[1]);
+
+    int status = 0;
+    REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+    bool diag_fired = WIFEXITED(status) && WEXITSTATUS(status) == 66;
+    if (!WIFEXITED(status) || diag_fired) {
+      hangs++;
+      fprintf(stderr,
+              "trial %d: hang detected (WIFEXITED=%d WEXITSTATUS=%d "
+              "WIFSIGNALED=%d WTERMSIG=%d)\n",
+              i, WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1,
+              WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : -1);
+      if (diag_fired) _diag_report(diagfd[0]);
+    }
+    close(diagfd[0]);
+  }
+
+  REQUIRE_EQ(hangs, 0);
+
+  atomic_store(&feeder.stop, 1);
+  pthread_join(feeder_tid, NULL);
+  atomic_store(&churn.stop, 1);
+  pthread_join(churn_tid, NULL);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
+/* Regression coverage for a real bug in _ctpool_teardown_raw's own
+ * foreign_since_fork branch (see src/cthreadpool.c's own comment there for
+ * the full account): it used to free pool->threads and the pool struct
+ * itself without ever touching pool->head/pool->tail, silently leaking
+ * every still-queued ctpool_task; and, for a queued FUTURE task
+ * specifically, never calling future_cancel on it, so a caller in the
+ * child still holding that future's pointer and calling
+ * ctpool_future_get() on it would block forever waiting for a worker that
+ * will never exist in this process. Fixed by discarding the queue (and
+ * cancelling any attached futures) exactly like ctpool_shutdown_immediate
+ * already does for a live pool, before freeing anything. This is also the
+ * exact call shape __ctpool_destroy's own doc comment promises to support
+ * ("If neither ctpool_shutdown_drain nor ctpool_shutdown_immediate was
+ * called beforehand, a drain shutdown runs first"): destroying a foreign
+ * pool directly, with no explicit prior shutdown call. */
+TEST(
+    fork_safety,
+    destroy_of_foreign_pool_with_queued_future_frees_queue_and_cancels_future) {
+  atomic_int gate = 0;
+  atomic_int started = 0;
+  gate_ctx_t gctx = {.gate = &gate, .started = &started};
+
+  char *err = NULL;
+  ctpool pool = create_cthread_pool(1, 1, &err);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
+  ctpool_submit(pool, blocker_fn, &gctx, NULL);
+  while (!atomic_load(&started)) sleep_ms(1);
+
+  int dummy = 0;
+  ctpool_future *f = ctpool_submit_future(pool, identity_fn, &dummy);
+  REQUIRE_NE((void *)f, NULL); /* queued behind the blocked worker */
+
+  /* The child reports its own outcome through a pipe rather than through
+   * its own process exit code: under make memtest, valgrind overrides a
+   * forked child's real exit code with its own --error-exitcode the
+   * instant it finds ANY "still reachable" allocation in that child's
+   * inherited process image at exit time (which every child forked
+   * mid-suite always has, since the rest of this suite has not quiesced
+   * yet), so the exit code cannot reliably carry this result; see
+   * tests/clogger/tests.c's own fork_safety group for the identical,
+   * already-established reasoning, and this file's own
+   * fork_does_not_inherit_a_locked_ctpool_mutex test above, which checks
+   * only WIFEXITED for the same reason. */
+  int pipefd[2];
+  REQUIRE_EQ(pipe(pipefd), 0);
+
+  pid_t pid = fork();
+  REQUIRE_NE(pid, -1);
+  if (pid == 0) {
+    close(pipefd[0]);
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    /* Bounds this child's own lifetime in case the hazard this test guards
+     * against somehow still fires, rather than hanging the whole suite. */
+    alarm(2);
+
+    ctpool_destroy(pool); /* no explicit shutdown_immediate call first */
+
+    void *res = ctpool_future_get(f); /* must return promptly (cancelled),
+                                          not hang forever */
+    char ok = (ctpool_future_cancelled(f) && res == NULL) ? 1 : 0;
+    ssize_t written = write(pipefd[1], &ok, 1);
+    (void)written;
+    close(pipefd[1]);
+    _exit(0);
+  }
+  close(pipefd[1]);
+
+  char ok = 0;
+  ssize_t n = read(pipefd[0], &ok, 1);
+  close(pipefd[0]);
+
+  int status = 0;
+  pid_t waited = waitpid(pid, &status, 0);
+
+  /* Release the parent's own worker and tear down its own, still-live pool
+   * before any assertion below, so a genuine regression here does not also
+   * leak a permanently-blocked worker thread into the rest of the suite;
+   * its own copy of pool/f is completely unaffected by whatever the child
+   * did to its own, independent (post-fork COW) copy. */
+  atomic_store(&gate, 1);
+  void *res = ctpool_future_get(f);
+  ctpool_future_free(f);
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+
+  REQUIRE_EQ(waited, pid);
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_EQ(n, (ssize_t)1);
+  REQUIRE_EQ(ok, 1);
+  REQUIRE_EQ(res, (void *)&dummy);
+}
+
+/* Regression coverage for a real bug in ctpool_wait: unlike
+ * _ctpool_shutdown_drain_internal/_ctpool_shutdown_immediate_internal (both
+ * of which skip trying to join a foreign pool's own, nonexistent worker
+ * threads), ctpool_wait had no foreign_since_fork guard at all, so calling
+ * it in a forked child on an inherited pool whose active_count/queue_size
+ * was nonzero at the instant of fork() hung forever: no worker thread
+ * exists in this process to ever decrement active_count, drain queue_size,
+ * or broadcast idle_cv again. Fixed by treating a foreign pool as vacuously
+ * idle. */
+TEST(fork_safety, wait_on_foreign_pool_with_pending_work_does_not_hang) {
+  atomic_int gate = 0;
+  atomic_int started = 0;
+  atomic_int counter = 0;
+  gate_ctx_t gctx = {.gate = &gate, .started = &started};
+
+  char *err = NULL;
+  ctpool pool = create_cthread_pool(1, 0, &err);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
+  ctpool_submit(pool, blocker_fn, &gctx, NULL);
+  while (!atomic_load(&started)) sleep_ms(1);
+  ctpool_submit(pool, inc_counter, &counter, NULL); /* queues behind blocker */
+
+  pid_t pid = fork();
+  REQUIRE_NE(pid, -1);
+  if (pid == 0) {
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    alarm(2); /* bounds this child's own lifetime if the fix regresses */
+    ctpool_wait(pool); /* must return promptly, not hang forever */
+    _exit(0);
+  }
+
+  int status = 0;
+  pid_t waited = waitpid(pid, &status, 0);
+
+  /* Release the parent's own worker and tear down its own, still-live pool
+   * before the assertions below, so a genuine regression here does not
+   * also leak a permanently-blocked worker thread into the rest of the
+   * suite; its own worker is still genuinely blocked, unaffected by the
+   * child. */
+  atomic_store(&gate, 1);
+  ctpool_shutdown_drain(pool);
+  int final_counter = atomic_load(&counter);
+  ctpool_destroy(pool);
+
+  REQUIRE_EQ(waited, pid);
+  /* Not WEXITSTATUS: under make memtest, valgrind overrides a forked
+   * child's real exit code with its own --error-exitcode the instant it
+   * finds any "still reachable" allocation in that child's inherited
+   * process image at exit time (which every child forked mid-suite
+   * always has), so WIFEXITED alone (still catches a real regression
+   * re-hanging, which turns into WIFSIGNALED via the alarm above, or a
+   * genuine crash) is the only part of the observable exit status this
+   * test can rely on; see tests/clogger/tests.c's own fork_safety group
+   * for the identical, already-established reasoning, and this file's own
+   * fork_does_not_inherit_a_locked_ctpool_mutex test above, which checks
+   * only WIFEXITED for the same reason. */
+  REQUIRE_TRUE(WIFEXITED(status));
+  REQUIRE_EQ(final_counter, 1);
+}
+
+#endif /* FORK_SAFETY_REQUIRED */

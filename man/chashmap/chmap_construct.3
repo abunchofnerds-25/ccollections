@@ -28,6 +28,27 @@ Creates hidden type marker variables for type safety
 Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
 Uses default memory management and hashing
 .fi
+.SH "FLOAT AND DOUBLE KEY EQUALITY"
+.nf
+For a float or double key_type, key equality is bitwise equality,
+not IEEE 754 == equality, with one exception: -0.0 and 0.0 are
+canonicalized to the same key, matching -0.0 == 0.0 in C.
+Every other bit pattern, including NaN, follows bitwise equality:
+a NaN key is always found again by the exact bit pattern it was
+inserted with (unlike NaN == NaN, which is always false in C), and
+two different NaN payloads are two different keys.
+.fi
+.SH "LONG DOUBLE KEY EQUALITY"
+.nf
+For a long double key_type, key equality is based on numeric value
+(native ==), not bitwise equality: -0.0L and 0.0L are the same key,
+and two keys holding the identical value remain the same key even
+if their platform-defined padding bits differ. Every NaN long
+double collapses into a single key, unlike float/double's own
+distinct-NaN-payload behavior. This value-based handling is
+bypassed when a custom hashing function is supplied at creation
+time; see chmap_create_full(3).
+.fi
 .SH EXAMPLES
 .nf
 chmap_construct(map, int, char*);

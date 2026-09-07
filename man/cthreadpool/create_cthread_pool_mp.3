@@ -48,14 +48,37 @@ The returned handle is an opaque VALUE (a packed {slot index,
 generation} pair), not a pointer; never cast it to/from void* or
 treat it as an address.
 Futures always use standard malloc/free regardless of mprocs.
+The small internal task node backing each submission is recycled
+through a bounded per-pool cache rather than allocated and freed via
+mprocs on every single call; a caller relying on mprocs to observe
+one allocation and one free per submission (for example a tracking or
+instrumenting allocator) will instead see calls only when the cache is
+empty or already full, not on every call.
 The pool must be shut down with ctpool_shutdown_drain or
 ctpool_shutdown_immediate before calling ctpool_destroy, unless
 ctpool_destroy is used directly (which performs a drain shutdown).
 __ctpool_destroy waits for every in-flight resolved use of the handle
 (a concurrently executing ctpool_submit/_wait/_pending_count/... call)
-to finish before freeing anything, so it is no longer the caller's
-own responsibility to first prove no other thread is still using the
-pool; see __ctpool_destroy(3).
+to finish before freeing anything, so the caller does not need to
+independently prove no other thread is still using the pool; see
+__ctpool_destroy(3).
+
+A fresh create_cthread_pool_mp/ctpool_submit/_try_submit/_timed_submit/
+ctpool_destroy (and the future/wait/shutdown variants) call, from any
+thread, in either the parent or a freshly forked child, never hangs on
+a lock some other (possibly no-longer-existing, since fork(2)
+duplicates only the calling thread) thread happened to hold at the
+instant of the fork. A pool already live across the fork is a
+different matter: its worker threads are not duplicated into the
+child, so an inherited pool can no longer run any queued or future
+task there regardless of this guarantee; treat such a pool as inert in
+the child (not usable for further submission). ctpool_wait on such a
+pool in the child returns immediately rather than waiting for progress
+that can never happen, and ctpool_destroy still discards any work
+still queued at the moment of the fork (cancelling any queued futures,
+so a caller blocked in ctpool_future_get on one of them wakes up
+rather than hanging) before releasing the pool's own memory, even with
+no prior explicit shutdown call.
 .fi
 .SH "SEE ALSO"
 .BR create_cthread_pool (3),

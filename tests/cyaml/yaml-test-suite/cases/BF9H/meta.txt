@@ -1,0 +1,2 @@
+fail=1
+name=Trailing comment in multiline plain scalar

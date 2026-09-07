@@ -19,6 +19,24 @@ appears multiple times, the last value is returned.
 The returned pointer is valid for the lifetime of the handler
 invocation.
 .fi
+.SH NOTES
+.nf
+A chunked request body's trailer fields (RFC 7230 4.1.2) are indexed
+exactly like any other header and become retrievable through this same
+function once they have actually been parsed; there is no separate
+trailer-specific accessor.
+
+For a buffered route this is transparent: the handler only ever runs
+once the whole body, trailers included, has already been read, so a
+trailer field is retrievable from the very start of the handler.
+
+For a streaming route, a trailer field becomes retrievable only once
+the handler's own chttpsvr_req_read() calls have drained the body all
+the way to its natural end (a return of 0).  Querying it any earlier
+returns NULL, indistinguishable from the field never having been sent
+at all.
+.fi
 .SH "SEE ALSO"
 .BR chttpsvr_req_method (3),
-.BR chttpsvr_req_path (3)
+.BR chttpsvr_req_path (3),
+.BR chttpsvr_req_read (3)

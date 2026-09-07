@@ -11,8 +11,9 @@ ccol_retval_t chttpsvr_set_engine_logger(clog cl);
 .fi
 .SH DESCRIPTION
 .nf
-Derives a child logger from cl, adds the field component=http-engine,
-and installs it as the shared reactor's diagnostics logger.  Any
+Derives a child logger from cl, adds the field
+component=http-server-engine, and installs it as the shared reactor's
+diagnostics logger.  Any
 previously installed engine logger is closed.
 
 The reactor logs to this handle at exactly three points: a TLS

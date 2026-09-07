@@ -21,13 +21,24 @@ an earlier call or concurrently by another thread, a forged value,
 or garbage) is a FATAL ERROR: this function calls fatal_err()
 (abort()/SIGABRT) rather than risk a use-after-free or double-free.
 
-On a live handle, waits for every in-flight resolved use of the
-handle to finish (event_loop_add/_modify/_pause/_resume/_remove/
-_reg_count calls currently executing on another thread), then
-calls event_loop_shutdown() if the caller skipped it (guaranteeing
-every reactor thread is joined and no dispatch can be in flight
-before the next step), then frees every remaining registration
-through the same per-registration path event_loop_remove() uses.
+Calling this on loop from within a callback currently dispatching
+on one of loop's own threads (the poller thread, or, for
+num_reactor_threads > 1, a dispatch worker) is also a FATAL ERROR
+(abort()/SIGABRT): that thread is the one this call would otherwise
+need to join, and freeing every registration and the loop struct
+itself out from under a still-executing callback on that same
+thread would be a use-after-free, not merely a deadlock. Defer
+destruction to another thread, or to after the callback returns,
+instead.
+
+On a live handle called from any other thread, waits for every
+in-flight resolved use of the handle to finish (event_loop_add/
+_modify/_pause/_resume/_remove/_reg_count calls currently executing
+on another thread), then calls event_loop_shutdown() if the caller
+skipped it (guaranteeing every reactor thread is joined and no
+dispatch can be in flight before the next step), then frees every
+remaining registration through the same per-registration path
+event_loop_remove() uses.
 
 For queue-backed registrations this correctly unlinks each one from
 its queue's own waiter list before freeing it, so a queue that

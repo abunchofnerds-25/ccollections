@@ -55,6 +55,23 @@ void __cstring_destroy(cstr s) {
   }
 }
 
+/* True when length + 1 (room for the null terminator) can be represented
+ * without wrapping size_t. Every call site that computes a buffer capacity
+ * as length + 1 before handing it to find_nearest_gte_power_of_two() must
+ * check this first: that function's own overflow detection operates on the
+ * already-computed length + 1 value, not on length itself, so a length of
+ * exactly SIZE_MAX silently wraps length + 1 to 0 before the check ever
+ * runs. A requested capacity of 0 satisfies cstring_grow_to()'s own "already
+ * sufficient" fast path (0 <= any real capacity) unconditionally, so the
+ * wrap would silently report success without allocating anything, and the
+ * caller would then read or write far past the real (small) buffer. Not
+ * reachable through any real allocation (a string spanning the entire
+ * address space cannot exist) but checked explicitly rather than left to
+ * depend on that fact never changing. */
+static bool cstring_length_fits_with_terminator(size_t length) {
+  return length != ccol_invalid_size;
+}
+
 /* Grows the character buffer to at least needed_capacity bytes. The new size
  * is rounded up to the nearest power of two to amortise future allocations,
  * with a floor of cstring_minimum_capacity. A no-op if current capacity
@@ -130,6 +147,13 @@ cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
   }
 
   size_t init_len = initial ? strlen(initial) : 0;
+  if (!cstring_length_fits_with_terminator(init_len)) {
+    __cstring_destroy(s);
+    if (err) {
+      *err = CCOL_ERR_STR("initial string too large");
+    }
+    return NULL;
+  }
   size_t init_cap = find_nearest_gte_power_of_two(init_len + 1);
   if (init_cap == ccol_invalid_size) {
     __cstring_destroy(s);
@@ -166,7 +190,12 @@ cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
 
 /* Returns the custom allocator stored in the cstr, or NULL for default
  * malloc/free. */
-ccol_memmgmt_procs_t *cstring_get_mprocs(cstr s) { return s->m_procs; }
+ccol_memmgmt_procs_t *cstring_get_mprocs(cstr s) {
+  if (!s) {
+    ccol_assert(false);
+  }
+  return s->m_procs;
+}
 
 /* ========================================================================== */
 /*                         QUERY FUNCTIONS                                    */
@@ -231,7 +260,7 @@ ccol_retval_t cstring_append(cstr s, const char *str) {
   }
 
   size_t new_len = s->length + str_len;
-  if (new_len < s->length) {
+  if (new_len < s->length || !cstring_length_fits_with_terminator(new_len)) {
     return ccol_container_full;
   }
 
@@ -272,7 +301,7 @@ ccol_retval_t cstring_prepend(cstr s, const char *str) {
   }
 
   size_t new_len = s->length + str_len;
-  if (new_len < s->length) {
+  if (new_len < s->length || !cstring_length_fits_with_terminator(new_len)) {
     return ccol_container_full;
   }
 
@@ -319,7 +348,7 @@ ccol_retval_t cstring_insert(cstr s, size_t pos, const char *str) {
   }
 
   size_t new_len = s->length + str_len;
-  if (new_len < s->length) {
+  if (new_len < s->length || !cstring_length_fits_with_terminator(new_len)) {
     return ccol_container_full;
   }
 
@@ -365,6 +394,9 @@ ccol_retval_t cstring_set(cstr s, const char *str) {
   }
 
   size_t str_len = strlen(str);
+  if (!cstring_length_fits_with_terminator(str_len)) {
+    return ccol_container_full;
+  }
 
   ptrdiff_t alias_off =
       (str >= s->data && str < s->data + s->capacity) ? (str - s->data) : -1;
@@ -385,18 +417,24 @@ ccol_retval_t cstring_set(cstr s, const char *str) {
 
 /* Clears the string content and attempts to shrink the buffer back to
  * cstring_minimum_capacity. Length is zeroed unconditionally; if the
- * reallocation fails the buffer retains its previous capacity. */
+ * reallocation fails the buffer retains its previous capacity. A string
+ * already at the minimum capacity (the common case: a freshly created string,
+ * or one that was already reset) skips the reallocation call entirely, since
+ * there would be nothing to shrink. */
 void cstring_reset(cstr s) {
   if (!s) {
     ccol_assert(false);
   }
 
-  char *orig = s->data;
-  s->data = (char *)_mem_realloc(s->m_procs, s->data, cstring_minimum_capacity);
-  if (!s->data) {
-    s->data = orig;
-  } else {
-    s->capacity = cstring_minimum_capacity;
+  if (s->capacity != cstring_minimum_capacity) {
+    char *orig = s->data;
+    s->data =
+        (char *)_mem_realloc(s->m_procs, s->data, cstring_minimum_capacity);
+    if (!s->data) {
+      s->data = orig;
+    } else {
+      s->capacity = cstring_minimum_capacity;
+    }
   }
   s->length = 0;
   s->data[0] = '\0';
@@ -439,7 +477,7 @@ void cstring_to_lower(cstr s) {
 }
 
 /* Removes leading and trailing whitespace in-place. Trailing whitespace is
- * trimmed first by simply walking the null terminator backwards – no memory
+ * trimmed first by simply walking the null terminator backwards; no memory
  * movement required. Leading whitespace then requires a memmove. */
 void cstring_trim(cstr s) {
   if (!s) {
@@ -466,11 +504,60 @@ void cstring_trim(cstr s) {
   }
 }
 
+/* Computes the resulting length after replacing count non-overlapping
+ * occurrences of an nlen-byte needle with an rlen-byte replacement in a
+ * string currently orig_length bytes long, detecting size_t overflow in
+ * either the (rlen - nlen) * count multiplication or the final addition.
+ * count must be > 0 (the caller is expected to have already handled the
+ * zero-occurrences case).
+ *
+ * Extracted out of cstring_replace() into its own function specifically so
+ * this arithmetic can be exercised directly by tests: reaching these overflow
+ * guards through cstring_replace() itself would require constructing actual
+ * strings on the order of gigabytes (e.g. a several-GB source string built
+ * from a single repeated character together with a several-GB replacement
+ * string), which is impractical for a routine test run. */
+static ccol_retval_t compute_replace_new_length(size_t orig_length, size_t nlen,
+                                                size_t rlen, size_t count,
+                                                size_t *new_len_out) {
+  ccol_assert(count > 0);
+
+  if (rlen >= nlen) {
+    size_t added = (rlen - nlen) * count;
+    if (added / count != (rlen - nlen)) {
+      return ccol_container_full;
+    }
+    size_t new_len = orig_length + added;
+    /* new_len == orig_length + added can legitimately land on exactly
+     * SIZE_MAX without ever being "less than orig_length" (the wraparound
+     * this first check catches); cstring_replace()'s own caller still needs
+     * new_len + 1 to fit size_t for the null terminator, so that exact value
+     * must be rejected here too, not just a genuine wraparound past it. */
+    if (new_len < orig_length ||
+        !cstring_length_fits_with_terminator(new_len)) {
+      return ccol_container_full;
+    }
+    *new_len_out = new_len;
+  } else {
+    /* No overflow/underflow guard is needed here, unlike the growth branch
+     * above: count occurrences of an nlen-byte needle were found
+     * non-overlapping within a string of orig_length bytes (the counting
+     * loop in cstring_replace() advances by nlen after each match), so
+     * count * nlen <= orig_length always holds, which bounds
+     * count * (nlen - rlen) <= count * nlen below it too. The subtraction
+     * below can therefore never underflow, and the intermediate
+     * multiplication can never overflow, for any input this function is
+     * actually called with. */
+    *new_len_out = orig_length - (nlen - rlen) * count;
+  }
+
+  return ccol_success;
+}
+
 /* Replaces all occurrences of needle with replacement in-place. To avoid
  * multiple reallocations, the total number of occurrences is counted first so
  * a single new buffer of the exact required size can be allocated before the
- * content is rebuilt. The overflow check on added bytes handles edge cases
- * where count * (rlen - nlen) exceeds size_t. */
+ * content is rebuilt. */
 ccol_retval_t cstring_replace(cstr s, const char *needle,
                               const char *replacement) {
   if (!s) {
@@ -497,18 +584,10 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
 
   /* Calculate the new length, checking for overflow. */
   size_t new_len;
-  if (rlen >= nlen) {
-    size_t added = (rlen - nlen) * count;
-    /* Overflow check: if count > 0 the division must round-trip. */
-    if (count > 0 && added / count != (rlen - nlen)) {
-      return ccol_container_full;
-    }
-    new_len = s->length + added;
-    if (new_len < s->length) {
-      return ccol_container_full;
-    }
-  } else {
-    new_len = s->length - (nlen - rlen) * count;
+  ccol_retval_t len_rv =
+      compute_replace_new_length(s->length, nlen, rlen, count, &new_len);
+  if (len_rv != ccol_success) {
+    return len_rv;
   }
 
   size_t new_cap = find_nearest_gte_power_of_two(new_len + 1);
@@ -808,5 +887,22 @@ size_t cstring_get_capacity(cstr s) {
     ccol_assert(false);
   }
   return s->capacity;
+}
+
+/* Exposes cstring_length_fits_with_terminator() for white-box unit tests;
+ * see that function's own comment for why this check exists. Not part of
+ * the public API. */
+bool cstring_length_fits_with_terminator_for_tests(size_t length) {
+  return cstring_length_fits_with_terminator(length);
+}
+
+/* Exposes cstring_replace()'s internal overflow-checked length arithmetic for
+ * white-box unit tests; see compute_replace_new_length()'s own comment for
+ * why this is necessary. Not part of the public API. */
+ccol_retval_t cstring_replace_compute_new_length_for_tests(
+    size_t orig_length, size_t nlen, size_t rlen, size_t count,
+    size_t *new_len_out) {
+  return compute_replace_new_length(orig_length, nlen, rlen, count,
+                                    new_len_out);
 }
 #endif

@@ -20,7 +20,8 @@ memory management procedures.
 .fi
 .SH PARAMETERS
 .nf
-elem_size  Size of each element in bytes (must be > 0)
+elem_size  Size of each element in bytes (must be > 0, and must not
+           exceed SIZE_MAX / 4)
 err        Optional pointer to receive error string on failure
            (pass NULL to ignore)
 .fi

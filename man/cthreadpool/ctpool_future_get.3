@@ -18,6 +18,13 @@ and ctpool_future_cancelled(f) will return true.
 
 Does not free the future. The caller must call ctpool_future_free
 after retrieving the result.
+
+Result ownership: the pool never allocates, copies, or frees the
+returned void*; it only carries the pointer the task function
+returned. ctpool_future_free releases the future's own handle, never
+the result. Once this function returns, the caller owns the result
+and is responsible for freeing it however the task function
+allocated it.
 .fi
 .SH PARAMETERS
 .nf

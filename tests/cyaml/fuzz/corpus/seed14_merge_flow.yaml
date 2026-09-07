@@ -1,0 +1,2 @@
+defaults: &defaults {a: 1, b: 2}
+service: {<<: *defaults, b: 3, c: 4}

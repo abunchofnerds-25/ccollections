@@ -1,0 +1,56 @@
+.TH CHMAP_DESTROY_WITH_DTOR 3 "2026-08-19" "c_collections" "C Collections Library - Functions"
+.SH NAME
+chmap_destroy_with_dtor \- destroy a hash map, running a destructor on every value first, without allocating memory
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <chashmap.h>
+
+void chmap_destroy_with_dtor(chmap chm,
+    void (*val_dtor)(cmap_pair *val_pair, void *dtor_ctx),
+    void *dtor_ctx);
+.fi
+.SH DESCRIPTION
+.nf
+Behaves like __chmap_destroy(3), except that val_dtor (when non-NULL) is
+invoked once per live entry, passing that entry's own value as a
+cmap_pair, immediately before the entry itself is freed.
+
+Unlike enumerating the map with chashmap_begin_iter(3) first and
+destroying it afterward, this function never allocates memory of its
+own: it walks the map's own internal storage directly, the same way
+__chmap_destroy(3) already does internally, with the destructor call
+threaded into that same walk.
+
+Intended for a map whose values are themselves owned pointers to a
+larger structure needing its own recursive teardown (for example, a
+dictionary of dictionaries). Destroying such a map by enumerating it
+via chashmap_begin_iter(3), running a value destructor per entry, and
+only then destroying the (by then already emptied) map has a real gap
+under memory pressure: chashmap_begin_iter(3)'s own small internal
+allocation can itself fail, in which case that approach has no way
+left to reach and free the values it still owns. This function has no
+such gap, since it performs no allocation of its own.
+.fi
+.SH PARAMETERS
+.nf
+chm        Hash map to destroy
+val_dtor   Destructor invoked once per live value before that entry is
+           freed, or NULL to behave identically to __chmap_destroy(3)
+dtor_ctx   Opaque pointer forwarded unchanged to every val_dtor call
+.fi
+.SH NOTES
+.nf
+Safe to call with a NULL chm (a no-op)
+Does not NULL the chm handle, matching __chmap_destroy(3)'s own raw,
+internal convention
+val_dtor must not itself mutate chm; the map is mid-teardown for the
+whole duration of this call
+Performs no allocation of its own, so it cannot fail under any memory
+condition that would make chashmap_begin_iter(3) itself fail
+.fi
+.SH "SEE ALSO"
+.BR __chmap_destroy (3),
+.BR chmap_destroy (3),
+.BR chashmap_begin_iter (3)

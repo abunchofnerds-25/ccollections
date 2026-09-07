@@ -1,0 +1,2 @@
+fail=0
+name=Key with anchor after missing explicit mapping value

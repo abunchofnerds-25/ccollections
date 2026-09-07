@@ -53,6 +53,39 @@ SOFTWARE.
 #define CHTTP_MAX_REDIRECTS 50
 #define CHTTP_MAX_IDLE_PER_ORIGIN 4
 #define CHTTP_MAX_IDLE_TOTAL 32
+/* Bounds the number of DISTINCT origin keys the idle pool's chmap will ever
+ * hold an entry for, independent of CHTTP_MAX_IDLE_TOTAL/_PER_ORIGIN above
+ * (which bound live pooled CONNECTIONS, never the number of distinct
+ * origins that have ever had one). Without this, a client that contacts
+ * many different origins over its lifetime and never revisits most of them
+ * (a crawler, an outbound-heavy service fanning out to many hosts) would
+ * accumulate one permanent chmap entry per origin ever seen, since an
+ * origin whose pool is later capped-out or aged-out has no other trigger
+ * that removes its (by then empty, or never-revisited) entry - the
+ * reuse-triggered pruning in _idle_pool_take/_async_idle_pool_take only
+ * reclaims an origin's entry once THAT origin is revisited and its pool
+ * drained to zero, which never happens for an origin visited exactly once.
+ * Once this cap is hit, offering a connection for a genuinely new origin is
+ * simply not pooled (matching this file's own established "doesn't fit ->
+ * don't pool it, a lost optimisation, never a correctness issue" policy for
+ * the other two caps), rather than growing the map further. */
+#define CHTTP_MAX_IDLE_ORIGINS 128
+#ifdef RUNNING_UNIT_TESTS
+/* Overrides CHTTP_MAX_IDLE_ORIGINS's effective value for a test (0 = use the
+ * real constant); a real cap of 128 needs 128 genuinely distinct origins to
+ * exercise directly, impractical for an ordinary functional test, so a test
+ * shrinks this to a small number instead. Set via
+ * _chttpclient_set_max_idle_origins_for_tests (near the other white-box test
+ * helpers). */
+static _Atomic size_t g_max_idle_origins_override_for_tests = 0;
+#endif /* RUNNING_UNIT_TESTS */
+static size_t _effective_max_idle_origins(void) {
+#ifdef RUNNING_UNIT_TESTS
+  size_t override = atomic_load(&g_max_idle_origins_override_for_tests);
+  if (override > 0) return override;
+#endif
+  return CHTTP_MAX_IDLE_ORIGINS;
+}
 #define CHTTP_IDLE_MAX_AGE_MS 60000L
 /* How long chttp_do_internal waits for a "100 Continue" interim response
  * (or the server's real final response, if it answers directly without
@@ -394,8 +427,8 @@ why this is closed outright rather than left as residual risk */
  * compare-and-swap if the handle it's given happens to be this singleton
  * (see __chttpclient_destroy's own comment on this); chttp_default_client
  * reads it with a plain atomic_load, matching this file's existing
- * _Atomic(event_reg *) precedent rather than adding a new lock for a single
- * pointer. once never resets: this module never re-initialises the default
+ * _Atomic(event_reg) precedent rather than adding a new lock for a single
+ * value. once never resets: this module never re-initialises the default
  * client, deliberately (see chttp_default_client's own doc comment). */
 static struct {
   _Atomic(chttpcli) client;
@@ -423,11 +456,27 @@ static void _url_free(ccol_memmgmt_procs_t *mp, chttp_url_t *u) {
  * component: every byte outside an unreserved/sub-delim set is escaped,
  * '/' included (the whole point of this scheme is packing a path that
  * itself contains '/' into a single authority component). */
-static char *_percent_encode_unix_path(ccol_memmgmt_procs_t *mp,
-                                       const char *path) {
+/* Does the actual work for _percent_encode_unix_path, taking `len` as an
+ * explicit parameter (rather than computing it via strlen(path) itself) so
+ * the overflow guard below can be exercised directly, with a fake `len`,
+ * from a white-box test without needing to actually construct a
+ * multi-exabyte path string; see
+ * _chttp_percent_encode_unix_path_overflow_guard_for_tests below. */
+static char *_percent_encode_unix_path_len(ccol_memmgmt_procs_t *mp,
+                                           const char *path, size_t len) {
   static const char *unreserved =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-  size_t len = strlen(path);
+  /* Overflow guard on the "needed size" computation below, mirroring the
+   * SIZE_MAX-relative guard idiom this file's other growable/percent-encoded
+   * buffers (chttp_base64_encode_mp, _ob_append) already use for the
+   * identical class of computation; without it, a path long enough to make
+   * len * 3 + 1 wrap past SIZE_MAX would let this function under-allocate
+   * `out` and then write past the end of it in the loop below. Unreachable
+   * in practice (it would require an already multi-exabyte path string
+   * resident in memory before this function is ever called), but this
+   * project treats a reducible/unguarded overflow in a size computation as
+   * a real bug regardless of how large an input is needed to trigger it. */
+  if (len > (SIZE_MAX - 1) / 3) return NULL;
   char *out = (char *)_mem_alloc(mp, len * 3 + 1);
   if (!out) return NULL;
   size_t w = 0;
@@ -445,6 +494,46 @@ static char *_percent_encode_unix_path(ccol_memmgmt_procs_t *mp,
   out[w] = '\0';
   return out;
 }
+
+/* Percent-encodes a unix socket path into a newly allocated NUL-terminated
+ * string, for reconstructing a "http+unix://<path>" URL string (origin_key,
+ * a redirect target resolved against a unix-socket base). Mirrors the
+ * percent-encoding a real client library would apply to any URL authority
+ * component: every byte outside an unreserved/sub-delim set is escaped,
+ * '/' included (the whole point of this scheme is packing a path that
+ * itself contains '/' into a single authority component). */
+static char *_percent_encode_unix_path(ccol_memmgmt_procs_t *mp,
+                                       const char *path) {
+  return _percent_encode_unix_path_len(mp, path, strlen(path));
+}
+
+#ifdef RUNNING_UNIT_TESTS
+/*
+ * White-box test helper exposing _percent_encode_unix_path_len's overflow
+ * guard directly, mirroring _chttp_ob_append_overflow_guard_for_tests's own
+ * established pattern for this exact class of guard: fake_len stands in for
+ * strlen(path) without a test ever having to construct a real multi-exabyte
+ * path string. ONLY safe to call with a fake_len that actually exceeds the
+ * guard's own threshold ((SIZE_MAX - 1) / 3): the guard then rejects before
+ * the loop ever runs, so `path` need only be readable for whatever small,
+ * real prefix a test happens to pass, regardless of how large fake_len
+ * claims to be. A fake_len that does NOT exceed the threshold would make
+ * the loop below index into `path` up to fake_len bytes, a real
+ * out-of-bounds read for any ordinary small test buffer; this helper exists
+ * solely to exercise the rejection path, not the ordinary success path
+ * (already covered by every other _chttp_resolve_redirect_url_for_tests-
+ * based unix-socket test). Not part of the public API; gated so this symbol
+ * does not leak into a production build of libccollections.so, matching
+ * every other white-box helper in this file.
+ */
+bool _chttp_percent_encode_unix_path_overflow_guard_for_tests(
+    ccol_memmgmt_procs_t *mp, const char *path, size_t fake_len) {
+  char *r = _percent_encode_unix_path_len(mp, path, fake_len);
+  bool rejected = (r == NULL);
+  _mem_free(mp, r);
+  return rejected;
+}
+#endif /* RUNNING_UNIT_TESTS */
 
 /* Percent-decodes [start, start+len) into a newly allocated NUL-terminated
  * string. Used only for userinfo components; path/query bytes are never
@@ -581,6 +670,17 @@ static char *_format_bracketed_host(ccol_memmgmt_procs_t *mp, const char *host,
                                     bool is_ipv6) {
   if (!is_ipv6) return ccol_strdup(mp, host);
   size_t hlen = strlen(host);
+  /* Overflow guard on hlen + 3, mirroring every other size-computing
+   * allocation in this file's URL/redirect-resolution helpers
+   * (_percent_encode_unix_path_len, _merge_ref_path, _concat_len), all of
+   * which guard this identical class of computation regardless of how
+   * unreachable an input large enough to actually trigger it would be in
+   * practice (this project's own standing policy: a reducible/unguarded
+   * overflow in a size computation is a real bug regardless of how large
+   * an input is needed to trigger it). Without it, hlen >= SIZE_MAX - 2
+   * would wrap the allocation size, under-allocate `out`, and the memcpy
+   * below would write past its end. */
+  if (hlen > SIZE_MAX - 3) return NULL;
   char *out = (char *)_mem_alloc(mp, hlen + 3);
   if (!out) return NULL;
   out[0] = '[';
@@ -922,6 +1022,17 @@ static char *_merge_ref_path(ccol_memmgmt_procs_t *mp,
     dir_len = last_slash ? (size_t)(last_slash - base_path_and_query) + 1 : 0;
   }
 
+  /* Overflow guard on the "needed size" computation below, mirroring
+   * _ob_append's/_sink_buffered's own identical guard for the identical
+   * class of computation: dir_len and ref_path_len are two INDEPENDENTLY
+   * sized values (a redirect base path and a Location reference's own
+   * path), so unlike a single strlen() result, their sum reaching close to
+   * SIZE_MAX does not require either one alone to be implausibly large;
+   * unchecked, it would let this allocation under-size `out` and then the
+   * memcpy calls below write past its end. */
+  if (ref_path_len > SIZE_MAX - dir_len ||
+      dir_len + ref_path_len > SIZE_MAX - 1)
+    return NULL;
   char *out = (char *)_mem_alloc(mp, dir_len + ref_path_len + 1);
   if (!out) return NULL;
   memcpy(out, base_path_and_query, dir_len);
@@ -929,6 +1040,79 @@ static char *_merge_ref_path(ccol_memmgmt_procs_t *mp,
   out[dir_len + ref_path_len] = '\0';
   return out;
 }
+
+#ifdef RUNNING_UNIT_TESTS
+/*
+ * White-box test helper exposing _merge_ref_path's overflow guard directly,
+ * mirroring _chttp_percent_encode_unix_path_overflow_guard_for_tests's own
+ * established pattern: _merge_ref_path already takes ref_path_len as an
+ * explicit parameter, so fake_ref_path_len can simply be passed straight
+ * through with no further refactoring needed. ONLY safe to call with a
+ * fake_ref_path_len that actually exceeds the guard's own threshold, so the
+ * guard rejects before either memcpy call ever runs; see that sibling
+ * helper's own doc comment for the identical out-of-bounds-read hazard a
+ * non-rejecting fake length would otherwise create here. Not part of the
+ * public API; gated so this symbol does not leak into a production build of
+ * libccollections.so, matching every other white-box helper in this file.
+ */
+bool _chttp_merge_ref_path_overflow_guard_for_tests(
+    ccol_memmgmt_procs_t *mp, const char *base_path_and_query,
+    const char *ref_path, size_t fake_ref_path_len) {
+  char *r =
+      _merge_ref_path(mp, base_path_and_query, ref_path, fake_ref_path_len);
+  bool rejected = (r == NULL);
+  _mem_free(mp, r);
+  return rejected;
+}
+#endif /* RUNNING_UNIT_TESTS */
+
+/* Concatenates a[0..a_len) and b[0..b_len) into a newly allocated,
+ * NUL-terminated string. a_len/b_len are taken as explicit parameters
+ * (rather than computed internally via strlen) purely so the overflow
+ * guard below can be exercised directly from a white-box test with a fake
+ * length, without needing to actually construct a multi-exabyte string;
+ * see _chttp_concat_len_overflow_guard_for_tests below. Used by
+ * _resolve_redirect_url to splice a resolved path back together with a
+ * reference's own query string. */
+static char *_concat_len(ccol_memmgmt_procs_t *mp, const char *a, size_t a_len,
+                         const char *b, size_t b_len) {
+  /* Overflow guard on the "needed size" computation below, mirroring
+   * _merge_ref_path's own identical guard just above: a_len and b_len are
+   * two independently sized values, so their sum reaching close to
+   * SIZE_MAX does not require either one alone to be implausibly large;
+   * unchecked, it would let this allocation under-size `out` and then the
+   * memcpy calls below write past its end. */
+  if (b_len > SIZE_MAX - a_len || a_len + b_len > SIZE_MAX - 1) return NULL;
+  char *out = (char *)_mem_alloc(mp, a_len + b_len + 1);
+  if (!out) return NULL;
+  memcpy(out, a, a_len);
+  memcpy(out + a_len, b, b_len);
+  out[a_len + b_len] = '\0';
+  return out;
+}
+
+#ifdef RUNNING_UNIT_TESTS
+/*
+ * White-box test helper exposing _concat_len's overflow guard directly.
+ * ONLY safe to call with a fake_a_len/fake_b_len pair that actually exceeds
+ * the guard's own threshold, so the guard rejects before either memcpy call
+ * ever runs; see _chttp_merge_ref_path_overflow_guard_for_tests's own doc
+ * comment for the identical out-of-bounds-read hazard a non-rejecting fake
+ * length would otherwise create here. Not part of the public API; gated so
+ * this symbol does not leak into a production build of libccollections.so,
+ * matching every other white-box helper in this file.
+ */
+bool _chttp_concat_len_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
+                                                const char *a,
+                                                size_t fake_a_len,
+                                                const char *b,
+                                                size_t fake_b_len) {
+  char *r = _concat_len(mp, a, fake_a_len, b, fake_b_len);
+  bool rejected = (r == NULL);
+  _mem_free(mp, r);
+  return rejected;
+}
+#endif /* RUNNING_UNIT_TESTS */
 
 /*
  * True if `s` begins with an RFC 3986 SS3.1 "scheme ':'"
@@ -1119,6 +1303,25 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
       new_path = _remove_dot_segments(mp, path_only);
       _mem_free(mp, path_only);
     }
+  } else if (ref_path_len == 0) {
+    /* RFC 3986 SS5.3: R.path == "" (a query-only reference, e.g. "?y") means
+     * T.path = Base.path VERBATIM (no merge, no dot-segment removal).
+     * Base is not assumed to already be normalised here: this client never
+     * dot-segment-normalises the caller's own original request URL either
+     * (see _parse_chttp_url), so re-deriving a "cleaned" form of it at this
+     * one specific reference shape would silently redirect to a different
+     * path than the one the original request actually used, with no server
+     * instruction to change it (a real, previously-untested divergence from
+     * both the RFC and a reference implementation, e.g. Python's
+     * urllib.parse.urljoin: both leave a dotted base path like "/a/../b"
+     * untouched for a query-only reference, matching the fragment-only
+     * branch above, which already gets this right for the identical
+     * reason). _merge_ref_path's own ref_path_len==0 handling already
+     * produces exactly this verbatim copy (dir_len == the whole base path,
+     * nothing appended); the bug was applying _remove_dot_segments to that
+     * result afterward, in the branch below, which is why this needs to be
+     * its own branch rather than merely skipping that one call inline. */
+    new_path = _merge_ref_path(mp, base->path_and_query, location, 0);
   } else {
     char *merged =
         _merge_ref_path(mp, base->path_and_query, location, ref_path_len);
@@ -1128,16 +1331,16 @@ static char *_resolve_redirect_url(ccol_memmgmt_procs_t *mp,
     }
   }
   if (new_path && ref_query) {
-    size_t path_len = strlen(new_path);
-    size_t query_len = strlen(ref_query);
-    char *with_query = (char *)_mem_alloc(mp, path_len + query_len + 1);
+    /* _concat_len's own overflow guard (see its doc comment) is what makes
+     * this safe against path_len + query_len wrapping SIZE_MAX; treated as
+     * an ordinary allocation failure here (the existing !with_query
+     * branch), exactly like the real OOM case just below it. */
+    char *with_query = _concat_len(mp, new_path, strlen(new_path), ref_query,
+                                   strlen(ref_query));
     if (!with_query) {
       _mem_free(mp, new_path);
       new_path = NULL;
     } else {
-      memcpy(with_query, new_path, path_len);
-      memcpy(with_query + path_len, ref_query, query_len);
-      with_query[path_len + query_len] = '\0';
       _mem_free(mp, new_path);
       new_path = with_query;
     }
@@ -1309,17 +1512,24 @@ chttp_request_t *chttp_request_new_mp(chttp_method_t method, const char *url,
     memcpy(body_copy, body->data, body->len);
     req->body.data = body_copy;
     req->body.len = body->len;
+  }
 
-    if (body->content_type) {
-      req->body.content_type = ccol_strdup(mp, body->content_type);
-      if (!req->body.content_type) {
-        if (err_str) *err_str = CCOL_ERR_STR("failed to copy content_type");
-        _mem_free(mp, body_copy);
-        _mem_free(mp, req->url);
-        _mem_free(mp, req);
-        if (mp) mp->free(mp);
-        return NULL;
-      }
+  /* content_type is copied whenever the caller supplied one, independent of
+   * whether body->len > 0: a genuinely zero-length body (e.g. an empty JSON
+   * payload via CHTTP_JSON_BODY("", 0)) with an explicit content type is a
+   * legitimate request shape, and _serialize_request's Content-Type
+   * auto-injection is documented to honor req->body.content_type regardless
+   * of body length. Nesting this copy inside the body->len > 0 branch above
+   * used to silently discard content_type for exactly that shape. */
+  if (body && body->content_type) {
+    req->body.content_type = ccol_strdup(mp, body->content_type);
+    if (!req->body.content_type) {
+      if (err_str) *err_str = CCOL_ERR_STR("failed to copy content_type");
+      _mem_free(mp, (void *)req->body.data);
+      _mem_free(mp, req->url);
+      _mem_free(mp, req);
+      if (mp) mp->free(mp);
+      return NULL;
     }
   }
 
@@ -1329,6 +1539,17 @@ chttp_request_t *chttp_request_new_mp(chttp_method_t method, const char *url,
 ccol_retval_t chttp_request_set_header(chttp_request_t *req, const char *name,
                                        const char *value) {
   if (!req || !name || !value) return ccol_invalid_args;
+  /* A field-name must be a non-empty tchar-only token (RFC 7230 SS3.2.6),
+   * mirroring chttpsvr_resp_set_header's identical validation on the
+   * server side (chttpserver.c) and this parser's own request-line
+   * method/header-name parsing (chttp1_parser.c) for bytes arriving off
+   * the wire: an empty name, or one containing a byte outside that set
+   * (e.g. a space or a literal ':'), produces a structurally malformed
+   * "name: value\r\n" wire line even when it contains no CR/LF of its own. */
+  if (!*name) return ccol_invalid_args;
+  for (const char *p = name; *p; p++) {
+    if (!chttp1_is_tchar((unsigned char)*p)) return ccol_invalid_args;
+  }
   /* _serialize_request writes name/value verbatim onto the wire as
    * "name: value\r\n", with no further escaping; an embedded CR or LF byte
    * would let a caller that reflects any untrusted data (a forwarded
@@ -1879,8 +2100,10 @@ static void _slot_release(struct chttpclient *cli) {
 /*                         KEEP-ALIVE IDLE POOL                               */
 /* ========================================================================== */
 
-/* chmap_entry is packed, so reading a stored pointer-sized value via a direct
- * cast is UB at -O3; use memcpy like cjson/cyaml do. */
+/* chmap_entry's SSO storage is naturally aligned, so this memcpy is
+ * defense-in-depth rather than a live alignment requirement; kept for
+ * consistency with cjson/cyaml/clrucache/cthreadcomm's own chmap-backed
+ * pointer storage, which use the same pattern. */
 static inline cvec _read_cvec(const void *src) {
   cvec v;
   memcpy(&v, src, sizeof(v));
@@ -1909,6 +2132,22 @@ static bool _idle_pool_take(struct chttpclient *cli, const char *origin_key,
             cvector_pop_back(list, out) == ccol_success) {
           got = true;
           if (cli->idle_total_count > 0) cli->idle_total_count--;
+          /* Prune the now-empty per-origin list/map entry rather than
+           * leaving it behind indefinitely: a long-running client that
+           * contacts many distinct origins over its lifetime (a crawler, an
+           * outbound-heavy service) would otherwise accumulate one
+           * permanent chmap entry (plus an empty cvec) per origin it has
+           * EVER pooled a connection for, unbounded by CHTTP_MAX_IDLE_
+           * TOTAL/CHTTP_MAX_IDLE_PER_ORIGIN (which only bound live
+           * connections, never distinct origin keys). _idle_pool_offer
+           * already handles "no entry for this origin yet" by creating one
+           * fresh (see its own logic a few lines below), so removing an
+           * empty entry here is always safe: the very next offer for this
+           * origin recreates it exactly as if it were a brand-new origin. */
+          if (cvector_elem_count(list) == 0) {
+            __cvector_destroy(list);
+            chmap_delete_elem(cli->idle_pools, &kp);
+          }
         }
       }
     }
@@ -1945,7 +2184,15 @@ static bool _idle_pool_take(struct chttpclient *cli, const char *origin_key,
          * consumed and the connection is left fully intact for reuse. */
         pn = ctls_conn_read(out->tls, &probe, 1);
       } else {
-        pn = recv(out->fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT);
+        /* Retried on EINTR, matching every other blocking-vs-signal-safe
+         * syscall wrapper in this file (_conn_read/_conn_write/_conn_wait):
+         * a signal interrupting this MSG_DONTWAIT peek reports errno ==
+         * EINTR, which matches neither EAGAIN nor EWOULDBLOCK below, so an
+         * un-retried call would wrongly declare a perfectly healthy
+         * connection dead and discard it instead of reusing it. */
+        do {
+          pn = recv(out->fd, &probe, 1, MSG_PEEK | MSG_DONTWAIT);
+        } while (pn < 0 && errno == EINTR);
       }
       alive = (pn < 0 && (errno == EAGAIN || errno == EWOULDBLOCK));
     }
@@ -1973,7 +2220,12 @@ static void _idle_pool_offer(struct chttpclient *cli, chttp_conn_t *c) {
     if (chmap_get_elem_ref(cli->idle_pools, &kp, &vp) == ccol_success && vp) {
       list = _read_cvec(vp->ptr);
     }
-    if (!list) {
+    /* A genuinely new origin only gets a fresh entry while the distinct-
+     * origin cap still has room; see CHTTP_MAX_IDLE_ORIGINS's own comment.
+     * At capacity, list stays NULL, falling through to the same "doesn't
+     * fit" path every other pooling failure below already uses. */
+    if (!list &&
+        chmap_elem_count(cli->idle_pools) < _effective_max_idle_origins()) {
       char *cverr = NULL;
       list = cvector_create_full(sizeof(chttp_conn_t), cli->m_procs, &cverr);
       if (list) {
@@ -2100,7 +2352,22 @@ static bool _seen_names_contains(const chttp_seen_names_t *seen,
 static bool _seen_names_add(ccol_memmgmt_procs_t *mp, chttp_seen_names_t *seen,
                             const char *name) {
   if (seen->count == seen->cap) {
+    /* Overflow guard on the doubling-growth computation below, mirroring
+     * this project's own established guard idiom (cvector/csort/cmempool,
+     * and this file's own _ob_append/_sink_buffered) for the identical
+     * "curr_size *= 2" class of computation: without it, an already-
+     * astronomical seen->cap doubling past SIZE_MAX, or the subsequent
+     * *sizeof(*nn) multiplication overflowing on its own, could settle on a
+     * small or zero nc; the header-emission loop above would then treat
+     * that as a validly-grown (but actually undersized) array and write
+     * seen->names[seen->count++] past its real bounds. Unreachable in
+     * practice (would need on the order of 2^61 distinct header names on a
+     * single request), but this project treats a reducible/unguarded
+     * overflow in a size computation as a real bug regardless of how large
+     * an input is needed to trigger it. */
+    if (seen->cap > SIZE_MAX / 2) return false;
     size_t nc = seen->cap ? seen->cap * 2 : 8;
+    if (nc > SIZE_MAX / sizeof(*seen->names)) return false;
     const char **nn =
         (const char **)_mem_realloc(mp, (void *)seen->names, nc * sizeof(*nn));
     if (!nn) return false;
@@ -2110,6 +2377,37 @@ static bool _seen_names_add(ccol_memmgmt_procs_t *mp, chttp_seen_names_t *seen,
   seen->names[seen->count++] = name;
   return true;
 }
+
+#ifdef RUNNING_UNIT_TESTS
+/*
+ * White-box test helper exposing _seen_names_add's overflow guard directly:
+ * constructs a chttp_seen_names_t whose own count/cap already sit at
+ * fake_cap (names stays NULL; no real backing array of that size is ever
+ * allocated or touched, since the guard must reject before the growth
+ * branch's own realloc call, let alone the seen->names[seen->count++]
+ * write below it, is ever reached) and calls _seen_names_add once. Mirrors
+ * this project's own established "assert the guard rejects before any real
+ * work happens" pattern for this exact class of overflow guard elsewhere
+ * in this file (_chttp_ob_append_overflow_guard_for_tests,
+ * _chttp_percent_encode_unix_path_overflow_guard_for_tests). Not part of
+ * the public API; gated so this symbol does not leak into a production
+ * build of libccollections.so, matching every other white-box helper in
+ * this file.
+ */
+bool _chttp_seen_names_add_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
+                                                    size_t fake_cap) {
+  chttp_seen_names_t seen = {.names = NULL, .count = fake_cap, .cap = fake_cap};
+  bool added = _seen_names_add(mp, &seen, "x");
+  /* A non-rejecting (ordinary, guard-not-triggered) call genuinely grows
+   * seen.names via realloc; free it here rather than leaking it, since this
+   * helper's own struct is a throwaway local, not something a caller of the
+   * real _seen_names_add (which always frees seen.names itself, in
+   * _serialize_request's own header-emission loop) would ever be
+   * responsible for cleaning up. */
+  _mem_free(mp, (void *)seen.names);
+  return !added;
+}
+#endif /* RUNNING_UNIT_TESTS */
 
 typedef struct {
   char *buf;
@@ -2121,9 +2419,33 @@ typedef struct {
 
 static void _ob_append(chttp_outbuf_t *b, const char *data, size_t n) {
   if (b->oom) return;
-  if (b->len + n + 1 > b->cap) {
+  /* Overflow guard on the "needed size" computation below, mirroring the
+   * SIZE_MAX-relative guard idiom this project's other growable buffers
+   * (cvector, csort, cmempool) already use for the identical class of
+   * computation. Without this, a caller-supplied body large enough to make
+   * b->len + n + 1 wrap past SIZE_MAX would let the doubling loop below
+   * settle on an `nc` far smaller than actually needed (or, if `nc` itself
+   * wraps to 0 mid-loop, spin forever, since 0 < any nonzero target is
+   * always true), turning the subsequent memcpy into a real heap-buffer
+   * overflow instead of a clean, reported allocation failure. Unreachable
+   * in practice (it would require an already multi-exabyte request body
+   * resident in memory before this function is ever called), but this
+   * project treats a reducible/unguarded overflow in a size computation as
+   * a real bug regardless of how large an input is needed to trigger it. */
+  if (n > SIZE_MAX - b->len || b->len + n > SIZE_MAX - 1) {
+    b->oom = true;
+    return;
+  }
+  size_t need = b->len + n + 1;
+  if (need > b->cap) {
     size_t nc = b->cap ? b->cap * 2 : 1024;
-    while (nc < b->len + n + 1) nc *= 2;
+    while (nc < need) {
+      if (nc > SIZE_MAX / 2) {
+        b->oom = true;
+        return;
+      }
+      nc *= 2;
+    }
     char *nb = (char *)_mem_realloc(b->mp, b->buf, nc);
     if (!nb) {
       b->oom = true;
@@ -2140,6 +2462,35 @@ static void _ob_append(chttp_outbuf_t *b, const char *data, size_t n) {
 static void _ob_append_cstr(chttp_outbuf_t *b, const char *s) {
   _ob_append(b, s, strlen(s));
 }
+
+#ifdef RUNNING_UNIT_TESTS
+/*
+ * White-box test helper exposing _ob_append's overflow guard directly: sets
+ * up a chttp_outbuf_t whose synthetic `len` already sits at fake_len (no
+ * real buffer of that size is ever allocated; chttp_outbuf_t starts with
+ * buf == NULL/cap == 0 regardless, so the guard must reject the append
+ * before ever touching mp's own malloc/realloc) and appends up to 64 bytes
+ * (n is capped at compile time so a real, small backing buffer always
+ * suffices) to it, returning whether _ob_append set b->oom. The caller is
+ * expected to pass a counting allocator and check its own call count
+ * separately; this mirrors this project's own established "assert the
+ * allocator was never invoked" pattern for this exact class of overflow
+ * guard elsewhere (see e.g. csort's/cmempool's own default comparators).
+ * Not part of the public API; gated so this symbol does not leak into a
+ * production build of libccollections.so, matching every other white-box
+ * helper in this file.
+ */
+bool _chttp_ob_append_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
+                                               size_t fake_len, size_t n) {
+  chttp_outbuf_t ob = {.mp = mp, .len = fake_len};
+  char probe[64] = {0};
+  if (n > sizeof(probe)) n = sizeof(probe);
+  _ob_append(&ob, probe, n);
+  bool oom = ob.oom;
+  _mem_free(mp, ob.buf);
+  return oom;
+}
+#endif /* RUNNING_UNIT_TESTS */
 
 /*
  * Serialises method line + headers + body into a single wire buffer.
@@ -2257,18 +2608,26 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
     for (; it; it = it->_next_fn(it)) {
       const char *name = (const char *)it->key_pair->ptr;
       const char *val = (const char *)it->val_pair->ptr;
-      /* Redundant with chttp_request_set_header's own identical check (see
+      /* Redundant with chttp_request_set_header's own identical checks (see
        * that function's doc comment); this is the real backstop, since
        * req->headers is an internal chmap handle any caller can still build
        * and assign directly (chttp_run_query's borrowed map, or a caller
        * that pokes chttp_request_t.headers itself), entirely bypassing
        * chttp_request_set_header. This loop is the one place every header,
        * from either path, is actually written onto the wire. */
-      if (strpbrk(name, "\r\n") || strpbrk(val, "\r\n")) {
+      if (strpbrk(name, "\r\n") || strpbrk(val, "\r\n") || !*name) {
         ccol_iter_destroy(it);
         _mem_free(mp, (void *)seen.names);
         _mem_free(mp, ob.buf);
         return ccol_invalid_args;
+      }
+      for (const char *p = name; *p; p++) {
+        if (!chttp1_is_tchar((unsigned char)*p)) {
+          ccol_iter_destroy(it);
+          _mem_free(mp, (void *)seen.names);
+          _mem_free(mp, ob.buf);
+          return ccol_invalid_args;
+        }
       }
       /* A non-body-carrying method on THIS hop never puts req->body on the
        * wire at all (see the body-append check further down), regardless of
@@ -2316,10 +2675,31 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
        * from. */
       if (body_carrying_method && strcasecmp(name, "content-length") == 0) {
         size_t expected = req->body.data ? req->body.len : (size_t)0;
+        /* val is written to the wire byte-for-byte if accepted, so its
+         * grammar must be validated as strictly as this codebase's own
+         * request-side parser (chttp1_parser.c's parse_uint64_decimal, used
+         * by chttpserver.c) validates an incoming Content-Length: a bare
+         * "1*DIGIT" with no sign and no embedded whitespace. strtoull alone
+         * is not sufficient here, since (unlike parse_uint64_decimal) it
+         * tolerates a leading '+'/'-' and leading whitespace before the
+         * digits; a value like "+42" or " 42" numerically equal to the real
+         * body length used to pass this check (strtoull("+42", &endp, 10)
+         * returns 42 with *endp == '\0') and be written verbatim onto the
+         * wire, producing a request this library's own chttpserver rejects
+         * outright as "Invalid Content-Length" despite chttp_request_
+         * set_header/_serialize_request having accepted it as valid. */
+        size_t val_len = strlen(val);
+        bool all_digits = val_len > 0;
+        for (size_t vi = 0; vi < val_len; vi++) {
+          if (!isdigit((unsigned char)val[vi])) {
+            all_digits = false;
+            break;
+          }
+        }
         char *endp = NULL;
         errno = 0;
-        unsigned long long declared = strtoull(val, &endp, 10);
-        if (*val == '\0' || *endp != '\0' || errno == ERANGE ||
+        unsigned long long declared = all_digits ? strtoull(val, &endp, 10) : 0;
+        if (!all_digits || *endp != '\0' || errno == ERANGE ||
             (unsigned long long)expected != declared) {
           ccol_iter_destroy(it);
           _mem_free(mp, (void *)seen.names);
@@ -2341,17 +2721,24 @@ static ccol_retval_t _serialize_request(ccol_memmgmt_procs_t *mp,
     _mem_free(mp, (void *)seen.names);
   }
 
-  if (!has_ct && body_carrying_method && req->body.data && req->body.len > 0 &&
-      req->body.content_type) {
-    /* Gated on body_carrying_method, matching the Content-Length synthesis
-     * and the actual body-append below: a non-body-carrying method (GET,
-     * DELETE, HEAD, OPTIONS) never puts req->body on the wire at all (see
-     * the body-append check further down), so advertising a content-type
-     * for it was a real, previously-untested inconsistency; a caller
+  if (!has_ct && body_carrying_method && req->body.content_type) {
+    /* Gated on body_carrying_method alone (not also on req->body.data/len),
+     * matching the Content-Length synthesis a few lines below, which
+     * likewise fires for any body_carrying_method with !has_cl regardless
+     * of whether body.data is set. A non-body-carrying method (GET, DELETE,
+     * HEAD, OPTIONS) never puts req->body on the wire at all (see the
+     * body-append check further down), so advertising a content-type for
+     * one of those was a real, previously-untested inconsistency; a caller
      * attaching a body to e.g. a DELETE request (as this file's own
      * delete_body_not_transmitted test does) got a spurious
      * "content-type: ..." header with no body bytes and no Content-Length
-     * to match it.
+     * to match it - body_carrying_method alone is what rules that out.
+     * A genuinely empty body on a body-carrying method (body.data == NULL
+     * because body.len == 0, e.g. CHTTP_JSON_BODY("", 0)) is a different,
+     * legitimate case: it still emits "content-length: 0" below, so a
+     * matching "content-type: ..." describing that empty representation is
+     * correct HTTP, not spurious, and must not be additionally gated on
+     * body.data/len the way the non-body-carrying-method case is.
      *
      * Same CRLF-injection concern as the header loop above; content_type
      * has no dedicated setter to validate it at (it travels in via
@@ -2407,6 +2794,29 @@ static size_t _sink_discard(const void *data, size_t len, void *ctx) {
 static size_t _sink_buffered(const void *data, size_t len, void *ctx) {
   chttp_bodybuf_t *bb = (chttp_bodybuf_t *)ctx;
   if (len == 0) return 0;
+  /* Overflow guard on the size computations below, mirroring _ob_append's
+   * own identical guard for the sibling (request-serialization) growable
+   * buffer: bb->len is a running total across many _on_body callbacks (each
+   * individually bounded to a single ~8KB socket read), so unlike a single
+   * strlen()-sized allocation elsewhere in this file, no single caller-
+   * supplied value needs to be implausibly large on its own for bb->len +
+   * len to approach SIZE_MAX; only the CUMULATIVE total across many calls
+   * does. Practically unreachable regardless (the real allocator behind
+   * _mem_realloc below would already fail well before bb->buf could ever
+   * grow anywhere near that size, and that failure is already handled by
+   * the existing `if (!nb)` check further down), but this project treats a
+   * reducible/unguarded overflow in a size computation as a real bug
+   * regardless of how large an input is needed to trigger it. Left
+   * unguarded, a wrapped bb->len + len would let the max_size comparison
+   * below wrongly conclude an oversized response is still under the cap,
+   * and would let the growth loop settle on an nc far smaller than actually
+   * needed (or, if nc itself wraps to 0 mid-loop, spin forever), turning
+   * the memcpy below into a real heap-buffer overflow instead of a clean,
+   * reported allocation failure. */
+  if (len > SIZE_MAX - bb->len || bb->len + len > SIZE_MAX - 1) {
+    bb->oom = true;
+    return 0;
+  }
   /* Reactive cap enforcement: covers every body-framing mode (Content-Length,
    * chunked, EOF-delimited), unlike the up-front declared-Content-Length
    * check in _on_headers_complete, which only catches a Content-Length that
@@ -2420,7 +2830,13 @@ static size_t _sink_buffered(const void *data, size_t len, void *ctx) {
   }
   if (bb->len + len + 1 > bb->cap) {
     size_t nc = bb->cap ? bb->cap * 2 : 4096;
-    while (nc < bb->len + len + 1) nc *= 2;
+    while (nc < bb->len + len + 1) {
+      if (nc > SIZE_MAX / 2) {
+        bb->oom = true;
+        return 0;
+      }
+      nc *= 2;
+    }
     char *nb = (char *)_mem_realloc(bb->mp, bb->buf, nc);
     if (!nb) {
       bb->oom = true;
@@ -2434,6 +2850,32 @@ static size_t _sink_buffered(const void *data, size_t len, void *ctx) {
   bb->buf[bb->len] = '\0';
   return len;
 }
+
+#ifdef RUNNING_UNIT_TESTS
+/*
+ * White-box test helper exposing _sink_buffered's overflow guard directly:
+ * sets up a chttp_bodybuf_t whose own accumulated `len` already sits at
+ * fake_len (bb.buf stays NULL, no real buffer of that size is ever
+ * allocated; the guard must reject before ever touching bb->mp's own
+ * malloc/realloc or bb->buf itself) and feeds it a small, real probe chunk.
+ * Mirrors _chttp_ob_append_overflow_guard_for_tests's own established
+ * pattern for this exact class of guard on the sibling growable buffer.
+ * Not part of the public API; gated so this symbol does not leak into a
+ * production build of libccollections.so, matching every other white-box
+ * helper in this file.
+ */
+bool _chttp_sink_buffered_overflow_guard_for_tests(ccol_memmgmt_procs_t *mp,
+                                                   size_t fake_len) {
+  chttp_bodybuf_t bb = {0};
+  bb.mp = mp;
+  bb.len = fake_len;
+  char probe[8] = {0};
+  size_t n = _sink_buffered(probe, sizeof(probe), &bb);
+  bool rejected = (n != sizeof(probe)) && bb.oom && !bb.too_large;
+  _mem_free(mp, bb.buf);
+  return rejected;
+}
+#endif /* RUNNING_UNIT_TESTS */
 
 /* chttp1_parser hands a header/trailer line to this callback whole (name and
  * value already split and OWS-trimmed), so there is no accumulator state to
@@ -2502,31 +2944,42 @@ static int _on_headers_complete(chttp1_parser_t *p) {
    * redirect's own body is always discarded via _sink_discard regardless of
    * its declared length, and a streaming caller manages its own memory via
    * chttpcli_write_fn's return value, never chttp_bodybuf_t at all), and only
-   * for a message that will actually carry a body onto the wire. Two message
-   * classes can legitimately declare a Content-Length that has nothing to do
-   * with what will actually be read: a 1xx informational response (RFC 7230
-   * SS3.3.2 says a server MUST NOT send Content-Length on one at all, but a
-   * misbehaving or malicious server might anyway; every such response is
-   * always discarded/skipped by the caller's own interim-response handling
-   * (_chttp_read_message_loop's is_skippable_1xx check, or the parser's own
-   * no_body forcing for 1xx a few lines below this callback), never
-   * delivered as a final result) and a HEAD response (whose Content-Length
-   * describes what a GET would have returned, per RFC 7231 SS4.3.2, but is
-   * never followed by actual body bytes; see this function's own is_head_
-   * request check at the very end). Applying this cap to either wrongly
-   * failed the WHOLE request with ccol_msg_too_large even when the real,
-   * eventually-delivered response was well within the configured limit: a
-   * 103 Early Hints interim response (or any other 1xx) carrying an oversized
-   * declared length ahead of a small, well-within-cap final response, or a
-   * plain HEAD request against a large resource, both used to fail this way
-   * before this check excluded them. A chunked or EOF-delimited body (no
+   * for a message that will actually carry a body onto the wire. Several
+   * message classes can legitimately declare a Content-Length that has
+   * nothing to do with what will actually be read: a 1xx informational
+   * response (RFC 7230 SS3.3.2 says a server MUST NOT send Content-Length on
+   * one at all, but a misbehaving or malicious server might anyway; every
+   * such response is always discarded/skipped by the caller's own
+   * interim-response handling (_chttp_read_message_loop's is_skippable_1xx
+   * check, or the parser's own no_body forcing for 1xx a few lines below this
+   * callback), never delivered as a final result), a 204/304 response (RFC
+   * 7230 SS3.3 treats these identically to 1xx for body-framing purposes: a
+   * 304 commonly carries the original resource's own Content-Length per RFC
+   * 7232 SS4.1, e.g. from a conditional GET against a CDN, and chttp1_parser
+   * itself already unconditionally forces no_body for both regardless of any
+   * declared length - see chttp1_parser.c's own identical status-code set),
+   * and a HEAD response (whose Content-Length describes what a GET would have
+   * returned, per RFC 7231 SS4.3.2, but is never followed by actual body
+   * bytes; see this function's own is_head_request check at the very end).
+   * Applying this cap to any of these wrongly failed the WHOLE request with
+   * ccol_msg_too_large even when the real, eventually-delivered response
+   * (always zero bytes for 1xx/204/304, unconditionally) was well within the
+   * configured limit: a 103 Early Hints interim response (or any other 1xx)
+   * carrying an oversized declared length ahead of a small, well-within-cap
+   * final response, a plain HEAD request against a large resource, or an
+   * ordinary conditional GET receiving 304 Not Modified with the original
+   * resource's oversized Content-Length, all used to fail this way before
+   * this check excluded them. A chunked or EOF-delimited body (no
    * Content-Length declared) has no up-front signal to check here regardless;
    * it is still bounded by the reactive per-append check in _sink_buffered
    * below. */
   bool is_informational_status =
       ctx->status_code >= 100 && ctx->status_code < 200;
+  bool is_always_bodyless_status = is_informational_status ||
+                                   ctx->status_code == 204 ||
+                                   ctx->status_code == 304;
   if (!ctx->will_redirect && !ctx->is_head_request &&
-      !is_informational_status && ctx->requested_sink_fn == _sink_buffered) {
+      !is_always_bodyless_status && ctx->requested_sink_fn == _sink_buffered) {
     chttp_bodybuf_t *bb = (chttp_bodybuf_t *)ctx->requested_sink_ctx;
     if (bb->max_size > 0 && chttp1_has_content_length(p) &&
         chttp1_declared_content_length(p) > (uint64_t)bb->max_size) {
@@ -2623,6 +3076,13 @@ static ccol_retval_t _parse_ctx_reset_for_continue(chttp_parse_ctx_t *ctx) {
   ctx->trailing_garbage = false;
   ctx->error = false;
   ctx->aborted = false;
+  ctx->too_large = false; /* not currently reachable (every path that sets
+                           * this already fails the read via CHTTP1_USER
+                           * before this reset ever runs), but reset
+                           * anyway so a stale "too large" verdict from a
+                           * discarded interim message can never carry
+                           * forward into the next one this function
+                           * prepares ctx for. */
   ctx->status_code = 0;
   ctx->sink_fn = NULL;
   ctx->sink_ctx = NULL;
@@ -3112,8 +3572,10 @@ static void _client_engine_join_reaper_if_needed_locked(void) {
 static void *_client_engine_reaper_fn(void *arg) {
   (void)arg;
   event_loop loop_to_destroy;
+  ctpool dns_pool_to_destroy;
   mutex_lock(cli_engine_bundler.mutex);
   loop_to_destroy = cli_engine_bundler.reactor;
+  dns_pool_to_destroy = cli_engine_bundler.dns_pool;
   mutex_unlock(cli_engine_bundler.mutex);
 
   /* Stop the deadline sweep before tearing down the reactor and DNS pool it
@@ -3121,9 +3583,21 @@ static void *_client_engine_reaper_fn(void *arg) {
    * registration directly; see _client_deadline_sweep_once). */
   _client_deadline_sweep_stop_and_join();
   if (loop_to_destroy) event_loop_destroy(loop_to_destroy);
+  /* ctpool_destroy (an implicit drain shutdown, joining every dns_pool
+   * worker thread - potentially slow if one is mid-getaddrinfo()/connect())
+   * is called here, outside the lock, mirroring event_loop_destroy just
+   * above it rather than being held under cli_engine_bundler.mutex the way
+   * an earlier version of this function did. That earlier version let any
+   * concurrent, otherwise-cheap call to chttpcli_set_engine_logger/_set_
+   * engine_mem_mgmt_procs/_set_engine_num_reactor_threads (all of which
+   * take this same mutex unconditionally, with no cond-var wait to yield
+   * it) block for the full duration of the drain, with no real ordering
+   * requirement forcing that - reactor/dns_pool are only ever cleared
+   * together, under the single critical section below, regardless of
+   * where the actual destroy call happens relative to it. */
+  if (dns_pool_to_destroy) ctpool_destroy(dns_pool_to_destroy);
 
   mutex_lock(cli_engine_bundler.mutex);
-  ctpool_destroy(cli_engine_bundler.dns_pool); /* implicit drain shutdown */
   cli_engine_bundler.dns_pool = CTPOOL_INVALID;
   cli_engine_bundler.reactor = EVENT_LOOP_INVALID;
   cli_engine_bundler.stopping = false;
@@ -3139,7 +3613,7 @@ static void *_client_engine_reaper_fn(void *arg) {
     log_info(cli_engine_bundler.logger,
              "The http client reactor engine has been destroyed");
   clog old_logger = cli_engine_bundler.logger;
-  cli_engine_bundler.logger = NULL;
+  cli_engine_bundler.logger = CLOG_INVALID;
   cond_var_broadcast(cli_engine_bundler.stopped_cv);
   mutex_unlock(cli_engine_bundler.mutex);
   if (old_logger) clog_close(old_logger);
@@ -3191,24 +3665,46 @@ static ccol_retval_t _client_engine_acquire(void) {
     char *dns_err = NULL;
     cli_engine_bundler.dns_pool = create_cthread_pool(nthreads, 0, &dns_err);
     if (!cli_engine_bundler.dns_pool) {
-      event_loop_destroy(cli_engine_bundler.reactor);
+      /* Capture the reactor handle and clear the struct field BEFORE
+       * releasing the mutex, so a concurrent _client_engine_acquire sees a
+       * clean "nothing built yet" state and retries construction itself,
+       * rather than observing a reactor field that still looks live while
+       * this thread blocks joining every reactor thread. The blocking
+       * destroy itself runs AFTER the mutex is released: nothing else can
+       * be relying on this mutex to make progress at this exact point (this
+       * freshly created reactor has zero registrations, and the deadline
+       * sweep thread has not been started yet either), so holding the
+       * mutex across it serves no correctness purpose, only needlessly
+       * blocks any other thread trying to acquire/release/reconfigure the
+       * engine for the duration of the join. */
+      event_loop stale_reactor = cli_engine_bundler.reactor;
       cli_engine_bundler.reactor = EVENT_LOOP_INVALID;
       mutex_unlock(cli_engine_bundler.mutex);
+      __event_loop_destroy(stale_reactor);
       return ccol_not_enough_memory;
     }
 
     if (_client_deadline_sweep_start() != ccol_success) {
-      ctpool_destroy(cli_engine_bundler.dns_pool);
+      /* Same reasoning as the dns_pool-creation-failure branch just above:
+       * clear both fields under the mutex, then release it before the two
+       * blocking destroys. The deadline sweep thread failed to even start
+       * here, so (unlike the logger-allocation-failure branch below, which
+       * has an already-running sweep thread to contend with) there is
+       * nothing else that could be depending on either handle at this
+       * point. */
+      ctpool stale_dns_pool = cli_engine_bundler.dns_pool;
+      event_loop stale_reactor = cli_engine_bundler.reactor;
       cli_engine_bundler.dns_pool = CTPOOL_INVALID;
-      event_loop_destroy(cli_engine_bundler.reactor);
       cli_engine_bundler.reactor = EVENT_LOOP_INVALID;
       mutex_unlock(cli_engine_bundler.mutex);
+      __ctpool_destroy(stale_dns_pool);
+      __event_loop_destroy(stale_reactor);
       return ccol_unexpected_failure;
     }
 
     if (!cli_engine_bundler.logger) {
       cli_engine_bundler.logger =
-          clog_open_fd_mp(2, CLOG_FATAL, cli_engine_bundler.mprocs);
+          clog_open_fd_mp(2, CLOG_FATAL, NULL, cli_engine_bundler.mprocs);
       if (!cli_engine_bundler.logger) {
         /* Unlike the three rollback branches above (reactor/dns_pool/sweep
          * creation failing), the sweep thread is ALREADY running at this
@@ -3376,9 +3872,9 @@ ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads) {
  * of interest), so there is no "forgot to re-arm a one-shot write interest"
  * window to guard against for raw (queue-bypassing) TLS writes.
  *
- * Connection identity is its raw fd plus the event_reg* returned by
- * event_loop_add for its current registration (NULL while none is active,
- * e.g. mid-connect via the DNS/connect pool, or while idle-pooled).
+ * Connection identity is its raw fd plus the event_reg handle returned by
+ * event_loop_add for its current registration (EVENT_REG_INVALID while none
+ * is active, e.g. mid-connect via the DNS/connect pool, or while idle-pooled).
  * event_loop's own generation counter (event_loop_reg_generation) is
  * available for defensive bookkeeping but is not needed for correctness
  * here: event_loop's dispatch path already re-validates a registration's
@@ -3418,6 +3914,18 @@ typedef enum {
   CHTTP_ASYNC_CONNECTING,
   CHTTP_ASYNC_TLS_HANDSHAKING,
   CHTTP_ASYNC_WRITING,
+  CHTTP_ASYNC_AWAITING_CONTINUE, /* Expect: 100-continue only: the header
+                                  * block has been fully written and this
+                                  * ctx is registered for READ, waiting up
+                                  * to ctx->continue_deadline for either an
+                                  * interim "100 Continue" (resume writing
+                                  * the body), a direct final response (the
+                                  * body is never sent), or the deadline
+                                  * sweep to flip this registration to
+                                  * WRITE as a timeout signal (send the
+                                  * body anyway); see ctx->want_100_continue
+                                  * and ctx->continue_decided's own field
+                                  * comments for the full design. */
   CHTTP_ASYNC_READING,
   CHTTP_ASYNC_IDLE, /* sitting in cli->idle_pools_async, not owned by any
                      * chain (ctx->chain == NULL); see the "ASYNC IDLE
@@ -3563,6 +4071,19 @@ typedef struct {
                                       * deadline above; copied into every hop's
                                       * ctx->bb.max_size in _async_submit_hop/
                                       * _async_retry_hop. 0 = unlimited. */
+  bool expect_continue; /* snapshot of the original chttp_request_t.
+                         * expect_continue, taken once in
+                         * _chttp_do_async_internal, mirroring connect_
+                         * timeout_ms/max_response_body_size above. Whether
+                         * a given HOP actually routes through the
+                         * Expect: 100-continue wait is still recomputed
+                         * per hop in _async_submit_hop (mirroring Tier 1's
+                         * identical per-hop use_100_continue local),
+                         * exactly like Tier 1's own request-level flag vs.
+                         * per-hop decision split, since a redirect can
+                         * downgrade the method/drop the body, making the
+                         * wait moot for a later hop even though this flag
+                         * itself never changes for the chain's lifetime. */
 
   mutex_t lock; /* guards fulfilled and refcount, both mutated from
                  * potentially concurrent hops' reactor callbacks (see the
@@ -3606,8 +4127,8 @@ typedef struct chttp_async_ctx_s {
                               * loop variable */
   _Atomic chttp_async_state_t state;
   _Atomic int fd; /* -1 until the connect task obtains a real fd */
-  _Atomic(event_reg *)
-      reg; /* current event_loop registration, or NULL
+  _Atomic(event_reg)
+      reg; /* current event_loop registration, or EVENT_REG_INVALID
             * while none is active (mid-connect via the DNS/connect
             * pool, or while idle-pooled with no direction of
             * interest yet needed). Set exactly once, by
@@ -3679,11 +4200,13 @@ typedef struct chttp_async_ctx_s {
                          * CURRENT attempt; gates the reused-connection
                          * dead-connection retry, exactly like Tier 1's
                          * identically-named any_bytes_read output param */
-  size_t interim_responses_seen; /* how many interim (1xx) responses THIS
-                                  * hop attempt has already discarded; must
-                                  * persist across dispatch callback
-                                  * invocations (the discard loop in
-                                  * _async_on_readable_impl can return early,
+  size_t interim_responses_seen; /* how many CONSECUTIVE interim (1xx)
+                                  * responses have been discarded since the
+                                  * most recent non-discarded message
+                                  * boundary; must persist across dispatch
+                                  * callback invocations (the discard loop in
+                                  * _async_on_readable_impl/_async_awaiting_
+                                  * continue_on_data can return early,
                                   * waiting for more bytes via a later
                                   * on_readable dispatch, mid-way through
                                   * skipping one), unlike Tier 1's identical
@@ -3699,10 +4222,35 @@ typedef struct chttp_async_ctx_s {
                                   * it) alive indefinitely. Reset to 0 on
                                   * every fresh attempt (a new connect, or a
                                   * retry via _async_retry_hop); a reused
-                                  * connection popped from the idle pool
-                                  * also starts at 0, since _async_idle_pool_
+                                  * connection popped from the idle pool also
+                                  * starts at 0, since _async_idle_pool_
                                   * offer's reset block zeroes every
-                                  * per-hop-attempt field before pooling. */
+                                  * per-hop-attempt field before pooling.
+                                  * ALSO reset to 0 the moment a genuine "100
+                                  * Continue" is claimed in _async_awaiting_
+                                  * continue_on_data, right before handing
+                                  * off to the final-response read phase (see
+                                  * that call site's own comment): a
+                                  * confirmed "100 Continue" is itself a
+                                  * real, non-discarded message, so the
+                                  * "consecutive discarded" run this field
+                                  * tracks genuinely restarts there, exactly
+                                  * mirroring how Tier 1's _chttp_send_and_
+                                  * read hands the continue-wait and the
+                                  * final-response read to two SEPARATE
+                                  * _chttp_read_message_loop calls, each with
+                                  * its own independent counter. Without this
+                                  * reset, a hop that discarded N interim
+                                  * responses while waiting for "100
+                                  * Continue" only had 64-N (not a fresh 64)
+                                  * left over for the final response's own
+                                  * interim responses, silently violating
+                                  * this cap's own documented "64 CONSECUTIVE
+                                  * discarded interim responses" contract
+                                  * (README.md/chttpclient_do_async.3): a
+                                  * confirmed "100 Continue" breaks the
+                                  * consecutive run, so it must not still
+                                  * count against whatever comes after it. */
   struct timespec last_used;     /* set when offered to the idle pool; used by
                                   * _async_idle_pool_take's staleness check */
   char *wire; /* owned serialized request bytes; this module always retains
@@ -3870,16 +4418,16 @@ typedef struct chttp_async_ctx_s {
                                       * the "ASYNC DEADLINE SWEEP" section. */
   mutex_t deadline_lock; /* Guards overall_deadline below ONLY; a small,
                           * dedicated leaf lock, never held while trying to
-                          * acquire idle_lock or client_deadline_bundle.mutex
+                          * acquire idle_lock or a deadline stripe's mutex
                           * (so it introduces no new lock-ordering cycle with
                           * either), taken briefly by both the writer
                           * (_async_idle_pool_take/_async_submit_hop/
                           * _async_retry_hop, all of which may already be
                           * holding idle_lock at the point they need to
                           * write overall_deadline) and the reader (the
-                          * deadline sweep, which already holds
-                          * client_deadline_bundle.mutex for its whole registry
-                          * walk). A first version of overall_deadline
+                          * deadline sweep, which already holds this ctx's
+                          * own stripe's mutex for that stripe's walk). A
+                          * first version of overall_deadline
                           * relied on ctx->chain's own _Atomic-ness as a
                           * publication barrier (matching connect_deadline's
                           * established pattern below) instead of a real
@@ -3929,23 +4477,117 @@ typedef struct chttp_async_ctx_s {
                              * would only extend the overrun for no
                              * benefit). _Atomic for the same reason
                              * state/chain/fd are, above. */
-  bool deadline_registered; /* True once this ctx has been linked into
-                             * client_deadline_bundle.head at least once.
-                             * Registration is idempotent and, once made,
-                             * persists for ctx's whole lifetime (including
-                             * every idle-pool cycle); see
-                             * _client_deadline_register's own comment. */
+  bool deadline_registered; /* True once this ctx has been linked into its
+                             * stripe's list (client_deadline_bundle.
+                             * stripes[_deadline_stripe_index_for_ctx(ctx)])
+                             * at least once. Registration is idempotent
+                             * and, once made, persists for ctx's whole
+                             * lifetime (including every idle-pool cycle);
+                             * see _client_deadline_register's own comment. */
   struct chttp_async_ctx_s *deadline_prev,
       *deadline_next; /* Intrusive
-                       * doubly-linked membership in the process-wide deadline
-                       * registry, guarded by client_deadline_bundle.mutex (a
-                       * different lock than idle_lock above; see that
-                       * global's own comment for the lock-ordering contract
-                       * between the two). */
+                       * doubly-linked membership in this ctx's own stripe of
+                       * the process-wide, lock-sharded deadline registry,
+                       * guarded by that one stripe's mutex (a different lock
+                       * than idle_lock above; see client_deadline_bundle's
+                       * own comment for the lock-ordering contract between
+                       * the two, which applies identically to every
+                       * individual stripe's mutex). */
 
   chttp1_parser_t parser;
   chttp_parse_ctx_t pctx;
   chttp_bodybuf_t bb;
+
+  /* Expect: 100-continue (Tier 2/3). Mirrors Tier 1's own chttp_do_
+   * internal/_chttp_send_and_read design (see that function's own doc
+   * comment for the three-outcome contract: interim 100 seen -> send body;
+   * server answers directly -> that IS the final response, body never
+   * sent; wait times out -> send body anyway), adapted to this module's
+   * event-driven dispatch instead of a blocking wait loop. */
+  bool want_100_continue; /* Computed once per hop attempt in
+                           * _async_submit_hop/_async_retry_hop, mirroring
+                           * Tier 1's identical use_100_continue local
+                           * exactly (same condition: req->expect_continue
+                           * && !has_explicit_expect && body_carrying_method
+                           * && body.data && body.len > 0). Only ctx->reg's
+                           * own dispatch_lock-serialised callbacks and the
+                           * hop-setup code that runs strictly before this
+                           * ctx is ever registered touch this field, so it
+                           * needs no atomic/lock protection of its own. */
+  size_t header_len;      /* Only meaningful when want_100_continue: the
+                           * boundary within `wire` between the header
+                           * block and the body (wire_len - body_len, i.e.
+                           * exactly Tier 1's own header_len local). The
+                           * first write phase stops here instead of at
+                           * wire_len; see _async_plain_try_write/_tls_
+                           * try_write's own want_100_continue branch. */
+  _Atomic bool
+      continue_decided; /* Guards the read-sees-100-vs-write-sees-timeout
+                         * race the exact same way hop_completed guards
+                         * the analogous "which dispatch gets to finish
+                         * this hop" race elsewhere in this file: at most
+                         * one of _async_on_readable_impl's "100 Continue
+                         * seen" branch and _async_on_writable_impl's
+                         * "continue_deadline expired" branch may actually
+                         * decide to resume writing the body; whichever
+                         * dispatch's callback runs first (event_loop's own
+                         * per-entry dispatch_lock guarantees the two can
+                         * never run concurrently with each other, since
+                         * both directions of one fd share one entry) sets
+                         * this via atomic_exchange and only proceeds if it
+                         * observed the transition from false; the other,
+                         * if it also fires, sees it already true and
+                         * no-ops. Reset to false at the start of every
+                         * fresh want_100_continue hop attempt, exactly
+                         * like interim_responses_seen. */
+  chttp_deadline_t
+      continue_deadline; /* Bounded by both CHTTP_100_CONTINUE_WAIT_MS and
+                          * whatever remains of ctx->overall_deadline (via
+                          * _deadline_earlier), computed once when this hop
+                          * attempt transitions into CHTTP_ASYNC_AWAITING_
+                          * CONTINUE. Consulted only by the deadline sweep,
+                          * only while ctx->state == CHTTP_ASYNC_AWAITING_
+                          * CONTINUE; needs no lock of its own for the
+                          * identical reason connect_deadline needs none
+                          * (see that field's own comment): set once per
+                          * hop attempt, never rewritten while a concurrent
+                          * reader could be consulting it. */
+  bool retry_unsafe;     /* Mirrors Tier 1's identical *retry_unsafe_out
+                          * parameter to _chttp_send_and_read: set true the
+                          * moment this hop sends the body onto the wire AFTER
+                          * having received an explicit "100 Continue" from the
+                          * server on THIS connection, at which point a
+                          * subsequent read failure with zero final-response
+                          * bytes is no longer safe to interpret as "nothing
+                          * was ever sent, retry is free" (see that function's
+                          * own doc comment for the full non-idempotent-
+                          * double-submission rationale). Checked by
+                          * _async_ctx_finish alongside reused/any_bytes_read;
+                          * reset to false at the start of every fresh hop
+                          * attempt. */
+  char *continue_carry;  /* Non-NULL only when a "100 Continue" line
+                          * arrived in the same read() as the start of
+                          * the real final response (a fast/optimistic
+                          * server writing both before it has even
+                          * received the body; RFC 7231 SS5.1.1
+                          * license this - see Tier 1's identical
+                          * carry-forward in _chttp_send_and_read for
+                          * the blocking-design equivalent). Owned copy
+                          * of those trailing bytes, taken because the
+                          * body write that must happen first may not
+                          * complete synchronously (EWOULDBLOCK
+                          * partway through a large body), so the
+                          * bytes cannot simply be re-parsed inline:
+                          * they are stashed here and fed through
+                          * _async_process_reading_data the moment the
+                          * body write actually finishes (in
+                          * _async_plain_try_write/_tls_try_write's
+                          * shared completion path), whichever
+                          * dispatch that turns out to be on. Freed
+                          * and NULLed there; also freed at ctx
+                          * teardown for the abandoned-mid-flight
+                          * case. */
+  size_t continue_carry_len;
 } chttp_async_ctx_t;
 
 /* ========================================================================== */
@@ -3964,30 +4606,73 @@ typedef struct chttp_async_ctx_s {
  * alongside them (see _client_deadline_sweep_start/_stop_and_join, called
  * from _client_engine_acquire/_client_engine_reaper_fn above).
  *
- * client_deadline_bundle.mutex serialises three things: (1) the intrusive
- * doubly-linked registry list itself (ctx->deadline_prev/deadline_next),
- * (2) the sweep thread's own sleep/wake condvar, and (3); the reason a
- * ctx is never explicitly unregistered except from within _async_ctx_free,
- * the single reliable point ctx memory is actually released; mutual
- * exclusion between the sweep reading a registered ctx's fields and any
- * other thread freeing that same ctx concurrently: _client_deadline_
- * unregister cannot complete (and therefore _async_ctx_free cannot proceed
- * to actually free ctx) while the sweep is still walking the registry with
- * this lock held.
+ * The registry of live async ctx nodes is sharded across
+ * CHTTP_DEADLINE_SWEEP_STRIPES independent stripes (client_deadline_bundle.
+ * stripes[]), each with its own mutex and its own intrusive doubly-linked
+ * list head, rather than one global mutex guarding one global list. A
+ * registration/unregistration only ever needs to lock the one stripe its
+ * ctx hashes into (_deadline_stripe_index_for_ctx), so concurrent
+ * registrations for different ctx nodes across many in-flight requests no
+ * longer serialise against each other, and the sweep's own per-stripe walk
+ * (below) only ever blocks a registration/unregistration landing in that
+ * one stripe, not every registration/unregistration in the process. A
+ * single request's own register/unregister pair is still, by construction,
+ * always on the very same stripe (the hash is a pure, stateless function
+ * of the ctx pointer, recomputed identically on both calls, so no extra
+ * per-ctx bookkeeping field is needed to remember which stripe a given ctx
+ * landed in). Mirrors event_loop's own lock-striped fd registry in
+ * cthreadcomm.c (_stripe_index_for_fd) for exactly the same reason: a real
+ * ctx-hash key needs the same stripe on every lookup, unlike event_loop's
+ * queue-selectable stripe assignment (round-robin), which is safe only
+ * because a queue selectable is never looked up a second time.
+ *
+ * client_deadline_bundle.mutex/cond_var, separately, guard only the sweep
+ * thread's own start/stop/sleep-wake lifecycle (client_deadline_bundle.
+ * stop/thread); they play no part in registry mutual exclusion at all any
+ * more. Each stripe's own mutex now serialises, for that one stripe: (1)
+ * its intrusive doubly-linked list itself (ctx->deadline_prev/
+ * deadline_next, for every ctx hashing into it), and (2) the reason a ctx
+ * is never explicitly unregistered except from within _async_ctx_free, the
+ * single reliable point ctx memory is actually released: mutual exclusion
+ * between the sweep reading a registered ctx's fields and any other thread
+ * freeing that same ctx concurrently. _client_deadline_unregister cannot
+ * complete (and therefore _async_ctx_free cannot proceed to actually free
+ * ctx) while the sweep is still walking that ctx's own stripe with that
+ * stripe's mutex held; a sweep tick's walk of a DIFFERENT stripe is
+ * entirely unaffected and proceeds concurrently.
  *
  * Registration (_client_deadline_register) is idempotent and, once made,
  * persists for a ctx's entire lifetime, including every idle-pool cycle it
- * goes through; a pooled/idle ctx just sits in the registry inertly (the
+ * goes through; a pooled/idle ctx just sits in its stripe inertly (the
  * sweep's own state==CONNECTING/TLS_HANDSHAKING and chain!=NULL checks
  * naturally skip it while idle), which is simpler and just as correct as
  * explicitly unregistering on every idle-pool-offer and re-registering on
  * every reuse.
  *
- * Lock ordering: client_deadline_bundle.mutex is only ever taken OUTSIDE of any
- * ctx->idle_lock (never the reverse); _client_deadline_register/
- * _unregister are never called while idle_lock is held (see their call
- * sites), and the sweep itself never touches idle_lock at all (see
- * _client_deadline_sweep_once's own comment for how it avoids needing to).
+ * Lock ordering: _client_deadline_register CAN legitimately be called while
+ * some ctx's idle_lock is held (e.g. _async_submit_hop's reused-connection
+ * event_loop_modify-failure branch holds the abandoned ctx's own idle_lock
+ * across its call to _async_retry_hop, which registers the brand-new retry
+ * ctx before releasing it), so a stripe's mutex is NOT always taken outside
+ * of every ctx->idle_lock. This is still deadlock-free only because the
+ * reverse acquisition never happens anywhere: neither
+ * _client_deadline_register nor _client_deadline_unregister ever touches
+ * any ctx's idle_lock while holding a stripe's mutex (both only ever
+ * manipulate that one stripe's own intrusive list), and the sweep
+ * (_client_deadline_sweep_once, every stripe mutex's only other consumer)
+ * never acquires idle_lock at all, reading every field it needs via plain
+ * _Atomic loads instead (see that function's own comment). Preserving THAT
+ * one-directional invariant - no stripe's mutex may ever be held while
+ * acquiring any ctx->idle_lock - is what actually matters here; do not
+ * "fix" the sweep or the register/unregister functions to also take
+ * idle_lock without re-deriving this reasoning first, or the
+ * idle_lock-then-stripe-mutex ordering already in real use above becomes a
+ * genuine AB-BA lock-order inversion. No two stripe mutexes are ever held
+ * at once anywhere in this file either (each operation touches exactly one
+ * ctx, hence exactly one stripe, and the sweep locks/walks/unlocks one
+ * stripe fully before moving to the next), so sharding introduces no new
+ * inter-stripe lock-ordering surface to reason about beyond the
+ * stripe-vs-idle_lock rule above.
  *
  * Neutering an expired connection: a raw fd carries no protection of its own
  * against being closed and reused by an unrelated connection between the
@@ -3998,39 +4683,81 @@ typedef struct chttp_async_ctx_s {
  * that hazard by construction rather than needing a generation check of its
  * own: every teardown path (_async_ctx_finish/_async_idle_ctx_finish,
  * defined after the idle pool section below) calls
- * _client_deadline_unregister (which requires this same lock) strictly
- * BEFORE closing ctx->fd, so any ctx still linked into this registry is
- * guaranteed to not have had its fd closed yet. This sweep therefore calls
- * shutdown(fd, SHUT_RDWR) directly, still holding client_deadline_bundle.mutex,
- * with no separate collect-then-act-outside-the-lock phase needed at all:
- * shutdown() is a plain kernel-level operation with no synchronous
- * application callback, so there is no reentrancy risk in calling it here.
- * shutdown() neuters both directions
- * of the connection (readable-with-error and writable-with-error on the
- * next epoll_wait) without this sweep ever touching ctx's own memory,
- * idle_lock, or its event_loop registration; the normal dispatch path
+ * _client_deadline_unregister (which requires that ctx's own stripe mutex)
+ * strictly BEFORE closing ctx->fd, so any ctx still linked into its stripe
+ * is guaranteed to not have had its fd closed yet. This sweep therefore
+ * calls shutdown(fd, SHUT_RDWR) directly, still holding that ctx's own
+ * stripe mutex, with no separate collect-then-act-outside-the-lock phase
+ * needed at all: shutdown() is a plain kernel-level operation with no
+ * synchronous application callback, so there is no reentrancy risk in
+ * calling it here. shutdown() neuters both directions of the connection
+ * (readable-with-error and writable-with-error on the next epoll_wait)
+ * without this sweep ever touching ctx's own memory, idle_lock, or its
+ * event_loop registration; the normal dispatch path
  * (_async_on_readable/_on_writable/_on_error) takes it from there once the
  * reactor observes it, exactly like any other organic connection failure.
  */
+#define CHTTP_DEADLINE_SWEEP_STRIPES 16
+
+typedef struct {
+  mutex_t mutex;
+  chttp_async_ctx_t *head;
+} chttp_deadline_stripe_t;
+
 struct {
   mutex_t mutex;
   cond_var_t cond_var;
-  /* client_deadline_bundle.mutex/_cv used to carry static
+  /* client_deadline_bundle.mutex/_cv guard only the sweep thread's own
+   * start/stop/sleep-wake lifecycle (stop, thread), never the ctx registry
+   * itself; the registry's own locking is entirely per-stripe (see
+   * stripes[] below). client_deadline_bundle.mutex/_cv used to carry static
    * PTHREAD_MUTEX_INITIALIZER/PTHREAD_COND_INITIALIZER initializers; converted
    * to lazy, call_once-guarded runtime init (see
    * _client_deadline_init_globals), independent of the async engine pair's own
    * once-guard above, for the same reason: a non-pthread backend's equivalent
    * primitive may need real setup work a compile-time constant can't provide.
-   * Every function below that touches either global calls
+   * Every function below that touches any of these globals calls
    * call_once(client_deadline_bundle.once, ...) as its first statement. */
   once_flag_t once;
-  chttp_async_ctx_t *head;
+  chttp_deadline_stripe_t stripes[CHTTP_DEADLINE_SWEEP_STRIPES];
   thread_id_t thread;
   bool stop;
 } client_deadline_bundle = {0};
 
+static size_t _deadline_stripe_index_for_ctx(const chttp_async_ctx_t *ctx) {
+  uintptr_t p = (uintptr_t)ctx;
+  /* Fold the full pointer width down to 32 bits (XOR the high and low
+   * halves) before applying the multiplicative hash, rather than just
+   * truncating to the low 32 bits: a heap pointer's low bits are often
+   * alignment-constrained (e.g. always a multiple of 16), so using only
+   * them would waste entropy the high bits actually carry. Same Knuth
+   * multiplicative constant _stripe_index_for_fd uses in cthreadcomm.c.
+   *
+   * The `p >> 32` fold only makes sense (and only compiles) on a platform
+   * where uintptr_t is wider than 32 bits: on a 32-bit target (e.g. i386),
+   * uintptr_t IS the 32-bit value already, so there is no "high half" left
+   * to XOR in, and `p >> 32` is a shift by the full width of the type,
+   * undefined behavior and a hard -Werror=shift-count-overflow error under
+   * this project's build flags. Guarded with a preprocessor #if (not a
+   * runtime if), mirroring chashmap.c's own `#if SIZE_MAX == UINT64_MAX`
+   * convention for the identical reason: a runtime check does not stop the
+   * compiler from still fully type-checking (and rejecting) the
+   * dead-on-this-platform branch. */
+  uint32_t folded;
+#if UINTPTR_MAX > 0xFFFFFFFFu
+  folded = (uint32_t)p ^ (uint32_t)(p >> 32);
+#else
+  folded = (uint32_t)p;
+#endif
+  uint32_t h = folded * 2654435761u;
+  return (size_t)h % CHTTP_DEADLINE_SWEEP_STRIPES;
+}
+
 static void _client_deadline_init_globals(void) {
   mutex_init(client_deadline_bundle.mutex);
+  for (size_t i = 0; i < CHTTP_DEADLINE_SWEEP_STRIPES; i++) {
+    mutex_init(client_deadline_bundle.stripes[i].mutex);
+  }
   /* CLOCK_MONOTONIC to match _client_deadline_sweep_fn's own
    * clock_gettime(CLOCK_MONOTONIC, ...)-based wake deadline;
    * cond_var_init's default clock (CLOCK_REALTIME) would make that
@@ -4058,59 +4785,75 @@ static void _client_deadline_init_globals(void) {
 
 /*
  * Adds ctx to the deadline registry if not already present. Must be called
- * with ctx->idle_lock NOT held (see the lock-ordering note above).
+ * with ctx->idle_lock NOT held (see the lock-ordering note above). Only
+ * ever locks the one stripe ctx hashes into, never any other stripe and
+ * never client_deadline_bundle.mutex itself (that mutex guards the sweep
+ * thread's own lifecycle only, not the registry).
  */
 static void _client_deadline_register(chttp_async_ctx_t *ctx) {
   call_once(client_deadline_bundle.once, _client_deadline_init_globals);
-  mutex_lock(client_deadline_bundle.mutex);
+  chttp_deadline_stripe_t *stripe =
+      &client_deadline_bundle.stripes[_deadline_stripe_index_for_ctx(ctx)];
+  mutex_lock(stripe->mutex);
   if (!ctx->deadline_registered) {
     ctx->deadline_prev = NULL;
-    ctx->deadline_next = client_deadline_bundle.head;
-    if (client_deadline_bundle.head)
-      client_deadline_bundle.head->deadline_prev = ctx;
-    client_deadline_bundle.head = ctx;
+    ctx->deadline_next = stripe->head;
+    if (stripe->head) stripe->head->deadline_prev = ctx;
+    stripe->head = ctx;
     ctx->deadline_registered = true;
   }
-  mutex_unlock(client_deadline_bundle.mutex);
+  mutex_unlock(stripe->mutex);
 }
 
 /* Removes ctx from the deadline registry if present. Called exactly once,
  * as the first thing _async_ctx_free does; see that function's own
- * comment for why that is the single correct place for this. */
+ * comment for why that is the single correct place for this.
+ * _deadline_stripe_index_for_ctx is a pure, stateless function of ctx's own
+ * address, so this always recomputes and locks the identical stripe
+ * _client_deadline_register used for this same ctx - no separate
+ * "which stripe was this in" bookkeeping is needed. */
 static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
   call_once(client_deadline_bundle.once, _client_deadline_init_globals);
-  mutex_lock(client_deadline_bundle.mutex);
+  chttp_deadline_stripe_t *stripe =
+      &client_deadline_bundle.stripes[_deadline_stripe_index_for_ctx(ctx)];
+  mutex_lock(stripe->mutex);
   if (ctx->deadline_registered) {
     if (ctx->deadline_prev) {
       ctx->deadline_prev->deadline_next = ctx->deadline_next;
     } else {
-      client_deadline_bundle.head = ctx->deadline_next;
+      stripe->head = ctx->deadline_next;
     }
     if (ctx->deadline_next)
       ctx->deadline_next->deadline_prev = ctx->deadline_prev;
     ctx->deadline_prev = ctx->deadline_next = NULL;
     ctx->deadline_registered = false;
   }
-  mutex_unlock(client_deadline_bundle.mutex);
+  mutex_unlock(stripe->mutex);
 }
 
 /*
- * One sweep pass: walks the whole registry under client_deadline_bundle.mutex,
+ * One sweep pass: walks each of the CHTTP_DEADLINE_SWEEP_STRIPES stripes in
+ * turn, locking only that one stripe's own mutex for the duration of its
+ * own walk (never more than one stripe lock held at a time, and never
+ * client_deadline_bundle.mutex itself, which this function never touches),
  * checking each ctx's connect_deadline (only while it is actually in a
  * connecting phase) and its chain's overall_deadline (whenever it has a
  * live chain at all), and shuts down the fd of any newly-expired connection
- * directly, inline, still holding the lock (see the section's own file-level
- * comment for why this is safe: no reentrancy risk, and no fd-reuse race).
+ * directly, inline, still holding that stripe's lock (see the section's own
+ * file-level comment for why this is safe: no reentrancy risk, and no
+ * fd-reuse race). n_shutdown accumulates across the whole tick (every
+ * stripe), so CHTTP_DEADLINE_SWEEP_BATCH still bounds one sweep tick's total
+ * work the same way it did under the single-list design, not per-stripe.
  *
  * state/chain/fd/timed_out are read as plain (but _Atomic-qualified, so
  * individually race-free) loads here; deliberately NOT under the ctx's own
  * idle_lock (see the lock-ordering note above for why: some call paths
- * legitimately hold a ctx's idle_lock while also needing
- * client_deadline_bundle.mutex, e.g. _async_submit_hop's
- * reused-connection-write- failure branch calling _async_retry_hop ->
- * _client_deadline_register; this sweep must never acquire idle_lock itself
- * while holding client_deadline_bundle.mutex, or that becomes a classic AB-BA
- * lock-order inversion).
+ * legitimately hold a ctx's idle_lock while also needing to lock a deadline
+ * stripe, e.g. _async_submit_hop's reused-connection-write-failure branch
+ * calling _async_retry_hop -> _client_deadline_register; this sweep must
+ * never acquire idle_lock itself while holding a stripe's mutex, or that
+ * becomes a classic AB-BA lock-order inversion, for that stripe exactly as
+ * it would have for the single global mutex before sharding).
  *
  * This is safe without idle_lock's stronger *compound* (state-and-chain-
  * together) consistency guarantee specifically because of what this
@@ -4138,47 +4881,94 @@ static void _client_deadline_unregister(chttp_async_ctx_t *ctx) {
  */
 static void _client_deadline_sweep_once(void) {
   call_once(client_deadline_bundle.once, _client_deadline_init_globals);
-  mutex_lock(client_deadline_bundle.mutex);
-  chttp_async_ctx_t *node = client_deadline_bundle.head;
   size_t n_shutdown = 0;
-  while (node && n_shutdown < CHTTP_DEADLINE_SWEEP_BATCH) {
-    chttp_async_ctx_t *next = node->deadline_next;
 
-    chttp_async_state_t state = node->state;
-    /* Only ever compared against NULL (never dereferenced): see
-     * node->overall_deadline's own field comment for why dereferencing a
-     * bare chain pointer read here was a real, TSan-caught
-     * use-after-free. */
-    bool has_chain = (node->chain != NULL);
-    int fd = node->fd;
-    bool expired = false;
-    if (!node->timed_out) {
-      int ms;
-      if ((state == CHTTP_ASYNC_CONNECTING ||
-           state == CHTTP_ASYNC_TLS_HANDSHAKING) &&
-          !_deadline_remaining_ms(&node->connect_deadline, &ms)) {
-        expired = true;
-      }
-      if (!expired && has_chain) {
-        /* See node->deadline_lock's own field comment: this dedicated leaf
-         * lock is what makes reading overall_deadline here safe, since it
-         * can be rewritten (not just published once) on every idle-pool
-         * reuse cycle, unlike connect_deadline. */
-        mutex_lock(node->deadline_lock);
-        bool still_ok = _deadline_remaining_ms(&node->overall_deadline, &ms);
-        mutex_unlock(node->deadline_lock);
-        if (!still_ok) expired = true;
-      }
-      if (expired) node->timed_out = true;
-    }
+  for (size_t s = 0; s < CHTTP_DEADLINE_SWEEP_STRIPES &&
+                     n_shutdown < CHTTP_DEADLINE_SWEEP_BATCH;
+       s++) {
+    chttp_deadline_stripe_t *stripe = &client_deadline_bundle.stripes[s];
+    mutex_lock(stripe->mutex);
+    chttp_async_ctx_t *node = stripe->head;
+    while (node && n_shutdown < CHTTP_DEADLINE_SWEEP_BATCH) {
+      chttp_async_ctx_t *next = node->deadline_next;
 
-    if (expired) {
-      if (fd >= 0) shutdown(fd, SHUT_RDWR);
-      n_shutdown++;
+      chttp_async_state_t state = node->state;
+      /* Only ever compared against NULL (never dereferenced): see
+       * node->overall_deadline's own field comment for why dereferencing a
+       * bare chain pointer read here was a real, TSan-caught
+       * use-after-free. */
+      bool has_chain = (node->chain != NULL);
+      int fd = node->fd;
+      bool expired = false;
+      if (!node->timed_out) {
+        int ms;
+        if ((state == CHTTP_ASYNC_CONNECTING ||
+             state == CHTTP_ASYNC_TLS_HANDSHAKING) &&
+            !_deadline_remaining_ms(&node->connect_deadline, &ms)) {
+          expired = true;
+        }
+        if (!expired && has_chain) {
+          /* See node->deadline_lock's own field comment: this dedicated
+           * leaf lock is what makes reading overall_deadline here safe,
+           * since it can be rewritten (not just published once) on every
+           * idle-pool reuse cycle, unlike connect_deadline. */
+          mutex_lock(node->deadline_lock);
+          bool still_ok = _deadline_remaining_ms(&node->overall_deadline, &ms);
+          mutex_unlock(node->deadline_lock);
+          if (!still_ok) expired = true;
+        }
+        if (expired) node->timed_out = true;
+      }
+
+      if (expired) {
+        if (fd >= 0) shutdown(fd, SHUT_RDWR);
+        n_shutdown++;
+      } else if (state == CHTTP_ASYNC_AWAITING_CONTINUE) {
+        /* A soft, per-hop-phase deadline distinct from connect_deadline/
+         * overall_deadline above: CHTTP_100_CONTINUE_WAIT_MS expiring does
+         * NOT mean the request itself timed out (overall_deadline, checked
+         * unconditionally above since has_chain is true here too, remains
+         * the real backstop for that and is left completely untouched by
+         * this branch); it means the wait for a "100 Continue" is over and
+         * the body should be sent anyway (see CHTTP_ASYNC_AWAITING_CONTINUE's
+         * own doc comment for the full three-outcome contract). Delivered by
+         * flipping this registration to write direction, which dispatches
+         * to _async_on_writable_impl's own CHTTP_ASYNC_AWAITING_CONTINUE
+         * branch to actually act on it under that dispatch's own
+         * dispatch_lock, rather than mutating ctx's fields directly from
+         * this sweep thread.
+         *
+         * continue_decided is only peeked (not claimed) here: the real
+         * claim happens inside the dispatch this triggers, exactly like
+         * every other exit from _async_awaiting_continue_on_data. Already
+         * true here means a genuine "100 Continue"/final response was
+         * concurrently claimed by an in-flight on_readable dispatch for
+         * this same ctx; skipping the modify call in that case avoids a
+         * harmless but wasted spurious write-direction flip racing that
+         * dispatch's own, already correct, transition. A residual,
+         * extremely narrow window remains where this peek and the modify
+         * call below could still race a same-instant on_readable claim;
+         * the worst outcome is a transiently wrong epoll direction for
+         * this one connection, which self-heals via the very next
+         * event_loop_modify call for the same registration (always
+         * recomputed from live state, never a stale snapshot) or, at
+         * worst, via overall_deadline's own unconditional backstop above -
+         * never a permanent hang, a crash, or any effect on any OTHER
+         * request. */
+        int cms;
+        if (!_deadline_remaining_ms(&node->continue_deadline, &cms) &&
+            !atomic_load(&node->continue_decided)) {
+          event_reg reg = atomic_load(&node->reg);
+          if (reg) {
+            event_loop_modify(cli_engine_bundler.reactor, reg,
+                              ccol_select_write);
+          }
+        }
+      }
+      node = next;
     }
-    node = next;
+    mutex_unlock(stripe->mutex);
   }
-  mutex_unlock(client_deadline_bundle.mutex);
 
   if (n_shutdown > 0) {
     _CLIENT_ENGINE_LOG_INFO("deadline sweep shut down %zu connection(s)",
@@ -4270,8 +5060,8 @@ static chttp_async_chain_t *_async_chain_create(
     const char *body_content_type, const char *initial_origin_key,
     ctls_ctx_t *tls_ctx, bool tls_ctx_usable, bool verify_host,
     long connect_timeout_ms, long request_timeout_ms,
-    size_t max_response_body_size, chttpcli_write_fn write_fn,
-    void *write_ctx) {
+    size_t max_response_body_size, chttpcli_write_fn write_fn, void *write_ctx,
+    bool expect_continue) {
   chttp_async_chain_t *chain =
       (chttp_async_chain_t *)_mem_calloc(mp, 1, sizeof(*chain));
   if (!chain) return NULL;
@@ -4290,6 +5080,7 @@ static chttp_async_chain_t *_async_chain_create(
   chain->max_response_body_size = max_response_body_size;
   chain->write_fn = write_fn;
   chain->write_ctx = write_ctx;
+  chain->expect_continue = expect_continue;
 
   if (req_headers) {
     chain->req_headers = _clone_headers_map(mp, req_headers);
@@ -4453,6 +5244,7 @@ static void _async_ctx_destroy_now(chttp_async_ctx_t *ctx) {
   mutex_destroy(ctx->idle_lock);
   mutex_destroy(ctx->deadline_lock);
   _mem_free(ctx->mp, ctx->wire);
+  _mem_free(ctx->mp, ctx->continue_carry);
   _mem_free(ctx->mp, ctx->unix_socket_path);
   _mem_free(ctx->mp, ctx->host);
   _mem_free(ctx->mp, ctx->path_and_query);
@@ -4724,6 +5516,16 @@ static bool _async_idle_remove_locked(struct chttpclient *cli,
       chttp_async_ctx_t **slot2 = (chttp_async_ctx_t **)cvector_at(list, i);
       *slot2 = last;
     }
+    /* Prune the now-empty per-origin list/map entry; see _idle_pool_take's
+     * identical comment (Tier 1's own sibling function) for why this is
+     * both necessary (unbounded distinct-origin growth otherwise, for a
+     * long-running, many-origin client) and always safe (_async_idle_pool_
+     * offer already handles "no entry for this origin yet" by creating one
+     * fresh). */
+    if (cvector_elem_count(list) == 0) {
+      __cvector_destroy(list);
+      chmap_delete_elem(cli->idle_pools_async, &kp);
+    }
     return true;
   }
   return false;
@@ -4846,6 +5648,18 @@ static bool _async_idle_pool_take(struct chttpclient *cli,
           }
           _async_idle_count_dec_locked(cli);
           ctx = cand;
+          /* Prune the now-empty per-origin list/map entry; see
+           * _idle_pool_take's identical comment (Tier 1's own sibling
+           * function) for why this is both necessary and always safe.
+           * Note: a stale candidate discarded above via `continue` is
+           * deliberately left in the list (reaped later via dispatch, not
+           * here - see this function's own file-level comment), so this
+           * check can only ever fire on the genuine-reuse exit, never mid-
+           * scan. */
+          if (cvector_elem_count(list) == 0) {
+            __cvector_destroy(list);
+            chmap_delete_elem(cli->idle_pools_async, &kp);
+          }
           break;
         }
       }
@@ -4936,7 +5750,13 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
         vp) {
       list = _read_cvec(vp->ptr);
     }
-    if (!list) {
+    /* A genuinely new origin only gets a fresh entry while the distinct-
+     * origin cap still has room; see CHTTP_MAX_IDLE_ORIGINS's own comment
+     * (Tier 1's _idle_pool_offer, the sibling this mirrors). At capacity,
+     * list stays NULL, falling through to the same "doesn't fit, don't
+     * pool it" path has_room's own check below already produces. */
+    if (!list && chmap_elem_count(cli->idle_pools_async) <
+                     _effective_max_idle_origins()) {
       char *cverr = NULL;
       list = cvector_create_full(sizeof(chttp_async_ctx_t *), cli->m_procs,
                                  &cverr);
@@ -4985,6 +5805,23 @@ static bool _async_idle_pool_offer(chttp_async_ctx_t *ctx) {
   _mem_free(ctx->mp, ctx->wire);
   ctx->wire = NULL;
   ctx->wire_len = ctx->wire_sent = 0;
+  /* Expect: 100-continue state, stale the moment this hop is done; every
+   * fresh hop attempt recomputes want_100_continue/header_len from scratch
+   * in _async_submit_hop/_async_retry_hop and re-arms continue_decided to
+   * false there too, but resetting here as well matches this function's
+   * own "restore the same all-zero state a freshly _mem_calloc'd ctx
+   * already has" discipline documented above. continue_carry should always
+   * already be NULL by the time a hop reaches here (consumed the moment
+   * the body write it was waiting on finished; see that field's own
+   * comment), but freed defensively regardless, the same as wire/bb just
+   * above. */
+  _mem_free(ctx->mp, ctx->continue_carry);
+  ctx->continue_carry = NULL;
+  ctx->continue_carry_len = 0;
+  ctx->want_100_continue = false;
+  ctx->header_len = 0;
+  ctx->retry_unsafe = false;
+  atomic_store(&ctx->continue_decided, false);
   /* Stale the moment this ctx goes idle (it described the just-finished
    * hop's request path, not anything meaningful while pooled); freed here
    * rather than left dangling until the next _async_submit_hop call
@@ -5103,7 +5940,7 @@ static void _async_ctx_finish(chttp_async_ctx_t *ctx) {
   if (!ctx->hop_completed) {
     if (ctx->timed_out) { /* _Atomic; plain read is already race-free */
       _async_fulfill(ctx, ccol_timed_out, NULL);
-    } else if (ctx->reused && !ctx->any_bytes_read) {
+    } else if (ctx->reused && !ctx->any_bytes_read && !ctx->retry_unsafe) {
       _async_retry_hop(ctx); /* marks ctx->hop_completed = true itself */
     }
   }
@@ -5181,6 +6018,14 @@ static void _async_retry_hop(chttp_async_ctx_t *ctx);
  * handshake completes, before its own definition later in this file. */
 static void _async_tls_try_write(chttp_async_ctx_t *ctx);
 
+/* Forward declaration: _async_plain_try_write/_async_tls_try_write (below)
+ * call this to process any Expect: 100-continue trailing bytes carried
+ * forward across a body write (see ctx->continue_carry's own field
+ * comment); the full definition, shared with the ordinary on_readable
+ * dispatch path, comes later in this file, alongside it. */
+static void _async_process_reading_data(chttp_async_ctx_t *ctx,
+                                        const char *data, size_t data_len);
+
 /*
  * Drives the client TLS handshake one step at a time from either
  * _async_on_readable or _async_on_writable, whichever fires next (this
@@ -5243,9 +6088,18 @@ static void _async_tls_advance(chttp_async_ctx_t *ctx) {
  * and again from _async_on_writable each time write interest fires.
  */
 static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
-  while (ctx->wire_sent < ctx->wire_len) {
+  /* Expect: 100-continue - stop at the header/body boundary instead of the
+   * end of wire, exactly once per hop attempt (continue_decided flips true
+   * the moment either a real "100 Continue" arrives or the wait times out;
+   * see CHTTP_ASYNC_AWAITING_CONTINUE's own doc comment for the full
+   * three-outcome contract this mirrors from Tier 1's _chttp_send_and_read).
+   */
+  bool awaiting_continue =
+      ctx->want_100_continue && !atomic_load(&ctx->continue_decided);
+  size_t target_len = awaiting_continue ? ctx->header_len : ctx->wire_len;
+  while (ctx->wire_sent < target_len) {
     ssize_t n = ctls_conn_write(ctx->tls, ctx->wire + ctx->wire_sent,
-                                ctx->wire_len - ctx->wire_sent);
+                                target_len - ctx->wire_sent);
     if (n > 0) {
       ctx->wire_sent += (size_t)n;
       continue;
@@ -5255,6 +6109,39 @@ static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
      * checked inside _async_ctx_finish itself; no pre-emptive fulfil here
      * (see that function's own comment for why). */
     _async_ctx_finish(ctx);
+    return;
+  }
+  if (awaiting_continue) {
+    /* Header block fully sent; hold the body (wire[header_len..wire_len))
+     * back and wait for the server's "100 Continue"/direct final response/
+     * timeout. wire must stay alive regardless of ctx->reused here - unlike
+     * the ordinary full-send case below, the body bytes still to be sent
+     * live in it; freeing it now would be a clean fresh-ctx use-after-free
+     * the very next time this hop attempts to send the body. */
+    /* continue_deadline is computed and stored BEFORE the ctx->state store
+     * below, not after: the deadline sweep polls ctx->state independently,
+     * on its own timer, with no coordination beyond that one atomic load,
+     * and treats CHTTP_ASYNC_AWAITING_CONTINUE becoming visible as its
+     * signal that continue_deadline is now meaningful to consult (see that
+     * field's own comment). ctx->state is the actual publish point (a
+     * concurrent atomic_load of it that observes this store is guaranteed,
+     * per C11's sequentially-consistent atomics, to see every plain write
+     * sequenced before that store in this thread); writing continue_deadline
+     * afterward would let the sweep observe the new state while
+     * continue_deadline still holds a stale or zeroed value (e.g. from
+     * calloc, or a prior hop on a reused ctx), reading it as "already
+     * expired" and firing the wait-timeout path immediately instead of
+     * genuinely waiting up to CHTTP_100_CONTINUE_WAIT_MS. */
+    mutex_lock(ctx->deadline_lock);
+    chttp_deadline_t overall = ctx->overall_deadline;
+    mutex_unlock(ctx->deadline_lock);
+    ctx->continue_deadline =
+        _deadline_earlier(_deadline_make(CHTTP_100_CONTINUE_WAIT_MS), overall);
+    ctx->state = CHTTP_ASYNC_AWAITING_CONTINUE;
+    if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                          ccol_select_read) != ccol_success) {
+      _async_ctx_finish(ctx);
+    }
     return;
   }
   /* A REUSED ctx's wire buffer must survive a "successful" write (accepted
@@ -5292,6 +6179,30 @@ static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
   if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
                         ccol_select_read) != ccol_success) {
     _async_ctx_finish(ctx);
+    return;
+  }
+  /* See ctx->continue_carry's own field comment: non-NULL only after an
+   * Expect: 100-continue hop whose "100 Continue" line arrived bundled with
+   * the start of the real final response, in the same read() that also
+   * completed this body write on a LATER dispatch (a fully synchronous
+   * completion is handled inline by _async_awaiting_continue_on_data
+   * itself, without ever setting this field at all - see that function's
+   * own comment). Processed here, the moment the write that had to happen
+   * first actually finishes, rather than waiting for a subsequent
+   * on_readable dispatch that may never come (the bytes already sitting in
+   * continue_carry are everything the peer is ever going to send if it
+   * considers the exchange already complete). Captures mp locally first:
+   * _async_process_reading_data may free ctx entirely on this same call
+   * (e.g. a completed, non-redirecting final response), so ctx must not be
+   * touched again afterward. */
+  if (ctx->continue_carry) {
+    ccol_memmgmt_procs_t *mp = ctx->mp;
+    char *carry = ctx->continue_carry;
+    size_t carry_len = ctx->continue_carry_len;
+    ctx->continue_carry = NULL;
+    ctx->continue_carry_len = 0;
+    _async_process_reading_data(ctx, carry, carry_len);
+    _mem_free(mp, carry);
   }
 }
 
@@ -5307,15 +6218,37 @@ static void _async_tls_try_write(chttp_async_ctx_t *ctx) {
  * across both call sites.
  */
 static void _async_plain_try_write(chttp_async_ctx_t *ctx) {
-  while (ctx->wire_sent < ctx->wire_len) {
+  /* See _async_tls_try_write's identical comment for why this stops at
+   * header_len rather than wire_len while awaiting a "100 Continue". */
+  bool awaiting_continue =
+      ctx->want_100_continue && !atomic_load(&ctx->continue_decided);
+  size_t target_len = awaiting_continue ? ctx->header_len : ctx->wire_len;
+  while (ctx->wire_sent < target_len) {
     ssize_t n = send(ctx->fd, ctx->wire + ctx->wire_sent,
-                     ctx->wire_len - ctx->wire_sent, MSG_NOSIGNAL);
+                     target_len - ctx->wire_sent, MSG_NOSIGNAL);
     if (n > 0) {
       ctx->wire_sent += (size_t)n;
       continue;
     }
     if (n < 0 && (errno == EWOULDBLOCK || errno == EAGAIN)) return;
     _async_ctx_finish(ctx);
+    return;
+  }
+  if (awaiting_continue) {
+    /* See _async_tls_try_write's identical branch for the full rationale
+     * (both the wire-buffer-lifetime note and, importantly, why
+     * continue_deadline must be computed and stored BEFORE ctx->state is
+     * published as CHTTP_ASYNC_AWAITING_CONTINUE, not after). */
+    mutex_lock(ctx->deadline_lock);
+    chttp_deadline_t overall = ctx->overall_deadline;
+    mutex_unlock(ctx->deadline_lock);
+    ctx->continue_deadline =
+        _deadline_earlier(_deadline_make(CHTTP_100_CONTINUE_WAIT_MS), overall);
+    ctx->state = CHTTP_ASYNC_AWAITING_CONTINUE;
+    if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
+                          ccol_select_read) != ccol_success) {
+      _async_ctx_finish(ctx);
+    }
     return;
   }
   /* See _async_tls_try_write's identical comment for the full history: a
@@ -5332,6 +6265,30 @@ static void _async_plain_try_write(chttp_async_ctx_t *ctx) {
   if (event_loop_modify(cli_engine_bundler.reactor, ctx->reg,
                         ccol_select_read) != ccol_success) {
     _async_ctx_finish(ctx);
+    return;
+  }
+  /* See ctx->continue_carry's own field comment: non-NULL only after an
+   * Expect: 100-continue hop whose "100 Continue" line arrived bundled with
+   * the start of the real final response, in the same read() that also
+   * completed this body write on a LATER dispatch (a fully synchronous
+   * completion is handled inline by _async_awaiting_continue_on_data
+   * itself, without ever setting this field at all - see that function's
+   * own comment). Processed here, the moment the write that had to happen
+   * first actually finishes, rather than waiting for a subsequent
+   * on_readable dispatch that may never come (the bytes already sitting in
+   * continue_carry are everything the peer is ever going to send if it
+   * considers the exchange already complete). Captures mp locally first:
+   * _async_process_reading_data may free ctx entirely on this same call
+   * (e.g. a completed, non-redirecting final response), so ctx must not be
+   * touched again afterward. */
+  if (ctx->continue_carry) {
+    ccol_memmgmt_procs_t *mp = ctx->mp;
+    char *carry = ctx->continue_carry;
+    size_t carry_len = ctx->continue_carry_len;
+    ctx->continue_carry = NULL;
+    ctx->continue_carry_len = 0;
+    _async_process_reading_data(ctx, carry, carry_len);
+    _mem_free(mp, carry);
   }
 }
 
@@ -5521,6 +6478,44 @@ static void _async_on_writable_impl(event_loop loop, ccol_selectable *sel,
     _async_plain_try_write(ctx);
     return;
   }
+  if (ctx->state == CHTTP_ASYNC_AWAITING_CONTINUE) {
+    /* Only reachable via the deadline sweep's own continue_deadline expiry
+     * check, which flips this registration to write direction specifically
+     * to deliver this dispatch (see the "ASYNC DEADLINE SWEEP" section);
+     * there is nothing of ours ever pending to flush on this direction
+     * otherwise while awaiting continue, unlike the ordinary WRITING state
+     * above. Claim the decision first, exactly like every exit from
+     * _async_awaiting_continue_on_data; a genuine "100 Continue" that
+     * arrived and was already claimed by a racing on_readable dispatch
+     * just before this one runs (event_loop's own per-entry dispatch_lock
+     * orders the two, but does not decide which one wins) means that
+     * dispatch has already taken over sending the body, and this one has
+     * nothing left to do. */
+    if (atomic_exchange(&ctx->continue_decided, true)) return;
+    /* Timed out with no answer either way: send the body anyway, matching
+     * curl's own CURLOPT_EXPECT_100_TIMEOUT_MS behaviour and Tier 1's
+     * identical timeout branch in _chttp_send_and_read. ctx->retry_unsafe
+     * deliberately stays false here (see its own field comment): unlike a
+     * confirmed "100 Continue", a bare timeout gives no evidence the peer
+     * is even still alive, so the usual reused-connection retry-once
+     * safety net still applies if this write (or the read that follows it)
+     * discovers the connection was already dead. */
+    /* See ctx->interim_responses_seen's own field comment: Tier 1's
+     * identical timeout branch hands the final-response read to a fresh
+     * _chttp_read_message_loop call with its own independent counter
+     * regardless of how the continue-wait ended, so this must reset here
+     * too, not just on a confirmed "100 Continue", or a hop that discarded
+     * interim responses while waiting would start its final-response read
+     * with less than the documented 64-response budget left. */
+    ctx->interim_responses_seen = 0;
+    ctx->state = CHTTP_ASYNC_WRITING;
+    if (ctx->tls) {
+      _async_tls_try_write(ctx);
+    } else {
+      _async_plain_try_write(ctx);
+    }
+    return;
+  }
   /* CHTTP_ASYNC_READING: nothing of ours is pending to flush; a stray
    * on_writable here is a no-op. */
 }
@@ -5548,6 +6543,316 @@ static void _async_on_writable_impl(event_loop loop, ccol_selectable *sel,
 static void _async_on_writable(event_loop loop, ccol_selectable *sel,
                                void *arg) {
   _async_on_writable_impl(loop, sel, (chttp_async_ctx_t *)arg);
+}
+
+/*
+ * Parses data[0..data_len) as one or more CHTTP_ASYNC_READING-state
+ * messages against ctx->parser, exactly as a normal on_readable dispatch
+ * would. Shared by _async_on_readable_impl's own READING-state read (the
+ * ordinary case, data fresh off the socket) and _async_plain_try_write/
+ * _async_tls_try_write's post-body-write continue_carry replay (data
+ * already read earlier, during the AWAITING_CONTINUE wait, and stashed
+ * because the body write it arrived alongside had not finished yet); both
+ * callers hand this function a message boundary they have never fed to
+ * ctx->parser before, so its own internal looping/reset behaviour needs no
+ * caller-visible distinction between the two origins.
+ *
+ * Looping (rather than a single chttp1_parser_execute call) is what lets
+ * this discard an interim informational (1xx) response and keep parsing
+ * (possibly still within THIS SAME chunk, if a fast server already wrote
+ * its next message in the same buffer) instead of misreading the first 1xx
+ * it sees as the final response. By the time this function ever runs, any
+ * Expect: 100-continue decision has already been made (see
+ * _async_awaiting_continue_on_data, which owns that decision and is never
+ * reached from here), so every 1xx seen here is discarded unconditionally
+ * and only a final (>=200) response (or a redirect, itself always >=200)
+ * ends the loop, mirroring Tier 1's own general-path handling in
+ * _chttp_read_message_loop. `data`/`data_len` walk forward across
+ * iterations as trailing bytes from a discarded message are re-fed to a
+ * freshly reinitialised ctx->parser; chttp1_parser_execute's own contract
+ * forbids feeding more bytes to an already-CHTTP1_PAUSED instance, so a
+ * fresh instance (mirroring how a brand-new hop's own ctx->parser is set up
+ * in _async_submit_hop/_async_retry_hop) is required for each subsequent
+ * message, exactly like Tier 1's own "fresh parser per message" convention.
+ */
+static void _async_process_reading_data(chttp_async_ctx_t *ctx,
+                                        const char *data, size_t data_len) {
+  for (;;) {
+    chttp1_errno_t err = chttp1_parser_execute(&ctx->parser, data, data_len);
+    if (err == CHTTP1_PAUSED) {
+      /* Message complete; the parser intentionally pauses right after,
+       * exactly like Tier 1's own CHTTP1_PAUSED handling. */
+      size_t consumed = chttp1_parser_consumed(&ctx->parser);
+      bool trailing_this_msg = consumed < data_len;
+
+      if (ctx->pctx.status_code >= 100 && ctx->pctx.status_code < 200) {
+        /* An interim informational response (e.g. "103 Early Hints", RFC
+         * 8297) arriving ahead of the real response; discard it and keep
+         * reading on this same connection, mirroring Tier 1's own
+         * general-path handling in _chttp_read_message_loop. Never
+         * terminal: ctx->hop_completed stays false, and neither
+         * _async_handle_redirect nor a fulfil/teardown runs here.
+         *
+         * Bounded, exactly like Tier 1's identical loop (see
+         * CHTTP_MAX_INTERIM_RESPONSES's own comment): a server that never
+         * stops sending interim responses would otherwise keep this ctx,
+         * and the chain/future waiting on it, alive indefinitely. */
+        if (++ctx->interim_responses_seen > CHTTP_MAX_INTERIM_RESPONSES) {
+          ctx->hop_completed = true;
+          _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
+          _async_ctx_finish(ctx);
+          return;
+        }
+        ccol_retval_t rrv = _parse_ctx_reset_for_continue(&ctx->pctx);
+        if (rrv != ccol_success) {
+          ctx->hop_completed = true;
+          _async_fulfill(ctx, ccol_not_enough_memory, NULL);
+          _async_ctx_finish(ctx);
+          return;
+        }
+        call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+        chttp1_parser_init(&ctx->parser,
+                           &client_http1_settings_bundler.settings);
+        ctx->parser.data = &ctx->pctx;
+        if (!trailing_this_msg) return; /* wait for more via on_readable */
+        data += consumed;
+        data_len -= consumed;
+        continue; /* re-parse the remaining bytes as the next message */
+      }
+
+      /* A final (>=200) response, or a redirect (always >=200 by
+       * definition: 3xx). */
+      ctx->hop_completed = true;
+      if (trailing_this_msg) ctx->pctx.trailing_garbage = true;
+      bool keep_alive =
+          chttp1_should_keep_alive(&ctx->parser) && !ctx->pctx.trailing_garbage;
+
+      if (ctx->pctx.will_redirect) {
+        _async_handle_redirect(ctx,
+                               keep_alive); /* closes/pools the connection */
+      } else {
+        /* Capture chain (with a temporary extra retain; see
+         * _async_handle_redirect's identical one for why: _async_finish_
+         * connection below can trigger a concurrent teardown of THIS ctx's
+         * own chain reference on another reactor thread, which could free
+         * chain before the _async_fulfill_chain call below runs if nothing
+         * else were holding it) and build the response BEFORE calling
+         * _async_finish_connection: when keep_alive is true, that call can
+         * successfully offer ctx to the idle pool, which resets ctx->chain
+         * to NULL and ctx->pctx/ctx->bb for reuse (see
+         * _async_idle_pool_offer) as part of a normal, expected, successful
+         * outcome; so both ctx->chain and ctx->pctx/ctx->bb must be
+         * captured/extracted first, or a NULL ctx->chain would crash the
+         * fulfil below (or the response would be built from already-cleared
+         * fields). Finishing the connection before fulfilling also matters
+         * independently: fulfilling can unblock the caller immediately
+         * (e.g. a ctpool_future_get on another thread), and if that caller
+         * then destroys cli, _async_finish_connection's idle-pool-offer
+         * path touching cli->lock afterward would race a use-after-free. */
+        chttp_async_chain_t *chain = ctx->chain;
+        _async_chain_retain(chain);
+        chttpcli_response *resp = _async_build_response(ctx);
+        _async_finish_connection(ctx, keep_alive);
+        _async_fulfill_chain(
+            chain, resp ? ccol_success : ccol_not_enough_memory, resp);
+        _async_chain_release(chain);
+      }
+      return;
+    }
+    if (err == CHTTP1_USER) {
+      ctx->hop_completed = true;
+      _async_fulfill(ctx,
+                     ctx->pctx.too_large
+                         ? ccol_msg_too_large
+                         : (ctx->pctx.error ? ccol_not_enough_memory
+                                            : ccol_http_transfer_aborted),
+                     NULL);
+      _async_ctx_finish(ctx);
+      return;
+    }
+    if (err != CHTTP1_OK) {
+      ctx->hop_completed = true;
+      _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
+      _async_ctx_finish(ctx);
+      return;
+    }
+    /* else: message not yet complete, wait for more on_readable */
+    return;
+  }
+}
+
+/*
+ * Handles data[0..data_len) arriving while ctx->state ==
+ * CHTTP_ASYNC_AWAITING_CONTINUE (the header block has been sent; the body
+ * is being deliberately withheld pending the server's answer). Mirrors
+ * Tier 1's _chttp_send_and_read's own post-header wait exactly (see that
+ * function's own doc comment for the full three-outcome contract), adapted
+ * to this module's event-driven dispatch: this function only ever runs
+ * from _async_on_readable_impl (a genuine byte arrived), never from the
+ * deadline-sweep-triggered timeout path (see _async_on_writable_impl's own
+ * CHTTP_ASYNC_AWAITING_CONTINUE branch for that one).
+ *
+ * ctx->continue_decided (an _Atomic bool) is the single guard deciding
+ * which of this function and the timeout path actually gets to act; see
+ * that field's own comment for the full race analysis. Every exit from
+ * this function that would otherwise act on the parsed message claims it
+ * first via atomic_exchange and backs off silently if it discovers the
+ * decision was already made (by the timeout path racing ahead of a
+ * genuinely late-arriving response).
+ */
+static void _async_awaiting_continue_on_data(chttp_async_ctx_t *ctx,
+                                             const char *data,
+                                             size_t data_len) {
+  for (;;) {
+    chttp1_errno_t err = chttp1_parser_execute(&ctx->parser, data, data_len);
+    if (err == CHTTP1_PAUSED) {
+      size_t consumed = chttp1_parser_consumed(&ctx->parser);
+      bool trailing_this_msg = consumed < data_len;
+
+      if (ctx->pctx.status_code == 100) {
+        /* The expected outcome: the server confirms it wants the body.
+         * Claim the decision first; if the timeout path already claimed it
+         * (this "100 Continue" simply arrived too late to matter), there is
+         * nothing left to do - that path has already taken over sending the
+         * body. */
+        if (atomic_exchange(&ctx->continue_decided, true)) return;
+
+        ccol_retval_t rrv = _parse_ctx_reset_for_continue(&ctx->pctx);
+        if (rrv != ccol_success) {
+          ctx->hop_completed = true;
+          _async_fulfill(ctx, ccol_not_enough_memory, NULL);
+          _async_ctx_finish(ctx);
+          return;
+        }
+        call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+        chttp1_parser_init(&ctx->parser,
+                           &client_http1_settings_bundler.settings);
+        ctx->parser.data = &ctx->pctx;
+        /* The body is now being handed to a connection the server itself
+         * just confirmed it is alive and ready to read from; see
+         * ctx->retry_unsafe's own field comment for why this disqualifies
+         * the usual reused-connection retry-once safety net regardless of
+         * what happens next. */
+        ctx->retry_unsafe = true;
+        /* A genuine "100 Continue" is itself a non-discarded message, so the
+         * run of CONSECUTIVE discarded interim responses this field tracks
+         * restarts here; see ctx->interim_responses_seen's own field comment
+         * for why leaving it un-reset would let interim responses discarded
+         * during THIS wait silently eat into the final-response read's own
+         * budget, unlike Tier 1's _chttp_send_and_read, which hands the two
+         * phases to separate _chttp_read_message_loop calls with
+         * independent counters. */
+        ctx->interim_responses_seen = 0;
+
+        if (trailing_this_msg) {
+          /* A fast/optimistic server already wrote (at least the start of)
+           * its real final response in the same read as the "100 Continue"
+           * line, before the body it hasn't received yet; see
+           * ctx->continue_carry's own field comment for why these bytes
+           * cannot simply be re-parsed inline right here (the body write
+           * below may not complete synchronously) and must be stashed
+           * instead. */
+          ctx->continue_carry =
+              (char *)_mem_alloc(ctx->mp, data_len - consumed);
+          if (!ctx->continue_carry) {
+            ctx->hop_completed = true;
+            _async_fulfill(ctx, ccol_not_enough_memory, NULL);
+            _async_ctx_finish(ctx);
+            return;
+          }
+          memcpy(ctx->continue_carry, data + consumed, data_len - consumed);
+          ctx->continue_carry_len = data_len - consumed;
+        }
+
+        ctx->state = CHTTP_ASYNC_WRITING;
+        if (ctx->tls) {
+          _async_tls_try_write(ctx);
+        } else {
+          _async_plain_try_write(ctx);
+        }
+        return;
+      }
+
+      if (ctx->pctx.status_code >= 100 && ctx->pctx.status_code < 200) {
+        /* Some OTHER interim response (e.g. "103 Early Hints") arriving
+         * ahead of either "100 Continue" or a direct final answer; discard
+         * and keep waiting within the same continue_deadline window,
+         * mirroring Tier 1's _chttp_read_message_loop(stop_at_status=100),
+         * which discards anything that is not the awaited status too. */
+        if (++ctx->interim_responses_seen > CHTTP_MAX_INTERIM_RESPONSES) {
+          if (atomic_exchange(&ctx->continue_decided, true)) return;
+          ctx->hop_completed = true;
+          _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
+          _async_ctx_finish(ctx);
+          return;
+        }
+        ccol_retval_t rrv = _parse_ctx_reset_for_continue(&ctx->pctx);
+        if (rrv != ccol_success) {
+          if (atomic_exchange(&ctx->continue_decided, true)) return;
+          ctx->hop_completed = true;
+          _async_fulfill(ctx, ccol_not_enough_memory, NULL);
+          _async_ctx_finish(ctx);
+          return;
+        }
+        call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
+        chttp1_parser_init(&ctx->parser,
+                           &client_http1_settings_bundler.settings);
+        ctx->parser.data = &ctx->pctx;
+        if (!trailing_this_msg) return; /* wait for more via on_readable */
+        data += consumed;
+        data_len -= consumed;
+        continue;
+      }
+
+      /* A final (>=200) response arrived directly, without ever seeing a
+       * "100 Continue" first; RFC 7231 SS5.1.1 fully permits a server to
+       * reject a request this way without ever wanting the body. This
+       * response IS the final answer and the body must never be sent.
+       * Never keep-alive eligible regardless of what chttp1_should_keep_
+       * alive/the response's own Connection header say: see
+       * _chttp_send_and_read's identical comment (Tier 1's own counterpart
+       * of this exact branch) for why pooling a connection the peer may
+       * still be expecting a withheld body on would desync the next,
+       * unrelated request that reuses it. */
+      if (atomic_exchange(&ctx->continue_decided, true)) return;
+      ctx->hop_completed = true;
+      if (trailing_this_msg) ctx->pctx.trailing_garbage = true;
+      if (ctx->pctx.will_redirect) {
+        _async_handle_redirect(ctx, false);
+      } else {
+        chttp_async_chain_t *chain = ctx->chain;
+        _async_chain_retain(chain);
+        chttpcli_response *resp = _async_build_response(ctx);
+        _async_finish_connection(ctx, false);
+        _async_fulfill_chain(
+            chain, resp ? ccol_success : ccol_not_enough_memory, resp);
+        _async_chain_release(chain);
+      }
+      return;
+    }
+    if (err == CHTTP1_USER) {
+      if (atomic_exchange(&ctx->continue_decided, true)) return;
+      ctx->hop_completed = true;
+      _async_fulfill(ctx,
+                     ctx->pctx.too_large
+                         ? ccol_msg_too_large
+                         : (ctx->pctx.error ? ccol_not_enough_memory
+                                            : ccol_http_transfer_aborted),
+                     NULL);
+      _async_ctx_finish(ctx);
+      return;
+    }
+    if (err != CHTTP1_OK) {
+      if (atomic_exchange(&ctx->continue_decided, true)) return;
+      ctx->hop_completed = true;
+      _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
+      _async_ctx_finish(ctx);
+      return;
+    }
+    /* else: message not yet complete (e.g. mid status/header line); wait
+     * for more via on_readable, still within continue_deadline. */
+    return;
+  }
 }
 
 static void _async_on_readable_impl(event_loop loop, ccol_selectable *sel,
@@ -5738,6 +7043,20 @@ static void _async_on_readable_impl(event_loop loop, ccol_selectable *sel,
       _async_ctx_finish(ctx);
       return;
     }
+    if (ctx->state == CHTTP_ASYNC_AWAITING_CONTINUE) {
+      /* An EOF-delimited (no Content-Length/chunked) final response
+       * arriving directly, without ever seeing a "100 Continue" first;
+       * this is still Tier 1's "server answered directly, body never sent"
+       * outcome (see _chttp_send_and_read's identical comment), just
+       * signalled via connection-close framing instead of a length header.
+       * Claim the decision first, exactly like every other exit from
+       * _async_awaiting_continue_on_data; back off silently if the
+       * deadline-sweep timeout path already claimed it. Never reusable
+       * either way: this eof path never pools its connection regardless
+       * (see _async_fulfill_success's own comment), so no extra keep_alive
+       * override is needed here beyond that already-existing behaviour. */
+      if (atomic_exchange(&ctx->continue_decided, true)) return;
+    }
     ctx->hop_completed = true;
     if (ctx->pctx.will_redirect) {
       /* Peer-closed (rather than Content-Length/chunked) framing is never
@@ -5751,127 +7070,11 @@ static void _async_on_readable_impl(event_loop loop, ccol_selectable *sel,
     return;
   }
 
-  /* Looping (rather than a single chttp1_parser_execute call) is what lets
-   * this dispatch discard an interim informational (1xx) response and keep
-   * parsing (possibly still within THIS SAME read, if a fast server
-   * already wrote its next message in the same buffer) instead of
-   * misreading the first 1xx it sees as the final response. Tier 2 never
-   * sends "Expect: 100-continue" (see chttp_request_t.expect_continue's own
-   * doc comment), so unlike Tier 1's _chttp_read_message_loop there is no
-   * "expected" stop status here: every 1xx is discarded, and only a final
-   * (>=200) response (or a redirect, itself always >=200) ends the loop.
-   * `data`/`data_len` walk forward across iterations as trailing bytes from
-   * a discarded message are re-fed to a freshly reinitialised ctx->parser;
-   * chttp1_parser_execute's own contract forbids feeding more bytes to an
-   * already-CHTTP1_PAUSED instance, so a fresh instance (mirroring how a
-   * brand-new hop's own ctx->parser is set up in _async_submit_hop/
-   * _async_retry_hop) is required for each subsequent message, exactly like
-   * Tier 1's own "fresh parser per message" convention. */
-  const char *data = buf;
-  size_t data_len = (size_t)n;
-
-  for (;;) {
-    chttp1_errno_t err = chttp1_parser_execute(&ctx->parser, data, data_len);
-    if (err == CHTTP1_PAUSED) {
-      /* Message complete; the parser intentionally pauses right after,
-       * exactly like Tier 1's own CHTTP1_PAUSED handling. */
-      size_t consumed = chttp1_parser_consumed(&ctx->parser);
-      bool trailing_this_msg = consumed < data_len;
-
-      if (ctx->pctx.status_code >= 100 && ctx->pctx.status_code < 200) {
-        /* An interim informational response (e.g. "103 Early Hints", RFC
-         * 8297) arriving ahead of the real response; discard it and keep
-         * reading on this same connection, mirroring Tier 1's own
-         * general-path handling in _chttp_read_message_loop. Never
-         * terminal: ctx->hop_completed stays false, and neither
-         * _async_handle_redirect nor a fulfil/teardown runs here.
-         *
-         * Bounded, exactly like Tier 1's identical loop (see
-         * CHTTP_MAX_INTERIM_RESPONSES's own comment): a server that never
-         * stops sending interim responses would otherwise keep this ctx,
-         * and the chain/future waiting on it, alive indefinitely. */
-        if (++ctx->interim_responses_seen > CHTTP_MAX_INTERIM_RESPONSES) {
-          ctx->hop_completed = true;
-          _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
-          _async_ctx_finish(ctx);
-          return;
-        }
-        ccol_retval_t rrv = _parse_ctx_reset_for_continue(&ctx->pctx);
-        if (rrv != ccol_success) {
-          ctx->hop_completed = true;
-          _async_fulfill(ctx, ccol_not_enough_memory, NULL);
-          _async_ctx_finish(ctx);
-          return;
-        }
-        call_once(client_http1_settings_bundler.once, _init_chttp1_settings);
-        chttp1_parser_init(&ctx->parser,
-                           &client_http1_settings_bundler.settings);
-        ctx->parser.data = &ctx->pctx;
-        if (!trailing_this_msg) return; /* wait for more via on_readable */
-        data += consumed;
-        data_len -= consumed;
-        continue; /* re-parse the remaining bytes as the next message */
-      }
-
-      /* A final (>=200) response, or a redirect (always >=200 by
-       * definition: 3xx). */
-      ctx->hop_completed = true;
-      if (trailing_this_msg) ctx->pctx.trailing_garbage = true;
-      bool keep_alive =
-          chttp1_should_keep_alive(&ctx->parser) && !ctx->pctx.trailing_garbage;
-
-      if (ctx->pctx.will_redirect) {
-        _async_handle_redirect(ctx,
-                               keep_alive); /* closes/pools the connection */
-      } else {
-        /* Capture chain (with a temporary extra retain; see
-         * _async_handle_redirect's identical one for why: _async_finish_
-         * connection below can trigger a concurrent teardown of THIS ctx's
-         * own chain reference on another reactor thread, which could free
-         * chain before the _async_fulfill_chain call below runs if nothing
-         * else were holding it) and build the response BEFORE calling
-         * _async_finish_connection: when keep_alive is true, that call can
-         * successfully offer ctx to the idle pool, which resets ctx->chain
-         * to NULL and ctx->pctx/ctx->bb for reuse (see
-         * _async_idle_pool_offer) as part of a normal, expected, successful
-         * outcome; so both ctx->chain and ctx->pctx/ctx->bb must be
-         * captured/extracted first, or a NULL ctx->chain would crash the
-         * fulfil below (or the response would be built from already-cleared
-         * fields). Finishing the connection before fulfilling also matters
-         * independently: fulfilling can unblock the caller immediately
-         * (e.g. a ctpool_future_get on another thread), and if that caller
-         * then destroys cli, _async_finish_connection's idle-pool-offer
-         * path touching cli->lock afterward would race a use-after-free. */
-        chttp_async_chain_t *chain = ctx->chain;
-        _async_chain_retain(chain);
-        chttpcli_response *resp = _async_build_response(ctx);
-        _async_finish_connection(ctx, keep_alive);
-        _async_fulfill_chain(
-            chain, resp ? ccol_success : ccol_not_enough_memory, resp);
-        _async_chain_release(chain);
-      }
-      return;
-    }
-    if (err == CHTTP1_USER) {
-      ctx->hop_completed = true;
-      _async_fulfill(ctx,
-                     ctx->pctx.too_large
-                         ? ccol_msg_too_large
-                         : (ctx->pctx.error ? ccol_not_enough_memory
-                                            : ccol_http_transfer_aborted),
-                     NULL);
-      _async_ctx_finish(ctx);
-      return;
-    }
-    if (err != CHTTP1_OK) {
-      ctx->hop_completed = true;
-      _async_fulfill(ctx, ccol_http_transfer_aborted, NULL);
-      _async_ctx_finish(ctx);
-      return;
-    }
-    /* else: message not yet complete, wait for more on_readable */
+  if (ctx->state == CHTTP_ASYNC_AWAITING_CONTINUE) {
+    _async_awaiting_continue_on_data(ctx, buf, (size_t)n);
     return;
   }
+  _async_process_reading_data(ctx, buf, (size_t)n);
 }
 
 static void _async_on_readable(event_loop loop, ccol_selectable *sel,
@@ -6059,9 +7262,17 @@ static void _async_connect_task(void *arg) {
 
   if (ctx->timed_out) {
     /* Never registered with the reactor, so nothing else could act on this
-     * fd yet; close it directly and report the timeout ourselves. */
-    close(fd);
-    ctx->fd = -1;
+     * fd yet; report the timeout ourselves and let _async_ctx_teardown (via
+     * _async_ctx_destroy_now) close fd for us. Closing it manually here,
+     * before _client_deadline_unregister has run, was a real violation of
+     * this module's own "unregister before close" invariant (see
+     * _async_ctx_destroy_now's own doc comment: this ctx is already linked
+     * into the deadline registry by this point, registered before this
+     * task was ever submitted). _async_ctx_destroy_now already closes
+     * ctx->fd itself, unconditionally, AFTER unregistering - closing it a
+     * second time here would only have been safe because it was set to -1
+     * immediately after, making the later close a no-op; removing the
+     * manual close entirely is both simpler and correct. */
     _async_fulfill(ctx, ccol_timed_out, NULL);
     _async_ctx_teardown(ctx);
     return;
@@ -6170,6 +7381,20 @@ static void _async_retry_hop(chttp_async_ctx_t *old_ctx) {
   ctx->wire_len = old_ctx->wire_len;
   ctx->origin_key = old_ctx->origin_key;
   old_ctx->origin_key = NULL;
+  /* The retry resends the exact same request, so it carries forward the
+   * exact same want_100_continue/header_len decision old_ctx already made
+   * (mirroring how cur_method/cur_body are carried forward elsewhere in
+   * this file's redirect machinery); reaching this function at all
+   * guarantees old_ctx never got past sending the header block (see
+   * _async_ctx_finish's retry-eligibility check, which requires
+   * !retry_unsafe - retry_unsafe only ever becomes true once the body has
+   * actually been sent following a confirmed "100 Continue"), so ctx->wire
+   * still holds the complete, unsent body ready to go. continue_decided
+   * starts false again for this fresh attempt, exactly like a brand-new
+   * hop. */
+  ctx->want_100_continue = old_ctx->want_100_continue;
+  ctx->header_len = old_ctx->header_len;
+  atomic_store(&ctx->continue_decided, false);
 
   ctx->pctx.mp = chain->mp;
   ctx->pctx.is_head_request = old_ctx->pctx.is_head_request;
@@ -6462,15 +7687,37 @@ static bool _async_submit_hop(chttp_async_chain_t *chain, const char *url_str,
   hop_req.body.data = body_data;
   hop_req.body.len = body_len;
   hop_req.body.content_type = body_content_type;
+  /* Without this, _serialize_request never actually emits "expect:
+   * 100-continue" on the wire (it reads req->expect_continue, not anything
+   * chain-level), even though ctx->want_100_continue below is computed
+   * independently from chain->expect_continue and correctly engages the
+   * write-splitting/wait machinery regardless - a real bug caught by
+   * async_step_a.expect_continue_field_reaches_the_wire, which found the
+   * header count on the wire coming back 0 despite the wait/timeout timing
+   * proving the wait itself was genuinely happening. */
+  hop_req.expect_continue = chain->expect_continue;
 
+  chttp_header_presence_t hop_hp;
   prv = _serialize_request(chain->mp, &hop_req, &url, effective_auth,
                            chain->explicit_auth_suppressed, &ctx->wire,
-                           &ctx->wire_len, NULL);
+                           &ctx->wire_len, &hop_hp);
   if (prv != ccol_success) {
     _url_free(chain->mp, &url);
     _async_submit_hop_fail(ctx, prv);
     return false;
   }
+  /* Mirrors Tier 1's identical use_100_continue local in chttp_do_internal
+   * exactly (see that function's own comment for why has_explicit_expect
+   * must come from _serialize_request's own case-insensitive scan rather
+   * than a second, naive lookup); body_carrying_method is recomputed here
+   * rather than threaded through from hop_req, since chttp_method_t has no
+   * public accessor for it outside _serialize_request's own internal use. */
+  bool body_carrying_method_ac =
+      (method == CHTTP_POST || method == CHTTP_PUT || method == CHTTP_PATCH);
+  ctx->want_100_continue = chain->expect_continue && !hop_hp.has_expect &&
+                           body_carrying_method_ac && body_data && body_len > 0;
+  ctx->header_len = ctx->want_100_continue ? ctx->wire_len - body_len : 0;
+  atomic_store(&ctx->continue_decided, false);
 
   if (!ctx->origin_key) {
     /* Always set except on the reused path, where it already carries the
@@ -6891,7 +8138,7 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
       mp, cli, future, (chmap)req->headers, req->body.data, req->body.len,
       req->body.content_type, initial_origin_key, tls_ctx, tls_ctx_usable,
       verify_host, connect_timeout_ms, request_timeout_ms,
-      max_response_body_size, write_fn, write_ctx);
+      max_response_body_size, write_fn, write_ctx, req->expect_continue);
   /* _async_chain_create takes a deep copy of initial_origin_key (matching
    * how it already handles req_headers/body_data/body_content_type); this
    * function's own local copy is never retained beyond this call, whether
@@ -6899,9 +8146,34 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
   _mem_free(mp, initial_origin_key);
   if (!chain) {
     if (tls_ctx) ctls_ctx_release(tls_ctx);
-    ctpool_future_fulfill(future, NULL); /* producer side; caller's own ref
-                                          * is released via its eventual
-                                          * ctpool_future_free(f) call */
+    /* _async_chain_create fails only on an allocation failure (calloc,
+     * mutex_init, or one of the deep-copy allocations it performs), so
+     * ccol_not_enough_memory is always the accurate cause here. Reported
+     * via a real chttpcli_async_result_t (mirroring exactly what
+     * _async_fulfill_chain builds on its own success path) rather than
+     * fulfilling with a bare NULL, so chttpclient_async_result_get returns
+     * a genuine result carrying that error code instead of collapsing this
+     * specific, common failure into the same NULL a cancelled future
+     * produces - which Tier 3 (chttpclient_do_pooled/_streaming) would
+     * otherwise have no way to distinguish from any other NULL-result
+     * cause, reporting the generic ccol_unexpected_failure instead of
+     * ccol_not_enough_memory. Only falls back to the bare-NULL fulfill (the
+     * same last-resort this function's own _async_fulfill_chain already
+     * uses when it can't even allocate ITS result struct) if this smaller
+     * allocation also fails. */
+    chttpcli_async_result_t *result =
+        (chttpcli_async_result_t *)_mem_calloc(mp, 1, sizeof(*result));
+    if (result) {
+      result->rv = ccol_not_enough_memory;
+      result->resp = NULL;
+      result->_m_procs = mp;
+      ctpool_future_fulfill(future, result);
+    } else {
+      ctpool_future_fulfill(future, NULL); /* producer side; caller's own
+                                            * ref is released via its
+                                            * eventual ctpool_future_free(f)
+                                            * call */
+    }
     _client_engine_release();
     return f;
   }
@@ -6916,6 +8188,17 @@ static ctpool_future *_chttp_do_async_internal(struct chttpclient *cli,
  * gated now that chttpclient_do_async/_streaming are real public callers,
  * but these five functions exist purely for test instrumentation). */
 #ifdef RUNNING_UNIT_TESTS
+/* Exposes sizeof(chttp_async_chain_t) (an internal, non-public type) so a
+ * test can build a size-targeted fault-injecting allocator that fails
+ * exactly the chain struct's own calloc call inside _async_chain_create,
+ * regardless of how many other allocations of different sizes happen to
+ * precede it (URL parsing, etc.) - deterministic and immune to drift from a
+ * future change shifting the number of preceding allocation calls, unlike
+ * an index-based fault injector. */
+size_t _chttp_async_chain_struct_size_for_tests(void) {
+  return sizeof(chttp_async_chain_t);
+}
+
 int _chttpclient_engine_ref_count_for_tests(void) {
   call_once(cli_engine_bundler.once, _client_engine_globals_init);
   mutex_lock(cli_engine_bundler.mutex);
@@ -6985,6 +8268,38 @@ size_t _chttpclient_async_idle_total_count_for_tests(struct chttpclient *cli) {
   size_t n = cli->idle_total_count_async;
   mutex_unlock(cli->lock);
   return n;
+}
+
+/* Reads how many distinct origin keys cli->idle_pools (Tier 1) currently
+ * holds an entry for. Test-only: lets a test verify that popping the last
+ * connection for an origin actually prunes that origin's own now-empty
+ * chmap entry, rather than merely leaving an empty per-origin cvec behind
+ * forever (see _idle_pool_take's own pruning comment). */
+size_t _chttpclient_idle_pools_key_count_for_tests(struct chttpclient *cli) {
+  mutex_lock(cli->lock);
+  size_t n = cli->idle_pools ? chmap_elem_count(cli->idle_pools) : 0;
+  mutex_unlock(cli->lock);
+  return n;
+}
+
+/* Async (Tier 2/3) counterpart of _chttpclient_idle_pools_key_count_for_
+ * tests above, for cli->idle_pools_async. */
+size_t _chttpclient_idle_pools_async_key_count_for_tests(
+    struct chttpclient *cli) {
+  mutex_lock(cli->lock);
+  size_t n =
+      cli->idle_pools_async ? chmap_elem_count(cli->idle_pools_async) : 0;
+  mutex_unlock(cli->lock);
+  return n;
+}
+
+/* Overrides CHTTP_MAX_IDLE_ORIGINS's effective value (shared by both
+ * _idle_pool_offer and _async_idle_pool_offer) for the remainder of this
+ * process; see g_max_idle_origins_override_for_tests's own comment. Pass 0
+ * to restore the real compile-time constant. Process-wide, not per-client,
+ * exactly like every other *_for_tests fault-injection hook in this file. */
+void _chttpclient_set_max_idle_origins_for_tests(size_t n) {
+  atomic_store(&g_max_idle_origins_override_for_tests, n);
 }
 
 /* Resolves h to its underlying struct chttpclient* WITHOUT pinning it (does
@@ -7102,9 +8417,13 @@ void chttpclient_async_result_free(chttpcli_async_result_t *result) {
  * check runs first specifically so a bad URL or unusable TLS config is
  * reported with the same specific code chttpclient_do would use, rather
  * than chttpclient_do_async/_streaming's collapsed NULL for that case (see
- * that helper's own comment). Any OTHER pre-queue failure (OOM, the engine
- * failing to start) still collapses to ccol_unexpected_failure; Tier 1
- * does not distinguish those cases with any more granularity either.
+ * that helper's own comment). An allocation failure building the async
+ * chain itself is reported as the specific ccol_not_enough_memory (see
+ * _chttp_do_async_internal's own chain-creation-failure branch); any OTHER
+ * pre-queue failure (the engine failing to start, ctpool_future_create_
+ * detached itself failing) still collapses to ccol_unexpected_failure,
+ * since those surface as a bare NULL future from chttpclient_do_async/
+ * _streaming with no result object to carry a more specific code at all.
  */
 
 ccol_retval_t chttpclient_do_pooled(chttpcli h, const chttp_request_t *req,
@@ -8345,16 +9664,36 @@ const char *chttpclient_resp_header(const chttpcli_response *resp,
                                     const char *name) {
   if (!resp || !name || !resp->headers) return NULL;
 
+  /* A caller doing several known-name header lookups per response (a
+   * realistic, likely hot pattern) previously paid one heap _mem_alloc/
+   * _mem_free pair per lookup just to hold the lower-cased copy of `name`.
+   * Every real HTTP header name (RFC 7230 SS3.2's "token" grammar; every
+   * registered name in the IANA registry, and any realistic custom one) is
+   * far shorter than this stack buffer, so the allocation is skipped
+   * entirely in the overwhelmingly common case; only a pathologically long
+   * name (longer than this buffer could ever legitimately be, since actual
+   * response headers of that length would themselves be rejected/unusual
+   * long before reaching this call) falls back to the heap, exactly as
+   * before. */
+  enum { STACK_NAME_BUF = 128 };
+  char stack_lower[STACK_NAME_BUF];
   size_t nlen = strlen(name);
-  char *lower = (char *)_mem_alloc(resp->_m_procs, nlen + 1);
-  if (!lower) return NULL;
+  char *lower;
+  char *heap_lower = NULL;
+  if (nlen < STACK_NAME_BUF) {
+    lower = stack_lower;
+  } else {
+    heap_lower = (char *)_mem_alloc(resp->_m_procs, nlen + 1);
+    if (!heap_lower) return NULL;
+    lower = heap_lower;
+  }
   for (size_t i = 0; i <= nlen; i++)
     lower[i] = (char)tolower((unsigned char)name[i]);
 
   cmap_pair kp = {.ptr = lower, .size = nlen + 1};
   cmap_pair *vp = NULL;
   ccol_retval_t rv = chmap_get_elem_ref((chmap)resp->headers, &kp, &vp);
-  _mem_free(resp->_m_procs, lower);
+  if (heap_lower) _mem_free(resp->_m_procs, heap_lower);
 
   if (rv != ccol_success || !vp) return NULL;
   return (const char *)vp->ptr;

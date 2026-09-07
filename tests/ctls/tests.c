@@ -27,6 +27,8 @@ SOFTWARE.
 #include <fcntl.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,6 +44,29 @@ TAU_MAIN()
 
 /* White-box accessor from ctls.c (RUNNING_UNIT_TESTS only). */
 extern SSL *_ctls_conn_ssl_for_tests(ctls_conn_t *conn);
+
+/* White-box accessor from chashmap.c (RUNNING_UNIT_TESTS only); see its own
+   doc comment there for the finding (a "possibly lost" chashmap iterator
+   under a heavily-loaded `make memtest` run) this permanent guard exists to
+   catch, should it ever genuinely recur. */
+extern long chashmap_iter_outstanding_count_for_tests(void);
+
+/* Checked at true process exit (the exact moment valgrind's own leak check
+   runs, later than any TEST()'s own local checks can reach) so a genuine
+   future regression in ANY chashmap iterator's own alloc/free balance,
+   anywhere in this suite's run, aborts loudly and immediately instead of
+   surfacing only as a rare, hard-to-reproduce valgrind report. */
+static void __attribute__((destructor)) _check_chmap_iter_balance_at_exit(
+    void) {
+  long outstanding = chashmap_iter_outstanding_count_for_tests();
+  if (outstanding != 0) {
+    fprintf(stderr,
+            "[chmap-iter-balance] FATAL: %ld chashmap iterator(s) still "
+            "outstanding at process exit\n",
+            outstanding);
+    abort();
+  }
+}
 
 /* ========================================================================== */
 /*                    THROWAWAY CERTIFICATE GENERATION                        */
@@ -692,6 +717,51 @@ TEST(ctls_sni, mixed_case_name_matches_case_insensitively) {
   ctls_ctx_release(server_ctx);
 }
 
+/* Regression: re-registering a named certificate for a server_name that
+ * already has one is a supported certificate-rotation pattern (ctls_ctx_
+ * cert_add's own implementation explicitly looks up and destroys the
+ * previous entry before inserting the new one). Internally, the chmap
+ * update for an already-present key returns ccol_key_already_present, not
+ * ccol_success; ctls_ctx_cert_add must treat that as success rather than
+ * destroying the certificate it just stored, which would leave the map's
+ * value slot for this hostname pointing at freed memory. */
+TEST(ctls_sni, cert_add_replaces_existing_named_cert_without_dangling_pointer) {
+  if (!g_certs_ready) return;
+  ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
+  REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "rotate.test", g_server_cert,
+                               g_server_key, NULL, NULL),
+             ccol_success);
+  /* Rotate: same name, different cert/key pair. */
+  REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, "rotate.test", g_client_cert,
+                               g_client_key, NULL, NULL),
+             ccol_success);
+  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+
+  int fds[2];
+  _make_nonblocking_pair(fds);
+  ctls_conn_t *server_conn =
+      ctls_conn_create_server(server_ctx, fds[0], NULL, NULL);
+  ctls_conn_t *client_conn =
+      ctls_conn_create_client(client_ctx, fds[1], "rotate.test", false, NULL);
+  REQUIRE_TRUE(_drive_both(client_conn, server_conn, 200, NULL, NULL));
+
+  SSL *client_ssl = _ctls_conn_ssl_for_tests(client_conn);
+  char cn_buf[128];
+  const char *cn = _peer_cert_cn(client_ssl, cn_buf, sizeof(cn_buf));
+  REQUIRE_NE((void *)cn, (void *)NULL);
+  /* Must be the second (client) cert's own CN, proving the rotation
+   * actually took effect against a live, correctly-updated entry rather
+   * than a dangling pointer left over from the first, freed cert. */
+  REQUIRE_STREQ(cn, "test-client");
+
+  ctls_conn_destroy(client_conn);
+  ctls_conn_destroy(server_conn);
+  close(fds[0]);
+  close(fds[1]);
+  ctls_ctx_release(client_ctx);
+  ctls_ctx_release(server_ctx);
+}
+
 TEST(ctls_sni, unmatched_name_falls_back_to_default) {
   ctls_ctx_t *server_ctx = ctls_ctx_new(NULL);
   REQUIRE_EQ(ctls_ctx_cert_add(server_ctx, NULL, NULL, NULL, NULL, NULL),
@@ -882,4 +952,234 @@ TEST(ctls_conn, udata_roundtrip) {
   close(fds[0]);
   close(fds[1]);
   ctls_ctx_release(ctx);
+}
+
+/* ========================================================================== */
+/* Regression coverage for three real bugs found via an independent deep-scan */
+/* code review, none previously caught: (1) a use-after-free in */
+/* _ctls_servername_cb, which used to look up the matching named cert's own */
+/* SSL_CTX* under tls->lock but call SSL_set_SSL_CTX() on it AFTER releasing */
+/* the lock, racing a concurrent ctls_ctx_cert_add() rotating (and freeing) */
+/* that exact SSL_CTX; (2) an entirely unlocked data race in */
+/* _ctls_alpn_select_cb (server-mode ALPN selection), which read */
+/* tls->alpn[]/tls->alpn_count with no locking at all, unlike its own */
+/* client-mode sibling _ctls_record_client_alpn, which already locked */
+/* correctly; and (3) a missing NULL check on the self-signed-certificate */
+/* subject-name allocation in ctls_ctx_cert_add, which could reach */
+/* _ctls_create_self_signed(NULL) -> strlen(NULL) under sustained memory */
+/* pressure instead of the documented, graceful ccol_not_enough_memory every */
+/* other allocation failure in that same function already reports.            */
+/* ========================================================================== */
+
+/* --- (3): self-signed named-cert subject-name OOM must not crash --------- */
+
+static _Atomic int g_fail_malloc_at_call = 0; /* 0 = never fail */
+static _Atomic int g_malloc_call_count = 0;
+
+static void *_fail_nth_malloc(size_t n) {
+  int call = atomic_fetch_add(&g_malloc_call_count, 1) + 1;
+  int fail_at = atomic_load(&g_fail_malloc_at_call);
+  if (fail_at && call == fail_at) return NULL;
+  return malloc(n);
+}
+static void _fail_nth_free(void *p) { free(p); }
+static void *_fail_nth_calloc(size_t n, size_t sz) { return calloc(n, sz); }
+static void *_fail_nth_realloc(void *p, size_t sz) { return realloc(p, sz); }
+
+TEST(ctls_ctx, cert_add_self_signed_name_alloc_failure_reports_oom_not_crash) {
+  /* ctls_ctx_cert_add's own call sequence for a NAMED, self-signed
+     certificate with no password: lower_name = _ctls_strdup_lower(...) is
+     the first malloc, nc = _mem_calloc(...) is a calloc (not counted
+     here), and nc->self_signed_name = _ctls_strdup(...) is the second
+     malloc; exactly the one this test targets. Confirmed to crash
+     (strlen(NULL) inside _ctls_create_self_signed, reached via
+     _ctls_ctx_rebuild_locked) against a scratch build with the NULL check
+     this test guards removed, before the fix was reapplied. */
+  ccol_memmgmt_procs_t mp = {_fail_nth_malloc, _fail_nth_free, _fail_nth_calloc,
+                             _fail_nth_realloc};
+  ctls_ctx_t *ctx = ctls_ctx_new_mp(&mp, NULL);
+  REQUIRE_NE((void *)ctx, (void *)NULL);
+
+  atomic_store(&g_malloc_call_count, 0);
+  atomic_store(&g_fail_malloc_at_call, 2);
+  char *err = NULL;
+  ccol_retval_t rv = ctls_ctx_cert_add(ctx, "oom.test", NULL, NULL, NULL, &err);
+  atomic_store(&g_fail_malloc_at_call, 0); /* disarm before any further alloc */
+  REQUIRE_EQ((int)rv, (int)ccol_not_enough_memory);
+
+  /* The context must still be genuinely usable afterward: the failed add
+     must not have left it half-configured or corrupted. */
+  REQUIRE_EQ(ctls_ctx_cert_add(ctx, "after-oom.test", NULL, NULL, NULL, NULL),
+             ccol_success);
+
+  ctls_ctx_release(ctx);
+}
+
+/* --- (1): SNI servername-callback UAF under concurrent cert rotation ----- */
+
+static _Atomic bool g_sni_race_stop = false;
+static ctls_ctx_t *g_sni_race_ctx = NULL;
+
+static void *_sni_race_rotate_thread(void *arg) {
+  (void)arg;
+  while (!atomic_load(&g_sni_race_stop)) {
+    /* Repeatedly re-adding the SAME name forces _ctls_ctx_rebuild_locked's
+       own commit step to SSL_CTX_free() the previous built_ctx on every
+       iteration; exactly the free a concurrent, in-flight
+       _ctls_servername_cb call (on the handshake thread below) must never
+       observe happening to the SSL_CTX* it already looked up. */
+    ctls_ctx_cert_add(g_sni_race_ctx, "race.test", NULL, NULL, NULL, NULL);
+    /* A real wall-clock throttle, not sched_yield(): with 22 real cores
+       available, an unthrottled rotate thread runs on its own dedicated
+       core with nothing else contending for it, so sched_yield() there is a
+       near no-op (it only cedes the CPU to another runnable thread on the
+       SAME core) and does nothing to slow this thread's own iteration rate
+       relative to the main thread's, which is on a different core entirely.
+       The rotate thread re-acquires ctx->lock so much faster than the main
+       thread's own handshake-driving calls that the lock is, in practice,
+       essentially always held (or immediately re-stolen the instant it's
+       released) by the time the main thread ever tries for it; a genuine
+       lock-starvation livelock (300 handshakes never completing within
+       several real minutes, not a deadlock but not survivable as a test
+       either), found empirically before this throttle was added: first a
+       180s run, then a bare sched_yield()-throttled 120s run, both never
+       got past the very first iteration of this test. usleep(1000) caps
+       the rotate thread at roughly 1000 iterations/sec, comfortably enough
+       to keep racing the main thread's own lock acquisitions while leaving
+       it genuine, reliable wall-clock room to win its share of them. */
+    usleep(1000);
+  }
+  return NULL;
+}
+
+TEST(ctls_sni, cert_add_race_during_live_handshake_does_not_crash) {
+  if (!g_certs_ready) return;
+  g_sni_race_ctx = ctls_ctx_new(NULL);
+  REQUIRE_EQ(
+      ctls_ctx_cert_add(g_sni_race_ctx, "race.test", NULL, NULL, NULL, NULL),
+      ccol_success);
+  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+
+  atomic_store(&g_sni_race_stop, false);
+  pthread_t rotate_th;
+  REQUIRE_EQ(pthread_create(&rotate_th, NULL, _sni_race_rotate_thread, NULL),
+             0);
+
+  /* A bounded number of real, full handshakes, each against a fresh
+     connection pair, racing the rotation thread's own continuous churn the
+     whole time. The real assertion is that this survives at all (under a
+     plain run this proves nothing new; under ASan/valgrind/TSan, a
+     use-after-free here reliably aborts or reports before the fix). */
+  for (int i = 0; i < 80; i++) {
+    int fds[2];
+    _make_nonblocking_pair(fds);
+    ctls_conn_t *server_conn =
+        ctls_conn_create_server(g_sni_race_ctx, fds[0], NULL, NULL);
+    ctls_conn_t *client_conn =
+        ctls_conn_create_client(client_ctx, fds[1], "race.test", false, NULL);
+    _drive_both(client_conn, server_conn, 200, NULL, NULL);
+    ctls_conn_destroy(client_conn);
+    ctls_conn_destroy(server_conn);
+    close(fds[0]);
+    close(fds[1]);
+  }
+
+  atomic_store(&g_sni_race_stop, true);
+  pthread_join(rotate_th, NULL);
+  /* Direct, empirical mid-suite checkpoint (see also
+     _check_chmap_iter_balance_at_exit's own, stronger, true-process-exit
+     check above): the rotation thread has just stopped, so nothing else in
+     the process can be concurrently allocating/destroying a chashmap
+     iterator right now; this confirms every chashmap_begin_iter() call this
+     test's own rotation thread made (via ctls_ctx_cert_add ->
+     _ctls_ctx_rebuild_locked) was genuinely balanced by a matching
+     ccol_iter_destroy(), rather than relying on code-reading alone. */
+  REQUIRE_EQ(chashmap_iter_outstanding_count_for_tests(), (long)0);
+  ctls_ctx_release(client_ctx);
+  ctls_ctx_release(g_sni_race_ctx);
+  g_sni_race_ctx = NULL;
+}
+
+/* --- (2): server-mode ALPN-select-callback race, plus the connection-owned */
+/*          alpn_selected_name copy fix (both directions)                    */
+
+static _Atomic bool g_alpn_race_stop = false;
+static ctls_ctx_t *g_alpn_race_server_ctx = NULL;
+
+static void *_alpn_race_rotate_thread(void *arg) {
+  (void)arg;
+  while (!atomic_load(&g_alpn_race_stop)) {
+    /* Re-adding the SAME protocol name repeatedly forces
+       ctls_ctx_alpn_add's own "replace an existing registration" branch,
+       which frees the previous entry's name buffer; exactly the buffer
+       a concurrent, in-flight _ctls_alpn_select_cb call (on the handshake
+       thread below) must never read from after it has been freed. */
+    ctls_ctx_alpn_add(g_alpn_race_server_ctx, "h2", NULL, NULL, NULL, NULL);
+    /* See the identical usleep() comment in _sni_race_rotate_thread above:
+       without a real wall-clock throttle, this tight loop starves the main
+       thread's own handshake-driving calls of ever winning ctx->lock in
+       practice, and sched_yield() alone does not fix it. */
+    usleep(1000);
+  }
+  return NULL;
+}
+
+TEST(ctls_alpn, alpn_add_race_during_live_handshake_does_not_crash) {
+  if (!g_certs_ready) return;
+  g_alpn_race_server_ctx = ctls_ctx_new(NULL);
+  REQUIRE_EQ(ctls_ctx_cert_add(g_alpn_race_server_ctx, NULL, g_server_cert,
+                               g_server_key, NULL, NULL),
+             ccol_success);
+  REQUIRE_EQ(
+      ctls_ctx_alpn_add(g_alpn_race_server_ctx, "h2", NULL, NULL, NULL, NULL),
+      ccol_success);
+  ctls_ctx_t *client_ctx = ctls_ctx_new(NULL);
+  REQUIRE_EQ(ctls_ctx_alpn_add(client_ctx, "h2", NULL, NULL, NULL, NULL),
+             ccol_success);
+
+  atomic_store(&g_alpn_race_stop, false);
+  pthread_t rotate_th;
+  REQUIRE_EQ(pthread_create(&rotate_th, NULL, _alpn_race_rotate_thread, NULL),
+             0);
+
+  /* Captured into a local rather than asserted on directly inside the loop:
+     a REQUIRE_EQ failing there would return from this function immediately,
+     skipping atomic_store(&g_alpn_race_stop, true)/pthread_join(rotate_th,
+     ...) entirely below and leaving that thread permanently running (its
+     own loop only terminates once g_alpn_race_stop is observed true), plus
+     leaking both ctls_ctx_t handles this function's own two release calls
+     below would otherwise reclaim. Every check is deferred until after the
+     loop, stop signal, join, and both releases have all run unconditionally,
+     matching this codebase's own established discipline for exactly this
+     class of early-REQUIRE-failure hazard. */
+  bool alpn_len_mismatch = false;
+  for (int i = 0; i < 80; i++) {
+    int fds[2];
+    _make_nonblocking_pair(fds);
+    ctls_conn_t *server_conn =
+        ctls_conn_create_server(g_alpn_race_server_ctx, fds[0], NULL, NULL);
+    ctls_conn_t *client_conn =
+        ctls_conn_create_client(client_ctx, fds[1], NULL, false, NULL);
+    if (_drive_both(client_conn, server_conn, 200, NULL, NULL)) {
+      /* When a handshake genuinely completes, the selected protocol name
+         must still be readable (through the connection-owned copy, not a
+         possibly-already-rotated-and-freed ctx-owned pointer) after the
+         fact, well after tls->lock has long since been released. */
+      size_t len = 0;
+      const char *name = ctls_conn_alpn_selected(server_conn, &len);
+      if (name && len != strlen(name)) alpn_len_mismatch = true;
+    }
+    ctls_conn_destroy(client_conn);
+    ctls_conn_destroy(server_conn);
+    close(fds[0]);
+    close(fds[1]);
+  }
+
+  atomic_store(&g_alpn_race_stop, true);
+  pthread_join(rotate_th, NULL);
+  ctls_ctx_release(client_ctx);
+  ctls_ctx_release(g_alpn_race_server_ctx);
+  g_alpn_race_server_ctx = NULL;
+
+  REQUIRE_FALSE(alpn_len_mismatch);
 }

@@ -1,0 +1,2 @@
+fail=1
+name=Comment in plain multiline value

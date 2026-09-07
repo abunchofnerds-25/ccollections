@@ -1,0 +1,2 @@
+fail=1
+name=Comment that looks like a mapping key

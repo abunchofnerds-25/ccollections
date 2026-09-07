@@ -1,0 +1,2 @@
+fail=1
+name=Literal block scalar with more spaces in first line

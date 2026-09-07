@@ -452,6 +452,22 @@ struct chttp1_parser {
 };
 
 /* ========================================================================== */
+/*                         GRAMMAR HELPERS                                    */
+/* ========================================================================== */
+
+/**
+ * @brief RFC 7230 SS3.2.6 tchar: true if c is a byte a header field NAME (or
+ *        an HTTP method token) may legally contain.
+ *
+ * Exposed for chttpclient.c's chttp_request_set_header() and chttpserver.c's
+ * chttpsvr_resp_set_header(), both of which validate a caller-supplied
+ * header NAME as a genuine token before accepting it, mirroring the
+ * identical check this parser's own request-line method and header-name
+ * parsing already apply to bytes arriving off the wire.
+ */
+bool chttp1_is_tchar(unsigned char c);
+
+/* ========================================================================== */
 /*                         LIFECYCLE                                          */
 /* ========================================================================== */
 

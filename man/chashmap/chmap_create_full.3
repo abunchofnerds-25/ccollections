@@ -1,4 +1,4 @@
-.TH CHMAP_CREATE_FULL 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.TH CHMAP_CREATE_FULL 3 "2026-08-25" "c_collections" "C Collections Library - Functions"
 .SH NAME
 chmap_create_full \- create a hash map with full customization
 .SH LIBRARY
@@ -42,6 +42,22 @@ Implementation selection:
 Integral types: char, short, int, long, long long (signed/unsigned),
                float, double
 Excludes long double from open-addressing (can be 10-16 bytes)
+For a float or double key_type, a -0.0 key is always canonicalized to
+0.0 before it is hashed, stored, or compared, matching -0.0 == 0.0 in
+C. This applies unconditionally, including when custom_hashing_proc is
+non-NULL: the custom function always receives the already-canonicalized
+bit pattern, and the canonicalized value is what ends up stored.
+For a long double key_type (always separate chaining), key equality
+and hashing are based on the key's numeric value rather than its raw
+byte representation: -0.0L and 0.0L collide into one key like -0.0/0.0
+do for float/double, and two keys holding the identical value remain
+the same key even if their platform-defined padding bits differ. Every
+NaN long double collapses into a single key, unlike float/double's own
+distinct-NaN-payload behavior. This value-based handling is bypassed
+when custom_hashing_proc is non-NULL: the custom function receives the
+raw bytes (padding included), so a custom hash function for a long
+double key type must itself be value-based to avoid spurious lookup
+misses.
 .fi
 .SH "SEE ALSO"
 .BR chmap_create (3),

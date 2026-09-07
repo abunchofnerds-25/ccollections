@@ -16,6 +16,9 @@ Releases all resources owned by the logger:
     the underlying file (i.e. all derived loggers have also been
     closed), the file descriptor is closed.  If derived loggers still
     exist the fd remains open and the file's ref-count is decremented.
+  - If async logging is enabled (see clog_open_fd_mp(3)) and this is
+    the last handle, everything already queued is drained and the
+    writer thread is joined before the file descriptor is closed.
   - All attached key=value fields are freed.
   - The internal write buffer is freed.
   - The per-handle state is freed; the shared backing store is freed
@@ -29,11 +32,17 @@ logger  Logger handle to close.
 .fi
 .SH NOTES
 .nf
-clog_close() must not be called while other threads are still calling
-log_* macros on the same handle. Callers are responsible for ensuring
-all logging threads have finished before calling clog_close().
+clog_close() must not be called while another thread is still making any
+call (log_* macros, clog_set_level, clog_set_field and friends,
+clog_derive, or another clog_close()) with that same handle. Callers are
+responsible for ensuring all other use of a handle has finished before
+closing it. Closing one handle concurrently with a sibling handle (root
+vs. derived, or two derived loggers) that is still logging is unaffected
+by this and remains safe, since that sibling is a different, still-open
+handle.
 For fd-based loggers (clog_open_fd_mp), the file descriptor is NOT
 closed; it is the caller's responsibility.
+Asserts if logger is CLOG_INVALID, stale, or already closed.
 .fi
 .SH "SEE ALSO"
 .BR clog_open_fd_mp (3),

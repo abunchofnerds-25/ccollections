@@ -26,15 +26,30 @@ val_pair   Pointer to receive reference to value
 .SH RETURN VALUE
 .nf
 ccol_success        - Key found, *val_pair points to value
-ccol_invalid_args   - chm, key_pair, or val_pair is NULL or key size is 0
+ccol_invalid_args   - chm, key_pair, or val_pair is NULL or key size is 0;
+                      also returned when key_pair->size does not exactly
+                      match the byte size of the key type, for any
+                      fixed-width numeric key type (char, short, int, long,
+                      long long, their unsigned counterparts, float,
+                      double, long double, or a pointer type), regardless
+                      of which backend the map uses
 ccol_key_not_found  - Key does not exist in map
 .fi
 .SH NOTES
 .nf
 Average O(1) complexity
-Returned reference is valid until next insert/delete/resize
+Returned reference is valid until next insert/delete/resize; a
+lookup for a different key never invalidates it, and references
+returned for distinct keys may be held concurrently
+val_pair->ptr is correctly aligned for any value type, regardless
+of which internal backend the map uses
+For a float or double key, see chmap_construct(3) for the map's
+key equality contract (bitwise, except -0.0 canonicalized to 0.0)
+For a long double key, see chmap_construct(3) for the map's key
+equality contract (value-based, unlike every other key type)
 .fi
 .SH "SEE ALSO"
 .BR chmap_get (3),
 .BR chmap_get_ptr (3),
-.BR chmap_insert_elem (3)
+.BR chmap_insert_elem (3),
+.BR chmap_construct (3)

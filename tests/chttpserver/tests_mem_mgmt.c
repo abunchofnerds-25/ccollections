@@ -55,7 +55,7 @@ TAU_MAIN()
 #define TEST_PORT 18795
 #define BASE_URL "http://127.0.0.1:18795"
 
-static clog g_test_logger = NULL;
+static clog g_test_logger = CLOG_INVALID;
 static chttpsvr g_srv = CHTTPSVR_INVALID;
 
 static size_t g_mm_malloc_count = 0;
@@ -107,7 +107,7 @@ static void _teardown(void) {
   chttpsvr_engine_wait();
   if (g_test_logger) {
     clog_close(g_test_logger);
-    g_test_logger = NULL;
+    g_test_logger = CLOG_INVALID;
   }
 }
 
@@ -128,7 +128,7 @@ __attribute__((constructor)) static void _setup(void) {
     exit(1);
   }
 
-  g_test_logger = clog_open_fd(2, CLOG_INFO);
+  g_test_logger = clog_open_fd(2, CLOG_INFO, NULL);
   if (!g_test_logger) {
     fprintf(stderr, "FATAL: could not create test logger\n");
     exit(1);
@@ -213,9 +213,14 @@ TEST(chttpserver_mem_mgmt, procs_wired_into_engine_allocations) {
    * cthreadcomm's own history (a real, if small and bounded, added latency
    * versus the single-thread design's near-synchronous inline dispatch),
    * which made a bare immediate assertion here measurably flaky where it
-   * previously was not. */
+   * previously was not. 150 x 20ms = 3s total, matching this codebase's own
+   * established precedent (e.g. chttpclient's async_expect_continue bounds,
+   * widened from 500ms to 1500ms to 3000ms for the identical reason) for
+   * how much headroom a dispatch-latency-sensitive wait needs to stay
+   * reliable under make memtest/a loaded CI runner, not just a native run. */
   for (int attempt = 0;
-       __atomic_load_n(&g_mm_free_count, __ATOMIC_RELAXED) == 0 && attempt < 50;
+       __atomic_load_n(&g_mm_free_count, __ATOMIC_RELAXED) == 0 &&
+       attempt < 150;
        attempt++) {
     usleep(20000);
   }
@@ -322,7 +327,16 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   REQUIRE_EQ(chttpsvr_set_engine_num_reactor_threads(3), ccol_success);
 
   char *err = NULL;
-  chttpsvr new_srv = create_chttpsvr(g_test_logger, &err);
+  /* _ccol_destructor: a safety net for a REQUIRE_* failure between here and
+     the ownership transfer to g_srv below (Tau's REQUIRE_* returns from this
+     function immediately on failure, which would otherwise leak this
+     server's own shared-engine reference and hang chttpsvr_engine_wait() in
+     this file's own _teardown() at process exit; see this suite's own
+     history for that exact class of bug). Neutralized (set to
+     CHTTPSVR_INVALID) immediately after ownership is actually handed to
+     g_srv, so it never double-destroys the handle g_srv now owns. */
+  chttpsvr new_srv _ccol_destructor(___chttpsvr_destroy) =
+      create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(new_srv != CHTTPSVR_INVALID);
   ccol_retval_t rv = chttpsvr_register_handler(new_srv, CHTTP_GET, "/hello",
                                                _hello_handler, NULL);
@@ -333,6 +347,7 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
   cfg.port = TEST_PORT;
   REQUIRE_EQ((int)chttpsvr_start(new_srv, &cfg), (int)ccol_success);
   g_srv = new_srv;
+  new_srv = CHTTPSVR_INVALID; /* ownership transferred to g_srv; see above */
 
   /* The shared event_loop reactor is a plain static variable, fully
    * destroyed (event_loop_destroy) when the last reference is released above
@@ -345,18 +360,30 @@ TEST(chttpserver_mem_mgmt, reinstall_after_full_stop_then_restart_succeeds) {
              malloc_calloc_before);
   REQUIRE_EQ(_chttpsvr_engine_num_reactor_threads_for_tests(), (size_t)3);
 
-  chttpcli cli = create_chttpclient(NULL);
+  chttpcli cli _ccol_destructor(___chttpclient_destroy) =
+      create_chttpclient(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
   chttp_request_t *req =
       chttp_request_new(CHTTP_GET, BASE_URL "/hello", NULL, NULL);
   REQUIRE_TRUE(req != NULL);
   chttpcli_response *resp = NULL;
   rv = chttpclient_do(cli, req, &resp);
-  REQUIRE_EQ((int)rv, (int)ccol_success);
-  REQUIRE_TRUE(resp != NULL);
-  REQUIRE_EQ(resp->status_code, 200);
-  REQUIRE_STREQ(resp->body, "Hello, mem-mgmt!");
-  chttpclient_resp_free(resp);
   chttp_request_free(req);
-  chttpclient_destroy(cli);
+
+  /* Every check below on resp's own contents is captured into a local first
+     and resp is freed unconditionally right after, before any REQUIRE_*
+     that could otherwise return early and leak it (resp has no RAII
+     destructor of its own, unlike cli above). */
+  bool resp_present = resp != NULL;
+  int status_code = resp_present ? resp->status_code : -1;
+  bool body_present = resp_present && resp->body != NULL;
+  bool body_matches =
+      body_present && strcmp(resp->body, "Hello, mem-mgmt!") == 0;
+  if (resp_present) chttpclient_resp_free(resp);
+
+  REQUIRE_EQ((int)rv, (int)ccol_success);
+  REQUIRE_TRUE(resp_present);
+  REQUIRE_EQ(status_code, 200);
+  REQUIRE_TRUE(body_present);
+  REQUIRE_TRUE(body_matches);
 }

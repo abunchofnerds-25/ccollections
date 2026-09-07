@@ -19,8 +19,9 @@ first to close the listener before calling this macro.
 
 Calling this a second time on an independently-held copy of the same
 handle value (whether concurrently, or later, after the first call
-has already completed) is a FATAL ERROR (abort()/SIGABRT); see
-__chttpsvr_destroy(3).
+has already completed), or calling it from within one of this
+server's own request handlers/middleware, is a FATAL ERROR
+(abort()/SIGABRT); see __chttpsvr_destroy(3).
 
 Safe to call regardless of whether the shared engine is still running
 (this releases name's own engine reference, possibly triggering an

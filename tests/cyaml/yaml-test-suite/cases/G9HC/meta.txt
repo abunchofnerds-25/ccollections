@@ -1,0 +1,2 @@
+fail=1
+name=Invalid anchor in zero indented sequence

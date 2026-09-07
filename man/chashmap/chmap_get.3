@@ -29,6 +29,10 @@ Terminates program if key not found
 Terminates program if value size doesn't match type size
 Returns value, not pointer
 For strings, returns the char* itself
+For a float or double key, see chmap_construct(3) for the map's
+key equality contract (bitwise, except -0.0 canonicalized to 0.0)
+For a long double key, see chmap_construct(3) for the map's key
+equality contract (value-based, unlike every other key type)
 .fi
 .SH EXAMPLES
 .nf
@@ -38,4 +42,5 @@ char* val = chmap_get(map, 42); // val == "hello"
 .fi
 .SH "SEE ALSO"
 .BR chmap_get_ptr (3),
-.BR chmap_insert (3)
+.BR chmap_insert (3),
+.BR chmap_construct (3)

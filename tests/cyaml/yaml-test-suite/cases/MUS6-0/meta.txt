@@ -1,0 +1,2 @@
+fail=1
+name=Directive variants

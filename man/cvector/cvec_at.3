@@ -27,8 +27,11 @@ Returns element reference at index
 .SH NOTES
 .nf
 Returns reference, not pointer
-No bounds checking - will cause SIGSEGV if index out of bounds
+index is evaluated exactly once, so a side-effecting expression
+(e.g. cvec_at(v, i++)) is safe to pass
+Terminates the program via fatal_err() if index is out of bounds
 Can be used on left side of assignment
+Use cvec_at_ptr for a non-terminating, NULL-on-out-of-bounds alternative
 .fi
 .SH EXAMPLES
 .nf
@@ -38,4 +41,5 @@ int val = cvec_at(vec, 0);  // val == 42
 cvec_at(vec, 0) = 5;        // now the first element is 5
 .fi
 .SH "SEE ALSO"
-.BR cvector_at (3)
+.BR cvector_at (3),
+.BR cvec_at_ptr (3)

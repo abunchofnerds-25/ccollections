@@ -1,0 +1,2 @@
+fail=0
+name=Spec Example 2.10. Node for “Sammy Sosa” appears twice in this document

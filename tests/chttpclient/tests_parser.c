@@ -1829,12 +1829,85 @@ TEST(stream, read_timeout_when_nothing_available) {
   close(fds[1]);
 }
 
+/* Regression coverage for timeout_ms == 0's own documented contract ("return
+ * immediately if fd is not already readable/writable right now"): a bug
+ * found via code review had both chttp1_stream_write (both its TLS and
+ * plaintext branches, via their one shared retry loop) and chttp1_stream_
+ * read's plaintext branch compute a fresh "now + timeout_ms" deadline and
+ * then immediately re-derive "time remaining until it" via a SECOND
+ * clock_gettime() call, before ever calling poll(2) or attempting the real
+ * I/O; for timeout_ms == 0 specifically, any nonzero elapsed time between
+ * those two clock reads (guaranteed, however small) already exceeds a
+ * zero-length budget, so that recomputed value was unconditionally <= 0.
+ * The result: both functions unconditionally reported a timeout for
+ * timeout_ms == 0, even when the fd was already ready right now, without
+ * ever calling poll(2) or attempting the real read(2)/write(2) at all. The
+ * three tests below construct exactly that "already ready" condition (data
+ * already sitting in the socket's receive buffer for read; an ordinary,
+ * freshly-connected socketpair, which is always immediately writable, for
+ * write) and confirm a real transfer happens instead of a synthesized
+ * timeout. */
+TEST(stream, read_timeout_zero_returns_data_when_already_available) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  /* Written synchronously, from this same thread, before the read below: by
+     the time chttp1_stream_read runs, these bytes are already sitting in
+     fds[0]'s own kernel receive buffer, i.e. genuinely available "right
+     now" with no wait required at all. */
+  REQUIRE_EQ(write(fds[1], "hi", 2), (ssize_t)2);
+  char buf[4] = {0};
+  REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 0), (ssize_t)2);
+  REQUIRE_EQ(memcmp(buf, "hi", 2), 0);
+  REQUIRE_FALSE(chttp1_stream_timed_out(&s));
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+TEST(stream, read_timeout_zero_times_out_when_nothing_available) {
+  /* The other half of timeout_ms == 0's contract: nothing available means an
+     immediate, single, non-blocking check correctly reports a timeout (not a
+     hang, and not a spurious successful read of zero bytes). */
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], NULL, 0));
+  char buf[8];
+  REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 0), (ssize_t)-1);
+  REQUIRE_TRUE(chttp1_stream_timed_out(&s));
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
 TEST(stream, write_basic) {
   int fds[2];
   make_pair(fds);
   chttp1_stream_t s;
   REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[1], NULL, 0));
   REQUIRE_EQ(chttp1_stream_write(&s, "hi", 2, 1000), (ssize_t)2);
+  char buf[4] = {0};
+  REQUIRE_EQ(read(fds[0], buf, sizeof(buf)), (ssize_t)2);
+  REQUIRE_EQ(memcmp(buf, "hi", 2), 0);
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+TEST(stream, write_timeout_zero_succeeds_when_already_writable) {
+  /* See read_timeout_zero_returns_data_when_already_available's own doc
+     comment above for the full account of the bug this pins. A freshly
+     connected socketpair endpoint is always immediately writable (its send
+     buffer starts empty), so this is genuinely "writable right now" with no
+     wait required. */
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[1], NULL, 0));
+  REQUIRE_EQ(chttp1_stream_write(&s, "hi", 2, 0), (ssize_t)2);
+  REQUIRE_FALSE(chttp1_stream_timed_out(&s));
   char buf[4] = {0};
   REQUIRE_EQ(read(fds[0], buf, sizeof(buf)), (ssize_t)2);
   REQUIRE_EQ(memcmp(buf, "hi", 2), 0);
@@ -1875,6 +1948,58 @@ TEST(stream, release_is_idempotent) {
   chttp1_stream_release(&s);
   close(fds[0]);
   close(fds[1]);
+}
+
+TEST(stream, push_back_leftover_prepends_ahead_of_existing_carry) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "world", 5));
+  REQUIRE_TRUE(chttp1_stream_push_back_leftover(&s, "hello ", 6));
+
+  char buf[11] = {0};
+  REQUIRE_EQ(chttp1_stream_read(&s, buf, sizeof(buf), 100), (ssize_t)11);
+  REQUIRE_EQ(memcmp(buf, "hello world", 11), 0);
+
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+TEST(stream, push_back_leftover_zero_len_is_a_noop) {
+  int fds[2];
+  make_pair(fds);
+  chttp1_stream_t s;
+  REQUIRE_TRUE(chttp1_stream_prepare(&s, fds[0], "x", 1));
+  REQUIRE_TRUE(chttp1_stream_push_back_leftover(&s, "unused", 0));
+  REQUIRE_EQ(s.carry_len, (size_t)1);
+  chttp1_stream_release(&s);
+  close(fds[0]);
+  close(fds[1]);
+}
+
+TEST(stream, push_back_leftover_overflow_guard_rejects_without_allocating) {
+  /* Regression test: total = len + existing had no overflow check before
+   * allocating `total` bytes; two independently sized values (a freshly
+   * pushed-back chunk and whatever carry-over the stream already held)
+   * summing close to SIZE_MAX would previously proceed with a wrapped
+   * allocation and then write far past it. existing is faked to SIZE_MAX
+   * directly on the struct (carry left NULL; no real buffer of that size is
+   * ever allocated or touched), matching this project's own established
+   * "assert the guard rejects before any real work happens" pattern for
+   * this exact class of overflow guard. */
+  chttp1_stream_t s;
+  memset(&s, 0, sizeof(s));
+  s.prepared = true;
+  s.carry = NULL;
+  s.carry_len = SIZE_MAX;
+  s.carry_pos = 0;
+
+  char buf[4] = {'a', 'b', 'c', 'd'};
+  REQUIRE_FALSE(chttp1_stream_push_back_leftover(&s, buf, sizeof(buf)));
+  /* Existing carry-over must be left completely untouched on rejection. */
+  REQUIRE_EQ((void *)s.carry, NULL);
+  REQUIRE_EQ(s.carry_len, (size_t)SIZE_MAX);
 }
 
 /* ========================================================================== */

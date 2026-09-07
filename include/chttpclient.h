@@ -62,15 +62,27 @@ SOFTWARE.
  *
  * ### Thread safety
  *
- * All public functions in this module are thread-safe.
+ * Every function taking a chttpcli handle is thread-safe: multiple threads
+ * may safely call chttpclient_do/_async/_pooled (and the chttpclient_set_*
+ * configuration functions) concurrently against the same client. This does
+ * NOT extend to concurrently mutating a single, caller-owned chttp_request_t
+ * or chttpcli_response object from more than one thread at once - neither
+ * carries any internal synchronization of its own (chttp_request_set_header/
+ * _get_header, chttpclient_resp_header, and direct field access all assume
+ * exclusive access to that one object), so a caller sharing one request or
+ * response across threads must provide its own external synchronization.
  *
+
  * ### Example
  *
  * @code
  * // Simple GET with the default client
  * chttpcli_response *resp;
  * if (chttp_get("https://api.example.com/users", &resp) == ccol_success) {
- *     printf("status=%d body=%s\n", resp->status_code, resp->body);
+ *     // resp->body is NULL for a genuinely empty body (e.g. 204/HEAD); see
+ *     // chttpcli_response's own doc comment below.
+ *     printf("status=%d body=%s\n", resp->status_code,
+ *            resp->body ? resp->body : "");
  *     chttpclient_resp_free(resp);
  * }
  *
@@ -141,10 +153,11 @@ typedef size_t (*chttpcli_write_fn)(const void *data, size_t len, void *ctx);
  * @brief HTTP request (partially transparent).
  *
  * The fields method, url, body, and expect_continue are public and may be
- * read/written directly. Headers are internal; use chttp_request_set_header
- * / get_header / headers_begin. url and body.data (and body.content_type,
- * if set) are owned copies allocated by chttp_request_new_mp and freed by
- * chttp_request_free.
+ * read/written directly. Headers are internal, with no iteration API of
+ * their own; use chttp_request_set_header to set one by name and
+ * chttp_request_get_header to read one back by name. url and body.data (and
+ * body.content_type, if set) are owned copies allocated by
+ * chttp_request_new_mp and freed by chttp_request_free.
  */
 typedef struct chttp_request {
   chttp_method_t method;
@@ -157,11 +170,22 @@ typedef struct chttp_request {
    *  before sending the body; see chttpclient_do's own doc comment for the
    *  full protocol. Has no effect if the request has no body, or the
    *  caller already set an explicit "Expect" header. Default false
-   *  (chttp_request_new_mp zero-initializes this field). Tier 1
-   *  (chttpclient_do/chttpclient_do_streaming) only; Tier 2/3
-   *  (chttpclient_do_async and everything built on it) silently ignore
-   *  this field for now and send the body immediately, exactly as if it
-   *  were false. */
+   *  (chttp_request_new_mp zero-initializes this field). Honored uniformly
+   *  by every tier (chttpclient_do/chttpclient_do_streaming,
+   *  chttpclient_do_async/chttpclient_do_async_streaming, and
+   *  chttpclient_do_pooled/chttpclient_do_pooled_streaming, the latter two
+   *  built on the async engine).
+   *
+   *  This is the ONLY thing that enables the actual wait-for-100-Continue
+   *  protocol; it is not inferred from the wire content. Calling
+   *  chttp_request_set_header(req, "Expect", "100-continue") directly,
+   *  without also setting this field, puts that literal header on the wire
+   *  but does NOT make the client wait for an interim response before
+   *  sending the body - the header and the actual behavior are entirely
+   *  independent, by design, so a caller retains full manual control over
+   *  the header's wire content regardless of what this field does. A
+   *  caller that wants the real protocol must set this field to true and
+   *  leave the header unset (letting it be auto-injected). */
   bool expect_continue;
 } chttp_request_t;
 
@@ -174,9 +198,16 @@ typedef struct chttp_request {
  *
  * status_code, body, body_len, and headers are public.
  *
- * body is a heap-allocated, NUL-terminated buffer. body_len is the number of
- * bytes before the sentinel NUL. body is NULL when chttpclient_do_streaming
- * was used (the body was delivered via the write callback instead).
+ * body is a heap-allocated, NUL-terminated buffer, non-NULL whenever it holds
+ * at least one byte. body_len is the number of bytes before the sentinel
+ * NUL. body is NULL in two cases: when chttpclient_do_streaming (or its
+ * async/pooled equivalents) was used (the body was delivered via the write
+ * callback instead), and, on the non-streaming path, whenever the response
+ * genuinely carried a zero-length body (e.g. a 204, a HEAD response, or an
+ * explicit Content-Length: 0) - in that second case body_len is 0 and there
+ * is simply nothing to hold, rather than an allocated empty string. A caller
+ * must therefore check body != NULL (or body_len > 0) before dereferencing
+ * body, even on a successful, non-streaming request.
  *
  * Call chttpclient_resp_free to release all owned memory.  When a custom
  * allocator was supplied to create_chttpclient_mp, free the response BEFORE
@@ -184,7 +215,8 @@ typedef struct chttp_request {
  */
 typedef struct chttpcli_response {
   int status_code;
-  char *body; /* heap-allocated, NUL-terminated; NULL for streaming path */
+  char *body; /* heap-allocated, NUL-terminated; NULL for the streaming path
+               * or for a genuinely zero-length non-streaming body */
   size_t body_len;
   chmap_declare(headers, char *, char *); /* internal: chmap(char* -> char*) */
   ccol_memmgmt_procs_t *_m_procs;
@@ -245,10 +277,12 @@ static inline __attribute__((always_inline)) chttp_request_t *chttp_request_new(
  * eventual method/redirect context), but is validated later, when the
  * request actually reaches the wire: chttpclient_do/_do_streaming/
  * _do_async/_do_async_streaming/_do_pooled/_do_pooled_streaming/
- * chttp_run_query all reject a request whose caller-set Content-Length does
- * not exactly match the body actually being sent, for the identical
- * "declared framing disagrees with the wire" reason Transfer-Encoding is
- * rejected outright above; see chttpclient_do's own doc comment.
+ * chttp_run_query all reject a request whose caller-set Content-Length is
+ * not a plain unsigned decimal digit string (no leading '+'/'-', no
+ * embedded whitespace) exactly matching the body actually being sent, for
+ * the identical "declared framing disagrees with the wire" reason
+ * Transfer-Encoding is rejected outright above; see chttpclient_do's own
+ * doc comment.
  *
  * @param req    Request to modify.
  * @param name   Header name (e.g. "Content-Type").
@@ -318,13 +352,25 @@ create_chttpclient(char **err_str) {
 /**
  * @brief Set the maximum number of concurrent in-flight requests.
  *
- * Excess callers of chttpclient_do block until a slot is free. May be called
- * before or after the first request, and takes effect immediately in either
- * case. Passing 0 selects the CPU count.
+ * Applies ONLY to Tier 1 (chttpclient_do / chttpclient_do_streaming):
+ * excess callers of those two functions block in a counting-semaphore-style
+ * wait until a slot is free. Tier 2 (chttpclient_do_async /
+ * chttpclient_do_async_streaming) and Tier 3 (chttpclient_do_pooled /
+ * chttpclient_do_pooled_streaming) are NOT subject to this cap at all: a
+ * caller may submit any number of concurrent Tier 2/3 requests, all
+ * processed by the shared async engine's reactor without blocking at
+ * submission time (see chttpcli_set_engine_num_reactor_threads for that
+ * engine's own, separate, process-wide thread-count setting, which this
+ * function has no effect on and which is not itself a concurrency cap
+ * either - it only controls how many OS threads dispatch already-queued
+ * work). May be called before or after the first request, and takes effect
+ * immediately in either case (for Tier 1 traffic only). Passing 0 selects
+ * the CPU count.
  *
  * This is purely a concurrency cap; it is independent of the client's
  * keep-alive idle-connection cache (see the file-level doc comment), which
- * has its own fixed internal per-origin/total caps.
+ * has its own fixed internal per-origin/total caps and DOES apply to all
+ * three tiers.
  *
  * @param cli  Client handle.
  * @param n    Pool size; 0 = CPU count.
@@ -462,8 +508,8 @@ ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
  * retains ownership of cl and must keep it alive for as long as any
  * chttpcli's async engine may be running.
  *
- * @param cl  Parent logger to derive from; must not be NULL.
- * @return ccol_success or ccol_invalid_args (cl is NULL).
+ * @param cl  Parent logger to derive from; must not be CLOG_INVALID.
+ * @return ccol_success or ccol_invalid_args (cl is CLOG_INVALID).
  */
 ccol_retval_t chttpcli_set_engine_logger(clog cl);
 
@@ -675,16 +721,27 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * the last hop's response is itself a would-be redirect, it is not followed
  * or delivered; ccol_http_too_many_redirects is returned instead.
  *
- * The request URL accepts http:// and https:// only. Both a plain
- * hostname/IPv4 literal and a bracketed IPv6 literal
- * ("https://[::1]:8443/path") are accepted. A URL may embed credentials
- * ("http://user:pass@host/path"); they are turned into an
- * "Authorization: Basic ..." header automatically unless the request
- * already sets its own Authorization header. That auto-injected header is
- * resent on every redirect hop that stays on the same origin (scheme,
- * host, and port) and is dropped permanently the first time a hop changes
- * origin. A trailing "#fragment" is recognized and discarded (fragments
- * are never sent to a server).
+ * The request URL accepts http://, https://, and http+unix:// (for
+ * connecting to a server listening on a Unix domain socket, e.g.
+ * "http+unix://%2Fvar%2Frun%2Fapp.sock/api/users"; see README.md's "Unix
+ * Domain Sockets" section for the scheme in full). "https+unix://" is not
+ * supported. Both a plain hostname/IPv4 literal and a bracketed IPv6
+ * literal ("https://[::1]:8443/path") are accepted for the network forms.
+ * A URL may embed credentials ("http://user:pass@host/path"); they are
+ * turned into an "Authorization: Basic ..." header automatically unless
+ * the request already sets its own Authorization header (not supported for
+ * "http+unix://", which has no established userinfo convention). That
+ * auto-injected header is resent on every redirect hop that stays on the
+ * same origin (scheme, host, and port) and is dropped permanently the
+ * first time a hop changes origin. An explicit "Authorization" header set
+ * directly by the caller via chttp_request_set_header (not derived from
+ * URL userinfo) is subject to the identical cross-origin rule: it is sent
+ * as long as every hop stays on the request's original origin, and is
+ * dropped permanently, never re-added, the first time a redirect crosses
+ * to a different origin (mirroring curl's own CVE-2018-1000007 hardening,
+ * so a token intended only for the original host is never silently leaked
+ * to a redirect target under attacker control). A trailing "#fragment" is
+ * recognized and discarded (fragments are never sent to a server).
  *
  * @param cli       Client handle.
  * @param req       Request to execute.
@@ -697,12 +754,14 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *             already-destroyed handle, req sets a "Transfer-Encoding" header
  *             (see chttp_request_set_header's own doc comment for why this
  *             is always rejected), or req sets a "Content-Length" header
- *             whose value does not exactly match the actual body length
- *             being sent on a body-carrying request (POST/PUT/PATCH); a
- *             mismatched declared length is the identical "framing
- *             disagrees with what's actually on the wire" hazard the
- *             Transfer-Encoding rejection exists to prevent, just reached
- *             through a wrong length instead of a wrong transfer-coding.
+ *             whose value is not a plain unsigned decimal digit string (no
+ *             leading '+'/'-', no embedded whitespace) exactly matching the
+ *             actual body length being sent on a body-carrying request
+ *             (POST/PUT/PATCH); a mismatched or malformed declared length
+ *             is the identical "framing disagrees with what's actually on
+ *             the wire" hazard the Transfer-Encoding rejection exists to
+ *             prevent, just reached through a wrong length instead of a
+ *             wrong transfer-coding.
  *             Not checked for a non-body-carrying request (GET, DELETE,
  *             HEAD, OPTIONS): any Content-Length header is stripped from
  *             the wire entirely there, so there is no framing left for a
@@ -714,16 +773,20 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  *         ccol_not_permitted
  *             Client is being destroyed.
  *         ccol_http_invalid_url
- *             URL is malformed, uses an unsupported scheme (only http:// and
- *             https:// are supported), or has a missing/invalid host,
- *             port, or userinfo component (including an embedded CR or LF
- *             byte anywhere in the host or the path/query, which would
- *             otherwise be carried verbatim onto the wire and let it inject
- *             extra header lines or a smuggled second request).
+ *             URL is malformed, uses an unsupported scheme (only http://,
+ *             https://, and http+unix:// are supported), has a
+ *             missing/invalid host, port, or userinfo component (including
+ *             an embedded CR or LF byte anywhere in the host or the
+ *             path/query, which would otherwise be carried verbatim onto
+ *             the wire and let it inject extra header lines or a smuggled
+ *             second request), or (for http+unix://) names a socket path
+ *             too long to fit sockaddr_un.sun_path.
  *         ccol_http_host_resolution_failed
- *             DNS resolution failed for the target host.
+ *             DNS resolution failed for the target host (never returned for
+ *             http+unix://, which has no DNS step).
  *         ccol_http_connection_failed
- *             The TCP connection could not be established.
+ *             The connection could not be established (e.g. connection
+ *             refused, or a http+unix:// socket path that does not exist).
  *         ccol_http_too_many_redirects
  *             The redirect chain exceeded 50 hops.
  *         ccol_http_tls_handshake_failed
@@ -763,7 +826,9 @@ ccol_retval_t chttpclient_do(chttpcli cli, const chttp_request_t *req,
  *         returned (chttpclient_set_max_response_body_size has no effect on
  *         this streaming path; see that function's own doc comment).
  *         Additionally, ccol_http_transfer_aborted is returned when write_fn
- *         returns fewer bytes than len, aborting the transfer.
+ *         returns anything other than len, aborting the transfer (matching
+ *         chttpcli_write_fn's own documented contract - not just fewer
+ *         bytes than len, but more too).
  */
 ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
                                        chttpcli_write_fn write_fn,
@@ -786,9 +851,11 @@ ccol_retval_t chttpclient_do_streaming(chttpcli cli, const chttp_request_t *req,
  * with chttpclient_resp_free before freeing this result, exactly as with
  * chttpclient_do's resp_out. For a request submitted via
  * chttpclient_do_async_streaming, resp is still populated on success (so
- * status_code and headers presence can be checked uniformly), but its body
- * is NULL; the body was already delivered via the write callback as it
- * arrived, exactly mirroring chttpclient_do_streaming's own
+ * status_code can be read uniformly across both streaming and non-
+ * streaming results), but resp->headers is always NULL and resp->body_len
+ * is always 0; the response headers are discarded rather than kept, and
+ * the body was already delivered via the write callback as it arrived
+ * (never buffered), exactly mirroring chttpclient_do_streaming's own
  * chttpcli_response.body == NULL convention for the streaming path.
  *
  * Obtained via chttpclient_async_result_get (a thin, typed wrapper over
@@ -861,8 +928,10 @@ ctpool_future *chttpclient_do_async(chttpcli cli, const chttp_request_t *req);
  * @param cli       Client handle.
  * @param req       Request to execute (see chttpclient_do_async).
  * @param write_fn  Chunk delivery callback (must not be NULL). Returning
- *                  fewer bytes than len aborts the transfer; the future's
- *                  result then carries ccol_http_transfer_aborted.
+ *                  anything other than len (matching chttpcli_write_fn's own
+ *                  documented contract - not just fewer bytes, but more too)
+ *                  aborts the transfer; the future's result then carries
+ *                  ccol_http_transfer_aborted.
  * @param write_ctx Passed verbatim to write_fn.
  * @return A future, or NULL under the same conditions as
  *         chttpclient_do_async (including a NULL write_fn).
@@ -923,12 +992,18 @@ void chttpclient_async_result_free(chttpcli_async_result_t *result);
  *                  success, receives the response (matching
  *                  chttpclient_do's identical *resp_out contract).
  * @return Same result codes as chttpclient_do, with one difference: a
- *         failure to even submit the request to the engine (OOM, or the
- *         engine failing to start) is reported as ccol_unexpected_failure
- *         rather than a more specific code. Everything detected once the
- *         request is actually in flight (bad URL, TLS failure, connection
- *         failure, transfer errors, timeouts, too many redirects) is
- *         reported with the exact same specific codes chttpclient_do uses.
+ *         failure to even submit the request to the engine that occurs
+ *         before a future exists to carry a specific code (the engine
+ *         failing to start, or an allocation failure creating the future
+ *         itself) is reported as ccol_unexpected_failure rather than a more
+ *         specific code. An allocation failure building the request's own
+ *         async state AFTER the future exists (e.g. out of memory while
+ *         copying the request's headers/body) is instead reported as the
+ *         specific ccol_not_enough_memory, not collapsed to the generic
+ *         code. Everything detected once the request is actually in flight
+ *         (bad URL, TLS failure, connection failure, transfer errors,
+ *         timeouts, too many redirects) is reported with the exact same
+ *         specific codes chttpclient_do uses.
  */
 ccol_retval_t chttpclient_do_pooled(chttpcli cli, const chttp_request_t *req,
                                     chttpcli_response **resp_out);
@@ -1021,8 +1096,11 @@ ccol_retval_t chttp_run_query(chttp_method_t method, const char *url,
  *
  * @param url      Target URL.
  * @param resp_out Receives the response pointer on success.
- * @return ccol_success, ccol_invalid_args, ccol_not_enough_memory,
- *         ccol_timed_out, or ccol_unexpected_failure.
+ * @return Same codes as chttpclient_do (ccol_success, ccol_invalid_args,
+ *         ccol_not_enough_memory, ccol_timed_out, ccol_unexpected_failure,
+ *         or one of the ccol_http_ family, ccol_msg_too_large, or
+ *         ccol_not_permitted codes that URL/redirect/TLS handling can
+ *         produce; see chttpclient_do for the full, authoritative list).
  */
 ccol_retval_t chttp_get(const char *url, chttpcli_response **resp_out);
 

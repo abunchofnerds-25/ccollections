@@ -1,0 +1,6 @@
+---
+kind: Service
+---
+kind: Deployment
+---
+kind: ConfigMap

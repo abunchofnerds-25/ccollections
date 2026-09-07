@@ -2066,6 +2066,19 @@ void circq_test_lock_mutex_for_tests(circular_queue *cq);
 void circq_test_unlock_mutex_for_tests(circular_queue *cq);
 
 /**
+ * @brief Test-only: reports whether a ccol_select() caller is genuinely
+ *        linked into cq's own read-waiter list right now.
+ *
+ * A single, self-contained lock/check/unlock. Lets a test that needs a
+ * select-waiter thread to have actually reached its own Phase 1 mutex_lock/
+ * link step poll this in a bounded loop, instead of guessing that a fixed
+ * sleep after pthread_create() is long enough margin for the OS to have
+ * scheduled the new thread that far -- pthread_create() returning gives no
+ * such guarantee.
+ */
+bool circq_test_has_sel_read_waiter_for_tests(circular_queue *cq);
+
+/**
  * @brief Like circq_test_force_next_send_condvar_wait_error, but also frees
  *        one queued message's slot at the same instant, for testing
  *

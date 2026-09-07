@@ -811,6 +811,13 @@ TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
+    /* Bounds this child's own lifetime so an unexpected hang here fails this
+     * one test loudly and fast (the default SIGALRM disposition terminates
+     * the process, which the parent's own waitpid below then simply
+     * observes as WIFSIGNALED/SIGALRM rather than SIGABRT), instead of the
+     * parent's unbounded waitpid hanging the entire test binary -- and
+     * whatever CI job is running it -- indefinitely. */
+    alarm(10);
     circular_queue *cq = circular_queue_create(4, NULL);
     if (!cq) _exit(2);
     event_loop loop = event_loop_create(8, 1, 1, NULL);
@@ -857,6 +864,12 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
       dup2(dn, STDERR_FILENO);
       close(dn);
     }
+    /* Bounds this child's own lifetime so an unexpected hang here fails
+     * this one test loudly and fast instead of the parent's unbounded
+     * waitpid hanging the entire test binary -- and whatever CI job is
+     * running it -- indefinitely; see this alarm's identical use in the
+     * sibling test above for the full rationale. */
+    alarm(10);
     circular_queue *cq = circular_queue_create(4, NULL);
     if (!cq) _exit(2);
 
@@ -864,15 +877,35 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
     pthread_t waiter;
     pthread_create(&waiter, NULL, cq_select_waiter_thread, &wargs);
 
-    /* Bounded, best-effort hand-off: the waiter thread's own Phase 1 (link
-     * into cq's waiter list, since the queue starts empty) runs almost
-     * immediately with nothing ahead of it, so this is comfortably enough
-     * margin in practice. */
-    struct timespec ts = {0, 50000000}; /* 50ms */
-    nanosleep(&ts, NULL);
+    /* Poll for the waiter thread to have ACTUALLY linked itself into cq's
+     * own read-waiter list (real synchronization on the condition this test
+     * needs, not a fixed sleep guessing at it): pthread_create() returning
+     * gives no guarantee the new thread has been scheduled at all yet, let
+     * alone reached its own first mutex_lock/link step inside ccol_select_
+     * timed's Phase 1. A fixed-sleep hand-off here (this test's own former
+     * design) previously lost this race under qemu-user emulation's much
+     * higher and more variable thread-start scheduling latency: destroy()
+     * ran first, correctly saw no waiters linked yet (nothing to catch),
+     * froze cq, and the late-arriving waiter thread then dereferenced that
+     * freed memory the moment it was finally scheduled -- a genuine
+     * use-after-free whose undefined behaviour manifested as the whole
+     * child hanging forever, which this test's own then-unbounded waitpid
+     * below had no way to ever notice. 200 iterations * 10ms = 2s bound,
+     * comfortably above any realistic scheduling delay while still being a
+     * hard bound; if it's never satisfied, the REQUIRE_TRUE below fails
+     * this test cleanly instead of proceeding into the same race. */
+    bool linked = false;
+    for (int i = 0; i < 200 && !linked; i++) {
+      linked = circq_test_has_sel_read_waiter_for_tests(cq);
+      if (!linked) {
+        struct timespec ts = {0, 10000000}; /* 10ms */
+        nanosleep(&ts, NULL);
+      }
+    }
+    if (!linked) _exit(3); /* unreachable in practice; see REQUIRE_TRUE below */
 
-    /* The actual misuse under test: the waiter thread above is still
-     * blocked, linked into cq's own waiter list, when this destroys cq. */
+    /* The actual misuse under test: the waiter thread above is confirmed
+     * still linked into cq's own waiter list when this destroys cq. */
     circular_queue_destroy(cq);
     _exit(0); /* unreachable if the assert fired as expected */
   }

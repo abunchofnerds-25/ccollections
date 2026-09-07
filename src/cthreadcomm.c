@@ -629,6 +629,30 @@ void circq_test_lock_mutex_for_tests(circular_queue *cq) {
 void circq_test_unlock_mutex_for_tests(circular_queue *cq) {
   mutex_unlock(cq->mutex);
 }
+
+/* Test-only: reports whether a ccol_select() caller is genuinely linked into
+ * cq's own read-waiter list right now (a single, self-contained lock/check/
+ * unlock, not built from the two functions above, since a test composing
+ * those itself would hold the mutex across its own check with no bound and
+ * risk the exact kind of deadlock this helper exists to let a test avoid).
+ * Exists so a test that needs a select-waiter thread to have ACTUALLY
+ * reached Phase 1's own mutex_lock/link step before proceeding (e.g. before
+ * destroying cq, to deterministically exercise the has_sel_waiters misuse
+ * check in __circular_queue_destroy) can poll this in a bounded loop instead
+ * of guessing a fixed sleep is "comfortably enough" margin for the OS to
+ * have scheduled a brand-new thread all the way to that point -- pthread_
+ * create() returning gives no such guarantee, and a sleep-based guess that
+ * loses this race lets destroy() proceed as if no one were watching, then
+ * frees cq out from under the late-arriving waiter the instant it finally
+ * runs (confirmed as the real mechanism behind a genuine CI hang: under
+ * qemu-user emulation's own, much higher and more variable thread-start
+ * scheduling latency, a fixed 50ms margin was not always enough). */
+bool circq_test_has_sel_read_waiter_for_tests(circular_queue *cq) {
+  mutex_lock(cq->mutex);
+  bool has_waiter = cq->sel_read_waiters_head != NULL;
+  mutex_unlock(cq->mutex);
+  return has_waiter;
+}
 #endif
 
 /* Writes msg into the circular array at write_index and advances the index

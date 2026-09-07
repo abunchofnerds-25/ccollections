@@ -1,6 +1,6 @@
 # Suppressions for reachable memory held by OpenSSL's own internal RSA/BN
 # caches (RSA blinding state, BN_MONT_CTX Montgomery contexts, and similar
-# lazily-computed values populated during RSA key generation and signing --
+# lazily-computed values populated during RSA key generation and signing;
 # exercised here by tests_parser's stream_tls test group, which uses
 # ctls_ctx_cert_add()'s self-signed certificate generation to drive a real
 # TLS handshake).

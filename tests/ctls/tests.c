@@ -971,7 +971,7 @@ TEST(ctls_conn, udata_roundtrip) {
 /* other allocation failure in that same function already reports.            */
 /* ========================================================================== */
 
-/* --- (3): self-signed named-cert subject-name OOM must not crash --------- */
+/* (3): self-signed named-cert subject-name OOM must not crash */
 
 static _Atomic int g_fail_malloc_at_call = 0; /* 0 = never fail */
 static _Atomic int g_malloc_call_count = 0;
@@ -1015,7 +1015,7 @@ TEST(ctls_ctx, cert_add_self_signed_name_alloc_failure_reports_oom_not_crash) {
   ctls_ctx_release(ctx);
 }
 
-/* --- (1): SNI servername-callback UAF under concurrent cert rotation ----- */
+/* (1): SNI servername-callback UAF under concurrent cert rotation */
 
 static _Atomic bool g_sni_race_stop = false;
 static ctls_ctx_t *g_sni_race_ctx = NULL;
@@ -1100,8 +1100,8 @@ TEST(ctls_sni, cert_add_race_during_live_handshake_does_not_crash) {
   g_sni_race_ctx = NULL;
 }
 
-/* --- (2): server-mode ALPN-select-callback race, plus the connection-owned */
-/*          alpn_selected_name copy fix (both directions)                    */
+/* (2): server-mode ALPN-select-callback race, plus the connection-owned
+ *      alpn_selected_name copy fix (both directions) */
 
 static _Atomic bool g_alpn_race_stop = false;
 static ctls_ctx_t *g_alpn_race_server_ctx = NULL;

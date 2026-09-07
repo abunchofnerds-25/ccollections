@@ -1,20 +1,17 @@
 name: Fuzz
 
+# Mandatory, blocking jobs on every push/pull_request, matching ci.yml's own
+# trigger exactly: fuzzing is part of ordinary CI, not a post-merge-only or
+# opt-in check.
 on:
+  push:
   pull_request:
-    types: [closed]
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
   fuzz-yaml:
     name: cyaml (libFuzzer)
     runs-on: ubuntu-latest
-    # pull_request/closed fires for a declined PR too, not just a merged one;
-    # workflow_dispatch (manual runs) has no pull_request event at all, so it
-    # must be let through unconditionally.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -22,7 +19,7 @@ jobs:
       - name: Build fuzz target
         run: cd tests/cyaml && make fuzz
       - name: Run for a bounded duration
-        run: cd tests/cyaml && ./fuzz_cyaml fuzz/corpus -max_total_time=1800
+        run: cd tests/cyaml && ./fuzz_cyaml fuzz/corpus -max_total_time=900
       - name: Upload crash artifact
         if: failure()
         uses: actions/upload-artifact@v4
@@ -37,7 +34,6 @@ jobs:
   fuzz-json:
     name: cjson (libFuzzer, parse + path)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -45,9 +41,9 @@ jobs:
       - name: Build fuzz targets
         run: cd tests/cjson && make fuzz_parse fuzz_path
       - name: Run parse-mode target for a bounded duration
-        run: cd tests/cjson && ./fuzz_cjson_parse fuzz/corpus_parse -max_total_time=900
+        run: cd tests/cjson && ./fuzz_cjson_parse fuzz/corpus_parse -max_total_time=450
       - name: Run path-mode target for a bounded duration
-        run: cd tests/cjson && ./fuzz_cjson_path fuzz/corpus_path -max_total_time=900
+        run: cd tests/cjson && ./fuzz_cjson_path fuzz/corpus_path -max_total_time=450
       - name: Upload crash artifact
         if: failure()
         uses: actions/upload-artifact@v4
@@ -62,7 +58,6 @@ jobs:
   fuzz-http:
     name: chttp1_parser (libFuzzer, request + response)
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -70,9 +65,9 @@ jobs:
       - name: Build fuzz targets
         run: cd tests/chttpclient && make fuzz_request fuzz_response
       - name: Run request-mode target for a bounded duration
-        run: cd tests/chttpclient && ./fuzz_chttp1_request fuzz/corpus_request -max_total_time=900
+        run: cd tests/chttpclient && ./fuzz_chttp1_request fuzz/corpus_request -max_total_time=450
       - name: Run response-mode target for a bounded duration
-        run: cd tests/chttpclient && ./fuzz_chttp1_response fuzz/corpus_response -max_total_time=900
+        run: cd tests/chttpclient && ./fuzz_chttp1_response fuzz/corpus_response -max_total_time=450
       - name: Upload crash artifact
         if: failure()
         uses: actions/upload-artifact@v4

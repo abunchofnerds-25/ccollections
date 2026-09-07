@@ -398,8 +398,8 @@ static void _ctpool_atfork_release_impl(bool is_child) {
 
       /* The real, previously-missing fix: a live pool's own worker threads
        * spend most of their lives blocked in cond_var_wait(pool->not_empty,
-       * pool->mu) (see worker_thread_fn's main loop), which -- unlike a
-       * plain mutex_lock -- releases pool->mu for the duration of the wait.
+       * pool->mu) (see worker_thread_fn's main loop), which (unlike a
+       * plain mutex_lock) releases pool->mu for the duration of the wait.
        * _ctpool_atfork_prepare locking pool->mu therefore proves nothing
        * about whether some OTHER, vanished-in-the-child thread was, at the
        * exact instant of fork(), sitting inside pthread_cond_wait's own
@@ -414,7 +414,7 @@ static void _ctpool_atfork_release_impl(bool is_child) {
        * internal state (confirmed directly: this test's own diagnostic
        * capture caught a hung child stuck inside pthread_cond_signal,
        * called from submit_internal's ordinary cond_var_signal(pool->
-       * not_empty) after enqueueing a task -- not inside pool->mu at all).
+       * not_empty) after enqueueing a task; not inside pool->mu at all).
        * Unlike a plain "normal" pthread mutex (no owner tracking, so a bare
        * unlock from a different thread fully and correctly clears it, per
        * this function's own header comment), a condition variable has no

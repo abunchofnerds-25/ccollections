@@ -101,7 +101,7 @@ static void _diag_arm(int write_fd) {
 
 /* Parent-side: reads whatever raw addresses _diag_alarm_handler wrote (a
  * plain unhandled-signal kill, or a clean exit, leaves the pipe empty,
- * which is fine -- got <= 0 below) and prints them resolved via
+ * which is fine; got <= 0 below) and prints them resolved via
  * backtrace_symbols(), safe here since the parent is a completely
  * ordinary, unstuck process. */
 static void _diag_report(int read_fd) {
@@ -2628,8 +2628,9 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
       fprintf(stderr,
               "trial %d: hang detected (WIFEXITED=%d WEXITSTATUS=%d "
               "WIFSIGNALED=%d WTERMSIG=%d)\n",
-              i, WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1,
-              WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : -1);
+              i, WIFEXITED(status),
+              WIFEXITED(status) ? WEXITSTATUS(status) : -1, WIFSIGNALED(status),
+              WIFSIGNALED(status) ? WTERMSIG(status) : -1);
       if (diag_fired) _diag_report(diagfd[0]);
     }
     close(diagfd[0]);

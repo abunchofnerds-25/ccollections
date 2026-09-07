@@ -22,11 +22,17 @@ test: build
 memtest: build
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 ./tests
 
+# --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
+# increments, which can race under concurrently-executed instrumented code and
+# has been observed producing a spurious negative hit count (reproduced on
+# more than one module, including a glibc header, not this library's own
+# logic); see tests/chttpclient/Makefile's identical flag for the full
+# rationale and reproduction notes.
 generate_coverage_report:
 	$(CC)  $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-$(SRC_FILE_PREFIX) && echo 'GCOV SUCCEEDED, CALLING LCOV' && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent,inconsistent --capture --directory . \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
 	genhtml --ignore-errors inconsistent -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
 	rm -rf *.gcno *.gcda *.gcov *.c.info

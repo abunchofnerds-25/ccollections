@@ -6164,7 +6164,7 @@ TEST(block_mapping, scalar_on_document_marker_line_still_works) {
   cyaml_destroy(doc);
 }
 
-/* ----- Explicit "? key" / ": value" block mapping entries ----------------- */
+/* Explicit "? key" / ": value" block mapping entries */
 
 TEST(explicit_block_mapping, simple_key_and_value) {
   char *err = NULL;
@@ -6290,7 +6290,7 @@ TEST(explicit_block_mapping, tagged_root_object) {
   cyaml_destroy(doc);
 }
 
-/* ----- Flow collection single-pair / bare-key shorthands ------------------ */
+/* Flow collection single-pair / bare-key shorthands */
 
 TEST(flow_collections, sequence_bare_pair_shorthand) {
   /* "[foo: bar]" is shorthand for "[{foo: bar}]": a single "key: value"
@@ -9755,7 +9755,7 @@ TEST(tag_typing, map_stored_without_altering_collection_parsing) {
   cyaml_destroy(doc);
 }
 
-/* ---- Structural-kind-mismatch: the 9 combinations. ---- */
+/* Structural-kind-mismatch: the 9 combinations. */
 
 TEST(tag_typing, str_on_collection_rejected) {
   char *err = NULL;

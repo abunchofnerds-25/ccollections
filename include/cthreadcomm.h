@@ -2073,7 +2073,7 @@ void circq_test_unlock_mutex_for_tests(circular_queue *cq);
  * select-waiter thread to have actually reached its own Phase 1 mutex_lock/
  * link step poll this in a bounded loop, instead of guessing that a fixed
  * sleep after pthread_create() is long enough margin for the OS to have
- * scheduled the new thread that far -- pthread_create() returning gives no
+ * scheduled the new thread that far; pthread_create() returning gives no
  * such guarantee.
  */
 bool circq_test_has_sel_read_waiter_for_tests(circular_queue *cq);

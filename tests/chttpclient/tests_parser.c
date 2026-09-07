@@ -1411,6 +1411,71 @@ TEST(request_body_framing,
   REQUIRE_EQ(ctx.body_len, (size_t)5);
 }
 
+TEST(request_body_framing, single_line_chunked_then_gzip_rejected) {
+  /* transfer_encoding_has_nonfinal_chunked's single-line path (as opposed
+   * to the split-across-two-header-lines path already covered above):
+   * "chunked" appearing before the end of one line's own token list is
+   * unconditionally wrong and must be rejected immediately, regardless of
+   * what the trailing token is. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: chunked, gzip\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_ERROR);
+}
+
+TEST(request_body_framing, single_line_gzip_then_chunked_accepted) {
+  /* The legitimate single-line counterpart: multiple comma-separated
+   * codings on ONE Transfer-Encoding line, ending in "chunked", is valid
+   * framing and must be accepted with chunked body parsing. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test_request(&parser, &ctx);
+  const char *msg =
+      "POST /x HTTP/1.1\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"
+      "5\r\nhello\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+  REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
+}
+
+TEST(request_body_framing,
+     response_mode_single_line_chunked_then_gzip_reads_until_eof) {
+  /* Response mode's scope reduction applies just as much to a single-line
+   * multi-coding value as to the single-coding case already covered above:
+   * "chunked" not being the final token on a response's Transfer-Encoding
+   * line is NOT rejected (transfer_encoding_has_nonfinal_chunked is gated
+   * to CHTTP1_PARSE_REQUEST only), it just means the final coding isn't
+   * "chunked", so the response falls back to EOF-delimited framing. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, gzip\r\n\r\nhello";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_OK);
+  REQUIRE_EQ(chttp1_parser_finish(&parser), CHTTP1_PAUSED);
+  REQUIRE_TRUE(ctx.message_complete_called);
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+}
+
+TEST(request_body_framing,
+     response_mode_single_line_gzip_then_chunked_accepted) {
+  /* Mirrors single_line_gzip_then_chunked_accepted above for response mode:
+   * value_ends_with_chunked doesn't distinguish request from response, so a
+   * response whose Transfer-Encoding line ends in "chunked" uses chunked
+   * body parsing regardless of what precedes it on the same line. */
+  chttp1_parser_t parser;
+  test_ctx_t ctx;
+  init_test(&parser, &ctx);
+  const char *msg =
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"
+      "5\r\nhello\r\n0\r\n\r\n";
+  REQUIRE_EQ(chttp1_parser_execute(&parser, msg, strlen(msg)), CHTTP1_PAUSED);
+  REQUIRE_EQ(ctx.body_len, (size_t)5);
+  REQUIRE_EQ(memcmp(ctx.body, "hello", 5), 0);
+}
+
 /* ========================================================================== */
 /*              HEADERS-COMPLETE BODY DIVERSION (CHTTP1_HEADERS_ONLY)        */
 /* ========================================================================== */

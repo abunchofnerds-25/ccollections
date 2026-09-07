@@ -20,7 +20,7 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS
 #                     already calls chttpsvr_start(), so the "install procs,
 #                     then start" happy path can only be exercised in a
 #                     process where nothing else has started the engine
-#                     first -- hence its own SEPARATE BINARY.
+#                     first; hence its own SEPARATE BINARY.
 #   tests_engine_stop (tests_engine_stop.c) - exercises chttpsvr_engine_stop()
 #                     (the forced, signal-handler-driven engine shutdown
 #                     path), which tears down the one shared, process-wide
@@ -28,7 +28,7 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS
 #                     started chttpsvr instance. tests.c's own g_srv/g_srv2/...
 #                     stay started across its entire run, so force-stopping
 #                     the shared engine there would yank the reactor out from
-#                     under them and fail unrelated tests -- hence its own
+#                     under them and fail unrelated tests; hence its own
 #                     SEPARATE BINARY, matching the same isolation reasoning
 #                     as tests_tls/tests_mem_mgmt above.
 COMMON_SRC_FILES = ../../src/chttpserver.c \
@@ -63,7 +63,7 @@ build_tsan:
 	$(CC) $(TSAN_CFLAGS) tests.c $(COMMON_SRC_FILES) -o tests_tsan $(LFLAGS) -fsanitize=thread
 
 # die_after_fork=0: see tests/chttpclient/Makefile's identical comment on
-# its own test_tsan target -- the same root cause (a persistent, process-wide
+# its own test_tsan target; the same root cause (a persistent, process-wide
 # multi-threaded event_loop reactor alive at fork() time, tripping TSan's own
 # die_after_fork=1 default the moment concurrent_double_destroy_is_fatal's
 # forked child creates its own two racing pthreads) applies here too,
@@ -110,12 +110,18 @@ memtest: build build_tls build_mem_mgmt build_engine_stop
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all \
 		--error-exitcode=1 --child-silent-after-fork=yes ./tests_engine_stop
 
+# --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
+# increments, which can race under concurrently-executed instrumented code and
+# has been observed producing a spurious negative hit count (reproduced on
+# more than one module, including a glibc header, not this library's own
+# logic); see tests/chttpclient/Makefile's identical flag for the full
+# rationale and reproduction notes.
 generate_coverage_report:
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests.c $(COMMON_SRC_FILES) \
 		-o tests $(LFLAGS) && \
 	./tests && \
 	gcov -d -w tests-chttpserver && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative \
 		--capture --directory . --output-file chttpserver.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpserver.c.info \
 		--output-directory coverage/tests && \
@@ -124,7 +130,7 @@ generate_coverage_report:
 		-o tests_tls $(LFLAGS) && \
 	./tests_tls && \
 	gcov -d -w tests_tls-chttpserver && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative \
 		--capture --directory . --output-file chttpserver_tls.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpserver_tls.c.info \
 		--output-directory coverage/tests_tls && \
@@ -133,7 +139,7 @@ generate_coverage_report:
 		-o tests_mem_mgmt $(LFLAGS) && \
 	./tests_mem_mgmt && \
 	gcov -d -w tests_mem_mgmt-chttpserver && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative \
 		--capture --directory . --output-file chttpserver_mem_mgmt.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpserver_mem_mgmt.c.info \
 		--output-directory coverage/tests_mem_mgmt && \
@@ -142,7 +148,7 @@ generate_coverage_report:
 		-o tests_engine_stop $(LFLAGS) && \
 	./tests_engine_stop && \
 	gcov -d -w tests_engine_stop-chttpserver && \
-	lcov --ignore-errors mismatch --ignore-errors inconsistent \
+	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative \
 		--capture --directory . --output-file chttpserver_engine_stop.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpserver_engine_stop.c.info \
 		--output-directory coverage/tests_engine_stop && \

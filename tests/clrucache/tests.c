@@ -2527,8 +2527,7 @@ static bool str_val_remote_getter(const cmap_pair *key, cmap_pair *val) {
   return true;
 }
 
-/* --- non-char* get miss: output buffer must not be modified ----------------
- */
+/* non-char* get miss: output buffer must not be modified */
 
 /*
  * For non-char* value types clru_get routes through __clrucache_get_into,
@@ -2546,7 +2545,7 @@ TEST(get_val_types, non_char_ptr_get_miss_does_not_modify_buf) {
   clru_destroy(cache);
 }
 
-/* --- non-char* scalar: double --------------------------------------------- */
+/* non-char* scalar: double */
 
 TEST(get_val_types, double_value_via_macro) {
   clru_construct(cache, int, double, 8, NULL, NULL, NULL);
@@ -2560,7 +2559,7 @@ TEST(get_val_types, double_value_via_macro) {
   clru_destroy(cache);
 }
 
-/* --- non-char* struct value ----------------------------------------------- */
+/* non-char* struct value */
 
 TEST(get_val_types, struct_value_via_macro) {
   clru_construct(cache, int, point_t, 8, NULL, NULL, NULL);
@@ -2576,8 +2575,7 @@ TEST(get_val_types, struct_value_via_macro) {
   clru_destroy(cache);
 }
 
-/* --- clrucache_get_full: each call produces a fresh independent allocation -
- */
+/* clrucache_get_full: each call produces a fresh independent allocation */
 
 TEST(get_val_types, full_api_returns_independent_copies) {
   clru_construct(cache, int, int, 8, NULL, NULL, NULL);
@@ -2603,8 +2601,7 @@ TEST(get_val_types, full_api_returns_independent_copies) {
   clru_destroy(cache);
 }
 
-/* --- on a miss, val_out fields are not modified ----------------------------
- */
+/* on a miss, val_out fields are not modified */
 
 TEST(get_val_types, missing_key_val_out_untouched) {
   clru_construct(cache, int, int, 8, NULL, NULL, NULL);
@@ -2624,8 +2621,7 @@ TEST(get_val_types, missing_key_val_out_untouched) {
   clru_destroy(cache);
 }
 
-/* --- overwrite: subsequent get returns the new value -----------------------
- */
+/* overwrite: subsequent get returns the new value */
 
 TEST(get_val_types, overwrite_reflected_in_subsequent_get) {
   clru_construct(cache, int, double, 8, NULL, NULL, NULL);
@@ -2640,8 +2636,7 @@ TEST(get_val_types, overwrite_reflected_in_subsequent_get) {
   clru_destroy(cache);
 }
 
-/* --- char* value: macro transfers heap ownership to caller -----------------
- */
+/* char* value: macro transfers heap ownership to caller */
 
 TEST(get_val_types, char_ptr_value_macro_transfers_ownership) {
   clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
@@ -2657,8 +2652,7 @@ TEST(get_val_types, char_ptr_value_macro_transfers_ownership) {
   clru_destroy(cache);
 }
 
-/* --- char* value: two consecutive gets return distinct heap pointers -------
- */
+/* char* value: two consecutive gets return distinct heap pointers */
 
 TEST(get_val_types, char_ptr_value_two_gets_are_independent_copies) {
   clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
@@ -2680,8 +2674,7 @@ TEST(get_val_types, char_ptr_value_two_gets_are_independent_copies) {
   clru_destroy(cache);
 }
 
-/* --- char* value via clrucache_get_full: size == strlen + 1 ----------------
- */
+/* char* value via clrucache_get_full: size == strlen + 1 */
 
 TEST(get_val_types, char_ptr_value_full_api_size_includes_null_terminator) {
   clru_construct(cache, int, char *, 8, NULL, NULL, NULL);
@@ -2702,7 +2695,7 @@ TEST(get_val_types, char_ptr_value_full_api_size_includes_null_terminator) {
   clru_destroy(cache);
 }
 
-/* --- both key and value are char* ----------------------------------------- */
+/* both key and value are char* */
 
 TEST(get_val_types, char_ptr_key_and_char_ptr_value) {
   clru_construct(cache, char *, char *, 8, NULL, NULL, NULL);
@@ -2725,8 +2718,7 @@ TEST(get_val_types, char_ptr_key_and_char_ptr_value) {
   clru_destroy(cache);
 }
 
-/* --- char* value from remote getter: macro path delivers owned string ------
- */
+/* char* value from remote getter: macro path delivers owned string */
 
 TEST(get_val_types, char_ptr_value_from_remote_getter_macro) {
   clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
@@ -2746,8 +2738,7 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_macro) {
   clru_destroy(cache);
 }
 
-/* --- char* value from remote getter: clrucache_get_full direct path --------
- */
+/* char* value from remote getter: clrucache_get_full direct path */
 
 TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
   clru_construct(cache, int, char *, 8, str_val_remote_getter, NULL, NULL);
@@ -2766,7 +2757,7 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
   clru_destroy(cache);
 }
 
-/* --- __clrucache_get_into safety check: cached value size mismatching the
+/* __clrucache_get_into safety check: cached value size mismatching the
  *     caller's buffer, in either direction (LIVE entry path).
  *
  *     The size-mismatch-reject logic in __clrucache_get_into has two
@@ -2783,7 +2774,7 @@ TEST(get_val_types, char_ptr_value_from_remote_getter_full_api) {
  *     We reach the LIVE path by storing a value via clrucache_set_full
  *     directly (bypassing the type-safe macros, which always keep buf_size
  *     and the stored size in sync), then calling __clrucache_get_into with a
- *     differently-sized buffer. ------------------------------------------ */
+ *     differently-sized buffer. */
 
 TEST(get_val_types, get_into_rejects_live_value_too_large_for_buffer) {
   clru_cache cache = clrucache_create_full(8, ccol_int, ccol_int, NULL, NULL,

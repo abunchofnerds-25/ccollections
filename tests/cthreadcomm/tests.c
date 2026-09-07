@@ -815,8 +815,8 @@ TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
      * one test loudly and fast (the default SIGALRM disposition terminates
      * the process, which the parent's own waitpid below then simply
      * observes as WIFSIGNALED/SIGALRM rather than SIGABRT), instead of the
-     * parent's unbounded waitpid hanging the entire test binary -- and
-     * whatever CI job is running it -- indefinitely. */
+     * parent's unbounded waitpid hanging the entire test binary (and
+     * whatever CI job is running it) indefinitely. */
     alarm(10);
     circular_queue *cq = circular_queue_create(4, NULL);
     if (!cq) _exit(2);
@@ -866,8 +866,8 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
     }
     /* Bounds this child's own lifetime so an unexpected hang here fails
      * this one test loudly and fast instead of the parent's unbounded
-     * waitpid hanging the entire test binary -- and whatever CI job is
-     * running it -- indefinitely; see this alarm's identical use in the
+     * waitpid hanging the entire test binary (and whatever CI job is
+     * running it) indefinitely; see this alarm's identical use in the
      * sibling test above for the full rationale. */
     alarm(10);
     circular_queue *cq = circular_queue_create(4, NULL);
@@ -887,7 +887,7 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
      * higher and more variable thread-start scheduling latency: destroy()
      * ran first, correctly saw no waiters linked yet (nothing to catch),
      * froze cq, and the late-arriving waiter thread then dereferenced that
-     * freed memory the moment it was finally scheduled -- a genuine
+     * freed memory the moment it was finally scheduled; a genuine
      * use-after-free whose undefined behaviour manifested as the whole
      * child hanging forever, which this test's own then-unbounded waitpid
      * below had no way to ever notice. 200 iterations * 10ms = 2s bound,
@@ -1777,8 +1777,7 @@ TEST(channels, destroy_with_live_event_loop_registration_is_fatal) {
 
 // CCOL_SELECT TESTS
 
-// --- helpers ---
-
+// helpers
 typedef struct {
   circular_queue *cq;
   int delay_us;
@@ -1855,8 +1854,7 @@ static void *thr_send_via_channel(void *arg) {
   return NULL;
 }
 
-// --- tests ---
-
+// tests
 TEST(ccol_select, returns_invalid_args_on_bad_inputs) {
   circular_queue *cq = circular_queue_create(4, NULL);
 
@@ -2090,8 +2088,7 @@ TEST(ccol_select, channel_direction_resolved_correctly_for_owner_thread) {
   channel_destroy(ch);
 }
 
-// --- write-wait helpers ---
-
+// write-wait helpers
 typedef struct {
   circular_queue *cq;
   int delay_us;
@@ -2130,8 +2127,7 @@ static void *thr_enable_dynq_sending(void *arg) {
   return NULL;
 }
 
-// --- write-wait tests ---
-
+// write-wait tests
 TEST(ccol_select, write_circq_writable_immediately) {
   circular_queue *cq = circular_queue_create(4, NULL);
 
@@ -2274,8 +2270,7 @@ TEST(ccol_select, write_channel_owner_resolves_send_direction) {
   channel_destroy(ch);
 }
 
-// --- fd selectable helpers ---
-
+// fd selectable helpers
 typedef struct {
   int write_fd;
   int delay_us;
@@ -2290,8 +2285,7 @@ static void *thr_write_to_fd(void *arg) {
   return NULL;
 }
 
-// --- fd selectable tests ---
-
+// fd selectable tests
 TEST(ccol_select, fd_readable_immediately) {
   /* Write data to the pipe before calling ccol_select; it must return without
    * blocking and report the correct index. The caller then reads the fd
@@ -2665,8 +2659,7 @@ TEST(ccol_select, write_dynq_timed_out_when_sending_disabled) {
   dynamic_queue_destroy(dq);
 }
 
-// --- concurrent write-waiters helpers ---
-
+// concurrent write-waiters helpers
 typedef struct {
   circular_queue *cq;
   ccol_retval_t result;
@@ -2714,8 +2707,7 @@ TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
   circular_queue_destroy(cq);
 }
 
-// --- concurrent read-waiters helper ---
-
+// concurrent read-waiters helper
 typedef struct {
   circular_queue *cq;
   ccol_retval_t result;
@@ -2900,8 +2892,7 @@ TEST(ccol_select, fd_grouped_registration_coexists_with_ready_queue) {
   close(pfd[1]);
 }
 
-// --- event_loop test helpers ---
-
+// event_loop test helpers
 typedef struct evl_sync_ctx {
   pthread_mutex_t mtx;
   pthread_cond_t cond;
@@ -3046,8 +3037,7 @@ static void evl_set_nonblocking(int fd) {
   fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
-// --- event_loop tests ---
-
+// event_loop tests
 TEST(event_loop, create_destroy) {
   char *err = NULL;
   event_loop loop = event_loop_create(8, 1, 1, &err);
@@ -4567,8 +4557,7 @@ TEST(event_loop, multiple_independent_instances) {
   close(pfd_b[1]);
 }
 
-// --- lock-striping tests ---
-
+// lock-striping tests
 TEST(event_loop, num_lock_stripes_zero_returns_null) {
   char *err = NULL;
   event_loop loop = event_loop_create(8, 0, 1, &err);
@@ -5477,7 +5466,7 @@ TEST(event_loop, destroy_frees_registrations_across_multiple_stripes) {
   }
 }
 
-/* --- Multi-threaded reactor (num_reactor_threads > 1) tests below --- */
+/* Multi-threaded reactor (num_reactor_threads > 1) tests below */
 
 TEST(event_loop, multi_thread_basic_smoke) {
   /* Plain single-fd readable dispatch, but with several reactor threads

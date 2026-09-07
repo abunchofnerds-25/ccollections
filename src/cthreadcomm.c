@@ -640,7 +640,7 @@ void circq_test_unlock_mutex_for_tests(circular_queue *cq) {
  * destroying cq, to deterministically exercise the has_sel_waiters misuse
  * check in __circular_queue_destroy) can poll this in a bounded loop instead
  * of guessing a fixed sleep is "comfortably enough" margin for the OS to
- * have scheduled a brand-new thread all the way to that point -- pthread_
+ * have scheduled a brand-new thread all the way to that point; pthread_
  * create() returning gives no such guarantee, and a sleep-based guess that
  * loses this race lets destroy() proceed as if no one were watching, then
  * frees cq out from under the late-arriving waiter the instant it finally

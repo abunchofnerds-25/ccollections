@@ -324,7 +324,7 @@ The following example uses the two most commonly needed modules: a dynamic array
 #include <stdio.h>
 
 int main(void) {
-    /* --- Dynamic array of exam scores --- */
+    /* Dynamic array of exam scores */
     cvec_construct(scores, int);
 
     cvec_push_rvalue(scores, 91);
@@ -341,7 +341,7 @@ int main(void) {
 
     cvec_destroy(scores);   /* free all memory */
 
-    /* --- Map from student name to grade --- */
+    /* Map from student name to grade */
     chmap_construct(grades, char*, int);
 
     int g;
@@ -830,6 +830,23 @@ ccol_for_each(coords, it, {
 });
 chmap_destroy(coords);
 ```
+
+### Custom Hashing Functions
+
+`chmap_create_ch`/`chmap_construct_ch` (and the `_full` variants) accept a custom hash function of type `ccol_hashing_proc_t`, which receives both the key's address and its size in bytes, so it can hash a variable-length binary key (a string, or any other buffer-like key) without relying on a NUL terminator or other external convention to find its own extent:
+
+```c
+unsigned long fnv1a_hash(const void *ptr, size_t size) {
+    const unsigned char *b = (const unsigned char *)ptr;
+    unsigned long h = 2166136261UL;
+    for (size_t i = 0; i < size; i++) h = (h ^ b[i]) * 16777619UL;
+    return h;
+}
+
+chmap_construct_ch(m, char*, int, fnv1a_hash);
+```
+
+For a fixed-size key type (an integer, `float`, `double`, a pointer), `size` is always that type's own `sizeof`.
 
 ### Key Equality for `float` and `double` Keys
 

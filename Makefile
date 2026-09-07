@@ -27,8 +27,8 @@ EXTRA_CFLAGS ?=
 # at the actual link step that produces libccollections.so, not here in
 # COMMON_CFLAGS, which this Makefile only ever uses for the separate,
 # link-less `$(CC) -c ...` object-compile steps below. Putting it here meant
-# it was silently discarded before ever reaching a real link invocation --
-# providing no actual RELRO/BIND_NOW hardening at all -- and, under clang
+# it was silently discarded before ever reaching a real link invocation
+# (providing no actual RELRO/BIND_NOW hardening at all), and, under clang
 # specifically (whose driver treats an unused linker argument passed to a
 # compile-only invocation as an error under -Werror, unlike gcc's silent
 # tolerance of the same mistake), broke the build outright. See
@@ -92,7 +92,10 @@ $(OBJECT_DIR)/%.static.o: $(SOURCE_DIR)/%.c $(HEADER_FILES)
 clean:
 	rm -rf $(SHARED_LIBRARY_NAME) $(STATIC_LIBRARY_NAME) $(OBJECT_DIR) \
 		tests/*/tests tests/*/tests_tls tests/*/tests_mem_mgmt \
-		tests/*/tests_parser tests/*/tests_starts_engine_first \
+		tests/*/tests_parser tests/*/tests_default_client \
+		tests/*/tests_engine_stop tests/*/tests_engine_stop_tsan \
+		tests/*/tests_spec_suite tests/*/tests_differential \
+		tests/*/tests_tsan tests/*/fuzz_* \
 		tests/*/coverage tests/*/third_party_obj \
 		tests/*/*.gcno tests/*/*.gcda tests/*/*.gcov tests/*/*.c.info
 

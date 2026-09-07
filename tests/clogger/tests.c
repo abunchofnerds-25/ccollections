@@ -1374,7 +1374,7 @@ TEST(oversized,
 
   /* PRI for CLOG_ERROR at the default CLOG_SYSLOG_USER facility (1):
    * 1*8 + 3 (error severity) = 11. At least two well-formed "<11>1 "
-   * records: the fallback placeholder, plus one or more backtrace frames --
+   * records: the fallback placeholder, plus one or more backtrace frames;
    * in any environment where backtrace capture is genuinely available at
    * all (see backtrace_capture_genuinely_available()'s own doc comment);
    * otherwise just the fallback placeholder itself. */

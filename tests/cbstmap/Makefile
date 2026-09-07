@@ -10,7 +10,7 @@ CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \
 	-fstack-clash-protection \
 	-D_FORTIFY_SOURCE=3 \
 	-Wformat=2 -Wformat-security -Wall -Wextra -gdwarf-4 -g3 -O3 -Werror $(EXTRA_CFLAGS)
-COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage 
+COVERAGE_FLAGS = -fprofile-arcs -ftest-coverage
 LFLAGS =
 
 build:

@@ -103,6 +103,16 @@ jobs:
   linux-aarch64-gcc:
     name: Linux aarch64 (cross-compile + QEMU)
     runs-on: ubuntu-latest
+    # qemu-user's own fork()-plus-multithreaded-guest handling has a known,
+    # timing-dependent deadlock class (its binary-translation lock can be
+    # held across a guest fork(), wedging the child's own itimer/signal
+    # delivery along with it); when it triggers, no in-process timeout
+    # (including this suite's own `alarm(10)` safety nets around fork()-based
+    # tests) can save the job, since the itimer that alarm() relies on is
+    # itself stuck inside the same deadlock. A one-time occurrence ran for
+    # over 3 hours with zero output before being cancelled; this bound keeps
+    # a recurrence cheap instead of silently burning runner time.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -150,6 +160,13 @@ jobs:
   linux-aarch64-clang:
     name: Linux aarch64 (Clang cross-compile + QEMU)
     runs-on: ubuntu-latest
+    # See linux-aarch64-gcc's own comment above for the full rationale: this
+    # job runs the identical qemu-aarch64-based fork() test under the same
+    # emulator, so it carries the identical deadlock risk (confirmed directly
+    # on this job: a run hung for over 3 hours at
+    # circular_queues.destroy_while_ccol_select_is_watching_is_fatal with zero
+    # output before being cancelled).
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -202,6 +219,10 @@ jobs:
   linux-arm32-gcc:
     name: Linux arm32 (cross-compile + QEMU)
     runs-on: ubuntu-latest
+    # See linux-aarch64-gcc's own comment above for the full rationale: this
+    # job runs the identical fork() test under qemu-arm, so it carries the
+    # identical qemu-user fork()-plus-multithreaded-guest deadlock risk.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -245,6 +266,10 @@ jobs:
   linux-arm32-clang:
     name: Linux arm32 (Clang cross-compile + QEMU)
     runs-on: ubuntu-latest
+    # See linux-aarch64-gcc's own comment above for the full rationale: this
+    # job runs the identical fork() test under qemu-arm, so it carries the
+    # identical qemu-user fork()-plus-multithreaded-guest deadlock risk.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -273,6 +298,24 @@ jobs:
         # full rationale (gcc-arm-linux-gnueabihf-ld has its own correct
         # sysroot built in, and passing --sysroot= again on top of that
         # double-prefixes every path ld resolves and breaks the link).
+        #
+        # EXTRA_CFLAGS="-Wno-error=unused-command-line-argument": Clang does
+        # not implement -fstack-clash-protection's actual codegen for this
+        # target at all (confirmed empirically: a binary built with the flag
+        # is byte-identical to one built without it, on both clang-18 and
+        # clang-19; GCC's own arm-linux-gnueabihf cross-compiler DOES
+        # implement it, genuinely differing binaries, so linux-arm32-gcc
+        # above still provides real protection for this architecture).
+        # Whether Clang's driver actually WARNS about this is, separately,
+        # its own genuine driver quirk: "argument unused during compilation"
+        # fires only when the link step has no -l flag at all, so a
+        # module's own LFLAGS being empty or not is what silently decided
+        # whether -Werror caught it, not anything about the module's source.
+        # Downgrading only this one, fully-understood diagnostic class from
+        # fatal to a visible warning (never silencing it outright, e.g. via
+        # a decoy -l flag) keeps the CI log honestly showing that this one
+        # compiler/target combination cannot provide this specific hardening
+        # flag, rather than hiding it.
         run: |
           set -e
           ARM_GCC_CROSS_DIR=$(find /usr/lib/gcc-cross/arm-linux-gnueabihf -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
@@ -280,7 +323,7 @@ jobs:
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" build)
+            (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" EXTRA_CFLAGS="-Wno-error=unused-command-line-argument" build)
             qemu-arm -L /usr/arm-linux-gnueabihf "$dir/tests"
             echo "::endgroup::"
           done

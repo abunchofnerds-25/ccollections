@@ -856,26 +856,36 @@ static void *cq_select_waiter_thread(void *arg) {
 }
 
 TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
+  fprintf(stderr, "[DEBUG_TEST] pid=%d about to fork()\n", (int)getpid());
   pid_t pid = fork();
+  fprintf(stderr, "[DEBUG_TEST] pid=%d fork() returned %d\n", (int)getpid(),
+          (int)pid);
   if (pid == 0) {
-    int dn = open("/dev/null", O_WRONLY);
+    /* TEMPORARILY DISABLED FOR DEBUGGING: int dn = open("/dev/null", O_WRONLY);
     if (dn >= 0) {
       dup2(dn, STDOUT_FILENO);
       dup2(dn, STDERR_FILENO);
       close(dn);
-    }
+    } */
     /* Bounds this child's own lifetime so an unexpected hang here fails
      * this one test loudly and fast instead of the parent's unbounded
      * waitpid hanging the entire test binary (and whatever CI job is
      * running it) indefinitely; see this alarm's identical use in the
      * sibling test above for the full rationale. */
     alarm(10);
+    fprintf(stderr, "[DEBUG_TEST] child pid=%d alarm set, creating queue\n",
+            (int)getpid());
     circular_queue *cq = circular_queue_create(4, NULL);
     if (!cq) _exit(2);
+    fprintf(stderr,
+            "[DEBUG_TEST] child pid=%d queue created, spawning waiter\n",
+            (int)getpid());
 
     cq_select_waiter_args wargs = {.cq = cq};
     pthread_t waiter;
     pthread_create(&waiter, NULL, cq_select_waiter_thread, &wargs);
+    fprintf(stderr, "[DEBUG_TEST] child pid=%d waiter thread created\n",
+            (int)getpid());
 
     /* Poll for the waiter thread to have ACTUALLY linked itself into cq's
      * own read-waiter list (real synchronization on the condition this test
@@ -903,10 +913,17 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
       }
     }
     if (!linked) _exit(3); /* unreachable in practice; see REQUIRE_TRUE below */
+    fprintf(stderr,
+            "[DEBUG_TEST] child pid=%d confirmed linked, calling destroy\n",
+            (int)getpid());
 
     /* The actual misuse under test: the waiter thread above is confirmed
      * still linked into cq's own waiter list when this destroys cq. */
     circular_queue_destroy(cq);
+    fprintf(
+        stderr,
+        "[DEBUG_TEST] child pid=%d destroy returned (should be unreachable!)\n",
+        (int)getpid());
     _exit(0); /* unreachable if the assert fired as expected */
   }
   REQUIRE_NE(pid, -1);

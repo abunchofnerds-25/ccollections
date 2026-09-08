@@ -2133,32 +2133,6 @@ static int _rotate(clog_shared_t *sh) {
    * ENOENT means the file was deleted externally; treat it as a clean slate
    * (O_CREAT below will create a fresh file).  Any other rename error is a
    * hard failure; leave the logger writing to the still-open original fd. */
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-  /* Log the containing directory's permission bits and inode immediately
-   * before EVERY rename() attempt, not only on failure: chasing an
-   * intermittent CI-only EACCES whose root cause is still unknown, this
-   * establishes whether the directory is already wrong microseconds before
-   * the syscall (ruling a same-instant TOCTOU flip in or out) and, since
-   * every attempt (successful or not) gets a line, lets the mode/inode
-   * progression across many rotations in the same run reveal exactly which
-   * one first goes bad, rather than only ever seeing the already-failed
-   * state. */
-  {
-    char pre_dir_buf[PATH_MAX];
-    _debug_dir_of(sh->file_path, pre_dir_buf, sizeof pre_dir_buf);
-    struct stat pre_dir_st;
-    int pre_dir_rv = lstat(pre_dir_buf[0] ? pre_dir_buf : ".", &pre_dir_st);
-    cdebuglog_write(
-        "[DEBUG_ROTATE_PRE] pid=%d tid=%d dir=%s stat_rv=%d mode=%o "
-        "ino=%llu uid=%d gid=%d euid=%d egid=%d\n",
-        (int)getpid(), (int)_get_tid(), pre_dir_buf, pre_dir_rv,
-        pre_dir_rv == 0 ? (unsigned int)(pre_dir_st.st_mode & 07777) : 0u,
-        pre_dir_rv == 0 ? (unsigned long long)pre_dir_st.st_ino : 0ull,
-        pre_dir_rv == 0 ? (int)pre_dir_st.st_uid : -1,
-        pre_dir_rv == 0 ? (int)pre_dir_st.st_gid : -1, (int)geteuid(),
-        (int)getegid());
-  }
-#endif
   int rename_rv = rename(sh->file_path, rotated);
   if (rename_rv != 0 && errno != ENOENT) {
 #if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)

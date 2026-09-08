@@ -1984,7 +1984,19 @@ static void _prune_rotated(const char *file_path, int max_keep,
 
   /* Delete oldest entries that exceed the quota */
   int to_del = mc - max_keep;
-  for (int i = 0; i < to_del; i++) unlink(matches[i]);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write(
+      "[DEBUG_PRUNE_RESULT] pid=%d dir=%s base=%s mc=%d max_keep=%d "
+      "to_del=%d\n",
+      (int)getpid(), dir, base, mc, max_keep, to_del);
+#endif
+  for (int i = 0; i < to_del; i++) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_PRUNE_RESULT] pid=%d deleting %s\n", (int)getpid(),
+                    matches[i]);
+#endif
+    unlink(matches[i]);
+  }
 
   for (int i = 0; i < mc; i++) _mem_free(m_procs, matches[i]);
   _mem_free(m_procs, matches);
@@ -2202,6 +2214,13 @@ static int _rotate(clog_shared_t *sh) {
   sh->fd = new_fd;
   sh->bytes_written = 0;
   sh->last_rotation = now;
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write(
+      "[DEBUG_ROTATE_RESULT] pid=%d tid=%d rotation succeeded: did_rename=%d "
+      "rotated_path=%s max_rotated_files=%d\n",
+      (int)getpid(), (int)_get_tid(), (int)did_rename, rotated,
+      sh->rotation.max_rotated_files);
+#endif
 
   /* Prune only once the rotation has definitively succeeded (the new live
    * file is open); pruning before this point would let a subsequently

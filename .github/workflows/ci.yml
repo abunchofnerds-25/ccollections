@@ -112,7 +112,7 @@ jobs:
     # itself stuck inside the same deadlock. A one-time occurrence ran for
     # over 3 hours with zero output before being cancelled; this bound keeps
     # a recurrence cheap instead of silently burning runner time.
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -166,7 +166,7 @@ jobs:
     # on this job: a run hung for over 3 hours at
     # circular_queues.destroy_while_ccol_select_is_watching_is_fatal with zero
     # output before being cancelled).
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -222,7 +222,7 @@ jobs:
     # See linux-aarch64-gcc's own comment above for the full rationale: this
     # job runs the identical fork() test under qemu-arm, so it carries the
     # identical qemu-user fork()-plus-multithreaded-guest deadlock risk.
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -269,7 +269,7 @@ jobs:
     # See linux-aarch64-gcc's own comment above for the full rationale: this
     # job runs the identical fork() test under qemu-arm, so it carries the
     # identical qemu-user fork()-plus-multithreaded-guest deadlock risk.
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies

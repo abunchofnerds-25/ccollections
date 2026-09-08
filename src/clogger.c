@@ -2314,8 +2314,25 @@ static void _clog_time_rotate_if_due(clog_shared_t *sh) {
   if (!(sh->rotation_enabled && sh->rotation.time_rotation_enabled)) return;
   time_t now = time(NULL);
   if (now - sh->last_rotation >= sh->rotation.rotation_interval_secs &&
-      now >= sh->rotate_retry_after && _rotate(sh) != 0)
-    sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
+      now >= sh->rotate_retry_after) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ROTATE_DECISION] pid=%d tid=%d src=time path=%s now=%lld "
+        "last_rotation=%lld interval=%lld retry_after=%lld\n",
+        (int)getpid(), (int)_get_tid(), sh->file_path ? sh->file_path : "(fd)",
+        (long long)now, (long long)sh->last_rotation,
+        (long long)sh->rotation.rotation_interval_secs,
+        (long long)sh->rotate_retry_after);
+#endif
+    int rrv = _rotate(sh);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ROTATE_DECISION] pid=%d tid=%d src=time _rotate() "
+        "returned %d\n",
+        (int)getpid(), (int)_get_tid(), rrv);
+#endif
+    if (rrv != 0) sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
+  }
 }
 
 /*
@@ -2330,8 +2347,24 @@ static void _clog_size_rotate_if_due(clog_shared_t *sh) {
         sh->bytes_written >= sh->rotation.max_file_size))
     return;
   time_t now = time(NULL);
-  if (now >= sh->rotate_retry_after && _rotate(sh) != 0)
-    sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
+  if (now >= sh->rotate_retry_after) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ROTATE_DECISION] pid=%d tid=%d src=size path=%s "
+        "bytes_written=%lld max_file_size=%lld now=%lld retry_after=%lld\n",
+        (int)getpid(), (int)_get_tid(), sh->file_path ? sh->file_path : "(fd)",
+        (long long)sh->bytes_written, (long long)sh->rotation.max_file_size,
+        (long long)now, (long long)sh->rotate_retry_after);
+#endif
+    int rrv = _rotate(sh);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ROTATE_DECISION] pid=%d tid=%d src=size _rotate() "
+        "returned %d\n",
+        (int)getpid(), (int)_get_tid(), rrv);
+#endif
+    if (rrv != 0) sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
+  }
 }
 
 /* ========================================================================== */

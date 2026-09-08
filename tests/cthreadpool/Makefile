@@ -1,6 +1,6 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = cthreadpool
 # cvector.c is needed for ctpool's own generation-tagged handle slot table
 # (the same redesign already applied to chttpcli/chttpsvr/event_loop/

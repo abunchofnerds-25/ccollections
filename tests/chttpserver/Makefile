@@ -1,7 +1,7 @@
 CC = gcc
 
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 
 # Our source files (compiled with strict flags + -Werror). chttpserver.c and
 # chttpclient.c each own a fully independent static event_loop reactor.

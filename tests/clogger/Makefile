@@ -3,7 +3,7 @@ INCLUDES = -I.. -I../../include
 # CDEBUGLOG_ENABLED opts this suite into src/cdebuglog.c's own diagnostic
 # log buffer (see its doc comment in include/cdebuglog.h for why
 # RUNNING_UNIT_TESTS alone is not enough to activate it).
-DEFINITIONS = -DRUNNING_UNIT_TESTS -DCDEBUGLOG_ENABLED
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64 -DCDEBUGLOG_ENABLED
 SRC_FILE_PREFIX = clogger
 # cvector.c is needed for clog's own generation-tagged handle slot table (a
 # cvec of slots plus a cvec free-index stack, plus the live-shareds and

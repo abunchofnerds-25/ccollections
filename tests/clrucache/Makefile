@@ -1,6 +1,6 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = clrucache
 # cthreadpool.c is a transitive dependency of cthreadcomm.c: event_loop's
 # dispatch_pool (num_reactor_threads > 1) is a ctpool. cvector.c is needed

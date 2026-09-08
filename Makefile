@@ -37,10 +37,18 @@ EXTRA_CFLAGS ?=
 # all) has no equivalent: RELRO/BIND_NOW are properties of a real ELF
 # executable/shared object, and applying them is the responsibility of
 # whatever a caller of libccollections.a itself ultimately links into.
+# -D_FILE_OFFSET_BITS=64: on a 32-bit (ILP32) target, glibc's readdir() must
+# narrow the kernel's 64-bit d_ino into the caller's own ino_t; without this
+# flag that ino_t is only 32 bits wide, so readdir() fails with EOVERFLOW
+# the moment a directory contains an entry whose real inode number does not
+# fit (routine on a modern 64-bit-inode filesystem, not a corrupt or
+# adversarial input). This flag makes ino_t (and off_t, stat, etc.) 64 bits
+# wide on every target, a no-op on a 64-bit build where they already are.
 COMMON_CFLAGS = -I$(INCLUDE_DIR) \
 	-fstack-protector-strong \
 	-fstack-clash-protection \
 	-D_FORTIFY_SOURCE=3 \
+	-D_FILE_OFFSET_BITS=64 \
 	-Wstrict-overflow -Wformat=2 -Wformat-security -Wall -Wextra \
 	-g -O3 -Werror -fPIC $(EXTRA_CFLAGS)
 

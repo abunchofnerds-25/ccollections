@@ -1,6 +1,6 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = cjson
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \
             ../../src/cvector.c ../../src/csort.c ../../src/common.c

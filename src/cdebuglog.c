@@ -31,12 +31,14 @@ SOFTWARE.
 #if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
 
 #include <cdebuglog.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* One shared, process-wide buffer rather than one per consumer module: every
@@ -78,8 +80,21 @@ void cdebuglog_flush(void) {
 static void _cdebuglog_atexit(void) { cdebuglog_flush(); }
 
 void cdebuglog_write(const char *fmt, ...) {
-  if (!atomic_exchange(&_cdebuglog_atexit_registered, true))
+  if (!atomic_exchange(&_cdebuglog_atexit_registered, true)) {
     atexit(_cdebuglog_atexit);
+    /* One-shot process-startup context, captured the first time this module
+     * is used in a given process: umask (read via the standard "set twice"
+     * trick, since umask(2) has no query-only mode) and cwd. Rules an
+     * inherited process-wide umask or working-directory oddity in or out as
+     * an explanation for a directory permission mismatch observed later in
+     * the same process, rather than leaving it a blind spot. */
+    mode_t um = umask(0);
+    umask(um);
+    char cwd[PATH_MAX];
+    if (!getcwd(cwd, sizeof cwd)) strcpy(cwd, "(unknown)");
+    cdebuglog_write("[DEBUG_PROCSTART] pid=%d umask=%03o cwd=%s\n",
+                    (int)getpid(), (unsigned int)um, cwd);
+  }
 
   char line[512];
   va_list ap;

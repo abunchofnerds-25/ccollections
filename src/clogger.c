@@ -2019,6 +2019,21 @@ static bool _rotated_name_taken(const char *candidate, bool check_gz) {
   return access(gz, F_OK) == 0;
 }
 
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+/* Derives file_path's containing directory into out (bounded, NUL
+ * terminated), shared by every _rotate() diagnostic call site below so the
+ * dirname parsing (and its edge cases: root, no slash) is expressed once. */
+static void _debug_dir_of(const char *file_path, char *out, size_t outsz) {
+  size_t path_len = strlen(file_path);
+  size_t dir_len = path_len;
+  while (dir_len > 0 && file_path[dir_len - 1] != '/') dir_len--;
+  if (dir_len > 1) dir_len--; /* drop the trailing slash, keep root as "/" */
+  if (dir_len >= outsz) dir_len = outsz - 1;
+  memcpy(out, file_path, dir_len);
+  out[dir_len] = '\0';
+}
+#endif
+
 /*
  * Rotate the current log file.  Must be called with shared->mutex held.
  *
@@ -2118,6 +2133,32 @@ static int _rotate(clog_shared_t *sh) {
    * ENOENT means the file was deleted externally; treat it as a clean slate
    * (O_CREAT below will create a fresh file).  Any other rename error is a
    * hard failure; leave the logger writing to the still-open original fd. */
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  /* Log the containing directory's permission bits and inode immediately
+   * before EVERY rename() attempt, not only on failure: chasing an
+   * intermittent CI-only EACCES whose root cause is still unknown, this
+   * establishes whether the directory is already wrong microseconds before
+   * the syscall (ruling a same-instant TOCTOU flip in or out) and, since
+   * every attempt (successful or not) gets a line, lets the mode/inode
+   * progression across many rotations in the same run reveal exactly which
+   * one first goes bad, rather than only ever seeing the already-failed
+   * state. */
+  {
+    char pre_dir_buf[PATH_MAX];
+    _debug_dir_of(sh->file_path, pre_dir_buf, sizeof pre_dir_buf);
+    struct stat pre_dir_st;
+    int pre_dir_rv = lstat(pre_dir_buf[0] ? pre_dir_buf : ".", &pre_dir_st);
+    cdebuglog_write(
+        "[DEBUG_ROTATE_PRE] pid=%d tid=%d dir=%s stat_rv=%d mode=%o "
+        "ino=%llu uid=%d gid=%d euid=%d egid=%d\n",
+        (int)getpid(), (int)_get_tid(), pre_dir_buf, pre_dir_rv,
+        pre_dir_rv == 0 ? (unsigned int)(pre_dir_st.st_mode & 07777) : 0u,
+        pre_dir_rv == 0 ? (unsigned long long)pre_dir_st.st_ino : 0ull,
+        pre_dir_rv == 0 ? (int)pre_dir_st.st_uid : -1,
+        pre_dir_rv == 0 ? (int)pre_dir_st.st_gid : -1, (int)geteuid(),
+        (int)getegid());
+  }
+#endif
   int rename_rv = rename(sh->file_path, rotated);
   if (rename_rv != 0 && errno != ENOENT) {
 #if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
@@ -2129,28 +2170,28 @@ static int _rotate(clog_shared_t *sh) {
      * (derived from sh->file_path, not `rotated`, since both live in it)
      * plus the source file itself, alongside the calling thread's own
      * effective ids, to see whether the kernel's view of the permissions
-     * actually differs from what the test expects, rather than guessing. */
+     * actually differs from what the test expects, rather than guessing.
+     * ino is included so it can be directly compared against the
+     * DEBUG_ROTATE_PRE line just above and DEBUG_MKTMPDIR at directory
+     * creation: a changed inode across those means the directory was
+     * removed and recreated, not merely had its mode changed. */
     char dir_buf[PATH_MAX];
-    size_t path_len = strlen(sh->file_path);
-    size_t dir_len = path_len;
-    while (dir_len > 0 && sh->file_path[dir_len - 1] != '/') dir_len--;
-    if (dir_len > 1) dir_len--; /* drop the trailing slash, keep root as "/" */
-    if (dir_len >= sizeof dir_buf) dir_len = sizeof dir_buf - 1;
-    memcpy(dir_buf, sh->file_path, dir_len);
-    dir_buf[dir_len] = '\0';
+    _debug_dir_of(sh->file_path, dir_buf, sizeof dir_buf);
 
     struct stat dir_st, src_st;
     int dir_stat_rv = lstat(dir_buf[0] ? dir_buf : ".", &dir_st);
     int src_stat_rv = lstat(sh->file_path, &src_st);
     cdebuglog_write(
-        "[DEBUG_ROTATE] pid=%d rename(%s -> %s) failed, errno=%d (%s)\n",
-        (int)getpid(), sh->file_path, rotated, rename_errno,
+        "[DEBUG_ROTATE] pid=%d tid=%d rename(%s -> %s) failed, errno=%d "
+        "(%s)\n",
+        (int)getpid(), (int)_get_tid(), sh->file_path, rotated, rename_errno,
         strerror(rename_errno));
     cdebuglog_write(
         "[DEBUG_ROTATE] pid=%d euid=%d egid=%d dir=%s dir_stat_rv=%d "
-        "dir_mode=%o dir_uid=%d dir_gid=%d\n",
+        "dir_mode=%o dir_ino=%llu dir_uid=%d dir_gid=%d\n",
         (int)getpid(), (int)geteuid(), (int)getegid(), dir_buf, dir_stat_rv,
         dir_stat_rv == 0 ? (unsigned int)(dir_st.st_mode & 07777) : 0u,
+        dir_stat_rv == 0 ? (unsigned long long)dir_st.st_ino : 0ull,
         dir_stat_rv == 0 ? (int)dir_st.st_uid : -1,
         dir_stat_rv == 0 ? (int)dir_st.st_gid : -1);
     cdebuglog_write(

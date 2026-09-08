@@ -4931,7 +4931,9 @@ TEST(fork_safety,
   clog_test_set_pending_compress_delay_us(1000000);
 
   pthread_t t;
-  REQUIRE_EQ(pthread_create(&t, NULL, _fork_pending_compress_writer, &lg), 0);
+  int create_rv = pthread_create(&t, NULL, _fork_pending_compress_writer, &lg);
+  if (create_rv != 0) clog_test_set_pending_compress_delay_us(0);
+  REQUIRE_EQ(create_rv, 0);
 
   /* Spin-wait until the first rotation's .gz destination genuinely exists on
    * disk, so fork() below is guaranteed to land inside the real, on-disk
@@ -4944,6 +4946,25 @@ TEST(fork_safety,
   char stale_gz[1024] = {0};
   {
     DIR *d = opendir(dir);
+    /* Disarm this global, process-wide delay knob HERE, unconditionally,
+     * regardless of what opendir()/the scan below finds: it is safe (the
+     * writer thread's own in-flight _gzip_compress_file() call already
+     * captured its own LOCAL copy of the delay value before starting its
+     * usleep(), per that function's own doc comment, so disarming the
+     * global now does not cut that sleep short) and it must happen before
+     * the REQUIRE_NE below, which can return from this test function
+     * immediately on failure. Leaving this knob armed past that early
+     * return previously left every later test's own gzip compression
+     * calls, for the rest of this binary's entire run, paying an extra
+     * full second each -- confirmed as the actual root cause of a CI
+     * failure cascade (this test's own REQUIRE_NE below failing
+     * intermittently under qemu-arm's scheduling variance, then silently
+     * corrupting roughly a dozen further, otherwise-unrelated compression
+     * tests) via the [DEBUG_ROTATE_TIMING] instrumentation in
+     * src/clogger.c's own _rotate(), which showed every subsequent
+     * _gzip_compress_file() call taking a suspiciously exact ~1000ms
+     * despite compressing a file of only a few hundred bytes. */
+    clog_test_set_pending_compress_delay_us(0);
     REQUIRE_NE((void *)d, (void *)NULL);
     struct dirent *e;
     while ((e = readdir(d)) != NULL) {
@@ -4965,8 +4986,12 @@ TEST(fork_safety,
   /* Parent: let the original, still-in-flight compression finish normally
    * and unlink its own pending-compress bookkeeping exactly as it always
    * has; this test is only about the CHILD's own, separate copy of that
-   * list, not about disturbing the parent's already-correct behavior. */
-  clog_test_set_pending_compress_delay_us(0);
+   * list, not about disturbing the parent's already-correct behavior. The
+   * global delay knob itself is already disarmed above (must happen before
+   * fork(), not here, so an early REQUIRE_NE up there can never skip it);
+   * joining the writer thread and closing lg still belong here, AFTER
+   * fork(), since the whole point of this test is forking while that
+   * thread's own compression is still genuinely in flight. */
   pthread_join(t, NULL);
   clog_close(lg);
 

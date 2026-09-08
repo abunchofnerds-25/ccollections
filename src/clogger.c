@@ -2220,6 +2220,55 @@ static int _rotate(clog_shared_t *sh) {
       "rotated_path=%s max_rotated_files=%d\n",
       (int)getpid(), (int)_get_tid(), (int)did_rename, rotated,
       sh->rotation.max_rotated_files);
+  /* Diagnosing an intermittent qemu-arm-only CI failure where every single
+   * _prune_rotated() readdir() scan reports zero matching files (mc=0) even
+   * though access()/rename() prove the just-created rotated file genuinely
+   * exists on disk: stat() the exact path this rename() just produced via a
+   * syscall independent of readdir(), then separately opendir()/readdir()
+   * the same directory and log every raw entry seen (not just ones that
+   * pass _prune_rotated's own filter), right at the same call site
+   * _prune_rotated itself will use moments later. If readdir() here also
+   * comes back empty (or missing this exact name) while the stat() above
+   * succeeds, that pins the gap to readdir() itself in this environment
+   * rather than to any filtering logic in _prune_rotated. */
+  if (did_rename) {
+    struct stat _diag_st;
+    int _diag_stat_rv = stat(rotated, &_diag_st);
+    cdebuglog_write(
+        "[DEBUG_READDIR_DIAG] pid=%d stat(%s) rv=%d errno=%d (%s) "
+        "size=%lld ino=%llu\n",
+        (int)getpid(), rotated, _diag_stat_rv, _diag_stat_rv == 0 ? 0 : errno,
+        _diag_stat_rv == 0 ? "ok" : strerror(errno),
+        _diag_stat_rv == 0 ? (long long)_diag_st.st_size : -1LL,
+        _diag_stat_rv == 0 ? (unsigned long long)_diag_st.st_ino : 0ull);
+
+    char _diag_dir[PATH_MAX];
+    _debug_dir_of(sh->file_path, _diag_dir, sizeof _diag_dir);
+    DIR *_diag_d = opendir(_diag_dir[0] ? _diag_dir : ".");
+    if (!_diag_d) {
+      cdebuglog_write(
+          "[DEBUG_READDIR_DIAG] pid=%d opendir(%s) failed, errno=%d (%s)\n",
+          (int)getpid(), _diag_dir, errno, strerror(errno));
+    } else {
+      int _diag_n = 0;
+      bool _diag_found_target = false;
+      struct dirent *_diag_e;
+      while ((_diag_e = readdir(_diag_d)) != NULL) {
+        cdebuglog_write("[DEBUG_READDIR_DIAG] pid=%d entry[%d]=%s\n",
+                        (int)getpid(), _diag_n, _diag_e->d_name);
+        _diag_n++;
+        if (strstr(rotated, _diag_e->d_name) &&
+            strcmp(_diag_e->d_name, ".") != 0 &&
+            strcmp(_diag_e->d_name, "..") != 0)
+          _diag_found_target = true;
+      }
+      closedir(_diag_d);
+      cdebuglog_write(
+          "[DEBUG_READDIR_DIAG] pid=%d dir=%s total_entries=%d "
+          "found_just_renamed_target=%d\n",
+          (int)getpid(), _diag_dir, _diag_n, (int)_diag_found_target);
+    }
+  }
 #endif
 
   /* Prune only once the rotation has definitively succeeded (the new live

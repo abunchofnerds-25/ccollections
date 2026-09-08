@@ -58,7 +58,15 @@ void add_duration_to_timespec(struct timespec *target,
     target->tv_sec += target->tv_nsec / max_nsecs;
     target->tv_nsec = target->tv_nsec % max_nsecs;
   } else if (target->tv_nsec < 0) {
-    long int borrow = (-target->tv_nsec + max_nsecs - 1) / max_nsecs;
+    /* Computed in long long, not long: a tv_nsec magnitude spanning more
+     * than one whole second (e.g. -1500000000) makes
+     * (-tv_nsec + max_nsecs - 1) itself exceed LONG_MAX on an ILP32 target
+     * (i386, armhf, where long is 4 bytes), signed integer overflow
+     * (undefined behaviour) confirmed to actually miscompute this borrow
+     * count under a real -O3 build rather than merely being a theoretical
+     * risk. */
+    long long borrow =
+        (-(long long)target->tv_nsec + max_nsecs - 1) / max_nsecs;
     target->tv_sec -= borrow;
     target->tv_nsec += borrow * max_nsecs;
   }
@@ -69,7 +77,7 @@ void add_duration_to_timespec(struct timespec *target,
     dur.tv_sec += dur.tv_nsec / max_nsecs;
     dur.tv_nsec = dur.tv_nsec % max_nsecs;
   } else if (dur.tv_nsec < 0) {
-    long int borrow = (-dur.tv_nsec + max_nsecs - 1) / max_nsecs;
+    long long borrow = (-(long long)dur.tv_nsec + max_nsecs - 1) / max_nsecs;
     dur.tv_sec -= borrow;
     dur.tv_nsec += borrow * max_nsecs;
   }

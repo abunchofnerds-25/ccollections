@@ -2121,9 +2121,45 @@ static int _rotate(clog_shared_t *sh) {
   int rename_rv = rename(sh->file_path, rotated);
   if (rename_rv != 0 && errno != ENOENT) {
 #if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    /* Capture errno before any diagnostic call below (lstat, etc.) has a
+     * chance to clobber it. */
+    int rename_errno = errno;
+    /* rename() needs write+execute on the directory containing both
+     * oldpath and newpath (the same directory here); lstat that directory
+     * (derived from sh->file_path, not `rotated`, since both live in it)
+     * plus the source file itself, alongside the calling thread's own
+     * effective ids, to see whether the kernel's view of the permissions
+     * actually differs from what the test expects, rather than guessing. */
+    char dir_buf[PATH_MAX];
+    size_t path_len = strlen(sh->file_path);
+    size_t dir_len = path_len;
+    while (dir_len > 0 && sh->file_path[dir_len - 1] != '/') dir_len--;
+    if (dir_len > 1) dir_len--; /* drop the trailing slash, keep root as "/" */
+    if (dir_len >= sizeof dir_buf) dir_len = sizeof dir_buf - 1;
+    memcpy(dir_buf, sh->file_path, dir_len);
+    dir_buf[dir_len] = '\0';
+
+    struct stat dir_st, src_st;
+    int dir_stat_rv = lstat(dir_buf[0] ? dir_buf : ".", &dir_st);
+    int src_stat_rv = lstat(sh->file_path, &src_st);
     cdebuglog_write(
         "[DEBUG_ROTATE] pid=%d rename(%s -> %s) failed, errno=%d (%s)\n",
-        (int)getpid(), sh->file_path, rotated, errno, strerror(errno));
+        (int)getpid(), sh->file_path, rotated, rename_errno,
+        strerror(rename_errno));
+    cdebuglog_write(
+        "[DEBUG_ROTATE] pid=%d euid=%d egid=%d dir=%s dir_stat_rv=%d "
+        "dir_mode=%o dir_uid=%d dir_gid=%d\n",
+        (int)getpid(), (int)geteuid(), (int)getegid(), dir_buf, dir_stat_rv,
+        dir_stat_rv == 0 ? (unsigned int)(dir_st.st_mode & 07777) : 0u,
+        dir_stat_rv == 0 ? (int)dir_st.st_uid : -1,
+        dir_stat_rv == 0 ? (int)dir_st.st_gid : -1);
+    cdebuglog_write(
+        "[DEBUG_ROTATE] pid=%d src_stat_rv=%d src_mode=%o src_uid=%d "
+        "src_gid=%d\n",
+        (int)getpid(), src_stat_rv,
+        src_stat_rv == 0 ? (unsigned int)(src_st.st_mode & 07777) : 0u,
+        src_stat_rv == 0 ? (int)src_st.st_uid : -1,
+        src_stat_rv == 0 ? (int)src_st.st_gid : -1);
 #endif
     return -1;
   }

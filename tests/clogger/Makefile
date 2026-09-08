@@ -1,15 +1,24 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+# CDEBUGLOG_ENABLED opts this suite into src/cdebuglog.c's own diagnostic
+# log buffer (see its doc comment in include/cdebuglog.h for why
+# RUNNING_UNIT_TESTS alone is not enough to activate it).
+DEFINITIONS = -DRUNNING_UNIT_TESTS -DCDEBUGLOG_ENABLED
 SRC_FILE_PREFIX = clogger
 # cvector.c is needed for clog's own generation-tagged handle slot table (a
 # cvec of slots plus a cvec free-index stack, plus the live-shareds and
 # atfork scratch cvectors; see "Fork safety" in src/clogger.c). cthreadcomm.c
 # is needed for async logging's writer-thread queue (circular_queue /
 # dynamic_queue); cthreadpool.c is cthreadcomm.c's own transitive dependency.
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \
-            ../../src/cvector.c ../../src/cthreadcomm.c \
-            ../../src/cthreadpool.c ../../src/common.c
+# cdebuglog.c is an opt-in, RUNNING_UNIT_TESTS-only diagnostic log buffer
+# (not part of the root Makefile's default library build; see its own doc
+# comment in include/cdebuglog.h) that clogger.c's own DEBUG_ROTATE/
+# DEBUG_ROTATE_TIMING instrumentation currently uses while chasing a
+# CI-only, qemu-only rotation/compression timing mystery.
+SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cdebuglog.c \
+            ../../src/chashmap.c ../../src/cvector.c \
+            ../../src/cthreadcomm.c ../../src/cthreadpool.c \
+            ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 EXTRA_CFLAGS ?=
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \

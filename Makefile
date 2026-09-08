@@ -52,7 +52,13 @@ STATIC_CFLAGS = $(COMMON_CFLAGS)
 SHARED_LDFLAGS = -Wl,-z,relro,-z,now -shared -lpthread -lz -lssl -lcrypto -lm
 STATIC_LDFLAGS =
 
-SOURCE_FILES = $(wildcard $(SOURCE_DIR)/*.c)
+# cdebuglog.c (an opt-in, RUNNING_UNIT_TESTS-only diagnostic log buffer for
+# chasing hard-to-reproduce CI timing/hang issues; see its own doc comment
+# in include/cdebuglog.h) is deliberately excluded here: it is not part of
+# the shipped library, even as the empty translation unit it would compile
+# to in a production (non-RUNNING_UNIT_TESTS) build. A test suite that wants
+# it adds src/cdebuglog.c to its own Makefile's SRC_FILES explicitly.
+SOURCE_FILES = $(filter-out $(SOURCE_DIR)/cdebuglog.c,$(wildcard $(SOURCE_DIR)/*.c))
 HEADER_FILES = $(wildcard $(INCLUDE_DIR)/*.h)
 OBJ_FILES_SHARED = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.o)
 OBJ_FILES_STATIC = $(SOURCE_FILES:$(SOURCE_DIR)/%.c=$(OBJECT_DIR)/%.static.o)

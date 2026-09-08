@@ -24,6 +24,7 @@ SOFTWARE.
 
 #define _GNU_SOURCE
 
+#include <cdebuglog.h>
 #include <chashmap.h>
 #include <clogger.h>
 #include <common.h>
@@ -2012,7 +2013,15 @@ static int _rotate(clog_shared_t *sh) {
   atomic_fetch_add(&_clog_test_rotate_attempt_count, 1);
 #endif
 
-  if (!sh->file_path || sh->fd < 0) return 0;
+  if (!sh->file_path || sh->fd < 0) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ROTATE] pid=%d entry-guard early return: file_path=%s "
+        "fd=%d\n",
+        (int)getpid(), sh->file_path ? sh->file_path : "(null)", sh->fd);
+#endif
+    return 0;
+  }
 
   time_t now = time(NULL);
   struct tm tm;
@@ -2021,13 +2030,27 @@ static int _rotate(clog_shared_t *sh) {
   size_t plen = strlen(sh->file_path);
   char rotated[PATH_MAX];
 
-  if (plen + CLOG_ROTATION_FMT_LEN + CLOG_ROTATION_EXTRA + 1 > sizeof rotated)
+  if (plen + CLOG_ROTATION_FMT_LEN + CLOG_ROTATION_EXTRA + 1 > sizeof rotated) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ROTATE] pid=%d path too long: plen=%zu fmt_len=%d "
+        "extra=%d bufsz=%zu\n",
+        (int)getpid(), plen, (int)CLOG_ROTATION_FMT_LEN,
+        (int)CLOG_ROTATION_EXTRA, sizeof rotated);
+#endif
     return -1;
+  }
 
   memcpy(rotated, sh->file_path, plen);
   size_t slen =
       strftime(rotated + plen, sizeof(rotated) - plen, CLOG_ROTATION_FMT, &tm);
-  if (slen == 0) return -1;
+  if (slen == 0) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_ROTATE] pid=%d strftime returned 0\n",
+                    (int)getpid());
+#endif
+    return -1;
+  }
 
   /* Resolve collisions: append _0001, _0002, ... until the name is free.
    * Zero-padded so alphabetical sort in _prune_rotated matches creation order.
@@ -2043,13 +2066,29 @@ static int _rotate(clog_shared_t *sh) {
     bool found = false;
     for (int n = 1; n < 10000; n++) {
       int w = snprintf(rotated + base, sizeof(rotated) - base, "_%04d", n);
-      if (w < 0) return -1;
+      if (w < 0) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+        cdebuglog_write(
+            "[DEBUG_ROTATE] pid=%d snprintf collision-suffix failed, "
+            "errno=%d (%s)\n",
+            (int)getpid(), errno, strerror(errno));
+#endif
+        return -1;
+      }
       if (!_rotated_name_taken(rotated, check_gz)) {
         found = true;
         break;
       }
     }
-    if (!found) return -1;
+    if (!found) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+      cdebuglog_write(
+          "[DEBUG_ROTATE] pid=%d exhausted 10000 collision-suffix "
+          "attempts for base name %.*s\n",
+          (int)getpid(), (int)(plen + slen), rotated);
+#endif
+      return -1;
+    }
   }
 
   /* Rename while the old fd is still open (POSIX allows renaming open files).
@@ -2059,7 +2098,14 @@ static int _rotate(clog_shared_t *sh) {
    * (O_CREAT below will create a fresh file).  Any other rename error is a
    * hard failure; leave the logger writing to the still-open original fd. */
   int rename_rv = rename(sh->file_path, rotated);
-  if (rename_rv != 0 && errno != ENOENT) return -1;
+  if (rename_rv != 0 && errno != ENOENT) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ROTATE] pid=%d rename(%s -> %s) failed, errno=%d (%s)\n",
+        (int)getpid(), sh->file_path, rotated, errno, strerror(errno));
+#endif
+    return -1;
+  }
   /* `rotated` only actually exists on disk when the rename above genuinely
    * succeeded; on the ENOENT "clean slate" path there is nothing at that
    * path to prune or compress. */
@@ -2068,6 +2114,12 @@ static int _rotate(clog_shared_t *sh) {
   int new_fd =
       open(sh->file_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
   if (new_fd < 0) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ROTATE] pid=%d open(%s, O_CREAT) failed, errno=%d (%s), "
+        "did_rename=%d\n",
+        (int)getpid(), sh->file_path, errno, strerror(errno), (int)did_rename);
+#endif
     /* Recovery: restore the original path so the still-open fd remains useful.
      */
     (void)rename(rotated, sh->file_path);
@@ -2086,9 +2138,21 @@ static int _rotate(clog_shared_t *sh) {
    * concurrent _rotate() call is still busy compressing (sh->pending_compress)
    * is excluded from deletion, so this prune pass can never race that other
    * call's own not-yet-finished read of it. */
-  if (sh->rotation.max_rotated_files > 0)
+  if (sh->rotation.max_rotated_files > 0) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    struct timespec _prune_t0, _prune_t1;
+    clock_gettime(CLOCK_MONOTONIC, &_prune_t0);
+#endif
     _prune_rotated(sh->file_path, sh->rotation.max_rotated_files, sh->m_procs,
                    sh->pending_compress);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    clock_gettime(CLOCK_MONOTONIC, &_prune_t1);
+    double _prune_ms = (_prune_t1.tv_sec - _prune_t0.tv_sec) * 1000.0 +
+                       (_prune_t1.tv_nsec - _prune_t0.tv_nsec) / 1e6;
+    cdebuglog_write("[DEBUG_ROTATE_TIMING] pid=%d _prune_rotated took %.3fms\n",
+                    (int)getpid(), _prune_ms);
+#endif
+  }
 
   /*
    * Compress the rotated file outside the mutex so log writers are not stalled
@@ -2124,8 +2188,35 @@ static int _rotate(clog_shared_t *sh) {
       sh->pending_compress = &node;
 
       mutex_unlock(sh->mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+      struct timespec _gz_t0, _gz_t1;
+      clock_gettime(CLOCK_MONOTONIC, &_gz_t0);
+      cdebuglog_write(
+          "[DEBUG_ROTATE_TIMING] pid=%d _gzip_compress_file(%s) START\n",
+          (int)getpid(), rotated);
+#endif
       _gzip_compress_file(rotated, gz_path);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+      clock_gettime(CLOCK_MONOTONIC, &_gz_t1);
+      double _gz_ms = (_gz_t1.tv_sec - _gz_t0.tv_sec) * 1000.0 +
+                      (_gz_t1.tv_nsec - _gz_t0.tv_nsec) / 1e6;
+      cdebuglog_write(
+          "[DEBUG_ROTATE_TIMING] pid=%d _gzip_compress_file(%s) DONE, took "
+          "%.3fms\n",
+          (int)getpid(), rotated, _gz_ms);
+      struct timespec _relock_t0, _relock_t1;
+      clock_gettime(CLOCK_MONOTONIC, &_relock_t0);
+#endif
       mutex_lock(sh->mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+      clock_gettime(CLOCK_MONOTONIC, &_relock_t1);
+      double _relock_ms = (_relock_t1.tv_sec - _relock_t0.tv_sec) * 1000.0 +
+                          (_relock_t1.tv_nsec - _relock_t0.tv_nsec) / 1e6;
+      cdebuglog_write(
+          "[DEBUG_ROTATE_TIMING] pid=%d re-acquiring sh->mutex after "
+          "compress took %.3fms\n",
+          (int)getpid(), _relock_ms);
+#endif
 
       /* Unlink `node` from the list. A concurrent rotation may have pushed
        * further nodes onto the head while we were unlocked, so `node` is not

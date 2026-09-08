@@ -1,14 +1,23 @@
 CC = gcc
 INCLUDES = -I.. -I../../include
-DEFINITIONS = -DRUNNING_UNIT_TESTS
+# CDEBUGLOG_ENABLED opts this suite into src/cdebuglog.c's own diagnostic
+# log buffer (see its doc comment in include/cdebuglog.h for why
+# RUNNING_UNIT_TESTS alone is not enough to activate it).
+DEFINITIONS = -DRUNNING_UNIT_TESTS -DCDEBUGLOG_ENABLED
 SRC_FILE_PREFIX = cthreadcomm
 # chashmap.c is a transitive dependency: event_loop's internal fd registry
 # (int fd -> event_entry*) is backed by chmap. cthreadpool.c is a transitive
 # dependency too: event_loop's dispatch_pool (num_reactor_threads > 1) is a
 # ctpool. cvector.c is needed for event_loop's own generation-tagged handle
-# slot table (a cvec of slots plus a cvec free-index stack).
-SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/chashmap.c \
-            ../../src/cthreadpool.c ../../src/cvector.c ../../src/common.c
+# slot table (a cvec of slots plus a cvec free-index stack). cdebuglog.c is
+# an opt-in, RUNNING_UNIT_TESTS-only diagnostic log buffer (not part of the
+# root Makefile's default library build; see its own doc comment in
+# include/cdebuglog.h) that both cthreadcomm.c's own DEBUG_ATFORK/
+# DEBUG_DESTROY instrumentation and this suite's own tests.c currently use
+# while chasing a CI-only, qemu-only timing/hang mystery.
+SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cdebuglog.c \
+            ../../src/chashmap.c ../../src/cthreadpool.c \
+            ../../src/cvector.c ../../src/common.c
 ALL_SRC_FILES = tests.c $(SRC_FILES)
 EXTRA_CFLAGS ?=
 CFLAGS = $(INCLUDES) $(DEFINITIONS) -fstack-protector-strong -Wstrict-overflow \

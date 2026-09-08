@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+#include <cdebuglog.h>
 #include <chashmap.h>
 #include <cthreadcomm.h>
 #include <cthreadpool.h>
@@ -592,22 +593,22 @@ void __circular_queue_destroy(circular_queue *cq) {
      * unlinking a node in either list at this exact moment, so this must be
      * a genuine, race-free read, not an unlocked peek at fields a different
      * thread might be updating. */
-#ifdef RUNNING_UNIT_TESTS
-    fprintf(stderr,
-            "[DEBUG_DESTROY] pid=%d about to mutex_lock(cq->mutex) cq=%p\n",
-            (int)getpid(), (void *)cq);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_DESTROY] pid=%d about to mutex_lock(cq->mutex) cq=%p\n",
+        (int)getpid(), (void *)cq);
 #endif
     mutex_lock(cq->mutex);
-#ifdef RUNNING_UNIT_TESTS
-    fprintf(stderr, "[DEBUG_DESTROY] pid=%d acquired cq->mutex\n",
-            (int)getpid());
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d acquired cq->mutex\n",
+                    (int)getpid());
 #endif
     bool has_sel_waiters = (cq->sel_read_waiters_head != NULL) ||
                            (cq->sel_write_waiters_head != NULL);
     mutex_unlock(cq->mutex);
-#ifdef RUNNING_UNIT_TESTS
-    fprintf(stderr, "[DEBUG_DESTROY] pid=%d has_sel_waiters=%d\n",
-            (int)getpid(), (int)has_sel_waiters);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d has_sel_waiters=%d\n",
+                    (int)getpid(), (int)has_sel_waiters);
 #endif
     if (has_sel_waiters) {
       ccol_assert(false);
@@ -3260,17 +3261,17 @@ struct event_loop_s {
  * for the remainder of its teardown, not a new gap this fix
  * introduces. */
 static void _cthreadcomm_atfork_prepare(void) {
-#ifdef RUNNING_UNIT_TESTS
-  fprintf(stderr, "[DEBUG_ATFORK] prepare() ENTER pid=%d\n", (int)getpid());
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] prepare() ENTER pid=%d\n", (int)getpid());
 #endif
   mutex_lock(queue_mutex_registry.mutex);
   mutex_lock(event_loop_slot_table.mutex);
 
   size_t n_loops = cvector_elem_count(event_loop_slot_table.slots);
-#ifdef RUNNING_UNIT_TESTS
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
   size_t n_addrs_dbg = cvector_elem_count(queue_mutex_registry.addrs);
-  fprintf(stderr, "[DEBUG_ATFORK] pid=%d n_loops=%zu n_queue_addrs=%zu\n",
-          (int)getpid(), n_loops, n_addrs_dbg);
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d n_loops=%zu n_queue_addrs=%zu\n",
+                  (int)getpid(), n_loops, n_addrs_dbg);
 #endif
 
   /* Phase 1: every live loop's own shutdown_lock/reg_slot_mutex/stripe
@@ -3311,9 +3312,15 @@ static void _cthreadcomm_atfork_prepare(void) {
       }
     }
   }
-#ifdef RUNNING_UNIT_TESTS
-  fprintf(stderr, "[DEBUG_ATFORK] pid=%d prepare() EXIT (all locked)\n",
-          (int)getpid());
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d prepare() EXIT (all locked)\n",
+                  (int)getpid());
+  /* Flush as the LAST action before returning: pthread_atfork's prepare
+   * handlers run synchronously as the final step before the actual fork()
+   * syscall, so this guarantees the buffer is empty at the instant fork()
+   * executes, for every fork() anywhere in this process; see this buffer's
+   * own doc comment above for why that eliminates cross-fork duplication. */
+  cdebuglog_flush();
 #endif
 }
 
@@ -3372,9 +3379,9 @@ static void _cthreadcomm_atfork_prepare(void) {
  *    fork(); nothing else this function does depends on it having
  *    succeeded. */
 static void _cthreadcomm_atfork_release_impl(bool is_child) {
-#ifdef RUNNING_UNIT_TESTS
-  fprintf(stderr, "[DEBUG_ATFORK] pid=%d release_impl(is_child=%d) ENTER\n",
-          (int)getpid(), (int)is_child);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d release_impl(is_child=%d) ENTER\n",
+                  (int)getpid(), (int)is_child);
 #endif
   size_t n_loops = cvector_elem_count(event_loop_slot_table.slots);
 
@@ -3430,6 +3437,20 @@ static void _cthreadcomm_atfork_release_impl(bool is_child) {
 
   mutex_unlock(event_loop_slot_table.mutex);
   mutex_unlock(queue_mutex_registry.mutex);
+
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  /* Flush as the LAST action, in BOTH the parent and the child: this runs
+   * synchronously immediately after fork() returns, strictly before any
+   * application code in either process, and a great many of this codebase's
+   * own forked-child test paths go on to call _exit() directly rather than
+   * exit() -- which would silently skip this file's atexit()-registered
+   * flush and lose everything logged since the last flush point, including
+   * this exact release_impl() call's own is_child=1 line. Flushing here
+   * unconditionally means the atfork machinery's own diagnostic trail is
+   * never lost to that, regardless of how either process goes on to
+   * terminate. */
+  cdebuglog_flush();
+#endif
 }
 
 static void _cthreadcomm_atfork_release(void) {

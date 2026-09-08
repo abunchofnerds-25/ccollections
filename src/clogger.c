@@ -1666,10 +1666,25 @@ static _Atomic bool _clog_test_gz_dest_opened = false;
 void clog_test_set_pending_compress_delay_us(unsigned int delay_us) {
   atomic_store(&_clog_test_gz_dest_opened, false);
   atomic_store(&_clog_test_pending_compress_delay_us, delay_us);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write(
+      "[DEBUG_ROTATE_TIMING] pid=%d tid=%d "
+      "clog_test_set_pending_compress_delay_us(%u): armed, "
+      "gz_dest_opened cleared\n",
+      (int)getpid(), (int)_get_tid(), delay_us);
+#endif
 }
 
 bool clog_test_gz_dest_opened(void) {
-  return atomic_load(&_clog_test_gz_dest_opened);
+  bool opened = atomic_load(&_clog_test_gz_dest_opened);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  if (opened)
+    cdebuglog_write(
+        "[DEBUG_ROTATE_TIMING] pid=%d tid=%d "
+        "clog_test_gz_dest_opened() observed true\n",
+        (int)getpid(), (int)_get_tid());
+#endif
+  return opened;
 }
 
 /*
@@ -1798,6 +1813,12 @@ static int _gzip_compress_file(const char *src, const char *dst) {
      * that must never race this call's own already-in-progress read of it. */
     unsigned int delay = atomic_load(&_clog_test_pending_compress_delay_us);
     atomic_store(&_clog_test_gz_dest_opened, true);
+#if defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ROTATE_TIMING] pid=%d tid=%d _gzip_compress_file(dst=%s) "
+        "set gz_dest_opened=true, delay_us=%u\n",
+        (int)getpid(), (int)_get_tid(), dst, delay);
+#endif
     if (delay) usleep(delay);
   }
 #endif
@@ -2192,8 +2213,9 @@ static int _rotate(clog_shared_t *sh) {
       struct timespec _gz_t0, _gz_t1;
       clock_gettime(CLOCK_MONOTONIC, &_gz_t0);
       cdebuglog_write(
-          "[DEBUG_ROTATE_TIMING] pid=%d _gzip_compress_file(%s) START\n",
-          (int)getpid(), rotated);
+          "[DEBUG_ROTATE_TIMING] pid=%d tid=%d _gzip_compress_file(%s) "
+          "START\n",
+          (int)getpid(), (int)_get_tid(), rotated);
 #endif
       _gzip_compress_file(rotated, gz_path);
 #if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
@@ -2201,9 +2223,9 @@ static int _rotate(clog_shared_t *sh) {
       double _gz_ms = (_gz_t1.tv_sec - _gz_t0.tv_sec) * 1000.0 +
                       (_gz_t1.tv_nsec - _gz_t0.tv_nsec) / 1e6;
       cdebuglog_write(
-          "[DEBUG_ROTATE_TIMING] pid=%d _gzip_compress_file(%s) DONE, took "
-          "%.3fms\n",
-          (int)getpid(), rotated, _gz_ms);
+          "[DEBUG_ROTATE_TIMING] pid=%d tid=%d _gzip_compress_file(%s) DONE, "
+          "took %.3fms\n",
+          (int)getpid(), (int)_get_tid(), rotated, _gz_ms);
       struct timespec _relock_t0, _relock_t1;
       clock_gettime(CLOCK_MONOTONIC, &_relock_t0);
 #endif

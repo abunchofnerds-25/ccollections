@@ -4932,7 +4932,15 @@ TEST(fork_safety,
 
   pthread_t t;
   int create_rv = pthread_create(&t, NULL, _fork_pending_compress_writer, &lg);
-  if (create_rv != 0) clog_test_set_pending_compress_delay_us(0);
+  if (create_rv != 0) {
+    /* No thread was ever created, so there is nothing to join; still close
+     * lg and clean up before failing, matching the identical reasoning at
+     * the stale_gz[0] == '\0' check further below. */
+    clog_test_set_pending_compress_delay_us(0);
+    clog_close(lg);
+    cleanup_dir(marker_dir, "marker");
+    cleanup_dir(dir, "app.log");
+  }
   REQUIRE_EQ(create_rv, 0);
 
   /* Spin-wait until the first rotation's .gz destination genuinely exists on
@@ -4973,6 +4981,25 @@ TEST(fork_safety,
         snprintf(stale_gz, sizeof stale_gz, "%s/%s", dir, e->d_name);
     }
     closedir(d);
+  }
+  if (stale_gz[0] == '\0') {
+    /* The premise verification itself failed: the writer thread's own
+     * first rotation never produced a .gz file we could observe on disk
+     * before forking. We are not going to fork() at all on this path, so
+     * the "must stay in flight for fork() to land inside it" reason for
+     * leaving the writer thread unjoined and lg still open no longer
+     * applies; do both now, unconditionally, before failing. Without this,
+     * this exact failure (confirmed occurring intermittently under
+     * qemu-arm's scheduling variance) leaked the writer thread and its own
+     * still-mid-compress clog_shared_t for the rest of this binary's run --
+     * a second, independent leak on top of the delay-knob one fixed above:
+     * even with that one fixed, this test failing this way alone was still
+     * enough to corrupt roughly a dozen further, otherwise-unrelated
+     * compression tests for the remainder of the run. */
+    pthread_join(t, NULL);
+    clog_close(lg);
+    cleanup_dir(marker_dir, "marker");
+    cleanup_dir(dir, "app.log");
   }
   REQUIRE_NE(stale_gz[0], '\0');
 

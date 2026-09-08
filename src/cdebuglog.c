@@ -47,6 +47,16 @@ SOFTWARE.
  * lines) since a caller that lets this fill up between flush points simply
  * starts silently dropping lines; see cdebuglog_write()'s own doc comment. */
 #define CDEBUGLOG_BUF_CAP (8U * 1024U * 1024U)
+/* Flushing only at fork()/exit() lets an entire crash-free run's worth of
+ * lines pile up before any of it reaches stderr, which then dumps as one
+ * huge burst interleaved at whatever point the first fork() happens to
+ * land, rather than near the tests that actually produced each line. This
+ * threshold makes cdebuglog_write() additionally trigger a flush once the
+ * buffer crosses it, so a long run's output breaks into several
+ * chronologically-meaningful bursts instead of one. Still far fewer write()
+ * calls than one per line; only the granularity, not the "batch instead of
+ * write per line" design, changes. */
+#define CDEBUGLOG_FLUSH_THRESHOLD (CDEBUGLOG_BUF_CAP / 8U)
 static char _cdebuglog_buf[CDEBUGLOG_BUF_CAP];
 static _Atomic size_t _cdebuglog_pos = 0;
 static _Atomic bool _cdebuglog_atexit_registered = false;
@@ -82,6 +92,13 @@ void cdebuglog_write(const char *fmt, ...) {
   size_t start = atomic_fetch_add(&_cdebuglog_pos, ulen);
   if (start + ulen > CDEBUGLOG_BUF_CAP) return; /* dropped; see doc comment */
   memcpy(_cdebuglog_buf + start, line, ulen);
+
+  /* Only the single write whose own reservation crosses the threshold
+   * triggers a flush, so a burst of concurrent writers doesn't all call
+   * flush at once; see CDEBUGLOG_FLUSH_THRESHOLD's own doc comment. */
+  if (start < CDEBUGLOG_FLUSH_THRESHOLD &&
+      start + ulen >= CDEBUGLOG_FLUSH_THRESHOLD)
+    cdebuglog_flush();
 }
 
 #endif /* RUNNING_UNIT_TESTS && CDEBUGLOG_ENABLED */

@@ -2250,9 +2250,34 @@ static int _rotate(clog_shared_t *sh) {
           "[DEBUG_READDIR_DIAG] pid=%d opendir(%s) failed, errno=%d (%s)\n",
           (int)getpid(), _diag_dir, errno, strerror(errno));
     } else {
+      /* fstat() the OPEN directory fd (not a separate path-based lstat,
+       * which would be racy against whatever is being diagnosed) right
+       * before reading it, so a permission gap that would explain
+       * "opendir()/stat()-by-name succeed but readdir() returns nothing"
+       * (read permission on the directory missing while search/execute
+       * permission remains, e.g. a mode with the read bit stripped) shows
+       * up directly rather than being inferred after the fact. */
+      struct stat _diag_dirst;
+      int _diag_fstat_rv = fstat(dirfd(_diag_d), &_diag_dirst);
+      cdebuglog_write(
+          "[DEBUG_READDIR_DIAG] pid=%d fstat(dirfd) rv=%d mode=%o uid=%d "
+          "gid=%d euid=%d egid=%d\n",
+          (int)getpid(), _diag_fstat_rv,
+          _diag_fstat_rv == 0 ? (unsigned int)(_diag_dirst.st_mode & 07777)
+                              : 0u,
+          _diag_fstat_rv == 0 ? (int)_diag_dirst.st_uid : -1,
+          _diag_fstat_rv == 0 ? (int)_diag_dirst.st_gid : -1, (int)geteuid(),
+          (int)getegid());
+
       int _diag_n = 0;
       bool _diag_found_target = false;
       struct dirent *_diag_e;
+      /* Cleared before the loop and read back immediately after it exits,
+       * before any other call has a chance to clobber it: glibc's
+       * readdir() returns NULL both on a genuine end-of-directory AND on
+       * an internal getdents()/getdents64() syscall error, and the two
+       * are otherwise indistinguishable to a caller. */
+      errno = 0;
       while ((_diag_e = readdir(_diag_d)) != NULL) {
         cdebuglog_write("[DEBUG_READDIR_DIAG] pid=%d entry[%d]=%s\n",
                         (int)getpid(), _diag_n, _diag_e->d_name);
@@ -2262,11 +2287,15 @@ static int _rotate(clog_shared_t *sh) {
             strcmp(_diag_e->d_name, "..") != 0)
           _diag_found_target = true;
       }
+      int _diag_readdir_errno = errno;
       closedir(_diag_d);
       cdebuglog_write(
           "[DEBUG_READDIR_DIAG] pid=%d dir=%s total_entries=%d "
-          "found_just_renamed_target=%d\n",
-          (int)getpid(), _diag_dir, _diag_n, (int)_diag_found_target);
+          "found_just_renamed_target=%d terminating_errno=%d (%s)\n",
+          (int)getpid(), _diag_dir, _diag_n, (int)_diag_found_target,
+          _diag_readdir_errno,
+          _diag_readdir_errno == 0 ? "clean EOF"
+                                   : strerror(_diag_readdir_errno));
     }
   }
 #endif

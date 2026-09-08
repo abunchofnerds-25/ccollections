@@ -24,7 +24,6 @@ SOFTWARE.
 
 #define _GNU_SOURCE
 
-#include <cdebuglog.h>
 #include <chashmap.h>
 #include <clogger.h>
 #include <common.h>
@@ -1666,24 +1665,10 @@ static _Atomic bool _clog_test_gz_dest_opened = false;
 void clog_test_set_pending_compress_delay_us(unsigned int delay_us) {
   atomic_store(&_clog_test_gz_dest_opened, false);
   atomic_store(&_clog_test_pending_compress_delay_us, delay_us);
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-  cdebuglog_write(
-      "[DEBUG_ROTATE_TIMING] pid=%d tid=%d "
-      "clog_test_set_pending_compress_delay_us(%u): armed, "
-      "gz_dest_opened cleared\n",
-      (int)getpid(), (int)_get_tid(), delay_us);
-#endif
 }
 
 bool clog_test_gz_dest_opened(void) {
   bool opened = atomic_load(&_clog_test_gz_dest_opened);
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-  if (opened)
-    cdebuglog_write(
-        "[DEBUG_ROTATE_TIMING] pid=%d tid=%d "
-        "clog_test_gz_dest_opened() observed true\n",
-        (int)getpid(), (int)_get_tid());
-#endif
   return opened;
 }
 
@@ -1813,12 +1798,6 @@ static int _gzip_compress_file(const char *src, const char *dst) {
      * that must never race this call's own already-in-progress read of it. */
     unsigned int delay = atomic_load(&_clog_test_pending_compress_delay_us);
     atomic_store(&_clog_test_gz_dest_opened, true);
-#if defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write(
-        "[DEBUG_ROTATE_TIMING] pid=%d tid=%d _gzip_compress_file(dst=%s) "
-        "set gz_dest_opened=true, delay_us=%u\n",
-        (int)getpid(), (int)_get_tid(), dst, delay);
-#endif
     if (delay) usleep(delay);
   }
 #endif
@@ -1984,17 +1963,7 @@ static void _prune_rotated(const char *file_path, int max_keep,
 
   /* Delete oldest entries that exceed the quota */
   int to_del = mc - max_keep;
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-  cdebuglog_write(
-      "[DEBUG_PRUNE_RESULT] pid=%d dir=%s base=%s mc=%d max_keep=%d "
-      "to_del=%d\n",
-      (int)getpid(), dir, base, mc, max_keep, to_del);
-#endif
   for (int i = 0; i < to_del; i++) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write("[DEBUG_PRUNE_RESULT] pid=%d deleting %s\n", (int)getpid(),
-                    matches[i]);
-#endif
     unlink(matches[i]);
   }
 
@@ -2031,20 +2000,6 @@ static bool _rotated_name_taken(const char *candidate, bool check_gz) {
   return access(gz, F_OK) == 0;
 }
 
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-/* Derives file_path's containing directory into out (bounded, NUL
- * terminated), shared by every _rotate() diagnostic call site below so the
- * dirname parsing (and its edge cases: root, no slash) is expressed once. */
-static void _debug_dir_of(const char *file_path, char *out, size_t outsz) {
-  size_t path_len = strlen(file_path);
-  size_t dir_len = path_len;
-  while (dir_len > 0 && file_path[dir_len - 1] != '/') dir_len--;
-  if (dir_len > 1) dir_len--; /* drop the trailing slash, keep root as "/" */
-  if (dir_len >= outsz) dir_len = outsz - 1;
-  memcpy(out, file_path, dir_len);
-  out[dir_len] = '\0';
-}
-#endif
 
 /*
  * Rotate the current log file.  Must be called with shared->mutex held.
@@ -2062,12 +2017,6 @@ static int _rotate(clog_shared_t *sh) {
 #endif
 
   if (!sh->file_path || sh->fd < 0) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write(
-        "[DEBUG_ROTATE] pid=%d entry-guard early return: file_path=%s "
-        "fd=%d\n",
-        (int)getpid(), sh->file_path ? sh->file_path : "(null)", sh->fd);
-#endif
     return 0;
   }
 
@@ -2079,13 +2028,6 @@ static int _rotate(clog_shared_t *sh) {
   char rotated[PATH_MAX];
 
   if (plen + CLOG_ROTATION_FMT_LEN + CLOG_ROTATION_EXTRA + 1 > sizeof rotated) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write(
-        "[DEBUG_ROTATE] pid=%d path too long: plen=%zu fmt_len=%d "
-        "extra=%d bufsz=%zu\n",
-        (int)getpid(), plen, (int)CLOG_ROTATION_FMT_LEN,
-        (int)CLOG_ROTATION_EXTRA, sizeof rotated);
-#endif
     return -1;
   }
 
@@ -2093,10 +2035,6 @@ static int _rotate(clog_shared_t *sh) {
   size_t slen =
       strftime(rotated + plen, sizeof(rotated) - plen, CLOG_ROTATION_FMT, &tm);
   if (slen == 0) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write("[DEBUG_ROTATE] pid=%d strftime returned 0\n",
-                    (int)getpid());
-#endif
     return -1;
   }
 
@@ -2115,12 +2053,6 @@ static int _rotate(clog_shared_t *sh) {
     for (int n = 1; n < 10000; n++) {
       int w = snprintf(rotated + base, sizeof(rotated) - base, "_%04d", n);
       if (w < 0) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-        cdebuglog_write(
-            "[DEBUG_ROTATE] pid=%d snprintf collision-suffix failed, "
-            "errno=%d (%s)\n",
-            (int)getpid(), errno, strerror(errno));
-#endif
         return -1;
       }
       if (!_rotated_name_taken(rotated, check_gz)) {
@@ -2129,12 +2061,6 @@ static int _rotate(clog_shared_t *sh) {
       }
     }
     if (!found) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-      cdebuglog_write(
-          "[DEBUG_ROTATE] pid=%d exhausted 10000 collision-suffix "
-          "attempts for base name %.*s\n",
-          (int)getpid(), (int)(plen + slen), rotated);
-#endif
       return -1;
     }
   }
@@ -2147,47 +2073,6 @@ static int _rotate(clog_shared_t *sh) {
    * hard failure; leave the logger writing to the still-open original fd. */
   int rename_rv = rename(sh->file_path, rotated);
   if (rename_rv != 0 && errno != ENOENT) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    /* Capture errno before any diagnostic call below (lstat, etc.) has a
-     * chance to clobber it. */
-    int rename_errno = errno;
-    /* rename() needs write+execute on the directory containing both
-     * oldpath and newpath (the same directory here); lstat that directory
-     * (derived from sh->file_path, not `rotated`, since both live in it)
-     * plus the source file itself, alongside the calling thread's own
-     * effective ids, to see whether the kernel's view of the permissions
-     * actually differs from what the test expects, rather than guessing.
-     * ino is included so it can be directly compared against the
-     * DEBUG_ROTATE_PRE line just above and DEBUG_MKTMPDIR at directory
-     * creation: a changed inode across those means the directory was
-     * removed and recreated, not merely had its mode changed. */
-    char dir_buf[PATH_MAX];
-    _debug_dir_of(sh->file_path, dir_buf, sizeof dir_buf);
-
-    struct stat dir_st, src_st;
-    int dir_stat_rv = lstat(dir_buf[0] ? dir_buf : ".", &dir_st);
-    int src_stat_rv = lstat(sh->file_path, &src_st);
-    cdebuglog_write(
-        "[DEBUG_ROTATE] pid=%d tid=%d rename(%s -> %s) failed, errno=%d "
-        "(%s)\n",
-        (int)getpid(), (int)_get_tid(), sh->file_path, rotated, rename_errno,
-        strerror(rename_errno));
-    cdebuglog_write(
-        "[DEBUG_ROTATE] pid=%d euid=%d egid=%d dir=%s dir_stat_rv=%d "
-        "dir_mode=%o dir_ino=%llu dir_uid=%d dir_gid=%d\n",
-        (int)getpid(), (int)geteuid(), (int)getegid(), dir_buf, dir_stat_rv,
-        dir_stat_rv == 0 ? (unsigned int)(dir_st.st_mode & 07777) : 0u,
-        dir_stat_rv == 0 ? (unsigned long long)dir_st.st_ino : 0ull,
-        dir_stat_rv == 0 ? (int)dir_st.st_uid : -1,
-        dir_stat_rv == 0 ? (int)dir_st.st_gid : -1);
-    cdebuglog_write(
-        "[DEBUG_ROTATE] pid=%d src_stat_rv=%d src_mode=%o src_uid=%d "
-        "src_gid=%d\n",
-        (int)getpid(), src_stat_rv,
-        src_stat_rv == 0 ? (unsigned int)(src_st.st_mode & 07777) : 0u,
-        src_stat_rv == 0 ? (int)src_st.st_uid : -1,
-        src_stat_rv == 0 ? (int)src_st.st_gid : -1);
-#endif
     return -1;
   }
   /* `rotated` only actually exists on disk when the rename above genuinely
@@ -2198,12 +2083,6 @@ static int _rotate(clog_shared_t *sh) {
   int new_fd =
       open(sh->file_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
   if (new_fd < 0) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write(
-        "[DEBUG_ROTATE] pid=%d open(%s, O_CREAT) failed, errno=%d (%s), "
-        "did_rename=%d\n",
-        (int)getpid(), sh->file_path, errno, strerror(errno), (int)did_rename);
-#endif
     /* Recovery: restore the original path so the still-open fd remains useful.
      */
     (void)rename(rotated, sh->file_path);
@@ -2214,91 +2093,6 @@ static int _rotate(clog_shared_t *sh) {
   sh->fd = new_fd;
   sh->bytes_written = 0;
   sh->last_rotation = now;
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-  cdebuglog_write(
-      "[DEBUG_ROTATE_RESULT] pid=%d tid=%d rotation succeeded: did_rename=%d "
-      "rotated_path=%s max_rotated_files=%d\n",
-      (int)getpid(), (int)_get_tid(), (int)did_rename, rotated,
-      sh->rotation.max_rotated_files);
-  /* Diagnosing an intermittent qemu-arm-only CI failure where every single
-   * _prune_rotated() readdir() scan reports zero matching files (mc=0) even
-   * though access()/rename() prove the just-created rotated file genuinely
-   * exists on disk: stat() the exact path this rename() just produced via a
-   * syscall independent of readdir(), then separately opendir()/readdir()
-   * the same directory and log every raw entry seen (not just ones that
-   * pass _prune_rotated's own filter), right at the same call site
-   * _prune_rotated itself will use moments later. If readdir() here also
-   * comes back empty (or missing this exact name) while the stat() above
-   * succeeds, that pins the gap to readdir() itself in this environment
-   * rather than to any filtering logic in _prune_rotated. */
-  if (did_rename) {
-    struct stat _diag_st;
-    int _diag_stat_rv = stat(rotated, &_diag_st);
-    cdebuglog_write(
-        "[DEBUG_READDIR_DIAG] pid=%d stat(%s) rv=%d errno=%d (%s) "
-        "size=%lld ino=%llu\n",
-        (int)getpid(), rotated, _diag_stat_rv, _diag_stat_rv == 0 ? 0 : errno,
-        _diag_stat_rv == 0 ? "ok" : strerror(errno),
-        _diag_stat_rv == 0 ? (long long)_diag_st.st_size : -1LL,
-        _diag_stat_rv == 0 ? (unsigned long long)_diag_st.st_ino : 0ull);
-
-    char _diag_dir[PATH_MAX];
-    _debug_dir_of(sh->file_path, _diag_dir, sizeof _diag_dir);
-    DIR *_diag_d = opendir(_diag_dir[0] ? _diag_dir : ".");
-    if (!_diag_d) {
-      cdebuglog_write(
-          "[DEBUG_READDIR_DIAG] pid=%d opendir(%s) failed, errno=%d (%s)\n",
-          (int)getpid(), _diag_dir, errno, strerror(errno));
-    } else {
-      /* fstat() the OPEN directory fd (not a separate path-based lstat,
-       * which would be racy against whatever is being diagnosed) right
-       * before reading it, so a permission gap that would explain
-       * "opendir()/stat()-by-name succeed but readdir() returns nothing"
-       * (read permission on the directory missing while search/execute
-       * permission remains, e.g. a mode with the read bit stripped) shows
-       * up directly rather than being inferred after the fact. */
-      struct stat _diag_dirst;
-      int _diag_fstat_rv = fstat(dirfd(_diag_d), &_diag_dirst);
-      cdebuglog_write(
-          "[DEBUG_READDIR_DIAG] pid=%d fstat(dirfd) rv=%d mode=%o uid=%d "
-          "gid=%d euid=%d egid=%d\n",
-          (int)getpid(), _diag_fstat_rv,
-          _diag_fstat_rv == 0 ? (unsigned int)(_diag_dirst.st_mode & 07777)
-                              : 0u,
-          _diag_fstat_rv == 0 ? (int)_diag_dirst.st_uid : -1,
-          _diag_fstat_rv == 0 ? (int)_diag_dirst.st_gid : -1, (int)geteuid(),
-          (int)getegid());
-
-      int _diag_n = 0;
-      bool _diag_found_target = false;
-      struct dirent *_diag_e;
-      /* Cleared before the loop and read back immediately after it exits,
-       * before any other call has a chance to clobber it: glibc's
-       * readdir() returns NULL both on a genuine end-of-directory AND on
-       * an internal getdents()/getdents64() syscall error, and the two
-       * are otherwise indistinguishable to a caller. */
-      errno = 0;
-      while ((_diag_e = readdir(_diag_d)) != NULL) {
-        cdebuglog_write("[DEBUG_READDIR_DIAG] pid=%d entry[%d]=%s\n",
-                        (int)getpid(), _diag_n, _diag_e->d_name);
-        _diag_n++;
-        if (strstr(rotated, _diag_e->d_name) &&
-            strcmp(_diag_e->d_name, ".") != 0 &&
-            strcmp(_diag_e->d_name, "..") != 0)
-          _diag_found_target = true;
-      }
-      int _diag_readdir_errno = errno;
-      closedir(_diag_d);
-      cdebuglog_write(
-          "[DEBUG_READDIR_DIAG] pid=%d dir=%s total_entries=%d "
-          "found_just_renamed_target=%d terminating_errno=%d (%s)\n",
-          (int)getpid(), _diag_dir, _diag_n, (int)_diag_found_target,
-          _diag_readdir_errno,
-          _diag_readdir_errno == 0 ? "clean EOF"
-                                   : strerror(_diag_readdir_errno));
-    }
-  }
-#endif
 
   /* Prune only once the rotation has definitively succeeded (the new live
    * file is open); pruning before this point would let a subsequently
@@ -2308,19 +2102,8 @@ static int _rotate(clog_shared_t *sh) {
    * is excluded from deletion, so this prune pass can never race that other
    * call's own not-yet-finished read of it. */
   if (sh->rotation.max_rotated_files > 0) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    struct timespec _prune_t0, _prune_t1;
-    clock_gettime(CLOCK_MONOTONIC, &_prune_t0);
-#endif
     _prune_rotated(sh->file_path, sh->rotation.max_rotated_files, sh->m_procs,
                    sh->pending_compress);
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    clock_gettime(CLOCK_MONOTONIC, &_prune_t1);
-    double _prune_ms = (_prune_t1.tv_sec - _prune_t0.tv_sec) * 1000.0 +
-                       (_prune_t1.tv_nsec - _prune_t0.tv_nsec) / 1e6;
-    cdebuglog_write("[DEBUG_ROTATE_TIMING] pid=%d _prune_rotated took %.3fms\n",
-                    (int)getpid(), _prune_ms);
-#endif
   }
 
   /*
@@ -2357,36 +2140,8 @@ static int _rotate(clog_shared_t *sh) {
       sh->pending_compress = &node;
 
       mutex_unlock(sh->mutex);
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-      struct timespec _gz_t0, _gz_t1;
-      clock_gettime(CLOCK_MONOTONIC, &_gz_t0);
-      cdebuglog_write(
-          "[DEBUG_ROTATE_TIMING] pid=%d tid=%d _gzip_compress_file(%s) "
-          "START\n",
-          (int)getpid(), (int)_get_tid(), rotated);
-#endif
       _gzip_compress_file(rotated, gz_path);
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-      clock_gettime(CLOCK_MONOTONIC, &_gz_t1);
-      double _gz_ms = (_gz_t1.tv_sec - _gz_t0.tv_sec) * 1000.0 +
-                      (_gz_t1.tv_nsec - _gz_t0.tv_nsec) / 1e6;
-      cdebuglog_write(
-          "[DEBUG_ROTATE_TIMING] pid=%d tid=%d _gzip_compress_file(%s) DONE, "
-          "took %.3fms\n",
-          (int)getpid(), (int)_get_tid(), rotated, _gz_ms);
-      struct timespec _relock_t0, _relock_t1;
-      clock_gettime(CLOCK_MONOTONIC, &_relock_t0);
-#endif
       mutex_lock(sh->mutex);
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-      clock_gettime(CLOCK_MONOTONIC, &_relock_t1);
-      double _relock_ms = (_relock_t1.tv_sec - _relock_t0.tv_sec) * 1000.0 +
-                          (_relock_t1.tv_nsec - _relock_t0.tv_nsec) / 1e6;
-      cdebuglog_write(
-          "[DEBUG_ROTATE_TIMING] pid=%d re-acquiring sh->mutex after "
-          "compress took %.3fms\n",
-          (int)getpid(), _relock_ms);
-#endif
 
       /* Unlink `node` from the list. A concurrent rotation may have pushed
        * further nodes onto the head while we were unlocked, so `node` is not
@@ -2412,22 +2167,7 @@ static void _clog_time_rotate_if_due(clog_shared_t *sh) {
   time_t now = time(NULL);
   if (now - sh->last_rotation >= sh->rotation.rotation_interval_secs &&
       now >= sh->rotate_retry_after) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write(
-        "[DEBUG_ROTATE_DECISION] pid=%d tid=%d src=time path=%s now=%lld "
-        "last_rotation=%lld interval=%lld retry_after=%lld\n",
-        (int)getpid(), (int)_get_tid(), sh->file_path ? sh->file_path : "(fd)",
-        (long long)now, (long long)sh->last_rotation,
-        (long long)sh->rotation.rotation_interval_secs,
-        (long long)sh->rotate_retry_after);
-#endif
     int rrv = _rotate(sh);
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write(
-        "[DEBUG_ROTATE_DECISION] pid=%d tid=%d src=time _rotate() "
-        "returned %d\n",
-        (int)getpid(), (int)_get_tid(), rrv);
-#endif
     if (rrv != 0) sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
   }
 }
@@ -2445,21 +2185,7 @@ static void _clog_size_rotate_if_due(clog_shared_t *sh) {
     return;
   time_t now = time(NULL);
   if (now >= sh->rotate_retry_after) {
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write(
-        "[DEBUG_ROTATE_DECISION] pid=%d tid=%d src=size path=%s "
-        "bytes_written=%lld max_file_size=%lld now=%lld retry_after=%lld\n",
-        (int)getpid(), (int)_get_tid(), sh->file_path ? sh->file_path : "(fd)",
-        (long long)sh->bytes_written, (long long)sh->rotation.max_file_size,
-        (long long)now, (long long)sh->rotate_retry_after);
-#endif
     int rrv = _rotate(sh);
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-    cdebuglog_write(
-        "[DEBUG_ROTATE_DECISION] pid=%d tid=%d src=size _rotate() "
-        "returned %d\n",
-        (int)getpid(), (int)_get_tid(), rrv);
-#endif
     if (rrv != 0) sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
   }
 }

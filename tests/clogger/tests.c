@@ -1,4 +1,3 @@
-#include <cdebuglog.h>
 #include <clogger.h>
 #include <common.h>
 #include <dirent.h>
@@ -168,28 +167,6 @@ static int find_file_with_suffix(const char *dir, const char *suffix, char *out,
 static int make_tmpdir(char *out, size_t outsz) {
   snprintf(out, outsz, "/tmp/clogger_test_XXXXXX");
   if (!mkdtemp(out)) return -1;
-#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
-  /* Diagnosing an intermittent CI-only EACCES on rename() into this exact
-   * directory (mode observed as 555 instead of the requested 0700 at the
-   * point of failure, with nothing in this codebase ever chmod()ing it
-   * except one deliberate, later-running test): logging the mode and inode
-   * right at creation time distinguishes a directory that is already wrong
-   * at birth (kernel/qemu/glibc) from one that starts correct and is
-   * altered later (in-process corruption); ino is directly comparable
-   * against clogger.c's own DEBUG_ROTATE_PRE/DEBUG_ROTATE lines for this
-   * same directory, so a changed inode there means the directory was
-   * removed and recreated, not merely had its mode changed. */
-  struct stat st;
-  int rv = lstat(out, &st);
-  cdebuglog_write(
-      "[DEBUG_MKTMPDIR] pid=%d tid=%d dir=%s lstat_rv=%d mode=%o ino=%llu "
-      "uid=%d gid=%d euid=%d egid=%d\n",
-      (int)getpid(), (int)syscall(SYS_gettid), out, rv,
-      rv == 0 ? (unsigned int)(st.st_mode & 07777) : 0u,
-      rv == 0 ? (unsigned long long)st.st_ino : 0ull,
-      rv == 0 ? (int)st.st_uid : -1, rv == 0 ? (int)st.st_gid : -1,
-      (int)geteuid(), (int)getegid());
-#endif
   return 0;
 }
 

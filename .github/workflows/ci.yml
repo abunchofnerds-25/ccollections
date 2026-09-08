@@ -324,38 +324,6 @@ jobs:
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
             (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" EXTRA_CFLAGS="-Wno-error=unused-command-line-argument" build)
-            if [ "$mod" = "clogger" ]; then
-              # Extra data-gathering pass only, chasing a readdir()-returns-
-              # nothing-despite-stat()-confirming-the-file-exists bug that is
-              # otherwise reproducible only on this exact CI job (arm32
-              # Clang under qemu-arm; not reproducible locally even against
-              # the identical qemu-user 8.2.2 build and toolchain, and not
-              # seen on the aarch64 qemu jobs). Runs BEFORE, and completely
-              # independently of, the real invocation below, so tracing
-              # overhead never perturbs the timing of the authoritative pass
-              # this job's own pass/fail status is based on; its exit code is
-              # discarded on purpose (the traced run is expected to fail the
-              # same way clogger already does -- that is not this step's
-              # signal). The full syscall trace is uploaded as a workflow
-              # artifact by the step below; a filtered, directory/file-
-              # syscall-only subset (the getdents64() calls behind readdir(),
-              # plus the openat()/close() calls needed to correlate each fd
-              # back to the directory it names, and the rename()/mkdir()/
-              # unlink() calls that produce and remove the files in question)
-              # is echoed inline here too so it is visible in this same log
-              # without pulling in the full trace's unrelated futex/
-              # clock_gettime64/mmap2 noise.
-              qemu-arm -d strace -D clogger.tests.strace.log -L /usr/arm-linux-gnueabihf "$dir/tests" || true
-              echo "--- filtered fs-syscall trace (openat/statx/getdents64/close/access/unlink/rename/mkdir/rmdir) ---"
-              grep -E '^[0-9]+ (openat|statx|getdents64|close|access|unlink|rename|mkdir|rmdir)\(' clogger.tests.strace.log || true
-            fi
             qemu-arm -L /usr/arm-linux-gnueabihf "$dir/tests"
             echo "::endgroup::"
           done
-      - name: Upload clogger qemu-arm syscall trace
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: clogger-arm32-clang-strace
-          path: clogger.tests.strace.log
-          if-no-files-found: ignore

@@ -2066,6 +2066,76 @@ void circq_test_lock_mutex_for_tests(circular_queue *cq);
 void circq_test_unlock_mutex_for_tests(circular_queue *cq);
 
 /**
+ * @brief Test-only: locks loop's own reg_slot_rwlock write side directly,
+ *        bypassing every public API function.
+ *
+ * Lets a test hold this rwlock's write side locked, from a thread OTHER
+ * than the one that will call fork(), for an arbitrarily long, precisely
+ * controlled window; mirrors circq_test_lock_mutex_for_tests's own reason
+ * for existing, scoped to event_loop's own reg-slot table instead of a
+ * circular_queue.
+ *
+ * @return An opaque resolved-loop pointer that MUST be passed to the
+ *         matching event_loop_test_wrunlock_reg_slot_for_tests call, or
+ *         NULL if loop was invalid (in which case nothing was locked, and
+ *         the matching unlock call is a safe no-op given NULL). Deliberately
+ *         NOT loop itself: the unlock side must reuse this exact resolved
+ *         pointer rather than re-resolving loop on its own, since a second
+ *         resolve from a different thread can deadlock against a concurrent
+ *         fork() already holding event_loop_slot_table's own mutex while
+ *         waiting for this exact write lock to be released (a real,
+ *         reproduced hazard in an earlier version of this hook, not
+ *         theoretical).
+ *
+ * @warning Must always be paired with a later
+ * event_loop_test_wrunlock_reg_slot_for_tests call, passing this call's own
+ * return value; nothing else in this file expects reg_slot_rwlock to still
+ * be write-locked once that call returns.
+ *
+ * @see event_loop_test_wrunlock_reg_slot_for_tests
+ */
+void *event_loop_test_wrlock_reg_slot_for_tests(event_loop loop);
+
+/**
+ * @brief Test-only: unlocks the reg_slot_rwlock write side locked by a
+ *        prior event_loop_test_wrlock_reg_slot_for_tests call.
+ *
+ * @param resolved_loop The exact, non-NULL return value of the matching
+ *        event_loop_test_wrlock_reg_slot_for_tests call; NULL is a safe
+ *        no-op (mirrors that call's own NULL-on-invalid-loop return).
+ *
+ * @see event_loop_test_wrlock_reg_slot_for_tests
+ */
+void event_loop_test_wrunlock_reg_slot_for_tests(void *resolved_loop);
+
+/**
+ * @brief Test-only: locks event_loop_slot_table's own rwlock write side
+ *        directly, bypassing every public API function.
+ *
+ * Lets a test hold this rwlock's write side locked, from a thread OTHER
+ * than the one that will call fork(), for an arbitrarily long, precisely
+ * controlled window; scoped to the process-wide loop table itself, distinct
+ * from event_loop_test_wrlock_reg_slot_for_tests's own per-loop reg_slot_
+ * rwlock. Unlike that pair, there is no per-instance handle to resolve
+ * here, so this takes no argument and the matching unlock call needs none
+ * of that pair's own AB-BA precautions.
+ *
+ * @warning Must always be paired with a later
+ * event_loop_test_wrunlock_slot_table_for_tests call; nothing else in this
+ * file expects event_loop_slot_table.rwlock to still be write-locked once
+ * that call returns.
+ *
+ * @see event_loop_test_wrunlock_slot_table_for_tests
+ */
+void event_loop_test_wrlock_slot_table_for_tests(void);
+
+/**
+ * @brief Test-only: unlocks event_loop_slot_table's own rwlock write side;
+ *        see event_loop_test_wrlock_slot_table_for_tests.
+ */
+void event_loop_test_wrunlock_slot_table_for_tests(void);
+
+/**
  * @brief Test-only: reports whether a ccol_select() caller is genuinely
  *        linked into cq's own read-waiter list right now.
  *

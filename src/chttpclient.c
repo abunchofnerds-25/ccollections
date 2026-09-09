@@ -209,7 +209,20 @@ typedef struct {
  * earlier, already-completed destroy) as a fatal_err rather than a
  * use-after-free/double-free: a slot is marked not-in-use the instant it is
  * released, and its generation is bumped on every reuse, so a stale handle
- * can never alias a later, unrelated client occupying the same slot index. */
+ * can never alias a later, unrelated client occupying the same slot index.
+ *
+ * The table's own lock is a read-write lock, not a plain mutex: _chttpcli_
+ * resolve (read-only: bounds-check idx, compare generation, read slot->ptr)
+ * runs once per outbound request across every API tier (chttpclient_do,
+ * _do_async, _do_pooled, ...); _chttpcli_handle_slot_acquire/
+ * __chttpclient_destroy (the only mutators) each run once per client's
+ * entire lifetime, not once per request. Mirrors cthreadcomm.c's/
+ * cthreadpool.c's own identical slot-table rwlock conversions. Unlike
+ * those two, this table has no pthread_atfork() protection of its own at
+ * all (chttpclient.c registers none), so this conversion carries none of
+ * their own TID-tracked-write-lock reinit-in-child subtlety: there being
+ * nothing to preserve doesn't change what fork() safety this table already
+ * did or didn't have. */
 typedef struct {
   struct chttpclient *ptr; /* NULL when slot is free */
   uint32_t generation;     /* minted fresh on every acquire; monotonic per
@@ -219,7 +232,7 @@ typedef struct {
 } chttpcli_slot_t;
 
 static struct {
-  mutex_t mutex;
+  rw_lock_t rwlock;
   once_flag_t once;
   cvec slots;        /* cvec of chttpcli_slot_t; grows via push_back only,
                          indices permanent once allocated */
@@ -227,7 +240,7 @@ static struct {
 } chttpcli_slot_table = {0};
 
 static void _chttpcli_slot_table_init_globals(void) {
-  mutex_init(chttpcli_slot_table.mutex);
+  rw_lock_init(chttpcli_slot_table.rwlock);
   chttpcli_slot_table.slots = cvector_create(sizeof(chttpcli_slot_t), NULL);
   if (!chttpcli_slot_table.slots)
     fatal_err("chttpcli slot table: failed to allocate slots vector");
@@ -336,24 +349,24 @@ static struct chttpclient *_chttpcli_resolve(chttpcli h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_rdlock(chttpcli_slot_table.rwlock);
   struct chttpclient *raw = NULL;
   if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
     chttpcli_slot_t *slot =
         (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  /* Lock-free: no raw->lock acquisition here at all, so nothing can ever
-   * block while chttpcli_slot_table.mutex is held; a nested-lock version
-   * would let a slow, per-client operation holding raw->lock (e.g.
-   * chttpclient_set_tls's blocking disk I/O in _rebuild_tls_ctx_locked)
-   * transiently stall every other client's resolve calls process-wide.
-   * Safe because raw is guaranteed still-allocated here regardless: the
-   * only thing that could make it unsafe to touch, __chttpclient_destroy's
-   * slot-release step, also requires chttpcli_slot_table.mutex, which we
-   * still hold at this exact point. */
+  /* No raw->lock acquisition here at all, so nothing can ever block while
+   * chttpcli_slot_table.rwlock is held; a nested-lock version would let a
+   * slow, per-client operation holding raw->lock (e.g. chttpclient_set_
+   * tls's blocking disk I/O in _rebuild_tls_ctx_locked) transiently stall
+   * every other client's resolve calls process-wide. Safe because raw is
+   * guaranteed still-allocated here regardless: the only thing that could
+   * make it unsafe to touch, __chttpclient_destroy's slot-release step,
+   * also requires chttpcli_slot_table.rwlock's write side, which cannot
+   * run concurrently with this read side regardless. */
   if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
   return raw;
 }
 
@@ -380,8 +393,8 @@ static void _chttpcli_resolve_unpin(struct chttpclient *raw) {
    * makes the wait predicate MORE true, never flips it from true to false),
    * so it has no need to synchronize with a sleeper. This function is
    * always called standalone, after _chttpcli_resolve has already released
-   * chttpcli_slot_table.mutex, so this raw->lock acquisition is never
-   * nested inside the slot table's global mutex; an entirely ordinary
+   * chttpcli_slot_table.rwlock, so this raw->lock acquisition is never
+   * nested inside the slot table's global lock; an entirely ordinary
    * per-object lock use, identical in shape to every other
    * mutex_lock(cli->lock) call already in this file. */
 }
@@ -391,7 +404,7 @@ static void _chttpcli_resolve_unpin(struct chttpclient *raw) {
  * after the object is otherwise fully constructed. */
 static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
   call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_wrlock(chttpcli_slot_table.rwlock);
   uint32_t idx;
   chttpcli_slot_t *slot;
   if (cvector_elem_count(chttpcli_slot_table.free_indices) > 0) {
@@ -400,7 +413,7 @@ static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
   } else {
     chttpcli_slot_t fresh = {0};
     if (cvector_push_back(chttpcli_slot_table.slots, &fresh) != ccol_success) {
-      mutex_unlock(chttpcli_slot_table.mutex);
+      rw_lock_unlock(chttpcli_slot_table.rwlock);
       return 0; /* ordinary, non-fatal OOM */
     }
     idx = (uint32_t)cvector_elem_count(chttpcli_slot_table.slots) - 1;
@@ -415,7 +428,7 @@ why this is closed outright rather than left as residual risk */
   slot->ptr = cli;
   slot->in_use = true;
   chttpcli h = ((chttpcli)idx << 32) | (chttpcli)slot->generation;
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
   return h;
 }
 
@@ -8316,14 +8329,14 @@ struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_rdlock(chttpcli_slot_table.rwlock);
   struct chttpclient *raw = NULL;
   if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
     chttpcli_slot_t *slot =
         (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
   return raw;
 }
 
@@ -8333,9 +8346,9 @@ struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h) {
  * table without bound. */
 size_t _chttpcli_slot_table_capacity_for_tests(void) {
   call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_rdlock(chttpcli_slot_table.rwlock);
   size_t n = cvector_elem_count(chttpcli_slot_table.slots);
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
   return n;
 }
 
@@ -8777,7 +8790,7 @@ void __chttpclient_destroy(chttpcli cli) {
   call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
   uint32_t idx = (uint32_t)(cli >> 32);
   uint32_t gen = (uint32_t)(cli & 0xFFFFFFFFu);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_wrlock(chttpcli_slot_table.rwlock);
   chttpcli_slot_t *slot = NULL;
   struct chttpclient *raw = NULL;
   if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
@@ -8789,7 +8802,7 @@ void __chttpclient_destroy(chttpcli cli) {
     }
   }
   if (!raw) {
-    mutex_unlock(chttpcli_slot_table.mutex);
+    rw_lock_unlock(chttpcli_slot_table.rwlock);
     fatal_err(
         "chttpclient_destroy: handle is stale or already destroyed "
         "(double-destroy / use-after-destroy of a chttpcli handle)");
@@ -8797,7 +8810,7 @@ void __chttpclient_destroy(chttpcli cli) {
   slot->in_use = false; /* blocks ALL future resolves for this handle from
                             this instant, including a second concurrent
                             destroy attempt */
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
 
   mutex_lock(raw->lock);
   raw->destroying = true;
@@ -8920,7 +8933,7 @@ void __chttpclient_destroy(chttpcli cli) {
    * slots' backing array via cvector_push_back, invalidating any pointer
    * into it taken before this second lock acquisition; idx itself is
    * stable. */
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_wrlock(chttpcli_slot_table.rwlock);
   chttpcli_slot_t *slot2 =
       (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
   slot2->ptr = NULL;
@@ -8928,7 +8941,7 @@ void __chttpclient_destroy(chttpcli cli) {
       the just-freed cli's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(chttpcli_slot_table.free_indices, &idx);
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
 }
 
 /* ========================================================================== */
@@ -9541,7 +9554,7 @@ __attribute__((destructor)) static void _cleanup_default_client(void) {
    * __attribute__((destructor)) functions run unconditionally for the whole
    * shared object regardless of which parts of it were actually used. */
   call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_wrlock(chttpcli_slot_table.rwlock);
   bool any_slot_in_use = false;
   size_t slot_count = cvector_elem_count(chttpcli_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
@@ -9556,7 +9569,7 @@ __attribute__((destructor)) static void _cleanup_default_client(void) {
     __cvector_destroy(chttpcli_slot_table.slots);
     __cvector_destroy(chttpcli_slot_table.free_indices);
   }
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
 }
 
 /* ========================================================================== */

@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <cthreadcomm.h>
+#include <dirent.h>
 #include <errno.h>
 #include <execinfo.h>
 #include <fcntl.h>
@@ -796,6 +797,132 @@ TEST(circular_queues, send_and_receive_thread) {
   circular_queue_destroy(cq);
 }
 
+/* Reads /proc/<pid>/<name> (a single-line-ish pseudo-file) into buf, NUL-
+ * terminated, returning true on success. Best-effort diagnostic-only: false
+ * on any failure (process already fully reaped, permission, etc.), which
+ * the caller reports as part of the dump rather than treating as fatal --
+ * this runs only after a bounded wait has already timed out, so it must
+ * never itself introduce a new way to hang or crash the test binary. */
+static bool _read_proc_file(pid_t pid, const char *name, char *buf,
+                            size_t buf_cap) {
+  char path[64];
+  snprintf(path, sizeof path, "/proc/%d/%s", (int)pid, name);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) return false;
+  ssize_t n = read(fd, buf, buf_cap - 1);
+  close(fd);
+  if (n < 0) return false;
+  buf[n] = '\0';
+  return true;
+}
+
+/* Diagnostic-only: dumps whatever the host kernel's /proc still says about
+ * pid (and each of its own threads, if any) after a bounded wait for it has
+ * already timed out -- see _wait_for_forked_child_bounded's own doc comment
+ * for why an unbounded parent-side waitpid() is no longer trusted here.
+ * Deliberately reads real files via plain, buffered stdio/read() calls
+ * rather than anything signal-handler-safe or cdebuglog-buffered: unlike
+ * the now-removed child-side SIGALRM instrumentation this mirrors in spirit
+ * (see this suite's own git history), this only ever runs on the already-
+ * failing path, well after the timing window that mattered has closed, so
+ * perturbing it further costs nothing.
+ *
+ * /proc/<pid>/status's own State: line is the single most useful field
+ * here: Z (zombie) would mean the child has genuinely already exited and
+ * the kernel is just waiting to be reaped, pointing at a bug in how
+ * waitpid() itself observes that under emulation rather than anything the
+ * child was actually doing; D/R/S with a real /proc/<pid>/syscall entry
+ * points at the child (or a specific one of its threads) genuinely still
+ * being alive and stuck somewhere identifiable. status/wchan/syscall/stat
+ * are each read independently so one missing/unreadable file (e.g. wchan
+ * requiring a config the running kernel might lack) does not suppress the
+ * others. */
+static void _dump_stuck_child_diagnostics(pid_t pid) {
+  char buf[4096];
+  fprintf(stderr,
+          "[STUCK_CHILD_DIAG] parent pid=%d timed out waiting for child "
+          "pid=%d; dumping /proc diagnostics\n",
+          (int)getpid(), (int)pid);
+
+  static const char *const files[] = {"status", "wchan", "syscall", "stat"};
+  for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+    if (_read_proc_file(pid, files[i], buf, sizeof buf)) {
+      fprintf(stderr, "[STUCK_CHILD_DIAG] /proc/%d/%s:\n%s\n", (int)pid,
+              files[i], buf);
+    } else {
+      fprintf(stderr,
+              "[STUCK_CHILD_DIAG] /proc/%d/%s: unreadable (errno=%d %s)\n",
+              (int)pid, files[i], errno, strerror(errno));
+    }
+  }
+
+  char task_dir[64];
+  snprintf(task_dir, sizeof task_dir, "/proc/%d/task", (int)pid);
+  DIR *td = opendir(task_dir);
+  if (!td) {
+    fprintf(stderr, "[STUCK_CHILD_DIAG] /proc/%d/task: unreadable\n", (int)pid);
+  } else {
+    struct dirent *ent;
+    while ((ent = readdir(td)) != NULL) {
+      if (ent->d_name[0] == '.') continue;
+      char rel[16 + sizeof(ent->d_name)];
+      snprintf(rel, sizeof rel, "task/%s/status", ent->d_name);
+      if (_read_proc_file(pid, rel, buf, sizeof buf)) {
+        fprintf(stderr, "[STUCK_CHILD_DIAG] /proc/%d/%s:\n%s\n", (int)pid, rel,
+                buf);
+      }
+    }
+    closedir(td);
+  }
+  fflush(stderr);
+}
+
+/* Bounded replacement for a blocking waitpid(pid, status_out, 0): polls with
+ * WNOHANG up to timeout_ms (wall-clock), returning true and setting
+ * *status_out the moment pid is reaped, or false if timeout_ms elapses
+ * first. A genuinely reproduced qemu-user hang can leave a forked child's
+ * own alarm()-bounded lifetime irrelevant: the child completes and even
+ * visibly aborts (SIGABRT, a core dump), yet the parent's own waitpid()
+ * still never returns -- see this suite's own git history for the
+ * SIGALRM-in-the-child instrumentation that was built to chase this and
+ * removed once it looked resolved, and this function's own sibling
+ * (_dump_stuck_child_diagnostics) for why that removed tooling was aimed
+ * at the wrong side. An unbounded parent-side wait, unlike an unbounded
+ * child-side one, has no alarm() of its own to fall back on, so it can hang
+ * this entire test binary (and whatever CI job runs it) indefinitely
+ * regardless of how well-bounded every forked child in this file already
+ * is. On timeout, dumps diagnostics and makes a best-effort attempt to
+ * SIGKILL and reap pid anyway (so a merely-slow-not-actually-stuck child
+ * does not outlive this test as an orphan); that reap attempt is itself
+ * bounded and its own outcome does not change this function's own false
+ * return, since the timeout already establishes the failure this test
+ * needs to report. */
+static bool _wait_for_forked_child_bounded(pid_t pid, int *status_out,
+                                           int timeout_ms) {
+  enum { POLL_INTERVAL_MS = 50 };
+  int elapsed_ms = 0;
+  while (elapsed_ms < timeout_ms) {
+    pid_t r = waitpid(pid, status_out, WNOHANG);
+    if (r == pid) return true;
+    if (r == -1) return false; /* e.g. ECHILD: nothing left to wait for */
+    struct timespec ts = {.tv_sec = POLL_INTERVAL_MS / 1000,
+                          .tv_nsec = (POLL_INTERVAL_MS % 1000) * 1000000L};
+    nanosleep(&ts, NULL);
+    elapsed_ms += POLL_INTERVAL_MS;
+  }
+
+  _dump_stuck_child_diagnostics(pid);
+
+  kill(pid, SIGKILL);
+  for (int i = 0; i < 20; i++) { /* up to 1s, best-effort only */
+    pid_t r = waitpid(pid, status_out, WNOHANG);
+    if (r == pid || r == -1) break;
+    struct timespec ts = {0, 50000000}; /* 50ms */
+    nanosleep(&ts, NULL);
+  }
+  return false;
+}
+
 /* Regression tests for a real use-after-free hazard: destroying a queue
  * while it still has a linked ccol_select()/event_loop waiter left that
  * waiter's own node holding a dangling pointer into the queue's
@@ -816,10 +943,9 @@ TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
     }
     /* Bounds this child's own lifetime so an unexpected hang here fails this
      * one test loudly and fast (the default SIGALRM disposition terminates
-     * the process, which the parent's own waitpid below then simply
-     * observes as WIFSIGNALED/SIGALRM rather than SIGABRT), instead of the
-     * parent's unbounded waitpid hanging the entire test binary (and
-     * whatever CI job is running it) indefinitely. */
+     * the process, which the parent's own bounded wait below then simply
+     * observes as WIFSIGNALED/SIGALRM rather than SIGABRT), independently
+     * of the parent's own bound below. */
     alarm(10);
     circular_queue *cq = circular_queue_create(4, NULL);
     if (!cq) _exit(2);
@@ -838,7 +964,13 @@ TEST(circular_queues, destroy_with_live_event_loop_registration_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* 20s: comfortably longer than the child's own alarm(10), leaving margin
+   * for the parent to actually observe and reap it even under emulation;
+   * see _wait_for_forked_child_bounded's own doc comment for why this
+   * bound exists at all, not just the child's. */
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 20000);
+  REQUIRE_TRUE(reaped);
+  if (!reaped) return;
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -862,10 +994,11 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
   pid_t pid = fork();
   if (pid == 0) {
     /* Bounds this child's own lifetime so an unexpected hang here fails
-     * this one test loudly and fast instead of the parent's unbounded
-     * waitpid hanging the entire test binary (and whatever CI job is
-     * running it) indefinitely; see this alarm's identical use in the
-     * sibling test above for the full rationale. */
+     * this one test loudly and fast instead of hanging the entire test
+     * binary (and whatever CI job is running it) indefinitely; see this
+     * alarm's identical use in the sibling test above for the full
+     * rationale, and _wait_for_forked_child_bounded's own doc comment for
+     * why the parent below has its own, independent bound too. */
     alarm(10);
     circular_queue *cq = circular_queue_create(4, NULL);
     if (!cq) _exit(2);
@@ -909,7 +1042,11 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* See _wait_for_forked_child_bounded's own doc comment and the sibling
+   * test above for why 20s and why this bound exists at all. */
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 20000);
+  REQUIRE_TRUE(reaped);
+  if (!reaped) return;
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -1361,7 +1498,9 @@ TEST(dynamic_queues, destroy_with_live_event_loop_registration_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 20000);
+  REQUIRE_TRUE(reaped);
+  if (!reaped) return;
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -1768,7 +1907,9 @@ TEST(channels, destroy_with_live_event_loop_registration_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 20000);
+  REQUIRE_TRUE(reaped);
+  if (!reaped) return;
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -6601,7 +6742,9 @@ TEST(event_loop_handle_lifecycle, sequential_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 20000);
+  REQUIRE_TRUE(reaped);
+  if (!reaped) return;
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -6663,7 +6806,9 @@ TEST(event_loop_handle_lifecycle,
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 20000);
+  REQUIRE_TRUE(reaped);
+  if (!reaped) return;
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -6702,7 +6847,9 @@ TEST(event_loop_handle_lifecycle,
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 20000);
+  REQUIRE_TRUE(reaped);
+  if (!reaped) return;
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -6744,7 +6891,9 @@ TEST(event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 20000);
+  REQUIRE_TRUE(reaped);
+  if (!reaped) return;
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -6958,7 +7107,7 @@ static void *fork_safety_churn_thread(void *arg) {
  * src/cthreadcomm.c's own _event_loop_atfork_prepare doc comment for the
  * full mechanism): fork() duplicates only the calling thread, so
  * event_loop_slot_table's own mutex and any live loop's own
- * shutdown_lock/reg_slot_mutex/stripes[].lock could previously be
+ * shutdown_lock/reg_slot_rwlock/stripes[].lock could previously be
  * inherited by a child already locked, with no thread left alive in that
  * child that could ever unlock it.
  *
@@ -7027,7 +7176,12 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
     }
 
     int status = 0;
-    REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+    /* 10s: comfortably longer than the child's own alarm(3); see
+     * _wait_for_forked_child_bounded's own doc comment for why the parent
+     * needs its own bound here too, independent of the child's. */
+    bool reaped = _wait_for_forked_child_bounded(pid, &status, 10000);
+    REQUIRE_TRUE(reaped);
+    if (!reaped) return;
     if (!WIFEXITED(status)) hangs++;
   }
 
@@ -7194,11 +7348,274 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
   REQUIRE_EQ((int)byte, 1);
 
   int status = 0;
+  /* 10s: comfortably longer than the child's own alarm(3); see
+   * _wait_for_forked_child_bounded's own doc comment for why the parent
+   * needs its own bound here too, independent of the child's. */
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 10000);
+  REQUIRE_TRUE(reaped);
+  if (reaped) REQUIRE_TRUE(WIFEXITED(status));
+
+  pthread_join(holder, NULL);
+  circular_queue_destroy(cq);
+}
+
+typedef struct {
+  event_loop loop;
+  _Atomic bool locked;
+  int hold_ms;
+} reg_slot_fork_lock_arg_t;
+
+static void *reg_slot_fork_lock_thread(void *arg) {
+  reg_slot_fork_lock_arg_t *a = (reg_slot_fork_lock_arg_t *)arg;
+  /* The returned opaque pointer, not a->loop itself, must be handed to the
+   * matching unlock call below; see event_loop_test_wrlock_reg_slot_for_
+   * tests's own doc comment for why re-resolving a->loop a second time
+   * from this thread, at unlock time, is a real deadlock hazard against a
+   * concurrent fork(). */
+  void *resolved = event_loop_test_wrlock_reg_slot_for_tests(a->loop);
+  atomic_store(&a->locked, true);
+  /* Releases on its own fixed schedule, entirely independent of anything
+   * the forking thread does below; see queue_fork_lock_thread's own
+   * identical comment for why (the same reasoning applies verbatim, this
+   * time against _cthreadcomm_atfork_prepare's Phase 1 reg_slot_rwlock
+   * write-lock instead of _queue_atfork_prepare's cq->mutex lock). */
+  struct timespec ts = {.tv_sec = a->hold_ms / 1000,
+                        .tv_nsec = (long)(a->hold_ms % 1000) * 1000000L};
+  nanosleep(&ts, NULL);
+  event_loop_test_wrunlock_reg_slot_for_tests(resolved);
+  return NULL;
+}
+
+/* Regression test for the reg_slot_rwlock TID-tracked write-lock hazard
+ * described in _cthreadcomm_atfork_release_impl's own comment on its
+ * in_child branch for reg_slot_rwlock: converting reg_slot_mutex to a
+ * rw_lock_t (so concurrent _event_reg_resolve calls, event_loop's own
+ * hottest path under a per-request pause/resume caller like chttpserver,
+ * no longer serialize behind one lock) means the write side can now be
+ * acquired by any thread calling event_loop_add/_remove, not necessarily
+ * the thread that later calls fork(); glibc's rwlock write-lock tracks
+ * ownership by TID, so a plain rw_lock_unlock from the child's own
+ * differently-TID'd surviving thread would silently fail to release a lock
+ * a different, now-vanished thread actually locked, hanging every
+ * subsequent resolve in that child. Mirrors fork_does_not_inherit_a_
+ * locked_circular_queue_mutex's own structure exactly, substituting
+ * event_loop's reg_slot_rwlock for circular_queue's cq->mutex. */
+TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
+  char *err = NULL;
+  event_loop loop = event_loop_create_with_mprocs(4, 1, 1, NULL, &err);
+  REQUIRE_NE(loop, EVENT_LOOP_INVALID);
+
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  evl_set_nonblocking(pfd[0]);
+  event_handlers_t h = {.on_readable = fork_safety_hot_fd_on_readable,
+                        .on_writable = NULL,
+                        .on_error = NULL};
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), h, NULL, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  enum { HOLD_MS = 300 };
+  reg_slot_fork_lock_arg_t arg = {
+      .loop = loop, .locked = false, .hold_ms = HOLD_MS};
+  pthread_t holder;
+  REQUIRE_EQ(pthread_create(&holder, NULL, reg_slot_fork_lock_thread, &arg), 0);
+
+  while (!atomic_load(&arg.locked)) {
+    /* See fork_does_not_inherit_a_locked_circular_queue_mutex's own
+     * identical spin-wait comment for why sched_yield(), not a bare spin,
+     * matters under valgrind. */
+    sched_yield();
+  }
+
+  int result_pipe[2];
+  REQUIRE_EQ(pipe(result_pipe), 0);
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+
+  pid_t pid = fork();
+  REQUIRE_NE(pid, -1);
+  if (pid == 0) {
+    /* `holder` does not exist here (fork() duplicates only the calling
+     * thread). This child could only come into existence once the parent's
+     * own fork() call returned, which requires _cthreadcomm_atfork_
+     * prepare's own rw_lock_wrlock(loop->reg_slot_rwlock) to have already
+     * succeeded, i.e. the (vanished, in this process) holder thread must
+     * have already released it. Without the fix (a plain rw_lock_unlock
+     * in the child instead of a reinit), this process would inherit
+     * reg_slot_rwlock in a write-locked state with no thread that could
+     * ever release it, hanging the resolve inside event_loop_reg_
+     * generation below until alarm(3) kills this child. */
+    close(result_pipe[0]);
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    alarm(3);
+    uint64_t gen = event_loop_reg_generation(loop, reg);
+    char byte = (gen != 0) ? 1 : 0;
+    test_write_retry_eintr(result_pipe[1], &byte, 1);
+    close(result_pipe[1]);
+    _exit(0);
+  }
+  close(result_pipe[1]);
+
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000LL + (t1.tv_nsec - t0.tv_nsec) / 1000000LL;
+  /* Proves the fix's own blocking behaviour actually engaged: fork() must
+   * have waited for close to the holder's own HOLD_MS before returning. */
+  REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
+
+  char byte = 0;
+  ssize_t n = read(result_pipe[0], &byte, 1);
+  close(result_pipe[0]);
+  REQUIRE_EQ((int)n, 1);
+  REQUIRE_EQ((int)byte, 1);
+
+  int status = 0;
+  /* 10s: comfortably longer than the child's own alarm(3); see
+   * _wait_for_forked_child_bounded's own doc comment for why the parent
+   * needs its own bound here too, independent of the child's. */
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 10000);
+  REQUIRE_TRUE(reaped);
+  if (reaped) REQUIRE_TRUE(WIFEXITED(status));
+
+  pthread_join(holder, NULL);
+
+  /* The parent's own reg_slot_rwlock must still be genuinely usable after
+   * all of the above: a plain rw_lock_unlock (the parent's own release
+   * path, unlike the child's reinit) on a lock this same thread's fork()
+   * call validly released is exactly what is expected to work. */
+  uint64_t gen_after = event_loop_reg_generation(loop, reg);
+  REQUIRE_NE(gen_after, (uint64_t)0);
+
+  event_loop_remove(loop, reg);
+  event_loop_destroy(loop);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+typedef struct {
+  _Atomic bool locked;
+  int hold_ms;
+} event_loop_slot_table_fork_lock_arg_t;
+
+static void *event_loop_slot_table_fork_lock_thread(void *arg) {
+  event_loop_slot_table_fork_lock_arg_t *a =
+      (event_loop_slot_table_fork_lock_arg_t *)arg;
+  event_loop_test_wrlock_slot_table_for_tests();
+  atomic_store(&a->locked, true);
+  /* Releases on its own fixed schedule, entirely independent of anything
+   * the forking thread does below; see queue_fork_lock_thread's own
+   * identical reasoning elsewhere in this file. */
+  struct timespec ts = {.tv_sec = a->hold_ms / 1000,
+                        .tv_nsec = (long)(a->hold_ms % 1000) * 1000000L};
+  nanosleep(&ts, NULL);
+  event_loop_test_wrunlock_slot_table_for_tests();
+  return NULL;
+}
+
+/* Regression test for the event_loop_slot_table.rwlock TID-tracked
+ * write-lock hazard described in _cthreadcomm_atfork_release_impl's own
+ * comment on its in_child branch for event_loop_slot_table.rwlock: this is
+ * the process-wide LOOP table (distinct from a single loop's own
+ * reg_slot_rwlock, covered by fork_does_not_inherit_a_write_locked_reg_
+ * slot_rwlock above), acquired by every event_loop_create/_destroy call
+ * and also, on its read side, by the very first thing event_loop_pause/
+ * _resume/_modify/_remove/event_loop_reg_generation do. Its write side can
+ * be acquired by any thread calling event_loop_create/_destroy, not
+ * necessarily the thread that later calls fork(); glibc's rwlock
+ * write-lock tracks ownership by TID, so a plain rw_lock_unlock from the
+ * child's own differently-TID'd surviving thread would silently fail to
+ * release a lock a different, now-vanished thread actually locked, hanging
+ * every subsequent _event_loop_resolve (and therefore every event_loop_
+ * create/_destroy/_add/_remove/_pause/_resume/_modify call) in that
+ * child. */
+TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
+  enum { HOLD_MS = 300 };
+  event_loop_slot_table_fork_lock_arg_t arg = {.locked = false,
+                                               .hold_ms = HOLD_MS};
+  pthread_t holder;
+  REQUIRE_EQ(pthread_create(&holder, NULL,
+                            event_loop_slot_table_fork_lock_thread, &arg),
+             0);
+
+  while (!atomic_load(&arg.locked)) {
+    /* See fork_does_not_inherit_a_locked_circular_queue_mutex's own
+     * identical spin-wait reasoning for why sched_yield(), not a bare
+     * spin, matters under valgrind. */
+    sched_yield();
+  }
+
+  int result_pipe[2];
+  REQUIRE_EQ(pipe(result_pipe), 0);
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+
+  pid_t pid = fork();
+  REQUIRE_NE(pid, -1);
+  if (pid == 0) {
+    /* `holder` does not exist here (fork() duplicates only the calling
+     * thread). This child could only come into existence once the parent's
+     * own fork() call returned, which requires _cthreadcomm_atfork_
+     * prepare's own rw_lock_wrlock(event_loop_slot_table.rwlock) to have
+     * already succeeded, i.e. the (vanished, in this process) holder
+     * thread must have already released it. Without the fix (a plain
+     * rw_lock_unlock in the child instead of a reinit), this process would
+     * inherit event_loop_slot_table.rwlock in a write-locked state with no
+     * thread that could ever release it, hanging the resolve inside
+     * event_loop_create below until alarm(3) kills this child. */
+    close(result_pipe[0]);
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    alarm(3);
+    char *err = NULL;
+    event_loop l = event_loop_create(4, 1, 1, &err);
+    char byte = (l != EVENT_LOOP_INVALID) ? 1 : 0;
+    if (l != EVENT_LOOP_INVALID) event_loop_destroy(l);
+    test_write_retry_eintr(result_pipe[1], &byte, 1);
+    close(result_pipe[1]);
+    _exit(0);
+  }
+  close(result_pipe[1]);
+
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000LL + (t1.tv_nsec - t0.tv_nsec) / 1000000LL;
+  /* Proves the fix's own blocking behaviour actually engaged: fork() must
+   * have waited for close to the holder's own HOLD_MS before returning. */
+  REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
+
+  char byte = 0;
+  ssize_t n = read(result_pipe[0], &byte, 1);
+  close(result_pipe[0]);
+  REQUIRE_EQ((int)n, 1);
+  REQUIRE_EQ((int)byte, 1);
+
+  int status = 0;
   REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFEXITED(status));
 
   pthread_join(holder, NULL);
-  circular_queue_destroy(cq);
+
+  /* The parent's own event_loop_slot_table.rwlock must still be genuinely
+   * usable after all of the above: a plain rw_lock_unlock (the parent's
+   * own release path, unlike the child's reinit) on a lock this same
+   * thread's fork() call validly released is exactly what is expected to
+   * work. */
+  char *err2 = NULL;
+  event_loop l2 = event_loop_create(4, 1, 1, &err2);
+  REQUIRE_NE(l2, EVENT_LOOP_INVALID);
+  event_loop_destroy(l2);
 }
 
 static void fork_safety2_noop_readable(event_loop loop, ccol_selectable *sel,
@@ -7473,7 +7890,14 @@ TEST(fork_safety, event_loop_destroy_of_inherited_loop_in_child_is_safe) {
   close(result_pipe[0]);
 
   int status = 0;
-  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+  /* 10s: comfortably longer than the child's own alarm(5); see
+   * _wait_for_forked_child_bounded's own doc comment for why the parent
+   * needs its own bound here too, independent of the child's. Not an
+   * early-return on timeout, unlike this file's simpler fork-safety
+   * tests: the parent's own loop/pfd/ctx below still need tearing down
+   * regardless of whether the child was successfully reaped. */
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 10000);
+  REQUIRE_TRUE(reaped);
 
   /* Reaching a clean exit with the byte actually written is the real
    * assertion: a SIGSEGV (the historically-reproduced regression) makes
@@ -7485,7 +7909,7 @@ TEST(fork_safety, event_loop_destroy_of_inherited_loop_in_child_is_safe) {
    * _exit() under make memtest's own --errors-for-leak-kinds=all/
    * --error-exitcode machinery; see e.g.
    * fork_does_not_inherit_a_locked_circular_queue_mutex's own comment). */
-  REQUIRE_TRUE(WIFEXITED(status));
+  if (reaped) REQUIRE_TRUE(WIFEXITED(status));
   REQUIRE_EQ((int)n, 1);
   REQUIRE_EQ((int)byte, 1);
 

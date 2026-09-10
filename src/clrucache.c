@@ -144,7 +144,8 @@ static struct {
 } clrucache_slot_table = {0};
 
 static void _clrucache_slot_table_init_globals(void) {
-  rw_lock_init(clrucache_slot_table.rwlock);
+  if (rw_lock_init(clrucache_slot_table.rwlock) != 0)
+    fatal_err("clru_cache slot table: failed to initialize rwlock");
   clrucache_slot_table.slots = cvector_create(sizeof(clrucache_slot_t), NULL);
   if (!clrucache_slot_table.slots)
     fatal_err("clru_cache slot table: failed to allocate slots vector");

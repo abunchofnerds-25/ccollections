@@ -508,8 +508,14 @@ TEST(proc_field, different_threads_have_different_tids) {
 
   /* Log from a spawned thread */
   pthread_t thr;
-  pthread_create(&thr, NULL, _proc_test_thread, &lg);
-  pthread_join(thr, NULL);
+  int create_rv = pthread_create(&thr, NULL, _proc_test_thread, &lg);
+  if (create_rv == 0) {
+    pthread_join(thr, NULL);
+  } else {
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(create_rv, 0);
 
   clog_close(lg);
 
@@ -2155,13 +2161,24 @@ TEST(threading, concurrent_writes_produce_no_garbled_lines) {
 
   pthread_t threads[THREAD_COUNT];
   thread_arg_t args[THREAD_COUNT];
+  bool created[THREAD_COUNT];
+  int create_failures = 0;
 
   for (int i = 0; i < THREAD_COUNT; i++) {
     args[i].lg = lg;
     args[i].thread_id = i;
-    pthread_create(&threads[i], NULL, _writer_thread, &args[i]);
+    created[i] =
+        (pthread_create(&threads[i], NULL, _writer_thread, &args[i]) == 0);
+    if (!created[i]) create_failures++;
   }
-  for (int i = 0; i < THREAD_COUNT; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < THREAD_COUNT; i++)
+    if (created[i]) pthread_join(threads[i], NULL);
+
+  if (create_failures > 0) {
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(create_failures, 0);
 
   clog_close(lg);
 
@@ -3816,6 +3833,7 @@ TEST(syslog, fatal_severity_encoding) {
     log_fatal(lg, "fatal syslog event");
     _exit(0); /* unreachable */
   }
+  REQUIRE_NE(pid, -1);
 
   int status;
   waitpid(pid, &status, 0);
@@ -4268,18 +4286,30 @@ TEST(threading, concurrent_parent_and_derived_writers_no_garbled_lines) {
 
   pthread_t threads[DERIVED_THREAD_COUNT];
   derived_arg_t args[DERIVED_THREAD_COUNT];
+  bool created[DERIVED_THREAD_COUNT];
+  int create_failures = 0;
 
   for (int i = 0; i < DERIVED_THREAD_COUNT; i++) {
     args[i].lg = parent;
     args[i].id = i;
-    pthread_create(&threads[i], NULL, _derived_writer_thread, &args[i]);
+    created[i] = (pthread_create(&threads[i], NULL, _derived_writer_thread,
+                                 &args[i]) == 0);
+    if (!created[i]) create_failures++;
   }
 
   /* Parent also writes concurrently. */
   for (int i = 0; i < DERIVED_MSGS_PER_THREAD; i++)
     log_info(parent, "parent msg=%d", i);
 
-  for (int i = 0; i < DERIVED_THREAD_COUNT; i++) pthread_join(threads[i], NULL);
+  for (int i = 0; i < DERIVED_THREAD_COUNT; i++)
+    if (created[i]) pthread_join(threads[i], NULL);
+
+  if (create_failures > 0) {
+    clog_close(parent);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(create_failures, 0);
+
   clog_close(parent);
 
   /* Every non-backtrace line must start with "ts=". */
@@ -4333,13 +4363,26 @@ TEST(threading, concurrent_filtered_writes_and_level_changes_no_crash) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   pthread_t writers[LEVEL_FASTPATH_WRITER_COUNT], toggler;
-  for (int i = 0; i < LEVEL_FASTPATH_WRITER_COUNT; i++)
-    pthread_create(&writers[i], NULL, _level_fastpath_writer, &lg);
-  pthread_create(&toggler, NULL, _level_fastpath_toggler, &lg);
+  bool writer_created[LEVEL_FASTPATH_WRITER_COUNT];
+  int create_failures = 0;
+  for (int i = 0; i < LEVEL_FASTPATH_WRITER_COUNT; i++) {
+    writer_created[i] =
+        (pthread_create(&writers[i], NULL, _level_fastpath_writer, &lg) == 0);
+    if (!writer_created[i]) create_failures++;
+  }
+  bool toggler_created =
+      (pthread_create(&toggler, NULL, _level_fastpath_toggler, &lg) == 0);
+  if (!toggler_created) create_failures++;
 
   for (int i = 0; i < LEVEL_FASTPATH_WRITER_COUNT; i++)
-    pthread_join(writers[i], NULL);
-  pthread_join(toggler, NULL);
+    if (writer_created[i]) pthread_join(writers[i], NULL);
+  if (toggler_created) pthread_join(toggler, NULL);
+
+  if (create_failures > 0) {
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(create_failures, 0);
 
   clog_set_level(lg, CLOG_INFO);
   log_info(lg, "final marker");
@@ -4416,13 +4459,26 @@ TEST(threading, concurrent_set_field_and_write_no_race) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   pthread_t writers[FIELD_RACE_WRITER_COUNT], mutator;
-  for (int i = 0; i < FIELD_RACE_WRITER_COUNT; i++)
-    pthread_create(&writers[i], NULL, _field_race_writer, &lg);
-  pthread_create(&mutator, NULL, _field_race_mutator, &lg);
+  bool writer_created[FIELD_RACE_WRITER_COUNT];
+  int create_failures = 0;
+  for (int i = 0; i < FIELD_RACE_WRITER_COUNT; i++) {
+    writer_created[i] =
+        (pthread_create(&writers[i], NULL, _field_race_writer, &lg) == 0);
+    if (!writer_created[i]) create_failures++;
+  }
+  bool mutator_created =
+      (pthread_create(&mutator, NULL, _field_race_mutator, &lg) == 0);
+  if (!mutator_created) create_failures++;
 
   for (int i = 0; i < FIELD_RACE_WRITER_COUNT; i++)
-    pthread_join(writers[i], NULL);
-  pthread_join(mutator, NULL);
+    if (writer_created[i]) pthread_join(writers[i], NULL);
+  if (mutator_created) pthread_join(mutator, NULL);
+
+  if (create_failures > 0) {
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(create_failures, 0);
 
   clog_close(lg);
 
@@ -4488,13 +4544,26 @@ TEST(threading, concurrent_derive_close_churn_stresses_slot_table) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   pthread_t writers[SLOT_CHURN_WRITER_COUNT], deriver;
-  for (int i = 0; i < SLOT_CHURN_WRITER_COUNT; i++)
-    pthread_create(&writers[i], NULL, _slot_churn_writer, &lg);
-  pthread_create(&deriver, NULL, _slot_churn_deriver, &lg);
+  bool writer_created[SLOT_CHURN_WRITER_COUNT];
+  int create_failures = 0;
+  for (int i = 0; i < SLOT_CHURN_WRITER_COUNT; i++) {
+    writer_created[i] =
+        (pthread_create(&writers[i], NULL, _slot_churn_writer, &lg) == 0);
+    if (!writer_created[i]) create_failures++;
+  }
+  bool deriver_created =
+      (pthread_create(&deriver, NULL, _slot_churn_deriver, &lg) == 0);
+  if (!deriver_created) create_failures++;
 
   for (int i = 0; i < SLOT_CHURN_WRITER_COUNT; i++)
-    pthread_join(writers[i], NULL);
-  pthread_join(deriver, NULL);
+    if (writer_created[i]) pthread_join(writers[i], NULL);
+  if (deriver_created) pthread_join(deriver, NULL);
+
+  if (create_failures > 0) {
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(create_failures, 0);
 
   clog_close(lg);
   cleanup_dir(dir, "app.log");
@@ -4633,8 +4702,23 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   pthread_t writers[FORK_CHURN_WRITER_COUNT];
-  for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++)
-    pthread_create(&writers[i], NULL, _fork_churn_writer, &lg);
+  bool writer_created[FORK_CHURN_WRITER_COUNT];
+  int writer_create_failures = 0;
+  for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++) {
+    writer_created[i] =
+        (pthread_create(&writers[i], NULL, _fork_churn_writer, &lg) == 0);
+    if (!writer_created[i]) writer_create_failures++;
+  }
+  if (writer_create_failures > 0) {
+    /* No fork() attempted yet; join whatever did get created before failing,
+     * so no background thread outlives this test function's own stack
+     * frame (which `lg` and `dir` above live on). */
+    for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++)
+      if (writer_created[i]) pthread_join(writers[i], NULL);
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(writer_create_failures, 0);
 
   /* Fork partway through the churn, from the main test thread. */
   usleep(1000);
@@ -4644,6 +4728,16 @@ TEST(fork_safety, concurrent_fork_during_churn_does_not_hang) {
      * and use the inherited handle before exiting. */
     log_info(lg, "post-fork child message");
     _exit(0);
+  }
+  if (pid == -1) {
+    /* Every writer thread above was successfully created (the check just
+     * above already guarantees this); join them all before failing, rather
+     * than leaving them running against `lg`/`dir` after this test function
+     * returns. */
+    for (int i = 0; i < FORK_CHURN_WRITER_COUNT; i++)
+      pthread_join(writers[i], NULL);
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
   }
   REQUIRE_NE(pid, -1);
 
@@ -5009,6 +5103,15 @@ TEST(fork_safety,
     _fork_pending_compress_child(lg, dir, stale_gz, marker_path);
     _exit(127); /* unreachable */
   }
+  if (pid == -1) {
+    /* Thread `t` was already successfully created above; join it (rather
+     * than leaving it running against `lg`/`dir` after this test function
+     * returns) before failing. */
+    pthread_join(t, NULL);
+    clog_close(lg);
+    cleanup_dir(marker_dir, "marker");
+    cleanup_dir(dir, "app.log");
+  }
   REQUIRE_NE(pid, -1);
 
   /* Parent: let the original, still-in-flight compression finish normally
@@ -5126,6 +5229,16 @@ TEST(fork_safety, fork_during_concurrent_close_does_not_leak_target_in_child) {
              clog_test_live_shareds_count());
     _fork_safety_marker_append(marker_path, buf);
     _exit(0);
+  }
+  if (pid == -1) {
+    /* The closer thread is genuinely still suspended (mid clog_close())
+     * behind the artificial delay armed above; disarm it and join before
+     * failing, rather than leaving it running against `to_close`/`lg` (both
+     * local to this test function) after this test function returns. */
+    clog_test_set_close_finalize_delay_us(0);
+    pthread_join(closer, NULL);
+    cleanup_dir(marker_dir, "marker");
+    cleanup_dir(dir, "app.log");
   }
   REQUIRE_NE(pid, -1);
 
@@ -5493,8 +5606,15 @@ TEST(async, backtrace_captured_on_calling_thread_not_writer_thread) {
   REQUIRE_NE(g_bt_test_lg, CLOG_INVALID);
 
   pthread_t th;
-  pthread_create(&th, NULL, _clog_bt_uniquely_named_worker_fn, NULL);
-  pthread_join(th, NULL);
+  int create_rv =
+      pthread_create(&th, NULL, _clog_bt_uniquely_named_worker_fn, NULL);
+  if (create_rv == 0) {
+    pthread_join(th, NULL);
+  } else {
+    clog_close(g_bt_test_lg);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(create_rv, 0);
 
   clog_flush(g_bt_test_lg);
 
@@ -7122,10 +7242,21 @@ TEST(threading, concurrent_async_writes_produce_no_garbled_lines) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   pthread_t writers[ASYNC_STRESS_WRITER_COUNT];
+  bool created[ASYNC_STRESS_WRITER_COUNT];
+  int create_failures = 0;
+  for (int i = 0; i < ASYNC_STRESS_WRITER_COUNT; i++) {
+    created[i] =
+        (pthread_create(&writers[i], NULL, _async_stress_writer, &lg) == 0);
+    if (!created[i]) create_failures++;
+  }
   for (int i = 0; i < ASYNC_STRESS_WRITER_COUNT; i++)
-    pthread_create(&writers[i], NULL, _async_stress_writer, &lg);
-  for (int i = 0; i < ASYNC_STRESS_WRITER_COUNT; i++)
-    pthread_join(writers[i], NULL);
+    if (created[i]) pthread_join(writers[i], NULL);
+
+  if (create_failures > 0) {
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(create_failures, 0);
 
   clog_close(lg);
 
@@ -7434,10 +7565,21 @@ TEST(compression, concurrent_rotations_never_corrupt_or_lose_a_gz_file) {
   REQUIRE_NE(lg, CLOG_INVALID);
 
   pthread_t threads[ROTATE_STRESS_THREAD_COUNT];
+  bool created[ROTATE_STRESS_THREAD_COUNT];
+  int create_failures = 0;
+  for (int i = 0; i < ROTATE_STRESS_THREAD_COUNT; i++) {
+    created[i] =
+        (pthread_create(&threads[i], NULL, _rotate_stress_writer, &lg) == 0);
+    if (!created[i]) create_failures++;
+  }
   for (int i = 0; i < ROTATE_STRESS_THREAD_COUNT; i++)
-    pthread_create(&threads[i], NULL, _rotate_stress_writer, &lg);
-  for (int i = 0; i < ROTATE_STRESS_THREAD_COUNT; i++)
-    pthread_join(threads[i], NULL);
+    if (created[i]) pthread_join(threads[i], NULL);
+
+  if (create_failures > 0) {
+    clog_close(lg);
+    cleanup_dir(dir, "app.log");
+  }
+  REQUIRE_EQ(create_failures, 0);
 
   clog_close(lg);
 
@@ -7671,6 +7813,7 @@ TEST(fatal, terminates_process) {
     log_fatal(lg, "process must die");
     _exit(0); /* unreachable */
   }
+  REQUIRE_NE(pid, -1);
 
   int wstatus;
   waitpid(pid, &wstatus, 0);
@@ -7703,6 +7846,7 @@ TEST(fatal, writes_log_before_terminating) {
     log_fatal(lg, "fatal condition encountered");
     _exit(0); /* unreachable */
   }
+  REQUIRE_NE(pid, -1);
 
   int wstatus;
   waitpid(pid, &wstatus, 0);
@@ -7744,6 +7888,7 @@ TEST(fatal, writes_backtrace_before_terminating) {
     log_fatal(lg, "fatal with trace");
     _exit(0); /* unreachable */
   }
+  REQUIRE_NE(pid, -1);
 
   int wstatus;
   waitpid(pid, &wstatus, 0);
@@ -7781,6 +7926,7 @@ TEST(fatal, writes_and_terminates_with_clog_off) {
     log_fatal(lg, "fatal bypasses filter");
     _exit(0); /* unreachable */
   }
+  REQUIRE_NE(pid, -1);
 
   int wstatus;
   waitpid(pid, &wstatus, 0);
@@ -7824,6 +7970,7 @@ TEST(json, fatal_level_string_in_json) {
     log_fatal(lg, "fatal json message");
     _exit(0); /* unreachable */
   }
+  REQUIRE_NE(pid, -1);
 
   int wstatus;
   waitpid(pid, &wstatus, 0);
@@ -7861,6 +8008,7 @@ TEST(json, fatal_has_inline_bt_array) {
     log_fatal(lg, "fatal event");
     _exit(0); /* unreachable */
   }
+  REQUIRE_NE(pid, -1);
 
   int wstatus;
   waitpid(pid, &wstatus, 0);

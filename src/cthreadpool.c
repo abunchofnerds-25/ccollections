@@ -115,7 +115,8 @@ static void _ctpool_atfork_child_release(void);
 #endif
 
 static void _ctpool_slot_table_init_globals(void) {
-  rw_lock_init(ctpool_slot_table.rwlock);
+  if (rw_lock_init(ctpool_slot_table.rwlock) != 0)
+    fatal_err("ctpool slot table: failed to initialize rwlock");
   ctpool_slot_table.slots = cvector_create(sizeof(ctpool_slot_t), NULL);
   if (!ctpool_slot_table.slots)
     fatal_err("ctpool slot table: failed to allocate slots vector");
@@ -459,10 +460,14 @@ static void _ctpool_atfork_release_impl(bool is_child) {
        * pool, whose real worker threads (the only ones that could ever have
        * been genuine waiters) are all, unconditionally, gone in this
        * process regardless of what fork() caught them doing. */
-      cond_var_init(pool->not_empty);
-      cond_var_init(pool->not_full);
-      cond_var_init(pool->idle_cv);
-      cond_var_init(pool->pin_cv);
+      if (cond_var_init(pool->not_empty) != 0)
+        fatal_err("ctpool atfork release: failed to reinit not_empty");
+      if (cond_var_init(pool->not_full) != 0)
+        fatal_err("ctpool atfork release: failed to reinit not_full");
+      if (cond_var_init(pool->idle_cv) != 0)
+        fatal_err("ctpool atfork release: failed to reinit idle_cv");
+      if (cond_var_init(pool->pin_cv) != 0)
+        fatal_err("ctpool atfork release: failed to reinit pin_cv");
     }
 
     mutex_unlock(pool->mu);
@@ -485,7 +490,8 @@ static void _ctpool_atfork_release_impl(bool is_child) {
    * because the child has exactly one thread at this point and no one else
    * can possibly be waiting on it. */
   if (is_child) {
-    rw_lock_init(ctpool_slot_table.rwlock);
+    if (rw_lock_init(ctpool_slot_table.rwlock) != 0)
+      fatal_err("ctpool atfork release: failed to reinit slot table rwlock");
   } else {
     rw_lock_unlock(ctpool_slot_table.rwlock);
   }

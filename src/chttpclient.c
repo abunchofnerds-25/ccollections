@@ -240,7 +240,8 @@ static struct {
 } chttpcli_slot_table = {0};
 
 static void _chttpcli_slot_table_init_globals(void) {
-  rw_lock_init(chttpcli_slot_table.rwlock);
+  if (rw_lock_init(chttpcli_slot_table.rwlock) != 0)
+    fatal_err("chttpcli slot table: failed to initialize rwlock");
   chttpcli_slot_table.slots = cvector_create(sizeof(chttpcli_slot_t), NULL);
   if (!chttpcli_slot_table.slots)
     fatal_err("chttpcli slot table: failed to allocate slots vector");
@@ -1713,15 +1714,15 @@ static chttp_deadline_t _deadline_earlier(chttp_deadline_t a,
  * deadline at all; see client_deadline_bundle's own identical fix
  * (_client_deadline_init_globals) for the first place this exact mistake was
  * caught in this codebase. */
-static void _cond_var_init_monotonic(cond_var_t *cv) {
+static int _cond_var_init_monotonic(cond_var_t *cv) {
   cond_var_attr_t cv_attr;
   if (cond_var_attr_init(cv_attr) == 0) {
     cond_var_attr_setclock(cv_attr, CLOCK_MONOTONIC);
-    cond_var_init_ca(*cv, cv_attr);
+    int rv = cond_var_init_ca(*cv, cv_attr);
     cond_var_attr_destroy(cv_attr);
-  } else {
-    cond_var_init(*cv);
+    return rv;
   }
+  return cond_var_init(*cv);
 }
 
 /* ========================================================================== */
@@ -3451,7 +3452,22 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
      * field comments now warn against) got a false sense of security: the
      * hostname check would run and "pass" against literally any
      * self-signed certificate for that hostname. */
-    ctls_ctx_trust_system(ctx);
+    if (ctls_ctx_trust_system(ctx) != ccol_success) {
+      /* Unlike a plain missing/unreadable CA-bundle file (checked with
+       * access() before ctls is ever touched, above), this failure is not
+       * pre-checkable: it means the platform's own default CA store
+       * couldn't be loaded inside ctls. Discarding ctx entirely here
+       * (rather than falling through to install it) matters: ctx's
+       * verify_peer flag was already committed to SSL_VERIFY_PEER before
+       * this rebuild failed, but the rebuild that would have loaded any
+       * trust anchors never committed, so the PREVIOUS, pre-verify_peer
+       * ctx_default from ctls_ctx_new_mp's own initial build would remain
+       * installed with no certificate verification at all if this ctx were
+       * kept; every other failure in this function already discards ctx
+       * for the identical reason. */
+      ctls_ctx_release(ctx);
+      return ccol_success; /* deferred failure, see comment above */
+    }
   }
 
   cli->tls_ctx = ctx;
@@ -3531,8 +3547,10 @@ static ccol_retval_t _client_deadline_sweep_start(void);
 static void _client_deadline_sweep_stop_and_join(void);
 
 static void _client_engine_globals_init(void) {
-  mutex_init(cli_engine_bundler.mutex);
-  cond_var_init(cli_engine_bundler.stopped_cv);
+  if (mutex_init(cli_engine_bundler.mutex) != 0)
+    fatal_err("chttpclient engine: failed to initialize mutex");
+  if (cond_var_init(cli_engine_bundler.stopped_cv) != 0)
+    fatal_err("chttpclient engine: failed to initialize condition variable");
   /* Belt-and-suspenders: Tier 1 already passes MSG_NOSIGNAL to every send(),
    * and Tier 2/3's own raw writes do the same (see _async_on_writable), so
    * this is not load-bearing the way chttpserver.c's identical call is for
@@ -4767,9 +4785,12 @@ static size_t _deadline_stripe_index_for_ctx(const chttp_async_ctx_t *ctx) {
 }
 
 static void _client_deadline_init_globals(void) {
-  mutex_init(client_deadline_bundle.mutex);
+  if (mutex_init(client_deadline_bundle.mutex) != 0)
+    fatal_err("chttpclient deadline sweep: failed to initialize mutex");
   for (size_t i = 0; i < CHTTP_DEADLINE_SWEEP_STRIPES; i++) {
-    mutex_init(client_deadline_bundle.stripes[i].mutex);
+    if (mutex_init(client_deadline_bundle.stripes[i].mutex) != 0)
+      fatal_err(
+          "chttpclient deadline sweep: failed to initialize stripe mutex");
   }
   /* CLOCK_MONOTONIC to match _client_deadline_sweep_fn's own
    * clock_gettime(CLOCK_MONOTONIC, ...)-based wake deadline;
@@ -4783,7 +4804,10 @@ static void _client_deadline_init_globals(void) {
    * for the exact same fix, applied there first; see _cond_var_init_monotonic
    * (this file's shared helper for this exact pattern) for the full
    * rationale. */
-  _cond_var_init_monotonic(&client_deadline_bundle.cond_var);
+  if (_cond_var_init_monotonic(&client_deadline_bundle.cond_var) != 0)
+    fatal_err(
+        "chttpclient deadline sweep: failed to initialize condition "
+        "variable");
 }
 
 #define CHTTP_DEADLINE_SWEEP_INTERVAL_MS 100
@@ -8551,14 +8575,52 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
 
   cli->m_procs = mp;
   cli->tls = CHTTP_TLS_DEFAULT;
-  mutex_init(cli->lock);
+  if (mutex_init(cli->lock) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("failed to initialize mutex");
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
   /* CLOCK_MONOTONIC: _slot_acquire hands this condvar a CLOCK_MONOTONIC
    * timespec (from _deadline_make) via cond_var_timedwait; see
    * _cond_var_init_monotonic's own comment for why the clock must match. */
-  _cond_var_init_monotonic(&cli->available);
-  cond_var_init(cli->idle_async_drained);
-  mutex_init(cli->async_count_lock);
-  cond_var_init(cli->async_count_drained);
+  if (_cond_var_init_monotonic(&cli->available) != 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("failed to initialize condition variable");
+    mutex_destroy(cli->lock);
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
+  if (cond_var_init(cli->idle_async_drained) != 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("failed to initialize condition variable");
+    mutex_destroy(cli->lock);
+    cond_var_destroy(cli->available);
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
+  if (mutex_init(cli->async_count_lock) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("failed to initialize mutex");
+    mutex_destroy(cli->lock);
+    cond_var_destroy(cli->available);
+    cond_var_destroy(cli->idle_async_drained);
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
+  if (cond_var_init(cli->async_count_drained) != 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("failed to initialize condition variable");
+    mutex_destroy(cli->lock);
+    cond_var_destroy(cli->available);
+    cond_var_destroy(cli->idle_async_drained);
+    mutex_destroy(cli->async_count_lock);
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
 
   char *herr = NULL;
   cli->idle_pools =

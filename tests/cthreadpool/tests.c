@@ -1324,7 +1324,7 @@ TEST(wait, concurrent_shutdown_immediate_unblocks_wait) {
   }
 
   pthread_t waiter;
-  pthread_create(&waiter, NULL, pool_wait_thread, &pool);
+  REQUIRE_EQ(pthread_create(&waiter, NULL, pool_wait_thread, &pool), 0);
   sleep_ms(10); /* let waiter enter cond_var_wait inside ctpool_wait */
 
   /* Release the gate, then poll until active_count drops to 0.  The moment
@@ -1361,14 +1361,14 @@ TEST(wait, concurrent_shutdown_drain_unblocks_wait) {
   }
 
   pthread_t waiter;
-  pthread_create(&waiter, NULL, pool_wait_thread, &pool);
+  REQUIRE_EQ(pthread_create(&waiter, NULL, pool_wait_thread, &pool), 0);
   sleep_ms(10); /* let waiter block inside ctpool_wait */
 
   /* A helper thread releases the gate after a delay so the worker exits
    * blocker_fn and drains the queued tasks while shutdown_drain is already
    * in progress. */
   pthread_t releaser;
-  pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
 
   ctpool_shutdown_drain(pool);
   pthread_join(releaser, NULL);
@@ -1445,7 +1445,7 @@ TEST(shutdown_immediate, queued_tasks_discarded) {
   }
 
   pthread_t releaser;
-  pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
 
   /* Queue is discarded here (worker is in blocker_fn, not dequeuing).
    * Internally blocks until the worker joins; the helper thread releases
@@ -1478,7 +1478,7 @@ TEST(shutdown_immediate, futures_become_cancelled) {
   REQUIRE_NE((void *)f2, NULL);
 
   pthread_t releaser;
-  pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
 
   ctpool_shutdown_immediate(pool); /* discards f1 and f2 while gate==0 */
   pthread_join(releaser, NULL);
@@ -1521,7 +1521,7 @@ TEST(shutdown_immediate, on_complete_not_called_for_discarded) {
   }
 
   pthread_t releaser;
-  pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
   ctpool_shutdown_immediate(pool); /* discards all 5 queued tasks */
   pthread_join(releaser, NULL);
 
@@ -1770,12 +1770,20 @@ TEST(load, concurrent_producers) {
 
   producer_arg_t args[NPRODUCERS];
   pthread_t threads[NPRODUCERS];
+  int created = 0;
   for (int i = 0; i < NPRODUCERS; i++) {
     args[i] =
         (producer_arg_t){.pool = pool, .counter = &counter, .n = TASKS_PER};
-    pthread_create(&threads[i], NULL, producer_thread, &args[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized threads[i] slot (undefined behavior, possibly hanging
+     * on garbage pthread_t data), so only the threads actually created are
+     * joined. */
+    if (pthread_create(&threads[i], NULL, producer_thread, &args[i]) != 0)
+      break;
+    created++;
   }
-  for (int i = 0; i < NPRODUCERS; i++) {
+  REQUIRE_EQ(created, (int)NPRODUCERS);
+  for (int i = 0; i < created; i++) {
     pthread_join(threads[i], NULL);
   }
 
@@ -1861,8 +1869,16 @@ TEST(ctpool_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     ctp_concurrent_destroy_arg_t a1 = {.h = pool};
     ctp_concurrent_destroy_arg_t a2 = {.h = pool};
     pthread_t t1, t2;
-    pthread_create(&t1, NULL, ctp_concurrent_destroy_thread, &a1);
-    pthread_create(&t2, NULL, ctp_concurrent_destroy_thread, &a2);
+    /* Inside a forked child: REQUIRE_* would be unsafe here (its early
+     * return would skip this branch's own _exit() and fall back into the
+     * harness's test loop a second time), so a create failure instead
+     * falls through to a distinct, non-SIGABRT exit the parent's
+     * WIFSIGNALED/SIGABRT check below already turns into a clean test
+     * failure, rather than joining a garbage, never-created pthread_t. */
+    if (pthread_create(&t1, NULL, ctp_concurrent_destroy_thread, &a1) != 0)
+      _exit(2);
+    if (pthread_create(&t2, NULL, ctp_concurrent_destroy_thread, &a2) != 0)
+      _exit(2);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
     _exit(0); /* unreachable: whichever of the two destroy calls loses the

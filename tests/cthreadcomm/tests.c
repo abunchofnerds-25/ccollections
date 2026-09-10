@@ -849,7 +849,7 @@ TEST(circular_queues, disable_sending_does_not_unblock_recv) {
 
   cq_disable_recv_args args = {.cq = cq, .result = ccol_unexpected_failure};
   pthread_t tid;
-  pthread_create(&tid, NULL, cq_blocking_recv_thread, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, cq_blocking_recv_thread, &args), 0);
 
   usleep(20000);  // let the receiver block on the empty queue
   circq_disable_sending(cq);
@@ -911,7 +911,7 @@ TEST(circular_queues, send_and_receive_thread) {
   circular_queue *cq = circular_queue_create_with_mprocs(1, NULL, NULL);
 
   pthread_t tid;
-  pthread_create(&tid, NULL, cq_helper_thread, cq);
+  REQUIRE_EQ(pthread_create(&tid, NULL, cq_helper_thread, cq), 0);
 
   c_message_t m = {.data = malloc(16 * sizeof(char)), .size = 16};
   ((char *)(m.data))[0] = 'A';
@@ -1159,7 +1159,22 @@ TEST(circular_queues, destroy_while_ccol_select_is_watching_is_fatal) {
 
     cq_select_waiter_args wargs = {.cq = cq};
     pthread_t waiter;
-    pthread_create(&waiter, NULL, cq_select_waiter_thread, &wargs);
+    /* Checked via an if-guard, not REQUIRE_EQ: this runs inside the forked
+     * child above (pid == 0), where REQUIRE_EQ's failure path (an early
+     * `return` out of this Tau test function) would return out of THIS
+     * test function while still running as the forked child, skipping the
+     * exit calls below and falling into the harness's own subsequent
+     * test-running loop a second time in a process only ever meant to run
+     * this one child-side branch; see fork_does_not_deadlock_with_queue_
+     * registered_before_event_loop's own identical fix/comment further
+     * down in this file for the full reasoning. A failed create here is
+     * already bounded by the poll loop below (linked never becomes true
+     * with no thread to link it), but exiting immediately with a distinct
+     * code makes the failure's actual cause visible in the exit status
+     * rather than surfacing 2 seconds later as an indistinguishable
+     * REQUIRE_TRUE(linked) failure. */
+    if (pthread_create(&waiter, NULL, cq_select_waiter_thread, &wargs) != 0)
+      _test_flush_and_exit(4);
 #ifdef RUNNING_UNIT_TESTS
     _register_hang_watch_waiter(waiter);
     cdebuglog_write("[DEBUG_TEST] child pid=%d waiter thread created\n",
@@ -1578,7 +1593,7 @@ TEST(dynamic_queues, disable_sending_does_not_unblock_recv) {
 
   dq_disable_recv_args args = {.dq = dq, .result = ccol_unexpected_failure};
   pthread_t tid;
-  pthread_create(&tid, NULL, dq_blocking_recv_thread, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, dq_blocking_recv_thread, &args), 0);
 
   usleep(20000);  // let the receiver block on the empty queue
   dynmq_disable_sending(dq);
@@ -1632,7 +1647,7 @@ TEST(dynamic_queues, send_and_receive_thread) {
   dynamic_queue *dq = dynamic_queue_create_with_mprocs(NULL, NULL);
 
   pthread_t tid;
-  pthread_create(&tid, NULL, dq_helper_thread, dq);
+  REQUIRE_EQ(pthread_create(&tid, NULL, dq_helper_thread, dq), 0);
 
   usleep(50000);  // Let's make the receiver wait
 
@@ -1754,7 +1769,9 @@ TEST(channels, basic_send_and_receive_no_mprocs) {
   channel *ch = channel_create_with_mprocs(1, NULL, NULL);
 
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_for_channels_basic_send_and_receive, ch);
+  REQUIRE_EQ(
+      pthread_create(&tid, NULL, thr_for_channels_basic_send_and_receive, ch),
+      0);
 
   c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *((char *)m1.data) = 'A';
@@ -1779,7 +1796,9 @@ TEST(channels, basic_send_and_receive_with_mprocs) {
       NULL);
 
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_for_channels_basic_send_and_receive, ch);
+  REQUIRE_EQ(
+      pthread_create(&tid, NULL, thr_for_channels_basic_send_and_receive, ch),
+      0);
 
   c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *((char *)m1.data) = 'A';
@@ -1829,7 +1848,7 @@ TEST(channels, msg_count) {
   }
 
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_for_channels_msg_count, ch);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_for_channels_msg_count, ch), 0);
 
   usleep(100000);
 
@@ -1874,7 +1893,9 @@ TEST(channels, try_send_and_try_receive) {
   channel *ch = channel_create_with_mprocs(1, NULL, NULL);
 
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_for_channels_try_send_and_try_receive, ch);
+  REQUIRE_EQ(
+      pthread_create(&tid, NULL, thr_for_channels_try_send_and_try_receive, ch),
+      0);
 
   c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *(char *)m1.data = 'A';
@@ -1953,7 +1974,9 @@ TEST(channels, timed_send_and_timed_receive) {
   channel *ch = channel_create_with_mprocs(1, NULL, NULL);
 
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_for_channels_timed_send_and_timed_receive, ch);
+  REQUIRE_EQ(pthread_create(&tid, NULL,
+                            thr_for_channels_timed_send_and_timed_receive, ch),
+             0);
 
   c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   *(char *)m1.data = 'A';
@@ -2026,7 +2049,7 @@ TEST(channels, enable_disable_sending) {
   channel *ch = channel_create_with_mprocs(1, NULL, NULL);
 
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_for_enable_disable_sending, ch);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_for_enable_disable_sending, ch), 0);
 
   c_message_t m1 = {.data = malloc(sizeof(char)), .size = 1};
   m1.size = 1;
@@ -2295,7 +2318,7 @@ TEST(ccol_select, blocks_until_message_arrives_on_circq) {
 
   sel_circq_args args = {.cq = q1, .delay_us = 15000, .value = 99};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_send_to_circq, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_circq, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_va(&idx, selectable_from_circq(q0, ccol_select_read),
@@ -2341,7 +2364,8 @@ TEST(ccol_select,
   sel_disable_reenable_args args = {
       .cq0 = q0, .cq1 = q1, .delay_us = 15000, .value = 42};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_disable_then_reenable_and_send, &args);
+  REQUIRE_EQ(
+      pthread_create(&tid, NULL, thr_disable_then_reenable_and_send, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_va(&idx, selectable_from_circq(q0, ccol_select_read),
@@ -2364,7 +2388,7 @@ TEST(ccol_select, blocks_until_message_arrives_on_dynq) {
 
   sel_dynq_args args = {.dq = dq, .delay_us = 15000, .value = 55};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_send_to_dynq, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_dynq, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_va(&idx, selectable_from_circq(q0, ccol_select_read),
@@ -2390,7 +2414,7 @@ TEST(ccol_select, channel_direction_resolved_correctly_for_owner_thread) {
    */
   sel_chan_args args = {.ch = ch, .delay_us = 15000, .value = 77};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_send_via_channel, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_via_channel, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_va(&idx, selectable_from_chan(ch, ccol_select_read)),
@@ -2473,7 +2497,7 @@ TEST(ccol_select, write_circq_blocks_until_reader_frees_space) {
 
   sel_recv_circq_args args = {.cq = cq, .delay_us = 15000};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_recv_from_circq, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_recv_from_circq, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_va(&idx, selectable_from_circq(cq, ccol_select_write)),
@@ -2496,7 +2520,7 @@ TEST(ccol_select, write_circq_wakes_when_sending_reenabled) {
 
   sel_enable_circq_args args = {.cq = cq, .delay_us = 15000};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_enable_circq_sending, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_enable_circq_sending, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_va(&idx, selectable_from_circq(cq, ccol_select_write)),
@@ -2524,7 +2548,7 @@ TEST(ccol_select, write_dynq_wakes_when_sending_reenabled) {
 
   sel_enable_dynq_args args = {.dq = dq, .delay_us = 15000};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_enable_dynq_sending, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_enable_dynq_sending, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_va(&idx, selectable_from_dynq(dq, ccol_select_write)),
@@ -2549,7 +2573,7 @@ TEST(ccol_select, write_mixed_full_circq_and_readable_circq) {
 
   sel_circq_args args = {.cq = q_read, .delay_us = 15000, .value = 88};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_send_to_circq, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_circq, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(
@@ -2633,7 +2657,7 @@ TEST(ccol_select, fd_blocks_until_data_arrives) {
 
   sel_fd_write_args args = {.write_fd = pfd[1], .delay_us = 15000, .value = 77};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_write_to_fd, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_write_to_fd, &args), 0);
 
   size_t idx = 99;
   struct timespec before, after;
@@ -2703,7 +2727,7 @@ TEST(ccol_select, fd_and_queue_queue_wins) {
 
   sel_circq_args args = {.cq = cq, .delay_us = 15000, .value = 33};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_send_to_circq, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_circq, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_va(&idx, selectable_from_fd(pfd[0], ccol_select_read),
@@ -2731,7 +2755,7 @@ TEST(ccol_select, fd_and_dynq_dynq_wins) {
 
   sel_dynq_args args = {.dq = dq, .delay_us = 15000, .value = 99};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_send_to_dynq, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_dynq, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_va(&idx, selectable_from_fd(pfd[0], ccol_select_read),
@@ -2815,7 +2839,7 @@ TEST(ccol_select, timed_succeeds_before_deadline) {
   /* A helper thread that sleeps 20 ms then sends. */
   helper_thread_args args = {cq, send_msg};
 
-  pthread_create(&tid, NULL, helper_thread_main, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, helper_thread_main, &args), 0);
 
   size_t idx = 99;
   REQUIRE_EQ(ccol_select_timed_va(&idx, 500,
@@ -2919,7 +2943,7 @@ TEST(ccol_select, timed_wait_ready_racing_condvar_error_still_succeeds) {
 
   sel_circq_args args = {.cq = cq, .delay_us = 50000, .value = 77};
   pthread_t tid;
-  pthread_create(&tid, NULL, thr_send_to_circq, &args);
+  REQUIRE_EQ(pthread_create(&tid, NULL, thr_send_to_circq, &args), 0);
 
   ccol_select_test_force_next_condvar_wait_error_racing_ready();
 
@@ -3006,8 +3030,8 @@ TEST(ccol_select, write_circq_two_concurrent_waiters_both_wake_on_slot_free) {
   sel_write_wait_result a1 = {.cq = cq, .result = ccol_unexpected_failure};
   sel_write_wait_result a2 = {.cq = cq, .result = ccol_unexpected_failure};
   pthread_t t1, t2;
-  pthread_create(&t1, NULL, thr_circq_write_wait, &a1);
-  pthread_create(&t2, NULL, thr_circq_write_wait, &a2);
+  REQUIRE_EQ(pthread_create(&t1, NULL, thr_circq_write_wait, &a1), 0);
+  REQUIRE_EQ(pthread_create(&t2, NULL, thr_circq_write_wait, &a2), 0);
 
   usleep(30000); /* let both threads register as write-waiters */
 
@@ -3057,8 +3081,8 @@ TEST(ccol_select,
   sel_read_wait_result a1 = {.cq = cq, .result = ccol_unexpected_failure};
   sel_read_wait_result a2 = {.cq = cq, .result = ccol_unexpected_failure};
   pthread_t t1, t2;
-  pthread_create(&t1, NULL, thr_circq_read_wait, &a1);
-  pthread_create(&t2, NULL, thr_circq_read_wait, &a2);
+  REQUIRE_EQ(pthread_create(&t1, NULL, thr_circq_read_wait, &a1), 0);
+  REQUIRE_EQ(pthread_create(&t2, NULL, thr_circq_read_wait, &a2), 0);
 
   usleep(30000); /* let both threads register as read waiters */
 
@@ -3224,8 +3248,15 @@ typedef struct evl_sync_ctx {
 } evl_sync_ctx;
 
 static void evl_sync_ctx_init(evl_sync_ctx *c) {
-  pthread_mutex_init(&c->mtx, NULL);
-  pthread_cond_init(&c->cond, NULL);
+  /* Checked: an unchecked failure here would leave c->mtx/c->cond
+   * uninitialized, undefined behavior for every later pthread_mutex_lock/
+   * pthread_cond_wait call this file makes on them, up to and including a
+   * silent, indefinite hang if the uninitialized bytes happen to look
+   * already-locked. This helper runs only from ordinary (non-forked-child)
+   * test bodies in this file, so asserting is safe here, unlike a
+   * pthread_create inside a forked child elsewhere in this file. */
+  assert(pthread_mutex_init(&c->mtx, NULL) == 0);
+  assert(pthread_cond_init(&c->cond, NULL) == 0);
   c->readable_count = 0;
   c->writable_count = 0;
   c->error_count = 0;
@@ -4044,7 +4075,7 @@ TEST(event_loop, queue_channel_selectable) {
 
   evl_chan_sender_args sargs = {.ch = ch, .value = 88};
   pthread_t tid;
-  pthread_create(&tid, NULL, evl_chan_sender_thread, &sargs);
+  REQUIRE_EQ(pthread_create(&tid, NULL, evl_chan_sender_thread, &sargs), 0);
   pthread_join(tid, NULL);
 
   REQUIRE_TRUE(evl_wait_for(&ctx, &ctx.readable_count, 1, 2000));
@@ -4217,7 +4248,9 @@ TEST(event_loop, queue_second_registration_on_same_queue_is_not_starved) {
 
     evl_two_readers_feeder_args feeder_args = {.cq = cq, .iterations = 300};
     pthread_t feeder;
-    pthread_create(&feeder, NULL, evl_two_readers_feeder_thread, &feeder_args);
+    REQUIRE_EQ(pthread_create(&feeder, NULL, evl_two_readers_feeder_thread,
+                              &feeder_args),
+               0);
     pthread_join(feeder, NULL);
 
     /* Bounded wait (r2, the slow head, is expected to dominate the count;
@@ -4342,8 +4375,10 @@ TEST(event_loop, queue_multiple_registrations_share_traffic_fairly) {
 
     evl_two_readers_feeder_args feeder_args = {.cq = cq, .iterations = 400};
     pthread_t feeder;
-    pthread_create(&feeder, NULL, evl_two_readers_no_backlog_feeder_thread,
-                   &feeder_args);
+    REQUIRE_EQ(
+        pthread_create(&feeder, NULL, evl_two_readers_no_backlog_feeder_thread,
+                       &feeder_args),
+        0);
     pthread_join(feeder, NULL);
 
     /* Bounded wait for any final in-flight dispatch to settle. */
@@ -4439,8 +4474,9 @@ TEST(event_loop, dynq_multiple_registrations_share_traffic_fairly) {
 
     evl_dynq_feeder_args feeder_args = {.dq = dq, .iterations = 400};
     pthread_t feeder;
-    pthread_create(&feeder, NULL, evl_dynq_no_backlog_feeder_thread,
-                   &feeder_args);
+    REQUIRE_EQ(pthread_create(&feeder, NULL, evl_dynq_no_backlog_feeder_thread,
+                              &feeder_args),
+               0);
     pthread_join(feeder, NULL);
 
     struct timespec ts = {0, 50000000}; /* 50ms */
@@ -4564,7 +4600,7 @@ TEST(event_loop, remove_from_different_thread_concurrent_with_dispatch) {
 
       evl_remover_args rargs = {.loop = loop, .reg = reg, .delay_us = 0};
       pthread_t rtid;
-      pthread_create(&rtid, NULL, evl_remover_thread, &rargs);
+      REQUIRE_EQ(pthread_create(&rtid, NULL, evl_remover_thread, &rargs), 0);
 
       int *payload = malloc(sizeof(int));
       *payload = iter;
@@ -5634,7 +5670,9 @@ TEST(event_loop, multi_threaded_multi_fd_stress_with_stripes) {
     event_loop_construct_scoped(loop, 32, 16, 1);
     for (int i = 0; i < n_threads; i++) {
       args[i].loop = loop;
-      pthread_create(&threads[i], NULL, evl_stripe_stress_fd_worker, &args[i]);
+      REQUIRE_EQ(pthread_create(&threads[i], NULL, evl_stripe_stress_fd_worker,
+                                &args[i]),
+                 0);
     }
     for (int i = 0; i < n_threads; i++) {
       pthread_join(threads[i], NULL);
@@ -5719,8 +5757,9 @@ TEST(event_loop, multi_threaded_multi_queue_stress_with_stripes) {
     event_loop_construct_scoped(loop, 32, 16, 1);
     for (int i = 0; i < n_threads; i++) {
       args[i].loop = loop;
-      pthread_create(&threads[i], NULL, evl_stripe_stress_queue_worker,
-                     &args[i]);
+      REQUIRE_EQ(pthread_create(&threads[i], NULL,
+                                evl_stripe_stress_queue_worker, &args[i]),
+                 0);
     }
     for (int i = 0; i < n_threads; i++) {
       pthread_join(threads[i], NULL);
@@ -5898,7 +5937,7 @@ TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
 
   evl_no_double_dispatch_ctx ctx;
   memset(&ctx, 0, sizeof(ctx));
-  pthread_mutex_init(&ctx.mtx, NULL);
+  assert(pthread_mutex_init(&ctx.mtx, NULL) == 0);
 
   {
     /* Nested block: see multi_thread_cross_direction_serialization's
@@ -5920,7 +5959,8 @@ TEST(event_loop, multi_thread_no_double_dispatch_same_fd) {
 
     evl_feeder_args feeder_args = {.write_fd = pfd[1], .iterations = 4000};
     pthread_t feeder;
-    pthread_create(&feeder, NULL, evl_feeder_thread, &feeder_args);
+    REQUIRE_EQ(pthread_create(&feeder, NULL, evl_feeder_thread, &feeder_args),
+               0);
     pthread_join(feeder, NULL);
 
     /* Give the reactor threads a brief grace period to finish draining
@@ -6008,7 +6048,7 @@ TEST(event_loop, multi_thread_cross_direction_serialization) {
 
   evl_no_double_dispatch_ctx ctx;
   memset(&ctx, 0, sizeof(ctx));
-  pthread_mutex_init(&ctx.mtx, NULL);
+  assert(pthread_mutex_init(&ctx.mtx, NULL) == 0);
 
   {
     /* Nested block: event_loop_construct_scoped's destructor fires at this
@@ -6047,7 +6087,8 @@ TEST(event_loop, multi_thread_cross_direction_serialization) {
 
     evl_feeder_args feeder_args = {.write_fd = sv[1], .iterations = 4000};
     pthread_t feeder;
-    pthread_create(&feeder, NULL, evl_feeder_thread, &feeder_args);
+    REQUIRE_EQ(pthread_create(&feeder, NULL, evl_feeder_thread, &feeder_args),
+               0);
     pthread_join(feeder, NULL);
 
     for (int spins = 0; spins < 400 && atomic_load(&ctx.total_calls) < 500;
@@ -6213,7 +6254,9 @@ TEST(event_loop, multi_thread_fd_reuse_generation_stays_consistent) {
     event_loop_construct_scoped(loop, 8, 4, 8);
     for (int i = 0; i < n_drivers; i++) {
       args[i].loop = loop;
-      pthread_create(&drivers[i], NULL, evl_reuse_driver_thread, &args[i]);
+      REQUIRE_EQ(
+          pthread_create(&drivers[i], NULL, evl_reuse_driver_thread, &args[i]),
+          0);
     }
     for (int i = 0; i < n_drivers; i++) {
       pthread_join(drivers[i], NULL);
@@ -6341,8 +6384,8 @@ TEST(event_loop, multi_thread_shutdown_drains_in_flight_dispatch_job) {
 
   evl_shutdown_drain_ctx ctx;
   memset(&ctx, 0, sizeof(ctx));
-  pthread_mutex_init(&ctx.mtx, NULL);
-  pthread_cond_init(&ctx.cond, NULL);
+  assert(pthread_mutex_init(&ctx.mtx, NULL) == 0);
+  assert(pthread_cond_init(&ctx.cond, NULL) == 0);
 
   event_loop loop = event_loop_create(8, 4, 4, NULL);
   REQUIRE_NE(loop, EVENT_LOOP_INVALID);
@@ -6551,8 +6594,12 @@ TEST(event_loop, reg_handle_survives_concurrent_remove_vs_accessor_race) {
 
     evl_reg_race_args shared = {loop, reg};
     pthread_t remover, accessor;
-    pthread_create(&remover, NULL, evl_reg_race_remover_thread, &shared);
-    pthread_create(&accessor, NULL, evl_reg_race_accessor_thread, &shared);
+    REQUIRE_EQ(
+        pthread_create(&remover, NULL, evl_reg_race_remover_thread, &shared),
+        0);
+    REQUIRE_EQ(
+        pthread_create(&accessor, NULL, evl_reg_race_accessor_thread, &shared),
+        0);
     pthread_join(remover, NULL);
     pthread_join(accessor, NULL);
 
@@ -6639,7 +6686,9 @@ TEST(event_loop, multi_thread_hot_fd_dispatch_pool_pending_stays_bounded) {
      * total byte count. */
     evl_feeder_args feeder_args = {.write_fd = pfd[1], .iterations = 1000};
     pthread_t feeder;
-    pthread_create(&feeder, NULL, evl_bounded_feeder_thread, &feeder_args);
+    REQUIRE_EQ(
+        pthread_create(&feeder, NULL, evl_bounded_feeder_thread, &feeder_args),
+        0);
 
     for (int i = 0; i < 200; i++) {
       size_t pending = event_loop_dispatch_pool_pending_count_for_tests(loop);
@@ -6729,8 +6778,9 @@ TEST(event_loop, multi_thread_hot_queue_dispatch_pool_pending_stays_bounded) {
 
     evl_bounded_queue_feeder_args feeder_args = {.cq = cq, .iterations = 1000};
     pthread_t feeder;
-    pthread_create(&feeder, NULL, evl_bounded_queue_feeder_thread,
-                   &feeder_args);
+    REQUIRE_EQ(pthread_create(&feeder, NULL, evl_bounded_queue_feeder_thread,
+                              &feeder_args),
+               0);
 
     for (int i = 0; i < 200; i++) {
       size_t pending = event_loop_dispatch_pool_pending_count_for_tests(loop);
@@ -7060,8 +7110,19 @@ TEST(event_loop_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     evl_concurrent_destroy_arg_t a1 = {.h = loop};
     evl_concurrent_destroy_arg_t a2 = {.h = loop};
     pthread_t t1, t2;
-    pthread_create(&t1, NULL, evl_concurrent_destroy_thread, &a1);
-    pthread_create(&t2, NULL, evl_concurrent_destroy_thread, &a2);
+    /* Checked via if-guards, not REQUIRE_EQ: this runs inside the forked
+     * child above (pid == 0); see cq_select_waiter_thread's own identical
+     * fix/comment earlier in this file for why REQUIRE_EQ's early-return
+     * failure path is unsafe here. Joining a pthread_t that pthread_create
+     * never actually initialized is undefined behavior (a hang, a crash,
+     * or, worse, a stray SIGABRT from something unrelated that would make
+     * this test appear to pass for the wrong reason); exit distinctly
+     * instead so a create failure is reported as itself, not conflated
+     * with the fatal_err() this test actually expects. */
+    if (pthread_create(&t1, NULL, evl_concurrent_destroy_thread, &a1) != 0)
+      _exit(3);
+    if (pthread_create(&t2, NULL, evl_concurrent_destroy_thread, &a2) != 0)
+      _exit(3);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
     _exit(0); /* unreachable: whichever of the two destroy calls loses the
@@ -7894,8 +7955,14 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
   REQUIRE_EQ((int)byte, 1);
 
   int status = 0;
-  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
-  REQUIRE_TRUE(WIFEXITED(status));
+  /* Bounded, not a bare blocking waitpid(): matches every sibling
+   * fork_safety test's own established convention (see
+   * _wait_for_forked_child_bounded's own doc comment for why an unbounded
+   * parent-side wait is never used here, even though the child's own
+   * alarm(3) above already bounds the ordinary case). */
+  bool reaped = _wait_for_forked_child_bounded(pid, &status, 10000);
+  REQUIRE_TRUE(reaped);
+  if (reaped) REQUIRE_TRUE(WIFEXITED(status));
 
   pthread_join(holder, NULL);
 
@@ -8087,9 +8154,14 @@ TEST(fork_safety,
           _exit(0);
         } else if (inner_pid > 0) {
           /* Reaching here at all (rather than hanging until alarm(30)
-           * above kills this process) is the actual thing under test. */
+           * above kills this process) is the actual thing under test.
+           * Bounded, not a bare blocking waitpid(): _wait_for_forked_child_
+           * bounded has no Tau macro in it, so it is safe to call from
+           * this already-forked child too, and doing so keeps this call
+           * consistent with every other forked-child wait in this file
+           * rather than being the one bare exception. */
           int inner_status = 0;
-          waitpid(inner_pid, &inner_status, 0);
+          (void)_wait_for_forked_child_bounded(inner_pid, &inner_status, 10000);
           byte = 1;
         }
 
@@ -8117,7 +8189,12 @@ TEST(fork_safety,
   close(result_pipe[0]);
 
   int status = 0;
-  REQUIRE_EQ(waitpid(outer_pid, &status, 0), outer_pid);
+  /* Bounded, not a bare blocking waitpid(): see fork_does_not_inherit_a_
+   * write_locked_event_loop_slot_table's own identical fix/comment above
+   * for why, even though the child's own alarm(180) already bounds the
+   * ordinary case. */
+  bool reaped = _wait_for_forked_child_bounded(outer_pid, &status, 200000);
+  REQUIRE_TRUE(reaped);
 
   REQUIRE_EQ((int)n, 1);
   REQUIRE_EQ((int)byte, 1);

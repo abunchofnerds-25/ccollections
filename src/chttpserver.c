@@ -525,7 +525,8 @@ void _clog_ensure_atfork_registered_before_caller(void);
 #endif
 
 static void _chttpsvr_slot_table_init_globals(void) {
-  mutex_init(chttpsvr_slot_table.mutex);
+  if (mutex_init(chttpsvr_slot_table.mutex) != 0)
+    fatal_err("chttpsvr slot table: failed to initialize mutex");
   chttpsvr_slot_table.slots = cvector_create(sizeof(chttpsvr_slot_t), NULL);
   if (!chttpsvr_slot_table.slots)
     fatal_err("chttpsvr slot table: failed to allocate slots vector");
@@ -1439,9 +1440,12 @@ static void _engine_force_stop_quiesce_all(void) {
 }
 
 static void _engine_globals_init(void) {
-  mutex_init(srv_engine_bundler.mutex);
-  cond_var_init(srv_engine_bundler.stopped_cv);
-  mutex_init(servers_bundler.mutex);
+  if (mutex_init(srv_engine_bundler.mutex) != 0)
+    fatal_err("chttpserver engine: failed to initialize mutex");
+  if (cond_var_init(srv_engine_bundler.stopped_cv) != 0)
+    fatal_err("chttpserver engine: failed to initialize condition variable");
+  if (mutex_init(servers_bundler.mutex) != 0)
+    fatal_err("chttpserver engine: failed to initialize servers_bundler mutex");
   /* SIGPIPE must be suppressed for all TCP servers, unconditionally: a
    * client can close its read side (or the whole connection) while a worker
    * is still mid-write on the response, and chttp1_stream_write's raw
@@ -4911,8 +4915,10 @@ static struct {
 } g_start_race_hook = {0};
 
 static void _start_race_hook_init_globals(void) {
-  mutex_init(g_start_race_hook.mutex);
-  cond_var_init(g_start_race_hook.cv);
+  if (mutex_init(g_start_race_hook.mutex) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize mutex");
+  if (cond_var_init(g_start_race_hook.cv) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize condition variable");
 }
 
 void _chttpsvr_arm_start_race_hook_for_tests(void) {
@@ -4976,8 +4982,10 @@ static struct {
 } g_engine_stopping_race_hook = {0};
 
 static void _engine_stopping_race_hook_init_globals(void) {
-  mutex_init(g_engine_stopping_race_hook.mutex);
-  cond_var_init(g_engine_stopping_race_hook.cv);
+  if (mutex_init(g_engine_stopping_race_hook.mutex) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize mutex");
+  if (cond_var_init(g_engine_stopping_race_hook.cv) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize condition variable");
 }
 
 void _chttpsvr_arm_engine_stopping_race_hook_for_tests(void) {
@@ -5052,8 +5060,10 @@ static struct {
 } g_start_resolve_race_hook = {0};
 
 static void _start_resolve_race_hook_init_globals(void) {
-  mutex_init(g_start_resolve_race_hook.mutex);
-  cond_var_init(g_start_resolve_race_hook.cv);
+  if (mutex_init(g_start_resolve_race_hook.mutex) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize mutex");
+  if (cond_var_init(g_start_resolve_race_hook.cv) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize condition variable");
 }
 
 void _chttpsvr_arm_start_resolve_race_hook_for_tests(void) {
@@ -5124,8 +5134,10 @@ static struct {
 } g_stop_race_hook = {0};
 
 static void _stop_race_hook_init_globals(void) {
-  mutex_init(g_stop_race_hook.mutex);
-  cond_var_init(g_stop_race_hook.cv);
+  if (mutex_init(g_stop_race_hook.mutex) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize mutex");
+  if (cond_var_init(g_stop_race_hook.cv) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize condition variable");
 }
 
 void _chttpsvr_arm_stop_race_hook_for_tests(void) {
@@ -5199,8 +5211,10 @@ static struct {
 } g_start_stopping_wait_signal = {0};
 
 static void _start_stopping_wait_signal_init_globals(void) {
-  mutex_init(g_start_stopping_wait_signal.mutex);
-  cond_var_init(g_start_stopping_wait_signal.cv);
+  if (mutex_init(g_start_stopping_wait_signal.mutex) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize mutex");
+  if (cond_var_init(g_start_stopping_wait_signal.cv) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize condition variable");
 }
 
 void _chttpsvr_arm_start_stopping_wait_signal_for_tests(void) {
@@ -5257,8 +5271,10 @@ static struct {
 } g_reaper_race_hook = {0};
 
 static void _reaper_race_hook_init_globals(void) {
-  mutex_init(g_reaper_race_hook.mutex);
-  cond_var_init(g_reaper_race_hook.cv);
+  if (mutex_init(g_reaper_race_hook.mutex) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize mutex");
+  if (cond_var_init(g_reaper_race_hook.cv) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize condition variable");
 }
 
 void _chttpsvr_arm_reaper_race_hook_for_tests(void) {
@@ -5326,8 +5342,10 @@ static struct {
 } g_quiesce_teardown_race_hook = {0};
 
 static void _quiesce_teardown_race_hook_init_globals(void) {
-  mutex_init(g_quiesce_teardown_race_hook.mutex);
-  cond_var_init(g_quiesce_teardown_race_hook.cv);
+  if (mutex_init(g_quiesce_teardown_race_hook.mutex) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize mutex");
+  if (cond_var_init(g_quiesce_teardown_race_hook.cv) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize condition variable");
 }
 
 void _chttpsvr_arm_quiesce_teardown_race_hook_for_tests(void) {
@@ -5409,20 +5427,24 @@ static struct {
 } g_start_quiescing_unpinned_race_hook = {0};
 
 static void _start_quiescing_unpinned_race_hook_init_globals(void) {
-  mutex_init(g_start_quiescing_unpinned_race_hook.mutex);
+  if (mutex_init(g_start_quiescing_unpinned_race_hook.mutex) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize mutex");
   /* CLOCK_MONOTONIC, matching the create_chttpsvr_mp/_wait_and_detach_pools
    * precedent commented there: _chttpsvr_wait_start_quiescing_unpinned_
    * race_hook_entered_for_tests below computes its own bounded-wait
    * deadline via clock_gettime(CLOCK_MONOTONIC, ...), which cond_var_init's
    * default clock (CLOCK_REALTIME) would compare against incorrectly. */
   cond_var_attr_t cv_attr;
+  int cv_rc;
   if (cond_var_attr_init(cv_attr) == 0) {
     cond_var_attr_setclock(cv_attr, CLOCK_MONOTONIC);
-    cond_var_init_ca(g_start_quiescing_unpinned_race_hook.cv, cv_attr);
+    cv_rc = cond_var_init_ca(g_start_quiescing_unpinned_race_hook.cv, cv_attr);
     cond_var_attr_destroy(cv_attr);
   } else {
-    cond_var_init(g_start_quiescing_unpinned_race_hook.cv);
+    cv_rc = cond_var_init(g_start_quiescing_unpinned_race_hook.cv);
   }
+  if (cv_rc != 0)
+    fatal_err("chttpsvr test hook: failed to initialize condition variable");
 }
 
 void _chttpsvr_arm_start_quiescing_unpinned_race_hook_for_tests(void) {
@@ -5515,8 +5537,10 @@ static struct {
 } g_listener_dispatch_race_hook = {0};
 
 static void _listener_dispatch_race_hook_init_globals(void) {
-  mutex_init(g_listener_dispatch_race_hook.mutex);
-  cond_var_init(g_listener_dispatch_race_hook.cv);
+  if (mutex_init(g_listener_dispatch_race_hook.mutex) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize mutex");
+  if (cond_var_init(g_listener_dispatch_race_hook.cv) != 0)
+    fatal_err("chttpsvr test hook: failed to initialize condition variable");
 }
 
 void _chttpsvr_arm_listener_dispatch_race_hook_for_tests(void) {
@@ -7178,7 +7202,8 @@ static struct {
 } chttpsvr_router_shell_registry = {0};
 
 static void _chttpsvr_router_shell_registry_init_globals(void) {
-  mutex_init(chttpsvr_router_shell_registry.mutex);
+  if (mutex_init(chttpsvr_router_shell_registry.mutex) != 0)
+    fatal_err("chttpsvr router shell registry: failed to initialize mutex");
 }
 
 static void _chttpsvr_router_shell_register(chttpsvr_router *r) {
@@ -7552,7 +7577,8 @@ static void _chttpsvr_atfork_release_impl(bool is_child) {
       atomic_store(&srv->listener_dispatch_pins, (size_t)0);
       /* Re-init, not unlock: see this function's own doc comment for the
        * glibc rwlock-write-lock-tracks-TID hazard this avoids. */
-      rw_lock_init(srv->routes_lock);
+      if (rw_lock_init(srv->routes_lock) != 0)
+        fatal_err("chttpsvr atfork release: failed to reinit routes_lock");
 
       /* See this function's own doc comment for the full reasoning behind
        * both of the fixups below. Both are exhaustive switches (no

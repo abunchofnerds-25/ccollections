@@ -428,7 +428,8 @@ static inline bool _clog_test_consume_forced_fresh_slot_reg_failure(void) {
 #endif
 
 static void _clog_slot_table_init_globals(void) {
-  rw_lock_init(clog_slot_table.rwlock);
+  if (rw_lock_init(clog_slot_table.rwlock) != 0)
+    fatal_err("clog slot table: failed to initialize rwlock");
   clog_slot_table.slots = cvector_create(sizeof(clog_slot_t), NULL);
   if (!clog_slot_table.slots)
     fatal_err("clog slot table: failed to allocate slots vector");
@@ -934,7 +935,8 @@ static void _clog_atfork_release(bool in_child) {
   }
 
   if (in_child) {
-    rw_lock_init(clog_slot_table.rwlock);
+    if (rw_lock_init(clog_slot_table.rwlock) != 0)
+      fatal_err("clog atfork release: failed to reinit slot table rwlock");
   } else {
     rw_lock_unlock(clog_slot_table.rwlock);
   }
@@ -1999,7 +2001,6 @@ static bool _rotated_name_taken(const char *candidate, bool check_gz) {
   memcpy(gz + clen, ".gz", 4); /* includes NUL */
   return access(gz, F_OK) == 0;
 }
-
 
 /*
  * Rotate the current log file.  Must be called with shared->mutex held.

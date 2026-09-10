@@ -11026,7 +11026,7 @@ TEST(node_pool, fresh_thread_starts_with_an_empty_pool) {
    * a broken drain would show up there as a 50-allocation leak. */
   pool_populate_result_t result = {(size_t)-1, (size_t)-1};
   pthread_t tid;
-  pthread_create(&tid, NULL, pool_populate_thread, &result);
+  REQUIRE_EQ(pthread_create(&tid, NULL, pool_populate_thread, &result), 0);
   pthread_join(tid, NULL);
 
   REQUIRE_EQ(result.start_pool_size, (size_t)0);
@@ -11070,12 +11070,19 @@ TEST(node_pool, node_freed_on_a_different_thread_joins_that_threads_own_pool) {
 
   cross_thread_free_arg_t arg = {nodes, count, (size_t)-1, (size_t)-1};
   pthread_t tid;
-  pthread_create(&tid, NULL, cross_thread_free_thread, &arg);
-  pthread_join(tid, NULL);
+  int create_rv = pthread_create(&tid, NULL, cross_thread_free_thread, &arg);
+  if (create_rv == 0) {
+    pthread_join(tid, NULL);
+  } else {
+    /* The worker thread never ran to destroy these nodes; destroy them here
+     * instead, before the REQUIRE_EQ below can return early and leak them. */
+    for (size_t i = 0; i < count; i++) cyaml_destroy(nodes[i]);
+  }
   free(nodes);
 
   size_t main_pool_after = cyaml_debug_pool_size();
 
+  REQUIRE_EQ(create_rv, 0);
   REQUIRE_EQ(arg.start_pool_size, (size_t)0);
   REQUIRE_EQ(arg.end_pool_size, count);
   REQUIRE_EQ(main_pool_after, main_pool_before);

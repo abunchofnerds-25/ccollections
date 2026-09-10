@@ -360,7 +360,8 @@ static void _cthreadcomm_register_atfork_once(void);
 
 #if FORK_SAFETY_REQUIRED
 static void _queue_mutex_registry_init_globals(void) {
-  mutex_init(queue_mutex_registry.mutex);
+  if (mutex_init(queue_mutex_registry.mutex) != 0)
+    fatal_err("queue mutex registry: failed to initialize mutex");
   queue_mutex_registry.addrs = cvector_create(sizeof(mutex_t *), NULL);
   if (!queue_mutex_registry.addrs)
     fatal_err("queue mutex registry: failed to allocate address vector");
@@ -531,9 +532,30 @@ circular_queue *circular_queue_create_with_mprocs(
     return NULL;
   }
 
-  mutex_init(cq->mutex);
-  cond_var_init(cq->read_cond);
-  cond_var_init(cq->write_cond);
+  if (mutex_init(cq->mutex) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize cq mutex");
+    _mem_free(mmgmt_procs, cq->msg_array);
+    _mem_free(mmgmt_procs, cq->m_procs);
+    _mem_free(mmgmt_procs, cq);
+    return NULL;
+  }
+  if (cond_var_init(cq->read_cond) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize cq read_cond");
+    mutex_destroy(cq->mutex);
+    _mem_free(mmgmt_procs, cq->msg_array);
+    _mem_free(mmgmt_procs, cq->m_procs);
+    _mem_free(mmgmt_procs, cq);
+    return NULL;
+  }
+  if (cond_var_init(cq->write_cond) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize cq write_cond");
+    mutex_destroy(cq->mutex);
+    cond_var_destroy(cq->read_cond);
+    _mem_free(mmgmt_procs, cq->msg_array);
+    _mem_free(mmgmt_procs, cq->m_procs);
+    _mem_free(mmgmt_procs, cq);
+    return NULL;
+  }
   cq->read_index = 0;
   cq->write_index = 0;
   cq->max_size = max_size;
@@ -618,16 +640,49 @@ void __circular_queue_destroy(circular_queue *cq) {
       _mem_free(cq->m_procs, cq->msg_array);
       cq->msg_array = NULL;
     }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d msg_array freed\n", (int)getpid());
+#endif
 
 #if FORK_SAFETY_REQUIRED
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d about to registry_remove\n",
+                    (int)getpid());
+#endif
     /* Unregister before destroying the mutex: once destroyed, &cq->mutex
      * must never again be a candidate for _queue_atfork_prepare to lock. */
     _queue_mutex_registry_remove(&cq->mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d registry_remove done\n",
+                    (int)getpid());
+#endif
 #endif
 
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d about to mutex_destroy\n",
+                    (int)getpid());
+#endif
     mutex_destroy(cq->mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_DESTROY] pid=%d mutex_destroy done, about to "
+        "cond_var_destroy(read_cond)\n",
+        (int)getpid());
+#endif
     cond_var_destroy(cq->read_cond);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_DESTROY] pid=%d read_cond destroyed, about to "
+        "cond_var_destroy(write_cond)\n",
+        (int)getpid());
+#endif
     cond_var_destroy(cq->write_cond);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_DESTROY] pid=%d write_cond destroyed, about to "
+        "free cq itself\n",
+        (int)getpid());
+#endif
 
     if (cq->m_procs) {
       ccol_free_t free_func = cq->m_procs->free;
@@ -636,6 +691,10 @@ void __circular_queue_destroy(circular_queue *cq) {
     } else {
       mem_free(cq);
     }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d __circular_queue_destroy EXIT\n",
+                    (int)getpid());
+#endif
   }
 }
 
@@ -1219,8 +1278,19 @@ dynamic_queue *dynamic_queue_create_with_mprocs(
     return NULL;
   }
 
-  mutex_init(dq->mutex);
-  cond_var_init(dq->read_cond);
+  if (mutex_init(dq->mutex) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize dq mutex");
+    _mem_free(mmgmt_procs, dq->m_procs);
+    _mem_free(mmgmt_procs, dq);
+    return NULL;
+  }
+  if (cond_var_init(dq->read_cond) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize dq read_cond");
+    mutex_destroy(dq->mutex);
+    _mem_free(mmgmt_procs, dq->m_procs);
+    _mem_free(mmgmt_procs, dq);
+    return NULL;
+  }
   dq->msg_count = 0;
   dq->head = NULL;
   dq->tail = NULL;
@@ -2461,7 +2531,10 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
   mutex_t sel_mtx;
   cond_var_t sel_cond;
   bool ready = false;
-  mutex_init(sel_mtx);
+  if (mutex_init(sel_mtx) != 0) {
+    free(nodes);
+    return ccol_unexpected_failure;
+  }
   /* Always initialise with CLOCK_MONOTONIC so timed waits are immune to
    * wall-clock adjustments.  Infinite waits ignore the clock attribute so
    * this is safe even when no timeout is used. */
@@ -2469,7 +2542,12 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
     cond_var_attr_t cond_attr;
     cond_var_attr_init(cond_attr);
     cond_var_attr_setclock(cond_attr, CLOCK_MONOTONIC);
-    cond_var_init_ca(sel_cond, cond_attr);
+    if (cond_var_init_ca(sel_cond, cond_attr) != 0) {
+      cond_var_attr_destroy(cond_attr);
+      mutex_destroy(sel_mtx);
+      free(nodes);
+      return ccol_unexpected_failure;
+    }
     cond_var_attr_destroy(cond_attr);
   }
 
@@ -2861,7 +2939,8 @@ static void _cthreadcomm_atfork_child_release(void);
 #endif
 
 static void _event_loop_slot_table_init_globals(void) {
-  rw_lock_init(event_loop_slot_table.rwlock);
+  if (rw_lock_init(event_loop_slot_table.rwlock) != 0)
+    fatal_err("event_loop slot table: failed to initialize rwlock");
   event_loop_slot_table.slots = cvector_create(sizeof(event_loop_slot_t), NULL);
   if (!event_loop_slot_table.slots)
     fatal_err("event_loop slot table: failed to allocate slots vector");
@@ -3556,7 +3635,9 @@ static void _cthreadcomm_atfork_release_impl(bool is_child) {
      * safe specifically because the child has exactly one thread at this
      * point and no one else can possibly be waiting on it. */
     if (is_child) {
-      rw_lock_init(loop->reg_slot_rwlock);
+      if (rw_lock_init(loop->reg_slot_rwlock) != 0)
+        fatal_err(
+            "event_loop atfork release: failed to reinit reg_slot_rwlock");
     } else {
       rw_lock_unlock(loop->reg_slot_rwlock);
     }
@@ -3577,7 +3658,10 @@ static void _cthreadcomm_atfork_release_impl(bool is_child) {
    * the full TID-tracked-write-lock reasoning; this is the process-wide
    * loop table's own copy of the identical hazard, not a new one. */
   if (is_child) {
-    rw_lock_init(event_loop_slot_table.rwlock);
+    if (rw_lock_init(event_loop_slot_table.rwlock) != 0)
+      fatal_err(
+          "event_loop atfork release: failed to reinit event_loop_slot_table "
+          "rwlock");
   } else {
     rw_lock_unlock(event_loop_slot_table.rwlock);
   }
@@ -4036,8 +4120,21 @@ static event_reg_s *_event_reg_create(struct event_loop_s *loop,
    * pthread_cond_destroy (undefined behaviour per POSIX) or a destroy of
    * never-initialized memory; see _event_reg_free's own comment. */
   if (sel.type != ccol_selectable_fd) {
-    mutex_init(reg->wait_mtx);
-    cond_var_init(reg->wait_cond);
+    /* On either failure, reg is freed directly rather than through
+     * _event_reg_free: wait_mtx/wait_cond were never validly initialized,
+     * so that function's own mutex_destroy/cond_var_destroy on them would
+     * be undefined behavior; see this function's own doc comment above for
+     * why _event_reg_free must be the sole, exclusive owner of tearing
+     * them down on every OTHER path. */
+    if (mutex_init(reg->wait_mtx) != 0) {
+      _mem_free(loop->m_procs, reg);
+      return NULL;
+    }
+    if (cond_var_init(reg->wait_cond) != 0) {
+      mutex_destroy(reg->wait_mtx);
+      _mem_free(loop->m_procs, reg);
+      return NULL;
+    }
   }
   return reg;
 }
@@ -4085,7 +4182,10 @@ static ccol_retval_t _event_loop_add_fd(struct event_loop_s *loop, size_t idx,
     entry->stripe_idx = idx;
     entry->as.fd.read_reg = NULL;
     entry->as.fd.write_reg = NULL;
-    mutex_init(entry->dispatch_lock);
+    if (mutex_init(entry->dispatch_lock) != 0) {
+      _mem_free(loop->m_procs, entry);
+      return ccol_unexpected_failure;
+    }
     atomic_init(&entry->removed, false);
     atomic_init(&entry->refcount, (size_t)0);
     /* Minted once per NEW entry, never for a second direction joining an
@@ -4496,23 +4596,28 @@ event_reg event_loop_add(event_loop loop, ccol_selectable sel,
       entry->fd = -1;
       entry->stripe_idx = idx;
       entry->as.reg = reg;
-      mutex_init(entry->dispatch_lock);
-      atomic_init(&entry->removed, false);
-      atomic_init(&entry->refcount, (size_t)0);
-      /* Queue/channel selectables never share an entry (1:1, no combining),
-       * so every event_loop_add call here mints a fresh generation;
-       * unlike the fd path, there is no "second direction joins the
-       * existing entry" case to special-case. */
-      entry->generation = atomic_fetch_add(&raw->fd_generation_counter, 1) + 1;
-      rv = _event_loop_add_queue(raw, entry, reg);
-      if (rv == ccol_success) {
-        reg->owning_entry = entry;
-        reg->stripe_idx = idx;
-        reg->generation = entry->generation;
-        _loop_queue_list_add(stripe, reg);
-      } else {
-        mutex_destroy(entry->dispatch_lock);
+      if (mutex_init(entry->dispatch_lock) != 0) {
         _mem_free(raw->m_procs, entry);
+        rv = ccol_unexpected_failure;
+      } else {
+        atomic_init(&entry->removed, false);
+        atomic_init(&entry->refcount, (size_t)0);
+        /* Queue/channel selectables never share an entry (1:1, no
+         * combining), so every event_loop_add call here mints a fresh
+         * generation; unlike the fd path, there is no "second direction
+         * joins the existing entry" case to special-case. */
+        entry->generation =
+            atomic_fetch_add(&raw->fd_generation_counter, 1) + 1;
+        rv = _event_loop_add_queue(raw, entry, reg);
+        if (rv == ccol_success) {
+          reg->owning_entry = entry;
+          reg->stripe_idx = idx;
+          reg->generation = entry->generation;
+          _loop_queue_list_add(stripe, reg);
+        } else {
+          mutex_destroy(entry->dispatch_lock);
+          _mem_free(raw->m_procs, entry);
+        }
       }
     }
   }
@@ -5992,9 +6097,34 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
     return EVENT_LOOP_INVALID;
   }
 
-  mutex_init(loop->shutdown_lock);
-  cond_var_init(loop->joined_cv);
-  rw_lock_init(loop->reg_slot_rwlock);
+  if (mutex_init(loop->shutdown_lock) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize shutdown_lock");
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return EVENT_LOOP_INVALID;
+  }
+  if (cond_var_init(loop->joined_cv) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize joined_cv");
+    mutex_destroy(loop->shutdown_lock);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return EVENT_LOOP_INVALID;
+  }
+  if (rw_lock_init(loop->reg_slot_rwlock) != 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("Failed to initialize reg_slot_rwlock");
+    cond_var_destroy(loop->joined_cv);
+    mutex_destroy(loop->shutdown_lock);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return EVENT_LOOP_INVALID;
+  }
   loop->reg_slots =
       cvector_create_full(sizeof(event_reg_slot_t), mmgmt_procs, NULL);
   if (!loop->reg_slots) {
@@ -6085,7 +6215,27 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
       _mem_free(mmgmt_procs, loop);
       return EVENT_LOOP_INVALID;
     }
-    mutex_init(loop->stripes[stripes_created].lock);
+    if (mutex_init(loop->stripes[stripes_created].lock) != 0) {
+      if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize stripe lock");
+      /* _destroy_stripes(loop, mmgmt_procs, stripes_created) below only
+       * destroys stripes [0, stripes_created), so this current stripe's
+       * own already-created fd_index (its .lock never having been validly
+       * initialized) is torn down explicitly first, exactly like the
+       * sibling !fd_index failure block just above handles its own current
+       * stripe. */
+      chmap_destroy(loop->stripes[stripes_created].fd_index);
+      _destroy_stripes(loop, mmgmt_procs, stripes_created);
+      cvector_destroy(loop->reg_free_indices);
+      cvector_destroy(loop->reg_slots);
+      rw_lock_destroy(loop->reg_slot_rwlock);
+      cond_var_destroy(loop->joined_cv);
+      mutex_destroy(loop->shutdown_lock);
+      close(loop->shutdown_efd);
+      close(loop->epfd);
+      _mem_free(mmgmt_procs, loop->m_procs);
+      _mem_free(mmgmt_procs, loop);
+      return EVENT_LOOP_INVALID;
+    }
     loop->stripes[stripes_created].queue_regs_head = NULL;
   }
 

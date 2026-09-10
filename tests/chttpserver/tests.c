@@ -10092,7 +10092,14 @@ TEST(chttpsvr_handle_lifecycle, sequential_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* waitpid's own return must be checked before trusting status: an EINTR
+   * (or any other) failure leaves status at its initialized 0, which would
+   * otherwise be silently misread as "child exited normally with status 0"
+   * instead of "waitpid itself never actually reported this child's real
+   * outcome", producing a confusing WIFSIGNALED failure instead of a clear
+   * one; mirrors this same file's own explicit `!= pid` check on every
+   * later, more elaborate fork test below. */
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -10134,7 +10141,14 @@ TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* waitpid's own return must be checked before trusting status: an EINTR
+   * (or any other) failure leaves status at its initialized 0, which would
+   * otherwise be silently misread as "child exited normally with status 0"
+   * instead of "waitpid itself never actually reported this child's real
+   * outcome", producing a confusing WIFSIGNALED failure instead of a clear
+   * one; mirrors this same file's own explicit `!= pid` check on every
+   * later, more elaborate fork test below. */
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -10186,7 +10200,14 @@ TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* waitpid's own return must be checked before trusting status: an EINTR
+   * (or any other) failure leaves status at its initialized 0, which would
+   * otherwise be silently misread as "child exited normally with status 0"
+   * instead of "waitpid itself never actually reported this child's real
+   * outcome", producing a confusing WIFSIGNALED failure instead of a clear
+   * one; mirrors this same file's own explicit `!= pid` check on every
+   * later, more elaborate fork test below. */
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -10224,7 +10245,14 @@ TEST(chttpsvr_handle_lifecycle, engine_wait_from_within_own_handler_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* waitpid's own return must be checked before trusting status: an EINTR
+   * (or any other) failure leaves status at its initialized 0, which would
+   * otherwise be silently misread as "child exited normally with status 0"
+   * instead of "waitpid itself never actually reported this child's real
+   * outcome", producing a confusing WIFSIGNALED failure instead of a clear
+   * one; mirrors this same file's own explicit `!= pid` check on every
+   * later, more elaborate fork test below. */
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }

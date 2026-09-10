@@ -1812,8 +1812,15 @@ static void make_pair(int fds[2]) {
 static void make_nonblocking_pair(int fds[2]) {
   make_pair(fds);
   for (int i = 0; i < 2; i++) {
+    /* An unchecked failure here would leave fds[i] blocking; this file's own
+     * comment right above this function explains why that specifically
+     * deadlocks tls_drive_handshake()'s single-threaded ping-pong loop
+     * (confirmed via gdb during this test's own development), so a silent
+     * fcntl() failure here would turn into a real, hard-to-diagnose hang
+     * rather than a clean, immediate test failure. */
     int flags = fcntl(fds[i], F_GETFL, 0);
-    fcntl(fds[i], F_SETFL, flags | O_NONBLOCK);
+    REQUIRE_GE(flags, 0);
+    REQUIRE_EQ(fcntl(fds[i], F_SETFL, flags | O_NONBLOCK), 0);
   }
 }
 

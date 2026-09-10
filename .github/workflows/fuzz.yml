@@ -1,11 +1,10 @@
 name: Fuzz
 
-# Mandatory, blocking jobs on every push/pull_request, matching ci.yml's own
+# Mandatory, blocking jobs on every push, matching ci.yml's own
 # trigger exactly: fuzzing is part of ordinary CI, not a post-merge-only or
 # opt-in check.
 on:
   push:
-  pull_request:
   workflow_dispatch:
 
 jobs:

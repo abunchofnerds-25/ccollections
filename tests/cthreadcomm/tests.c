@@ -7342,25 +7342,8 @@ static void *fork_safety_churn_thread(void *arg) {
  * alarm(3): before the fix, this reproduced a hung child in the large
  * majority of trials (a single stripe maximizes the odds fork() lands
  * mid-critical-section on it), which this test would otherwise never
- * finish at all rather than fail visibly.
- *
- * Ignored under CCOL_UNDER_QEMU_USER, a macro defined only via EXTRA_CFLAGS
- * in the four qemu-based CI jobs (see .github/workflows/ci.yml's own
- * comment at each of those jobs' build step): this test's own rapid,
- * repeated fork() calls have been confirmed, via cdebuglog-based
- * instrumentation from a prior investigation, to hang inside qemu-user's
- * own fork()/clone() return path itself, on both qemu-arm and qemu-aarch64,
- * with every lock this codebase owns already
- * fully and symmetrically released on both the parent and child side by the
- * time the hang occurs. Not reproducible natively, nor under this same
- * qemu-user version with either the target suite run in isolation or the
- * full suite run repeatedly under deliberately induced CPU contention; see
- * this file's own git history for the full investigation. */
-#ifdef CCOL_UNDER_QEMU_USER
-IGNORE_TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
-#else
+ * finish at all rather than fail visibly. */
 TEST(fork_safety, fork_does_not_inherit_a_locked_event_loop_mutex) {
-#endif
 #if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
   /* Unlike every OTHER hang-prone test in this file, the one genuinely
    * UNBOUNDED call here is fork() itself, on the MAIN test thread: a
@@ -8052,44 +8035,67 @@ TEST(fork_safety,
 
       fork_safety2_sender_arg_t sarg = {.cq = cq, .started = false};
       pthread_t sender;
-      pthread_create(&sender, NULL, fork_safety2_sender_thread, &sarg);
-      while (!atomic_load(&sarg.started)) {
-        /* Wait for the sender to confirm it is about to call
-         * circq_send_zc, before forking below. A bare atomic-load spin
-         * with no yield is not actually cheap under valgrind: memcheck
-         * time-slices every thread through one single instrumented
-         * execution engine rather than giving them true multi-core
-         * parallelism (see fork_does_not_inherit_a_locked_circular_
-         * queue_mutex's own identical fix above, and tests/cthreadpool/
-         * tests.c's own ctp_fork_feeder_thread), so this loop's own
-         * iteration count, however cheap each one is natively, made this
-         * test's own `make memtest` run take well over a minute (up to,
-         * and sometimes past, this test's own 30-second alarm) rather
-         * than a fraction of a second. sched_yield() caps this thread's
-         * own achievable spin rate to whatever the scheduler's own
-         * time-slice granularity allows, letting the sender thread
-         * actually get scheduled promptly instead of being starved by
-         * this thread continuously re-winning the single instrumented
-         * engine's turn. */
-        sched_yield();
-      }
-      /* Give the sender a moment to acquire cq->mutex and enter the
-       * widened _notify_waiter delay before the risky fork() call. */
-      usleep(50000);
+      /* Checked, unlike a bare fire-and-forget call: this runs inside the
+       * forked child above (outer_pid == 0), where a failed create cannot
+       * be reported via REQUIRE_EQ the way every sibling fork_safety test's
+       * own identical spin-wait setup does (their own pthread_create is
+       * called by the PARENT, before ever forking, so REQUIRE_EQ's failure
+       * path -- an early `return` out of this Tau test function -- lands
+       * safely back in the harness that called it; here, that same early
+       * `return` would instead return out of THIS test function while
+       * still running as the forked child, skipping the _exit(0) below and
+       * falling into the harness's own subsequent test-running loop a
+       * second time, in a process that was only ever supposed to run this
+       * one child-side branch and exit). A failed create is therefore
+       * handled exactly like a failed cq/loop/reg creation just above:
+       * skip the risky section entirely and fall through with byte still
+       * 0, reporting this run as a failure via the existing pipe protocol
+       * rather than ever entering the wait loop below with no thread
+       * created to ever satisfy it. Confirmed, via reproduction under a
+       * deliberately tightened process/thread ulimit, that an unchecked
+       * failure here left sarg.started permanently false, spinning the
+       * sched_yield() loop below forever with nothing left to log: the
+       * exact hang this file's own instrumentation was added to chase. */
+      if (pthread_create(&sender, NULL, fork_safety2_sender_thread, &sarg) ==
+          0) {
+        while (!atomic_load(&sarg.started)) {
+          /* Wait for the sender to confirm it is about to call
+           * circq_send_zc, before forking below. A bare atomic-load spin
+           * with no yield is not actually cheap under valgrind: memcheck
+           * time-slices every thread through one single instrumented
+           * execution engine rather than giving them true multi-core
+           * parallelism (see fork_does_not_inherit_a_locked_circular_
+           * queue_mutex's own identical fix above, and tests/cthreadpool/
+           * tests.c's own ctp_fork_feeder_thread), so this loop's own
+           * iteration count, however cheap each one is natively, made this
+           * test's own `make memtest` run take well over a minute (up to,
+           * and sometimes past, this test's own 30-second alarm) rather
+           * than a fraction of a second. sched_yield() caps this thread's
+           * own achievable spin rate to whatever the scheduler's own
+           * time-slice granularity allows, letting the sender thread
+           * actually get scheduled promptly instead of being starved by
+           * this thread continuously re-winning the single instrumented
+           * engine's turn. */
+          sched_yield();
+        }
+        /* Give the sender a moment to acquire cq->mutex and enter the
+         * widened _notify_waiter delay before the risky fork() call. */
+        usleep(50000);
 
-      pid_t inner_pid = fork();
-      if (inner_pid == 0) {
-        _exit(0);
-      } else if (inner_pid > 0) {
-        /* Reaching here at all (rather than hanging until alarm(30) above
-         * kills this process) is the actual thing under test. */
-        int inner_status = 0;
-        waitpid(inner_pid, &inner_status, 0);
-        byte = 1;
-      }
+        pid_t inner_pid = fork();
+        if (inner_pid == 0) {
+          _exit(0);
+        } else if (inner_pid > 0) {
+          /* Reaching here at all (rather than hanging until alarm(30)
+           * above kills this process) is the actual thing under test. */
+          int inner_status = 0;
+          waitpid(inner_pid, &inner_status, 0);
+          byte = 1;
+        }
 
-      _notify_waiter_test_set_delay_us(0);
-      pthread_join(sender, NULL);
+        _notify_waiter_test_set_delay_us(0);
+        pthread_join(sender, NULL);
+      }
     }
 
     test_write_retry_eintr(result_pipe[1], &byte, 1);

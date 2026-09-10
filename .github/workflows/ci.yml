@@ -111,16 +111,6 @@ jobs:
     # itself stuck inside the same deadlock. A one-time occurrence ran for
     # over 3 hours with zero output before being cancelled; this bound keeps
     # a recurrence cheap instead of silently burning runner time.
-    #
-    # This same deadlock class was subsequently confirmed to hang
-    # tests/cthreadcomm's own fork_safety.fork_does_not_inherit_a_locked_
-    # event_loop_mutex test specifically, on both qemu-arm and qemu-aarch64,
-    # in a single CI run. Every EXTRA_CFLAGS below therefore additionally
-    # defines CCOL_UNDER_QEMU_USER, which that test's own tests.c uses to
-    # skip (Tau's IGNORE_TEST, not a compile-time removal) itself under this
-    # emulator specifically; see that test's own doc comment in tests.c for
-    # the full rationale, including why this is believed to be a qemu-user
-    # fork()/clone() bug rather than a bug in this codebase's own locking.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -161,7 +151,7 @@ jobs:
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            (cd "$dir" && make CC=aarch64-linux-gnu-gcc EXTRA_CFLAGS=-DCCOL_UNDER_QEMU_USER build)
+            (cd "$dir" && make CC=aarch64-linux-gnu-gcc build)
             qemu-aarch64 -L /usr/aarch64-linux-gnu "$dir/tests"
             echo "::endgroup::"
           done
@@ -220,7 +210,7 @@ jobs:
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            (cd "$dir" && make CC="clang --target=aarch64-linux-gnu -B$AARCH64_GCC_CROSS_DIR" EXTRA_CFLAGS=-DCCOL_UNDER_QEMU_USER build)
+            (cd "$dir" && make CC="clang --target=aarch64-linux-gnu -B$AARCH64_GCC_CROSS_DIR" build)
             qemu-aarch64 -L /usr/aarch64-linux-gnu "$dir/tests"
             echo "::endgroup::"
           done
@@ -267,7 +257,7 @@ jobs:
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            (cd "$dir" && make CC=arm-linux-gnueabihf-gcc EXTRA_CFLAGS=-DCCOL_UNDER_QEMU_USER build)
+            (cd "$dir" && make CC=arm-linux-gnueabihf-gcc build)
             qemu-arm -L /usr/arm-linux-gnueabihf "$dir/tests"
             echo "::endgroup::"
           done
@@ -332,7 +322,7 @@ jobs:
             mod=$(basename "$dir")
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
-            (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" EXTRA_CFLAGS="-Wno-error=unused-command-line-argument -DCCOL_UNDER_QEMU_USER" build)
+            (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" EXTRA_CFLAGS="-Wno-error=unused-command-line-argument" build)
             qemu-arm -L /usr/arm-linux-gnueabihf "$dir/tests"
             echo "::endgroup::"
           done

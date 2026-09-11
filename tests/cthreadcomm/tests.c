@@ -6,6 +6,7 @@
 #include <execinfo.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <poll.h>
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
@@ -1056,6 +1057,55 @@ static bool _wait_for_forked_child_bounded(pid_t pid, int *status_out,
     nanosleep(&ts, NULL);
   }
   return false;
+}
+
+/* Bounded alternative to a plain blocking read() on a forked child's result
+ * pipe. Every fork_safety test below that uses a result pipe relies on the
+ * forked child's own alarm() to eventually close its write end (either by
+ * writing the result byte and exiting normally, or by the default SIGALRM
+ * disposition terminating it on a hang), so a bare read() there was assumed
+ * safe: it can only ever block as long as the child's own alarm bound
+ * allows. A qemu-user binary-translation lock held across the guest fork()
+ * (the same class this project's CI infrastructure notes already document
+ * for a hung linux-aarch64-clang run) can wedge a forked child's own
+ * itimer/signal delivery right along with everything else it depends on,
+ * silently disabling that alarm bound entirely and leaving the write end of
+ * the pipe open indefinitely with nothing ever written or closed. Bounding
+ * the read itself with poll() closes that gap independently of whatever
+ * bound the child's own alarm() call was supposed to provide, mirroring
+ * _wait_for_forked_child_bounded's own reasoning above for why an unbounded
+ * parent-side wait is never trusted alone in this file. Returns the same
+ * value read() would (1 on a byte actually observed, 0 on a genuine EOF)
+ * within timeout_ms; also returns 0 (as if EOF) on a timeout, so every
+ * existing REQUIRE_EQ((int)n, 1) call site downstream still fails that one
+ * test cleanly instead of hanging the whole binary. */
+static ssize_t _read_result_byte_bounded(int fd, char *out_byte,
+                                         int timeout_ms) {
+  struct timespec deadline;
+  clock_gettime(CLOCK_MONOTONIC, &deadline);
+  deadline.tv_sec += timeout_ms / 1000;
+  deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if (deadline.tv_nsec >= 1000000000L) {
+    deadline.tv_sec += 1;
+    deadline.tv_nsec -= 1000000000L;
+  }
+
+  for (;;) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long remaining_ms = (deadline.tv_sec - now.tv_sec) * 1000L +
+                        (deadline.tv_nsec - now.tv_nsec) / 1000000L;
+    if (remaining_ms <= 0) return 0; /* timed out; treat like EOF */
+
+    struct pollfd pfd = {.fd = fd, .events = POLLIN};
+    int r = poll(&pfd, 1, (int)remaining_ms);
+    if (r == 0) return 0; /* timed out; treat like EOF */
+    if (r < 0) {
+      if (errno == EINTR) continue;
+      return -1;
+    }
+    return read(fd, out_byte, 1);
+  }
 }
 
 /* Regression tests for a real use-after-free hazard: destroying a queue
@@ -7690,12 +7740,12 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_circular_queue_mutex) {
    * not returned near-instantly while the lock was still genuinely held. */
   REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
 
-  /* A short, bounded read: if the child hung past alarm(3) and was killed
-   * without ever writing, its copy of the write end closes with it, and
-   * this read returns 0 (EOF) rather than blocking forever, since the
-   * parent already closed its own write-end copy above. */
+  /* Bounded, not a bare blocking read(): see _read_result_byte_bounded's own
+   * doc comment for why a plain read() here cannot be trusted to return
+   * even on a killed/hung child. 10s matches this test's own parent-side
+   * _wait_for_forked_child_bounded call below. */
   char byte = 0;
-  ssize_t n = read(result_pipe[0], &byte, 1);
+  ssize_t n = _read_result_byte_bounded(result_pipe[0], &byte, 10000);
   close(result_pipe[0]);
   REQUIRE_EQ((int)n, 1);
   REQUIRE_EQ((int)byte, 1);
@@ -7823,8 +7873,11 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_reg_slot_rwlock) {
    * have waited for close to the holder's own HOLD_MS before returning. */
   REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
 
+  /* Bounded, not a bare blocking read(): see _read_result_byte_bounded's own
+   * doc comment for why a plain read() here cannot be trusted to return
+   * even on a killed/hung child. */
   char byte = 0;
-  ssize_t n = read(result_pipe[0], &byte, 1);
+  ssize_t n = _read_result_byte_bounded(result_pipe[0], &byte, 10000);
   close(result_pipe[0]);
   REQUIRE_EQ((int)n, 1);
   REQUIRE_EQ((int)byte, 1);
@@ -7948,8 +8001,15 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
    * have waited for close to the holder's own HOLD_MS before returning. */
   REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
 
+  /* Bounded, not a bare blocking read(): see _read_result_byte_bounded's own
+   * doc comment for why a plain read() here cannot be trusted to return
+   * even on a killed/hung child; this is precisely the test where that
+   * exact gap was confirmed to hang an entire CI job (a qemu-arm run went
+   * silent right after this fork()'s own child-side atfork release
+   * completed, with neither process ever heard from again until the job's
+   * own external timeout fired). */
   char byte = 0;
-  ssize_t n = read(result_pipe[0], &byte, 1);
+  ssize_t n = _read_result_byte_bounded(result_pipe[0], &byte, 10000);
   close(result_pipe[0]);
   REQUIRE_EQ((int)n, 1);
   REQUIRE_EQ((int)byte, 1);
@@ -8184,8 +8244,13 @@ TEST(fork_safety,
   }
 
   close(result_pipe[1]);
+  /* Bounded, not a bare blocking read(): see _read_result_byte_bounded's own
+   * doc comment (and fork_does_not_inherit_a_write_locked_event_loop_slot_
+   * table's identical fix above) for why a plain read() here cannot be
+   * trusted to return even on a killed/hung child. 200s matches this test's
+   * own outer_pid bound below. */
   char byte = 0;
-  ssize_t n = read(result_pipe[0], &byte, 1);
+  ssize_t n = _read_result_byte_bounded(result_pipe[0], &byte, 200000);
   close(result_pipe[0]);
 
   int status = 0;
@@ -8277,8 +8342,12 @@ TEST(fork_safety, event_loop_destroy_of_inherited_loop_in_child_is_safe) {
   }
 
   close(result_pipe[1]);
+  /* Bounded, not a bare blocking read(): see _read_result_byte_bounded's own
+   * doc comment for why a plain read() here cannot be trusted to return
+   * even on a killed/hung child. 10s matches this test's own alarm(5)-plus-
+   * margin bound below. */
   char byte = 0;
-  ssize_t n = read(result_pipe[0], &byte, 1);
+  ssize_t n = _read_result_byte_bounded(result_pipe[0], &byte, 10000);
   close(result_pipe[0]);
 
   int status = 0;

@@ -50,8 +50,13 @@ test: build
 # own persistent, process-wide reactors; set for consistency across all
 # three fork-and-spawn-new-threads suites, and as a safeguard against a
 # future test addition making this parent multi-threaded at fork time too.
+# suppressions=tsan_rwlock_reinit.supp: a known, confirmed-non-bug
+# ThreadSanitizer limitation around this module's own fork()-safety rwlock
+# reinit; see that file's own comment for the independent, cthreadcomm.c-free
+# reproduction proving it, mirroring tests/clogger/Makefile's identical
+# "known non-bug, suppress with a documented reason" precedent.
 test_tsan: build_tsan
-	TSAN_OPTIONS="die_after_fork=0" ./tests_tsan
+	TSAN_OPTIONS="die_after_fork=0 suppressions=tsan_rwlock_reinit.supp" ./tests_tsan
 
 memtest: build
 	valgrind --leak-check=full -s -q --show-leak-kinds=all --errors-for-leak-kinds=all --error-exitcode=1 --child-silent-after-fork=yes ./tests

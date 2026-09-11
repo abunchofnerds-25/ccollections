@@ -2785,6 +2785,44 @@ struct event_entry {
    * acquire this lock, so no new lock-ordering cycle is introduced. */
   mutex_t dispatch_lock;
 
+  /* Thread currently holding dispatch_lock for a live callback invocation,
+   * 0 when no dispatch is in flight; written only by whichever thread
+   * currently holds dispatch_lock itself (set right after acquiring it, in
+   * _event_loop_handle_event/_event_loop_dispatch_job_fn, cleared right
+   * before releasing it), read without that lock held by event_loop_remove
+   * to decide whether it needs to wait on dispatch_lock at all before
+   * returning. Self-removal from within a callback (a documented, common
+   * pattern; see evl_on_readable_self_remove's own doc comment in
+   * tests/cthreadcomm/tests.c) calls event_loop_remove from the very thread
+   * already holding this entry's dispatch_lock; waiting on it there would
+   * be a guaranteed self-deadlock, and is also unnecessary, since holding
+   * dispatch_lock already proves no OTHER thread is concurrently
+   * dispatching this same entry. _Atomic (not plain, protected only by
+   * dispatch_lock) specifically because event_loop_remove's read of it
+   * happens without dispatch_lock held, by construction: taking the lock
+   * first to read this field would defeat the entire purpose of checking
+   * it before deciding whether to take the lock. Deliberately the default
+   * memory_order_seq_cst for every access, not memory_order_relaxed: a
+   * relaxed-ordering version of this field was tried and reverted after it
+   * produced a real, reproducible hang (event_loop.fd_write_only_
+   * registration_still_fires_on_writable_when_peer_hangs_up_multi_thread,
+   * a num_reactor_threads > 1 test, wedged with entry->dispatch_lock
+   * genuinely locked and no thread anywhere holding it). The "this only
+   * ever needs to compare against my own thread ID" reasoning that
+   * motivated trying relaxed ordering was itself correct in isolation, but
+   * incomplete: it ignored that this field's own store additionally needs
+   * to be ordered, from OTHER threads' perspective, relative to
+   * entry->refcount and entry->removed, both touched nearby under the same
+   * dispatch_lock/stripe_lock critical sections; seq_cst here also
+   * supplies (as a side effect, via x86's total-store-order plus an
+   * explicit fence) an ordering guarantee those neighboring accesses
+   * depend on, which relaxed ordering removed. Left at seq_cst rather than
+   * re-deriving the minimal correct memory_order for that cross-field
+   * dependency: the cost is one store per dispatch batch (not per
+   * message) and one load per event_loop_remove call (not per message),
+   * not a hot-loop-per-message cost. */
+  _Atomic uintptr_t dispatch_owner_tid;
+
   /* Caller-visible identity token (event_loop_reg_generation): minted once,
    * from loop->fd_generation_counter, at entry-creation time (never for an
    * existing entry gaining its second direction) and copied into every
@@ -4188,6 +4226,7 @@ static ccol_retval_t _event_loop_add_fd(struct event_loop_s *loop, size_t idx,
     }
     atomic_init(&entry->removed, false);
     atomic_init(&entry->refcount, (size_t)0);
+    atomic_init(&entry->dispatch_owner_tid, (uintptr_t)0);
     /* Minted once per NEW entry, never for a second direction joining an
      * already-registered fd (that case takes the !new_entry path below and
      * shares the existing entry's generation, correctly reflecting that
@@ -4602,6 +4641,7 @@ event_reg event_loop_add(event_loop loop, ccol_selectable sel,
       } else {
         atomic_init(&entry->removed, false);
         atomic_init(&entry->refcount, (size_t)0);
+        atomic_init(&entry->dispatch_owner_tid, (uintptr_t)0);
         /* Queue/channel selectables never share an entry (1:1, no
          * combining), so every event_loop_add call here mints a fresh
          * generation; unlike the fd path, there is no "second direction
@@ -5187,9 +5227,27 @@ static void _event_loop_free_all_pending(struct event_loop_s *loop) {
  * Returns true if this call is the one that actually performed the
  * removal (reg->removed was false and is now true), false if reg was
  * already removed by a prior call (a graceful no-op; the caller must not
- * proceed to phase 2 or release a slot in that case). */
+ * proceed to phase 2 or release a slot in that case). On a true return,
+ * *out_entry is also set to reg's own owning_entry (valid regardless of
+ * selectable type; see event_loop_remove's own use of it to wait out an
+ * in-flight dispatch before returning), with entry->refcount already
+ * bumped by this call specifically so it stays alive for that wait: this
+ * function may itself defer entry for reclaim below (the last-direction-
+ * removed case), and reclaim requires refcount == 0 in addition to its
+ * epoch check (see _event_loop_reclaim_pending_frees's own comment on
+ * event_entry.refcount) precisely so a still-needed entry is never freed
+ * out from under a caller that has not finished with it yet -- the same
+ * mechanism a dispatch job already relies on, reused here rather than
+ * inventing a second one. The bump happens under this same stripe lock,
+ * strictly before any defer call below, so it is visible to any reclaim
+ * attempt from the moment this function could possibly make entry
+ * eligible at all. event_loop_remove's caller is responsible for
+ * releasing this one reference (atomic_fetch_sub) after it is done
+ * waiting. *out_entry is left untouched, and nothing is bumped, on a
+ * false return. */
 static bool _event_loop_remove_unlink(struct event_loop_s *raw,
-                                      event_reg_s *reg) {
+                                      event_reg_s *reg,
+                                      event_entry **out_entry) {
   event_loop_stripe_t *stripe = &raw->stripes[reg->stripe_idx];
   mutex_lock(stripe->lock);
 
@@ -5199,6 +5257,8 @@ static bool _event_loop_remove_unlink(struct event_loop_s *raw,
   }
 
   event_entry *entry = reg->owning_entry;
+  *out_entry = entry;
+  atomic_fetch_add(&entry->refcount, 1);
 
   if (reg->sel.type == ccol_selectable_fd) {
     event_reg_s **slot = (reg->sel.dir == ccol_select_read)
@@ -5321,7 +5381,70 @@ ccol_retval_t event_loop_remove(event_loop loop, event_reg reg_h) {
     return ccol_invalid_args;
   }
 
-  if (_event_loop_remove_unlink(raw, reg)) {
+  event_entry *entry = NULL;
+  if (_event_loop_remove_unlink(raw, reg, &entry)) {
+    /* Waits out any dispatch of THIS entry currently in flight on another
+     * thread (the poller thread itself for num_reactor_threads == 1, or a
+     * ctpool worker already past collection for num_reactor_threads > 1),
+     * before this call can return: _event_loop_handle_event/
+     * _event_loop_dispatch_job_fn both hold entry->dispatch_lock across
+     * their entire dispatch of one epoll-reported readiness (collection
+     * through every matched callback actually running), so blocking on it
+     * here cannot return before such a callback, mid-invocation right now
+     * with reg->arg live, has fully finished and released it. Closes the
+     * gap _event_loop_run_callback's own removed re-check only closed
+     * probabilistically for num_reactor_threads == 1 (see that re-check's
+     * own comment: "a handful of instructions... real, but so narrow it
+     * was never observed" -- observed for the first time via
+     * ThreadSanitizer against event_loop.resume_never_paused_is_idempotent_
+     * and_harmless, whose own on_readable never drains its fd, keeping it
+     * continuously ready and the poller re-dispatching it as fast as it
+     * can).
+     *
+     * entry is safe to dereference here specifically because
+     * _event_loop_remove_unlink already bumped entry->refcount before
+     * returning (see that function's own comment): a first attempt at this
+     * fix relied instead on reasoning that reclaim "cannot have run yet"
+     * purely from the epoch check, and a real, valgrind-caught
+     * use-after-free promptly disproved that under genuine multi-core
+     * concurrency (this thread's own _event_loop_remove_unlink call defers
+     * entry for reclaim, another core's poller_thread can cross a
+     * between-batches point and free it before this thread ever reaches
+     * this line -- the epoch condition alone says nothing about how much
+     * wall-clock time separates the two). The refcount bump means reclaim
+     * (which already requires refcount == 0 in addition to its epoch
+     * check, for the identical reason a ctpool dispatch job needs it; see
+     * _event_loop_reclaim_pending_frees) cannot free entry until the
+     * matching release below has run, regardless of how the epoch
+     * condition alone would have resolved. Immediately safe to skip
+     * waiting when nothing is currently dispatching this entry (the
+     * ordinary case): lock/unlock then returns at once, uncontended.
+     *
+     * Skipped entirely, rather than waited on, when THIS call is itself
+     * running on the thread already recorded as entry->dispatch_owner_tid:
+     * that is exactly the documented, common self-removal-from-within-a-
+     * callback pattern (see event_loop_remove's own header doc comment,
+     * and evl_on_readable_self_remove in tests/cthreadcomm/tests.c), where
+     * the calling thread already holds entry->dispatch_lock further up its
+     * own call stack. Waiting here would be a guaranteed self-deadlock
+     * against a plain (non-recursive) mutex; it would also be pointless,
+     * since this thread already holding dispatch_lock is itself the proof
+     * no OTHER thread can be concurrently dispatching this same entry. The
+     * read of dispatch_owner_tid here is deliberately lock-free (see its
+     * own field comment for why); comparing against get_thread_id() here
+     * mirrors this file's own established owner-thread-comparison idiom
+     * (see e.g. channel's owner_tid checks and loop->poller_thread's own
+     * self-call checks elsewhere in this file). */
+    if (atomic_load(&entry->dispatch_owner_tid) != (uintptr_t)get_thread_id()) {
+      mutex_lock(entry->dispatch_lock);
+      mutex_unlock(entry->dispatch_lock);
+    }
+    /* Releases _event_loop_remove_unlink's own bump, above, now that this
+     * call is done with entry; safe even when the wait above was skipped
+     * (self-removal), since the bump still happened unconditionally in
+     * _event_loop_remove_unlink. */
+    atomic_fetch_sub(&entry->refcount, 1);
+
     /* Immediately invalidates this reg's own handle for every future
      * resolve attempt, BEFORE phase 2 below can ever make reg eligible
      * for actual reclaim; see _event_loop_remove_unlink's own comment for
@@ -5390,28 +5513,27 @@ static void _event_loop_run_callback(event_loop loop, _dispatch_item *item) {
   /* Re-check removed here, at the actual moment of invocation, not just at
    * collection time (where this was already checked once, under the stripe
    * lock, before this item was ever added to items[]/job->items[]).
-   * event_loop_remove() does not take entry->dispatch_lock and does not wait
-   * for an already-collected item to finish dispatching (see its own header
-   * doc comment: "in-progress" callback teardown is deferred, which protects
-   * event_loop's own reg/entry memory, but promises nothing about whether a
-   * collected-but-not-yet-invoked callback still fires); so a concurrent
-   * event_loop_remove can complete, and the caller can go on to free
-   * whatever reg->arg points to, strictly between collection and this
-   * function actually running. For num_reactor_threads == 1 that window is
-   * a handful of instructions with no thread switch possible in between
-   * (collection and this call happen back-to-back in the same function,
-   * same thread); real, but so narrow it was never observed. For
-   * num_reactor_threads > 1 the equivalent window is an arbitrarily long
-   * ctpool queue wait, which made this a real, valgrind-caught
-   * use-after-free (found via tests/chttpserver/tests_mem_mgmt.c's own
-   * teardown racing a freshly accepted connection's first readable
-   * dispatch against __chttpsvr_destroy's _close_all_idle_connections):
-   * chttpserver's own conn->reg lifetime discipline is "call
-   * event_loop_remove, then immediately free conn" (see chttpserver.c's
-   * _conn_close), which is only safe if event_loop guarantees no callback
-   * still runs afterward with conn as reg->arg. Re-checking removed here
-   * closes that gap for both dispatch paths with one change: once removed
-   * is observed true, reg->arg is never touched again by this reg. */
+   * event_loop_remove() now waits on entry->dispatch_lock before returning
+   * (see its own call site's comment), which fully closes this window for
+   * num_reactor_threads == 1: collection and this call both happen while
+   * poller_thread holds that same entry's dispatch_lock across the whole of
+   * _event_loop_handle_event, so event_loop_remove's own wait cannot return
+   * from the middle of it. For num_reactor_threads > 1 the window is only
+   * narrowed, not closed: a job already collected and handed to ctpool, but
+   * still sitting in ctpool's own internal queue rather than yet picked up
+   * by a worker, has not yet taken entry->dispatch_lock at all, so
+   * event_loop_remove's wait does not observe it; that sub-case is what
+   * originally made this a real, valgrind-caught use-after-free (found via
+   * tests/chttpserver/tests_mem_mgmt.c's own teardown racing a freshly
+   * accepted connection's first readable dispatch against
+   * __chttpsvr_destroy's _close_all_idle_connections): chttpserver's own
+   * conn->reg lifetime discipline is "call event_loop_remove, then
+   * immediately free conn" (see chttpserver.c's _conn_close), which is only
+   * safe if event_loop guarantees no callback still runs afterward with
+   * conn as reg->arg. Re-checking removed here is what still closes that
+   * remaining ctpool-queue-wait gap for num_reactor_threads > 1: once
+   * removed is observed true, reg->arg is never touched again by this
+   * reg. */
   if (atomic_load(&reg->removed)) return;
   /* Re-check paused here for the identical reason removed is re-checked
    * above: event_loop_pause's own contract ("no on_readable/on_writable/
@@ -5473,12 +5595,16 @@ static void _event_loop_release_after_dispatch(struct event_loop_s *loop,
  * lock across a user callback.
  *
  * Held across the WHOLE function, not just collection: entry->dispatch_lock.
- * For num_reactor_threads == 1 specifically this lock is uncontended by
- * construction (poller_thread is the only caller of this function, so
- * there is no other thread that could race it here); it is kept anyway
- * purely so this function's own logic needs no special-casing versus its
- * pre-split form, matching the "byte-for-byte unchanged" requirement above
- * exactly. Its original motivating hazard (more than one thread each
+ * For num_reactor_threads == 1, poller_thread is still the only thread that
+ * ever calls this function, but the lock is no longer uncontended: a
+ * concurrent event_loop_remove() for this same entry now also acquires it
+ * (briefly, to wait out an in-flight dispatch before returning; see that
+ * function's own call-site comment for why), specifically because this
+ * function's original design of running unlocked with only a
+ * probabilistic removed re-check (_event_loop_run_callback's own comment)
+ * left a real, ThreadSanitizer-caught window where a caller could free
+ * reg->arg while a callback using it was still in flight. Its original
+ * motivating hazard (more than one thread each
  * independently calling epoll_wait on the same shared epoll instance,
  * genuinely receiving the same still-ready entry more than once, and
  * without this lock both passing the collection step below for the SAME
@@ -5521,6 +5647,7 @@ static void _event_loop_handle_event(struct event_loop_s *loop,
   }
 
   mutex_lock(entry->dispatch_lock);
+  atomic_store(&entry->dispatch_owner_tid, (uintptr_t)get_thread_id());
 
   _dispatch_item items[2];
   size_t n_items = 0;
@@ -5640,6 +5767,7 @@ static void _event_loop_handle_event(struct event_loop_s *loop,
     _event_loop_release_after_dispatch(loop, items[i].reg);
   }
 
+  atomic_store(&entry->dispatch_owner_tid, (uintptr_t)0);
   mutex_unlock(entry->dispatch_lock);
 }
 
@@ -5901,6 +6029,7 @@ static void _event_loop_dispatch_job_fn(void *arg) {
   thread_ls_set(event_loop_job_key_bundle.key, (void *)loop);
 
   mutex_lock(entry->dispatch_lock);
+  atomic_store(&entry->dispatch_owner_tid, (uintptr_t)get_thread_id());
   for (size_t i = 0; i < job->n_items; i++) {
     _dispatch_item *item = &job->items[i];
     if (!entry->is_fd) {
@@ -5912,6 +6041,7 @@ static void _event_loop_dispatch_job_fn(void *arg) {
     if (!entry->is_fd) _event_loop_queue_cascade_notify_next(item->reg);
     _event_loop_release_after_dispatch(loop, item->reg);
   }
+  atomic_store(&entry->dispatch_owner_tid, (uintptr_t)0);
   mutex_unlock(entry->dispatch_lock);
 
   /* Re-arm and the refcount release happen together, under the same stripe

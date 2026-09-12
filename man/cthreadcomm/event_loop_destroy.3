@@ -30,6 +30,11 @@ instead.
 
 See __event_loop_destroy(3) for the queue-outlives-the-loop safety
 guarantee this provides for queue-backed registrations.
+
+Every remaining registration's handlers.on_removed (see
+event_loop_add(3)), if set, fires exactly once as part of freeing it
+here, the same guarantee an ordinary event_loop_remove() call gives a
+still-live registration.
 .fi
 .SH PARAMETERS
 .nf

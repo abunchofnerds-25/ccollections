@@ -442,6 +442,34 @@ typedef struct chttpsvr_conn {
   struct chttpsvr_conn *diverted_prev, *diverted_next;
   bool in_diverted_list;
 
+  /* Governs when it is actually safe to free this struct, mirroring
+   * event_reg's own refcount design in cthreadcomm.c ("1 while registered;
+   * +1 per in-flight callback"): starts at 1 for "the application has not
+   * yet closed this connection" (see _conn_create), +1 for every conn->reg
+   * registration ever created for it (every event_loop_add call site
+   * below, on success), -1 exactly once from _conn_close (the
+   * application's own "done with conn" decision) and -1 exactly once per
+   * registration's on_removed firing (_conn_on_removed), which
+   * cthreadcomm itself guarantees fires exactly once per registration that
+   * was ever actually wired live, asynchronously, only once no dispatch of
+   * it can still be touching conn. _conn_free actually runs only when this
+   * reaches 0.
+   *
+   * A single on_removed firing is not sufficient on its own: a connection
+   * can go through more than one registration episode over its life (e.g.
+   * _conn_dispatch_reject and _conn_start_diverted's own pause-failure
+   * fallback each remove their own registration synchronously, from
+   * within that registration's own dispatch, self-removal-safe by
+   * construction, while conn survives to be registered again later by
+   * _conn_pump/_task_worker for a subsequent step or keep-alive request);
+   * freeing on the first on_removed firing alone would free conn while a
+   * later registration episode, or the application's own close decision,
+   * is still outstanding. Summing every contribution, regardless of
+   * ordering, is what makes "close requested AND every registration ever
+   * created has been proven safe to release" the exact condition, not an
+   * approximation of it. */
+  _Atomic int lifetime_refs;
+
   ccol_memmgmt_procs_t *m_procs;
 } chttpsvr_conn_t;
 
@@ -1037,6 +1065,43 @@ struct chttpserver {
   mutex_t diverted_mutex;
   chttpsvr_conn_t *diverted_head, *diverted_tail;
 
+  /* This server's own index into chttpsvr_slot_table.slots, set once by
+   * _chttpsvr_handle_slot_acquire; needed by _chttpsvr_finish_destroy when
+   * it runs from _conn_on_removed (see that field's own comment), which has
+   * no chttpsvr handle value to re-derive it from, only this raw pointer. */
+  uint32_t self_slot_idx;
+
+  /* Governs when it is actually safe to free this struct, mirroring
+   * chttpsvr_conn_t's own lifetime_refs design exactly (see that field's
+   * own comment for the full reasoning): starts at 1 for "the application
+   * has not yet destroyed this server" (see create_chttpsvr_mp), +1 for
+   * every conn->reg registration ever created for any connection this
+   * server accepts (every event_loop_add call site in _conn_pump/
+   * _task_worker, on success), -1 exactly once from __chttpsvr_destroy
+   * (the application's own "done with this server" decision) and -1
+   * exactly once per registration's on_removed firing (_conn_on_removed).
+   * _chttpsvr_finish_destroy (the actual mutex_destroy/free/slot-release
+   * step, factored out of __chttpsvr_destroy for exactly this reason) runs
+   * only when this reaches 0, whichever of the two kinds of caller brings
+   * it there: a connection's own on_removed can fire well after
+   * __chttpsvr_destroy's own caller returns (see event_loop_remove()'s own
+   * doc comment on why it cannot make that synchronous without risking a
+   * lock-ordering cycle; the specific case this closes is a registration
+   * removed too close to the shared reactor's own async, engine-reaper-
+   * driven teardown to ever reach its OWN ordinary, poller-driven reclaim
+   * pass -- confirmed via a real, intermittent, valgrind-caught use-after-
+   * free otherwise: __chttpsvr_destroy freeing raw synchronously while
+   * _event_loop_teardown_raw's own final, unconditional sweep still had
+   * this exact connection's on_removed pending on the reaper's own
+   * thread). __chttpsvr_destroy itself must never block waiting for this
+   * counter to reach 0 (that was tried and reverted: it deadlocks against this
+   * project's own existing chttpsvr_start()-races-a-concurrent-graceful-
+   * reap tests, whose own design requires chttpsvr_destroy()/_engine_
+   * release() to return promptly rather than block on the reap it may
+   * have just triggered) -- deferring the free itself, not blocking for
+   * it, is what closes the gap without reintroducing that deadlock. */
+  _Atomic int lifetime_refs;
+
   ccol_memmgmt_procs_t *m_procs;
 };
 
@@ -1121,6 +1186,7 @@ would collide with CHTTPSVR_INVALID; see chttpclient.c's identical
 guard for the full reasoning */
   slot->ptr = srv;
   slot->in_use = true;
+  srv->self_slot_idx = idx;
   chttpsvr h = ((chttpsvr)idx << 32) | (chttpsvr)slot->generation;
   mutex_unlock(chttpsvr_slot_table.mutex);
   return h;
@@ -1982,6 +2048,12 @@ void _chttpsvr_test_hold_engine_mutex_and_signal_self(int sig) {
 
 static void _conn_close(chttpsvr_conn_t *conn);
 static void _conn_reject_and_close(chttpsvr_conn_t *conn, unsigned timeout_ms);
+/* Defined near __chttpsvr_destroy, far below; forward-declared here since
+ * _conn_on_removed (which needs to call it, possibly long after
+ * __chttpsvr_destroy's own caller has returned) is defined well before it in
+ * this file. See struct chttpserver's own lifetime_refs field comment for
+ * why this exists as a separate, deferrable step at all. */
+static void _chttpsvr_finish_destroy(struct chttpserver *raw);
 
 /* Computes the doubling-growth target capacity for a plain-realloc'd
  * pointer array: cap*2 (or `initial` the first time cap is 0), or 0 if
@@ -4166,6 +4238,7 @@ static chttpsvr_conn_t *_conn_create(struct chttpserver *srv, int fd,
   conn->fd = fd;
   conn->srv = srv;
   conn->m_procs = srv->m_procs;
+  atomic_init(&conn->lifetime_refs, 1);
   chttp1_parser_init_request(&conn->parser, settings);
   conn->parser.data = conn;
   clock_gettime(CLOCK_MONOTONIC, &conn->last_activity);
@@ -4184,12 +4257,15 @@ static chttpsvr_conn_t *_conn_create(struct chttpserver *srv, int fd,
 
 static void _conn_free(chttpsvr_conn_t *conn) {
   if (!conn) return;
+  /* Captured before conn itself is freed below; the deferred decrement at
+   * this function's own end needs it, and conn is no longer safe to read
+   * by then. */
+  struct chttpserver *srv = conn->srv;
   ccol_memmgmt_procs_t *mp = conn->m_procs;
   _idle_list_remove(conn);
   _diverted_list_remove(conn);
   if (conn->tls) ctls_conn_destroy(conn->tls);
   if (conn->fd >= 0) close(conn->fd);
-  atomic_fetch_sub(&conn->srv->current_connections, 1);
   _mem_free(mp, conn->path);
   _mem_free(mp, conn->decoded_path);
   _mem_free(mp, conn->raw_query);
@@ -4213,15 +4289,80 @@ static void _conn_free(chttpsvr_conn_t *conn) {
    * silently leaking the carry-over buffer with nothing left to catch it. */
   _mem_free(mp, conn->_carry_over);
   _mem_free(mp, conn);
+
+  /* Decremented LAST, only after every access to conn/mp above has fully
+   * completed: _drain_and_close_all_connections's own wait loop treats
+   * current_connections reaching 0 as proof this connection is entirely
+   * done, safe to let srv-level teardown (routers, m_procs, ...) proceed.
+   * Decrementing any earlier (as this function used to, right after
+   * close(conn->fd)) would let that waiter observe "done" while this
+   * function is still running against conn/mp/srv, a real, ThreadSanitizer-
+   * caught race once _conn_free could run asynchronously (from
+   * _conn_on_removed, on cthreadcomm's own reactor thread) rather than only
+   * ever synchronously on whichever thread called _conn_close. */
+  atomic_fetch_sub(&srv->current_connections, 1);
+}
+
+/* on_removed handler for every conn->reg registration created below: fires
+ * exactly once per registration, from cthreadcomm's own reclaim path,
+ * asynchronously, only once no dispatch of it (and no other event_loop
+ * call resolving it) can still be touching conn; see event_loop_remove()'s
+ * own doc comment for why event_loop_remove() cannot provide that
+ * synchronously without risking a lock-ordering cycle against conn->srv's
+ * own locks (taken from inside _conn_on_readable/_conn_on_writable/
+ * _conn_on_error). Decrements conn->lifetime_refs (see its own field
+ * comment for why a single firing is not sufficient on its own to know
+ * conn is safe to free) and frees conn if this was the last outstanding
+ * contribution.
+ *
+ * srv is captured before that possible free (conn itself, not srv, is what
+ * _conn_free frees) and srv->lifetime_refs decremented unconditionally
+ * afterward, regardless of whether this exact firing also happened to free
+ * conn: srv's own count tracks every registration ever created for ANY of
+ * its connections (see its own field comment), one contribution per
+ * registration, entirely independent of conn->lifetime_refs's own,
+ * per-connection count. This is what lets __chttpsvr_destroy defer srv's
+ * own final free to whichever firing (this one, or its own direct
+ * decrement) turns out to be the last one, without ever blocking on it. */
+static void _conn_on_removed(void *arg) {
+  chttpsvr_conn_t *conn = (chttpsvr_conn_t *)arg;
+  struct chttpserver *srv = conn->srv;
+  if (atomic_fetch_sub(&conn->lifetime_refs, 1) == 1) _conn_free(conn);
+  if (atomic_fetch_sub(&srv->lifetime_refs, 1) == 1)
+    _chttpsvr_finish_destroy(srv);
 }
 
 static void _conn_close(chttpsvr_conn_t *conn) {
+  /* Unlinked here, synchronously, rather than left to _conn_free below: once
+   * this function returns, neither the idle-timeout sweep nor a bounded-
+   * shutdown drain must ever be able to find conn via either list again,
+   * even though the actual free (via _conn_on_removed, conn->lifetime_refs
+   * permitting) may not run until later. Both helpers are idempotent, so
+   * this is harmless if conn was never in either list to begin with. */
+  _idle_list_remove(conn);
+  _diverted_list_remove(conn);
+
   if (conn->reg) {
-    event_loop_remove(srv_engine_bundler.reactor, conn->reg);
+    event_reg reg = conn->reg;
     conn->reg = EVENT_REG_INVALID;
+    /* conn is deliberately NOT freed here, even though this may be the
+     * registration's own self-removal (no dispatch in flight): freeing
+     * would be correct for THIS registration alone, but conn->lifetime_refs
+     * may still carry an outstanding contribution from an earlier
+     * registration episode's own not-yet-fired on_removed (see that
+     * field's comment); event_loop_remove()'s own eventual on_removed
+     * callback for this exact registration, immediately below via the
+     * shared decrement-and-maybe-free path, is what actually accounts for
+     * it correctly regardless of ordering. */
+    event_loop_remove(srv_engine_bundler.reactor, reg);
   }
+
   conn->state = CONN_ST_CLOSING;
-  _conn_free(conn);
+  /* The application's own "done with conn" vote, counted exactly once per
+   * _conn_close call (this function is only ever called once per conn, the
+   * same pre-existing invariant _conn_free's own single call here always
+   * relied on); see conn->lifetime_refs's own field comment. */
+  if (atomic_fetch_sub(&conn->lifetime_refs, 1) == 1) _conn_free(conn);
 }
 
 /* ========================================================================== */
@@ -5709,12 +5850,21 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
             srv_engine_bundler.reactor, selectable_from_fd(conn->fd, want),
             (event_handlers_t){.on_readable = _conn_on_readable,
                                .on_writable = _conn_on_writable,
-                               .on_error = _conn_on_error},
+                               .on_error = _conn_on_error,
+                               .on_removed = _conn_on_removed},
             conn, &err);
         if (!conn->reg) {
           _conn_close(conn);
           return;
         }
+        /* See conn->lifetime_refs's own field comment: this new
+         * registration's own eventual on_removed firing is a fresh, +1
+         * contribution against it, counted the instant the registration
+         * itself becomes live so it can never be missed. srv->lifetime_refs
+         * gets the identical treatment, for the identical reason, at the
+         * server level; see its own field comment. */
+        atomic_fetch_add(&conn->lifetime_refs, 1);
+        atomic_fetch_add(&conn->srv->lifetime_refs, 1);
       }
       /* Re-add to the idle list before returning: this thread is done with
        * conn for now (waiting on the next handshake step's readiness), and
@@ -5780,12 +5930,18 @@ static void _conn_pump(chttpsvr_conn_t *conn) {
               srv_engine_bundler.reactor, selectable_from_fd(conn->fd, want),
               (event_handlers_t){.on_readable = _conn_on_readable,
                                  .on_writable = _conn_on_writable,
-                                 .on_error = _conn_on_error},
+                                 .on_error = _conn_on_error,
+                                 .on_removed = _conn_on_removed},
               conn, &err);
           if (!conn->reg) {
             _conn_close(conn);
             return;
           }
+          /* See conn->lifetime_refs's own field comment, and srv->
+           * lifetime_refs's own (the identical treatment at the server
+           * level). */
+          atomic_fetch_add(&conn->lifetime_refs, 1);
+          atomic_fetch_add(&conn->srv->lifetime_refs, 1);
         } else {
           /* Already registered (read-direction, from a prior iteration of
            * this same loop, or from CTLS_HANDSHAKE_DONE above): recompute
@@ -6474,13 +6630,18 @@ static void _task_worker(void *arg) {
                        selectable_from_fd(conn->fd, ccol_select_read),
                        (event_handlers_t){.on_readable = _conn_on_readable,
                                           .on_writable = _conn_on_writable,
-                                          .on_error = _conn_on_error},
+                                          .on_error = _conn_on_error,
+                                          .on_removed = _conn_on_removed},
                        conn, &err);
     if (!conn->reg) {
       _conn_close(conn);
       _release_in_flight(srv);
       return;
     }
+    /* See conn->lifetime_refs's own field comment, and srv->lifetime_refs's
+     * own (the identical treatment at the server level). */
+    atomic_fetch_add(&conn->lifetime_refs, 1);
+    atomic_fetch_add(&srv->lifetime_refs, 1);
   }
   _idle_list_add(conn);
   _release_in_flight(srv);
@@ -8042,6 +8203,7 @@ chttpsvr create_chttpsvr_mp(ccol_memmgmt_procs_t *mprocs, clog cl,
     if (err_str) *err_str = CCOL_ERR_STR("out of memory");
     return CHTTPSVR_INVALID;
   }
+  atomic_init(&srv->lifetime_refs, 1);
 
   if (mprocs) {
     srv->m_procs = (ccol_memmgmt_procs_t *)_mem_alloc(
@@ -8706,6 +8868,36 @@ void __chttpsvr_destroy(chttpsvr srv) {
     _destroy_router(raw->routers[i], raw->m_procs);
   }
   _mem_free(raw->m_procs, raw->routers);
+
+  /* raw itself (its mutexes, its own memory, its slot) is only actually
+   * torn down once every connection this server ever accepted has had
+   * every one of its own registrations proven safe to release; see
+   * raw->lifetime_refs's own field comment for the full reasoning and
+   * _chttpsvr_finish_destroy for the deferred teardown itself. This
+   * decrement is the application's own "done with raw" vote (exactly one
+   * per raw, since __chttpsvr_destroy itself is only ever reached once per
+   * handle; a second, concurrent or later call already got a fatal_err
+   * above via the slot's own in_use guard). If some connection's own
+   * registration is still pending reclaim, this is not the last
+   * contribution, and _conn_on_removed itself performs the actual final
+   * teardown once it is. */
+  if (atomic_fetch_sub(&raw->lifetime_refs, 1) == 1)
+    _chttpsvr_finish_destroy(raw);
+}
+
+/* The actual final teardown of raw: destroys its own mutexes/condvars/
+ * rwlock, closes its logger, frees its own memory, and releases its slot.
+ * Deferred out of __chttpsvr_destroy itself (see raw->lifetime_refs's own
+ * field comment) so it can be run from either of two places, whichever
+ * turns out to be the last contributor to that count: __chttpsvr_destroy's
+ * own tail above, or _conn_on_removed, possibly well after __chttpsvr_
+ * destroy's own caller has already returned. Every field this function
+ * touches (raw's own mutexes, raw->m_procs, raw->self_slot_idx) is
+ * therefore guaranteed to still be valid at the point this runs, from
+ * either caller: raw itself has not been freed yet by construction (that
+ * is what this very function is about to do), and self_slot_idx is set
+ * once, at handle-acquire time, and never written again. */
+static void _chttpsvr_finish_destroy(struct chttpserver *raw) {
   mutex_destroy(raw->mutex);
   mutex_destroy(raw->idle_mutex);
   mutex_destroy(raw->diverted_mutex);
@@ -8717,6 +8909,7 @@ void __chttpsvr_destroy(chttpsvr srv) {
   clog_close(raw->cl);
   raw->cl = CLOG_INVALID;
 
+  uint32_t idx = raw->self_slot_idx;
   ccol_memmgmt_procs_t *mp = raw->m_procs;
   _mem_free(mp, raw);
   _mem_free(mp, mp);
@@ -8724,11 +8917,11 @@ void __chttpsvr_destroy(chttpsvr srv) {
   /* Release the slot last, only after raw is fully torn down and freed:
    * this is what makes the slot's generation bump (and the free-index
    * push-back) mark the handle as reusable, not any earlier step. Re-fetch
-   * by idx rather than reusing `slot`: a concurrent create_chttpsvr_mp's
-   * own _chttpsvr_handle_slot_acquire call in between may have reallocated
+   * by idx rather than caching a slot pointer across the gap since raw was
+   * last touched: a concurrent create_chttpsvr_mp's own
+   * _chttpsvr_handle_slot_acquire call in between may have reallocated
    * slots' backing array via cvector_push_back, invalidating any pointer
-   * into it taken before this second lock acquisition; idx itself is
-   * stable. */
+   * into it taken earlier; idx itself is stable. */
   mutex_lock(chttpsvr_slot_table.mutex);
   chttpsvr_slot_t *slot2 =
       (chttpsvr_slot_t *)cvector_at(chttpsvr_slot_table.slots, idx);

@@ -4664,6 +4664,354 @@ TEST(event_loop, remove_from_different_thread_concurrent_with_dispatch) {
   }
 }
 
+/* Deliberately controllable "slow callback" fixture for on_removed's own
+ * ordering guarantee, distinct from evl_sync_ctx above: needs an explicit,
+ * test-controlled gate to hold a dispatch open on purpose (simulating a
+ * callback still genuinely in flight), which none of evl_sync_ctx's existing
+ * fields provide. */
+typedef struct evl_slow_cb_ctx {
+  pthread_mutex_t mtx;
+  pthread_cond_t cond;
+  bool callback_started;
+  bool release_callback;
+  bool callback_finished;
+  bool on_removed_called;
+  /* Snapshot of callback_finished taken from inside evl_on_removed_slow
+   * itself, under the same mtx: this is what lets the test prove ordering
+   * (on_removed only ever observes callback_finished already true) rather
+   * than merely observing both flags eventually true with no guarantee
+   * about which came first. */
+  bool on_removed_saw_finished;
+  void *on_removed_arg_seen;
+} evl_slow_cb_ctx;
+
+static void evl_slow_cb_ctx_init(evl_slow_cb_ctx *c) {
+  assert(pthread_mutex_init(&c->mtx, NULL) == 0);
+  assert(pthread_cond_init(&c->cond, NULL) == 0);
+  c->callback_started = false;
+  c->release_callback = false;
+  c->callback_finished = false;
+  c->on_removed_called = false;
+  c->on_removed_saw_finished = false;
+  c->on_removed_arg_seen = NULL;
+}
+
+static void evl_slow_cb_ctx_destroy(evl_slow_cb_ctx *c) {
+  pthread_mutex_destroy(&c->mtx);
+  pthread_cond_destroy(&c->cond);
+}
+
+/* Bounded wait (never an unbounded one: an unbounded main-thread wait can
+ * hang the whole test binary under load, not just fail one test) for *flag
+ * to become true, signaled via cond. Generic over which bool field of
+ * evl_slow_cb_ctx is being waited on, unlike evl_wait_for above (which is
+ * hardwired to evl_sync_ctx's own int counters). */
+static bool evl_wait_bool(pthread_mutex_t *mtx, pthread_cond_t *cond,
+                          bool *flag, int timeout_ms) {
+  struct timespec deadline;
+  clock_gettime(CLOCK_REALTIME, &deadline);
+  deadline.tv_sec += timeout_ms / 1000;
+  deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if (deadline.tv_nsec >= 1000000000L) {
+    deadline.tv_sec++;
+    deadline.tv_nsec -= 1000000000L;
+  }
+  pthread_mutex_lock(mtx);
+  while (!*flag) {
+    int r = pthread_cond_timedwait(cond, mtx, &deadline);
+    if (r == ETIMEDOUT) break;
+  }
+  bool ok = *flag;
+  pthread_mutex_unlock(mtx);
+  return ok;
+}
+
+/* on_readable handler that blocks, on the reactor thread, until the test's
+ * own main thread explicitly releases it: this is what lets the test force
+ * the exact interleaving it needs to verify (event_loop_remove() returning
+ * while this dispatch is still genuinely in flight) deterministically,
+ * rather than racing incidental timing. Bounded by deadline below even if
+ * never released, so a bug that skips the release can never hang the test
+ * binary itself, only fail the assertion that depends on release having
+ * happened in time. */
+static void evl_on_readable_slow(event_loop loop, ccol_selectable *sel,
+                                 void *arg) {
+  (void)loop;
+  evl_slow_cb_ctx *c = (evl_slow_cb_ctx *)arg;
+  char buf[64];
+  if (sel->type == ccol_selectable_fd) {
+    ssize_t n = read(sel->fd, buf, sizeof(buf));
+    (void)n; /* draining is all this test needs; content is unused */
+  }
+
+  struct timespec deadline;
+  clock_gettime(CLOCK_REALTIME, &deadline);
+  deadline.tv_sec += 2;
+
+  pthread_mutex_lock(&c->mtx);
+  c->callback_started = true;
+  pthread_cond_broadcast(&c->cond);
+  while (!c->release_callback) {
+    int r = pthread_cond_timedwait(&c->cond, &c->mtx, &deadline);
+    if (r == ETIMEDOUT) break;
+  }
+  c->callback_finished = true;
+  pthread_cond_broadcast(&c->cond);
+  pthread_mutex_unlock(&c->mtx);
+}
+
+static void evl_on_removed_slow(void *arg) {
+  evl_slow_cb_ctx *c = (evl_slow_cb_ctx *)arg;
+  pthread_mutex_lock(&c->mtx);
+  c->on_removed_called = true;
+  c->on_removed_saw_finished = c->callback_finished;
+  c->on_removed_arg_seen = arg;
+  pthread_cond_broadcast(&c->cond);
+  pthread_mutex_unlock(&c->mtx);
+}
+
+TEST(event_loop, on_removed_fires_only_after_in_flight_callback_finishes) {
+  /* Reproduces remove_from_different_thread_concurrent_with_dispatch's own
+   * documented hazard above on purpose, deterministically, and proves
+   * on_removed actually closes it: without on_removed, that test's own
+   * comment explains a caller has no way to know an in-flight dispatch is
+   * still touching arg at the moment event_loop_remove() returns. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 1);
+
+  evl_slow_cb_ctx ctx;
+  evl_slow_cb_ctx_init(&ctx);
+  event_handlers_t handlers = {.on_readable = evl_on_readable_slow,
+                               .on_writable = NULL,
+                               .on_error = NULL,
+                               .on_removed = evl_on_removed_slow};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  char b = 1;
+  REQUIRE_EQ(write(pfd[1], &b, 1), (ssize_t)1);
+  REQUIRE_TRUE(evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.callback_started, 2000));
+
+  /* The one reactor thread is now blocked inside evl_on_readable_slow,
+   * holding this registration's entry->dispatch_lock. Remove concurrently
+   * from this thread while that dispatch is still genuinely in flight. */
+  REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
+
+  /* event_loop_remove() must return without waiting for the callback (see
+   * that function's own doc comment for why); give on_removed a generous
+   * window to prove it does NOT fire while the callback is still blocked. */
+  usleep(100000);
+  pthread_mutex_lock(&ctx.mtx);
+  bool fired_too_early = ctx.on_removed_called;
+  pthread_mutex_unlock(&ctx.mtx);
+  REQUIRE_FALSE(fired_too_early);
+
+  pthread_mutex_lock(&ctx.mtx);
+  ctx.release_callback = true;
+  pthread_cond_broadcast(&ctx.cond);
+  pthread_mutex_unlock(&ctx.mtx);
+
+  REQUIRE_TRUE(
+      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, 2000));
+  pthread_mutex_lock(&ctx.mtx);
+  REQUIRE_TRUE(ctx.on_removed_saw_finished);
+  REQUIRE_EQ(ctx.on_removed_arg_seen, (void *)&ctx);
+  pthread_mutex_unlock(&ctx.mtx);
+
+  evl_slow_cb_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, on_removed_fires_for_an_ordinary_removal) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 1);
+
+  evl_slow_cb_ctx ctx;
+  evl_slow_cb_ctx_init(&ctx);
+  /* on_readable left NULL: this test never writes to pfd[1], so nothing
+   * would ever dispatch it anyway; only on_removed is under test here. */
+  event_handlers_t handlers = {.on_readable = NULL,
+                               .on_writable = NULL,
+                               .on_error = NULL,
+                               .on_removed = evl_on_removed_slow};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
+  REQUIRE_TRUE(
+      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, 2000));
+  pthread_mutex_lock(&ctx.mtx);
+  REQUIRE_EQ(ctx.on_removed_arg_seen, (void *)&ctx);
+  pthread_mutex_unlock(&ctx.mtx);
+
+  evl_slow_cb_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, on_removed_null_is_harmless) {
+  /* The overwhelming majority of existing registrations across this
+   * codebase leave on_removed unset (NULL); this pins that as a fully
+   * supported, ordinary no-op rather than something that must crash or be
+   * special-cased by a caller that has no use for the notification. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 1);
+
+  event_handlers_t handlers = {
+      .on_readable = evl_on_readable, .on_writable = NULL, .on_error = NULL};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, NULL, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  REQUIRE_EQ(event_loop_remove(loop, reg), ccol_success);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+TEST(event_loop, on_removed_fires_on_destroy_for_a_still_registered_reg) {
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  evl_slow_cb_ctx ctx;
+  evl_slow_cb_ctx_init(&ctx);
+
+  {
+    event_loop_construct_scoped(loop, 8, 4, 1);
+    /* on_readable left NULL: this test never writes to pfd[1], so nothing
+     * would ever dispatch it before the loop is destroyed still-registered
+     * below; only on_removed is under test here. */
+    event_handlers_t handlers = {.on_readable = NULL,
+                                 .on_writable = NULL,
+                                 .on_error = NULL,
+                                 .on_removed = evl_on_removed_slow};
+    char *err = NULL;
+    event_reg reg =
+        event_loop_add(loop, selectable_from_fd(pfd[0], ccol_select_read),
+                       handlers, &ctx, &err);
+    REQUIRE_NE(reg, EVENT_REG_INVALID);
+    /* Never removed: the scoped loop's own destructor at this block's
+     * closing brace tears it down still-registered, exercising
+     * _event_loop_teardown_raw's own direct walk rather than the ordinary
+     * removal-and-reclaim path the tests above exercise. */
+  }
+
+  pthread_mutex_lock(&ctx.mtx);
+  REQUIRE_TRUE(ctx.on_removed_called);
+  REQUIRE_EQ(ctx.on_removed_arg_seen, (void *)&ctx);
+  pthread_mutex_unlock(&ctx.mtx);
+
+  evl_slow_cb_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+}
+
+/* Carries the arguments/result for the background thread below: a single
+ * event_loop_reg_generation call, deliberately slowed down (via
+ * event_loop_test_delay_next_reg_resolve_unpin_ms) at the exact point where
+ * it would otherwise release its resolve pin on reg. */
+typedef struct evl_delayed_reg_generation_ctx {
+  event_loop loop;
+  event_reg reg;
+  uint64_t gen;
+} evl_delayed_reg_generation_ctx;
+
+static void *evl_delayed_reg_generation_thread(void *arg) {
+  evl_delayed_reg_generation_ctx *c = (evl_delayed_reg_generation_ctx *)arg;
+  c->gen = event_loop_reg_generation(c->loop, c->reg);
+  return NULL;
+}
+
+TEST(event_loop,
+     on_removed_fires_via_bounded_retry_when_resolve_unpin_races_remove) {
+  /* Reproduces, deterministically, a resolve pin (from
+   * event_loop_reg_generation here, standing in for event_loop_modify/
+   * _pause/_resume, all of which are documented as callable concurrently
+   * with event_loop_remove against the same reg) still held at the exact
+   * moment event_loop_remove marks reg removed and defers its reclaim, in a
+   * way that makes _event_reg_resolve_unpin's own maybe_needs_wake snapshot
+   * (read before remove() ever ran) stale by the time the delayed unpin
+   * below finally drops pending_resolve_count to 0: that unpin's own ping
+   * is a documented, deliberate no-op in this exact interleaving (see its
+   * comment). On this otherwise-idle loop, nothing but
+   * EVENT_LOOP_RECLAIM_RETRY_MS's own bounded epoll_wait retry (see
+   * _event_loop_reclaim_pending_frees) is left to ever reclaim reg and fire
+   * on_removed; this test's bounded wait below proves that retry is what
+   * actually delivers it. */
+  int pfd[2];
+  REQUIRE_EQ(pipe(pfd), 0);
+  event_loop_construct_scoped(loop, 8, 4, 1);
+
+  evl_slow_cb_ctx ctx;
+  evl_slow_cb_ctx_init(&ctx);
+  /* on_readable left NULL: this test never writes to pfd[1], so nothing
+   * would ever dispatch it; only on_removed is under test here. */
+  event_handlers_t handlers = {.on_readable = NULL,
+                               .on_writable = NULL,
+                               .on_error = NULL,
+                               .on_removed = evl_on_removed_slow};
+  char *err = NULL;
+  event_reg reg = event_loop_add(
+      loop, selectable_from_fd(pfd[0], ccol_select_read), handlers, &ctx, &err);
+  REQUIRE_NE(reg, EVENT_REG_INVALID);
+
+  /* Arms a one-shot delay for the very next resolve-unpin process-wide (see
+   * that function's own doc comment); the background thread started below
+   * is what consumes it. */
+  event_loop_test_delay_next_reg_resolve_unpin_ms(300);
+
+  evl_delayed_reg_generation_ctx gen_ctx = {.loop = loop, .reg = reg, .gen = 0};
+  pthread_t th;
+  int create_rv =
+      pthread_create(&th, NULL, evl_delayed_reg_generation_thread, &gen_ctx);
+  REQUIRE_EQ(create_rv, 0);
+
+  /* Generous window for the background thread to resolve (pinning reg) and
+   * enter the armed delay before remove runs below; this is what makes
+   * event_loop_remove observe pending_resolve_count > 0 for reg and defer
+   * its reclaim instead of freeing it outright. */
+  usleep(50000);
+
+  ccol_retval_t remove_rv = event_loop_remove(loop, reg);
+
+  int join_rv = pthread_join(th, NULL);
+  /* Unconditional insurance against leaking an unconsumed delay into a
+   * later, unrelated test: harmless no-op if the background thread's own
+   * resolve-unpin above already consumed it, as expected. Placed before any
+   * REQUIRE_* below so it always runs regardless of which assertion, if
+   * any, fails first: Tau's REQUIRE_* macros return from the test function
+   * immediately on failure, skipping every subsequent line, so cleanup
+   * cannot be left after a fallible assertion. */
+  event_loop_test_delay_next_reg_resolve_unpin_ms(0);
+
+  bool on_removed_fired =
+      evl_wait_bool(&ctx.mtx, &ctx.cond, &ctx.on_removed_called, 2000);
+  pthread_mutex_lock(&ctx.mtx);
+  void *on_removed_arg_seen = ctx.on_removed_arg_seen;
+  pthread_mutex_unlock(&ctx.mtx);
+
+  evl_slow_cb_ctx_destroy(&ctx);
+  close(pfd[0]);
+  close(pfd[1]);
+
+  REQUIRE_EQ(join_rv, 0);
+  /* 0 is event_loop_reg_generation's own documented "resolve failed"
+   * sentinel; a nonzero result here is what proves the background thread's
+   * resolve actually succeeded (and therefore genuinely held a pin on reg)
+   * rather than the race having gone the other way with nothing exercised. */
+  REQUIRE_NE(gen_ctx.gen, (uint64_t)0);
+  REQUIRE_EQ(remove_rv, ccol_success);
+  REQUIRE_TRUE(on_removed_fired);
+  REQUIRE_EQ(on_removed_arg_seen, (void *)&ctx);
+}
+
 TEST(event_loop, shutdown_with_pending_registrations) {
   int pfd[2];
   REQUIRE_EQ(pipe(pfd), 0);
@@ -7951,12 +8299,39 @@ TEST(fork_safety, fork_does_not_inherit_a_write_locked_event_loop_slot_table) {
        * silent on a real CI run (a qemu-arm and an aarch64-clang job both
        * failed here) with no checkpoint of any kind to show how far it
        * got, unlike every sibling fork_safety test in this file. */
+      cdebuglog_write(
+          "[DEBUG_TEST] child pid=%d about to arm sigalrm "
+          "backtrace handler\n",
+          (int)getpid());
+      /* Flushed explicitly, immediately, unlike this file's other
+       * checkpoints: the very first CI recurrence of this test's own hang
+       * (before this checkpoint existed at all) went completely silent
+       * between the atfork release completing and event_loop_create ever
+       * being reached, /proc showing the child genuinely blocked in a real
+       * futex_do_wait, not a busy spin or stuck-in-emulator-translation
+       * pattern -- pointing at _arm_sigalrm_backtrace_handler's own
+       * backtrace() call specifically, whose lazy first-use unwind-info
+       * init walks loaded shared libraries via dl_iterate_phdr, taking
+       * glibc's own internal dynamic-linker lock, a lock this project owns
+       * no atfork handler for and cannot protect the way it protects its
+       * own locks. If THAT is where this hangs, alarm(3) below is never
+       * even reached, so nothing downstream would ever get a chance to
+       * flush this on its own; an unflushed, buffered checkpoint sitting
+       * unseen forever would be exactly as uninformative as having none at
+       * all. */
+      cdebuglog_flush();
       _arm_sigalrm_backtrace_handler();
+      cdebuglog_write(
+          "[DEBUG_TEST] child pid=%d sigalrm backtrace handler "
+          "armed, about to alarm(3)\n",
+          (int)getpid());
+      cdebuglog_flush();
       alarm(3);
       cdebuglog_write(
           "[DEBUG_TEST] child pid=%d alarm set, about to "
           "event_loop_create\n",
           (int)getpid());
+      cdebuglog_flush();
       char *err = NULL;
       event_loop l = event_loop_create(4, 1, 1, &err);
       cdebuglog_write(

@@ -1335,16 +1335,56 @@ typedef void (*event_error_fn)(event_loop loop, ccol_selectable *sel,
                                void *arg);
 
 /**
+ * @brief Callback invoked once it is provably safe to release arg
+ *
+ * Fires exactly once per registration that was ever actually wired into an
+ * event_loop (never for an event_loop_add call that itself failed), on
+ * either of two occasions: event_loop_remove() being called for this
+ * registration (from any thread, including from within one of this same
+ * registration's own on_readable/on_writable/on_error callbacks) and every
+ * dispatch of it that was already in flight or already collected for
+ * dispatch at that moment finishing; or the owning event_loop being
+ * destroyed while this registration was still live.
+ *
+ * This is the only one of the four callback types that is asynchronous:
+ * it is never invoked from inside event_loop_remove() or event_loop_destroy()
+ * itself, and may run an arbitrary, bounded amount of time after either
+ * returns (on num_reactor_threads == 1, at the reactor thread's own next
+ * between-batches point; see event_loop_remove()'s own note on why arg's
+ * memory is not otherwise safe to release synchronously). Runs on whichever
+ * thread happens to perform the reclamation (the reactor thread for an
+ * ordinary removal, or whichever thread called event_loop_destroy for a
+ * still-registered one) with none of this module's own internal locks
+ * held, so it is always safe for on_removed to acquire an application-level
+ * lock of its own, including one also taken by this registration's other
+ * callbacks.
+ *
+ * A registration with on_removed set to NULL keeps the exact contract every
+ * other callback type already had: no guarantee about when a stale, in-
+ * flight callback invocation is done with arg beyond event_loop_remove()'s
+ * own documented (deliberately weaker) promise.
+ *
+ * @param arg The opaque pointer passed to event_loop_add
+ */
+typedef void (*event_removed_fn)(void *arg);
+
+/**
  * @brief Callback bundle for a single event_loop_add call
  *
- * Any of the three may be NULL, in which case that class of event is
- * silently dropped for this registration (e.g. a write-only producer that
- * never expects on_error may pass NULL there).
+ * on_readable/on_writable/on_error may each be NULL, in which case that
+ * class of event is silently dropped for this registration (e.g. a
+ * write-only producer that never expects on_error may pass NULL there).
+ * on_removed may also be NULL, for a registration whose arg needs no
+ * release notification at all (e.g. a stack-allocated or statically-owned
+ * arg, or one whose caller already has its own independent way of knowing
+ * when release is safe, such as the reg's own destruction of arg well
+ * after event_loop_remove() returns instead of exactly when it returns).
  */
 typedef struct event_handlers {
   event_readable_fn on_readable; /**< EPOLLIN|EPOLLRDHUP, or a queue message */
   event_writable_fn on_writable; /**< EPOLLOUT, or queue room available */
   event_error_fn on_error;       /**< EPOLLERR|EPOLLHUP (fd selectables only) */
+  event_removed_fn on_removed;   /**< Fires once arg is provably unreferenced */
 } event_handlers_t;
 
 /**
@@ -1644,13 +1684,24 @@ ccol_retval_t event_loop_resume(event_loop loop, event_reg reg);
  * Safe to call from within a callback for the very registration being
  * removed (self-removal on error is a common pattern) as well as from any
  * other thread, including concurrently with an in-flight dispatch for the
- * same registration; teardown is deferred until any in-progress callback
- * returns. No further callback for this registration is ever invoked after
- * this call returns, even one already collected (e.g. sitting queued for a
- * dispatch worker thread with num_reactor_threads > 1) but not yet actually
- * started; callers may free whatever the registration's own arg points to
- * immediately after this call returns without racing a stale callback
- * invocation.
+ * same registration. No further callback for this registration is ever
+ * invoked after this call returns, even one already collected (e.g. sitting
+ * queued for a dispatch worker thread with num_reactor_threads > 1) but not
+ * yet actually started; this call itself, however, does not wait for a
+ * dispatch that is already in flight at the moment of the call to finish.
+ * A caller that must not free whatever arg points to while that dispatch is
+ * still running (the common case for any arg that is not entirely
+ * self-contained, e.g. one a callback dereferences) needs the on_removed
+ * callback in event_handlers_t, set at event_loop_add time: it fires
+ * exactly once it is provably safe, asynchronously, from event_loop_remove
+ * itself never blocking on it or on that in-flight dispatch, since doing so
+ * would risk a lock-ordering cycle against any application-level lock that
+ * dispatch's own callback might need while this call's own caller is
+ * holding a different one. A caller confident no callback can be in flight
+ * at the moment of removal (e.g. removal happening from within that exact
+ * registration's own callback, or a registration that was never dispatched
+ * to begin with) may still free arg immediately without needing on_removed
+ * at all.
  *
  * Does not close an fd or affect a queue's own lifetime; only the
  * event_loop's registration bookkeeping is released, mirroring
@@ -1681,6 +1732,8 @@ ccol_retval_t event_loop_resume(event_loop loop, event_reg reg);
  * already removed it)
  *
  * @note Thread-safe
+ *
+ * @see event_removed_fn
  */
 ccol_retval_t event_loop_remove(event_loop loop, event_reg reg);
 
@@ -2040,6 +2093,27 @@ void circq_test_force_next_send_condvar_wait_error(void);
  * dynmq_send_zc/etc. call anywhere in the same process pays this delay.
  */
 void _notify_waiter_test_set_delay_us(int us);
+
+/**
+ * @brief Force the very next internal event_reg resolve-unpin to sleep for
+ *        ms milliseconds while still holding its resolve pin, for testing
+ *
+ * Arms a one-shot, auto-disarming, process-wide flag: the very next time any
+ * public call that resolves and unpins an event_reg (event_loop_modify,
+ * event_loop_pause, event_loop_resume, event_loop_remove, or
+ * event_loop_reg_generation) reaches the point where it would release its
+ * resolve pin, it first sleeps for ms milliseconds. Lets a test
+ * deterministically hold a resolve pin open long enough for a concurrent
+ * event_loop_remove on a different thread to mark the same registration
+ * removed and defer it first, exercising the case where an on_removed
+ * notification's actual delivery depends on the reactor's own bounded
+ * reclaim retry rather than on any single call's wakeup ping.
+ *
+ * @param ms  Milliseconds to sleep; 0 disables the delay (the default).
+ * @note Has no effect once consumed by the next resolve-unpin; call again
+ *       to arm a second one.
+ */
+void event_loop_test_delay_next_reg_resolve_unpin_ms(uint32_t ms);
 
 /**
  * @brief Test-only: locks cq's own internal mutex directly, bypassing every

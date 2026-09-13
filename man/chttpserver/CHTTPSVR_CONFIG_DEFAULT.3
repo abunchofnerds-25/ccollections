@@ -1,6 +1,6 @@
 .TH CHTTPSVR_CONFIG_DEFAULT 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-CHTTPSVR_CONFIG_DEFAULT \- zero-initialiser for chttpsvr_config_t with sensible defaults
+CHTTPSVR_CONFIG_DEFAULT \- initialiser for chttpsvr_config_t with sensible defaults
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -59,9 +59,9 @@ defeats it the same way it defeats read_timeout_ms/idle_timeout_ms.
 max_body_read_duration_ms closes that loophole by separately capping
 the *total* wall-clock time spent reading one request's body,
 regardless of how many individual gaps it took to get there.  It is
-disabled (0) by default so existing deployments are unaffected unless
-they opt in.  On expiry it reports the same ccol_timed_out outcome as
-a stream_read_timeout_ms expiry.
+disabled (0) by default: the total-duration cap applies only when it
+is explicitly opted into.  On expiry it reports the same ccol_timed_out
+outcome as a stream_read_timeout_ms expiry.
 
 Setting stream_read_timeout_ms, max_body_read_duration_ms,
 response_write_timeout_ms, and/or max_response_write_duration_ms to 0
@@ -88,9 +88,9 @@ two just before every such call's own timeout expires can hold a
 worker thread for as long as it likes.  max_response_write_duration_ms
 separately caps the *total* wall-clock time spent sending one
 response, regardless of how many individual calls it took to get
-there.  It is disabled (0) by default so existing deployments are
-unaffected unless they opt in; on expiry the response send fails and
-the connection is closed (the client sees a truncated response or a
+there.  It is disabled (0) by default: the total-duration cap applies
+only when it is explicitly opted into; on expiry the response send
+fails and the connection is closed (the client sees a truncated response or a
 reset).  A courtesy rejection response (404/405/413/500/501/503,
 generated internally rather than by a handler) and the
 "Expect: 100-continue" interim "100 Continue" line are both

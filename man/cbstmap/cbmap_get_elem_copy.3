@@ -1,0 +1,48 @@
+.TH CBMAP_GET_ELEM_COPY 3 "2026-09-13" "c_collections" "C Collections Library - Functions"
+.SH NAME
+cbmap_get_elem_copy \- copy the value associated with a key out of a BST map
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cbstmap.h>
+
+ccol_retval_t cbmap_get_elem_copy(cbmap cbm, const cmap_pair *key_pair,
+                                  void *target_buf, size_t target_buf_size);
+.fi
+.SH DESCRIPTION
+.nf
+Searches the map for key_pair and copies the associated value into
+target_buf. The buffer size must match the stored value's size exactly;
+a partial copy is never performed, so a value can never be silently
+truncated. This is stricter than chmap_get_elem_copy(3), which copies
+min(value_size, target_buf_size) bytes instead.
+.fi
+.SH PARAMETERS
+.nf
+cbm              BST map to search
+key_pair         Key to look up
+target_buf       Buffer to receive the value copy
+target_buf_size  Size of target_buf, which must equal the stored value's
+                 own size
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        - Key found, value copied into target_buf
+ccol_key_not_found  - Key does not exist in map
+ccol_invalid_args   - target_buf_size does not match the stored value's
+                      size, or key_pair's size does not match a
+                      fixed-width key type's own size (see
+                      cbmap_create_full(3))
+.fi
+.SH NOTES
+.nf
+O(log n) complexity
+Requires an exact value size match, unlike chmap_get_elem_copy(3)
+target_buf is left untouched on every failure
+Asserts if cbm is NULL
+.fi
+.SH "SEE ALSO"
+.BR cbmap_get_elem_ref (3),
+.BR cbmap_insert_elem (3),
+.BR cbmap_create_full (3)

@@ -1,0 +1,63 @@
+.TH CCOL_EVENT_LOOP_SHUTDOWN 3 "2026-07-12" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_event_loop_shutdown \- stop an event loop's poller and dispatch worker threads
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t ccol_event_loop_shutdown(ccol_event_loop loop);
+.fi
+.SH DESCRIPTION
+.nf
+Signals loop's polling thread to stop and blocks until it has been
+joined; for num_reactor_threads > 1, also gracefully drains and joins
+every dispatch worker thread afterward (finishes any job already queued
+or executing, cancels nothing).  No dispatch can be in flight once this
+call returns, for either configuration.
+
+Idempotent: safe to call more than once, including concurrently from
+multiple threads.  Exactly one caller actually performs the joins;
+every other concurrent caller blocks until those joins complete before
+returning, so every caller's own "blocks until joined" contract holds
+regardless of which one triggered the shutdown.
+
+ccol_event_loop_destroy() calls this internally if the caller never called it
+explicitly, so calling it directly first is optional; do so when the
+"threads stopped" and "resources freed" steps need to happen at
+different times.
+.fi
+.SH PARAMETERS
+.nf
+loop  ccol_event_loop to shut down.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success        Shut down (or already was).
+ccol_invalid_args   loop is CCOL_EVENT_LOOP_INVALID or a stale/
+                    already-destroyed handle.
+ccol_not_permitted  Called from within a callback running on one of
+                    loop's own threads (the poller, or a dispatch
+                    worker); see WARNINGS.
+.fi
+.SH THREAD SAFETY
+.nf
+Safe to call concurrently from multiple threads other than one of loop's
+own threads (the poller thread, or, for num_reactor_threads > 1, one
+of its dispatch worker threads).
+.fi
+.SH WARNINGS
+.nf
+Calling this from within a callback running on one of loop's own threads
+would otherwise join that thread from itself (undefined behavior /
+EDEADLK): this function joins the poller thread internally, and, for
+num_reactor_threads > 1, drains/joins every dispatch worker thread
+(callbacks run on a dispatch worker in that configuration, not the
+poller). This is detected and rejected with ccol_not_permitted rather
+than left as caller-triggerable undefined behavior. Defer shutdown to
+another thread, or to after the callback returns, instead.
+.fi
+.SH "SEE ALSO"
+.BR ccol_event_loop_destroy (3),
+.BR ccol_event_loop_create (3)

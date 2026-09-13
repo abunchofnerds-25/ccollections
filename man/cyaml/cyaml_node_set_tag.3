@@ -32,7 +32,8 @@ cyaml_serialize(3)).
 .fi
 .SH PARAMETERS
 .nf
-node  Target node of any type; a no-op if NULL.
+node  Target node of any type; NULL reports ccol_invalid_args
+      and changes nothing.
 tag   New tag string (copied); NULL clears any existing tag.
 .fi
 .SH RETURN VALUE

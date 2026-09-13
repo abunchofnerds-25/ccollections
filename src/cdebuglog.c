@@ -45,19 +45,19 @@ SOFTWARE.
  * caller's lines interleave in true chronological order once flushed, which
  * matters when correlating, say, a clogger.c rotation event against a
  * cthreadcomm.c fork() happening around the same time. Sized generously (a
- * full ~200-test suite run has been observed to accumulate several MB of
- * lines) since a caller that lets this fill up between flush points simply
- * starts silently dropping lines; see cdebuglog_write()'s own doc comment. */
+ * full ~200-test suite run accumulates several MB of lines) since a caller
+ * that lets this fill up between flush points simply starts silently
+ * dropping lines; see cdebuglog_write()'s own doc comment. */
 #define CDEBUGLOG_BUF_CAP (8U * 1024U * 1024U)
-/* Flushing only at fork()/exit() lets an entire crash-free run's worth of
- * lines pile up before any of it reaches stderr, which then dumps as one
- * huge burst interleaved at whatever point the first fork() happens to
- * land, rather than near the tests that actually produced each line. This
- * threshold makes cdebuglog_write() additionally trigger a flush once the
- * buffer crosses it, so a long run's output breaks into several
- * chronologically-meaningful bursts instead of one. Still far fewer write()
- * calls than one per line; only the granularity, not the "batch instead of
- * write per line" design, changes. */
+/* Flushing only at fork()/exit() would let an entire crash-free run's worth
+ * of lines pile up before any of it reaches stderr, then dump as one huge
+ * burst interleaved at whatever point the first fork() happens to land,
+ * rather than near the tests that actually produced each line. This
+ * threshold makes cdebuglog_write() also trigger a flush once the buffer
+ * crosses it, so a long run's output breaks into several
+ * chronologically-meaningful bursts instead of one. That still costs far
+ * fewer write() calls than one per line: the threshold sets the granularity
+ * of the batching, not whether lines are batched at all. */
 #define CDEBUGLOG_FLUSH_THRESHOLD (CDEBUGLOG_BUF_CAP / 8U)
 static char _cdebuglog_buf[CDEBUGLOG_BUF_CAP];
 static _Atomic size_t _cdebuglog_pos = 0;

@@ -96,7 +96,7 @@ static uint64_t uint64_powers_of_two[POWERS_OF_TWO_LEN] = {
  * result is architecture-dependent (capped at the pointer-size maximum).
  * Returns ccol_invalid_size when _input exceeds the largest representable
  * power of two for the current architecture. */
-size_t find_nearest_gte_power_of_two(size_t _input) {
+size_t ccol_find_nearest_gte_power_of_two(size_t _input) {
   uint64_t input = _input;
   size_t result = 0;
 
@@ -325,10 +325,10 @@ typedef struct s32 {
 /* Performs a copy of exactly n bytes (1-32) without calling into the C library.
  * Each case uses a packed struct assignment so the compiler emits the minimum
  * number of store instructions. This is always inlined to keep the switch
- * inside the hot path of mem_cpy rather than adding a call frame. */
-inline __attribute__((always_inline)) void mem_cpy_small(void *dst,
-                                                         const void *src,
-                                                         size_t n) {
+ * inside the hot path of ccol_mem_cpy rather than adding a call frame. */
+inline __attribute__((always_inline)) void ccol_mem_cpy_small(void *dst,
+                                                              const void *src,
+                                                              size_t n) {
   // Handle common small sizes with direct assignments
   switch (n) {
     case 0:
@@ -464,7 +464,7 @@ inline __attribute__((always_inline)) void mem_cpy_small(void *dst,
  * pointers is checked: if both satisfy uint64_t alignment the inlined
  * struct-assignment fast path is taken; otherwise the C library memcpy handles
  * the misaligned case. Larger buffers always delegate to memcpy. */
-void mem_cpy(void *dst, const void *src, size_t n) {
+void ccol_mem_cpy(void *dst, const void *src, size_t n) {
   if (n <= SMALL_CHUNKS_SIZE) {
     // Check if pointers are suitably aligned for fast path
     // Use pointer alignment check, since uint64_t is the largest direct access
@@ -475,7 +475,7 @@ void mem_cpy(void *dst, const void *src, size_t n) {
       return;
     }
 
-    mem_cpy_small(dst, src, n);
+    ccol_mem_cpy_small(dst, src, n);
     return;
   }
 
@@ -483,8 +483,10 @@ void mem_cpy(void *dst, const void *src, size_t n) {
 }
 
 /* Zeroes exactly n bytes (1-32) without calling into the C library, mirroring
- * the same packed struct technique used by mem_cpy_small. Always inlined. */
-inline __attribute__((always_inline)) void mem_zero_small(void *dst, size_t n) {
+ * the same packed struct technique used by ccol_mem_cpy_small. Always inlined.
+ */
+inline __attribute__((always_inline)) void ccol_mem_zero_small(void *dst,
+                                                               size_t n) {
   // Handle common small sizes with direct assignments
   switch (n) {
     case 0:
@@ -617,9 +619,10 @@ inline __attribute__((always_inline)) void mem_zero_small(void *dst, size_t n) {
 }
 
 /* Fast memset-to-zero wrapper using the same alignment + size dispatch strategy
- * as mem_cpy: small aligned buffers use mem_zero_small, everything else falls
+ * as ccol_mem_cpy: small aligned buffers use ccol_mem_zero_small, everything
+ * else falls
  * through to memset. */
-void mem_zero(void *dst, size_t n) {
+void ccol_mem_zero(void *dst, size_t n) {
   if (n <= SMALL_CHUNKS_SIZE) {
     // Check alignment for fast path
     if ((uintptr_t)dst & ALIGNMENT_MASK) {  // Not well aligned
@@ -627,7 +630,7 @@ void mem_zero(void *dst, size_t n) {
       return;
     }
 
-    mem_zero_small(dst, n);
+    ccol_mem_zero_small(dst, n);
     return;
   }
 
@@ -640,7 +643,7 @@ void mem_zero(void *dst, size_t n) {
 
 void ccol_growbuf_init(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp) {
   b->m_procs = mp;
-  b->buf = _mem_alloc(mp, 256);
+  b->buf = _ccol_mem_alloc(mp, 256);
   b->len = 0;
   b->cap = b->buf ? 256 : 0;
   b->oom = b->buf ? false : true;
@@ -651,7 +654,7 @@ void ccol_growbuf_init_hint(ccol_growbuf_t *b, ccol_memmgmt_procs_t *mp,
                             size_t hint) {
   size_t cap = hint + 1 > 64 ? hint + 1 : 64;
   b->m_procs = mp;
-  b->buf = _mem_alloc(mp, cap);
+  b->buf = _ccol_mem_alloc(mp, cap);
   b->len = 0;
   b->cap = b->buf ? cap : 0;
   b->oom = b->buf ? false : true;
@@ -671,7 +674,7 @@ static void growbuf_grow(ccol_growbuf_t *b, size_t needed) {
     }
     new_cap *= 2;
   }
-  char *p = _mem_realloc(b->m_procs, b->buf, new_cap);
+  char *p = _ccol_mem_realloc(b->m_procs, b->buf, new_cap);
   if (!p) {
     b->oom = true;
     return;

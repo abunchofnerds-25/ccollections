@@ -38,7 +38,7 @@ characters are automatically double-quoted and backslash-escaped in
 the output:
   - '"' -> \e"
   - '\e\e' -> \e\e
-  - control chars -> \exNN
+  - control chars -> \en, \er, \et, or \exNN
 
 The exact escape syntax differs by output format (see
 clog_set_format(3)): JSON uses \euNNNN Unicode escapes, and RFC 5424

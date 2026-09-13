@@ -43,21 +43,21 @@ struct cstring {
  * must be read before the allocator struct it belongs to is freed. */
 void __cstring_destroy(cstr s) {
   if (s) {
-    _mem_free(s->m_procs, s->data);
+    _ccol_mem_free(s->m_procs, s->data);
 
     if (s->m_procs) {
       ccol_free_t free_func = s->m_procs->free;
       free_func(s->m_procs);
       free_func(s);
     } else {
-      mem_free(s);
+      ccol_mem_free(s);
     }
   }
 }
 
 /* True when length + 1 (room for the null terminator) can be represented
  * without wrapping size_t. Every call site that computes a buffer capacity
- * as length + 1 before handing it to find_nearest_gte_power_of_two() must
+ * as length + 1 before handing it to ccol_find_nearest_gte_power_of_two() must
  * check this first: that function's own overflow detection operates on the
  * already-computed length + 1 value, not on length itself, so a length of
  * exactly SIZE_MAX silently wraps length + 1 to 0 before the check ever
@@ -81,7 +81,7 @@ static bool cstring_grow_to(cstr s, size_t needed_capacity) {
     return true;
   }
 
-  size_t new_cap = find_nearest_gte_power_of_two(needed_capacity);
+  size_t new_cap = ccol_find_nearest_gte_power_of_two(needed_capacity);
   if (new_cap == ccol_invalid_size) {
     return false;
   }
@@ -90,7 +90,7 @@ static bool cstring_grow_to(cstr s, size_t needed_capacity) {
   }
 
   char *orig = s->data;
-  s->data = (char *)_mem_realloc(s->m_procs, s->data, new_cap);
+  s->data = (char *)_ccol_mem_realloc(s->m_procs, s->data, new_cap);
   if (!s->data) {
     s->data = orig;
     return false;
@@ -133,7 +133,7 @@ cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
     return NULL;
   }
 
-  cstr s = (cstr)_mem_calloc(m_procs, 1, sizeof(cstring));
+  cstr s = (cstr)_ccol_mem_calloc(m_procs, 1, sizeof(cstring));
   if (!s) {
     if (err) {
       *err = CCOL_ERR_STR("failed to allocate cstring container");
@@ -142,7 +142,7 @@ cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
   }
 
   if (!ccol_populate_mem_mgmt_procs(s, m_procs, err)) {
-    _mem_free(m_procs, s);
+    _ccol_mem_free(m_procs, s);
     return NULL;
   }
 
@@ -154,7 +154,7 @@ cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
     }
     return NULL;
   }
-  size_t init_cap = find_nearest_gte_power_of_two(init_len + 1);
+  size_t init_cap = ccol_find_nearest_gte_power_of_two(init_len + 1);
   if (init_cap == ccol_invalid_size) {
     __cstring_destroy(s);
     if (err) {
@@ -166,7 +166,7 @@ cstr cstring_create_full(const char *initial, ccol_memmgmt_procs_t *m_procs,
     init_cap = cstring_minimum_capacity;
   }
 
-  s->data = (char *)_mem_alloc(s->m_procs, init_cap);
+  s->data = (char *)_ccol_mem_alloc(s->m_procs, init_cap);
   if (!s->data) {
     __cstring_destroy(s);
     if (err) {
@@ -428,8 +428,8 @@ void cstring_reset(cstr s) {
 
   if (s->capacity != cstring_minimum_capacity) {
     char *orig = s->data;
-    s->data =
-        (char *)_mem_realloc(s->m_procs, s->data, cstring_minimum_capacity);
+    s->data = (char *)_ccol_mem_realloc(s->m_procs, s->data,
+                                        cstring_minimum_capacity);
     if (!s->data) {
       s->data = orig;
     } else {
@@ -511,12 +511,13 @@ void cstring_trim(cstr s) {
  * count must be > 0 (the caller is expected to have already handled the
  * zero-occurrences case).
  *
- * Extracted out of cstring_replace() into its own function specifically so
- * this arithmetic can be exercised directly by tests: reaching these overflow
- * guards through cstring_replace() itself would require constructing actual
- * strings on the order of gigabytes (e.g. a several-GB source string built
- * from a single repeated character together with a several-GB replacement
- * string), which is impractical for a routine test run. */
+ * Kept as its own function, rather than inlined into cstring_replace(),
+ * specifically so this arithmetic can be exercised directly by tests:
+ * reaching these overflow guards through cstring_replace() itself would
+ * require constructing actual strings on the order of gigabytes (e.g. a
+ * several-GB source string built from a single repeated character together
+ * with a several-GB replacement string), which is impractical for a routine
+ * test run. */
 static ccol_retval_t compute_replace_new_length(size_t orig_length, size_t nlen,
                                                 size_t rlen, size_t count,
                                                 size_t *new_len_out) {
@@ -590,7 +591,7 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
     return len_rv;
   }
 
-  size_t new_cap = find_nearest_gte_power_of_two(new_len + 1);
+  size_t new_cap = ccol_find_nearest_gte_power_of_two(new_len + 1);
   if (new_cap == ccol_invalid_size) {
     return ccol_container_full;
   }
@@ -598,7 +599,7 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
     new_cap = cstring_minimum_capacity;
   }
 
-  char *new_buf = (char *)_mem_alloc(s->m_procs, new_cap);
+  char *new_buf = (char *)_ccol_mem_alloc(s->m_procs, new_cap);
   if (!new_buf) {
     return ccol_not_enough_memory;
   }
@@ -619,7 +620,7 @@ ccol_retval_t cstring_replace(cstr s, const char *needle,
   size_t tail = strlen(src);
   memcpy(dst, src, tail + 1);
 
-  _mem_free(s->m_procs, s->data);
+  _ccol_mem_free(s->m_procs, s->data);
   s->data = new_buf;
   s->length = new_len;
   s->capacity = new_cap;

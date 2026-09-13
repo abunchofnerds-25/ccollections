@@ -49,7 +49,8 @@ ccol_not_enough_memory  - future or task allocation failed.
 ccol_not_permitted      - pool is shutting down.
 ccol_container_full     - NULL timeout and queue is full.
 ccol_timed_out          - timeout elapsed before a slot became free.
-ccol_unexpected_failure - clock_gettime returned an unexpected error.
+ccol_unexpected_failure - clock_gettime or pthread_cond_timedwait
+                          returned an unexpected error.
 .fi
 .SH "SEE ALSO"
 .BR ctpool_submit_future (3),

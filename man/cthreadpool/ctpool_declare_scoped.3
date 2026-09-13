@@ -33,7 +33,7 @@ queue, which may block for an unbounded time if tasks are long-running.
 .nf
 {
     ctpool_declare_scoped(pool);
-    pool = create_cthread_pool(4, 0, NULL);
+    pool = ccol_create_cthread_pool(4, 0, NULL);
     ctpool_submit(pool, my_fn, my_arg, NULL);
     ctpool_shutdown_drain(pool);
 }  /* pool is destroyed automatically here */

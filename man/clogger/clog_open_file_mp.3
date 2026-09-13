@@ -1,6 +1,6 @@
 .TH CLOG_OPEN_FILE_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-clog_open_file_mp \- create a file-backed logger with optional log rotation
+clog_open_file_mp, clog_open_file \- create a file-backed logger with optional log rotation
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,6 +11,11 @@ clog clog_open_file_mp(const char *path, clog_level_t min_level,
                     const clog_rotation_cfg_t *cfg,
                     const clog_async_cfg_t *async_cfg,
                     ccol_memmgmt_procs_t *mprocs);
+/* convenience wrapper; default allocator */
+static inline clog clog_open_file(const char *path,
+                    clog_level_t min_level,
+                    const clog_rotation_cfg_t *cfg,
+                    const clog_async_cfg_t *async_cfg);
 .fi
 .SH DESCRIPTION
 .nf
@@ -122,7 +127,4 @@ moment.
 .SH "SEE ALSO"
 .BR clog_open_fd_mp (3),
 .BR clog_close (3),
-.BR clog_flush (3),
-.BR CLOG_DEFAULT_MAX_FILE_SIZE (3),
-.BR CLOG_DEFAULT_ROTATION_INTERVAL (3),
-.BR CLOG_DEFAULT_MAX_ROTATED_FILES (3)
+.BR clog_flush (3)

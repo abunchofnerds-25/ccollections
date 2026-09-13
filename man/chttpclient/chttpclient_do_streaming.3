@@ -19,8 +19,8 @@ Like chttpclient_do, but delivers the response body to write_fn in
 chunks as data arrives instead of buffering it.  No chttpcli_response
 struct is allocated; response headers are not accessible.
 
-write_fn must return the number of bytes consumed.  Returning less
-than len aborts the transfer with a failure.
+write_fn must return the number of bytes consumed.  Returning
+anything other than len aborts the transfer with a failure.
 .fi
 .SH PARAMETERS
 .nf
@@ -36,10 +36,10 @@ Same codes as chttpclient_do, except ccol_msg_too_large is never
 returned: chttpclient_set_max_response_body_size has no effect on
 this streaming path, since the caller's own write_fn already
 controls memory use.  Additionally, ccol_http_transfer_aborted is
-returned when write_fn returns fewer bytes than len, aborting the
-transfer.
+returned when write_fn returns anything other than len (not just
+fewer bytes than len, but more too), aborting the transfer.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do (3),
 .BR chttpclient_do_async_streaming (3),
-.BR chttpcli_write_fn (3)
+.BR chttpclient_do_pooled_streaming (3)

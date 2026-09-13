@@ -13,7 +13,8 @@ chmap_construct(hm_name, key_type, val_type);
 .nf
 Type-safe macro for creating a hash map with default settings.
 Automatically determines key and value types and creates type marker
-variables for compile-time type checking.
+variables that let the other type-dispatching macros know the declared
+key and value types at each call site.
 .fi
 .SH PARAMETERS
 .nf
@@ -24,8 +25,9 @@ val_type  Type of values
 .SH NOTES
 .nf
 Terminates program on allocation failure
-Creates hidden type marker variables for type safety
-Uses DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
+Creates hidden type marker variables that the other type-dispatching
+macros read; chmap_redeclare(3) recreates them in another scope
+Uses CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE (16) buckets
 Uses default memory management and hashing
 .fi
 .SH "FLOAT AND DOUBLE KEY EQUALITY"
@@ -52,7 +54,8 @@ time; see chmap_create_full(3).
 .SH EXAMPLES
 .nf
 chmap_construct(map, int, char*);
-chmap_insert(map, 42, "hello");
+int key = 42;
+chmap_insert(map, key, "hello");
 .fi
 .SH "SEE ALSO"
 .BR chmap_construct_full (3),

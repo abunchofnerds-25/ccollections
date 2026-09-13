@@ -12,7 +12,7 @@ ctpool_declare(name);
 .SH DESCRIPTION
 .nf
 Expands to `ctpool name`. The variable is left uninitialized and must
-be assigned via create_cthread_pool() or create_cthread_pool_mp()
+be assigned via ccol_create_cthread_pool() or ccol_create_cthread_pool_mp()
 before use.
 
 Provided for naming-convention symmetry with other c_collections
@@ -26,7 +26,7 @@ name  Variable name to declare.
 .nf
 ctpool_declare(pool);
 char *err = NULL;
-pool = create_cthread_pool(4, 128, &err);
+pool = ccol_create_cthread_pool(4, 128, &err);
 if (!pool) { fprintf(stderr, "%s\en", err); exit(1); }
 /* ... submit tasks ... */
 ctpool_shutdown_drain(pool);
@@ -35,4 +35,4 @@ ctpool_destroy(pool);
 .SH "SEE ALSO"
 .BR ctpool_declare_scoped (3),
 .BR ctpool_construct (3),
-.BR create_cthread_pool (3)
+.BR ccol_create_cthread_pool (3)

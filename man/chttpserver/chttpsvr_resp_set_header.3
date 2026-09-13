@@ -33,7 +33,7 @@ vector but still produces a structurally malformed wire line a strict
 downstream parser could misread.
 
 value must not contain a CR or LF byte.  Both name and value are written
-onto the wire verbatim (as "name:value\r\n"), with no further escaping,
+onto the wire verbatim (as "name:value\er\en"), with no further escaping,
 so an embedded CR/LF in value would let a caller that reflects
 request-controlled data (a query parameter, a path parameter, an echoed
 request header) into a response header inject arbitrary extra header

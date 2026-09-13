@@ -37,20 +37,20 @@ SOFTWARE.
 TAU_MAIN()
 
 /* ========================================================================== */
-/*     REAL TLS HANDSHAKE COVERAGE (dedicated binary; see Makefile)         */
+/*     REAL TLS HANDSHAKE COVERAGE (dedicated binary; see Makefile)           */
 /*                                                                            */
 /* tests/chttpserver/tests.c only covers TLS *argument validation* (see       */
-/* serve_tls_zero_port_rejected_before_tls_init there); a real handshake     */
-/* needs a valid certificate/key pair. This suite generates a real,          */
-/* throwaway self-signed cert/key pair via the `openssl` CLI at startup,     */
-/* starts a real TLS chttpsvr listener, and drives an actual HTTPS request   */
-/* through it via chttpclient. This file is compiled into its own binary,    */
-/* tests_tls, separate from tests.c's tests binary (see the Makefile in      */
-/* this same directory) so a broken openssl CLI or a bad cert only fails     */
-/* this suite, not the rest of the chttpserver tests; ctls itself never      */
-/* aborts the process on bad TLS input, so this split is purely for that     */
-/* organizational isolation now, not to contain a process-abort failure      */
-/* mode.                                                                     */
+/* serve_tls_zero_port_rejected_before_tls_init there); a real handshake      */
+/* needs a valid certificate/key pair. This suite generates a real,           */
+/* throwaway self-signed cert/key pair via the `openssl` CLI at startup,      */
+/* starts a real TLS chttpsvr listener, and drives an actual HTTPS request    */
+/* through it via chttpclient. This file is compiled into its own binary,     */
+/* tests_tls, separate from tests.c's tests binary (see the Makefile in       */
+/* this same directory) so a broken openssl CLI or a bad cert only fails      */
+/* this suite, not the rest of the chttpserver tests. ctls itself never       */
+/* aborts the process on bad TLS input, so the split buys organizational      */
+/* isolation only; it is not there to contain a process-abort failure         */
+/* mode.                                                                      */
 /* ========================================================================== */
 
 #define TLS_TEST_PORT 18790
@@ -159,7 +159,7 @@ static void _teardown(void) {
     g_tls_srv = CHTTPSVR_INVALID;
   }
   /* __chttpsvr_destroy releases this server's shared-engine reference but
-   * does not synchronously wait for chttpserver's own shared event_loop
+   * does not synchronously wait for chttpserver's own shared ccol_event_loop
    * reactor to actually stop; chttpsvr_engine_wait() blocks until it has,
    * which is required here so the engine-installed logger (g_engine_logger
    * in chttpserver.c, set via chttpsvr_set_engine_logger) is guaranteed
@@ -193,7 +193,7 @@ __attribute__((constructor)) static void _setup(void) {
   }
   g_cert_ready = true;
 
-  g_tls_srv = create_chttpsvr(g_test_logger, &err);
+  g_tls_srv = ccol_create_chttpsvr(g_test_logger, &err);
   if (!g_tls_srv) {
     fprintf(stderr, "FATAL: could not create chttpsvr: %s\n",
             err ? err : "(unknown)");
@@ -219,7 +219,7 @@ __attribute__((constructor)) static void _setup(void) {
 
   /* Registered here, after chttpsvr_start, purely so g_tls_srv is already
      assigned by the time _teardown() (which stops and destroys it) can
-     possibly run; the shared event_loop engine itself has no atexit-based
+     possibly run; the shared ccol_event_loop engine itself has no atexit-based
      teardown of its own to race (see chttpsvr_engine_wait()'s own doc
      comment: teardown runs on an explicitly joined reaper thread, not a
      process-exit hook). */
@@ -242,7 +242,7 @@ TEST(chttpserver_tls, handshake_succeeds_when_ca_is_trusted) {
   }
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      create_chttpclient(NULL);
+      ccol_create_chttpclient(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -306,9 +306,9 @@ TEST(chttpserver_tls, handshake_fails_when_ca_is_untrusted) {
 }
 
 TEST(chttpserver_tls, hostname_mismatch_rejected_when_verify_host_enabled) {
-  /* Connects to the same server via "localhost"; which resolves to the
-     same loopback address but does NOT match the cert's CN=127.0.0.1;
-     with verify_host left at its default (true). This exercises ctls.c's
+  /* Connects to the same server via "localhost", which resolves to the
+     same loopback address but does NOT match the cert's CN=127.0.0.1, with
+     verify_host left at its default (true). This exercises ctls.c's
      own client-side hostname-verification wiring (ctls_conn_create_client's
      X509_VERIFY_PARAM_set1_host call); the CA is trusted (ca_bundle_path),
      so any rejection here can only be due to the hostname check, not an
@@ -321,7 +321,7 @@ TEST(chttpserver_tls, hostname_mismatch_rejected_when_verify_host_enabled) {
   }
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      create_chttpclient(NULL);
+      ccol_create_chttpclient(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -359,7 +359,7 @@ TEST(chttpserver_tls, hostname_mismatch_allowed_when_verify_host_disabled) {
   }
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      create_chttpclient(NULL);
+      ccol_create_chttpclient(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -408,7 +408,7 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
   }
 
   chttpcli cli _ccol_destructor(___chttpclient_destroy) =
-      create_chttpclient(NULL);
+      ccol_create_chttpclient(NULL);
   REQUIRE_TRUE(cli != CHTTPCLI_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -443,17 +443,18 @@ TEST(chttpserver_tls, client_presents_certificate_mtls_smoke) {
 }
 
 /* ========================================================================== */
-/*   REGRESSION: TLS config failures must never be silently swallowed        */
+/*   TLS config failures must never be silently swallowed                     */
 /*                                                                            */
-/* Both gaps below were found via code review: chttpsvr_start used to (a)    */
-/* silently start the server as plain, unencrypted HTTP whenever cfg.tls was */
-/* non-NULL but only one of cert_path/key_path was set, and (b) silently     */
-/* ignore ctls_ctx_trust's own return value for ca_bundle_path, meaning a    */
-/* bad/unreadable CA bundle left the server serving TLS without the mutual-  */
-/* TLS client-certificate enforcement the caller had explicitly asked for;   */
-/* in both cases chttpsvr_start still returned ccol_success, with no way for */
-/* the caller to ever notice. Fixed to report a genuine error in both cases  */
-/* instead; the three tests below pin that behavior directly.                */
+/* Neither gap below is reachable through ordinary testing.                   */
+/* chttpsvr_start must not (a) silently start the server as plain,            */
+/* unencrypted HTTP when cfg.tls is non-NULL but only one of                  */
+/* cert_path/key_path is set, nor (b) silently ignore ctls_ctx_trust's        */
+/* own return value for ca_bundle_path, which would leave a                   */
+/* bad/unreadable CA bundle serving TLS without the mutual-TLS                */
+/* client-certificate enforcement the caller explicitly asked for.            */
+/* Either would still return ccol_success, leaving the caller no way to       */
+/* notice. chttpsvr_start reports a genuine error in both cases instead;      */
+/* the tests below pin that behavior directly.                                */
 /* ========================================================================== */
 
 TEST(chttpserver_tls, start_rejects_cert_path_without_key_path) {
@@ -462,7 +463,7 @@ TEST(chttpserver_tls, start_rejects_cert_path_without_key_path) {
      real certificate files and no g_cert_ready gate. */
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, &err);
+      ccol_create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -482,7 +483,7 @@ TEST(chttpserver_tls, start_rejects_key_path_without_cert_path) {
   /* Mirror of the above with the two fields swapped. */
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, &err);
+      ccol_create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -499,20 +500,20 @@ TEST(chttpserver_tls, start_rejects_key_path_without_cert_path) {
 }
 
 TEST(chttpserver_tls, start_rejects_ca_bundle_path_without_cert_key_pair) {
-  /* Regression test for a real gap found via code review: ca_bundle_path set
-     with cert_path/key_path both left NULL used to be silently ignored (the
-     TLS setup block only ever looks at ca_bundle_path inside the branch
-     gated on both cert_path AND key_path being non-NULL), starting the
-     server as plain, unencrypted HTTP on a port the caller believed was
-     HTTPS with mutual-TLS client verification enabled. This is exactly the
-     ordinary way a caller configures custom-CA verification on the client
-     side (chttpclient_set_tls, mirroring curl's own --cacert), so a caller
-     reusing that same mental model server-side is a realistic mistake, not
-     a contrived one. Needs no real certificate files and no g_cert_ready
-     gate, since this must be rejected before any TLS work is attempted. */
+  /* ca_bundle_path set with cert_path/key_path both left NULL must not be
+     silently ignored (the TLS setup block only looks at ca_bundle_path
+     inside the branch gated on both cert_path AND key_path being non-NULL),
+     which would start the server as plain, unencrypted HTTP on a port the
+     caller believed was HTTPS with mutual-TLS client verification enabled.
+     This is exactly the ordinary way a caller configures custom-CA
+     verification on the client side (chttpclient_set_tls, mirroring curl's
+     own --cacert), so a caller reusing that same mental model server-side is
+     a realistic mistake, not a contrived one. Needs no real certificate
+     files and no g_cert_ready gate, since this must be rejected before any
+     TLS work is attempted. */
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, &err);
+      ccol_create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -537,20 +538,20 @@ TEST(chttpserver_tls, start_rejects_ca_bundle_path_without_cert_key_pair) {
 }
 
 TEST(chttpserver_tls, start_rejects_tls_config_with_no_cert_or_key) {
-  /* Regression test for a real gap found via code review: cfg->tls set but
-     cert_path/key_path/ca_bundle_path ALL left NULL used to be silently
-     ignored (none of the individual pairing checks fire when everything is
-     simply absent), starting the server as plain, unencrypted HTTP on a
-     port the caller believed was HTTPS. CHTTP_TLS_DEFAULT (chttp.h) is
-     exactly this shape ({NULL, NULL, NULL, true, true}) and is documented as
-     shared, verification-on defaults for both chttpclient and chttpserver;
-     a caller reaching for it here and forgetting to also set cert_path/
-     key_path afterward is a realistic mistake, not a contrived one. Needs no
-     real certificate files and no g_cert_ready gate, since this must be
-     rejected before any TLS work is attempted. */
+  /* cfg->tls set but cert_path/key_path/ca_bundle_path ALL left NULL must
+     not be silently ignored (none of the individual pairing checks fire when
+     everything is simply absent), which would start the server as plain,
+     unencrypted HTTP on a port the caller believed was HTTPS.
+     CHTTP_TLS_DEFAULT (chttp.h) is exactly this shape ({NULL, NULL, NULL,
+     true, true}) and is documented as shared, verification-on defaults for
+     both chttpclient and chttpserver; a caller reaching for it here and
+     forgetting to also set cert_path/key_path afterward is a realistic
+     mistake, not a contrived one. Needs no real certificate files and no
+     g_cert_ready gate, since this must be rejected before any TLS work is
+     attempted. */
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, &err);
+      ccol_create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;
@@ -586,7 +587,7 @@ TEST(chttpserver_tls, start_rejects_unloadable_ca_bundle_path) {
 
   char *err = NULL;
   chttpsvr srv _ccol_destructor(___chttpsvr_destroy) =
-      create_chttpsvr(g_test_logger, &err);
+      ccol_create_chttpsvr(g_test_logger, &err);
   REQUIRE_TRUE(srv != CHTTPSVR_INVALID);
 
   chttp_tls_config_t tls = CHTTP_TLS_DEFAULT;

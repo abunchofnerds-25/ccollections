@@ -18,12 +18,12 @@ Formats and emits a single structured log line. This is the function
 that all log_* macros expand to; application code should call the
 macros rather than this function directly.
 
-The write sequence (all steps under the per-logger mutex) is:
+The write sequence (all steps under the shared write lock) is:
 
   1. Check level >= min_level. If filtered AND level != CLOG_FATAL,
      return immediately (no output). CLOG_FATAL bypasses this check.
   2. Format the user message with vsnprintf into a 1024-byte stack
-     buffer; spill to heap if the formatted text exceeds 1024 bytes.
+     buffer; spill to heap if the formatted text exceeds 1023 bytes.
      If the heap spill itself cannot be allocated, the message falls
      back to the truncated stack copy with its final bytes replaced by
      a visible "...[truncated]" marker rather than being emitted as if
@@ -147,9 +147,10 @@ variadic arguments at compile time.
 Asserts if logger is CLOG_INVALID, stale, or already closed.
 .fi
 .SH "SEE ALSO"
-.BR log_trace (3),
-.BR log_debug (3),
-.BR log_info (3),
-.BR log_warn (3),
-.BR log_error (3),
-.BR log_fatal (3)
+.BR ccol_log_trace (3),
+.BR ccol_log_debug (3),
+.BR ccol_log_info (3),
+.BR ccol_log_warn (3),
+.BR ccol_log_error (3),
+.BR ccol_log_alert (3),
+.BR ccol_log_fatal (3)

@@ -4,17 +4,16 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 
 # Our source files (compiled with strict flags + -Werror). chttpclient.c owns
-# its own static event_loop reactor (cthreadcomm.c) and uses ctls.c for TLS.
+# its own static ccol_event_loop reactor (cthreadcomm.c) and uses ctls.c for TLS.
 # clogger.c is needed for chttpcli_set_engine_logger.
 # cthreadpool.c is a transitive dependency of the async engine's DNS/connect
 # worker pool (g_client_dns_pool).
 #
 # One binary, `tests` (tests.c), covers this whole directory's main suite,
 # including a real TLS handshake against a genuine self-signed cert generated
-# at test-startup via the `openssl` CLI. That TLS coverage used to live in
-# its own separate tests_tls binary; ctls.c (unlike the vendored TLS layer it
-# replaced) never aborts the process on bad input, so the isolation a
-# separate binary bought is no longer needed, and the two were merged.
+# at test-startup via the `openssl` CLI. That TLS coverage needs no separate
+# binary of its own: ctls.c never aborts the process on bad input (it reports
+# failure via return value), so there is no blast radius to isolate.
 COMMON_SRC_FILES = ../../src/chttpclient.c \
 	../../src/chttp1_parser.c \
 	../../src/chttp.c \
@@ -49,18 +48,16 @@ build_tsan:
 # die_after_fork=0: this suite's own concurrent_double_destroy_is_fatal test
 # forks, then creates two NEW pthreads in the child to race a double-destroy.
 # chttpclient's async engine keeps a persistent, process-wide multi-threaded
-# event_loop reactor alive for the whole suite, so by the time this test
+# ccol_event_loop reactor alive for the whole suite, so by the time this test
 # runs, the parent is multi-threaded at fork() time; exactly the condition
 # TSan's own default die_after_fork=1 treats as unsafe for a child that then
 # creates further threads, silently making the child exit normally instead
-# of reaching this test's own expected fatal_err()/SIGABRT (verified: the
-# child's chttpclient_destroy logic itself is correct and race-free under
-# gcc/clang, -O0/-O1, TSan or not; only fork()-then-new-threads under TSan's
-# own safety net is affected, confirmed via TSAN_OPTIONS=die_after_fork=0
-# reproducibly fixing it, and via TSan's own diagnostic output showing this
-# process is not single-threaded at fork time, unlike tests/cthreadcomm's
-# otherwise-identical test, whose event_loop instances are torn down between
-# tests, keeping ITS OWN parent single-threaded by the time it forks).
+# of reaching this test's own expected ccol_fatal_err()/SIGABRT. Only
+# fork()-then-new-threads under TSan's own safety net is affected; the
+# child's chttpclient_destroy logic is correct and race-free under gcc/clang,
+# -O0/-O1, TSan or not. tests/cthreadcomm's otherwise-identical test needs no
+# such option because its ccol_event_loop instances are torn down between
+# tests, leaving ITS OWN parent single-threaded by the time it forks.
 #
 # suppressions=tsan_openssl.supp: see that file's own comment for the one
 # known, third-party-only OpenSSL race it suppresses (concurrent client
@@ -85,7 +82,7 @@ build_default_client:
 # only ever sends well-formed responses); its own "stream" test group uses
 # local AF_UNIX socketpairs to exercise chttp1_stream_t, but this remains
 # fully independent of any real network traffic. chttp1_parser.c links
-# ctls.c (+ its own chashmap.c/common.c dependencies) now that
+# ctls.c (+ its own chashmap.c/common.c dependencies) because
 # chttp1_stream_t optionally drives a TLS connection via ctls_conn_read/
 # _write; see chttp1_parser.h's own module doc comment. Kept as its own
 # binary in this same directory rather than a new top-level tests/
@@ -152,9 +149,8 @@ memtest: build build_parser build_default_client build_differential
 # (non-atomic) increments, so this suite's own heavily multi-threaded async
 # engine can race two threads incrementing the same counter concurrently,
 # occasionally producing an apparently negative delta when gcov reconciles
-# counts; reproduced directly (not merely reasoned about) as a NON-
-# deterministic failure landing on a different file/line/value on repeated
-# runs (once on chttpclient.c, once on cthreadcomm.c). This is gcov's own
+# counts. The failure is non-deterministic, landing on a different
+# file/line/value from run to run. This is gcov's own
 # instrumentation limitation for concurrent code, not a defect in this
 # library's logic, matching the same tolerate-a-known-tool-quirk rationale
 # already applied here to mismatch/inconsistent.
@@ -166,7 +162,7 @@ generate_coverage_report:
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file chttpclient.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpclient.c.info --output-directory coverage/tests && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info tests
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_parser.c ../../src/chttp1_parser.c \
 		../../src/ctls.c ../../src/chashmap.c ../../src/common.c -o tests_parser $(LFLAGS) && \
 	./tests_parser && \
@@ -174,7 +170,7 @@ generate_coverage_report:
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file chttp1_parser.c.info && \
 	genhtml --ignore-errors inconsistent -s chttp1_parser.c.info --output-directory coverage/tests_parser && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info tests_parser
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests_parser
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_differential.c \
 		../../src/chttp1_parser.c ../../src/ctls.c ../../src/chashmap.c \
 		../../src/common.c picohttpparser/picohttpparser.c \
@@ -184,7 +180,7 @@ generate_coverage_report:
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file chttp1_parser_differential.c.info && \
 	genhtml --ignore-errors inconsistent -s chttp1_parser_differential.c.info --output-directory coverage/tests_differential && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info tests_differential
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests_differential
 
 all: build build_parser build_default_client build_differential build_tsan test test_tsan memtest generate_coverage_report
 

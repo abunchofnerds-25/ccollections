@@ -18,7 +18,7 @@ live handle (one returned by clrucache_create_full and not yet
 destroyed). CLRU_CACHE_INVALID is a silent no-op. Any other value (a
 stale handle already destroyed by an earlier call or concurrently
 by another thread, a forged value, or garbage) is a FATAL ERROR:
-this function calls fatal_err() (abort()/SIGABRT) rather than risk
+this function calls ccol_fatal_err() (abort()/SIGABRT) rather than risk
 a use-after-free or double-free.
 
 On a live handle, waits for every in-flight resolved use of the

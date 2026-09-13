@@ -1,6 +1,6 @@
 .TH CLOG_OPEN_FD_MP 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-clog_open_fd_mp \- create a logger writing to an existing file descriptor
+clog_open_fd_mp, clog_open_fd \- create a logger writing to an existing file descriptor
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -10,6 +10,9 @@ C Collections (libccollections, \-lccollections)
 clog clog_open_fd_mp(int fd, clog_level_t min_level,
                   const clog_async_cfg_t *async_cfg,
                   ccol_memmgmt_procs_t *mprocs);
+/* convenience wrapper; default allocator */
+static inline clog clog_open_fd(int fd, clog_level_t min_level,
+                  const clog_async_cfg_t *async_cfg);
 .fi
 .SH DESCRIPTION
 .nf
@@ -35,7 +38,8 @@ ever dropped on a genuinely unrecoverable write error.
 .nf
 fd         Open, writable file descriptor. Must be >= 0.
 min_level  Messages below this level are silently dropped. Use
-           CLOG_OFF to suppress all output.
+           CLOG_OFF to suppress all output except CLOG_FATAL, which
+           is always written.
 async_cfg  Async logging configuration, or NULL for synchronous
            logging. When non-NULL, log_*() calls only format their
            own message and hand the rest off to a dedicated writer
@@ -74,14 +78,17 @@ mprocs     Custom allocator (malloc/free/calloc/realloc function
 .SH RETURN VALUE
 .nf
 Returns a new logger handle on success.
-Returns CLOG_INVALID if fd < 0, if mprocs is invalid, or if memory
-allocation fails.
+Returns CLOG_INVALID if fd is negative, closed, read-only, or
+otherwise invalid, if mprocs is invalid, or if memory allocation
+fails.
 .fi
 .SH NOTES
 .nf
 The fd is not duplicated; the caller is responsible for keeping it
 open for the lifetime of the logger.
-All public functions are fully thread-safe via a per-logger mutex.
+All public functions are fully thread-safe; every write to a given
+target is serialised by one lock shared by the root logger and every
+logger derived from it.
 The supported way to combine fork(2) with clogger is to fork(2)
 before opening a logger, or open one and fork(2) immediately followed
 by exec(3); continuing to run without an intervening exec(3) while a
@@ -104,5 +111,5 @@ record itself synchronously, before terminating the process.
 .BR clog_open_file_mp (3),
 .BR clog_close (3),
 .BR clog_flush (3),
-.BR log_info (3),
-.BR log_error (3)
+.BR ccol_log_info (3),
+.BR ccol_log_error (3)

@@ -20,13 +20,13 @@ ccol_select_timed_va() does the same but calls ccol_select_timed() with the
 given timeout_ms (milliseconds; -1 = infinite, 0 = poll, positive = deadline).
 
 Each variadic argument must be a ccol_selectable value, typically produced
-by selectable_from_circq(), selectable_from_dynq(), selectable_from_chan(),
-or selectable_from_fd() with a ccol_select_read or ccol_select_write dir.
+by ccol_selectable_from_circq(), ccol_selectable_from_dynq(), ccol_selectable_from_chan(),
+or ccol_selectable_from_fd() with a ccol_select_read or ccol_select_write dir.
 All arguments are evaluated exactly once.
 
 Neither macro performs the receive or send itself: on ccol_success the
-caller must, immediately afterward, call circq_try_recv_zc()/
-dynmq_try_recv_zc()/circq_try_send_zc()/dynmq_try_send_zc() on the winning
+caller must, immediately afterward, call ccol_circq_try_recv_zc()/
+ccol_dynmq_try_recv_zc()/ccol_circq_try_send_zc()/ccol_dynmq_send_zc() on the winning
 queue selectable, or read(2)/recv(2)/write(2)/send(2) on the winning fd
 selectable's descriptor.
 
@@ -59,34 +59,34 @@ valid under strict ISO C (-pedantic).  Compiles cleanly with -Wall
 .fi
 .SH NOTES
 .nf
-The selectable array is a compound literal on the stack; no heap
+The selectable array is an ordinary local array on the stack; no heap
 allocation occurs beyond that already performed by ccol_select_timed().
 .fi
 .SH EXAMPLES
 .nf
 size_t idx;
 
-/* Two circular queues and a channel, all read-wait: */
+/* Two circular queues and a ccol_channel, all read-wait: */
 ccol_retval_t r = ccol_select_va(&idx,
-    selectable_from_circq(q0, ccol_select_read),
-    selectable_from_circq(q1, ccol_select_read),
-    selectable_from_chan(ch, ccol_select_read));
+    ccol_selectable_from_circq(q0, ccol_select_read),
+    ccol_selectable_from_circq(q1, ccol_select_read),
+    ccol_selectable_from_chan(ch, ccol_select_read));
 if (r == ccol_success) {
     printf("ready selectable: %zu\en", idx);
     /* claim the message from whichever selectable won, e.g.: */
     c_message_t msg;
-    if (idx == 0 && circq_try_recv_zc(q0, &msg) == ccol_success)
+    if (idx == 0 && ccol_circq_try_recv_zc(q0, &msg) == ccol_success)
         free(msg.data);
 }
 
 /* Mixed: write-wait on q0, read-wait on ch: */
 ccol_select_va(&idx,
-    selectable_from_circq(q0, ccol_select_write),
-    selectable_from_chan(ch, ccol_select_read));
+    ccol_selectable_from_circq(q0, ccol_select_write),
+    ccol_selectable_from_chan(ch, ccol_select_read));
 
 /* Timed wait with 200 ms deadline: */
 r = ccol_select_timed_va(&idx, 200,
-    selectable_from_circq(q0, ccol_select_read));
+    ccol_selectable_from_circq(q0, ccol_select_read));
 if (r == ccol_timed_out) {
     puts("no source ready within 200 ms");
 }
@@ -94,8 +94,7 @@ if (r == ccol_timed_out) {
 .SH "SEE ALSO"
 .BR ccol_select (3),
 .BR ccol_select_timed (3),
-.BR selectable_from_circq (3),
-.BR selectable_from_dynq (3),
-.BR selectable_from_chan (3),
-.BR selectable_from_fd (3),
-.BR ccol_selectable_from_chan (3)
+.BR ccol_selectable_from_circq (3),
+.BR ccol_selectable_from_dynq (3),
+.BR ccol_selectable_from_chan (3),
+.BR ccol_selectable_from_fd (3)

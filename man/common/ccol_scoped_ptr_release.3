@@ -47,7 +47,7 @@ simply returns NULL again.
 .nf
 char *build(ccol_memmgmt_procs_t *mp) {
   ccol_scoped_ptr_mp(buf, char, mp);
-  buf = _mem_alloc(mp, 128);
+  buf = _ccol_mem_alloc(mp, 128);
   if (!buf) return NULL;
 
   /* ... populate buf ... */

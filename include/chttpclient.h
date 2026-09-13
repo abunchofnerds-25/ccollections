@@ -30,12 +30,21 @@ SOFTWARE.
 #include <common.h>
 #include <cthreadpool.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file chttpclient.h
  * @brief Hand-rolled HTTP/1.1 client: an internal chttp1_parser drives
  *        request/response framing over raw sockets, with TLS provided by
  *        ctls (the same reactor-agnostic OpenSSL wrapper chttpserver uses
- *        for its own TLS) and Tier 2/3's reactor provided by event_loop.
+ *        for its own TLS) and Tier 2/3's reactor provided by ccol_event_loop.
  *
  * ### Connection pool
  *
@@ -72,7 +81,6 @@ SOFTWARE.
  * exclusive access to that one object), so a caller sharing one request or
  * response across threads must provide its own external synchronization.
  *
-
  * ### Example
  *
  * @code
@@ -115,8 +123,8 @@ SOFTWARE.
  * pair), not a pointer; it must never be cast to/from void*, compared via
  * a pointer cast, or otherwise treated as an address. Compare it directly
  * against CHTTPCLI_INVALID (or use it in a truthiness check; CHTTPCLI_INVALID
- * is 0, so `if (!cli)` still works exactly as it did when this was a raw
- * pointer). Internally, every use of a chttpcli is resolved through a
+ * is 0, so `if (!cli)` tests exactly the same "is there a client here"
+ * question). Internally, every use of a chttpcli is resolved through a
  * library-owned slot table before the underlying client object is touched:
  * a handle whose slot has since been freed (or reused for an unrelated,
  * later client) is always detected, rather than silently dereferencing
@@ -209,9 +217,9 @@ typedef struct chttp_request {
  * must therefore check body != NULL (or body_len > 0) before dereferencing
  * body, even on a successful, non-streaming request.
  *
- * Call chttpclient_resp_free to release all owned memory.  When a custom
- * allocator was supplied to create_chttpclient_mp, free the response BEFORE
- * destroying the client; see chttpclient_resp_free for details.
+ * Call chttpclient_resp_free to release all owned memory. When a custom
+ * allocator was supplied to ccol_create_chttpclient_mp, free the response
+ * BEFORE destroying the client; see chttpclient_resp_free for details.
  */
 typedef struct chttpcli_response {
   int status_code;
@@ -333,7 +341,8 @@ void chttp_request_free(chttp_request_t *req);
  * @param err_str  Optional: receives a static error string on failure.
  * @return New client handle, or CHTTPCLI_INVALID on failure.
  */
-chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str);
+chttpcli ccol_create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs,
+                                    char **err_str);
 
 /**
  * @brief Create an HTTP client with the default allocator.
@@ -341,8 +350,8 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str);
  * @return New client handle, or CHTTPCLI_INVALID on failure.
  */
 static inline __attribute__((always_inline)) chttpcli
-create_chttpclient(char **err_str) {
-  return create_chttpclient_mp(NULL, err_str);
+ccol_create_chttpclient(char **err_str) {
+  return ccol_create_chttpclient_mp(NULL, err_str);
 }
 
 /* ========================================================================== */
@@ -485,11 +494,11 @@ ccol_retval_t chttpclient_set_tls(chttpcli cli, const chttp_tls_config_t *tls);
  * @brief Install a custom logger for chttpclient's own async-engine (Tier
  *        2/3) reactor-level events.
  *
- * chttpclient_do_async/_streaming and the pooled-sync wrappers built on top
- * of them (chttpclient_do_pooled/_streaming) share one lazily-started,
- * process-wide event_loop reactor across every chttpcli instance (including
- * the default client). This engine logger captures that reactor's own
- * diagnostics (TLS handshake failures, connect errors); it is separate from
+ * chttpclient_do_async/_streaming and the pooled-sync wrappers built on top of
+ * them (chttpclient_do_pooled/_streaming) share one lazily-started,
+ * process-wide ccol_event_loop reactor across every chttpcli instance
+ * (including the default client). This engine logger captures that reactor's
+ * own diagnostics (TLS handshake failures, connect errors); it is separate from
  * the per-client logger, and separate from chttpsvr_set_engine_logger's own
  * reactor (chttpserver and chttpclient each own a fully independent static
  * reactor; a process may freely run both at once).
@@ -521,7 +530,7 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl);
  * @brief Install custom memory management procs for chttpclient's own
  *        async-engine (Tier 2/3) reactor-level allocations.
  *
- * By default, the event_loop reactor shared by every chttpcli instance's
+ * By default, the ccol_event_loop reactor shared by every chttpcli instance's
  * Tier 2/3 work in this process allocates its own memory (the registration
  * table, per-connection dispatch state, and so on) using the default
  * allocator. Calling this function with a non-NULL mp redirects all of that
@@ -531,7 +540,7 @@ ccol_retval_t chttpcli_set_engine_logger(clog cl);
  *
  * This configures only the shared reactor's own construction; it has no
  * effect on any individual chttpcli instance's own allocator, which is
- * configured independently via create_chttpclient_mp, exactly as before.
+ * configured independently via ccol_create_chttpclient_mp.
  *
  * May only be called before the reactor has ever started in this process
  * (i.e. before the first chttpclient_do_async/_streaming call anywhere), or
@@ -559,14 +568,13 @@ ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
  *
  * By default (never having called this function, or having called it with
  * num_threads == 0), the shared reactor sizes itself to
- * sysconf(_SC_NPROCESSORS_ONLN) (falling back to 1 if that query fails),
- * matching this library's long-standing default behavior. Calling this
- * function with a positive num_threads overrides that auto-detection and
- * pins the reactor to exactly that many OS threads instead, following
- * event_loop_create_with_mprocs's own num_reactor_threads semantics
- * (cthreadcomm.h): 1 means a single thread both polls and dispatches
- * inline; any larger value means one dedicated polling thread plus
- * (num_threads - 1) dispatch worker threads.
+ * sysconf(_SC_NPROCESSORS_ONLN) (falling back to 1 if that query fails).
+ * Calling this function with a positive num_threads overrides that
+ * auto-detection and pins the reactor to exactly that many OS threads
+ * instead, following ccol_event_loop_create_with_mprocs's own
+ * num_reactor_threads semantics (cthreadcomm.h): 1 means a single thread
+ * both polls and dispatches inline; any larger value means one dedicated
+ * polling thread plus (num_threads - 1) dispatch worker threads.
  *
  * This configures only the shared reactor's own construction, independent
  * of any individual chttpcli instance's own settings.
@@ -595,12 +603,12 @@ ccol_retval_t chttpcli_set_engine_num_reactor_threads(size_t num_threads);
  *
  * Waits for all in-flight requests to complete before freeing resources.
  *
- * cli must be a currently-live handle (one returned by create_chttpclient/
+ * cli must be a currently-live handle (one returned by ccol_create_chttpclient/
  * _mp or chttp_default_client and not yet destroyed). A stale handle
  * (one that has already been destroyed, whether by an earlier, completed
  * call to this same function, or concurrently, by another thread racing
  * this one right now), a forged value, or garbage is a fatal error:
- * this function calls fatal_err() (abort()/SIGABRT), rather than risking a
+ * this function calls ccol_fatal_err() (abort()/SIGABRT), rather than risking a
  * use-after-free or double-free, for both a purely sequential double-destroy
  * and a temporally-overlapping concurrent one. CHTTPCLI_INVALID (0) is the
  * one exception and remains a silent no-op, matching chttpclient_destroy's
@@ -650,7 +658,7 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
   chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_INVALID;
 
 /**
- * @brief Declare and initialise an HTTP client; fatal_err on failure.
+ * @brief Declare and initialise an HTTP client; ccol_fatal_err on failure.
  *
  * Example:
  * @code
@@ -662,29 +670,29 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * chttpclient_destroy(cli);
  * @endcode
  */
-#define chttpcli_construct(name)                          \
-  chttpcli name = CHTTPCLI_INVALID;                       \
-  do {                                                    \
-    char *_clic_err = NULL;                               \
-    (name) = create_chttpclient(&_clic_err);              \
-    if (!(name)) {                                        \
-      fatal_err("chttpcli_construct('%s'): %s", #name,    \
-                _clic_err ? _clic_err : "unknown error"); \
-    }                                                     \
+#define chttpcli_construct(name)                               \
+  chttpcli name = CHTTPCLI_INVALID;                            \
+  do {                                                         \
+    char *_clic_err = NULL;                                    \
+    (name) = ccol_create_chttpclient(&_clic_err);              \
+    if (!(name)) {                                             \
+      ccol_fatal_err("chttpcli_construct('%s'): %s", #name,    \
+                     _clic_err ? _clic_err : "unknown error"); \
+    }                                                          \
   } while (0)
 
 /**
- * @brief Declare, initialise, and auto-destroy on scope exit; fatal_err on
+ * @brief Declare, initialise, and auto-destroy on scope exit; ccol_fatal_err on
  *        failure.
  */
 #define chttpcli_construct_scoped(name)                                      \
   chttpcli name _ccol_destructor(___chttpclient_destroy) = CHTTPCLI_INVALID; \
   do {                                                                       \
     char *_clic_err = NULL;                                                  \
-    (name) = create_chttpclient(&_clic_err);                                 \
+    (name) = ccol_create_chttpclient(&_clic_err);                            \
     if (!(name)) {                                                           \
-      fatal_err("chttpcli_construct_scoped('%s'): %s", #name,                \
-                _clic_err ? _clic_err : "unknown error");                    \
+      ccol_fatal_err("chttpcli_construct_scoped('%s'): %s", #name,           \
+                     _clic_err ? _clic_err : "unknown error");               \
     }                                                                        \
   } while (0)
 
@@ -717,9 +725,9 @@ static inline __attribute__((always_inline)) void ___chttpclient_destroy(
  * unchanged; the next hop then reports ccol_http_invalid_url, the same code
  * an unsupported scheme in the original request URL already gets, rather
  * than the reference being silently merged onto the current origin's path as
- * though it were relative. If the 50-hop cap is reached and
- * the last hop's response is itself a would-be redirect, it is not followed
- * or delivered; ccol_http_too_many_redirects is returned instead.
+ * though it were relative. If the 50-hop cap is reached and the last hop's
+ * response is itself a would-be redirect, it is not followed or delivered;
+ * ccol_http_too_many_redirects is returned instead.
  *
  * The request URL accepts http://, https://, and http+unix:// (for
  * connecting to a server listening on a Unix domain socket, e.g.
@@ -1055,7 +1063,7 @@ ccol_retval_t chttpclient_do_pooled_streaming(chttpcli cli,
  * process, for the rest of its lifetime, then has no default client to use
  * and fails accordingly; there is no way to rebuild it once destroyed
  * this way. If you need a client with a bounded, caller-controlled
- * lifetime, create your own via create_chttpclient/_mp instead.
+ * lifetime, create your own via ccol_create_chttpclient/_mp instead.
  *
  * @return Default client handle, or CHTTPCLI_INVALID if initialisation
  *         failed.
@@ -1157,9 +1165,11 @@ const char *chttpclient_resp_header(const chttpcli_response *resp,
  *
  * Lifetime constraint with custom allocators: the response holds a
  * non-owning reference to the allocator supplied when the client was created
- * (via create_chttpclient_mp).  When a custom allocator is in use,
+ * (via ccol_create_chttpclient_mp).  When a custom allocator is in use,
  * chttpclient_resp_free MUST be called before chttpclient_destroy; calling
  * it after the client has been destroyed is undefined behaviour.  With the
  * default allocator (NULL mprocs / malloc) the order does not matter.
  */
 void chttpclient_resp_free(chttpcli_response *resp);
+
+#pragma GCC visibility pop

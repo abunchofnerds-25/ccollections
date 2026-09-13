@@ -1,30 +1,28 @@
 .TH CCOL_SELECTABLE_FROM_CHAN 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
 .SH NAME
-ccol_selectable_from_chan \- resolve a channel into a ccol_selectable for the calling thread and requested direction
+ccol_selectable_from_chan \- resolve a ccol_channel into a ccol_selectable for the calling thread and requested direction
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
 .nf
 #include <cthreadcomm.h>
 
-ccol_selectable ccol_selectable_from_chan(channel *ch, ccol_select_dir dir);
+ccol_selectable ccol_selectable_from_chan(ccol_channel *ch, ccol_select_dir dir);
 .fi
 .SH DESCRIPTION
 .nf
 Inspects the calling thread's ID and the requested direction to determine
-which of the channel's two underlying circular queues to wrap:
+which of the ccol_channel's two underlying circular queues to wrap:
 
-  ccol_select_read; owner <- workers_to_owner_cq  (same as chan_recv_zc)
+  ccol_select_read; owner <- workers_to_owner_cq  (same as ccol_chan_recv_zc)
                     worker <- owner_to_workers_cq
-  ccol_select_write; owner -> owner_to_workers_cq  (same as chan_send_zc)
+  ccol_select_write; owner -> owner_to_workers_cq  (same as ccol_chan_send_zc)
                     worker -> workers_to_owner_cq
 
 The resolution is performed at the call site so that ccol_select() itself
-never needs access to the opaque channel struct.  The channel pointer is
-not stored; only the resolved circular_queue pointer and the dir value are
+never needs access to the opaque ccol_channel struct.  The ccol_channel pointer is
+not stored; only the resolved ccol_circular_queue pointer and the dir value are
 kept in the returned ccol_selectable.
-
-The selectable_from_chan() macro is a thin wrapper around this function.
 .fi
 .SH PARAMETERS
 .nf
@@ -34,7 +32,7 @@ dir  ccol_select_read or ccol_select_write.
 .SH RETURN VALUE
 .nf
 ccol_selectable of type ccol_selectable_circq wrapping the appropriate
-circular_queue for the calling thread and direction.
+ccol_circular_queue for the calling thread and direction.
 
 If ch is NULL, returns a ccol_selectable_circq with a NULL queue pointer.
 Passing that to ccol_select() will cause it to return ccol_invalid_args.
@@ -44,17 +42,13 @@ Passing that to ccol_select() will cause it to return ccol_invalid_args.
 Direction is resolved once at call time, not re-evaluated on each
 ccol_select() iteration.  If the calling thread's role changes between
 construction and the actual ccol_select() call, reconstruct the selectable.
-
-Prefer the selectable_from_chan() macro at call sites for stylistic
-consistency with selectable_from_circq() and selectable_from_dynq().
 .fi
 .SH THREAD SAFETY
 .nf
-Reads ch->owner_tid and two pointer fields written once at channel creation
+Reads ch->owner_tid and two pointer fields written once at ccol_channel creation
 and never modified thereafter; safe to call concurrently from any thread.
 .fi
 .SH "SEE ALSO"
 .BR ccol_select (3),
-.BR selectable_from_chan (3),
-.BR chan_recv_zc (3),
-.BR chan_send_zc (3)
+.BR ccol_chan_recv_zc (3),
+.BR ccol_chan_send_zc (3)

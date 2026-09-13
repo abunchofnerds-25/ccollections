@@ -28,7 +28,8 @@ var_name  Name of the variable to declare.
 .SH EXAMPLES
 .nf
 {
-    cyaml_declare_scoped(doc) = cyaml_parse("x: 1\en", NULL);
+    cyaml_declare_scoped(doc);
+    doc = cyaml_parse("x: 1\en", NULL);
     if (!doc) return;
     /* ... use doc ... */
 }  /* doc is freed automatically here */

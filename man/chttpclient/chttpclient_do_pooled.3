@@ -35,10 +35,13 @@ resp_out Must not be NULL. Set to NULL immediately, then, on
 Same result codes as chttpclient_do, with one difference: a failure
 to even submit the request to the engine (OOM, or the engine
 failing to start) is reported as ccol_unexpected_failure rather than
-a more specific code. Everything detected once the request is
-actually in flight (bad URL, TLS failure, connection failure,
-transfer errors, timeouts, too many redirects) is reported with
-the exact same specific codes chttpclient_do uses.
+a more specific code; an allocation failure that happens after the
+request has been submitted (for example while copying the request's
+headers or body) is still reported as ccol_not_enough_memory.
+Everything detected once the request is actually in flight (bad URL,
+TLS failure, connection failure, transfer errors, timeouts, too many
+redirects) is reported with the exact same specific codes
+chttpclient_do uses.
 .fi
 .SH "SEE ALSO"
 .BR chttpclient_do (3),

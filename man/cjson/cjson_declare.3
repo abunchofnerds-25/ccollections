@@ -22,7 +22,7 @@ var_name  Name of the variable to declare.
 .SH EXAMPLES
 .nf
 cjson_declare(root);
-root = cjson_parse("{\e"k\e":1}");
+root = cjson_parse("{\e"k\e":1}", NULL);
 cjson_destroy(root);
 .fi
 .SH "SEE ALSO"

@@ -1,6 +1,6 @@
 .TH CSTR_RESERVE 3 "2026-07-10" "c_collections" "C Collections Library - Macros"
 .SH NAME
-cstr_reserve \- reserve capacity; calls fatal_err() on failure
+cstr_reserve \- reserve capacity; calls ccol_fatal_err() on failure
 .SH LIBRARY
 C Collections (libccollections, \-lccollections)
 .SH SYNOPSIS
@@ -11,7 +11,7 @@ cstr_reserve(s, cap);
 .fi
 .SH DESCRIPTION
 .nf
-Calls cstring_reserve() and calls fatal_err() if it returns false.
+Calls cstring_reserve() and calls ccol_fatal_err() if it returns false.
 .fi
 .SH PARAMETERS
 .nf

@@ -28,6 +28,15 @@ SOFTWARE.
 #include <stdbool.h>
 #include <time.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file cthreadpool.h
  * @brief Generic thread pool with bounded or unbounded task queue, completion
@@ -84,14 +93,14 @@ typedef struct cthread_pool cthread_pool;
  *
  * Never cast a ctpool to/from void*, compare it via a pointer cast, or
  * treat it as an address. Compare it against CTPOOL_INVALID (or use it in
- * a truthiness check; CTPOOL_INVALID is 0, so `if (!pool)` still works
- * exactly as it did when this was a raw pointer). Every use of a ctpool is
- * resolved through a library-owned slot table before the underlying
- * cthread_pool object is ever touched, so a stale handle (one whose pool
- * has already been destroyed) is always detected rather than silently
- * dereferencing freed memory; passing an already-destroyed or otherwise
- * stale handle to __ctpool_destroy specifically is a fatal error (see that
- * function's own doc comment).
+ * a truthiness check; CTPOOL_INVALID is 0, so `if (!pool)` is a valid test
+ * for an invalid handle). Every use of a ctpool is resolved through a
+ * library-owned slot table before the underlying cthread_pool object is
+ * ever touched, so a stale handle (one whose pool has already been
+ * destroyed) is always detected rather than silently dereferencing freed
+ * memory; passing an already-destroyed or otherwise stale handle to
+ * __ctpool_destroy specifically is a fatal error (see that function's own
+ * doc comment).
  */
 typedef uint64_t ctpool;
 
@@ -115,17 +124,19 @@ typedef struct ctpool_future ctpool_future;
  * @param err_str         Optional: receives error description on failure
  * @return New pool handle, or CTPOOL_INVALID on failure
  */
-ctpool create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
-                              ccol_memmgmt_procs_t *mprocs, char **err_str);
+ctpool ccol_create_cthread_pool_mp(size_t num_threads, size_t queue_capacity,
+                                   ccol_memmgmt_procs_t *mprocs,
+                                   char **err_str);
 
 /**
  * @brief Create a thread pool with default memory management
  *
- * Equivalent to create_cthread_pool_mp with mprocs = NULL.
+ * Equivalent to ccol_create_cthread_pool_mp with mprocs = NULL.
  */
-static inline __attribute__((always_inline)) ctpool
-create_cthread_pool(size_t num_threads, size_t queue_capacity, char **err_str) {
-  return create_cthread_pool_mp(num_threads, queue_capacity, NULL, err_str);
+static inline __attribute__((always_inline)) ctpool ccol_create_cthread_pool(
+    size_t num_threads, size_t queue_capacity, char **err_str) {
+  return ccol_create_cthread_pool_mp(num_threads, queue_capacity, NULL,
+                                     err_str);
 }
 
 /* ========================================================================== */
@@ -137,12 +148,12 @@ create_cthread_pool(size_t num_threads, size_t queue_capacity, char **err_str) {
  *
  * pool is an opaque VALUE handle, resolved through a library-owned slot
  * table before the underlying pool object is ever touched. pool must be a
- * currently live handle (one returned by create_cthread_pool/_mp and not
+ * currently live handle (one returned by ccol_create_cthread_pool/_mp and not
  * yet destroyed). CTPOOL_INVALID is a silent no-op. Any other stale
  * handle - one already destroyed, whether by an earlier, completed call
  * to this same function or concurrently by another thread racing this one
  * right now - a forged value, or garbage, is a FATAL ERROR: this function
- * calls fatal_err() (abort()/SIGABRT) rather than risk a use-after-free or
+ * calls ccol_fatal_err() (abort()/SIGABRT) rather than risk a use-after-free or
  * double-free, for both a purely sequential double-destroy and a
  * temporally-overlapping concurrent one.
  *
@@ -199,7 +210,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
 /**
  * @brief Declare an uninitialised pool variable
  *
- * Must be followed by ctpool_construct or a create_cthread_pool* call.
+ * Must be followed by ctpool_construct or a ccol_create_cthread_pool* call.
  */
 #define ctpool_declare(name) ctpool name
 
@@ -210,7 +221,7 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
   ctpool name _ccol_destructor(___ctpool_destroy) = CTPOOL_INVALID
 
 /**
- * @brief Declare and initialise in one step; fatal_err on failure
+ * @brief Declare and initialise in one step; ccol_fatal_err on failure
  *
  * Example:
  * @code
@@ -224,25 +235,27 @@ static inline __attribute__((always_inline)) void ___ctpool_destroy(
   ctpool name = CTPOOL_INVALID;                                               \
   do {                                                                        \
     char *_ctp_err = NULL;                                                    \
-    (name) = create_cthread_pool((num_threads), (queue_capacity), &_ctp_err); \
+    (name) =                                                                  \
+        ccol_create_cthread_pool((num_threads), (queue_capacity), &_ctp_err); \
     if (!(name)) {                                                            \
-      fatal_err("ctpool_construct('%s'): %s", #name,                          \
-                _ctp_err ? _ctp_err : "unknown error");                       \
+      ccol_fatal_err("ctpool_construct('%s'): %s", #name,                     \
+                     _ctp_err ? _ctp_err : "unknown error");                  \
     }                                                                         \
   } while (0)
 
 /**
- * @brief Declare, initialise, and auto-destroy on scope exit; fatal_err on
+ * @brief Declare, initialise, and auto-destroy on scope exit; ccol_fatal_err on
  *        failure
  */
 #define ctpool_construct_scoped(name, num_threads, queue_capacity)            \
   ctpool name _ccol_destructor(___ctpool_destroy) = CTPOOL_INVALID;           \
   do {                                                                        \
     char *_ctp_err = NULL;                                                    \
-    (name) = create_cthread_pool((num_threads), (queue_capacity), &_ctp_err); \
+    (name) =                                                                  \
+        ccol_create_cthread_pool((num_threads), (queue_capacity), &_ctp_err); \
     if (!(name)) {                                                            \
-      fatal_err("ctpool_construct_scoped('%s'): %s", #name,                   \
-                _ctp_err ? _ctp_err : "unknown error");                       \
+      ccol_fatal_err("ctpool_construct_scoped('%s'): %s", #name,              \
+                     _ctp_err ? _ctp_err : "unknown error");                  \
     }                                                                         \
   } while (0)
 
@@ -527,3 +540,5 @@ size_t ctpool_pending_count(ctpool pool);
  * handle.
  */
 size_t ctpool_active_count(ctpool pool);
+
+#pragma GCC visibility pop

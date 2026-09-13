@@ -73,22 +73,21 @@ ___csort__define_default_integral_comparison_proc(unsigned long long,
  * operand; the naive (a>b)-(a<b) idiom used for every other numeric type
  * above therefore silently reports a NaN as "equal" to every other value it
  * is compared against, including two completely unrelated non-NaN values
- * that merely happen to straddle it in the collection being sorted. Left
- * unfixed, this does not merely leave the NaN's own position unspecified: it
- * corrupts the relative order of the surrounding non-NaN elements too, since
- * a merge step comparing a real value against that NaN is told they are
- * "equal" and picks a side based on that false premise rather than on the
- * real values still waiting on the other side. Reproduced directly against
- * the built library before this fix: csort_sort() on
- * {9, NaN, 1, 4, NaN, 2, 7} (double) produced {1, 4, 9, NaN, NaN, 2, 7};
- * the non-NaN subsequence 1, 4, 9, 2, 7 is not sorted, even though every
- * comparison csort_merge() performed returned a value consistent with *some*
- * total order (0 for "equal"), just not a well-defined one. Ordering NaN as
- * greater than every non-NaN value, and equal only to another NaN, restores
- * a real total order; this mirrors cbstmap's own cmp_float_val, which
- * documents and fixes the identical defect for this library's BST map keys.
- * isnan() is a type-generic (C99 <math.h>) macro, so this one macro serves
- * float/double/long double without a per-type variant. */
+ * that merely happen to straddle it in the collection being sorted. Without
+ * an explicit NaN rule, that does not merely leave the NaN's own position
+ * unspecified: it corrupts the relative order of the surrounding non-NaN
+ * elements too, since a merge step comparing a real value against that NaN
+ * is told they are "equal" and picks a side based on that false premise
+ * rather than on the real values still waiting on the other side.
+ * Concretely: csort_sort() on {9, NaN, 1, 4, NaN, 2, 7} (double) would produce
+ * {1, 4, 9, NaN, NaN, 2, 7}, whose non-NaN subsequence 1, 4, 9, 2, 7 is not
+ * sorted, even though every comparison csort_merge() performed returned a
+ * value consistent with *some* total order (0 for "equal"), just not a
+ * well-defined one. Ordering NaN as greater than every non-NaN value, and
+ * equal only to another NaN, restores a real total order; this mirrors
+ * cbstmap's own cmp_float_val, which imposes the identical rule for this
+ * library's BST map keys. isnan() is a type-generic (C99 <math.h>) macro, so
+ * this one macro serves float/double/long double without a per-type variant. */
 #define ___csort__define_default_float_comparison_proc(type, name) \
   int ___csort__get_default_integral_comparison_proc_name(name)(   \
       const void *first, const void *second) {                     \
@@ -145,13 +144,13 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
   for (i = 0; i < n1; i++) {
     void *src = getter_proc(col, left + i);
     void *dst = (unsigned char *)temp_buffer + i * elem_size;
-    mem_cpy(dst, src, elem_size);
+    ccol_mem_cpy(dst, src, elem_size);
   }
 
   for (j = 0; j < n2; j++) {
     void *src = getter_proc(col, mid + 1 + j);
     void *dst = (unsigned char *)temp_buffer + (n1 + j) * elem_size;
-    mem_cpy(dst, src, elem_size);
+    ccol_mem_cpy(dst, src, elem_size);
   }
 
   // Merge the two subarrays back into col
@@ -165,10 +164,10 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
     void *dst = getter_proc(col, k);
 
     if (comparison_proc(elem_i, elem_j) <= 0) {
-      mem_cpy(dst, elem_i, elem_size);
+      ccol_mem_cpy(dst, elem_i, elem_size);
       i++;
     } else {
-      mem_cpy(dst, elem_j, elem_size);
+      ccol_mem_cpy(dst, elem_j, elem_size);
       j++;
     }
     k++;
@@ -178,7 +177,7 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
   while (i < n1) {
     void *src = (unsigned char *)temp_buffer + i * elem_size;
     void *dst = getter_proc(col, k);
-    mem_cpy(dst, src, elem_size);
+    ccol_mem_cpy(dst, src, elem_size);
     i++;
     k++;
   }
@@ -187,7 +186,7 @@ static void csort_merge(void *col, size_t left, size_t mid, size_t right,
   while (j < n1 + n2) {
     void *src = (unsigned char *)temp_buffer + j * elem_size;
     void *dst = getter_proc(col, k);
-    mem_cpy(dst, src, elem_size);
+    ccol_mem_cpy(dst, src, elem_size);
     j++;
     k++;
   }
@@ -219,42 +218,42 @@ static bool csort_mergesort_iterative(void *col, size_t low, size_t high,
 
   size_t length = high - low + 1;
 
-  // Reject any length exceeding max_elem_count (2^63 on a 64-bit size_t)
-  // before doing anything else. The bottom-up loop below doubles curr_size
-  // (1, 2, 4, ..., up to the largest power of two less than length) and
-  // relies on curr_size eventually meeting or exceeding length to stop. For
-  // length > max_elem_count, that doubling sequence reaches
-  // curr_size == max_elem_count while curr_size < length still holds, so the
-  // loop body runs once more and curr_size *= 2 then overflows all the way
-  // around to 0; after which curr_size < length holds forever (0 doubled
-  // is still 0) and the loop can never terminate.
+  // Reject any length exceeding ccol_max_elem_count (2^63 on a 64-bit size_t)
+  // before doing anything else. The bottom-up loop below doubles curr_size (1,
+  // 2, 4, ..., up to the largest power of two less than length) and relies on
+  // curr_size eventually meeting or exceeding length to stop. For length >
+  // ccol_max_elem_count, that doubling sequence reaches curr_size ==
+  // ccol_max_elem_count while curr_size < length still holds, so the loop body
+  // runs once more and curr_size *= 2 then overflows all the way around to 0;
+  // after which curr_size < length holds forever (0 doubled is still 0) and the
+  // loop can never terminate.
   //
   // The multiplication guard just below this one (length > SIZE_MAX /
   // elem_size) does NOT make this check redundant, and elem_size == 1 is
   // specifically why: for elem_size == 1, SIZE_MAX / elem_size == SIZE_MAX
-  // itself, so that guard rejects nothing on the basis of size at all;
-  // every length up to SIZE_MAX sails through it and would reach the
-  // doubling loop above with no bound whatsoever were this check not here.
-  // (elem_size >= 2 is fully covered by the multiplication guard alone,
-  // since SIZE_MAX / elem_size is then already below max_elem_count, so this
-  // check's rejection range for those elem_size values is empty; elem_size
-  // == 0 is a different, unrelated case entirely; it never reaches this
-  // loop at all regardless of length, via its own dedicated short-circuit
-  // immediately below, so it is not what makes this check load-bearing
-  // either.) elem_size == 1 is therefore the one case this check exists to
-  // cover on its own, and the one a regression test for it must actually
-  // exercise (see csort_sort_rejects_length_exceeding_max_elem_count_for_
-  // nonzero_elem_size in tests/csort/tests.c).
+  // itself, so that guard rejects nothing on the basis of size at all; every
+  // length up to SIZE_MAX sails through it and would reach the doubling loop
+  // above with no bound whatsoever were this check not here. (elem_size >= 2 is
+  // fully covered by the multiplication guard alone, since SIZE_MAX / elem_size
+  // is then already below ccol_max_elem_count, so this check's rejection range
+  // for those elem_size values is empty; elem_size == 0 is a different,
+  // unrelated case entirely; it never reaches this loop at all regardless of
+  // length, via its own dedicated short-circuit immediately below, so it is not
+  // what makes this check load-bearing either.) elem_size == 1 is therefore the
+  // one case this check exists to cover on its own, and the one a regression
+  // test for it must actually exercise (see
+  // csort_sort_rejects_length_exceeding_max_elem_count_for_ nonzero_elem_size
+  // in tests/csort/tests.c).
   //
-  // Every other container in this library already refuses to grow past
-  // max_elem_count for the same underlying reason (see cvector_push_back,
-  // cvector_reserve, cvector_append_array); csort had no equivalent cap on
-  // its own length parameter. max_elem_count itself is never reachable by
-  // this check (the doubling sequence's last body execution is at
-  // curr_size == max_elem_count / 2, which then doubles to exactly
-  // max_elem_count and stops there without overflowing), so only lengths
+  // Every other container in this library refuses to grow past
+  // ccol_max_elem_count for the same underlying reason (see cvector_push_back,
+  // cvector_reserve, cvector_append_array); this check is csort's own
+  // equivalent cap on its length parameter. ccol_max_elem_count itself is never
+  // reachable by this check (the doubling sequence's last body execution is at
+  // curr_size == ccol_max_elem_count / 2, which then doubles to exactly
+  // ccol_max_elem_count and stops there without overflowing), so only lengths
   // strictly greater than it are rejected.
-  if (length > max_elem_count) {
+  if (length > ccol_max_elem_count) {
     return false;
   }
 
@@ -277,13 +276,13 @@ static bool csort_mergesort_iterative(void *col, size_t low, size_t high,
 
   // Guard the temp-buffer size computation against size_t overflow before
   // ever multiplying: length * elem_size wrapping around would hand
-  // _mem_alloc a tiny, wrapped size while every merge pass below still
+  // _ccol_mem_alloc a tiny, wrapped size while every merge pass below still
   // writes/reads full elem_size-sized elements at indices derived from the
   // real, un-wrapped length, corrupting heap memory past the undersized
   // buffer. Every other count * elem_size computation in this library
   // (cvector_create_full, scale_the_cvector_size_up, cvector_reserve, ...)
-  // already guards this same multiplication the same way; this was the one
-  // remaining unguarded one in the merge sort's own call chain.
+  // guards this same multiplication the same way; this is the merge sort's
+  // own instance of that guard.
   if (length > SIZE_MAX / elem_size) {
     return false;
   }
@@ -299,23 +298,22 @@ static bool csort_mergesort_iterative(void *col, size_t low, size_t high,
   // README.md documents passing one directly (not merely via a container's
   // already-validated cvector_get_mprocs()) as a first-class use case. Left
   // unchecked, a caller-supplied struct with e.g. .malloc set but .free left
-  // NULL let _mem_alloc() below succeed and only crashed later, calling
-  // through a NULL function pointer, when _mem_free() tried to release the
-  // temp buffer; reproduced directly against the built library before this
-  // check was added. Checked here, immediately before the only allocation
-  // this function ever performs, rather than earlier: every trivial-success
-  // path above (col == NULL, length 0/1, elem_size == 0, length exceeding
-  // max_elem_count, the length * elem_size overflow guard just above) never
-  // touches mprocs at all, so none of those documented contracts should
-  // start failing merely because an mprocs this particular call was never
-  // going to use happens to be malformed.
+  // NULL would let _ccol_mem_alloc() below succeed and only crash later,
+  // calling through a NULL function pointer, when _ccol_mem_free() tried to
+  // release the temp buffer. Checked here, immediately before the only
+  // allocation this function ever performs, rather than earlier: every
+  // trivial-success path above (col == NULL, length 0/1, elem_size == 0, length
+  // exceeding ccol_max_elem_count, the length * elem_size overflow guard just
+  // above) never touches mprocs at all, so none of those documented contracts
+  // should start failing merely because an mprocs this particular call was
+  // never going to use happens to be malformed.
   if (!ccol_verify_memmgmt_procs(mprocs, (char **)NULL)) {
     return false;
   }
 
   // Allocate temporary buffer for merging
   // This buffer will be reused for all merge operations
-  void *temp_buffer = _mem_alloc(mprocs, length * elem_size);
+  void *temp_buffer = _ccol_mem_alloc(mprocs, length * elem_size);
   if (!temp_buffer) {
     // Failed to allocate temporary buffer, cannot sort. The collection is
     // still in its original, unmodified order at this point (no merge has
@@ -353,7 +351,7 @@ static bool csort_mergesort_iterative(void *col, size_t low, size_t high,
   }
 
   // Free the temporary buffer
-  _mem_free(mprocs, temp_buffer);
+  _ccol_mem_free(mprocs, temp_buffer);
   return true;
 }
 
@@ -362,8 +360,7 @@ static bool csort_mergesort_iterative(void *col, size_t low, size_t high,
 /* ========================================================================== */
 
 /* Public entry point for csort. Validates inputs, then delegates to the
- * iterative bottom-up mergesort. Despite the name inherited from early
- * development, this is a stable mergesort, not quicksort. */
+ * iterative bottom-up mergesort: a stable sort, not a quicksort. */
 bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
                          csort_item_getter_proc_t getter_proc,
                          ccol_comparison_proc_t comparison_proc,

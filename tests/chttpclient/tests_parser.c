@@ -29,10 +29,9 @@ SOFTWARE.
  * cannot reach (its mock server only ever sends well-formed responses). See
  * tests.c/tests_tls.c for the "does real traffic still work" end-to-end
  * coverage; this file is purely about the parser's own correctness in
- * isolation. The "stream" test group (chttp1_stream_t, added alongside
- * request-mode parsing) does use local AF_UNIX socketpairs, but only to
- * exercise its own read/write/poll logic directly; no chttpclient.c, no
- * TLS, no real network traffic.
+ * isolation. The "stream" test group (chttp1_stream_t) does use local
+ * AF_UNIX socketpairs, but only to exercise its own read/write/poll logic
+ * directly; no chttpclient.c, no TLS, no real network traffic.
  */
 
 #include <chttp1_parser.h>
@@ -329,9 +328,9 @@ TEST(keep_alive, http_1_0_connection_keep_alive_overrides_default) {
 }
 
 TEST(keep_alive, version_greater_than_1_with_zero_minor_defaults_keep_alive) {
-  /* Regression test: chttp1_should_keep_alive used to test
+  /* Regression test: chttp1_should_keep_alive must not test
    * "http_major > 0 && http_minor > 0" to decide "HTTP/1.1 or later", which
-   * incorrectly treated any version with a zero minor component (e.g. a
+   * treats any version with a zero minor component (e.g. a
    * literal "HTTP/2.0" status line, which this parser's grammar accepts;
    * see status_line.any_major_minor_digit_accepted) as HTTP/1.0-or-earlier,
    * requiring an explicit "Connection: keep-alive" token no real server of
@@ -603,13 +602,13 @@ TEST(headers, max_total_header_bytes_override_rejects_below_builtin_default) {
 TEST(headers,
      request_line_itself_counts_against_max_total_header_bytes_override) {
   /* Regression test: chttpsvr_config_t.max_header_bytes is documented as
-   * bounding "request line + all header lines", but total_header_bytes
-   * used to only ever be incremented by process_header_line, never by the
-   * request/status line itself; so a request-target far larger than a
-   * configured cap was still accepted, bounded only by the much larger
+   * bounding "request line + all header lines", so total_header_bytes must
+   * be incremented by the request/status line itself, not only by
+   * process_header_line. Otherwise a request-target far larger than a
+   * configured cap is still accepted, bounded only by the much larger
    * CHTTP1_MAX_LINE_LEN. A request line alone, comfortably over the tiny
-   * override below but nowhere near CHTTP1_MAX_LINE_LEN, must now be
-   * rejected before any header is even seen. */
+   * override below but nowhere near CHTTP1_MAX_LINE_LEN, must be rejected
+   * before any header is even seen. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -683,9 +682,11 @@ TEST(framing, content_length_decimal_overflow_rejected) {
 }
 
 TEST(framing, transfer_encoding_not_chunked_reads_until_eof) {
-  /* RFC 7230 SS3.3.3: for a RESPONSE (never a request, which this parser
-   * never parses), a Transfer-Encoding whose last token isn't "chunked"
-   * means the body is read until the connection closes; not rejected. */
+  /* RFC 7230 SS3.3.3: for a RESPONSE, a Transfer-Encoding whose last token
+   * isn't "chunked" means the body is read until the connection closes; it
+   * is not rejected. A REQUEST in the same situation is rejected instead
+   * (see the request_body_framing group), since it has no EOF-delimited
+   * framing to fall back on. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1065,14 +1066,15 @@ TEST(finish_matrix, inside_eof_delimited_body_is_safe_with_callback) {
 
 TEST(finish_matrix,
      calling_finish_twice_after_eof_delimited_body_does_not_refire_callback) {
-  /* Regression test: the CHTTP1_FINISH_SAFE_WITH_CB case never updated
-   * finish_state (only parser->state) after firing on_message_complete, so
-   * finish_state stayed CHTTP1_FINISH_SAFE_WITH_CB forever, and a second
-   * finish() call on an already-CHTTP1_ST_MESSAGE_DONE parser used to
-   * re-enter that same branch and re-invoke on_message_complete, violating
-   * that callback's own "fired exactly once" contract and this function's
-   * own documented "already at a clean boundary returns CHTTP1_OK"
-   * contract. */
+  /* The CHTTP1_FINISH_SAFE_WITH_CB case must update finish_state (not only
+   * parser->state) after firing on_message_complete. With finish_state left
+   * at CHTTP1_FINISH_SAFE_WITH_CB, a second finish() call on an
+   * already-CHTTP1_ST_MESSAGE_DONE parser re-enters that same branch and
+   * re-invokes on_message_complete, violating both that callback's own
+   * "fired exactly once" contract and this function's own documented
+   * "already at a clean boundary returns CHTTP1_OK" contract. The two extra
+   * finish() calls below are what makes this test non-vacuous: each one
+   * must report CHTTP1_OK without firing the callback again. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1234,9 +1236,9 @@ TEST(request_line, split_across_every_byte_boundary) {
 TEST(request_line, single_leading_blank_line_tolerated) {
   /* RFC 7230 SS3.5: a server SHOULD ignore at least one empty line received
    * prior to the request-line (some clients send a stray CRLF after a POST
-   * body). Regression test: this used to hard-reject with PH_ERROR
-   * (method_len == 0), closing an otherwise-healthy keep-alive/pipelined
-   * connection over one stray CRLF. */
+   * body). Regression test: this must not hard-reject with PH_ERROR
+   * (method_len == 0), which closes an otherwise-healthy keep-alive/
+   * pipelined connection over one stray CRLF. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -1331,9 +1333,9 @@ TEST(request_body_framing, chunked_request_body) {
 }
 
 TEST(request_body_framing, trailer_name_not_whitelisted) {
-  /* Confirmed decision: no trailer-name whitelist for requests; any
-   * trailer name is accepted, matching the client parser's own
-   * pre-existing, unrestricted trailer handling. */
+  /* There is no trailer-name whitelist for requests: any trailer name is
+   * accepted, matching response mode's own unrestricted trailer
+   * handling. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -1351,7 +1353,8 @@ TEST(request_body_framing,
    * server MUST reject it outright rather than silently treating it as
    * bodyless (the request/response asymmetry means a request has no
    * EOF-delimited fallback the way a response does). Regression test: this
-   * used to be silently accepted as if Transfer-Encoding were absent. */
+   * must be rejected, not silently accepted as if Transfer-Encoding were
+   * absent. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -1366,8 +1369,8 @@ TEST(
    * header line at a time, so "chunked" claimed as final by an EARLIER
    * Transfer-Encoding line and then followed by a SECOND Transfer-Encoding
    * line (RFC 7230 SS3.2.2: repeated header lines are one concatenated
-   * comma-separated list, in order) used to bypass that check entirely,
-   * since each line was validated in isolation. */
+   * comma-separated list, in order) must not bypass that check, which is
+   * what validating each line in isolation would do. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test_request(&parser, &ctx);
@@ -1397,10 +1400,10 @@ TEST(request_body_framing,
 TEST(request_body_framing,
      response_mode_final_coding_not_chunked_still_reads_until_eof) {
   /* Response mode's own, separate, documented scope reduction (see
-   * value_ends_with_chunked's doc comment) must be unaffected by the
-   * request-mode-only rejection added above: a response with a
-   * Transfer-Encoding whose final coding isn't "chunked" still falls back
-   * to EOF-delimited framing, exactly as before. */
+   * value_ends_with_chunked's doc comment) is independent of the
+   * request-mode-only rejection covered above: a response with a
+   * Transfer-Encoding whose final coding isn't "chunked" falls back to
+   * EOF-delimited framing rather than being rejected. */
   chttp1_parser_t parser;
   test_ctx_t ctx;
   init_test(&parser, &ctx);
@@ -1800,24 +1803,21 @@ static void make_pair(int fds[2]) {
  * blocking socketpair; SSL_accept/SSL_connect's internal BIO_read can
  * itself block waiting for bytes the peer never gets a chance to send,
  * since driving that peer's own step is exactly what this thread would do
- * next, if it weren't already stuck. Confirmed via gdb (a real hang
- * reproduced during this test's own development, not a hypothetical): the
- * backtrace showed ctls_conn_handshake_step blocked inside a plain
- * BIO_read -> read(2) syscall. The plaintext "stream" tests above don't
- * need this: they always gate any read/write with chttp1_stream_read/
- * _write's own poll(2) call first (or, for the handful of direct read(2)/
- * write(2) calls, only ever touch a fd after the peer has already
- * synchronously written to it in the same thread), so blocking-mode
- * sockets never actually block there. */
+ * next, if it weren't already stuck. Under gdb that hang shows up as
+ * ctls_conn_handshake_step blocked inside a plain BIO_read -> read(2)
+ * syscall. The plaintext "stream" tests above don't need this: they always
+ * gate any read/write with chttp1_stream_read/_write's own poll(2) call
+ * first (or, for the handful of direct read(2)/write(2) calls, only ever
+ * touch a fd after the peer has already synchronously written to it in the
+ * same thread), so blocking-mode sockets never actually block there. */
 static void make_nonblocking_pair(int fds[2]) {
   make_pair(fds);
   for (int i = 0; i < 2; i++) {
     /* An unchecked failure here would leave fds[i] blocking; this file's own
      * comment right above this function explains why that specifically
-     * deadlocks tls_drive_handshake()'s single-threaded ping-pong loop
-     * (confirmed via gdb during this test's own development), so a silent
-     * fcntl() failure here would turn into a real, hard-to-diagnose hang
-     * rather than a clean, immediate test failure. */
+     * deadlocks tls_drive_handshake()'s single-threaded ping-pong loop, so a
+     * silent fcntl() failure here would turn into a real, hard-to-diagnose
+     * hang rather than a clean, immediate test failure. */
     int flags = fcntl(fds[i], F_GETFL, 0);
     REQUIRE_GE(flags, 0);
     REQUIRE_EQ(fcntl(fds[i], F_SETFL, flags | O_NONBLOCK), 0);
@@ -1901,24 +1901,23 @@ TEST(stream, read_timeout_when_nothing_available) {
   close(fds[1]);
 }
 
-/* Regression coverage for timeout_ms == 0's own documented contract ("return
- * immediately if fd is not already readable/writable right now"): a bug
- * found via code review had both chttp1_stream_write (both its TLS and
- * plaintext branches, via their one shared retry loop) and chttp1_stream_
- * read's plaintext branch compute a fresh "now + timeout_ms" deadline and
- * then immediately re-derive "time remaining until it" via a SECOND
- * clock_gettime() call, before ever calling poll(2) or attempting the real
- * I/O; for timeout_ms == 0 specifically, any nonzero elapsed time between
- * those two clock reads (guaranteed, however small) already exceeds a
- * zero-length budget, so that recomputed value was unconditionally <= 0.
- * The result: both functions unconditionally reported a timeout for
- * timeout_ms == 0, even when the fd was already ready right now, without
+/* Coverage for timeout_ms == 0's own documented contract ("return
+ * immediately if fd is not already readable/writable right now").
+ * chttp1_stream_write (both its TLS and plaintext branches, via their one
+ * shared retry loop) and chttp1_stream_read's plaintext branch must not
+ * compute a fresh "now + timeout_ms" deadline and then immediately
+ * re-derive "time remaining until it" via a SECOND clock_gettime() call
+ * before ever calling poll(2) or attempting the real I/O: for
+ * timeout_ms == 0 specifically, any nonzero elapsed time between two such
+ * clock reads (guaranteed, however small) already exceeds a zero-length
+ * budget, so the recomputed value is unconditionally <= 0 and both
+ * functions report a timeout even when the fd is ready right now, without
  * ever calling poll(2) or attempting the real read(2)/write(2) at all. The
  * three tests below construct exactly that "already ready" condition (data
  * already sitting in the socket's receive buffer for read; an ordinary,
  * freshly-connected socketpair, which is always immediately writable, for
- * write) and confirm a real transfer happens instead of a synthesized
- * timeout. */
+ * write), so they are non-vacuous: a synthesized timeout in place of a real
+ * transfer fails them. */
 TEST(stream, read_timeout_zero_returns_data_when_already_available) {
   int fds[2];
   make_pair(fds);
@@ -1970,7 +1969,7 @@ TEST(stream, write_basic) {
 
 TEST(stream, write_timeout_zero_succeeds_when_already_writable) {
   /* See read_timeout_zero_returns_data_when_already_available's own doc
-     comment above for the full account of the bug this pins. A freshly
+     comment above for the full account of the behaviour this pins. A freshly
      connected socketpair endpoint is always immediately writable (its send
      buffer starts empty), so this is genuinely "writable right now" with no
      wait required. */
@@ -2051,15 +2050,15 @@ TEST(stream, push_back_leftover_zero_len_is_a_noop) {
 }
 
 TEST(stream, push_back_leftover_overflow_guard_rejects_without_allocating) {
-  /* Regression test: total = len + existing had no overflow check before
-   * allocating `total` bytes; two independently sized values (a freshly
-   * pushed-back chunk and whatever carry-over the stream already held)
-   * summing close to SIZE_MAX would previously proceed with a wrapped
-   * allocation and then write far past it. existing is faked to SIZE_MAX
-   * directly on the struct (carry left NULL; no real buffer of that size is
-   * ever allocated or touched), matching this project's own established
-   * "assert the guard rejects before any real work happens" pattern for
-   * this exact class of overflow guard. */
+  /* `total = len + existing` needs its own overflow check before `total`
+   * bytes are allocated: two independently sized values (a freshly
+   * pushed-back chunk and whatever carry-over the stream already holds)
+   * summing close to SIZE_MAX would otherwise wrap, producing a far too
+   * small allocation that the copy then writes far past. existing is faked
+   * to SIZE_MAX directly on the struct (carry left NULL; no real buffer of
+   * that size is ever allocated or touched), matching this project's own
+   * established "assert the guard rejects before any real work happens"
+   * pattern for this exact class of overflow guard. */
   chttp1_stream_t s;
   memset(&s, 0, sizeof(s));
   s.prepared = true;

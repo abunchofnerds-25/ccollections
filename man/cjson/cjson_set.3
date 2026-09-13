@@ -22,8 +22,8 @@ Accepted C types for val:
   string literal ("...")     -> CJSON_STRING
   NULL                       -> CJSON_NULL
 
-Any other C type (long double, a struct, an enum, or any pointer
-type other than char * / const char *) is rejected: cjson_set
+Any other C type (long double, a struct, or any pointer type other
+than char * / const char *) is rejected: cjson_set
 returns ccol_invalid_args and the target leaf is left untouched
 (created leaves are not left behind as CJSON_NULL for an unsupported
 type; an existing leaf's value is not overwritten).

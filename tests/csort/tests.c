@@ -260,8 +260,9 @@ TEST(csort, cvector_string_sort_with_random_values) {
   for (i = 0; i < num_sample; i++) {
     /* rand() % max_str_lenght gives lengths in [0, max_str_lenght - 1], so the
      * generated string (plus its null terminator) always fits in the 100-byte
-     * buffer. The previous floating-point formula could yield length == 100
-     * when rand() == RAND_MAX, causing a one-byte stack overflow. */
+     * buffer. A floating-point scaling of rand() would instead yield
+     * length == 100 when rand() == RAND_MAX, overflowing that buffer by one
+     * byte. */
     create_random_str(rand_strings[i], (size_t)(rand() % max_str_lenght));
     cvector_push_back(cvec, &(char *){rand_strings[i]});
   }
@@ -396,9 +397,8 @@ TEST(csort, c_int_array_sort) {
 // comparator for a `signed char` x, on par with every other integral type
 // already covered above (including the plain, platform-signedness-dependent
 // `char`), and that comparator must produce a genuinely signed ordering, not
-// the raw-byte-pattern ordering a missing default (falling back to a NULL
-// comparator, or (if such a gap were ever reintroduced) an unsigned
-// comparator) would produce.
+// the raw-byte-pattern ordering a missing default (a NULL comparator, or an
+// unsigned one) would produce.
 // csort_item_getter_proc_t requires exactly void *(*)(void *, size_t);
 // cvector_at() itself takes a cvec (not a void *) as its first parameter, so
 // casting cvector_at directly to csort_item_getter_proc_t and calling it
@@ -608,13 +608,13 @@ TEST(csort, csort_sort_rejects_length_elem_size_overflow_without_allocating) {
   // comparison the guard itself uses) rather than a hardcoded literal, so
   // this stays a genuine overflow at every pointer width, not just 64-bit.
   // Deliberately +1, not +2: for elem_size == 2, SIZE_MAX/elem_size + 1 is
-  // exactly max_elem_count, which passes the separate, earlier
-  // length > max_elem_count guard (checked before this one) while still
+  // exactly ccol_max_elem_count, which passes the separate, earlier
+  // length > ccol_max_elem_count guard (checked before this one) while still
   // genuinely tripping this overflow guard. A +2 length is *also* rejected,
-  // but by the max_elem_count guard instead, since it exceeds max_elem_count
+  // but by the ccol_max_elem_count guard instead, since it exceeds that cap
   // too; which would leave this test unable to tell the two guards apart,
-  // giving no regression coverage for this overflow guard specifically were
-  // it ever removed or broken.
+  // giving no coverage for this overflow guard specifically were it ever
+  // removed or broken.
   size_t elem_size = 2;
   size_t length = SIZE_MAX / elem_size + 1;
 
@@ -635,10 +635,9 @@ static void *_csort_zero_elem_malloc(size_t size) {
   // Mimics a conforming allocator that returns NULL for a zero-byte
   // request (malloc(0) is explicitly implementation-defined by the C
   // standard; glibc happens to return a non-NULL pointer, but nothing
-  // requires that). If csort_sort() ever went back to actually issuing
-  // this allocation for elem_size == 0, this would deterministically make
-  // it misreport OOM regardless of which libc the suite happens to run
-  // against.
+  // requires that). If csort_sort() ever did issue this allocation for
+  // elem_size == 0, this would deterministically make it misreport OOM
+  // regardless of which libc the suite happens to run against.
   if (size == 0) {
     return NULL;
   }
@@ -705,7 +704,7 @@ TEST(csort, csort_sort_zero_elem_size_reports_success_without_allocating) {
 // opposed to a struct field used through an explicit comparator, the
 // documented, supported pattern) are both covered indirectly elsewhere in
 // this codebase (cvector's own sort_unsupported_type_is_fatal_with_clear_
-// diagnostic test, via cvec_sort's fatal_err path), but never directly
+// diagnostic test, via cvec_sort's ccol_fatal_err path), but never directly
 // against this macro's own return value within this module's own suite.
 TEST(csort, get_default_comparison_proc_returns_null_for_unsupported_types) {
   bool dummy_bool = true;
@@ -717,11 +716,12 @@ TEST(csort, get_default_comparison_proc_returns_null_for_unsupported_types) {
   REQUIRE_EQ((void *)cmp, NULL);
 }
 
-// The index-arithmetic bugs (int -> size_t) only manifest for collections
-// larger than INT_MAX elements and cannot be exercised directly. The tests
-// below guard against regressions by running the algorithm over a much
-// larger range of sizes than the rest of the suite (which tops out at 10
-// elements) and verifying the stability property that mergesort claims.
+// An index-arithmetic width mistake (int where size_t is required) only
+// misbehaves for collections larger than INT_MAX elements, which cannot be
+// exercised directly. The tests below narrow that blind spot by running the
+// algorithm over a much larger range of sizes than the rest of the suite
+// (which tops out at 10 elements) and verifying the stability property that
+// mergesort claims.
 
 TEST(csort, large_collection_sort) {
   // 1000 elements drives ~10 iterations of the outer doubling loop.
@@ -824,15 +824,14 @@ TEST(csort, sort_negative_integers) {
 // instantiations) only ever pushes rand() % modulus_value, which is
 // non-negative for every signed type it is instantiated with. All of these
 // comparators are generated from the same shared macro
-// (___csort__define_default_integral_comparison_proc), so a regression
-// specific to one of the untested types is unlikely, but per this project's
-// own standard for test rigor (see e.g. cbstmap/cjson's own dedicated
-// plain-char-signedness coverage), an actual type-specific typo would still
-// go undetected here without dedicated negative-value tests for each type
-// short/long/long_long are unambiguously signed in C (unlike plain char,
-// see sort_full_range_chars below), so a literal negative value set mirroring
-// sort_negative_integers is portable across every platform this library
-// targets.
+// (___csort__define_default_integral_comparison_proc), so a defect specific
+// to one of those types is unlikely, but per this project's own standard for
+// test rigor (see e.g. cbstmap/cjson's own dedicated plain-char-signedness
+// coverage), a type-specific typo would go undetected without dedicated
+// negative-value tests per type. short/long/long_long are unambiguously
+// signed in C (unlike plain char, see sort_full_range_chars below), so a
+// literal negative value set mirroring sort_negative_integers is portable
+// across every platform this library targets.
 
 TEST(csort, sort_negative_shorts) {
   short values[] = {0, -5, 3, -100, 42, -1, 7, -3};
@@ -900,14 +899,14 @@ TEST(csort, sort_negative_long_longs) {
 // literal negative value like the ones used above for short/long/long_long
 // is not portable here: on an unsigned-char platform, assigning e.g. -100 to
 // a char is well-defined (it wraps to 156) but is no longer testing what it
-// looks like it is testing. Every char coverage this suite had before this
-// test (the define_integer_type_test(char, char, 100) instantiation) only
-// ever pushes rand() % 100, i.e. values in [0, 99]; representable
-// identically as signed or unsigned char, so it cannot distinguish a
-// signedness-ordering regression at all. This test is written to be
-// meaningful on both kinds of platform instead: it spans char's own full
-// representable range (CHAR_MIN..CHAR_MAX, whatever those numerically are
-// here) via symbolic expressions rather than assumed-signed literals, and
+// looks like it is testing. This suite's other char coverage (the
+// define_integer_type_test(char, char, 100) instantiation) only ever pushes
+// rand() % 100, i.e. values in [0, 99]; representable identically as signed
+// or unsigned char, so it cannot distinguish a signedness-ordering
+// regression at all. This test is written to be meaningful on both kinds of
+// platform instead: it spans char's own full representable range
+// (CHAR_MIN..CHAR_MAX, whatever those numerically are here) via symbolic
+// expressions rather than assumed-signed literals, and
 // checks ascending order via plain <= on char values directly, which
 // follows the platform's own comparison semantics automatically.
 TEST(csort, sort_full_range_chars) {
@@ -941,9 +940,9 @@ TEST(csort, sort_full_range_chars) {
 // _long_double_sort) only ever generate non-negative values via
 // rand()/RAND_MAX, unlike sort_negative_integers just above, which exercises
 // the int comparator against negative values explicitly. The default
-// comparators use the same (a > b) - (a < b) idiom regardless of type, but
-// nothing in this suite previously verified that negative floating-point
-// values sort correctly (as opposed to merely not crashing). Values below
+// comparators use the same (a > b) - (a < b) idiom regardless of type, and
+// the three tests below are what verify that negative floating-point values
+// genuinely sort correctly, as opposed to merely not crashing. Their values
 // are exact binary fractions (sums of negative powers of two) so REQUIRE_EQ
 // can check them without floating-point rounding flakiness.
 
@@ -1096,13 +1095,13 @@ TEST(csort, c_str_array_sort) {
   REQUIRE_STREQ(arr[4], "date");
 }
 
-// A length exceeding max_elem_count must be rejected before any allocation
+// A length exceeding ccol_max_elem_count must be rejected before any allocation
 // is attempted and before getter_proc/comparison_proc are ever called
 // (exactly like the length * elem_size overflow guard just above), but this
 // rejection must hold even when elem_size == 0, a case the overflow guard
 // deliberately never rejects on its own (a zero elem_size can never
 // overflow length * elem_size, so that guard alone leaves length completely
-// unbounded). Without a dedicated cap here, this exact combination let the
+// unbounded). Without a dedicated cap here, this exact combination lets the
 // sort's own internal bottom-up doubling counter wrap around size_t's range
 // and spin forever instead of ever finishing or reporting an error.
 TEST(csort, csort_sort_rejects_length_exceeding_max_elem_count) {
@@ -1116,7 +1115,7 @@ TEST(csort, csort_sort_rejects_length_exceeding_max_elem_count) {
   g_overflow_test_alloc_called = false;
 
   int dummy_collection;  // address only; never dereferenced by this test
-  bool result = csort_sort(&dummy_collection, max_elem_count + 1, 0,
+  bool result = csort_sort(&dummy_collection, ccol_max_elem_count + 1, 0,
                            _csort_overflow_test_getter,
                            _csort_overflow_test_cmp, &counting);
 
@@ -1126,32 +1125,33 @@ TEST(csort, csort_sort_rejects_length_exceeding_max_elem_count) {
   REQUIRE_FALSE(g_overflow_test_alloc_called);
 }
 
-// The test above only ever exercises the length > max_elem_count guard with
-// elem_size == 0, a case where the guard is not actually the thing doing the
-// work: elem_size == 0 has its own, entirely separate short-circuit (see
+// The test above only ever exercises the length > ccol_max_elem_count guard
+// with elem_size == 0, a case where the guard is not actually the thing doing
+// the work: elem_size == 0 has its own, entirely separate short-circuit (see
 // csort_sort_zero_elem_size_reports_success_without_allocating) that returns
 // success without ever reaching the doubling loop this guard exists to
 // protect, regardless of whether this guard is present. For elem_size >= 2,
 // the length * elem_size overflow guard immediately below this one already
-// independently rejects any length anywhere near max_elem_count on its own
-// (SIZE_MAX / elem_size is already below max_elem_count for every
+// independently rejects any length anywhere near ccol_max_elem_count on its
+// own (SIZE_MAX / elem_size is already below ccol_max_elem_count for every
 // elem_size >= 2), so this guard's own rejection range for those elem_size
 // values is empty too. elem_size == 1 is the ONE value for which neither of
 // those is true: SIZE_MAX / 1 == SIZE_MAX, so the overflow guard rejects
 // nothing on the basis of size at all for elem_size == 1, leaving this
-// length > max_elem_count check as the sole thing standing between a length
-// in (max_elem_count, SIZE_MAX] and the doubling loop's own curr_size *= 2
-// overflow-to-zero infinite loop. Without a test exercising exactly this
-// combination (nonzero elem_size, length > max_elem_count), a regression
-// that removed or misordered this guard would very likely still report
-// false for the elem_size == 0 case above (since that case never depended
-// on this guard to begin with) and would very likely still report false for
-// a nonzero-elem_size case too, purely because the real allocator/OS would
-// fail an allocation this large anyway (virtual address space exhaustion,
-// not the guard); masking the missing check rather than catching it. This
-// test closes that gap the same way the elem_size == 0 test already proves
-// its own guard is doing the rejecting: by asserting the allocator was never
-// even invoked, not merely that the overall result was false.
+// length > ccol_max_elem_count check as the sole thing standing between a
+// length in (ccol_max_elem_count, SIZE_MAX] and the doubling loop's own
+// curr_size *= 2 overflow-to-zero infinite loop. Without a test exercising
+// exactly this combination (nonzero elem_size, length > ccol_max_elem_count),
+// a regression that removed or misordered this guard would very likely still
+// report false for the elem_size == 0 case above (since that case never
+// depended on this guard to begin with) and would very likely still report
+// false for a nonzero-elem_size case too, purely because the real
+// allocator/OS would fail an allocation this large anyway (virtual address
+// space exhaustion, not the guard); masking the missing check rather than
+// catching it. This test closes that gap the same way the elem_size == 0 test
+// already proves its own guard is doing the rejecting: by asserting the
+// allocator was never even invoked, not merely that the overall result was
+// false.
 TEST(csort,
      csort_sort_rejects_length_exceeding_max_elem_count_for_nonzero_elem_size) {
   ccol_memmgmt_procs_t counting = {.malloc = _csort_overflow_test_malloc,
@@ -1164,7 +1164,7 @@ TEST(csort,
   g_overflow_test_alloc_called = false;
 
   int dummy_collection;  // address only; never dereferenced by this test
-  bool result = csort_sort(&dummy_collection, max_elem_count + 1, 1,
+  bool result = csort_sort(&dummy_collection, ccol_max_elem_count + 1, 1,
                            _csort_overflow_test_getter,
                            _csort_overflow_test_cmp, &counting);
 
@@ -1236,11 +1236,10 @@ TEST(csort, csort_sort_null_comparison_proc_is_fatal) {
 // either proc. This is the documented, intentional behavior
 // (___csort_merge_sort's own "Will assert ... unless col is NULL or length
 // is 0 or 1" note already scopes the NULL-proc exemption to exclude
-// elem_size == 0), but it was previously untested; pinned here as a
-// forked-child fatal-path test, mirroring csort_sort_null_getter_proc_is_
-// fatal/csort_sort_null_comparison_proc_is_fatal above, so a future
-// reordering of these two checks cannot silently change this behavior in
-// either direction without a test noticing.
+// elem_size == 0), pinned here as a forked-child fatal-path test, mirroring
+// csort_sort_null_getter_proc_is_fatal/csort_sort_null_comparison_proc_is_
+// fatal above, so a future reordering of these two checks cannot silently
+// change this behavior in either direction without a test noticing.
 TEST(
     csort,
     csort_sort_null_procs_with_zero_elem_size_is_still_fatal_for_non_trivial_length) {
@@ -1272,9 +1271,9 @@ TEST(
 // caller's argument shared a name, every use of the parameter inside the
 // expansion would silently resolve to the macro's own fresh, not-yet
 // -assigned local instead of the caller's real variable, producing a
-// silently wrong (NULL) result with no compiler diagnostic. This mirrors
-// the exact class of bug already found and fixed for cvec_push's own
-// internal locals in the cvector module.
+// silently wrong (NULL) result with no compiler diagnostic. cvec_push's own
+// internal locals in the cvector module are named defensively against this
+// same hazard.
 TEST(csort,
      get_default_comparison_proc_not_shadowed_by_arg_named_comparison_proc) {
   int comparison_proc = 42;
@@ -1293,15 +1292,15 @@ TEST(csort,
 // comparator, for a genuine fixed-size char array (char[N]) such as a
 // `char name[64]` struct field. _Generic's controlling expression undergoes
 // ordinary array-to-pointer decay (C11 6.5.1.1p2/6.3.2.1p3), so a bare
-// is_char_ptr(x) check cannot tell "x really is a char* variable" apart
+// ccol_is_char_ptr(x) check cannot tell "x really is a char* variable" apart
 // from "x is an array that merely decayed to look like one for this one
-// comparison"; reproduced directly against a minimal standalone _Generic
-// snippet before this test was written: is_char_ptr(some_char_array)
-// evaluates to true. Without an explicit !is_char_array(x) exclusion, this
-// macro used to silently hand back csort_default_string_comparison_proc for
-// an array argument; that comparator's contract requires its arguments to
-// point at a stored char* VALUE (it performs one extra pointer indirection,
-// *(const char **)first), not at the array's own inline byte content, so
+// comparison": ccol_is_char_ptr(some_char_array) evaluates to true, as a
+// minimal standalone _Generic snippet confirms. So without an explicit
+// !ccol_is_char_array(x) exclusion, this macro would silently hand back
+// csort_default_string_comparison_proc for an array argument; that
+// comparator's contract requires its arguments to point at a stored char*
+// VALUE (it performs one extra pointer indirection, *(const char **)first),
+// not at the array's own inline byte content, so
 // invoking it against real array data is undefined behavior (an arbitrary
 // pointer built from the array's first sizeof(char*) content bytes,
 // dereferenced), not merely a wrong sort order. NULL is the correct,
@@ -1318,7 +1317,7 @@ TEST(csort, get_default_comparison_proc_returns_null_for_char_array) {
   REQUIRE_EQ((void *)cmp, NULL);
 
   // A genuine char* pointer variable (as opposed to an array) must still be
-  // correctly recognized as a string type and remain unaffected by the fix.
+  // correctly recognized as a string type and remain unaffected by that rule.
   char *p = name;
   cmp = csort_get_default_comparison_proc(p);
   REQUIRE_NE((void *)cmp, NULL);
@@ -1326,13 +1325,13 @@ TEST(csort, get_default_comparison_proc_returns_null_for_char_array) {
 }
 
 // The array-vs-pointer distinction above is not special-cased to plain
-// `char[N]`: is_char_ptr()/is_char_array() (common.h) treat `signed char *`/
-// `unsigned char *` as string-like pointers exactly like `char *`, so a
-// `signed char[N]`/`unsigned char[N]` array must be excluded from
-// csort_default_string_comparison_proc the same way, via the identical
-// !is_char_array(__csort_gdcp_arr_probe) check. Verified correct by
-// inspection when get_default_comparison_proc_returns_null_for_char_array
-// above was added, but never directly exercised until now.
+// `char[N]`: ccol_is_char_ptr()/ccol_is_char_array() (common.h) treat
+// `signed char *`/`unsigned char *` as string-like pointers exactly like
+// `char *`, so a `signed char[N]`/`unsigned char[N]` array must be excluded
+// from csort_default_string_comparison_proc the same way, via the identical
+// !ccol_is_char_array(__csort_gdcp_arr_probe) check. This test and the one
+// below exercise those two spellings directly, rather than leaving them
+// covered only by inspection of the plain-`char[N]` case above.
 TEST(csort, get_default_comparison_proc_returns_null_for_signed_char_array) {
   signed char name[64] = {1, 2, 3, 0};
   ccol_comparison_proc_t cmp = csort_get_default_comparison_proc(name);
@@ -1361,8 +1360,8 @@ TEST(csort, get_default_comparison_proc_returns_null_for_unsigned_char_array) {
 // this, IEEE 754's native `<`/`>` (both false whenever either operand is
 // NaN) would make the naive (a>b)-(a<b) idiom report a NaN as "equal" to
 // everything, including two unrelated non-NaN values it happens to sit
-// between; reproduced directly against the pre-fix library: csort_sort()
-// on {9, NaN, 1, 4, NaN, 2, 7} (double) produced {1, 4, 9, NaN, NaN, 2, 7},
+// between. Without that ordering, csort_sort() on
+// {9, NaN, 1, 4, NaN, 2, 7} (double) produces {1, 4, 9, NaN, NaN, 2, 7},
 // whose non-NaN subsequence 1, 4, 9, 2, 7 is not sorted. This test pins the
 // comparators' own return-value contract directly (all three floating-point
 // types); sort_with_nan_does_not_corrupt_non_nan_order below exercises the
@@ -1383,7 +1382,8 @@ TEST(csort, float_comparators_order_nan_as_greatest_and_equal_only_to_nan) {
   REQUIRE_LT(csort_default_long_double_comparison_proc(&ld_five, &ld_nan), 0);
   REQUIRE_EQ(csort_default_long_double_comparison_proc(&ld_nan, &ld_nan2), 0);
 
-  // Finite values (no NaN involved) must still compare exactly as before.
+  // Finite values (no NaN involved) must still compare by plain numeric
+  // ordering.
   float f_three = 3.0f;
   REQUIRE_LT(csort_default_float_comparison_proc(&f_three, &f_five), 0);
   REQUIRE_GT(csort_default_float_comparison_proc(&f_five, &f_three), 0);
@@ -1487,9 +1487,10 @@ static void _csort_custom_free(void *ptr) {
 // csort_sort_rejects_length_exceeding_max_elem_count, both of which assert
 // the allocator is NEVER called). None of those exercise the actual
 // allocate-then-free round trip a real custom-allocator integration depends
-// on, so a regression that silently fell back to the default heap for the
-// temp buffer would have gone undetected. This checks both the call counts
-// and that the freed pointer matches the one that was allocated.
+// on, so without this test a regression that silently fell back to the
+// default heap for the temp buffer would go undetected. This checks both the
+// call counts and that the freed pointer matches the one that was
+// allocated.
 TEST(csort, csort_sort_uses_the_provided_custom_allocator_for_a_real_sort) {
   ccol_memmgmt_procs_t custom = {.malloc = _csort_custom_malloc,
                                  .calloc = _csort_custom_calloc,
@@ -1532,12 +1533,11 @@ TEST(csort, csort_sort_uses_the_provided_custom_allocator_for_a_real_sort) {
 // ccol_memmgmt_procs_t documents and every other allocator-accepting entry
 // point in this library (cvector_create_full, chmap_create_full, ...)
 // already enforces via ccol_verify_memmgmt_procs() before ever touching such
-// a struct. Reproduced directly against the pre-fix library before this test
-// was written: a struct with .malloc/.calloc/.realloc populated but .free
-// left NULL let the temp-buffer allocation succeed and then crashed calling
-// through the NULL .free function pointer once the sort finished, instead of
-// failing gracefully like every sibling module already does for the
-// identical mistake (mirrors tests/cvector/tests.c's own
+// a struct. Unchecked, a struct with .malloc/.calloc/.realloc populated but
+// .free left NULL lets the temp-buffer allocation succeed and then crashes
+// calling through the NULL .free function pointer once the sort finishes,
+// instead of failing gracefully like every sibling module already does for
+// the identical mistake (mirrors tests/cvector/tests.c's own
 // create_with_invalid_mem_mgmt_procs test, one field at a time). A genuine,
 // non-trivial length (well above the 0/1 trivial-success path, and non-zero
 // elem_size) is used so this is the ONE guard actually being exercised, not

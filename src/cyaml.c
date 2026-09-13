@@ -72,8 +72,8 @@ typedef struct cyaml_node_t {
 
 /* Dynamic string buffer for YAML serialization, backed by common.h's
  * ccol_growbuf_t (the same growable-byte-buffer type cjson.c's own sbuf_t
- * uses); the yb_* names are kept as thin forwarding wrappers so every
- * existing call site in this file needs no change. Once oom is set all
+ * uses); the yb_* names are thin forwarding wrappers giving this file one
+ * short, local spelling for every buffer operation. Once oom is set all
  * yb_* operations become safe no-ops. */
 typedef ccol_growbuf_t ybuf_t;
 
@@ -133,21 +133,21 @@ static __thread unsigned _pool_sz = 0;
  * false before it is deleted.  Prevents calling into a deleted key if a
  * background thread is still running during dlclose. */
 static atomic_bool _pool_key_live = false;
-static thread_ls_key_t _pool_key;
+static ccol_thread_ls_key_t _pool_key;
 
 /* Serializes "use the still-live key" (node_free's own read side, taken as a
  * reader) against "flip _pool_key_live false and delete the key" (the DSO
- * destructor below, taken as the sole writer). A bare atomic_load-then-act
- * on _pool_key_live is not sufficient on its own: the destructor can run
- * between node_free's load and its own thread_ls_set call, deleting the key
- * out from under a pthread_setspecific() already in flight (UB per POSIX).
- * Holding this lock across the load-and-act keeps the two mutually
- * exclusive, so thread_ls_set either fully completes before the key is
- * deleted or never runs at all. Lazily initialized inside
- * _do_pool_key_init() (guarded by the same _pool_key_once below that already
- * gates every other part of this subsystem's one-time setup), per this
+ * destructor below, taken as the sole writer). A bare atomic_load-then-act on
+ * _pool_key_live is not sufficient on its own: the destructor can run between
+ * node_free's load and its own ccol_thread_ls_set call, deleting the key out
+ * from under a pthread_setspecific() already in flight (UB per POSIX). Holding
+ * this lock across the load-and-act keeps the two mutually exclusive, so
+ * ccol_thread_ls_set either fully completes before the key is deleted or never
+ * runs at all. Lazily initialized inside _do_pool_key_init() (guarded by the
+ * same _pool_key_once below that already gates every other part of this
+ * subsystem's one-time setup), per this
  * codebase's own standing rule against static/constant lock initializers. */
-static rw_lock_t _pool_key_rwlock;
+static ccol_rw_lock_t _pool_key_rwlock;
 
 static void _pool_drain(void *);
 
@@ -182,11 +182,11 @@ static __thread bool _parse_node_budget_exhausted = false;
  * PTHREAD_KEYS_MAX already reached process-wide), so a caller must never
  * assume the rwlock/key are valid to use without checking it first; see
  * node_free's own cold path for the corresponding read side. */
-static once_flag_t _pool_key_once = ONCE_INIT;
+static ccol_once_flag_t _pool_key_once = CCOL_ONCE_INIT;
 
 static void _do_pool_key_init(void) {
-  if (rw_lock_init(_pool_key_rwlock) != 0) return;
-  if (thread_ls_key_create(_pool_key, _pool_drain) != 0) return;
+  if (ccol_rw_lock_init(_pool_key_rwlock) != 0) return;
+  if (ccol_thread_ls_key_create(_pool_key, _pool_drain) != 0) return;
   atomic_store(&_pool_key_live, true);
 }
 
@@ -201,10 +201,10 @@ static void _do_pool_key_init(void) {
 __attribute__((destructor)) static void _pool_key_fini(void) {
   if (!atomic_load(&_pool_key_live)) return;
   _pool_drain(NULL);
-  rw_lock_wrlock(_pool_key_rwlock);
+  ccol_rw_lock_wrlock(_pool_key_rwlock);
   atomic_store(&_pool_key_live, false);
-  thread_ls_key_delete(_pool_key);
-  rw_lock_unlock(_pool_key_rwlock);
+  ccol_thread_ls_key_delete(_pool_key);
+  ccol_rw_lock_unlock(_pool_key_rwlock);
 }
 
 /* Allocate a new node, preferring a recycled entry from the thread-local pool
@@ -214,7 +214,7 @@ __attribute__((destructor)) static void _pool_key_fini(void) {
  * _parse_node_budget; see that variable's own doc comment). */
 static cyaml_node_t *node_alloc(cyaml_node_type_t type,
                                 ccol_memmgmt_procs_t *mp) {
-  call_once(_pool_key_once, _do_pool_key_init);
+  ccol_call_once(_pool_key_once, _do_pool_key_init);
   if (_parse_node_budget != (size_t)-1 && _parse_node_budget == 0) {
     _parse_node_budget_exhausted = true;
     return NULL;
@@ -228,7 +228,7 @@ static cyaml_node_t *node_alloc(cyaml_node_type_t type,
     _pool_sz--;
     memset(n, 0, sizeof(*n));
   } else {
-    n = _mem_calloc(mp, 1, sizeof(*n));
+    n = _ccol_mem_calloc(mp, 1, sizeof(*n));
     if (!n) return NULL;
   }
   /* Only counted against the budget once a node has actually been
@@ -248,16 +248,16 @@ static cyaml_node_t *node_alloc(cyaml_node_type_t type,
  * is not full) or release it directly through its own allocator. */
 static void node_free(cyaml_node_t *n) {
   if (n->m_procs != NULL) {
-    _mem_free(n->m_procs, n);
+    _ccol_mem_free(n->m_procs, n);
     return;
   }
-  /* Per this codebase's own rule for every pthread/once_flag_t primitive:
-   * never rely on call-graph reasoning (e.g. "every node reaching this
-   * function was already allocated via node_alloc(), which already ran
-   * this") to skip the once-guard in a function that directly touches
-   * _pool_key_rwlock; that exact reasoning is what has broken silently
-   * before elsewhere in this codebase the moment a new call path appeared. */
-  call_once(_pool_key_once, _do_pool_key_init);
+  /* Every function that directly touches _pool_key_rwlock runs the
+   * once-guard itself, per this codebase's own rule for every
+   * pthread/ccol_once_flag_t primitive. Call-graph reasoning (e.g. "every
+   * node reaching this function was already allocated via node_alloc(),
+   * which already ran this") is never a substitute for it: such reasoning
+   * silently stops holding the moment a new call path reaches here. */
+  ccol_call_once(_pool_key_once, _do_pool_key_init);
   if (_pool_sz >= _CYAML_POOL_CAP) {
     free(n);
     return;
@@ -273,16 +273,17 @@ static void node_free(cyaml_node_t *n) {
      * does not reopen the very race the inner lock exists to close, since
      * _pool_key_live only ever transitions false->true from inside
      * _do_pool_key_init() itself (already run to completion by the
-     * call_once() above, with the usual pthread_once happens-before
+     * ccol_call_once() above, with the usual pthread_once happens-before
      * guarantee), so observing true here means the rwlock is guaranteed
      * already fully initialized and remains valid memory for the rest of
      * the process even if a concurrent DSO unload flips the flag back to
      * false immediately afterward; the inner, lock-protected re-check is
      * what makes that later false transition safe to race against. */
     if (atomic_load(&_pool_key_live)) {
-      rw_lock_rdlock(_pool_key_rwlock);
-      if (atomic_load(&_pool_key_live)) thread_ls_set(_pool_key, (void *)1);
-      rw_lock_unlock(_pool_key_rwlock);
+      ccol_rw_lock_rdlock(_pool_key_rwlock);
+      if (atomic_load(&_pool_key_live))
+        ccol_thread_ls_set(_pool_key, (void *)1);
+      ccol_rw_lock_unlock(_pool_key_rwlock);
     }
   }
   memcpy((cyaml_node_t **)n, &_pool_head, sizeof(_pool_head));
@@ -339,17 +340,17 @@ static cmap_iterator *chmap_begin_iter_safe(chmap m) {
   return NULL;
 }
 
-/* Destructor callback for chmap_destroy_with_dtor(), used by node_clear's
- * own CYAML_DICTIONARY case below: destroys one dictionary entry's child
- * node. See chmap_destroy_with_dtor's own doc comment (chashmap.h) for why
- * this is the allocation-free way to reach every child during teardown,
- * unlike enumerating the dictionary via chashmap_begin_iter() first (which
- * needs its own small allocation that can itself fail under sustained
- * OOM, silently leaking every already-inserted child that allocation
- * failure prevents ever being reached). Still used, unmodified, by the
- * per-document anchor table's own teardown (anchors_destroy), where each
- * anchor is an independent __cyaml_destroy() call rather than part of the
- * same worklist-driven walk node_clear()/__cyaml_destroy() use below. */
+/* Destructor callback for chmap_destroy_with_dtor(), used by the
+ * per-document anchor table's own teardown (anchors_destroy): destroys one
+ * dictionary entry's child node outright, each anchor being an independent
+ * __cyaml_destroy() call rather than part of the worklist-driven walk
+ * node_clear()/__cyaml_destroy() use below. See chmap_destroy_with_dtor's
+ * own doc comment (chashmap.h) for why this is the allocation-free way to
+ * reach every child during teardown, unlike enumerating the dictionary via
+ * chashmap_begin_iter() first (which needs its own small allocation that
+ * can itself fail under sustained OOM, silently leaking every
+ * already-inserted child that allocation failure prevents ever being
+ * reached). */
 static void _cyaml_destroy_dict_child(cmap_pair *val_pair, void *dtor_ctx) {
   (void)dtor_ctx;
   cyaml_node_t *child = _cyaml_read_child(val_pair->ptr);
@@ -390,15 +391,16 @@ typedef struct destroy_worklist {
  * that one child's own subtree, and only when BOTH conditions hold at
  * once: the tree is deep enough to matter, AND the allocator is
  * simultaneously unable to grow a small scratch array. That compound
- * failure is accepted as a rare, graceful degradation back to the
- * pre-existing recursive behavior rather than engineered around further;
- * it is categorically narrower than the bug this worklist exists to fix,
- * which triggered on depth alone with no memory pressure required at all. */
+ * failure is accepted as a rare, graceful degradation rather than
+ * engineered around further; it is categorically narrower than the stack
+ * exhaustion this worklist exists to prevent, which needs depth alone and
+ * no memory pressure at all. */
 static void destroy_worklist_push(destroy_worklist_t *wl, cyaml_node_t *child) {
   if (!child) return;
   if (wl->len == wl->cap) {
     size_t new_cap = wl->cap == 0 ? 32 : wl->cap * 2;
-    cyaml_node_t **grown = mem_realloc(wl->items, new_cap * sizeof(*wl->items));
+    cyaml_node_t **grown =
+        ccol_mem_realloc(wl->items, new_cap * sizeof(*wl->items));
     if (!grown) {
       __cyaml_destroy((cyaml)child);
       return;
@@ -425,7 +427,7 @@ static void _cyaml_enqueue_dict_child(cmap_pair *val_pair, void *dtor_ctx) {
 static void node_clear_value(cyaml_node_t *n, destroy_worklist_t *wl) {
   switch (n->type) {
     case CYAML_STRING:
-      _mem_free(n->m_procs, n->value.string);
+      _ccol_mem_free(n->m_procs, n->value.string);
       n->value.string = NULL;
       break;
     case CYAML_LIST: {
@@ -459,7 +461,7 @@ static void destroy_worklist_drain(destroy_worklist_t *wl) {
   while (wl->len > 0) {
     cyaml_node_t *n = wl->items[--wl->len];
     node_clear_value(n, wl);
-    _mem_free(n->m_procs, n->tag);
+    _ccol_mem_free(n->m_procs, n->tag);
     n->tag = NULL;
     node_free(n);
   }
@@ -476,7 +478,7 @@ static void node_clear(cyaml_node_t *n) {
   destroy_worklist_t wl = {NULL, 0, 0};
   node_clear_value(n, &wl);
   destroy_worklist_drain(&wl);
-  mem_free(wl.items);
+  ccol_mem_free(wl.items);
 }
 
 /*
@@ -679,7 +681,7 @@ cyaml cyaml_create_dictionary_mp(ccol_memmgmt_procs_t *mp) {
   cyaml_node_t *n = node_alloc(CYAML_DICTIONARY, mp);
   if (!n) return NULL;
   char *err = NULL;
-  n->value.dictionary = chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
+  n->value.dictionary = chmap_create_mp(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
                                         ccol_string, ccol_pointer, mp, &err);
   if (!n->value.dictionary) {
     node_free(n);
@@ -711,12 +713,12 @@ void __cyaml_destroy(cyaml node) {
 
   destroy_worklist_t wl = {NULL, 0, 0};
   node_clear_value(n, &wl);
-  _mem_free(n->m_procs, n->tag);
+  _ccol_mem_free(n->m_procs, n->tag);
   n->tag = NULL;
   node_free(n);
 
   destroy_worklist_drain(&wl);
-  mem_free(wl.items);
+  ccol_mem_free(wl.items);
 }
 
 /* ========================================================================== */
@@ -742,69 +744,71 @@ ccol_retval_t cyaml_node_set_tag(cyaml node, const char *tag) {
   if (!node) return ccol_invalid_args;
   cyaml_node_t *n = (cyaml_node_t *)node;
   if (!tag) {
-    _mem_free(n->m_procs, n->tag);
+    _ccol_mem_free(n->m_procs, n->tag);
     n->tag = NULL;
     return ccol_success;
   }
   char *copy = ccol_strdup(n->m_procs, tag);
   if (!copy) return ccol_not_enough_memory;
-  _mem_free(n->m_procs, n->tag);
+  _ccol_mem_free(n->m_procs, n->tag);
   n->tag = copy;
   return ccol_success;
 }
 
 /*
- * Typed value accessors.  Each calls fatal_err() on type mismatch or NULL.
+ * Typed value accessors.  Each calls ccol_fatal_err() on type mismatch or NULL.
  * Guard with cyaml_type() when the type is not statically guaranteed.
  */
 bool cyaml_bool_val(cyaml node) {
   cyaml_node_t *n = (cyaml_node_t *)node;
   if (!n || n->type != CYAML_BOOL)
-    fatal_err("cyaml_bool_val: node is %s, expected CYAML_BOOL",
-              cyaml_type_str(node));
+    ccol_fatal_err("cyaml_bool_val: node is %s, expected CYAML_BOOL",
+                   cyaml_type_str(node));
   return n->value.boolean;
 }
 
 long long cyaml_int_val(cyaml node) {
   cyaml_node_t *n = (cyaml_node_t *)node;
   if (!n || n->type != CYAML_INTEGER)
-    fatal_err("cyaml_int_val: node is %s, expected CYAML_INTEGER",
-              cyaml_type_str(node));
+    ccol_fatal_err("cyaml_int_val: node is %s, expected CYAML_INTEGER",
+                   cyaml_type_str(node));
   return n->value.integer;
 }
 
 double cyaml_double_val(cyaml node) {
   cyaml_node_t *n = (cyaml_node_t *)node;
   if (!n || n->type != CYAML_FLOAT)
-    fatal_err("cyaml_double_val: node is %s, expected CYAML_FLOAT",
-              cyaml_type_str(node));
+    ccol_fatal_err("cyaml_double_val: node is %s, expected CYAML_FLOAT",
+                   cyaml_type_str(node));
   return n->value.number;
 }
 
 const char *cyaml_str_val(cyaml node) {
   cyaml_node_t *n = (cyaml_node_t *)node;
   if (!n || n->type != CYAML_STRING)
-    fatal_err("cyaml_str_val: node is %s, expected CYAML_STRING",
-              cyaml_type_str(node));
+    ccol_fatal_err("cyaml_str_val: node is %s, expected CYAML_STRING",
+                   cyaml_type_str(node));
   return n->value.string;
 }
 
 /* Return the number of elements in a list or the number of key-value
- * pairs in a dictionary.  Both call fatal_err() if the node is the wrong type.
+ * pairs in a dictionary. Both call ccol_fatal_err() if the node is the wrong
+ * type.
  */
 size_t cyaml_list_len(cyaml node) {
   cyaml_node_t *n = (cyaml_node_t *)node;
   if (!n || n->type != CYAML_LIST)
-    fatal_err("cyaml_list_len: node is %s, expected CYAML_LIST",
-              cyaml_type_str(node));
+    ccol_fatal_err("cyaml_list_len: node is %s, expected CYAML_LIST",
+                   cyaml_type_str(node));
   return cvector_elem_count(n->value.list);
 }
 
 size_t cyaml_dictionary_size(cyaml node) {
   cyaml_node_t *n = (cyaml_node_t *)node;
   if (!n || n->type != CYAML_DICTIONARY)
-    fatal_err("cyaml_dictionary_size: node is %s, expected CYAML_DICTIONARY",
-              cyaml_type_str(node));
+    ccol_fatal_err(
+        "cyaml_dictionary_size: node is %s, expected CYAML_DICTIONARY",
+        cyaml_type_str(node));
   return chmap_elem_count(n->value.dictionary);
 }
 
@@ -1017,8 +1021,8 @@ static bool clone_attach_tag(cyaml dst, const char *src_tag,
  * Without an independent cap, a legitimately acyclic but deep tree (e.g.
  * one built by a recursive application-level builder driven by external
  * input) recurses cyaml_clone() without bound and crashes the process via
- * stack overflow instead of returning NULL as documented, confirmed
- * empirically well below any depth that would raise practical suspicion.
+ * stack overflow instead of returning NULL as documented, at depths well
+ * below any that would raise practical suspicion.
  * Kept as its own constant, rather than referencing CYAML_MAX_SERIALIZE_DEPTH
  * directly, only because that constant is defined later in this file, after
  * clone_node(); both are set to the identical value 500 deliberately, so a
@@ -1220,8 +1224,8 @@ typedef struct {
  * another such mapping, nested N levels deep, forces each enclosing
  * level's canonicalization to re-double-quote the text the level below it
  * already produced, so the canonical string's length grows as O(2^N) in
- * nesting depth, not O(N) (confirmed empirically; roughly 2^N bytes at
- * depth N). CYAML_MAX_PARSE_DEPTH alone cannot bound this: a value
+ * nesting depth, not O(N) (roughly 2^N bytes at depth N).
+ * CYAML_MAX_PARSE_DEPTH alone cannot bound this: a value
  * generous enough for legitimate deep nesting (hundreds of levels) is
  * still far beyond the ~30 levels at which this specific pattern already
  * produces gigabyte-sized strings, so a document deliberately kept just
@@ -1264,9 +1268,9 @@ typedef struct {
  * gives no protection here. Without an independent cap of its own, a
  * legitimately acyclic but deep tree (e.g. one built by a recursive
  * application-level builder driven by external input) recurses the
- * serializer without bound and crashes the process via stack overflow,
- * confirmed empirically well below any depth that would raise practical
- * suspicion. Exceeding this is reported the same way any other
+ * serializer without bound and crashes the process via stack overflow, at
+ * depths well below any that would raise practical suspicion. Exceeding
+ * this is reported the same way any other
  * serialization failure is: by setting the ybuf_t's own oom flag, which
  * cyaml_serialize()/cyaml_serialize_flow() already translate into a NULL
  * return, since neither function has a separate error-string channel of
@@ -1354,10 +1358,10 @@ static void line_starts_extend(parse_ctx_t *ctx, size_t up_to) {
     if (c == '\n' || c == '\r') {
       if (ctx->line_starts_len == ctx->line_starts_cap) {
         size_t new_cap = ctx->line_starts_cap ? ctx->line_starts_cap * 2 : 64;
-        size_t *grown =
-            _mem_realloc(ctx->mp, ctx->line_starts, new_cap * sizeof(size_t));
+        size_t *grown = _ccol_mem_realloc(ctx->mp, ctx->line_starts,
+                                          new_cap * sizeof(size_t));
         if (!grown) {
-          _mem_free(ctx->mp, ctx->line_starts);
+          _ccol_mem_free(ctx->mp, ctx->line_starts);
           ctx->line_starts = NULL;
           ctx->line_starts_len = 0;
           ctx->line_starts_cap = 0;
@@ -1388,19 +1392,21 @@ static void line_starts_extend(parse_ctx_t *ctx, size_t up_to) {
  * A naive backward byte-by-byte scan here is O(column) per call; since a
  * flow collection (or any other construct that keeps parse_node_inner on
  * one physical line without crossing a newline) drives one such call per
- * sibling with no bound on how many siblings share a line, that made the
- * total parse cost O(n^2) in the line length (measured: tens of seconds on
- * a single-line flow list of a few tens of thousands of elements) with none
- * of CYAML_MAX_PARSE_DEPTH/CYAML_MAX_PARSE_NODES/CYAML_MAX_CANONICAL_KEY_LEN
+ * sibling with no bound on how many siblings share a line, that alone
+ * would make the total parse cost O(n^2) in the line length (tens of
+ * seconds on a single-line flow list of a few tens of thousands of
+ * elements), with none of the
+ * CYAML_MAX_PARSE_DEPTH/CYAML_MAX_PARSE_NODES/CYAML_MAX_CANONICAL_KEY_LEN
  * bounding it, since none of them bounds sibling fan-out on one line.
  *
- * Fixed with an amortized cache (ctx->line_starts): a monotonically growing,
- * sorted list of every line-start offset discovered so far. ctx->pos is
- * overwhelmingly monotonic (parsing only rarely backtracks, and only ever by
- * a small, bounded distance to retry the immediately preceding token - see
- * e.g. try_parse_scalar_dict_key()), so the common case only ever needs to
- * extend the cache forward past bytes never scanned before, making the
- * total scanning work O(n) for the whole parse rather than O(n) per call.
+ * An amortized cache (ctx->line_starts) is what keeps that cost linear: a
+ * monotonically growing, sorted list of every line-start offset discovered
+ * so far. ctx->pos is overwhelmingly monotonic (parsing only rarely
+ * backtracks, and only ever by a small, bounded distance to retry the
+ * immediately preceding token - see e.g. try_parse_scalar_dict_key()), so
+ * the common case only ever needs to extend the cache forward past bytes
+ * never scanned before, making the total scanning work O(n) for the whole
+ * parse rather than O(n) per call.
  * A query is then answered by binary-searching the recorded line starts for
  * the largest one <= ctx->pos, which is correct regardless of whether
  * ctx->pos is ahead of or behind the highest point reached so far - unlike
@@ -1461,21 +1467,20 @@ static int current_col(parse_ctx_t *ctx) {
 
 /* True when a tab character appears anywhere between the start of the
  * current line and ctx->pos. YAML 1.2 sec. 6.1 forbids a tab from ever
- * being interpreted as block-structural indentation or separation;
- * empirically verified (against PyYAML, the more reliable of the two
- * reference parsers for this specific rule; see this project's own
- * "Tab-as-indentation full audit" internal history notes for why)
- * that this extends to every position current_col() is used to measure
- * or compare an indentation LEVEL against, not merely the classic
- * "leading spaces before block content" case.
+ * being interpreted as block-structural indentation or separation. Per
+ * PyYAML (the more reliable of the two reference parsers for this
+ * specific rule), that prohibition extends to every position current_col()
+ * is used to measure or compare an indentation LEVEL against, not merely
+ * the classic "leading spaces before block content" case.
  *
  * Deliberately narrower than "does skip_ws_comments/skip_inline_ws see a
  * tab": those two shared functions are also used for whitespace genuinely
  * INTERNAL to already-open content (e.g. a quoted scalar's own line-
  * folding), where a tab is legitimate data, not indentation; conflating
- * the two caused a real, reproduced infinite loop when tried. This helper
- * is instead called explicitly, only at the specific points that
- * genuinely represent a block-structural indentation decision. */
+ * the two produces a real infinite loop, since those callers rely on the
+ * shared skip always making forward progress. This helper is instead
+ * called explicitly, only at the specific points that genuinely represent
+ * a block-structural indentation decision. */
 static bool line_indent_has_tab(parse_ctx_t *ctx) {
   size_t p = line_start_pos(ctx);
   return memchr(ctx->src + p, '\t', ctx->pos - p) != NULL;
@@ -1488,11 +1493,10 @@ static bool line_indent_has_tab(parse_ctx_t *ctx) {
  * Deliberately still skips a tab unconditionally: this function is also
  * used for whitespace genuinely internal to already-open content (e.g.
  * parse_double_quoted's own blank-line fold logic), where a tab is
- * legitimate data, not block-structural indentation; confirmed by a
- * real infinite loop found when an earlier draft of the tab-indentation
- * fix made this function stop at a tab unconditionally: parse_double_
- * quoted's fold loop calls this function expecting it to always make
- * forward progress, and a tab it left unconsumed broke that invariant.
+ * legitimate data, not block-structural indentation. Making this function
+ * stop at a tab unconditionally causes a real infinite loop:
+ * parse_double_quoted's fold loop calls it expecting it to always make
+ * forward progress, and a tab left unconsumed breaks that invariant.
  * Tab rejection for genuine block-structural positions is instead done
  * at each specific call site that represents one, via current_col()
  * plus line_indent_has_tab() (see that helper's own doc comment), not
@@ -1660,11 +1664,10 @@ static bool at_blank_line(parse_ctx_t *ctx) {
  * short of DEL. nb-json, which governs double-quoted content specifically
  * and is textually wider ("#x9 | [#x20-#x10FFFF]", with no upper gap around
  * 0x7F at all), would appear to permit a raw DEL byte there on the grammar
- * text alone; confirmed empirically against PyYAML, however (the same
- * verify-before-fixing discipline this file already applies elsewhere),
- * that a raw DEL byte is rejected identically across double-quoted,
- * single-quoted, plain, and literal-block scalars alike ("unacceptable
- * character #x007f: special characters are not allowed"); PyYAML filters
+ * text alone; PyYAML, however, rejects a raw DEL byte identically across
+ * double-quoted, single-quoted, plain, and literal-block scalars alike
+ * ("unacceptable character #x007f: special characters are not allowed").
+ * PyYAML filters
  * it at the character-stream level before any scalar-style-specific
  * grammar is even consulted, taking precedence over nb-json's own wider
  * textual range for this one byte.
@@ -1725,8 +1728,8 @@ static bool at_doc_marker(parse_ctx_t *ctx) {
 static bool anchors_ensure(parse_ctx_t *ctx) {
   if (ctx->anchors) return true;
   char *err = NULL;
-  ctx->anchors = chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE, ccol_string,
-                                 ccol_pointer, ctx->mp, &err);
+  ctx->anchors = chmap_create_mp(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
+                                 ccol_string, ccol_pointer, ctx->mp, &err);
   return ctx->anchors != NULL;
 }
 
@@ -1735,11 +1738,11 @@ static bool anchors_ensure(parse_ctx_t *ctx) {
  * itself; true on a genuine store.  clone is always consumed exactly once
  * either way (stored on success, destroyed on failure), so the caller never
  * needs its own cleanup for clone specifically.  Reporting failure here
- * (rather than silently discarding clone and returning nothing, as this
- * function used to) matters beyond a merely-cosmetic error message: a
- * caller that instead unconditionally treated storing an anchor as having
- * succeeded would return a "successful" parse result whose anchor was
- * silently never actually registered, which a later '*name' alias
+ * (rather than silently discarding clone and returning nothing) matters
+ * beyond a merely-cosmetic error message: a caller that instead treated
+ * storing an anchor as unconditionally successful would return a
+ * "successful" parse result whose anchor was silently never actually
+ * registered, which a later '*name' alias
  * reference to it would then fail against with a confusing "unknown alias"
  * error instead of the real "out of memory" cause; see this function's own
  * callers for how the return value propagates that failure instead. */
@@ -1788,8 +1791,8 @@ static void anchors_destroy(parse_ctx_t *ctx) {
    * allocation-free internal teardown walk, so this can never leak a
    * clone under sustained OOM the way enumerating via
    * chashmap_begin_iter() first (even through chmap_begin_iter_safe's own
-   * bounded retries) still could. Mirrors node_clear's own identical fix
-   * for a CYAML_DICTIONARY node's children. */
+   * bounded retries) still could. Mirrors the dtor-callback approach
+   * node_clear's own CYAML_DICTIONARY case takes for a node's children. */
   chmap_destroy_with_dtor(ctx->anchors, _cyaml_destroy_dict_child, NULL);
   ctx->anchors = NULL;
 }
@@ -1812,7 +1815,7 @@ static void anchors_destroy(parse_ctx_t *ctx) {
 static bool tag_handles_ensure(parse_ctx_t *ctx) {
   if (ctx->tag_handles) return true;
   char *err = NULL;
-  ctx->tag_handles = chmap_create_mp(DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
+  ctx->tag_handles = chmap_create_mp(CCOL_DEFAULT_INITIAL_BUCKET_ARRAY_SIZE,
                                      ccol_string, ccol_string, ctx->mp, &err);
   return ctx->tag_handles != NULL;
 }
@@ -1898,7 +1901,7 @@ static bool parse_anchor_name(parse_ctx_t *ctx, char **name_out) {
     parse_err(ctx, "empty anchor/alias name at position %zu", start);
     return false;
   }
-  char *name = _mem_alloc(ctx->mp, len + 1);
+  char *name = _ccol_mem_alloc(ctx->mp, len + 1);
   if (!name) {
     parse_err(ctx, "out of memory parsing anchor/alias name at position %zu",
               start);
@@ -1957,10 +1960,10 @@ static long long magnitude_to_signed(unsigned long long uval, bool neg) {
 static bool try_parse_int_scalar(const char *s, long long *out) {
   /* The core schema's own int grammar ([-+]?[0-9]+ for decimal, plus the
    * 0x/0o forms) has no leading-whitespace production at all; strtoll()
-   * below is
-   * more permissive than that grammar (per the C standard it silently skips
-   * leading whitespace before the subject sequence), which would otherwise
-   * let e.g. " 42" be silently accepted as 42 instead of failing as it must
+   * below is more permissive than that grammar (per the C standard it
+   * silently skips leading whitespace before the subject sequence), which
+   * would otherwise let e.g. " 42" be silently accepted as 42 instead of
+   * failing as it must
    * (trim_trailing_ws_for_numeric_tag, this function's own caller for an
    * explicit !!int tag, deliberately trims only trailing whitespace, never
    * leading, for exactly this reason). Rejected here, before anything else,
@@ -2011,9 +2014,9 @@ static bool try_parse_int_scalar(const char *s, long long *out) {
      * a value between 2^63 and 2^64-1 still fits in an unsigned 64-bit
      * word but has no representation as a long long of the requested sign,
      * so it must be rejected here too rather than silently reinterpreted
-     * (previously: 0xFFFFFFFFFFFFFFFF silently became -1, and
-     * 0x8000000000000000 silently became negative). Rejecting it here
-     * lets the caller's usual cascade (make_typed_scalar) fall back to a
+     * (0xFFFFFFFFFFFFFFFF would become -1, and 0x8000000000000000 would
+     * become negative). Rejecting it here lets the caller's usual cascade
+     * (make_typed_scalar) fall back to a
      * CYAML_FLOAT for a value this large, exactly mirroring how the
      * decimal branch's own errno==ERANGE check already behaves for a
      * plain decimal literal wider than 64 bits. */
@@ -2248,11 +2251,11 @@ static cyaml_node_t *make_typed_scalar(parse_ctx_t *ctx, const char *s) {
  * KEEP's own multiple preserved trailing newlines, would otherwise never
  * match). Confirmed empirically against PyYAML's own construct_yaml_int/
  * _float (both accept a KEEP-chomped "42\n\n\n" as 42; Python's underlying
- * int()/float() are themselves whitespace-tolerant); an earlier, narrower
- * "trim exactly one trailing newline" design was
- * verified against the same reference and found too strict, rejecting
- * exactly the KEEP-chomped multi-newline case PyYAML accepts. Deliberately
- * NOT applied to !!bool: PyYAML's own construct_yaml_bool does a strict,
+ * int()/float() are themselves whitespace-tolerant). A narrower "trim
+ * exactly one trailing newline" rule is too strict against that same
+ * reference: it rejects exactly the KEEP-chomped multi-newline case PyYAML
+ * accepts. Deliberately NOT applied to !!bool: PyYAML's own
+ * construct_yaml_bool does a strict,
  * untrimmed dict lookup and rejects the identical shape (also confirmed
  * empirically), so trimming there would only diverge from the reference in
  * the other direction. */
@@ -2316,7 +2319,7 @@ static cyaml_node_t *finalize_scalar_node(parse_ctx_t *ctx, char *text,
     bool bval;
     if (!try_parse_bool_scalar_explicit(text, &bval)) {
       parse_err(ctx, "'%s' is not a valid !!bool value", text);
-      _mem_free(ctx->mp, text);
+      _ccol_mem_free(ctx->mp, text);
       return NULL;
     }
     n = node_alloc(CYAML_BOOL, ctx->mp);
@@ -2326,7 +2329,7 @@ static cyaml_node_t *finalize_scalar_node(parse_ctx_t *ctx, char *text,
     long long ival;
     if (!try_parse_int_scalar(text, &ival)) {
       parse_err(ctx, "'%s' is not a valid !!int value", text);
-      _mem_free(ctx->mp, text);
+      _ccol_mem_free(ctx->mp, text);
       return NULL;
     }
     n = node_alloc(CYAML_INTEGER, ctx->mp);
@@ -2336,7 +2339,7 @@ static cyaml_node_t *finalize_scalar_node(parse_ctx_t *ctx, char *text,
     double dval;
     if (!try_parse_float_scalar(text, &dval)) {
       parse_err(ctx, "'%s' is not a valid !!float value", text);
-      _mem_free(ctx->mp, text);
+      _ccol_mem_free(ctx->mp, text);
       return NULL;
     }
     n = node_alloc(CYAML_FLOAT, ctx->mp);
@@ -2356,7 +2359,7 @@ static cyaml_node_t *finalize_scalar_node(parse_ctx_t *ctx, char *text,
      * fully determined by its own block/flow syntax, never inferred. */
     parse_err(ctx, "tag '%s' does not match the node it decorates",
               resolved_tag);
-    _mem_free(ctx->mp, text);
+    _ccol_mem_free(ctx->mp, text);
     return NULL;
   } else if (implicit_ok) {
     /* No forcing tag (untagged, non-specific "!", custom, or !!binary):
@@ -2372,7 +2375,8 @@ static cyaml_node_t *finalize_scalar_node(parse_ctx_t *ctx, char *text,
     }
   }
 
-  _mem_free(ctx->mp, text); /* no-op if ownership was already transferred */
+  _ccol_mem_free(ctx->mp,
+                 text); /* no-op if ownership was already transferred */
 
   if (!n) return NULL;
 
@@ -2616,7 +2620,7 @@ static bool parse_double_quoted(parse_ctx_t *ctx, char **out) {
    * "trailing white space is stripped" rule applies only to literal,
    * unescaped whitespace copied straight from the source, never to a byte
    * an escape sequence produced. Without this, an escaped trailing tab
-   * was silently eaten by the very next fold. */
+   * is silently eaten by the very next fold. */
   size_t escape_boundary = 0;
 
   while (!at_end(ctx)) {
@@ -2884,7 +2888,7 @@ done:
   return true;
 
 fail:
-  _mem_free(b.m_procs, b.buf);
+  _ccol_mem_free(b.m_procs, b.buf);
   return false;
 }
 
@@ -2923,7 +2927,7 @@ static bool parse_single_quoted(parse_ctx_t *ctx, char **out) {
      * there is no escape_boundary-style protected span to stop short of. */
     if (c == '\r' || c == '\n') {
       if (!fold_quoted_newline(ctx, &b, 0, "single-quoted")) {
-        _mem_free(b.m_procs, b.buf);
+        _ccol_mem_free(b.m_procs, b.buf);
         return false;
       }
       continue;
@@ -2934,7 +2938,7 @@ static bool parse_single_quoted(parse_ctx_t *ctx, char **out) {
                 "raw control character 0x%02x is not allowed in a "
                 "single-quoted scalar at position %zu",
                 (unsigned char)c, ctx->pos);
-      _mem_free(b.m_procs, b.buf);
+      _ccol_mem_free(b.m_procs, b.buf);
       return false;
     }
 
@@ -2943,12 +2947,12 @@ static bool parse_single_quoted(parse_ctx_t *ctx, char **out) {
   }
 
   parse_err(ctx, "unterminated single-quoted scalar");
-  _mem_free(b.m_procs, b.buf);
+  _ccol_mem_free(b.m_procs, b.buf);
   return false;
 
 done:
   if (b.oom) {
-    _mem_free(b.m_procs, b.buf);
+    _ccol_mem_free(b.m_procs, b.buf);
     return false;
   }
   *out = b.buf;
@@ -3062,8 +3066,7 @@ typedef enum {
 /*
  * Measure one block-scalar line's leading spaces and classify it, mutating
  * indent_determined, block_indent, and max_leading_blank_spaces exactly as
- * parse_block_scalar_content's and parse_folded_scalar_content's own,
- * previously separately hand-duplicated, per-line scanning logic did:
+ * parse_block_scalar_content and parse_folded_scalar_content both require:
  * YAML 1.2 sec. 6.1's tab-as-indentation-is-ambiguous-while-undetermined
  * rule, sec. 8.1.1's "no leading empty line may be more indented than the
  * first non-empty line" rule, and the auto-detect-from-first-content-line
@@ -3074,10 +3077,9 @@ typedef enum {
  * (committing buffered blank lines, reading a content line's own text, and
  * advancing past the line's own trailing newline): the two callers do this
  * differently enough (a single streaming ybuf_t vs. a collect-then-fold
- * line_t array) that unifying it too would trade this file's own "narrow,
- * independently verified" refactoring discipline for a much larger, riskier
- * change to code with a documented history of subtle tab/indentation bugs,
- * for little further benefit.
+ * line_t array) that one shared implementation would have to reintroduce
+ * that difference as internal branching, obscuring the tab/indentation
+ * rules this helper exists to state exactly once, for little benefit.
  */
 static scan_block_line_t scan_block_scalar_line(
     parse_ctx_t *ctx, int parent_indent, bool *indent_determined,
@@ -3090,15 +3092,14 @@ static scan_block_line_t scan_block_scalar_line(
   }
   /* Saturate rather than let a line with more than INT_MAX leading spaces
    * silently overflow a signed int; mirrors current_col()'s own identical
-   * saturation and its doc comment's rationale, which this later-added,
-   * independent counter did not originally share. */
+   * saturation, and its doc comment carries the full rationale. */
   int spaces = space_count > (size_t)INT_MAX ? INT_MAX : (int)space_count;
 
-  /* See parse_block_scalar_content's own, more detailed doc comment
-   * (historically carried on this exact check) for the full YAML 1.2 sec.
-   * 6.1 rationale: a tab as this line's very first character while
-   * block_indent is still undetermined is genuinely ambiguous and a hard
-   * error; the moment even one real space has been consumed, or once
+  /* See parse_block_scalar_content's own, more detailed doc comment for
+   * the full YAML 1.2 sec. 6.1 rationale: a tab as this line's very first
+   * character while block_indent is still undetermined is genuinely
+   * ambiguous and a hard error; the moment even one real space has been
+   * consumed, or once
    * block_indent is already established, a tab is ordinary content
    * instead, left for the caller's own content-reading step. */
   if (!*indent_determined && spaces == 0 && !at_end(ctx) && cur(ctx) == '\t') {
@@ -3120,10 +3121,10 @@ static scan_block_line_t scan_block_scalar_line(
    * scalar text instead of ending the scalar (and the document). Every
    * other block-content parser in this file (parse_block_dictionary,
    * parse_one_document, parse_plain_scalar_multiline, both quoted-scalar
-   * folders) already guards against this via at_doc_marker(); this
-   * function previously had no equivalent check at all. at_doc_marker()
-   * itself already requires column 0, so this is a no-op whenever
-   * spaces > 0 (a more-indented line can never be a marker). */
+   * folders) guards against this via at_doc_marker(), and so must this
+   * one. at_doc_marker() itself already requires column 0, so this is a
+   * no-op whenever spaces > 0 (a more-indented line can never be a
+   * marker). */
   if (spaces == 0 && at_doc_marker(ctx)) {
     ctx->pos = line_start;
     return SCAN_BLOCK_LINE_END;
@@ -3262,8 +3263,8 @@ static bool parse_block_scalar_content(parse_ctx_t *ctx, int parent_indent,
         &max_leading_blank_spaces, &spaces);
 
     if (kind == SCAN_BLOCK_LINE_ERROR) {
-      _mem_free(b.m_procs, b.buf);
-      _mem_free(pending.m_procs, pending.buf);
+      _ccol_mem_free(b.m_procs, b.buf);
+      _ccol_mem_free(pending.m_procs, pending.buf);
       return false;
     }
     if (kind == SCAN_BLOCK_LINE_END) break;
@@ -3296,8 +3297,8 @@ static bool parse_block_scalar_content(parse_ctx_t *ctx, int parent_indent,
                   "raw control character 0x%02x is not allowed in a "
                   "block scalar at position %zu",
                   (unsigned char)cur(ctx), ctx->pos);
-        _mem_free(b.m_procs, b.buf);
-        _mem_free(pending.m_procs, pending.buf);
+        _ccol_mem_free(b.m_procs, b.buf);
+        _ccol_mem_free(pending.m_procs, pending.buf);
         return false;
       }
       yb_append_c(&b, cur(ctx));
@@ -3346,10 +3347,10 @@ static bool parse_block_scalar_content(parse_ctx_t *ctx, int parent_indent,
   }
 
   bool pending_oom = pending.oom;
-  _mem_free(pending.m_procs, pending.buf);
+  _ccol_mem_free(pending.m_procs, pending.buf);
 
   if (b.oom || pending_oom) {
-    _mem_free(b.m_procs, b.buf);
+    _ccol_mem_free(b.m_procs, b.buf);
     return false;
   }
   *out = b.buf;
@@ -3400,7 +3401,7 @@ static bool parse_folded_scalar_content(parse_ctx_t *ctx, int parent_indent,
   } line_t;
 
   size_t lines_cap = 16, lines_len = 0;
-  line_t *lines = _mem_alloc(ctx->mp, lines_cap * sizeof(line_t));
+  line_t *lines = _ccol_mem_alloc(ctx->mp, lines_cap * sizeof(line_t));
   if (!lines) return false;
 
   /* See the identical tracker in parse_block_scalar_content: YAML 1.2
@@ -3423,7 +3424,7 @@ static bool parse_folded_scalar_content(parse_ctx_t *ctx, int parent_indent,
         &max_leading_blank_spaces, &spaces);
 
     if (kind == SCAN_BLOCK_LINE_ERROR) {
-      _mem_free(ctx->mp, lines);
+      _ccol_mem_free(ctx->mp, lines);
       return false;
     }
     if (kind == SCAN_BLOCK_LINE_END) break;
@@ -3433,9 +3434,10 @@ static bool parse_folded_scalar_content(parse_ctx_t *ctx, int parent_indent,
     /* Grow lines array if needed. */
     if (lines_len == lines_cap) {
       lines_cap *= 2;
-      line_t *tmp = _mem_realloc(ctx->mp, lines, lines_cap * sizeof(line_t));
+      line_t *tmp =
+          _ccol_mem_realloc(ctx->mp, lines, lines_cap * sizeof(line_t));
       if (!tmp) {
-        _mem_free(ctx->mp, lines);
+        _ccol_mem_free(ctx->mp, lines);
         return false;
       }
       lines = tmp;
@@ -3487,7 +3489,7 @@ static bool parse_folded_scalar_content(parse_ctx_t *ctx, int parent_indent,
         ctx->pos++;
       }
       if (bad_byte) {
-        _mem_free(ctx->mp, lines);
+        _ccol_mem_free(ctx->mp, lines);
         return false;
       }
       ln->text = span_start;
@@ -3565,8 +3567,8 @@ static bool parse_folded_scalar_content(parse_ctx_t *ctx, int parent_indent,
        * line's own break must be preserved even if that LAST trailing
        * blank line itself has none (had_trailing_newline, unconditionally
        * overwritten by every line including a trailing blank one, cannot
-       * tell the two apart on its own). Mirrors KEEP's own identical,
-       * already-correct check just below. See had_trailing_newline's own
+       * tell the two apart on its own). Mirrors KEEP's own identical
+       * check just below. See had_trailing_newline's own
        * doc comment in parse_block_scalar_content for the "no newline at
        * all when the source had none" case this still preserves. */
       if (have_content && (trailing_blanks > 0 || had_trailing_newline))
@@ -3596,10 +3598,10 @@ static bool parse_folded_scalar_content(parse_ctx_t *ctx, int parent_indent,
   /* Free the lines[] array itself; each entry's own text/text_len is a
    * borrowed span into ctx->src (see line_t's own doc comment above), not
    * an owned allocation, so there is nothing per-entry to free here. */
-  _mem_free(ctx->mp, lines);
+  _ccol_mem_free(ctx->mp, lines);
 
   if (b.oom) {
-    _mem_free(b.m_procs, b.buf);
+    _ccol_mem_free(b.m_procs, b.buf);
     return false;
   }
   *out = b.buf;
@@ -3704,7 +3706,7 @@ static bool parse_plain_scalar(parse_ctx_t *ctx, bool in_flow, char **out,
      * ended without a real terminator"; see scan_plain_scalar_line's own
      * doc comment for why this is the one case its return value alone
      * cannot signal. */
-    _mem_free(b.m_procs, b.buf);
+    _ccol_mem_free(b.m_procs, b.buf);
     return false;
   }
   if (hit_real_terminator) *hit_real_terminator = terminated;
@@ -3716,7 +3718,7 @@ static bool parse_plain_scalar(parse_ctx_t *ctx, bool in_flow, char **out,
   }
 
   if (b.oom) {
-    _mem_free(b.m_procs, b.buf);
+    _ccol_mem_free(b.m_procs, b.buf);
     return false;
   }
   *out = b.buf;
@@ -3770,7 +3772,7 @@ static bool parse_plain_scalar_multiline(parse_ctx_t *ctx, bool in_flow,
   ybuf_t b;
   yb_init(&b, ctx->mp);
   yb_append_cstr(&b, first_owned);
-  _mem_free(ctx->mp, first_owned);
+  _ccol_mem_free(ctx->mp, first_owned);
 
   size_t blank_count = 0;
   while (!at_end(ctx)) {
@@ -3785,8 +3787,8 @@ static bool parse_plain_scalar_multiline(parse_ctx_t *ctx, bool in_flow,
     }
     /* Saturate rather than let a continuation line with more than INT_MAX
      * leading spaces silently overflow a signed int; mirrors current_col()'s
-     * own identical saturation (and scan_block_scalar_line's matching fix
-     * for its own independent leading-space counter). */
+     * own identical saturation (and scan_block_scalar_line's matching
+     * saturation of its own independent leading-space counter). */
     int spaces =
         line_space_count > (size_t)INT_MAX ? INT_MAX : (int)line_space_count;
 
@@ -3800,7 +3802,7 @@ static bool parse_plain_scalar_multiline(parse_ctx_t *ctx, bool in_flow,
        * spaces) is what recognizes a line as blank even when its own
        * remaining whitespace is a tab rather than more spaces; a raw
        * at_eol() check here cannot see past such a tab to the real line
-       * break behind it. Mirrors the identical fix already applied to
+       * break behind it. Mirrors the identical handling in
        * double-/single-quoted scalar folding (see at_blank_line's own doc
        * comment). Advance past the remaining whitespace up to (but not
        * including) the line terminator itself, so the loop's own
@@ -3861,7 +3863,7 @@ static bool parse_plain_scalar_multiline(parse_ctx_t *ctx, bool in_flow,
     }
     if (cur(ctx) == '#') {
       /* A comment line (a line whose first non-whitespace character is
-       * '#', which; like anywhere else; can never legitimately be
+       * '#', which, like anywhere else, can never legitimately be
        * plain-scalar content of its own) is not a continuation of this
        * scalar; leave it for the caller's own ordinary skip_ws_comments
        * to consume normally, exactly as if this multi-line attempt had
@@ -3893,7 +3895,7 @@ static bool parse_plain_scalar_multiline(parse_ctx_t *ctx, bool in_flow,
       /* See parse_plain_scalar's own identical check for why this is
        * distinguished from an ordinary "no real terminator on this line"
        * outcome. */
-      _mem_free(b.m_procs, b.buf);
+      _ccol_mem_free(b.m_procs, b.buf);
       return false;
     }
     if (!b.oom) {
@@ -3906,16 +3908,16 @@ static bool parse_plain_scalar_multiline(parse_ctx_t *ctx, bool in_flow,
   }
 
   if (b.oom) {
-    _mem_free(b.m_procs, b.buf);
+    _ccol_mem_free(b.m_procs, b.buf);
     return false;
   }
   *out = b.buf;
   return true;
 }
 
-/* Forward declaration; defined below alongside parse_flow_dictionary,
- * which was its first user, but also needed here by try_parse_scalar_
- * dict_key's alias-as-key and flow-collection-as-key handling. */
+/* Forward declaration; defined below alongside parse_flow_dictionary, one
+ * of its users, but also needed here by try_parse_scalar_dict_key's
+ * alias-as-key and flow-collection-as-key handling. */
 static char *node_to_dict_key_string(parse_ctx_t *ctx, cyaml_node_t *key_node,
                                      const char *context_label);
 
@@ -3926,10 +3928,10 @@ static char *node_to_dict_key_string(parse_ctx_t *ctx, cyaml_node_t *key_node,
 static char *serialize_flow_canonical(cyaml_node_t *n);
 
 /* Forward declarations; needed by try_parse_scalar_dict_key's own
- * flow-collection-as-key handling (a flow list/dictionary is unambiguous
- * on its own; no "was this actually a key" backtracking is needed the
- * way a bare plain scalar requires; so calling these directly here,
- * rather than through the generic parse_node dispatch, is deliberate: it
+ * flow-collection-as-key handling. A flow list/dictionary is unambiguous
+ * on its own (no "was this actually a key" backtracking is needed the way
+ * a bare plain scalar requires), so calling these directly here, rather
+ * than through the generic parse_node dispatch, is deliberate: it
  * sidesteps parse_node's own key-vs-value ambiguity handling entirely,
  * which does not apply to a flow collection in the first place. */
 static cyaml_node_t *parse_flow_list(parse_ctx_t *ctx, int indent);
@@ -4005,8 +4007,8 @@ static bool at_bare_seq_indicator(parse_ctx_t *ctx) {
  * gives it the identical grammar restriction: scan_plain_scalar_line
  * already has its own, earlier special case for a ':' reached with
  * nothing yet scanned, returning an empty scalar with the ':' left
- * unconsumed; the exact mechanism parse_flow_list's own bare-colon-key
- * shorthand ("[: value]", an empty implicit key) depends on; rejecting
+ * unconsumed (the exact mechanism parse_flow_list's own bare-colon-key
+ * shorthand, "[: value]", an empty implicit key, depends on); rejecting
  * ':' here would pre-empt that mechanism before it ever runs.
  */
 static bool at_valid_flow_plain_scalar_start(parse_ctx_t *ctx) {
@@ -4145,7 +4147,7 @@ static bool parse_tag_token(parse_ctx_t *ctx, char **resolved_out) {
       parse_err(ctx, "empty verbatim tag at position %zu", tag_start);
       return false;
     }
-    char *content = _mem_alloc(ctx->mp, content_len + 1);
+    char *content = _ccol_mem_alloc(ctx->mp, content_len + 1);
     if (!content) {
       parse_err(ctx, "out of memory parsing verbatim tag at position %zu",
                 tag_start);
@@ -4154,7 +4156,7 @@ static bool parse_tag_token(parse_ctx_t *ctx, char **resolved_out) {
     memcpy(content, ctx->src + content_start, content_len);
     content[content_len] = '\0';
     if (!percent_decode_tag_inplace(ctx, content, content_start)) {
-      _mem_free(ctx->mp, content);
+      _ccol_mem_free(ctx->mp, content);
       return false;
     }
     *resolved_out = content;
@@ -4187,7 +4189,7 @@ static bool parse_tag_token(parse_ctx_t *ctx, char **resolved_out) {
     }
   }
 
-  char *handle = _mem_alloc(ctx->mp, handle_len + 1);
+  char *handle = _ccol_mem_alloc(ctx->mp, handle_len + 1);
   if (!handle) {
     parse_err(ctx, "out of memory parsing tag handle at position %zu",
               tag_start);
@@ -4211,7 +4213,7 @@ static bool parse_tag_token(parse_ctx_t *ctx, char **resolved_out) {
     /* A bare "!" with nothing after it at all: the non-specific tag
      * (c-non-specific-tag), a separate grammar production from a
      * shorthand tag (which requires ns-tag-char+ after its handle). */
-    _mem_free(ctx->mp, handle);
+    _ccol_mem_free(ctx->mp, handle);
     *resolved_out = NULL;
     return true;
   }
@@ -4220,7 +4222,7 @@ static bool parse_tag_token(parse_ctx_t *ctx, char **resolved_out) {
      * (c-ns-shorthand-tag requires at least one ns-tag-char). */
     parse_err(ctx, "tag handle '%s' with no suffix at position %zu", handle,
               tag_start);
-    _mem_free(ctx->mp, handle);
+    _ccol_mem_free(ctx->mp, handle);
     return false;
   }
 
@@ -4228,7 +4230,7 @@ static bool parse_tag_token(parse_ctx_t *ctx, char **resolved_out) {
   if (!prefix) {
     parse_err(ctx, "undefined tag handle '%s' at position %zu", handle,
               tag_start);
-    _mem_free(ctx->mp, handle);
+    _ccol_mem_free(ctx->mp, handle);
     return false;
   }
 
@@ -4239,36 +4241,37 @@ static bool parse_tag_token(parse_ctx_t *ctx, char **resolved_out) {
    * tag_inplace shortens in place, so decoded_len can only be <= suffix_len)
    * before concatenating with prefix, mirroring the verbatim branch's own
    * decode-before-use treatment rather than copying the raw source bytes
-   * verbatim the way this branch previously did. */
-  char *suffix = _mem_alloc(ctx->mp, suffix_len + 1);
+   * verbatim. */
+  char *suffix = _ccol_mem_alloc(ctx->mp, suffix_len + 1);
   if (!suffix) {
     parse_err(ctx, "out of memory parsing tag suffix at position %zu",
               tag_start);
-    _mem_free(ctx->mp, handle);
+    _ccol_mem_free(ctx->mp, handle);
     return false;
   }
   memcpy(suffix, ctx->src + suffix_start, suffix_len);
   suffix[suffix_len] = '\0';
   if (!percent_decode_tag_inplace(ctx, suffix, suffix_start)) {
-    _mem_free(ctx->mp, handle);
-    _mem_free(ctx->mp, suffix);
+    _ccol_mem_free(ctx->mp, handle);
+    _ccol_mem_free(ctx->mp, suffix);
     return false;
   }
   size_t decoded_suffix_len = strlen(suffix);
 
   size_t prefix_len = strlen(prefix);
-  char *resolved = _mem_alloc(ctx->mp, prefix_len + decoded_suffix_len + 1);
+  char *resolved =
+      _ccol_mem_alloc(ctx->mp, prefix_len + decoded_suffix_len + 1);
   if (!resolved) {
     parse_err(ctx, "out of memory resolving tag at position %zu", tag_start);
-    _mem_free(ctx->mp, handle);
-    _mem_free(ctx->mp, suffix);
+    _ccol_mem_free(ctx->mp, handle);
+    _ccol_mem_free(ctx->mp, suffix);
     return false;
   }
   memcpy(resolved, prefix, prefix_len);
   memcpy(resolved + prefix_len, suffix, decoded_suffix_len);
   resolved[prefix_len + decoded_suffix_len] = '\0';
-  _mem_free(ctx->mp, handle);
-  _mem_free(ctx->mp, suffix);
+  _ccol_mem_free(ctx->mp, handle);
+  _ccol_mem_free(ctx->mp, suffix);
   *resolved_out = resolved;
   return true;
 }
@@ -4292,7 +4295,7 @@ static bool parse_tag_token(parse_ctx_t *ctx, char **resolved_out) {
  * key storage. A quoted-scalar key has no such richer representation (a
  * quoted scalar is always a string, matching key_str exactly), so its
  * caller passes NULL and this function falls back to building the
- * CYAML_STRING wrapper directly from key_str, as before. If anchor_name
+ * CYAML_STRING wrapper directly from key_str. If anchor_name
  * is NULL, any anchor_value passed in is destroyed rather than silently
  * leaked (defensive; no current caller does this).
  *
@@ -4322,11 +4325,11 @@ static bool register_key_anchor(parse_ctx_t *ctx, char *anchor_name,
   if (!anchor_val) {
     parse_err(ctx, "out of memory registering key anchor '%s' at position %zu",
               anchor_name, ctx->pos);
-    _mem_free(ctx->mp, anchor_name);
+    _ccol_mem_free(ctx->mp, anchor_name);
     return false;
   }
   bool stored = anchors_store(ctx, anchor_name, anchor_val);
-  _mem_free(ctx->mp, anchor_name);
+  _ccol_mem_free(ctx->mp, anchor_name);
   return stored;
 }
 
@@ -4387,10 +4390,10 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
     if (!aliased) {
       parse_err(ctx, "unknown alias '*%s' at position %zu", alias_name,
                 ctx->pos);
-      _mem_free(ctx->mp, alias_name);
+      _ccol_mem_free(ctx->mp, alias_name);
       return false;
     }
-    _mem_free(ctx->mp, alias_name);
+    _ccol_mem_free(ctx->mp, alias_name);
     cyaml_node_t *clone = (cyaml_node_t *)cyaml_clone((cyaml)aliased);
     if (!clone) {
       /* cyaml_clone() never calls parse_err() on OOM. Without an explicit
@@ -4456,10 +4459,10 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
        * parse_tag_token() actually performs that validation. */
       char *key_tag = NULL;
       if (!parse_tag_token(ctx, &key_tag)) {
-        _mem_free(ctx->mp, anchor_name);
+        _ccol_mem_free(ctx->mp, anchor_name);
         return false;
       }
-      _mem_free(ctx->mp, key_tag);
+      _ccol_mem_free(ctx->mp, key_tag);
       had_tag = true;
       skip_inline_ws(ctx);
     } else {
@@ -4476,12 +4479,12 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
      * and would otherwise silently absorb the unconsumed second tag's
      * text as part of the key string itself. */
     parse_err(ctx, "a node cannot carry two tags at position %zu", ctx->pos);
-    _mem_free(ctx->mp, anchor_name);
+    _ccol_mem_free(ctx->mp, anchor_name);
     return false;
   }
   if (at_end(ctx) || cur(ctx) == '\n' || cur(ctx) == '\r') {
     ctx->pos = saved_pos;
-    _mem_free(ctx->mp, anchor_name);
+    _ccol_mem_free(ctx->mp, anchor_name);
     return false;
   }
   char c = cur(ctx);
@@ -4498,7 +4501,7 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
      * ordinary value, which routes back through parse_node_inner's own
      * identical check for these three characters. */
     ctx->pos = saved_pos;
-    _mem_free(ctx->mp, anchor_name);
+    _ccol_mem_free(ctx->mp, anchor_name);
     return false;
   }
 
@@ -4514,9 +4517,9 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
        * key just below: an implicit key is always single-line
        * (ns-s-implicit-yaml-key), and a quoted scalar is no exception
        * (verified against two independent reference parsers). */
-      _mem_free(ctx->mp, key_str);
+      _ccol_mem_free(ctx->mp, key_str);
       ctx->pos = saved_pos;
-      _mem_free(ctx->mp, anchor_name);
+      _ccol_mem_free(ctx->mp, anchor_name);
       return false;
     }
   } else if (c == '[' || c == '{') {
@@ -4550,7 +4553,7 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
                   "out of memory parsing flow collection dictionary key "
                   "at position %zu",
                   coll_start);
-      _mem_free(ctx->mp, anchor_name);
+      _ccol_mem_free(ctx->mp, anchor_name);
       return false;
     }
     /* Every implicit key, non-scalar or not, must fit on a single line
@@ -4559,7 +4562,7 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
     if (span_crosses_newline(ctx, coll_start)) {
       __cyaml_destroy((cyaml)coll);
       ctx->pos = saved_pos;
-      _mem_free(ctx->mp, anchor_name);
+      _ccol_mem_free(ctx->mp, anchor_name);
       return false;
     }
     if (anchor_name) {
@@ -4576,7 +4579,7 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
                   "position %zu",
                   coll_start);
         __cyaml_destroy((cyaml)coll);
-        _mem_free(ctx->mp, anchor_name);
+        _ccol_mem_free(ctx->mp, anchor_name);
         return false;
       }
     }
@@ -4603,7 +4606,7 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
     if (!ctx->error[0])
       parse_err(ctx, "out of memory parsing dictionary key at position %zu",
                 saved_pos);
-    _mem_free(ctx->mp, anchor_name);
+    _ccol_mem_free(ctx->mp, anchor_name);
     return false;
   }
 
@@ -4617,8 +4620,8 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
   }
   if (!ok) {
     ctx->pos = saved_pos;
-    _mem_free(ctx->mp, key_str);
-    _mem_free(ctx->mp, anchor_name);
+    _ccol_mem_free(ctx->mp, key_str);
+    _ccol_mem_free(ctx->mp, anchor_name);
     if (anchor_value) __cyaml_destroy((cyaml)anchor_value);
     return false;
   }
@@ -4629,8 +4632,8 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
      * same core-schema typing node_to_dict_key_string() already applies
      * to every OTHER key-capture site (the flow-collection/alias-as-key
      * branches above, a flow dictionary/sequence key, and an explicit
-     * "? key" block key); without this, "~: v" stored the literal text
-     * "~" while "? ~\n: v" stored "null" for the identical value, even
+     * "? key" block key); without this, "~: v" stores the literal text
+     * "~" while "? ~\n: v" stores "null" for the identical value, even
      * though YAML 1.2 treats the two notations as exactly equivalent
      * spellings of the same entry. Also resolves the key's own implicit
      * type (exactly as an ordinary, un-anchored value-position plain
@@ -4642,8 +4645,8 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
     if (!typed) {
       parse_err(ctx, "out of memory typing dictionary key at position %zu",
                 saved_pos);
-      _mem_free(ctx->mp, key_str);
-      _mem_free(ctx->mp, anchor_name);
+      _ccol_mem_free(ctx->mp, key_str);
+      _ccol_mem_free(ctx->mp, anchor_name);
       return false;
     }
     if (anchor_name) {
@@ -4658,19 +4661,19 @@ static bool try_parse_scalar_dict_key(parse_ctx_t *ctx, char **anchor_name_out,
                   "out of memory registering key anchor '%s' at position %zu",
                   anchor_name, ctx->pos);
         __cyaml_destroy((cyaml)typed);
-        _mem_free(ctx->mp, key_str);
-        _mem_free(ctx->mp, anchor_name);
+        _ccol_mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, anchor_name);
         return false;
       }
     }
     char *canon_key = node_to_dict_key_string(ctx, typed, "block dictionary");
     if (!canon_key) {
       if (anchor_value) __cyaml_destroy((cyaml)anchor_value);
-      _mem_free(ctx->mp, key_str);
-      _mem_free(ctx->mp, anchor_name);
+      _ccol_mem_free(ctx->mp, key_str);
+      _ccol_mem_free(ctx->mp, anchor_name);
       return false;
     }
-    _mem_free(ctx->mp, key_str);
+    _ccol_mem_free(ctx->mp, key_str);
     key_str = canon_key;
   }
 
@@ -4701,7 +4704,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
 
 /*
  * Thin recursion-depth guard wrapping parse_node_inner (the real dispatch
- * logic, unchanged below).  Every recursive descent into node parsing in
+ * logic, below).  Every recursive descent into node parsing in
  * this file goes through this one function, so incrementing/decrementing
  * ctx->depth here bounds total call-stack usage regardless of which YAML
  * construct drives the recursion (nested mappings, sequences, explicit
@@ -4847,42 +4850,42 @@ static cyaml_node_t *parse_flow_list(parse_ctx_t *ctx, int indent) {
       if (!key_str) goto fail;
 
       if (!flow_skip_ws(ctx, indent)) {
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         goto fail;
       }
       cyaml_node_t *val;
       if (!at_end(ctx) && cur(ctx) == ':') {
         ctx->pos++;
         if (!flow_skip_ws(ctx, indent)) {
-          _mem_free(ctx->mp, key_str);
+          _ccol_mem_free(ctx->mp, key_str);
           goto fail;
         }
         val = parse_node(ctx, indent, true, false, false, false, false, NULL);
         if (!val) {
-          _mem_free(ctx->mp, key_str);
+          _ccol_mem_free(ctx->mp, key_str);
           goto fail;
         }
       } else {
         val = node_alloc(CYAML_NULL, ctx->mp);
         if (!val) {
-          _mem_free(ctx->mp, key_str);
+          _ccol_mem_free(ctx->mp, key_str);
           goto fail;
         }
       }
 
       cyaml_node_t *pair = (cyaml_node_t *)cyaml_create_dictionary_mp(ctx->mp);
       if (!pair) {
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         __cyaml_destroy((cyaml)val);
         goto fail;
       }
       if (cyaml_dictionary_set((cyaml)pair, key_str, (cyaml)val) !=
           ccol_success) {
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         __cyaml_destroy((cyaml)pair);
         goto fail;
       }
-      _mem_free(ctx->mp, key_str);
+      _ccol_mem_free(ctx->mp, key_str);
       if (is_merge_candidate && !expand_merge_key(ctx, pair)) {
         __cyaml_destroy((cyaml)pair);
         goto fail;
@@ -4926,12 +4929,11 @@ static cyaml_node_t *parse_flow_list(parse_ctx_t *ctx, int indent) {
      * single-entry mapping element (YAML 1.2 sec. 7.4.1, ns-flow-pair).
      * Like every implicit key, it must fit on a single line
      * (ns-s-implicit-yaml-key): a ':' found only after crossing a newline
-     *; whether that newline was crossed while parse_node itself was
-     * still resolving elem (e.g. multi-line plain scalar continuation
-     * folding straight up to the ':') or only afterward, while skipping
-     * whitespace before finding it; is not this shorthand, just the
-     * next real error (a missing ',' between this element and whatever
-     * follows). */
+     * (whether that newline was crossed while parse_node itself was still
+     * resolving elem, e.g. multi-line plain scalar continuation folding
+     * straight up to the ':', or only afterward, while skipping whitespace
+     * before finding it) is not this shorthand, just the next real error
+     * (a missing ',' between this element and whatever follows). */
     if (!flow_skip_ws(ctx, indent)) {
       __cyaml_destroy((cyaml)elem);
       goto fail;
@@ -4943,20 +4945,20 @@ static cyaml_node_t *parse_flow_list(parse_ctx_t *ctx, int indent) {
       bool is_merge_candidate = key_is_merge_candidate;
       ctx->pos++; /* consume ':' */
       if (!flow_skip_ws(ctx, indent)) {
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         goto fail;
       }
 
       cyaml_node_t *val =
           parse_node(ctx, indent, true, false, false, false, false, NULL);
       if (!val) {
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         goto fail;
       }
 
       cyaml_node_t *pair = (cyaml_node_t *)cyaml_create_dictionary_mp(ctx->mp);
       if (!pair) {
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         __cyaml_destroy((cyaml)val);
         goto fail;
       }
@@ -4965,11 +4967,11 @@ static cyaml_node_t *parse_flow_list(parse_ctx_t *ctx, int indent) {
        * clean up on that path. */
       if (cyaml_dictionary_set((cyaml)pair, key_str, (cyaml)val) !=
           ccol_success) {
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         __cyaml_destroy((cyaml)pair);
         goto fail;
       }
-      _mem_free(ctx->mp, key_str);
+      _ccol_mem_free(ctx->mp, key_str);
       if (is_merge_candidate && !expand_merge_key(ctx, pair)) {
         __cyaml_destroy((cyaml)pair);
         goto fail;
@@ -5013,9 +5015,9 @@ fail:
  * (matching-flow-output equality) exactly like this DOM already treats,
  * say, the numeric key 1 and the string key "1" as the same string key,
  * regardless of what order either dictionary's own keys happened to be
- * inserted in; this canonicalization is context_label-independent (unlike
- * the previous hard rejection) so it applies uniformly to a block
- * dictionary's explicit key, a flow dictionary key, and a flow sequence's
+ * inserted in; this canonicalization is context_label-independent, so it
+ * applies uniformly to a block dictionary's explicit key, a flow
+ * dictionary key, and a flow sequence's
  * "key: value" shorthand.
  */
 static char *node_to_dict_key_string(parse_ctx_t *ctx, cyaml_node_t *key_node,
@@ -5064,7 +5066,7 @@ static char *node_to_dict_key_string(parse_ctx_t *ctx, cyaml_node_t *key_node,
                   "canonical form of a non-scalar key in %s exceeds %d "
                   "bytes at position %zu",
                   context_label, CYAML_MAX_CANONICAL_KEY_LEN, ctx->pos);
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         key_str = NULL;
       }
       break;
@@ -5072,12 +5074,12 @@ static char *node_to_dict_key_string(parse_ctx_t *ctx, cyaml_node_t *key_node,
   /* The LIST/DICTIONARY branch above always reports its own OOM/oversize
    * failure via parse_err() before falling through here; the five scalar
    * branches have no failure mode of their own besides a bare ccol_strdup
-   * OOM, which none of them individually reported, unlike this file's own
-   * established convention elsewhere (e.g. try_parse_scalar_dict_key). Not
-   * a crash or desync either way (parse_common's own top-level fallback
-   * would still correctly report a generic out-of-memory message when
-   * ctx->error is still empty), but a real OOM here deserves this call
-   * site's own specific diagnostic instead. */
+   * OOM, which none of them reports individually. Leaving that unreported
+   * is not a crash or desync either way (parse_common's own top-level
+   * fallback still correctly reports a generic out-of-memory message when
+   * ctx->error is empty), but a real OOM here deserves this call site's
+   * own specific diagnostic, matching this file's convention elsewhere
+   * (e.g. try_parse_scalar_dict_key). */
   if (!key_str && !ctx->error[0]) {
     parse_err(ctx,
               "out of memory converting a scalar key to a dictionary "
@@ -5116,9 +5118,9 @@ static cyaml_node_t *parse_flow_dictionary(parse_ctx_t *ctx, int indent) {
    * "last value wins" duplicate-key semantics), so an earlier merge-
    * triggering "<<" entry must never keep this true once a later,
    * explicitly quoted/tagged "<<" entry overwrites it with an ordinary
-   * literal value; OR-accumulating unconditionally let that earlier
-   * entry's candidacy incorrectly force-expand (or spuriously reject) the
-   * later, literal entry's own value instead. */
+   * literal value; OR-accumulating across entries instead would let that
+   * earlier entry's candidacy incorrectly force-expand (or spuriously
+   * reject) the later, literal entry's own value. */
   bool double_lt_is_merge_candidate = false;
   while (1) {
     if (!flow_skip_ws(ctx, indent)) goto fail;
@@ -5196,14 +5198,14 @@ static cyaml_node_t *parse_flow_dictionary(parse_ctx_t *ctx, int indent) {
      * likewise has a null value; YAML 1.2 sec. 7.4.2's ns-flow-map-entry
      * allows both the key and the value half of a pair to be omitted. */
     if (!flow_skip_ws(ctx, indent)) {
-      _mem_free(ctx->mp, key_str);
+      _ccol_mem_free(ctx->mp, key_str);
       goto fail;
     }
     cyaml_node_t *val;
     if (!at_end(ctx) && cur(ctx) == ':') {
       ctx->pos++;
       if (!flow_skip_ws(ctx, indent)) {
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         goto fail;
       }
       if (!at_end(ctx) && (cur(ctx) == ',' || cur(ctx) == '}')) {
@@ -5216,17 +5218,17 @@ static cyaml_node_t *parse_flow_dictionary(parse_ctx_t *ctx, int indent) {
     } else {
       parse_err(ctx, "expected ':' after flow dictionary key at position %zu",
                 ctx->pos);
-      _mem_free(ctx->mp, key_str);
+      _ccol_mem_free(ctx->mp, key_str);
       goto fail;
     }
     if (!val) {
-      _mem_free(ctx->mp, key_str);
+      _ccol_mem_free(ctx->mp, key_str);
       goto fail;
     }
 
     bool key_is_double_lt = strcmp(key_str, "<<") == 0;
     ccol_retval_t r = cyaml_dictionary_set((cyaml)map, key_str, (cyaml)val);
-    _mem_free(ctx->mp, key_str);
+    _ccol_mem_free(ctx->mp, key_str);
     if (r != ccol_success) goto fail;
     if (key_is_double_lt) double_lt_is_merge_candidate = is_merge_candidate;
 
@@ -5470,12 +5472,12 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
       if (try_parse_scalar_dict_key(ctx, &anchor_name, &key_str,
                                     &is_merge_candidate, &anchor_value)) {
         if (!register_key_anchor(ctx, anchor_name, key_str, anchor_value)) {
-          _mem_free(ctx->mp, key_str);
+          _ccol_mem_free(ctx->mp, key_str);
           return NULL;
         }
         cyaml_node_t *map = parse_block_dictionary(
             ctx, col, key_str, /*colon_consumed=*/true, is_merge_candidate);
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         return finalize_collection_node(ctx, map, resolved_tag);
       }
       if (ctx->error[0]) return NULL;
@@ -5522,15 +5524,15 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                 "unexpected '%c' directly after anchor name at "
                 "position %zu",
                 cur(ctx), ctx->pos);
-      _mem_free(ctx->mp, name);
+      _ccol_mem_free(ctx->mp, name);
       return NULL;
     }
 
     cyaml_node_t *n;
     if (!in_flow && rest_of_line_is_blank(ctx)) {
       /* Nothing else (but possibly a comment) on this line: mirror
-       * parse_block_map_node's own "a
-       * value on a later line only counts if it's actually more indented
+       * parse_block_map_node's own "a value on a later line only counts
+       * if it's actually more indented
        * (or, for a sequence, exactly as indented)" check before recursing,
        * so a sibling entry at or below `indent` (e.g. "b: 2" following
        * "a: &anchor" at the same column) is never misread as this
@@ -5542,7 +5544,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
           !at_end(ctx) && at_block_value_col(ctx, indent, seq_ok_at_indent);
       if (!is_value_col && !at_end(ctx) && ctx->error[0]) {
         /* at_block_value_col() found a tab, not merely "not eligible". */
-        _mem_free(ctx->mp, name);
+        _ccol_mem_free(ctx->mp, name);
         return NULL;
       }
       if (at_end(ctx) || !is_value_col) {
@@ -5581,7 +5583,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
        * silently accept a tab-indented or under-indented continuation line
        * here that flow_skip_ws would correctly reject anywhere else. */
       if (!flow_skip_ws(ctx, indent)) {
-        _mem_free(ctx->mp, name);
+        _ccol_mem_free(ctx->mp, name);
         return NULL;
       }
       n = parse_node(ctx, indent, in_flow, seq_ok_at_indent, allow_inline_map,
@@ -5596,7 +5598,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                 "a block sequence cannot start on the same line as an "
                 "anchor at position %zu",
                 ctx->pos);
-      _mem_free(ctx->mp, name);
+      _ccol_mem_free(ctx->mp, name);
       return NULL;
     } else if (!in_flow && cur(ctx) == '&') {
       /* This anchor's own same-line content is itself another anchor.
@@ -5613,14 +5615,14 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
        * fail (e.g. when nothing after the second anchor looks like a key). */
       parse_err(ctx, "a node cannot carry two anchors at position %zu",
                 ctx->pos);
-      _mem_free(ctx->mp, name);
+      _ccol_mem_free(ctx->mp, name);
       return NULL;
     } else {
       n = parse_node(ctx, indent, in_flow, seq_ok_at_indent, allow_inline_map,
                      true, had_tag, resolved_tag);
     }
     if (!n) {
-      _mem_free(ctx->mp, name);
+      _ccol_mem_free(ctx->mp, name);
       return NULL;
     }
     cyaml_node_t *clone = (cyaml_node_t *)cyaml_clone((cyaml)n);
@@ -5635,7 +5637,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
         parse_err(ctx, "out of memory cloning anchor '%s' at position %zu",
                   name, ctx->pos);
       __cyaml_destroy((cyaml)n);
-      _mem_free(ctx->mp, name);
+      _ccol_mem_free(ctx->mp, name);
       return NULL;
     }
     if (!anchors_store(ctx, name, clone)) {
@@ -5646,10 +5648,10 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
        * nothing (or, worse, against a stale entry from an outer scope)
        * instead of getting the real "out of memory" failure. */
       __cyaml_destroy((cyaml)n);
-      _mem_free(ctx->mp, name);
+      _ccol_mem_free(ctx->mp, name);
       return NULL;
     }
-    _mem_free(ctx->mp, name);
+    _ccol_mem_free(ctx->mp, name);
     return n;
   }
 
@@ -5671,11 +5673,11 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
          * scalar_dict_key, which is structurally never a merge candidate
          * (see that function's own doc comment); no need to even ask for
          * the out-param here. */
-        _mem_free(ctx->mp,
-                  anchor_name); /* an alias key has no name of its own */
+        _ccol_mem_free(ctx->mp,
+                       anchor_name); /* an alias key has no name of its own */
         cyaml_node_t *map = parse_block_dictionary(
             ctx, col, key_str, /*colon_consumed=*/true, false);
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         return finalize_collection_node(ctx, map, resolved_tag);
       }
       if (ctx->error[0]) return NULL;
@@ -5707,7 +5709,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     cyaml_node_t *anchored = anchors_lookup(ctx, name);
     if (!anchored) {
       parse_err(ctx, "unknown alias '*%s' at position %zu", name, ctx->pos);
-      _mem_free(ctx->mp, name);
+      _ccol_mem_free(ctx->mp, name);
       return NULL;
     }
     cyaml_node_t *clone = (cyaml_node_t *)cyaml_clone((cyaml)anchored);
@@ -5717,11 +5719,11 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                 "limit at position %zu; check for exponential anchor/alias "
                 "nesting",
                 name, CYAML_MAX_PARSE_NODES, ctx->pos);
-    _mem_free(ctx->mp, name);
+    _ccol_mem_free(ctx->mp, name);
     return clone;
   }
 
-  /* Tag (ignored) */
+  /* Tag */
   if (c == '!') {
     /* Mirrors the '&' branch's identical check just above: "!!tag key:
      * value" tags just the key scalar, not the entire dictionary that key
@@ -5746,12 +5748,12 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
          * from ever being a merge candidate (see that function's own doc
          * comment); no need to even ask for the out-param here. */
         if (!register_key_anchor(ctx, anchor_name, key_str, anchor_value)) {
-          _mem_free(ctx->mp, key_str);
+          _ccol_mem_free(ctx->mp, key_str);
           return NULL;
         }
         cyaml_node_t *map = parse_block_dictionary(
             ctx, col, key_str, /*colon_consumed=*/true, false);
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         return finalize_collection_node(ctx, map, resolved_tag);
       }
       if (ctx->error[0]) return NULL;
@@ -5788,7 +5790,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
        * all (e.g. "!!str,xxx", verified against a reference parser). */
       parse_err(ctx, "unexpected '%c' directly after tag at position %zu",
                 cur(ctx), ctx->pos);
-      _mem_free(ctx->mp, tag);
+      _ccol_mem_free(ctx->mp, tag);
       return NULL;
     }
     if (ctx->pos == after_tag_pos && !at_end(ctx) && cur(ctx) != '\n' &&
@@ -5808,7 +5810,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                 "tag must be separated from its content by whitespace at "
                 "position %zu",
                 ctx->pos);
-      _mem_free(ctx->mp, tag);
+      _ccol_mem_free(ctx->mp, tag);
       return NULL;
     }
 
@@ -5818,16 +5820,16 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
        * '&' branch's identical guard (see its own doc comment above) so a
        * sibling entry at or below `indent` (e.g. a following list entry
        * at the same column as "- !!str" itself) is never misread as
-       * this tag's own value. An earlier version of this branch recursed
-       * unconditionally whenever the rest of the line was blank, which let
-       * it walk straight past the newline and swallow that sibling (and
-       * everything after it) into this tag's value instead, exactly the
-       * bug the '&' branch's own comment already warns against. */
+       * this tag's own value. Recursing unconditionally whenever the rest
+       * of the line is blank would walk straight past the newline and
+       * swallow that sibling (and everything after it) into this tag's
+       * value instead, exactly what the '&' branch's own comment warns
+       * against. */
       skip_ws_comments(ctx);
       bool is_value_col =
           !at_end(ctx) && at_block_value_col(ctx, indent, seq_ok_at_indent);
       if (!is_value_col && !at_end(ctx) && ctx->error[0]) {
-        _mem_free(ctx->mp, tag);
+        _ccol_mem_free(ctx->mp, tag);
         return NULL;
       }
       if (at_end(ctx) || !is_value_col) {
@@ -5855,7 +5857,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
        * the way the block-context branch above does; a flow collection's
        * own ','/']'/'}' terminators, not indentation, delimit entries. */
       if (!flow_skip_ws(ctx, indent)) {
-        _mem_free(ctx->mp, tag);
+        _ccol_mem_free(ctx->mp, tag);
         return NULL;
       }
       n = parse_node(ctx, indent, in_flow, seq_ok_at_indent, allow_inline_map,
@@ -5869,7 +5871,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                 "a block sequence cannot start on the same line as a "
                 "tag at position %zu",
                 ctx->pos);
-      _mem_free(ctx->mp, tag);
+      _ccol_mem_free(ctx->mp, tag);
       return NULL;
     } else if (!in_flow && cur(ctx) == '!') {
       /* This tag's own same-line content is itself another tag.
@@ -5878,7 +5880,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
        * own doc comment for why had_tag's check further up cannot catch
        * this by itself). */
       parse_err(ctx, "a node cannot carry two tags at position %zu", ctx->pos);
-      _mem_free(ctx->mp, tag);
+      _ccol_mem_free(ctx->mp, tag);
       return NULL;
     } else {
       n = parse_node(ctx, indent, in_flow, seq_ok_at_indent, allow_inline_map,
@@ -5886,7 +5888,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     }
 
     if (!n) {
-      _mem_free(ctx->mp, tag);
+      _ccol_mem_free(ctx->mp, tag);
       return NULL;
     }
 
@@ -5902,7 +5904,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
      * was only ever borrowed by that whole chain, never transferred, so
      * it is unconditionally freed here regardless of which path was
      * taken. */
-    _mem_free(ctx->mp, tag);
+    _ccol_mem_free(ctx->mp, tag);
     return n;
   }
 
@@ -5949,7 +5951,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
            * always a plain scalar). */
           cyaml_node_t *map =
               parse_block_dictionary(ctx, col, key_str, false, false);
-          _mem_free(ctx->mp, key_str);
+          _ccol_mem_free(ctx->mp, key_str);
           /* See the double-quoted scalar branch's own identical comment
            * for why resolved_tag is unambiguously safe to attach to the
            * resulting mapping here, rather than to the flow collection
@@ -6081,7 +6083,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                       "implicit keys cannot span multiple lines at "
                       "position %zu",
                       ctx->pos);
-            _mem_free(ctx->mp, s);
+            _ccol_mem_free(ctx->mp, s);
             return NULL;
           }
           if (!allow_inline_map) {
@@ -6092,14 +6094,14 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                       "mapping values are not allowed here "
                       "(position %zu)",
                       ctx->pos);
-            _mem_free(ctx->mp, s);
+            _ccol_mem_free(ctx->mp, s);
             return NULL;
           }
           /* A quoted scalar can never be a merge-key candidate (see
            * try_parse_scalar_dict_key's own doc comment: only the plain-
            * scalar production is ever eligible). */
           cyaml_node_t *map = parse_block_dictionary(ctx, col, s, false, false);
-          _mem_free(ctx->mp, s);
+          _ccol_mem_free(ctx->mp, s);
           /* resolved_tag reaching this "value turns out to be a key"
            * shape can only ever happen via a tag forwarded through one
            * or more '&' anchor layers (a tag directly adjacent to a key
@@ -6137,7 +6139,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                       "implicit keys cannot span multiple lines at "
                       "position %zu",
                       ctx->pos);
-            _mem_free(ctx->mp, s);
+            _ccol_mem_free(ctx->mp, s);
             return NULL;
           }
           if (!allow_inline_map) {
@@ -6148,13 +6150,13 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                       "mapping values are not allowed here "
                       "(position %zu)",
                       ctx->pos);
-            _mem_free(ctx->mp, s);
+            _ccol_mem_free(ctx->mp, s);
             return NULL;
           }
           /* A quoted scalar can never be a merge-key candidate; see the
            * double-quoted branch's own identical comment. */
           cyaml_node_t *map = parse_block_dictionary(ctx, col, s, false, false);
-          _mem_free(ctx->mp, s);
+          _ccol_mem_free(ctx->mp, s);
           /* See the identical comment in the double-quoted branch above. */
           return finalize_collection_node(ctx, map, resolved_tag);
         }
@@ -6233,7 +6235,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
                       "mapping values are not allowed here "
                       "(position %zu)",
                       ctx->pos);
-            _mem_free(ctx->mp, s);
+            _ccol_mem_free(ctx->mp, s);
             return NULL;
           }
           /* This is a block dictionary key. See the double-quoted branch's
@@ -6251,8 +6253,8 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
            * intercepted by the '!' branch's own fast path above, never
            * reaching this plain-scalar dispatch at all. Disqualifying the
            * merge whenever the enclosing collection merely happens to be
-           * tagged was a bug: it silently left "<<" as a literal,
-           * unmerged key instead of expanding it. */
+           * tagged would silently leave "<<" as a literal, unmerged key
+           * instead of expanding it. */
           bool is_merge_candidate = strcmp(s, "<<") == 0;
           /* This plain-scalar key must canonicalize through the exact same
            * core-schema typing node_to_dict_key_string() already applies to
@@ -6260,7 +6262,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
            * flow-collection/alias-as-key/anchored-or-tagged-plain-scalar
            * branches, a flow dictionary/sequence key, and an explicit
            * "? key" block key); without this, an unadorned first entry like
-           * "~: v" stored the literal text "~" while "? ~\n: v" stored
+           * "~: v" stores the literal text "~" while "? ~\n: v" stores
            * "null" for the identical value, even though YAML 1.2 treats the
            * two notations as exactly equivalent spellings of the same
            * entry. is_merge_candidate above is deliberately computed from
@@ -6271,16 +6273,16 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
             parse_err(ctx,
                       "out of memory typing dictionary key at position %zu",
                       ctx->pos);
-            _mem_free(ctx->mp, s);
+            _ccol_mem_free(ctx->mp, s);
             return NULL;
           }
           char *canon_key =
               node_to_dict_key_string(ctx, typed, "block dictionary");
-          _mem_free(ctx->mp, s);
+          _ccol_mem_free(ctx->mp, s);
           if (!canon_key) return NULL;
           cyaml_node_t *map = parse_block_dictionary(ctx, col, canon_key, false,
                                                      is_merge_candidate);
-          _mem_free(ctx->mp, canon_key);
+          _ccol_mem_free(ctx->mp, canon_key);
           return finalize_collection_node(ctx, map, resolved_tag);
         }
       }
@@ -6366,9 +6368,9 @@ static cyaml_node_t *parse_block_list(parse_ctx_t *ctx, int seq_indent) {
      * "-": cur(ctx) is '#' at this point, not a newline, so at_eol() alone
      * would wrongly conclude real content starts here and hand the
      * comment text itself to parse_node() as if it were this entry's
-     * value; which then went on to swallow every following sibling
-     * entry as nested content instead of a null entry followed by its
-     * own separate siblings. */
+     * value, which then swallows every following sibling entry as nested
+     * content instead of yielding a null entry followed by its own
+     * separate siblings. */
     cyaml_node_t *elem;
     if (rest_of_line_is_blank(ctx) || at_end(ctx)) {
       /* Nothing on this line after '-'; peek at the next non-empty line.
@@ -6591,7 +6593,7 @@ static bool explicit_key_peek_is_merge_candidate(parse_ctx_t *ctx, int indent,
         ctx->pos = saved_pos;
         return false;
       }
-      _mem_free(ctx->mp, tmp_anchor);
+      _ccol_mem_free(ctx->mp, tmp_anchor);
       had_anchor = true;
     } else if (!at_end(ctx) && cur(ctx) == '!' && !had_tag) {
       skip_tag_token(ctx);
@@ -6738,7 +6740,7 @@ static int parse_one_dict_entry_key(parse_ctx_t *ctx, int map_indent,
                   "tab cannot be used as block mapping indentation at "
                   "position %zu",
                   ctx->pos);
-        _mem_free(ctx->mp, key_str);
+        _ccol_mem_free(ctx->mp, key_str);
         return -1;
       }
       have_colon = (current_col(ctx) == map_indent && cur(ctx) == ':');
@@ -6782,7 +6784,7 @@ static int parse_one_dict_entry_key(parse_ctx_t *ctx, int map_indent,
     return ctx->error[0] ? -1 : 0;
 
   if (!register_key_anchor(ctx, anchor_name, key_str, anchor_value)) {
-    _mem_free(ctx->mp, key_str);
+    _ccol_mem_free(ctx->mp, key_str);
     return -1;
   }
 
@@ -6867,7 +6869,7 @@ static bool merge_one_source_into(parse_ctx_t *ctx, cyaml_node_t *target,
  * confirmed a genuine plain, untagged merge-key trigger was seen while
  * parsing map. The merge source may be a single mapping or a sequence of
  * mappings (earlier sources win over later ones on conflict, per this
- * module's own confirmed precedence decision). A merged-in mapping's own
+ * module's own precedence rule). A merged-in mapping's own
  * "<<" entry, if it had one, is already fully expanded and removed by the
  * time IT was parsed (a nested mapping is always completely finished,
  * including its own merge expansion, before any anchor referencing it is
@@ -6944,9 +6946,9 @@ static cyaml_node_t *parse_block_dictionary(parse_ctx_t *ctx, int map_indent,
    * "last value wins" duplicate-key semantics), so an earlier merge-
    * triggering "<<" entry must never keep this true once a later,
    * explicitly quoted/tagged "<<" entry overwrites it with an ordinary
-   * literal value; OR-accumulating unconditionally let that earlier
-   * entry's candidacy incorrectly force-expand (or spuriously reject) the
-   * later, literal entry's own value instead. */
+   * literal value; OR-accumulating across entries instead would let that
+   * earlier entry's candidacy incorrectly force-expand (or spuriously
+   * reject) the later, literal entry's own value. */
   bool double_lt_is_merge_candidate = false;
   const char *key = first_key;
   char *key_owned = NULL; /* owned key for the current iteration */
@@ -7036,7 +7038,7 @@ static cyaml_node_t *parse_block_dictionary(parse_ctx_t *ctx, int map_indent,
     if (cyaml_dictionary_set((cyaml)map, key, (cyaml)val) != ccol_success) {
       goto fail;
     }
-    _mem_free(ctx->mp, key_owned);
+    _ccol_mem_free(ctx->mp, key_owned);
     key_owned = NULL;
     key = NULL;
 
@@ -7069,7 +7071,7 @@ static cyaml_node_t *parse_block_dictionary(parse_ctx_t *ctx, int map_indent,
   return map;
 
 fail:
-  _mem_free(ctx->mp, key_owned);
+  _ccol_mem_free(ctx->mp, key_owned);
   __cyaml_destroy((cyaml)map);
   return NULL;
 }
@@ -7108,8 +7110,8 @@ static bool parse_directive_line(parse_ctx_t *ctx,
 
   if (is_tag) {
     /* A tab is never valid block-structural indentation or separation
-     * (YAML 1.2 sec. 6.1); mirrors the identical, already-established
-     * "%YAML"-directive checks just below (both the immediate glued-tab
+     * (YAML 1.2 sec. 6.1); mirrors the identical "%YAML"-directive checks
+     * just below (both the immediate glued-tab
      * check and the post-skip_inline_ws scan of the whole consumed span,
      * since skip_inline_ws() itself still treats a tab as ordinary
      * whitespace and would otherwise silently swallow one past the first
@@ -7138,7 +7140,7 @@ static bool parse_directive_line(parse_ctx_t *ctx,
       parse_err(ctx, "malformed %%TAG directive at position %zu", start);
       return false;
     }
-    char *handle = _mem_alloc(ctx->mp, handle_len + 1);
+    char *handle = _ccol_mem_alloc(ctx->mp, handle_len + 1);
     if (!handle) return false;
     memcpy(handle, ctx->src + handle_start, handle_len);
     handle[handle_len] = '\0';
@@ -7169,23 +7171,23 @@ static bool parse_directive_line(parse_ctx_t *ctx,
     if (!handle_valid) {
       parse_err(ctx, "malformed %%TAG handle '%s' at position %zu", handle,
                 start);
-      _mem_free(ctx->mp, handle);
+      _ccol_mem_free(ctx->mp, handle);
       return false;
     }
 
     /* The handle-to-prefix separator gets the identical tab rejection as
-     * the directive-name-to-handle separator above; a tab was previously
-     * accepted here as an equally valid separator character, unlike every
-     * other same-line-vs-content-boundary case in this file. */
+     * the directive-name-to-handle separator above. Accepting a tab here as
+     * an equally valid separator would make this the one
+     * same-line-vs-content-boundary case in this file that does. */
     if (!at_end(ctx) && cur(ctx) == '\t') {
       parse_err(ctx, "tab cannot follow a %%TAG handle at position %zu",
                 ctx->pos);
-      _mem_free(ctx->mp, handle);
+      _ccol_mem_free(ctx->mp, handle);
       return false;
     }
     if (at_end(ctx) || cur(ctx) != ' ') {
       parse_err(ctx, "malformed %%TAG directive at position %zu", start);
-      _mem_free(ctx->mp, handle);
+      _ccol_mem_free(ctx->mp, handle);
       return false;
     }
     size_t ws2_start = ctx->pos;
@@ -7193,7 +7195,7 @@ static bool parse_directive_line(parse_ctx_t *ctx,
     if (memchr(ctx->src + ws2_start, '\t', ctx->pos - ws2_start) != NULL) {
       parse_err(ctx, "tab cannot follow a %%TAG handle at position %zu",
                 ws2_start);
-      _mem_free(ctx->mp, handle);
+      _ccol_mem_free(ctx->mp, handle);
       return false;
     }
 
@@ -7204,10 +7206,10 @@ static bool parse_directive_line(parse_ctx_t *ctx,
      * ordinary URI character, and a comment can only ever start after
      * genuine separating whitespace (s-b-comment), never glued directly
      * onto the prefix with nothing between them. Stopping at '#'
-     * unconditionally here (as this loop previously did) silently
-     * truncated any prefix containing one, e.g. a fragment identifier, and
-     * treated the rest as an ordinary trailing comment with no separator
-     * at all - mirrors parse_tag_token's/skip_tag_token's own suffix scan,
+     * unconditionally here would silently truncate any prefix containing
+     * one, e.g. a fragment identifier, and treat the rest as an ordinary
+     * trailing comment with no separator at all. Mirrors
+     * parse_tag_token's/skip_tag_token's own suffix scan,
      * which already treats '#' as an ordinary tag character. */
     while (!at_end(ctx) && cur(ctx) != ' ' && cur(ctx) != '\t' &&
            cur(ctx) != '\n' && cur(ctx) != '\r')
@@ -7215,12 +7217,12 @@ static bool parse_directive_line(parse_ctx_t *ctx,
     size_t prefix_len = ctx->pos - prefix_start;
     if (prefix_len == 0) {
       parse_err(ctx, "malformed %%TAG prefix at position %zu", start);
-      _mem_free(ctx->mp, handle);
+      _ccol_mem_free(ctx->mp, handle);
       return false;
     }
-    char *prefix = _mem_alloc(ctx->mp, prefix_len + 1);
+    char *prefix = _ccol_mem_alloc(ctx->mp, prefix_len + 1);
     if (!prefix) {
-      _mem_free(ctx->mp, handle);
+      _ccol_mem_free(ctx->mp, handle);
       return false;
     }
     memcpy(prefix, ctx->src + prefix_start, prefix_len);
@@ -7233,14 +7235,14 @@ static bool parse_directive_line(parse_ctx_t *ctx,
      * in the same s-l-comments production every other directive line
      * does, not the free-form ns-reserved-directive parameter list an
      * unrecognized directive name gets). Without this, e.g. "%TAG !e!
-     * tag:example.com,2000:app/ garbage-text\n" silently discarded
+     * tag:example.com,2000:app/ garbage-text\n" silently discards
      * "garbage-text" instead of being rejected. */
     if (!at_end(ctx) && cur(ctx) != ' ' && cur(ctx) != '\t' &&
         cur(ctx) != '\n' && cur(ctx) != '\r' && cur(ctx) != '#') {
       parse_err(ctx, "extra content after %%TAG prefix at position %zu",
                 ctx->pos);
-      _mem_free(ctx->mp, handle);
-      _mem_free(ctx->mp, prefix);
+      _ccol_mem_free(ctx->mp, handle);
+      _ccol_mem_free(ctx->mp, prefix);
       return false;
     }
     size_t ws3_start = ctx->pos;
@@ -7248,27 +7250,27 @@ static bool parse_directive_line(parse_ctx_t *ctx,
     if (memchr(ctx->src + ws3_start, '\t', ctx->pos - ws3_start) != NULL) {
       parse_err(ctx, "tab cannot follow a %%TAG prefix at position %zu",
                 ws3_start);
-      _mem_free(ctx->mp, handle);
-      _mem_free(ctx->mp, prefix);
+      _ccol_mem_free(ctx->mp, handle);
+      _ccol_mem_free(ctx->mp, prefix);
       return false;
     }
     if (!at_end(ctx) && cur(ctx) != '\n' && cur(ctx) != '\r' &&
         cur(ctx) != '#') {
       parse_err(ctx, "extra content after %%TAG prefix at position %zu",
                 ctx->pos);
-      _mem_free(ctx->mp, handle);
-      _mem_free(ctx->mp, prefix);
+      _ccol_mem_free(ctx->mp, handle);
+      _ccol_mem_free(ctx->mp, prefix);
       return false;
     }
 
     /* YAML 1.2 sec. 6.8.2: "it is an error to define the same handle
-     * more than once", mirroring the identical, already-established rule
-     * for a duplicate %YAML directive (sec. 6.8.1); verified against
+     * more than once", mirroring the identical rule for a duplicate
+     * %YAML directive (sec. 6.8.1); verified against
      * two independent reference parsers, both of which reject this even
      * when the second directive repeats the exact same prefix. */
     ccol_retval_t set_rv = tag_handles_set(ctx, handle, prefix);
-    _mem_free(ctx->mp, handle);
-    _mem_free(ctx->mp, prefix);
+    _ccol_mem_free(ctx->mp, handle);
+    _ccol_mem_free(ctx->mp, prefix);
     if (set_rv == ccol_key_already_present) {
       parse_err(ctx, "duplicate %%TAG directive for handle at position %zu",
                 start);
@@ -7286,7 +7288,7 @@ static bool parse_directive_line(parse_ctx_t *ctx,
        * (YAML 1.2 sec. 6.1), and a %YAML directive's own separator is no
        * exception (verified against a reference parser: "%YAML \t1.1" is
        * rejected, not merely the version-glued-directly-on "%YAML\t1.1"
-       * case this same check also already covered). */
+       * case this same check also covers). */
       parse_err(ctx, "tab cannot follow '%%YAML' at position %zu", ctx->pos);
       return false;
     }
@@ -7430,10 +7432,10 @@ static cyaml_node_t *parse_one_document(parse_ctx_t *ctx,
    * found afterward can never belong to THIS document; it can only be the
    * next document's own directive prefix, meaning this document is empty
    * and ends right here. Without tracking this, a bare '---' immediately
-   * followed (on a later line) by a directive-carrying document had that
+   * followed (on a later line) by a directive-carrying document has that
    * next document's entire "%directive\n---\ncontent" silently absorbed as
    * if it were this document's own trailing content, losing the empty
-   * document this '---' actually introduced. */
+   * document this '---' actually introduces. */
   bool consumed_leading_dashes = false;
 
   /* Accept optional leading document-start marker.  Per YAML 1.2 the '---'
@@ -7523,7 +7525,7 @@ static cyaml_node_t *parse_one_document(parse_ctx_t *ctx,
    * never legitimately start with it; a bare '%' reached here can only be
    * the next document's own directive prefix, never this document's
    * content. Without this check, two consecutive directive-only documents
-   * (e.g. "%YAML 1.2\n---\n%YAML 1.2\n---\n") had the second document's
+   * (e.g. "%YAML 1.2\n---\n%YAML 1.2\n---\n") have the second document's
    * directive line silently mis-consumed as the first document's own
    * scalar content, since parse_node() has no directive-syntax awareness
    * of its own. */
@@ -7570,11 +7572,11 @@ static cyaml_node_t *parse_one_document(parse_ctx_t *ctx,
    * comments between it and the one just consumed) belongs to THIS same
    * document's own closing, not to a fresh, separate (and, per the empty-
    * document check above, spuriously empty) document of its own. Without
-   * looping here, "a: 1\n...\n...\n" left the second '...' for the next
-   * parse_one_document call to find, which would then re-trigger the
-   * empty-document check above and fabricate a phantom extra CYAML_NULL
-   * document out of what is really just repeated separator noise; PyYAML,
-   * cross-checked directly, parses this as a single document.
+   * looping here, "a: 1\n...\n...\n" leaves the second '...' for the next
+   * parse_one_document call to find, which then re-triggers the
+   * empty-document check above and fabricates a phantom extra CYAML_NULL
+   * document out of what is really just repeated separator noise; PyYAML
+   * parses this as a single document.
    *
    * at_doc_marker() enforces column 0 so an indented '...' sequence is not
    * silently swallowed as a document boundary (it would then be reported
@@ -7651,8 +7653,7 @@ static void set_err_str(char **err_str, ccol_memmgmt_procs_t *mp,
  * the stream, each delimited by optional '---' / '...' markers.  The anchor
  * table is reset between documents so anchors do not leak across boundaries.
  *
- * Single-document streams: the root node is returned directly (same type as
- * before, fully backwards-compatible).
+ * Single-document streams: the root node is returned directly.
  *
  * Multi-document streams: all document roots are collected and returned as a
  * single CYAML_LIST node whose elements are the individual document roots, in
@@ -7678,7 +7679,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
    * parsing function runs; see that function's own doc comment for why
    * this allocation specifically is fatal-on-failure (unlike a later
    * growth of the same cache, which degrades gracefully instead). */
-  ctx.line_starts = _mem_alloc(mp, 64 * sizeof(size_t));
+  ctx.line_starts = _ccol_mem_alloc(mp, 64 * sizeof(size_t));
   if (!ctx.line_starts) {
     set_err_str(err_str, mp, "out of memory");
     parse_node_budget_disarm();
@@ -7706,9 +7707,9 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
    * own "---"/directives/content) is, by construction, pure indentation
    * from true column 0; see parse_node's own identical entry_at_line_start
    * check for why this is safe to apply here unconditionally. Without
-   * this, a document beginning with a tab (e.g. "\ta: 1\n") had that tab
-   * silently consumed here, before parse_one_document/parse_node ever got
-   * a chance to reject it. */
+   * this, a document beginning with a tab (e.g. "\ta: 1\n") has that tab
+   * silently consumed here, before parse_one_document/parse_node ever
+   * gets a chance to reject it. */
   if (!at_end(&ctx) && line_indent_has_tab(&ctx)) {
     char buf[96];
     snprintf(buf, sizeof(buf),
@@ -7717,7 +7718,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
              ctx.pos);
     set_err_str(err_str, mp, buf);
     parse_node_budget_disarm();
-    _mem_free(mp, ctx.line_starts);
+    _ccol_mem_free(mp, ctx.line_starts);
     return NULL;
   }
 
@@ -7752,7 +7753,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
       } else {
         /* Every genuine syntax rejection in this parser reports a
          * specific diagnostic via parse_err() before returning failure
-         * (this file's own established, audited convention throughout);
+         * (this file's own convention throughout);
          * the only way to reach here with ctx.error still empty is either
          * an allocation that failed somewhere deep in the call chain
          * without a diagnostic of its own to report (many low-level DOM
@@ -7789,7 +7790,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
     if (ndocs == dcap) {
       size_t new_cap = dcap ? dcap * 2 : 4;
       cyaml_node_t **nd =
-          _mem_realloc(mp, docs, new_cap * sizeof(cyaml_node_t *));
+          _ccol_mem_realloc(mp, docs, new_cap * sizeof(cyaml_node_t *));
       if (!nd) {
         __cyaml_destroy((cyaml)root);
         set_err_str(err_str, mp, "out of memory");
@@ -7807,7 +7808,7 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
   /* Empty input: return a null node, matching the behaviour of parsing an
    * empty plain scalar (YAML 1.2 core schema: empty value resolves to null). */
   if (ndocs == 0) {
-    _mem_free(mp, docs);
+    _ccol_mem_free(mp, docs);
     cyaml_node_t *empty = node_alloc(CYAML_NULL, mp);
     if (!empty) {
       /* *err_str must not be set to NULL until success is actually
@@ -7817,22 +7818,22 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
        * a NULL/NULL pair here either. */
       set_err_str(err_str, mp, "out of memory");
       parse_node_budget_disarm();
-      _mem_free(mp, ctx.line_starts);
+      _ccol_mem_free(mp, ctx.line_starts);
       return NULL;
     }
     if (err_str) *err_str = NULL;
     parse_node_budget_disarm();
-    _mem_free(mp, ctx.line_starts);
+    _ccol_mem_free(mp, ctx.line_starts);
     return (cyaml)empty;
   }
 
-  /* Single document: return as-is (backwards compatible). */
+  /* Single document: return the root node directly. */
   if (ndocs == 1) {
     cyaml_node_t *result = docs[0];
-    _mem_free(mp, docs);
+    _ccol_mem_free(mp, docs);
     if (err_str) *err_str = NULL;
     parse_node_budget_disarm();
-    _mem_free(mp, ctx.line_starts);
+    _ccol_mem_free(mp, ctx.line_starts);
     return (cyaml)result;
   }
 
@@ -7847,25 +7848,25 @@ static cyaml parse_common(const char *src, size_t len, char **err_str,
     if (cvector_push_back(list->value.list, &elem) != ccol_success) {
       /* Destroy remaining docs not yet adopted by the list. */
       for (size_t j = i; j < ndocs; j++) __cyaml_destroy((cyaml)docs[j]);
-      _mem_free(mp, docs);
+      _ccol_mem_free(mp, docs);
       __cyaml_destroy((cyaml)list);
       set_err_str(err_str, mp, "out of memory");
       parse_node_budget_disarm();
-      _mem_free(mp, ctx.line_starts);
+      _ccol_mem_free(mp, ctx.line_starts);
       return NULL;
     }
   }
-  _mem_free(mp, docs);
+  _ccol_mem_free(mp, docs);
   if (err_str) *err_str = NULL;
   parse_node_budget_disarm();
-  _mem_free(mp, ctx.line_starts);
+  _ccol_mem_free(mp, ctx.line_starts);
   return (cyaml)list;
 
 fail:
   parse_node_budget_disarm();
   for (size_t i = 0; i < ndocs; i++) __cyaml_destroy((cyaml)docs[i]);
-  _mem_free(mp, docs);
-  _mem_free(mp, ctx.line_starts);
+  _ccol_mem_free(mp, docs);
+  _ccol_mem_free(mp, ctx.line_starts);
   return NULL;
 }
 
@@ -7989,10 +7990,11 @@ static bool needs_quoting(const char *s) {
    * a legitimate underflow to a valid subnormal or to 0.0 (a correctly-
    * computed, still-numeric result); only the former means the string does
    * NOT parse as a genuine float. A bare "errno != ERANGE" check here
-   * disagreed with try_parse_float_scalar()'s own identical ERANGE-vs-
-   * actual-overflow distinction (see that function's own doc comment), so a
-   * CYAML_STRING value like "+.1e-400" was serialized unquoted and silently
-   * reparsed as CYAML_FLOAT 0.0 instead of round-tripping as a string. */
+   * would disagree with try_parse_float_scalar()'s own identical
+   * ERANGE-vs-actual-overflow distinction (see that function's own doc
+   * comment), letting a CYAML_STRING value like "+.1e-400" serialize
+   * unquoted and silently reparse as CYAML_FLOAT 0.0 instead of
+   * round-tripping as a string. */
   if (fc == '+' && s[1] == '.') {
     char *endp = NULL;
     errno = 0;
@@ -8010,7 +8012,7 @@ static bool needs_quoting(const char *s) {
     /* A raw C0 control byte (other than tab) has no valid unescaped
      * representation in ANY scalar style (see is_disallowed_control_byte's
      * own doc comment); emitting one directly into a plain scalar would
-     * produce output no conformant YAML 1.2 parser (this one now included,
+     * produce output no conformant YAML 1.2 parser (this one included,
      * since parse_plain_scalar's own scanner rejects it) can read back.
      * Routing it through yb_append_yaml_dquoted() instead is what actually
      * escapes it, via that function's own "\xXX" fallback for c < 0x20. */
@@ -8168,7 +8170,7 @@ static void serialize_block(ybuf_t *b, cyaml_node_t *n, int depth) {
    * check, the traversal itself is not short-circuited, so a wide tree of
    * many independently-deep branches would still pay full recursion cost
    * (and, for a dictionary sibling, a real chmap_begin_iter_safe
-   * allocation and, in canonical mode, a further _mem_calloc + qsort) for
+   * allocation and, in canonical mode, a further _ccol_mem_calloc + qsort) for
    * every remaining sibling, each independently re-discovering the same
    * already-known failure. This defeats the whole point of
    * CYAML_MAX_SERIALIZE_DEPTH bounding cost against a pathological tree:
@@ -8316,7 +8318,7 @@ char *cyaml_serialize(cyaml node) {
   /* Ensure output ends with a newline. */
   if (b.len > 0 && b.buf[b.len - 1] != '\n') yb_append_c(&b, '\n');
   if (b.oom) {
-    _mem_free(b.m_procs, b.buf);
+    _ccol_mem_free(b.m_procs, b.buf);
     return NULL;
   }
   return b.buf;
@@ -8351,7 +8353,7 @@ static int _flow_dict_entry_cmp(const void *a, const void *b) {
  * canonical controls dictionary entry order only (lists are already
  * order-significant and never reordered): false (the public
  * cyaml_serialize_flow() path) preserves the map's own chashmap iteration
- * order exactly, unchanged from this function's original behavior; true
+ * order exactly; true
  * (serialize_flow_canonical's own path, see its doc comment) instead emits
  * every dictionary's entries sorted lexicographically by key, at every
  * level of nesting (recursive calls forward the same canonical value
@@ -8434,7 +8436,7 @@ static void serialize_flow(ybuf_t *b, cyaml_node_t *n, bool canonical,
          * (clogger.c's rotated-file-name ordering uses the identical
          * qsort-plus-strcmp-comparator shape). */
         _flow_dict_entry_t *entries =
-            _mem_calloc(b->m_procs, cnt, sizeof(*entries));
+            _ccol_mem_calloc(b->m_procs, cnt, sizeof(*entries));
         if (!entries) {
           b->oom = true;
           break;
@@ -8453,7 +8455,7 @@ static void serialize_flow(ybuf_t *b, cyaml_node_t *n, bool canonical,
            * this the same as any other allocation failure encountered
            * while building this string, rather than silently emitting a
            * dictionary missing entries. */
-          _mem_free(b->m_procs, entries);
+          _ccol_mem_free(b->m_procs, entries);
           b->oom = true;
           break;
         }
@@ -8467,7 +8469,7 @@ static void serialize_flow(ybuf_t *b, cyaml_node_t *n, bool canonical,
           yb_append_cstr(b, ": ");
           serialize_flow(b, entries[i].val, canonical, depth + 1);
         }
-        _mem_free(b->m_procs, entries);
+        _ccol_mem_free(b->m_procs, entries);
       } else {
         /* Either the ordinary (non-canonical) public path, which
          * preserves chashmap's own iteration order unchanged, or a
@@ -8515,7 +8517,7 @@ char *cyaml_serialize_flow(cyaml node) {
   yb_init(&b, mp);
   serialize_flow(&b, n, false, 0);
   if (b.oom) {
-    _mem_free(b.m_procs, b.buf);
+    _ccol_mem_free(b.m_procs, b.buf);
     return NULL;
   }
   return b.buf;
@@ -8530,8 +8532,8 @@ char *cyaml_serialize_flow(cyaml node) {
  * built via different insertion sequences always canonicalize to the
  * identical string and correctly collide as the same dictionary key. Never
  * exposed publicly: cyaml_serialize_flow()'s own documented, unsorted
- * output order is deliberately left completely unchanged for every other
- * caller. Returns NULL on OOM, matching cyaml_serialize_flow()'s own
+ * output order is what every other caller gets. Returns NULL on OOM,
+ * matching cyaml_serialize_flow()'s own
  * contract. */
 static char *serialize_flow_canonical(cyaml_node_t *n) {
   ccol_memmgmt_procs_t *mp = n ? n->m_procs : NULL;
@@ -8539,7 +8541,7 @@ static char *serialize_flow_canonical(cyaml_node_t *n) {
   yb_init(&b, mp);
   serialize_flow(&b, n, true, 0);
   if (b.oom) {
-    _mem_free(b.m_procs, b.buf);
+    _ccol_mem_free(b.m_procs, b.buf);
     return NULL;
   }
   return b.buf;
@@ -8549,9 +8551,9 @@ static char *serialize_flow_canonical(cyaml_node_t *n) {
  * the matching allocator (mp == NULL for the default allocator). Also the
  * documented way to release an *err_str produced by cyaml_parse()/_parse_n()
  * on failure; s may be NULL (see set_err_str()'s own doc comment for when
- * that happens), which _mem_free() already treats as a safe no-op. */
+ * that happens), which _ccol_mem_free() already treats as a safe no-op. */
 void cyaml_serialize_free_mp(char *s, ccol_memmgmt_procs_t *mp) {
-  _mem_free(mp, s);
+  _ccol_mem_free(mp, s);
 }
 
 /* ========================================================================== */
@@ -8750,7 +8752,7 @@ cyaml _cyaml_get(cyaml root, const char *path) {
   char *copy = ccol_strdup(mp, path);
   if (!copy) return NULL;
   cyaml result = navigate_y(root, copy, NULL);
-  _mem_free(mp, copy);
+  _ccol_mem_free(mp, copy);
   return result;
 }
 
@@ -8794,16 +8796,16 @@ ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
   if (!last_dot) {
     leaf_copy = ccol_strdup(mp, path);
     parent = root;
-    _mem_free(mp, copy);
+    _ccol_mem_free(mp, copy);
   } else {
     *last_dot = '\0';
     cyaml_nav_fail_t fail_reason = CYAML_NAV_NOT_FOUND;
     leaf_copy = ccol_strdup(mp, last_dot + 1);
     parent = navigate_y(root, copy, &fail_reason);
-    _mem_free(mp, copy);
+    _ccol_mem_free(mp, copy);
     if (!leaf_copy) return ccol_not_enough_memory;
     if (!parent) {
-      _mem_free(mp, leaf_copy);
+      _ccol_mem_free(mp, leaf_copy);
       return nav_fail_to_retval(fail_reason);
     }
   }
@@ -8812,7 +8814,7 @@ ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
   path_unescape_component(leaf_copy);
   const char *leaf_comp = leaf_copy;
   if (leaf_comp[0] == '\0') {
-    _mem_free(mp, leaf_copy);
+    _ccol_mem_free(mp, leaf_copy);
     return ccol_invalid_args;
   }
 
@@ -8831,7 +8833,7 @@ ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
       ccol_retval_t make_r = node_make_scalar(type, raw, raw_size, is_signed,
                                               pn->m_procs, &new_node);
       if (make_r != ccol_success) {
-        _mem_free(mp, leaf_copy);
+        _ccol_mem_free(mp, leaf_copy);
         return make_r;
       }
       cmap_pair vp = {.ptr = &new_node, .size = sizeof(new_node)};
@@ -8881,7 +8883,7 @@ ccol_retval_t _cyaml_set_typed(cyaml root, const char *path,
     ret = ccol_invalid_args;
   }
 
-  _mem_free(mp, leaf_copy);
+  _ccol_mem_free(mp, leaf_copy);
   return ret;
 }
 
@@ -8919,16 +8921,16 @@ ccol_retval_t _cyaml_delete(cyaml root, const char *path) {
   if (!last_dot) {
     leaf_copy = ccol_strdup(mp, path);
     parent = root;
-    _mem_free(mp, copy);
+    _ccol_mem_free(mp, copy);
   } else {
     *last_dot = '\0';
     cyaml_nav_fail_t fail_reason = CYAML_NAV_NOT_FOUND;
     leaf_copy = ccol_strdup(mp, last_dot + 1);
     parent = navigate_y(root, copy, &fail_reason);
-    _mem_free(mp, copy);
+    _ccol_mem_free(mp, copy);
     if (!leaf_copy) return ccol_not_enough_memory;
     if (!parent) {
-      _mem_free(mp, leaf_copy);
+      _ccol_mem_free(mp, leaf_copy);
       return nav_fail_to_retval(fail_reason);
     }
   }
@@ -8938,7 +8940,7 @@ ccol_retval_t _cyaml_delete(cyaml root, const char *path) {
   const char *leaf_comp = leaf_copy;
 
   if (leaf_comp[0] == '\0') {
-    _mem_free(mp, leaf_copy);
+    _ccol_mem_free(mp, leaf_copy);
     return ccol_invalid_args;
   }
 
@@ -8968,6 +8970,6 @@ ccol_retval_t _cyaml_delete(cyaml root, const char *path) {
     ret = ccol_invalid_args;
   }
 
-  _mem_free(mp, leaf_copy);
+  _ccol_mem_free(mp, leaf_copy);
   return ret;
 }

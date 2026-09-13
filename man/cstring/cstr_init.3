@@ -12,7 +12,7 @@ cstr_init(s, initial);
 .SH DESCRIPTION
 .nf
 Calls cstring_create() to initialise the already-declared cstr variable s
-with the given initial content. Calls fatal_err() if creation fails.
+with the given initial content. Calls ccol_fatal_err() if creation fails.
 .fi
 .SH PARAMETERS
 .nf
@@ -21,7 +21,7 @@ initial  Initial content (C string or NULL for empty string)
 .fi
 .SH NOTES
 .nf
-Calls fatal_err() on allocation failure; use cstring_create() directly
+Calls ccol_fatal_err() on allocation failure; use cstring_create() directly
 if you need to handle errors gracefully
 .fi
 .SH EXAMPLES

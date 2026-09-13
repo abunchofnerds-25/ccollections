@@ -14,7 +14,7 @@ cvec_push_rvalue(v, new_elem);
 Type-safe wrapper for cvector_push_back() that accepts rvalues (literals,
 expressions). Creates a temporary, typed as v's own declared element
 type and initialized from new_elem via a GNU C compound literal, and
-pushes that. Calls fatal_err() on cvector_push_back() failure.
+pushes that. Calls ccol_fatal_err() on cvector_push_back() failure.
 .fi
 .SH PARAMETERS
 .nf

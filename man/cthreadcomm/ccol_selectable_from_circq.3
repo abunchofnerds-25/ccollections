@@ -1,0 +1,62 @@
+.TH CCOL_SELECTABLE_FROM_CIRCQ 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_selectable_from_circq \- build a ccol_selectable from a ccol_circular_queue
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_selectable_from_circq(q, dir);
+.fi
+.SH DESCRIPTION
+.nf
+Constructs a ccol_selectable tagged-union value of type ccol_selectable_circq
+wrapping the given ccol_circular_queue pointer with the specified direction.
+
+  ccol_select_read; wait for at least one message to arrive (read-wait)
+  ccol_select_write; wait until the queue has room for a send (write-wait)
+
+This is a macro that expands to a compound literal; it has no run-time
+overhead beyond loading the pointer.
+
+ccol_select() only reports readiness for either direction; it never
+consumes or reserves anything itself.  The caller must subsequently call
+ccol_circq_try_recv_zc() (read-direction win) or ccol_circq_try_send_zc()
+(write-direction win) itself, since nothing is claimed or reserved by
+ccol_select() (TOCTOU, same as POSIX select(2)).
+.fi
+.SH PARAMETERS
+.nf
+q    ccol_circular_queue pointer to wrap.  Passing NULL produces a selectable
+     that ccol_select() will reject with ccol_invalid_args.
+dir  ccol_select_read or ccol_select_write.
+.fi
+.SH RETURN VALUE
+.nf
+ccol_selectable value (not a pointer).
+.fi
+.SH EXAMPLES
+.nf
+ccol_circular_queue *q0 = ccol_circular_queue_create(8, NULL);
+ccol_circular_queue *q1 = ccol_circular_queue_create(8, NULL);
+
+size_t idx;
+/* Read-wait on two queues: */
+ccol_select_va(&idx,
+    ccol_selectable_from_circq(q0, ccol_select_read),
+    ccol_selectable_from_circq(q1, ccol_select_read));
+/* on ccol_success, claim the message via ccol_circq_try_recv_zc() on
+   whichever of q0/q1 idx points at */
+
+/* Mixed: wait until q0 has room to send or q1 has a message: */
+ccol_select_va(&idx,
+    ccol_selectable_from_circq(q0, ccol_select_write),
+    ccol_selectable_from_circq(q1, ccol_select_read));
+.fi
+.SH "SEE ALSO"
+.BR ccol_select (3),
+.BR ccol_select_va (3),
+.BR ccol_selectable_from_dynq (3),
+.BR ccol_selectable_from_chan (3),
+.BR ccol_selectable_from_fd (3)

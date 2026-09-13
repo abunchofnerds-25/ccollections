@@ -2,6 +2,17 @@ name: CI
 
 on:
   push:
+  pull_request:
+
+# A push to a branch that also has an open pull request is built twice, once
+# for each trigger. That is deliberate: pushing a branch with no pull request
+# open is a normal way to get a full matrix run here, so the push trigger
+# cannot be narrowed to main without losing it. Superseding runs on the same
+# ref cancel their predecessor so the duplication costs queue time at most
+# once per ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   linux-x86_64-gcc:
@@ -15,6 +26,8 @@ jobs:
         run: make test
       - name: make memtest (valgrind)
         run: make memtest
+      - name: public interface is fully namespaced
+        run: make check_namespace
 
   linux-x86_64-clang:
     name: Linux x86_64 (Clang)

@@ -2,14 +2,15 @@ CC = gcc
 INCLUDES = -I.. -I../../include
 # CDEBUGLOG_ENABLED opts this suite into src/cdebuglog.c's own diagnostic
 # log buffer (see its doc comment in include/cdebuglog.h for why
-# RUNNING_UNIT_TESTS alone is not enough to activate it); used by
-# resolve_then_use_race_destroy_waits's own [DEBUG_TEST] checkpoints while
-# chasing a CI-only, qemu-only hang.
+# RUNNING_UNIT_TESTS alone is not enough to activate it). It backs
+# resolve_then_use_race_destroy_waits's own [DEBUG_TEST] checkpoints, which
+# exist because that test has an open, CI-only, qemu-only hang: the
+# checkpoints are what make a recurrence diagnosable.
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64 -DCDEBUGLOG_ENABLED
 SRC_FILE_PREFIX = cthreadpool
 # cvector.c is needed for ctpool's own generation-tagged handle slot table
-# (the same redesign already applied to chttpcli/chttpsvr/event_loop/
-# clru_cache). cdebuglog.c is an opt-in, RUNNING_UNIT_TESTS-only diagnostic
+# (the same mechanism chttpcli/chttpsvr/ccol_event_loop/clru_cache each use).
+# cdebuglog.c is an opt-in, RUNNING_UNIT_TESTS-only diagnostic
 # log buffer (not part of the root Makefile's default library build; see
 # its own doc comment in include/cdebuglog.h).
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c ../../src/cdebuglog.c \
@@ -44,10 +45,9 @@ test: build
 # fork from within the pool's own worker thread, i.e. from a genuinely
 # multi-threaded process at that inner fork() call); see
 # tests/chttpclient/Makefile's own test_tsan target for the exact TSan
-# mechanism this works around. Empirically this suite's own tests were not
-# observed to be affected by TSan's default (checked directly: identical,
-# clean results with and without this option across multiple runs), but set
-# for consistency with the other fork-and-spawn-new-threads suites
+# mechanism this works around. This suite's own tests give identical, clean
+# results with and without the option, so it is not load-bearing here; it is
+# set for consistency with the other fork-and-spawn-new-threads suites
 # (cthreadcomm, chttpclient, chttpserver) and as a safeguard against a
 # future test addition actually needing it.
 test_tsan: build_tsan
@@ -58,10 +58,10 @@ memtest: build
 
 # --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
 # increments, which can race under concurrently-executed instrumented code and
-# has been observed producing a spurious negative hit count (reproduced on
-# more than one module, including a glibc header, not this library's own
-# logic); see tests/chttpclient/Makefile's identical flag for the full
-# rationale and reproduction notes.
+# produce a spurious negative hit count. This affects more than one module,
+# including inside a glibc header, and is a limitation of gcov's own
+# instrumentation rather than a defect in this library's logic; see
+# tests/chttpclient/Makefile's identical flag for the full rationale.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -69,7 +69,7 @@ generate_coverage_report:
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
 	genhtml --ignore-errors inconsistent -s $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info
 
 all: build build_tsan test test_tsan memtest generate_coverage_report
 

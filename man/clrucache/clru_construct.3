@@ -12,7 +12,7 @@ clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb);
 .SH DESCRIPTION
 .nf
 Combines clru_declare() and clru_init() into a single statement. This
-is the most common way to create an LRU cache. Calls fatal_err() if
+is the most common way to create an LRU cache. Calls ccol_fatal_err() if
 creation fails.
 .fi
 .SH PARAMETERS

@@ -1,0 +1,50 @@
+.TH CCOL_R_MEMPOOL_REALLOC_ENTRY 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_r_mempool_realloc_entry \- reallocate an entry to a different size
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cmempool.h>
+
+void *ccol_r_mempool_realloc_entry(ccol_r_mempool *rmp, void *addr, size_t size);
+.fi
+.SH DESCRIPTION
+.nf
+Changes the size of an allocated entry. If the new size does not require
+moving to a differently-sized underlying allocation, returns the original
+pointer unchanged (no copy); this applies whether the entry is served by
+one of the pool's own fixed-size tiers or by the dynamic/heap fallback
+path. Otherwise, allocates a new entry sized for the request, copies
+min(old_size, new_size) bytes, and frees the old entry.
+.fi
+.SH PARAMETERS
+.nf
+rmp   Ranged memory pool
+addr  Existing entry to reallocate, or NULL to allocate new
+size  New size in bytes (must be > 0 and <= largest_size)
+.fi
+.SH RETURN VALUE
+.nf
+Returns pointer to reallocated entry on success
+Returns NULL on failure
+.fi
+.SH NOTES
+.nf
+If addr is NULL, equivalent to ccol_r_mempool_alloc_entry()
+If the new size does not require a differently-sized allocation, returns
+the original pointer unchanged (no copy)
+Otherwise, allocates new, copies data, frees old
+Copies min(old_user_size, new_user_size) bytes
+Old entry is automatically freed if reallocation succeeds
+Thread-safe if pool created with single_threaded=false
+Returns NULL if size is 0 or > largest_size, WITHOUT touching addr: a
+  non-NULL addr is neither freed nor moved when size itself is invalid,
+  exactly as if the call had never been made
+Will assert if addr is non-NULL and was not obtained from this
+ccol_r_mempool (corruption/foreign-pointer detection, mirroring
+ccol_r_mempool_free_entry())
+.fi
+.SH "SEE ALSO"
+.BR ccol_r_mempool_alloc_entry (3),
+.BR ccol_r_mempool_free_entry (3)

@@ -41,24 +41,24 @@ SOFTWARE.
 /* ========================================================================== */
 
 /* Lazily generated once per process, shared by every self-signed certificate
- * this module ever generates (mirrors fio_tls_make_root_key's own shape).
- * This is genuinely process-global state (not tied to any one ctls_ctx_t
- * instance), so it is guarded by a once_flag_t rather than an instance-level
+ * this module ever generates (mirrors fio_tls_make_root_key's own shape). This
+ * is genuinely process-global state (not tied to any one ctls_ctx_t instance),
+ * so it is guarded by a ccol_once_flag_t rather than an instance-level
  * mutex. */
 static struct {
   EVP_PKEY *key;
-  mutex_t mutex;
-  once_flag_t once;
+  ccol_mutex_t mutex;
+  ccol_once_flag_t once;
 } ctls_root_key_bundle = {0};
 
 static void _ctls_root_key_globals_init(void) {
-  if (mutex_init(ctls_root_key_bundle.mutex) != 0)
-    fatal_err("ctls root key: failed to initialize mutex");
+  if (ccol_mutex_init(ctls_root_key_bundle.mutex) != 0)
+    ccol_fatal_err("ctls root key: failed to initialize mutex");
 }
 
 static EVP_PKEY *_ctls_get_root_key(void) {
-  call_once(ctls_root_key_bundle.once, _ctls_root_key_globals_init);
-  mutex_lock(ctls_root_key_bundle.mutex);
+  ccol_call_once(ctls_root_key_bundle.once, _ctls_root_key_globals_init);
+  ccol_mutex_lock(ctls_root_key_bundle.mutex);
   if (!ctls_root_key_bundle.key) {
     /* EVP_RSA_gen (a thin macro over EVP_PKEY_Q_keygen) is the modern,
      * non-deprecated OpenSSL 3.x replacement for the older RSA_new/BN_new/
@@ -69,7 +69,7 @@ static EVP_PKEY *_ctls_get_root_key(void) {
     ctls_root_key_bundle.key = EVP_RSA_gen(2048);
   }
   EVP_PKEY *key = ctls_root_key_bundle.key;
-  mutex_unlock(ctls_root_key_bundle.mutex);
+  ccol_mutex_unlock(ctls_root_key_bundle.mutex);
   return key;
 }
 
@@ -79,23 +79,23 @@ static EVP_PKEY *_ctls_get_root_key(void) {
 
 static struct {
   int idx;
-  mutex_t mutex;
-  once_flag_t once;
+  ccol_mutex_t mutex;
+  ccol_once_flag_t once;
 } ctls_conn_ex_idx_bundle = {0};
 
 static void _ctls_ex_idx_globals_init(void) {
-  if (mutex_init(ctls_conn_ex_idx_bundle.mutex) != 0)
-    fatal_err("ctls conn ex_data index: failed to initialize mutex");
+  if (ccol_mutex_init(ctls_conn_ex_idx_bundle.mutex) != 0)
+    ccol_fatal_err("ctls conn ex_data index: failed to initialize mutex");
 }
 
 static int _ctls_conn_ex_idx(void) {
-  call_once(ctls_conn_ex_idx_bundle.once, _ctls_ex_idx_globals_init);
-  mutex_lock(ctls_conn_ex_idx_bundle.mutex);
+  ccol_call_once(ctls_conn_ex_idx_bundle.once, _ctls_ex_idx_globals_init);
+  ccol_mutex_lock(ctls_conn_ex_idx_bundle.mutex);
   if (ctls_conn_ex_idx_bundle.idx < 0)
     ctls_conn_ex_idx_bundle.idx =
         SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
   int idx = ctls_conn_ex_idx_bundle.idx;
-  mutex_unlock(ctls_conn_ex_idx_bundle.mutex);
+  ccol_mutex_unlock(ctls_conn_ex_idx_bundle.mutex);
   return idx;
 }
 
@@ -126,7 +126,7 @@ typedef struct ctls_named_cert {
 
 struct ctls_ctx {
   size_t ref;
-  mutex_t lock;
+  ccol_mutex_t lock;
   ccol_memmgmt_procs_t *m_procs; /* owned copy, or NULL for default alloc */
 
   /* Default certificate (server_name NULL/"" in ctls_ctx_cert_add). */
@@ -174,13 +174,14 @@ struct ctls_conn {
    * documented 1-255 byte limit, plus one byte of headroom), populated by
    * _ctls_alpn_select_cb (server mode) or _ctls_record_client_alpn (client
    * mode) instead of pointing alpn_selected_name directly into the owning
-   * ctls_ctx_t's own tls->alpn[] storage: that storage is mutable (a
-   * concurrent ctls_ctx_alpn_add() call replacing or adding a protocol can
-   * _mem_free() an existing entry's own name buffer, or _mem_realloc() the
-   * whole array), and ctls_ctx_retain()'s own doc comment documents exactly
-   * this kind of concurrent reconfiguration under live traffic as a
-   * supported use case, not a hypothetical one; so a conn's own selected-
-   * protocol name must not remain a raw pointer into it for the life of the
+   * ctls_ctx_t's own tls->alpn[] storage: that storage is mutable (a concurrent
+   * ctls_ctx_alpn_add() call replacing or adding a protocol can
+   * _ccol_mem_free() an existing entry's own name buffer, or
+   * _ccol_mem_realloc() the whole array), and ctls_ctx_retain()'s own doc
+   * comment documents exactly this kind of concurrent reconfiguration under
+   * live traffic as a supported use case, not a hypothetical one; so a conn's
+   * own selected-protocol name must not remain a raw pointer into it for the
+   * life of the
    * connection. */
   char alpn_selected_buf[256];
   /* Set by _ctls_classify_io_result whenever ctls_conn_read()/ctls_conn_
@@ -207,18 +208,18 @@ struct ctls_conn {
    * internal "session context" bookkeeping stays pointing at the ORIGINAL
    * default SSL_CTX* for the connection's entire lifetime regardless, with
    * no reference of its own surviving that reassignment to keep it alive.
-   * Reproduced directly with ThreadSanitizer: a concurrent
-   * ctls_ctx_cert_add()/_trust()/_alpn_add() call on the same ctx (a
-   * documented, supported use case per ctls_ctx_retain()'s own doc
-   * comment, and one that unconditionally rebuilds and replaces
-   * ctx->ctx_default on every call, not only when the default certificate
-   * itself changed) freeing the original ctx_default raced a still-live,
-   * post-SNI-dispatch server connection's own later handshake/read/write
-   * steps touching that same, no-longer-independently-referenced object.
-   * Pinning it here, independently of SSL_new/SSL_free's own bookkeeping,
-   * closes the gap regardless of exactly how OpenSSL itself accounts for
-   * the two fields internally. NULL if SSL_new() itself failed before this
-   * could be taken. */
+   * Without this pin, a concurrent ctls_ctx_cert_add()/_trust()/_alpn_add()
+   * call on the same ctx (a documented, supported use case per
+   * ctls_ctx_retain()'s own doc comment, and one that unconditionally
+   * rebuilds and replaces ctx->ctx_default on every call, not only when the
+   * default certificate itself changed) frees the original ctx_default
+   * while a still-live, post-SNI-dispatch server connection's own later
+   * handshake/read/write steps are still touching that same object;
+   * ThreadSanitizer reports the race directly. Pinning it here,
+   * independently of SSL_new/SSL_free's own bookkeeping, holds the object
+   * alive regardless of exactly how OpenSSL itself accounts for the two
+   * fields internally. NULL if SSL_new() itself failed before this could
+   * be taken. */
   SSL_CTX *pinned_ctx_default;
 };
 
@@ -229,7 +230,7 @@ struct ctls_conn {
 static char *_ctls_strdup(ccol_memmgmt_procs_t *mp, const char *s) {
   if (!s) return NULL;
   size_t len = strlen(s) + 1;
-  char *d = (char *)_mem_alloc(mp, len);
+  char *d = (char *)_ccol_mem_alloc(mp, len);
   if (!d) return NULL;
   memcpy(d, s, len);
   return d;
@@ -238,7 +239,7 @@ static char *_ctls_strdup(ccol_memmgmt_procs_t *mp, const char *s) {
 static char *_ctls_strdup_lower(ccol_memmgmt_procs_t *mp, const char *s) {
   if (!s) return NULL;
   size_t len = strlen(s) + 1;
-  char *d = (char *)_mem_alloc(mp, len);
+  char *d = (char *)_ccol_mem_alloc(mp, len);
   if (!d) return NULL;
   for (size_t i = 0; i < len; ++i) d[i] = (char)tolower((unsigned char)s[i]);
   return d;
@@ -267,7 +268,7 @@ static bool _ctls_read_file(ccol_memmgmt_procs_t *mp, const char *path,
     fclose(f);
     return false;
   }
-  char *buf = (char *)_mem_alloc(mp, (size_t)sz);
+  char *buf = (char *)_ccol_mem_alloc(mp, (size_t)sz);
   if (!buf) {
     fclose(f);
     return false;
@@ -275,7 +276,7 @@ static bool _ctls_read_file(ccol_memmgmt_procs_t *mp, const char *path,
   size_t got = fread(buf, 1, (size_t)sz, f);
   fclose(f);
   if (got != (size_t)sz) {
-    _mem_free(mp, buf);
+    _ccol_mem_free(mp, buf);
     return false;
   }
   *out_data = buf;
@@ -464,8 +465,8 @@ static int _ctls_alpn_select_cb(SSL *ssl, const unsigned char **out,
   /* tls->lock guards the read of tls->alpn[]/tls->alpn_count below for the
    * identical reason _ctls_record_client_alpn's own client-side mirror
    * already locks around its own read of the same fields: tls->alpn is
-   * mutable storage a concurrent ctls_ctx_alpn_add() call can _mem_free()
-   * (replacing an existing entry) or _mem_realloc() (growing the array)
+   * mutable storage a concurrent ctls_ctx_alpn_add() call can _ccol_mem_free()
+   * (replacing an existing entry) or _ccol_mem_realloc() (growing the array)
    * out from under an in-progress handshake, and that is a documented,
    * supported use case (see ctls_ctx_retain()'s own doc comment), not a
    * hypothetical one. The matched entry's name/name_len/on_selected/udata
@@ -482,9 +483,9 @@ static int _ctls_alpn_select_cb(SSL *ssl, const unsigned char **out,
    * application callback that re-enters this same ctx (e.g. its own
    * ctls_ctx_alpn_add() call) must not deadlock against a lock this
    * function no longer needs to hold. */
-  mutex_lock(tls->lock);
+  ccol_mutex_lock(tls->lock);
   if (tls->alpn_count == 0) {
-    mutex_unlock(tls->lock);
+    ccol_mutex_unlock(tls->lock);
     return SSL_TLSEXT_ERR_NOACK;
   }
   ctls_alpn_entry *matched = NULL;
@@ -515,7 +516,7 @@ static int _ctls_alpn_select_cb(SSL *ssl, const unsigned char **out,
   ctls_alpn_selected_fn cb = matched->on_selected;
   size_t name_len = matched->name_len;
   void *udata = matched->udata;
-  mutex_unlock(tls->lock);
+  ccol_mutex_unlock(tls->lock);
 
   if (had_overlap) {
     *out = (const unsigned char *)conn->alpn_selected_buf;
@@ -530,7 +531,8 @@ static bool _ctls_apply_alpn(SSL_CTX *ctx, ctls_ctx_t *tls) {
   size_t wire_len = 0;
   for (size_t i = 0; i < tls->alpn_count; ++i)
     wire_len += tls->alpn[i].name_len + 1;
-  unsigned char *wire = (unsigned char *)_mem_alloc(tls->m_procs, wire_len);
+  unsigned char *wire =
+      (unsigned char *)_ccol_mem_alloc(tls->m_procs, wire_len);
   if (!wire) return false;
   size_t pos = 0;
   for (size_t i = 0; i < tls->alpn_count; ++i) {
@@ -541,7 +543,7 @@ static bool _ctls_apply_alpn(SSL_CTX *ctx, ctls_ctx_t *tls) {
   /* SSL_CTX_set_alpn_protos (client-mode offer list) copies its input
    * internally, so wire need not outlive this call. */
   SSL_CTX_set_alpn_protos(ctx, wire, (unsigned int)wire_len);
-  _mem_free(tls->m_procs, wire);
+  _ccol_mem_free(tls->m_procs, wire);
   SSL_CTX_set_alpn_select_cb(ctx, _ctls_alpn_select_cb, tls);
   return true;
 }
@@ -575,7 +577,7 @@ static SSL_CTX *_ctls_find_named_ctx(ctls_ctx_t *tls, const char *sni_name) {
     }
     it = it->_next_fn(it);
   }
-  _mem_free(tls->m_procs, lower);
+  _ccol_mem_free(tls->m_procs, lower);
   return found;
 }
 
@@ -599,10 +601,10 @@ static int _ctls_servername_cb(SSL *ssl, int *ad, void *arg) {
    * merely a theoretical one. Mirrors ctls_conn_create_client/_server's own
    * established discipline of calling SSL_new() on the default context
    * while still holding tls->lock, for the identical reason. */
-  mutex_lock(tls->lock);
+  ccol_mutex_lock(tls->lock);
   SSL_CTX *matched = _ctls_find_named_ctx(tls, name);
   if (matched) SSL_set_SSL_CTX(ssl, matched);
-  mutex_unlock(tls->lock);
+  ccol_mutex_unlock(tls->lock);
   return SSL_TLSEXT_ERR_OK;
 }
 
@@ -661,31 +663,31 @@ static bool _ctls_ctx_rebuild_locked(ctls_ctx_t *tls) {
   SSL_CTX **new_named_ctxs = NULL;
   ctls_named_cert **new_named_entries = NULL;
   if (named_count > 0) {
-    new_named_ctxs =
-        (SSL_CTX **)_mem_alloc(tls->m_procs, named_count * sizeof(SSL_CTX *));
-    new_named_entries = (ctls_named_cert **)_mem_alloc(
+    new_named_ctxs = (SSL_CTX **)_ccol_mem_alloc(
+        tls->m_procs, named_count * sizeof(SSL_CTX *));
+    new_named_entries = (ctls_named_cert **)_ccol_mem_alloc(
         tls->m_procs, named_count * sizeof(ctls_named_cert *));
     if (!new_named_ctxs || !new_named_entries) {
-      _mem_free(tls->m_procs, new_named_ctxs);
-      _mem_free(tls->m_procs, new_named_entries);
+      _ccol_mem_free(tls->m_procs, new_named_ctxs);
+      _ccol_mem_free(tls->m_procs, new_named_entries);
       SSL_CTX_free(new_default);
       return false;
     }
     char *err = NULL;
     cmap_iterator *it = chashmap_begin_iter(tls->named_certs, &err);
     /* named_count > 0 guarantees tls->named_certs is non-empty (this
-     * function runs with ctx->lock held, so it cannot have changed since
-     * the count above was read), so chashmap_begin_iter returning NULL
-     * here can only mean it failed to allocate the iterator itself (OOM),
-     * not "nothing to iterate". ok must start false in that case: with it
-     * true unconditionally, the while loop below correctly never executes
-     * (it is NULL), but new_named_ctxs/new_named_entries (allocated via
-     * _mem_alloc just above, not _mem_calloc, so still fully uninitialized)
-     * would then be read as if fully populated by the commit loop
-     * further down, dereferencing garbage pointers. Found by clang's
-     * static analyzer, not by any dynamic test (needs an OOM injected
-     * exactly inside chashmap_begin_iter with named/SNI certs configured,
-     * a combination no existing test constructs). */
+     * function runs with ctx->lock held, so it cannot have changed since the
+     * count above was read), so chashmap_begin_iter returning NULL here can
+     * only mean it failed to allocate the iterator itself (OOM), not "nothing
+     * to iterate". ok must start false in that case: with it true
+     * unconditionally, the while loop below correctly never executes (it is
+     * NULL), but new_named_ctxs/new_named_entries (allocated via
+     * _ccol_mem_alloc just above, not _ccol_mem_calloc, so still fully
+     * uninitialized) would then be read as if fully populated by the commit
+     * loop further down, dereferencing garbage pointers. clang's static
+     * analyzer flags that read; no dynamic test can reach it, since doing so
+     * needs an OOM injected exactly inside chashmap_begin_iter with
+     * named/SNI certs configured. */
     size_t i = 0;
     bool ok = (it != NULL);
     while (it && ok) {
@@ -706,8 +708,8 @@ static bool _ctls_ctx_rebuild_locked(ctls_ctx_t *tls) {
     if (it) ccol_iter_destroy(it);
     if (!ok) {
       for (size_t j = 0; j < i; ++j) SSL_CTX_free(new_named_ctxs[j]);
-      _mem_free(tls->m_procs, new_named_ctxs);
-      _mem_free(tls->m_procs, new_named_entries);
+      _ccol_mem_free(tls->m_procs, new_named_ctxs);
+      _ccol_mem_free(tls->m_procs, new_named_entries);
       SSL_CTX_free(new_default);
       return false;
     }
@@ -721,8 +723,8 @@ static bool _ctls_ctx_rebuild_locked(ctls_ctx_t *tls) {
       SSL_CTX_free(new_named_entries[i]->built_ctx);
     new_named_entries[i]->built_ctx = new_named_ctxs[i];
   }
-  _mem_free(tls->m_procs, new_named_ctxs);
-  _mem_free(tls->m_procs, new_named_entries);
+  _ccol_mem_free(tls->m_procs, new_named_ctxs);
+  _ccol_mem_free(tls->m_procs, new_named_entries);
   return true;
 }
 
@@ -732,33 +734,33 @@ static bool _ctls_ctx_rebuild_locked(ctls_ctx_t *tls) {
 
 static void _ctls_named_cert_destroy(ctls_ctx_t *tls, ctls_named_cert *nc) {
   if (!nc) return;
-  _mem_free(tls->m_procs, nc->cert_pem);
-  _mem_free(tls->m_procs, nc->key_pem);
-  _mem_free(tls->m_procs, nc->pk_password);
-  _mem_free(tls->m_procs, nc->self_signed_name);
+  _ccol_mem_free(tls->m_procs, nc->cert_pem);
+  _ccol_mem_free(tls->m_procs, nc->key_pem);
+  _ccol_mem_free(tls->m_procs, nc->pk_password);
+  _ccol_mem_free(tls->m_procs, nc->self_signed_name);
   if (nc->built_ctx) SSL_CTX_free(nc->built_ctx);
-  _mem_free(tls->m_procs, nc);
+  _ccol_mem_free(tls->m_procs, nc);
 }
 
 ctls_ctx_t *ctls_ctx_new_mp(ccol_memmgmt_procs_t *mp, char **err_str) {
-  ctls_ctx_t *tls = (ctls_ctx_t *)_mem_calloc(mp, 1, sizeof(*tls));
+  ctls_ctx_t *tls = (ctls_ctx_t *)_ccol_mem_calloc(mp, 1, sizeof(*tls));
   if (!tls) {
     if (err_str) *err_str = "ctls_ctx_new: allocation failure";
     return NULL;
   }
   if (mp) {
-    tls->m_procs = (ccol_memmgmt_procs_t *)_mem_alloc(mp, sizeof(*mp));
+    tls->m_procs = (ccol_memmgmt_procs_t *)_ccol_mem_alloc(mp, sizeof(*mp));
     if (!tls->m_procs) {
-      _mem_free(mp, tls);
+      _ccol_mem_free(mp, tls);
       if (err_str) *err_str = "ctls_ctx_new: allocation failure";
       return NULL;
     }
     *tls->m_procs = *mp;
   }
   tls->ref = 1;
-  if (mutex_init(tls->lock) != 0) {
-    _mem_free(mp, tls->m_procs);
-    _mem_free(mp, tls);
+  if (ccol_mutex_init(tls->lock) != 0) {
+    _ccol_mem_free(mp, tls->m_procs);
+    _ccol_mem_free(mp, tls);
     if (err_str) *err_str = "ctls_ctx_new: failed to initialize mutex";
     return NULL;
   }
@@ -766,17 +768,17 @@ ctls_ctx_t *ctls_ctx_new_mp(ccol_memmgmt_procs_t *mp, char **err_str) {
   tls->named_certs =
       chmap_create_mp(16, ccol_string, ccol_pointer, tls->m_procs, &err);
   if (!tls->named_certs) {
-    mutex_destroy(tls->lock);
-    _mem_free(mp, tls->m_procs);
-    _mem_free(mp, tls);
+    ccol_mutex_destroy(tls->lock);
+    _ccol_mem_free(mp, tls->m_procs);
+    _ccol_mem_free(mp, tls);
     if (err_str) *err_str = "ctls_ctx_new: chmap allocation failure";
     return NULL;
   }
   if (!_ctls_ctx_rebuild_locked(tls)) {
     __chmap_destroy(tls->named_certs);
-    mutex_destroy(tls->lock);
-    _mem_free(mp, tls->m_procs);
-    _mem_free(mp, tls);
+    ccol_mutex_destroy(tls->lock);
+    _ccol_mem_free(mp, tls->m_procs);
+    _ccol_mem_free(mp, tls);
     if (err_str) *err_str = "ctls_ctx_new: SSL_CTX_new failure";
     return NULL;
   }
@@ -809,22 +811,22 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
   if (have_pair) {
     if (!_ctls_read_file(ctx->m_procs, cert_path, &cert_pem, &cert_len) ||
         !_ctls_read_file(ctx->m_procs, key_path, &key_pem, &key_len)) {
-      _mem_free(ctx->m_procs, cert_pem);
-      _mem_free(ctx->m_procs, key_pem);
+      _ccol_mem_free(ctx->m_procs, cert_pem);
+      _ccol_mem_free(ctx->m_procs, key_pem);
       if (err_str) *err_str = "ctls_ctx_cert_add: cert/key file unreadable";
       return ccol_http_tls_cert_load_failed;
     }
     if (pk_password) {
       pw_copy = _ctls_strdup(ctx->m_procs, pk_password);
       if (!pw_copy) {
-        _mem_free(ctx->m_procs, cert_pem);
-        _mem_free(ctx->m_procs, key_pem);
+        _ccol_mem_free(ctx->m_procs, cert_pem);
+        _ccol_mem_free(ctx->m_procs, key_pem);
         return ccol_not_enough_memory;
       }
     }
   }
 
-  mutex_lock(ctx->lock);
+  ccol_mutex_lock(ctx->lock);
   ccol_retval_t rv = ccol_success;
   if (!have_name) {
     /* Replace the default certificate. */
@@ -838,17 +840,17 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
        * this certificate would need to configure a real name anyway. */
       self_signed_name = _ctls_strdup(ctx->m_procs, "ctls-default");
       if (!self_signed_name) {
-        _mem_free(ctx->m_procs, cert_pem);
-        _mem_free(ctx->m_procs, key_pem);
-        _mem_free(ctx->m_procs, pw_copy);
-        mutex_unlock(ctx->lock);
+        _ccol_mem_free(ctx->m_procs, cert_pem);
+        _ccol_mem_free(ctx->m_procs, key_pem);
+        _ccol_mem_free(ctx->m_procs, pw_copy);
+        ccol_mutex_unlock(ctx->lock);
         return ccol_not_enough_memory;
       }
     }
-    _mem_free(ctx->m_procs, ctx->default_cert_pem);
-    _mem_free(ctx->m_procs, ctx->default_key_pem);
-    _mem_free(ctx->m_procs, ctx->default_pk_password);
-    _mem_free(ctx->m_procs, ctx->default_self_signed_name);
+    _ccol_mem_free(ctx->m_procs, ctx->default_cert_pem);
+    _ccol_mem_free(ctx->m_procs, ctx->default_key_pem);
+    _ccol_mem_free(ctx->m_procs, ctx->default_pk_password);
+    _ccol_mem_free(ctx->m_procs, ctx->default_self_signed_name);
     ctx->default_cert_pem = cert_pem;
     ctx->default_cert_len = cert_len;
     ctx->default_key_pem = key_pem;
@@ -860,20 +862,20 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
   } else {
     char *lower_name = _ctls_strdup_lower(ctx->m_procs, server_name);
     if (!lower_name) {
-      _mem_free(ctx->m_procs, cert_pem);
-      _mem_free(ctx->m_procs, key_pem);
-      _mem_free(ctx->m_procs, pw_copy);
-      mutex_unlock(ctx->lock);
+      _ccol_mem_free(ctx->m_procs, cert_pem);
+      _ccol_mem_free(ctx->m_procs, key_pem);
+      _ccol_mem_free(ctx->m_procs, pw_copy);
+      ccol_mutex_unlock(ctx->lock);
       return ccol_not_enough_memory;
     }
     ctls_named_cert *nc =
-        (ctls_named_cert *)_mem_calloc(ctx->m_procs, 1, sizeof(*nc));
+        (ctls_named_cert *)_ccol_mem_calloc(ctx->m_procs, 1, sizeof(*nc));
     if (!nc) {
-      _mem_free(ctx->m_procs, lower_name);
-      _mem_free(ctx->m_procs, cert_pem);
-      _mem_free(ctx->m_procs, key_pem);
-      _mem_free(ctx->m_procs, pw_copy);
-      mutex_unlock(ctx->lock);
+      _ccol_mem_free(ctx->m_procs, lower_name);
+      _ccol_mem_free(ctx->m_procs, cert_pem);
+      _ccol_mem_free(ctx->m_procs, key_pem);
+      _ccol_mem_free(ctx->m_procs, pw_copy);
+      ccol_mutex_unlock(ctx->lock);
       return ccol_not_enough_memory;
     }
     nc->cert_pem = cert_pem;
@@ -885,9 +887,9 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
     if (self_signed) {
       nc->self_signed_name = _ctls_strdup(ctx->m_procs, lower_name);
       if (!nc->self_signed_name) {
-        /* Unlike every other allocation in this function, a failure here
-         * was previously left unchecked: nc->self_signed_name stayed NULL,
-         * but nc->self_signed stayed true, and nothing downstream ever
+        /* This failure must be checked like every other allocation in this
+         * function. Leaving it unchecked leaves nc->self_signed_name NULL
+         * while nc->self_signed stays true, and nothing downstream ever
          * re-examines self_signed_name for NULL before using it;
          * _ctls_ctx_rebuild_locked -> _ctls_build_one_ctx would go on to
          * call _ctls_create_self_signed(NULL), which unconditionally calls
@@ -900,8 +902,8 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
          * complete unwind; it also frees cert_pem/key_pem/pw_copy, which
          * nc already owns as of the assignments just above. */
         _ctls_named_cert_destroy(ctx, nc);
-        _mem_free(ctx->m_procs, lower_name);
-        mutex_unlock(ctx->lock);
+        _ccol_mem_free(ctx->m_procs, lower_name);
+        ccol_mutex_unlock(ctx->lock);
         return ccol_not_enough_memory;
       }
     }
@@ -915,7 +917,7 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
     }
     cmap_pair vp = {.ptr = &nc, .size = sizeof(nc)};
     rv = chmap_insert_elem(ctx->named_certs, &kp, &vp);
-    _mem_free(ctx->m_procs, lower_name);
+    _ccol_mem_free(ctx->m_procs, lower_name);
     /* ccol_key_already_present means the map's value slot for this
      * hostname was successfully updated to point at nc (the entry already
      * existed, e.g. this is a certificate rotation for a name added
@@ -923,13 +925,13 @@ ccol_retval_t ctls_ctx_cert_add(ctls_ctx_t *ctx, const char *server_name,
      * the map would be left holding a dangling pointer to it. */
     if (rv != ccol_success && rv != ccol_key_already_present) {
       _ctls_named_cert_destroy(ctx, nc);
-      mutex_unlock(ctx->lock);
+      ccol_mutex_unlock(ctx->lock);
       return rv;
     }
   }
 
   bool built = _ctls_ctx_rebuild_locked(ctx);
-  mutex_unlock(ctx->lock);
+  ccol_mutex_unlock(ctx->lock);
   if (!built) {
     if (err_str) *err_str = "ctls_ctx_cert_add: SSL_CTX rebuild failure";
     return ccol_http_tls_cert_load_failed;
@@ -947,32 +949,31 @@ ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
     return ccol_http_tls_cert_load_failed;
   }
 
-  mutex_lock(ctx->lock);
+  ccol_mutex_lock(ctx->lock);
   if (ctx->trust_count == ctx->trust_cap) {
     size_t new_cap = ctx->trust_cap ? ctx->trust_cap * 2 : 4;
     /* Committed to ctx->trust_pems immediately, not after also checking the
      * second realloc below: on success, realloc may move (freeing the old
      * block) or extend the original allocation, either way invalidating
      * ctx->trust_pems's own copy of that pointer. Deferring the commit
-     * until both reallocs were known to succeed left ctx->trust_pems
-     * dangling whenever this first call succeeded (moving the block) but
-     * the second one failed; a genuine use-after-free on this ctx's next
-     * access to trust_pems, on top of leaking new_pems itself, which
-     * clang's static analyzer caught (the leak; not the dangling-pointer
-     * half, which needed reading the realloc semantics by hand). */
-    char **new_pems = (char **)_mem_realloc(ctx->m_procs, ctx->trust_pems,
-                                            new_cap * sizeof(char *));
+     * until both reallocs are known to succeed would leave ctx->trust_pems
+     * dangling whenever this first call succeeds (moving the block) but the
+     * second one fails: a genuine use-after-free on this ctx's next access
+     * to trust_pems, on top of leaking new_pems itself (clang's static
+     * analyzer flags that leak). */
+    char **new_pems = (char **)_ccol_mem_realloc(ctx->m_procs, ctx->trust_pems,
+                                                 new_cap * sizeof(char *));
     if (!new_pems) {
-      _mem_free(ctx->m_procs, pem);
-      mutex_unlock(ctx->lock);
+      _ccol_mem_free(ctx->m_procs, pem);
+      ccol_mutex_unlock(ctx->lock);
       return ccol_not_enough_memory;
     }
     ctx->trust_pems = new_pems;
-    size_t *new_lens = (size_t *)_mem_realloc(ctx->m_procs, ctx->trust_lens,
-                                              new_cap * sizeof(size_t));
+    size_t *new_lens = (size_t *)_ccol_mem_realloc(
+        ctx->m_procs, ctx->trust_lens, new_cap * sizeof(size_t));
     if (!new_lens) {
-      _mem_free(ctx->m_procs, pem);
-      mutex_unlock(ctx->lock);
+      _ccol_mem_free(ctx->m_procs, pem);
+      ccol_mutex_unlock(ctx->lock);
       return ccol_not_enough_memory;
     }
     ctx->trust_lens = new_lens;
@@ -983,7 +984,7 @@ ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
   ctx->trust_count++;
   ctx->verify_peer = true;
   bool built = _ctls_ctx_rebuild_locked(ctx);
-  mutex_unlock(ctx->lock);
+  ccol_mutex_unlock(ctx->lock);
   if (!built) {
     if (err_str) *err_str = "ctls_ctx_trust: SSL_CTX rebuild failure";
     return ccol_http_tls_cert_load_failed;
@@ -993,11 +994,11 @@ ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
 
 ccol_retval_t ctls_ctx_trust_system(ctls_ctx_t *ctx) {
   if (!ctx) return ccol_invalid_args;
-  mutex_lock(ctx->lock);
+  ccol_mutex_lock(ctx->lock);
   ctx->verify_default_store = true;
   ctx->verify_peer = true;
   bool built = _ctls_ctx_rebuild_locked(ctx);
-  mutex_unlock(ctx->lock);
+  ccol_mutex_unlock(ctx->lock);
   return built ? ccol_success : ccol_http_tls_cert_load_failed;
 }
 
@@ -1016,31 +1017,31 @@ ccol_retval_t ctls_ctx_alpn_add(ctls_ctx_t *ctx, const char *protocol_name,
   char *name_copy = _ctls_strdup(ctx->m_procs, protocol_name);
   if (!name_copy) return ccol_not_enough_memory;
 
-  mutex_lock(ctx->lock);
+  ccol_mutex_lock(ctx->lock);
   /* Replace an existing registration with the same name, rather than
    * appending a duplicate entry. */
   for (size_t i = 0; i < ctx->alpn_count; ++i) {
     if (ctx->alpn[i].name_len == name_len &&
         memcmp(ctx->alpn[i].name, name_copy, name_len) == 0) {
       if (ctx->alpn[i].on_cleanup) ctx->alpn[i].on_cleanup(ctx->alpn[i].udata);
-      _mem_free(ctx->m_procs, ctx->alpn[i].name);
+      _ccol_mem_free(ctx->m_procs, ctx->alpn[i].name);
       ctx->alpn[i] = (ctls_alpn_entry){.name = name_copy,
                                        .name_len = name_len,
                                        .on_selected = on_selected,
                                        .udata = alpn_udata,
                                        .on_cleanup = on_cleanup};
       bool built = _ctls_ctx_rebuild_locked(ctx);
-      mutex_unlock(ctx->lock);
+      ccol_mutex_unlock(ctx->lock);
       return built ? ccol_success : ccol_http_tls_cert_load_failed;
     }
   }
   if (ctx->alpn_count == ctx->alpn_cap) {
     size_t new_cap = ctx->alpn_cap ? ctx->alpn_cap * 2 : 4;
-    ctls_alpn_entry *new_alpn = (ctls_alpn_entry *)_mem_realloc(
+    ctls_alpn_entry *new_alpn = (ctls_alpn_entry *)_ccol_mem_realloc(
         ctx->m_procs, ctx->alpn, new_cap * sizeof(ctls_alpn_entry));
     if (!new_alpn) {
-      _mem_free(ctx->m_procs, name_copy);
-      mutex_unlock(ctx->lock);
+      _ccol_mem_free(ctx->m_procs, name_copy);
+      ccol_mutex_unlock(ctx->lock);
       return ccol_not_enough_memory;
     }
     ctx->alpn = new_alpn;
@@ -1052,7 +1053,7 @@ ccol_retval_t ctls_ctx_alpn_add(ctls_ctx_t *ctx, const char *protocol_name,
                                                    .udata = alpn_udata,
                                                    .on_cleanup = on_cleanup};
   bool built = _ctls_ctx_rebuild_locked(ctx);
-  mutex_unlock(ctx->lock);
+  ccol_mutex_unlock(ctx->lock);
   if (!built) {
     if (err_str) *err_str = "ctls_ctx_alpn_add: SSL_CTX rebuild failure";
     return ccol_http_tls_cert_load_failed;
@@ -1066,23 +1067,23 @@ size_t ctls_ctx_alpn_count(const ctls_ctx_t *ctx) {
 
 void ctls_ctx_retain(ctls_ctx_t *ctx) {
   if (!ctx) return;
-  mutex_lock(ctx->lock);
+  ccol_mutex_lock(ctx->lock);
   ctx->ref++;
-  mutex_unlock(ctx->lock);
+  ccol_mutex_unlock(ctx->lock);
 }
 
 void ctls_ctx_release(ctls_ctx_t *ctx) {
   if (!ctx) return;
-  mutex_lock(ctx->lock);
+  ccol_mutex_lock(ctx->lock);
   size_t remaining = --ctx->ref;
-  mutex_unlock(ctx->lock);
+  ccol_mutex_unlock(ctx->lock);
   if (remaining > 0) return;
 
   if (ctx->ctx_default) SSL_CTX_free(ctx->ctx_default);
-  _mem_free(ctx->m_procs, ctx->default_cert_pem);
-  _mem_free(ctx->m_procs, ctx->default_key_pem);
-  _mem_free(ctx->m_procs, ctx->default_pk_password);
-  _mem_free(ctx->m_procs, ctx->default_self_signed_name);
+  _ccol_mem_free(ctx->m_procs, ctx->default_cert_pem);
+  _ccol_mem_free(ctx->m_procs, ctx->default_key_pem);
+  _ccol_mem_free(ctx->m_procs, ctx->default_pk_password);
+  _ccol_mem_free(ctx->m_procs, ctx->default_self_signed_name);
 
   if (ctx->named_certs) {
     char *err = NULL;
@@ -1097,27 +1098,26 @@ void ctls_ctx_release(ctls_ctx_t *ctx) {
   }
 
   for (size_t i = 0; i < ctx->trust_count; ++i)
-    _mem_free(ctx->m_procs, ctx->trust_pems[i]);
-  _mem_free(ctx->m_procs, ctx->trust_pems);
-  _mem_free(ctx->m_procs, ctx->trust_lens);
+    _ccol_mem_free(ctx->m_procs, ctx->trust_pems[i]);
+  _ccol_mem_free(ctx->m_procs, ctx->trust_pems);
+  _ccol_mem_free(ctx->m_procs, ctx->trust_lens);
 
   for (size_t i = 0; i < ctx->alpn_count; ++i) {
     if (ctx->alpn[i].on_cleanup) ctx->alpn[i].on_cleanup(ctx->alpn[i].udata);
-    _mem_free(ctx->m_procs, ctx->alpn[i].name);
+    _ccol_mem_free(ctx->m_procs, ctx->alpn[i].name);
   }
-  _mem_free(ctx->m_procs, ctx->alpn);
+  _ccol_mem_free(ctx->m_procs, ctx->alpn);
 
-  mutex_destroy(ctx->lock);
+  ccol_mutex_destroy(ctx->lock);
   /* ctx->m_procs (when non-NULL) is a heap-allocated copy of the caller's
    * procs, freed via its own contained free() function pointer; so ctx
    * itself must be freed FIRST while mp is still a live, dereferenceable
    * object; freeing mp (i.e. ctx->m_procs) before ctx would leave mp
-   * dangling for the second _mem_free() call, reading mp->free from
-   * already-freed memory (a real use-after-free valgrind caught during
-   * development). */
+   * dangling for the second _ccol_mem_free() call, reading mp->free from
+   * already-freed memory; valgrind reports that as a use-after-free. */
   ccol_memmgmt_procs_t *mp = ctx->m_procs;
-  _mem_free(mp, ctx);
-  _mem_free(mp, mp);
+  _ccol_mem_free(mp, ctx);
+  _ccol_mem_free(mp, mp);
 }
 
 /* ========================================================================== */
@@ -1126,7 +1126,7 @@ void ctls_ctx_release(ctls_ctx_t *ctx) {
 
 static ctls_conn_t *_ctls_conn_alloc(ctls_ctx_t *ctx, bool is_server) {
   ctls_conn_t *conn =
-      (ctls_conn_t *)_mem_calloc(ctx->m_procs, 1, sizeof(*conn));
+      (ctls_conn_t *)_ccol_mem_calloc(ctx->m_procs, 1, sizeof(*conn));
   if (!conn) return NULL;
   conn->ctx = ctx;
   conn->is_server = is_server;
@@ -1147,7 +1147,7 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
     return NULL;
   }
 
-  mutex_lock(ctx->lock);
+  ccol_mutex_lock(ctx->lock);
   SSL *ssl = SSL_new(ctx->ctx_default);
   if (ssl) {
     /* See struct ctls_conn's own pinned_ctx_default doc comment: taken
@@ -1157,11 +1157,11 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
     SSL_CTX_up_ref(ctx->ctx_default);
     conn->pinned_ctx_default = ctx->ctx_default;
   }
-  mutex_unlock(ctx->lock);
+  ccol_mutex_unlock(ctx->lock);
   if (!ssl) {
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
     ctls_ctx_release(ctx);
-    _mem_free(mp, conn);
+    _ccol_mem_free(mp, conn);
     if (err_str) *err_str = "ctls_conn_create_client: SSL_new failure";
     return NULL;
   }
@@ -1170,7 +1170,7 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
     SSL_CTX_free(conn->pinned_ctx_default);
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
     ctls_ctx_release(ctx);
-    _mem_free(mp, conn);
+    _ccol_mem_free(mp, conn);
     if (err_str) *err_str = "ctls_conn_create_client: SSL_set_ex_data failure";
     return NULL;
   }
@@ -1181,7 +1181,7 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
     SSL_CTX_free(conn->pinned_ctx_default);
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
     ctls_ctx_release(ctx);
-    _mem_free(mp, conn);
+    _ccol_mem_free(mp, conn);
     if (err_str) *err_str = "ctls_conn_create_client: BIO_new_socket failure";
     return NULL;
   }
@@ -1210,7 +1210,7 @@ ctls_conn_t *ctls_conn_create_client(ctls_ctx_t *ctx, int fd,
         SSL_CTX_free(conn->pinned_ctx_default);
         ccol_memmgmt_procs_t *mp = ctx->m_procs;
         ctls_ctx_release(ctx);
-        _mem_free(mp, conn);
+        _ccol_mem_free(mp, conn);
         if (err_str)
           *err_str =
               "ctls_conn_create_client: could not configure hostname "
@@ -1237,7 +1237,7 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
   }
   conn->udata = udata;
 
-  mutex_lock(ctx->lock);
+  ccol_mutex_lock(ctx->lock);
   SSL *ssl = SSL_new(ctx->ctx_default);
   if (ssl) {
     /* See struct ctls_conn's own pinned_ctx_default doc comment: taken
@@ -1247,11 +1247,11 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
     SSL_CTX_up_ref(ctx->ctx_default);
     conn->pinned_ctx_default = ctx->ctx_default;
   }
-  mutex_unlock(ctx->lock);
+  ccol_mutex_unlock(ctx->lock);
   if (!ssl) {
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
     ctls_ctx_release(ctx);
-    _mem_free(mp, conn);
+    _ccol_mem_free(mp, conn);
     if (err_str) *err_str = "ctls_conn_create_server: SSL_new failure";
     return NULL;
   }
@@ -1260,7 +1260,7 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
     SSL_CTX_free(conn->pinned_ctx_default);
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
     ctls_ctx_release(ctx);
-    _mem_free(mp, conn);
+    _ccol_mem_free(mp, conn);
     if (err_str) *err_str = "ctls_conn_create_server: SSL_set_ex_data failure";
     return NULL;
   }
@@ -1271,7 +1271,7 @@ ctls_conn_t *ctls_conn_create_server(ctls_ctx_t *ctx, int fd, void *udata,
     SSL_CTX_free(conn->pinned_ctx_default);
     ccol_memmgmt_procs_t *mp = ctx->m_procs;
     ctls_ctx_release(ctx);
-    _mem_free(mp, conn);
+    _ccol_mem_free(mp, conn);
     if (err_str) *err_str = "ctls_conn_create_server: BIO_new_socket failure";
     return NULL;
   }
@@ -1288,9 +1288,9 @@ static void _ctls_record_client_alpn(ctls_conn_t *conn) {
   const unsigned char *proto = NULL;
   unsigned int proto_len = 0;
   SSL_get0_alpn_selected(conn->ssl, &proto, &proto_len);
-  mutex_lock(tls->lock);
+  ccol_mutex_lock(tls->lock);
   if (tls->alpn_count == 0) {
-    mutex_unlock(tls->lock);
+    ccol_mutex_unlock(tls->lock);
     return;
   }
   ctls_alpn_entry *matched = NULL;
@@ -1318,7 +1318,7 @@ static void _ctls_record_client_alpn(ctls_conn_t *conn) {
   ctls_alpn_selected_fn cb = matched->on_selected;
   size_t name_len = matched->name_len;
   void *udata = matched->udata;
-  mutex_unlock(tls->lock);
+  ccol_mutex_unlock(tls->lock);
   if (cb) cb(conn, conn->alpn_selected_buf, name_len, udata);
 }
 
@@ -1377,7 +1377,7 @@ static ssize_t _ctls_classify_io_result(ctls_conn_t *conn, int ret) {
       return -1;
     default:
       /* SSL_ERROR_WANT_READ and every other non-fatal outcome: the
-       * pre-existing, "assume read" default. */
+       * "assume read" default. */
       conn->last_io_wants_write = false;
       errno = EWOULDBLOCK;
       return -1;
@@ -1443,7 +1443,7 @@ void ctls_conn_destroy(ctls_conn_t *conn) {
    * conn->ctx->m_procs afterward would be a use-after-free. */
   ccol_memmgmt_procs_t *mp = conn->ctx->m_procs;
   ctls_ctx_release(conn->ctx);
-  _mem_free(mp, conn);
+  _ccol_mem_free(mp, conn);
 }
 
 #ifdef RUNNING_UNIT_TESTS

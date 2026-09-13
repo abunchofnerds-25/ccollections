@@ -15,7 +15,7 @@ Type-safe wrapper for cvector_push_back(). new_elem is converted to v's
 declared element type via ordinary C assignment/initialization (exactly
 as "T tmp = new_elem;" would do) before being copied into the vector, so
 the pushed value is what a plain C assignment would have produced, not
-new_elem's own raw byte representation. Calls fatal_err() on
+new_elem's own raw byte representation. Calls ccol_fatal_err() on
 cvector_push_back() failure.
 .fi
 .SH PARAMETERS

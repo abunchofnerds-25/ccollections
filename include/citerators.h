@@ -46,6 +46,15 @@ SOFTWARE.
 
 #include <common.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /* Forward declarations; only pointer-to-incomplete-struct is needed for
  * _Generic type matching and for the begin_iter function prototypes below.
  * Full struct definitions live in each container's own header. */
@@ -125,15 +134,16 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
  *
  * @return @c const @c KeyT* to the current key.
  */
-#define ccol_iter_key_ptr(it)                                               \
-  ({                                                                        \
-    const typeof(*it##__ccol_iter_key_type_var) *_key;                      \
-    if ((it)->_direct_ptr || !is_char_ptr(*it##__ccol_iter_key_type_var)) { \
-      _key = (typeof(_key))((it)->key_pair->ptr);                           \
-    } else {                                                                \
-      _key = (typeof(_key))(&(it)->key_pair->ptr);                          \
-    }                                                                       \
-    _key;                                                                   \
+#define ccol_iter_key_ptr(it)                               \
+  ({                                                        \
+    const typeof(*it##__ccol_iter_key_type_var) *_key;      \
+    if ((it)->_direct_ptr ||                                \
+        !ccol_is_char_ptr(*it##__ccol_iter_key_type_var)) { \
+      _key = (typeof(_key))((it)->key_pair->ptr);           \
+    } else {                                                \
+      _key = (typeof(_key))(&(it)->key_pair->ptr);          \
+    }                                                       \
+    _key;                                                   \
   })
 
 /**
@@ -145,15 +155,16 @@ static inline void ___ccol_iterator_destroy(cmap_iterator **it) {
  *
  * @return @c ValT* to the current value / element.
  */
-#define ccol_iter_val_ptr(it)                                               \
-  ({                                                                        \
-    typeof(*it##__ccol_iter_val_type_var) *_val;                            \
-    if ((it)->_direct_ptr || !is_char_ptr(*it##__ccol_iter_val_type_var)) { \
-      _val = (typeof(_val))((it)->val_pair->ptr);                           \
-    } else {                                                                \
-      _val = (typeof(_val))(&(it)->val_pair->ptr);                          \
-    }                                                                       \
-    _val;                                                                   \
+#define ccol_iter_val_ptr(it)                               \
+  ({                                                        \
+    typeof(*it##__ccol_iter_val_type_var) *_val;            \
+    if ((it)->_direct_ptr ||                                \
+        !ccol_is_char_ptr(*it##__ccol_iter_val_type_var)) { \
+      _val = (typeof(_val))((it)->val_pair->ptr);           \
+    } else {                                                \
+      _val = (typeof(_val))(&(it)->val_pair->ptr);          \
+    }                                                       \
+    _val;                                                   \
   })
 
 /**
@@ -199,7 +210,7 @@ static inline __attribute__((always_inline)) cmap_iterator *__ccol_cbmap_begin(
  * of @p container.  Supported types: @c cvec, @c chmap, @c cbmap.
  *
  * Returns @c NULL without error when the container is empty.  Calls
- * @c fatal_err() on allocation failure.
+ * @c ccol_fatal_err() on allocation failure.
  *
  * @param container  A @c cvec, @c chmap, or @c cbmap variable.
  *
@@ -218,7 +229,7 @@ static inline __attribute__((always_inline)) cmap_iterator *__ccol_cbmap_begin(
             __ccol_chmap_begin((container), &_ccol_err),             \
             __ccol_cbmap_begin((container), &_ccol_err)));           \
     if (!_ccol_it && _ccol_err) {                                    \
-      fatal_err("ccol_begin('%s'): %s", #container, _ccol_err);      \
+      ccol_fatal_err("ccol_begin('%s'): %s", #container, _ccol_err); \
     }                                                                \
     _ccol_it;                                                        \
   })
@@ -251,3 +262,5 @@ static inline __attribute__((always_inline)) cmap_iterator *__ccol_cbmap_begin(
       __VA_ARGS__                                                           \
     }                                                                       \
   } while (0)
+
+#pragma GCC visibility pop

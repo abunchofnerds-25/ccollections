@@ -11,8 +11,8 @@ ccol_retval_t chttpsvr_set_engine_num_reactor_threads(size_t num_threads);
 .fi
 .SH DESCRIPTION
 .nf
-Configures how many OS threads the shared event_loop reactor devotes
-to its own polling and dispatch, per event_loop_create_with_mprocs's
+Configures how many OS threads the shared ccol_event_loop reactor devotes
+to its own polling and dispatch, per ccol_event_loop_create_with_mprocs's
 own num_reactor_threads parameter (see cthreadcomm.h): 1 means a
 single thread both polls and dispatches inline; any larger value means
 one dedicated polling thread plus (num_threads - 1) dispatch worker

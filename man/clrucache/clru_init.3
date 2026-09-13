@@ -13,7 +13,7 @@ clru_init(name, capacity, getter, setter, evict_cb);
 .nf
 Calls clrucache_create_full() with the key and value types inferred from
 the companion variables created by clru_declare(), and assigns the result
-to name. Calls fatal_err() if creation fails.
+to name. Calls ccol_fatal_err() if creation fails.
 .fi
 .SH PARAMETERS
 .nf
@@ -26,7 +26,7 @@ evict_cb   Eviction callback, or NULL
 .fi
 .SH NOTES
 .nf
-Calls fatal_err() on allocation failure.
+Calls ccol_fatal_err() on allocation failure.
 Use clrucache_create_full() directly if you need to handle errors
 gracefully.
 .fi

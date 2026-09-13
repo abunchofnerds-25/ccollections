@@ -1,5 +1,10 @@
 # C Collections
 
+[![CI](https://github.com/abunchofnerds-25/ccollections/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/abunchofnerds-25/ccollections/actions/workflows/ci.yml?query=branch%3Amain)
+[![Fuzz](https://github.com/abunchofnerds-25/ccollections/actions/workflows/fuzz.yml/badge.svg?branch=main)](https://github.com/abunchofnerds-25/ccollections/actions/workflows/fuzz.yml?query=branch%3Amain)
+[![Coverage](https://github.com/abunchofnerds-25/ccollections/actions/workflows/coverage.yml/badge.svg?branch=main)](https://abunchofnerds-25.github.io/ccollections/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 `c_collections` is a library of generic data structures and utilities for C. It provides what the C standard library leaves out: dynamic arrays, hash maps, ordered maps, dynamic strings, memory pools, inter-thread communication primitives, a thread pool, a structured logger, a JSON parser, a YAML parser, an HTTP client, and an HTTP server; all under one consistent API.
 
 If you have used C++'s `vector` and `map`, Java's `ArrayList` and `HashMap`, or Python's `list` and `dict`, the containers here will feel familiar. The difference is that this library is C11 (plus the GNU C extensions GCC and Clang both support: `typeof`, statement expressions, and `__attribute__((cleanup(...)))`); no code generators, no external build tools, no hidden runtime.
@@ -21,24 +26,25 @@ Every public function and macro also has a real troff manual page under [`man/`]
    - [Error Handling](#34-error-handling)
    - [Scoped Raw Pointers](#35-scoped-raw-pointers)
 4. [Building and Linking](#4-building-and-linking)
-5. [Dynamic Array - `cvector`](#5-dynamic-array--cvector)
-6. [Dynamic String - `cstring`](#6-dynamic-string--cstring)
-7. [Hash Map - `chashmap`](#7-hash-map--chashmap)
-8. [Ordered Map - `cbstmap`](#8-ordered-map--cbstmap)
-9. [Unified Iteration - `citerators`](#9-unified-iteration--citerators)
-10. [Sorting - `csort`](#10-sorting--csort)
-11. [Memory Pools - `cmempool`](#11-memory-pools--cmempool)
-12. [Thread Communication - `cthreadcomm`](#12-thread-communication--cthreadcomm)
-13. [LRU Cache - `clrucache`](#13-lru-cache--clrucache)
-14. [Structured Logger - `clogger`](#14-structured-logger--clogger)
-15. [JSON Parser / Serializer / DOM - `cjson`](#15-json-parser--serializer--dom--cjson)
-16. [YAML Parser / Serializer / DOM - `cyaml`](#16-yaml-parser--serializer--dom--cyaml)
-17. [Thread Pool - `cthreadpool`](#17-thread-pool--cthreadpool)
-18. [HTTP Client - `chttpclient`](#18-http-client--chttpclient)
-19. [HTTP Server - `chttpserver`](#19-http-server--chttpserver)
+5. [Dynamic Array - `cvector`](#5-dynamic-array---cvector)
+6. [Dynamic String - `cstring`](#6-dynamic-string---cstring)
+7. [Hash Map - `chashmap`](#7-hash-map---chashmap)
+8. [Ordered Map - `cbstmap`](#8-ordered-map---cbstmap)
+9. [Unified Iteration - `citerators`](#9-unified-iteration---citerators)
+10. [Sorting - `csort`](#10-sorting---csort)
+11. [Memory Pools - `cmempool`](#11-memory-pools---cmempool)
+12. [Thread Communication - `cthreadcomm`](#12-thread-communication---cthreadcomm)
+13. [LRU Cache - `clrucache`](#13-lru-cache---clrucache)
+14. [Structured Logger - `clogger`](#14-structured-logger---clogger)
+15. [JSON Parser / Serializer / DOM - `cjson`](#15-json-parser--serializer--dom---cjson)
+16. [YAML Parser / Serializer / DOM - `cyaml`](#16-yaml-parser--serializer--dom---cyaml)
+17. [Thread Pool - `cthreadpool`](#17-thread-pool---cthreadpool)
+18. [HTTP Client - `chttpclient`](#18-http-client---chttpclient)
+19. [HTTP Server - `chttpserver`](#19-http-server---chttpserver)
 20. [Thread Safety](#20-thread-safety)
 21. [Custom Memory Management](#21-custom-memory-management)
-22. [License](#22-license)
+22. [Authors](#22-authors)
+23. [License](#23-license)
 
 ---
 
@@ -48,7 +54,7 @@ C gives you direct control over memory, near-zero runtime overhead, and programs
 
 In C++, `std::vector<int> scores;` gives you a resizable, typed dynamic array. In Java, `new ArrayList<Integer>()` gives you the same thing. In Python, `scores = []` gives you a resizable list that grows on demand. In C, the closest built-in equivalent is a fixed-size array whose size you must know at compile time. Growing it means calling `realloc` yourself. A hash map means implementing one from scratch or tracking down a library. This is a valuable learning exercise, but in a real program you usually want to spend your energy on the problem you are actually solving, not on reimplementing containers you have already studied.
 
-The challenge with generic containers in C is catching type mistakes at compile time. The classic approach passes everything as `void *` (a pointer to untyped memory) which works with any element type but means the compiler cannot warn you about a mismatch. A `double *` silently passed where an `int *` is expected compiles without a warning and produces garbage at runtime. This library uses a C11 feature called `_Generic` that lets a macro inspect the static type of its argument at compile time and dispatch to different code accordingly. The result is that accidental type mismatches (the kind you make by mistake rather than by deliberate cast) are caught at the call site before the program runs.
+The challenge with generic containers in C is keeping the element type in the picture at all. The classic approach passes everything as `void *` (a pointer to untyped memory) which works with any element type but throws that information away entirely. A `double *` silently passed where an `int *` is expected compiles without a warning and produces garbage at runtime. This library uses a C11 feature called `_Generic` that lets a macro inspect the static type of its argument at compile time and dispatch to different code accordingly. A container therefore knows the element type it was declared with, and every call site stores and reads values through that declared type instead of through an untyped `void *`.
 
 ---
 
@@ -62,7 +68,7 @@ A second approach uses preprocessor token-pasting to generate a new family of ty
 
 A third approach generates C source code from a higher-level description using an external tool. This is clean at the API level but adds a step to the build process and breaks the direct edit-compile-run cycle.
 
-This library uses C11's built-in `_Generic` expression instead. A `_Generic` expression dispatches to different code branches at compile time based on the type of its argument, with no extra tools and no generated files. The macros look like typed containers, behave like typed containers, and produce a compiler error if you use them with the wrong type. The cost is a requirement for a C11-capable compiler with GNU extensions; a reasonable constraint on any modern development machine.
+This library uses C11's built-in `_Generic` expression instead. A `_Generic` expression dispatches to different code branches at compile time based on the type of its argument, with no extra tools and no generated files. The macros look like typed containers and behave like typed containers, with the element type recorded at the point of declaration and used at every call site. The cost is a requirement for a C11-capable compiler with GNU extensions; a reasonable constraint on any modern development machine.
 
 ---
 
@@ -70,26 +76,14 @@ This library uses C11's built-in `_Generic` expression instead. A `_Generic` exp
 
 ### 3.1 Compile-Time Type Dispatch
 
-C11 introduced a built-in expression called `_Generic` that selects different code branches at compile time based on the static type of a sub-expression. Every container macro in this library uses `_Generic` to inspect the type of its argument at the call site and dispatch to the correct internal path. This catches *accidental* type mismatches (the kind you make without thinking) at compile time, before the program runs.
+C11 introduced a built-in expression called `_Generic` that selects different code branches at compile time based on the static type of a sub-expression. Every container macro in this library uses `_Generic` to inspect the type of its argument at the call site and dispatch to the correct internal path, with zero runtime overhead.
 
-It is worth being precise about what this provides and what it does not. If you write:
-
-```c
-cvec_construct(scores, int);
-double d = 3.14;
-cvec_push(scores, *(int *)&d);   /* explicit cast; compiles, stores garbage */
-```
-
-the cast fools the `_Generic` check and nothing stops you. The library provides compile-time type *dispatch*, not type *safety* in the strict sense: it catches mistakes at the call site as long as you are not actively subverting the type system with a cast. That is enough to eliminate the most common class of bugs while adding zero runtime overhead.
-
-Every container macro inspects its argument with `_Generic` at the call site and records a `ccol_data_type` enum in the container's header struct. This enum drives all subsequent type-dependent decisions at runtime:
+`chashmap`, `cbstmap` and `clrucache` distil the declared types into a `ccol_data_type` enum at construction time and store it in the container, where it drives the type-dependent decisions those containers make at runtime:
 
 - `chashmap` selects open-addressing or separate-chaining based on key and value types.
 - `cbstmap` selects signed, unsigned, floating-point, or lexicographic key comparison.
-- `csort` selects the default comparator.
-- Internal serialisation into `cmap_pair` chooses the correct path.
 
-The key macros are defined in `include/common.h`: `is_integral_type()`, `is_char_ptr()`, `is_char_array()`, and `determine_ccol_data_type()`.
+`cvector` stores only the element size. Its element type lives entirely in the companion type variable, which is what `cvec_sort` reads to pick the default `csort` comparator and what `cvec_push` converts the pushed value through. Serialisation into a `cmap_pair` likewise chooses its path from the type of the expression at the call site.
 
 ### 3.2 Container Lifecycle Macros
 
@@ -103,7 +97,7 @@ All containers follow a three-level macro hierarchy that separates declaration, 
 | `*_init(name, ...)` | Allocates and initialises a previously declared container |
 | `*_construct(name, T, ...)` | Declares and initialises in a single step |
 | `*_construct_scoped(name, T, ...)` | Same as `*_construct`, but registers automatic destruction via `__attribute__((cleanup(...)))` |
-| `*_destroy(&name)` | Destroys the container and sets the pointer to `NULL` |
+| `*_destroy(name)` | Destroys the container and sets the pointer to `NULL` |
 
 The `*_scoped` variants require no explicit cleanup call. They are particularly valuable in functions with multiple return paths, where manual cleanup becomes error-prone.
 
@@ -140,7 +134,7 @@ Omitting `*_redeclare` before using a type-dispatching macro in a new scope is t
 
 ### 3.4 Error Handling
 
-Errors in this library fall into two broad categories. Programming mistakes (passing `NULL` where a valid pointer is required, or requesting an element at an out-of-bounds index) are handled by calling `fatal_err()`, which prints a diagnostic message and terminates the program. This is intentional: a programming mistake should be loud and obvious rather than silently propagated and discovered much later. When you need to handle an expected failure gracefully (for example, a key that might or might not be in a map), use the underlying raw functions, which return a `ccol_retval_t` value you can inspect.
+Errors in this library fall into two broad categories. Programming mistakes (passing `NULL` where a valid pointer is required, or requesting an element at an out-of-bounds index) are handled by calling `ccol_fatal_err()`, which prints a diagnostic message and terminates the program. This is intentional: a programming mistake should be loud and obvious rather than silently propagated and discovered much later. When you need to handle an expected failure gracefully (for example, a key that might or might not be in a map), use the underlying raw functions, which return a `ccol_retval_t` value you can inspect.
 
 Functions return `ccol_retval_t`, an enum whose value zero indicates success and whose negative values indicate specific failure conditions:
 
@@ -168,7 +162,7 @@ typedef enum {
 } ccol_retval_t;
 ```
 
-The convenience macros call `fatal_err()` on hard errors such as programming mistakes and resource exhaustion. When you need to recover from an expected failure condition, call the underlying functions directly and inspect the return value.
+The convenience macros call `ccol_fatal_err()` on hard errors such as programming mistakes and resource exhaustion. When you need to recover from an expected failure condition, call the underlying functions directly and inspect the return value.
 
 ### 3.5 Scoped Raw Pointers
 
@@ -243,7 +237,7 @@ cd tests/chttpserver  && make test
 
 ### Fuzz Testing
 
-Three libFuzzer-based fuzzing harnesses ship alongside the test suites, targeting the `cyaml` YAML parser, the `chttp1_parser` HTTP/1.1 parser, and the `cjson` JSON parser directly. None are part of `make test`, `make build`, or `make all`; all are opt-in. A CI job already runs all of them automatically whenever a pull request is merged into the branch `main`, so running them yourself is not part of the regular development loop; this is for readers who want to dig further into parser-level edge cases on their own, not something every contributor needs to touch.
+Three libFuzzer-based fuzzing harnesses ship alongside the test suites, targeting the `cyaml` YAML parser, the `chttp1_parser` HTTP/1.1 parser, and the `cjson` JSON parser directly. None are part of `make test`, `make build`, or `make all`; all are opt-in locally. CI runs every one of them as a mandatory, blocking job on each push and on each pull request, so running them yourself is not part of the regular development loop; this is for readers who want to dig further into parser-level edge cases on their own, not something every contributor needs to touch.
 
 Building them requires Clang (libFuzzer is a Clang/LLVM feature; GCC does not provide it), regardless of which compiler you use for everything else:
 
@@ -271,10 +265,42 @@ make fuzz_parse fuzz_path                       # builds ./fuzz_cjson_parse, ./f
 
 Each corpus directory seeds the fuzzer with a small set of curated byte sequences. Drop `-max_total_time` to run indefinitely; doing so mutates and grows the corpus directory in place with newly-discovered inputs, so `git status` will show new files afterward. Any crash, timeout, or out-of-memory finding is written to a `crash-*`/`timeout-*`/`oom-*` file in the same directory; pass that file as the sole argument (e.g. `./fuzz_cyaml crash-<hash>`) to replay it deterministically once you're ready to debug it.
 
-To link an application against the library:
+### Installing
+
+`make install` places the shared library, the static archive, the public headers, the `pkg-config` metadata, and the manual pages under `/usr/local`:
 
 ```bash
-gcc -o myapp myapp.c -lccollections -lpthread
+sudo make install
+sudo make uninstall
+```
+
+`PREFIX` moves the whole install somewhere else, and `DESTDIR` stages it into a directory without touching the live system, which is what a distribution package build wants:
+
+```bash
+make install PREFIX="$HOME/.local"        # no sudo needed for a prefix you own
+make install DESTDIR=/tmp/stage PREFIX=/usr
+```
+
+Escalation happens only when the destination is not already writable by the current user, so installing into a prefix you own never prompts for a password. Pass `SUDO=` to suppress it outright, or `SUDO=doas` to substitute another tool.
+
+### Linking
+
+The library depends on `pthread`, `zlib` (for compressing rotated log files), OpenSSL's `libssl` and `libcrypto` (for TLS in the HTTP client and server), and `libm`. `pkg-config` is the reliable way to get them right:
+
+```bash
+gcc -o myapp myapp.c $(pkg-config --cflags --libs ccollections)
+```
+
+Linking against the shared library by hand needs nothing else, because a shared object records its own dependencies and the dynamic loader resolves them:
+
+```bash
+gcc -o myapp myapp.c -lccollections
+```
+
+A static link is different. `libccollections.a` is an archive rather than a linked object, so it carries no record of what it needs and every dependency must appear on your own link line. `pkg-config --static` emits the full list, including OpenSSL's own transitive dependencies, which vary by distribution:
+
+```bash
+gcc -o myapp myapp.c $(pkg-config --cflags --libs --static ccollections)
 ```
 
 Include only the headers you need:
@@ -296,20 +322,24 @@ Include only the headers you need:
 #include <chttpserver.h>
 ```
 
-When linking against `chttpclient` or `chttpserver`, add `-lssl -lcrypto -lm` in addition to `-lpthread` (both are backed by TLS via OpenSSL):
-
-```bash
-gcc -o myapp myapp.c -lccollections -lpthread -lssl -lcrypto -lm
-```
-
 `cvector.h`, `chashmap.h`, and `cbstmap.h` each automatically include `citerators.h`, so the unified iteration API (`ccol_begin`, `ccol_for_each`, `ccol_iter_declare`, and related macros) is available whenever any one of those container headers is included.
+
+The shared library exports exactly the symbols declared in the installed public headers and nothing else, so an internal helper can neither be linked against by accident nor become an unintended part of the interface.
+
+### Compiler Requirements
+
+The library targets C11 plus the GNU C extensions that GCC and Clang both implement: `typeof`, statement expressions, and `__attribute__((cleanup(...)))`. The type-safe container macros are built on them and there is no fallback path, so a strictly conforming compiler is not enough. In practice this means:
+
+- GCC and Clang are supported, and both are exercised in CI on x86-64, i386, ARM32 and AArch64.
+- MSVC is not supported.
+- `-std=c11 -pedantic` rejects the extensions the macros rely on. Use `-std=gnu11` (or a later `gnu` standard), which is GCC's and Clang's own default.
 
 ### Compile-Time Configuration
 
-`FORK_SAFETY_REQUIRED` (defined to `1` by default in `common.h`) controls whether `cthreadpool`, `cthreadcomm` (`event_loop`, `circular_queue`, `dynamic_queue`, `channel`), `clogger`, and `chttpserver` compile in their `pthread_atfork()`-based protection against a `fork()` call inheriting one of their internal locks already held by a since-vanished thread. That protection costs real work on every single `fork()` call anywhere in the process, by any thread, for any reason: the registered handlers must lock every currently-live handle's own internal lock before `fork()` is allowed to proceed, then unlock them all again. An application that never calls `fork()` at all, or only ever calls it immediately followed by `exec()` (so the child never touches a handle from this library before its own process image is replaced), gets no benefit from this protection and can build the library with `-DFORK_SAFETY_REQUIRED=0` to remove it entirely:
+`CCOL_FORK_SAFETY_REQUIRED` (defined to `1` by default in `common.h`) controls whether `cthreadpool`, `cthreadcomm` (`ccol_event_loop`, `ccol_circular_queue`, `ccol_dynamic_queue`, `ccol_channel`), `clogger`, and `chttpserver` compile in their `pthread_atfork()`-based protection against a `fork()` call inheriting one of their internal locks already held by a since-vanished thread. That protection costs real work on every single `fork()` call anywhere in the process, by any thread, for any reason: the registered handlers must lock every currently-live handle's own internal lock before `fork()` is allowed to proceed, then unlock them all again. An application that never calls `fork()` at all, or only ever calls it immediately followed by `exec()` (so the child never touches a handle from this library before its own process image is replaced), gets no benefit from this protection and can build the library with `-DCCOL_FORK_SAFETY_REQUIRED=0` to remove it entirely:
 
 ```bash
-make EXTRA_CFLAGS="-DFORK_SAFETY_REQUIRED=0"
+make EXTRA_CFLAGS="-DCCOL_FORK_SAFETY_REQUIRED=0"
 ```
 
 Every other aspect of these modules' thread safety (locking, concurrent create/destroy safety via the generation-tagged handle tables) is unaffected either way; this switch controls fork() protection alone. With it turned off, calling `fork()` while any of these modules' locks might be held by another thread is the caller's own responsibility to avoid.
@@ -407,7 +437,7 @@ cvec_destroy(scores);
 
 ### Pushing Lvalues and Rvalues
 
-Both `cvec_push` and `cvec_push_rvalue` convert their argument to the vector's declared element type the same way a plain C assignment would before storing it, so a value whose type merely happens to be the same size as the vector's element type (an `int` literal pushed into a `long`-typed vector, or a `float` pushed into an `int`-typed vector) is converted correctly rather than having its raw bytes copied verbatim. The two macros exist for a purely syntactic reason: `cvec_push_rvalue` accepts values with no addressable storage of their own (literals and computed expressions); `cvec_push` is the simpler form for a value you already have in a variable. Use `cvec_push` for addressable variables; `cvec_push_rvalue` for literals and expressions:
+Both `cvec_push` and `cvec_push_rvalue` convert their argument to the vector's declared element type the same way a plain C assignment would before storing it, so a value whose type differs from the vector's element type (an `int` literal pushed into a `long`-typed vector, or a `float` pushed into an `int`-typed vector) is converted correctly rather than having its raw bytes copied verbatim. The two macros exist for a purely syntactic reason: `cvec_push_rvalue` accepts values with no addressable storage of their own (literals and computed expressions); `cvec_push` is the simpler form for a value you already have in a variable. Use `cvec_push` for addressable variables; `cvec_push_rvalue` for literals and expressions:
 
 ```c
 int x = 42;
@@ -485,8 +515,8 @@ void print_page(Student *all_students, size_t count,
 | `cvec_declare(v, T)` | Declare the variable without initialising it |
 | `cvec_declare_scoped(v, T)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
 | `cvec_redeclare(v, T)` | Restore type information in a new scope after passing the vector across a function boundary |
-| `cvec_init(v)` | Initialise a previously declared vector using the default allocator; calls `fatal_err()` on failure |
-| `cvec_init_mp(v, mprocs)` | Initialise a previously declared vector with a custom allocator; calls `fatal_err()` on failure |
+| `cvec_init(v)` | Initialise a previously declared vector using the default allocator; calls `ccol_fatal_err()` on failure |
+| `cvec_init_mp(v, mprocs)` | Initialise a previously declared vector with a custom allocator; calls `ccol_fatal_err()` on failure |
 | `cvec_construct(v, T)` | Declare and initialise in one step using the default allocator |
 | `cvec_construct_scoped(v, T)` | Declare, initialise, and register auto-cleanup using the default allocator |
 | `cvec_construct_mp(v, T, mprocs)` | Declare and initialise with a custom allocator |
@@ -498,29 +528,30 @@ void print_page(Student *all_students, size_t count,
 
 | Macro | Description |
 |---|---|
-| `cvec_push(v, var)` | Append a copy of `var`, converted to `v`'s declared element type the same way a plain C assignment would; `var` may safely alias into `v`'s own backing buffer (for example `cvec_at(v, i)`); calls `fatal_err()` on failure |
-| `cvec_push_rvalue(v, expr)` | Append `expr`, converted to `v`'s declared element type the same way a plain C assignment would; accepts rvalues (literals, computed values); calls `fatal_err()` on failure |
-| `cvec_pop(v)` | Remove and return the last element as a value; calls `fatal_err()` if the vector is empty |
-| `cvec_at(v, i)` | Return a modifiable lvalue reference to the element at index `i`; `i` is evaluated exactly once; calls `fatal_err()` if `i` is out of bounds |
+| `cvec_push(v, var)` | Append a copy of `var`, converted to `v`'s declared element type the same way a plain C assignment would; `var` may safely alias into `v`'s own backing buffer (for example `cvec_at(v, i)`); calls `ccol_fatal_err()` on failure |
+| `cvec_push_rvalue(v, expr)` | Append `expr`, converted to `v`'s declared element type the same way a plain C assignment would; accepts rvalues (literals, computed values); calls `ccol_fatal_err()` on failure |
+| `cvec_pop(v)` | Remove and return the last element as a value; calls `ccol_fatal_err()` if the vector is empty |
+| `cvec_at(v, i)` | Return a modifiable lvalue reference to the element at index `i`; `i` is evaluated exactly once; calls `ccol_fatal_err()` if `i` is out of bounds |
 | `cvec_at_ptr(v, i)` | Return a pointer to the element at index `i`, or `NULL` if `i` is out of bounds (does not terminate) |
+| `cvec_find(v, elem)` | Return the zero-based index of the first element byte-equal to `elem`, or `ccol_invalid_size` if there is no match |
 | `cvec_size(v)` | Return the number of elements currently stored |
-| `cvec_reserve(v, n)` | Pre-allocate capacity for at least `n` elements; `n` is evaluated exactly once; calls `fatal_err()` on failure |
+| `cvec_reserve(v, n)` | Pre-allocate capacity for at least `n` elements; `n` is evaluated exactly once; calls `ccol_fatal_err()` on failure |
 | `cvec_data_ptr(v)` | Return a raw pointer to the internal data array; invalidated by any resize |
 
 **Bulk Operations and Sorting**
 
 | Macro | Description |
 |---|---|
-| `cvec_append_array(v, arr_ptr, count)` | Append `count` elements from a plain C array in a single operation; `count` is evaluated exactly once; `arr_ptr` may safely point into `v`'s own backing buffer; calls `fatal_err()` on failure |
-| `cvec_append_cvec(v_dst, v_src)` | Append all elements of `v_src` to `v_dst`; both must have the same element type; calls `fatal_err()` on failure |
-| `cvec_sort(v)` | Sort in place using the default comparator for the element type; calls `fatal_err()` on failure |
-| `cvector_sort_with_comparison_proc(v, cmp)` | Sort in place using a caller-supplied comparator (`int cmp(const void *, const void *)`); calls `fatal_err()` on failure |
+| `cvec_append_array(v, arr_ptr, count)` | Append `count` elements from a plain C array in a single operation; `count` is evaluated exactly once; `arr_ptr` may safely point into `v`'s own backing buffer; calls `ccol_fatal_err()` on failure |
+| `cvec_append_cvec(v_dst, v_src)` | Append all elements of `v_src` to `v_dst`; both must have the same element type; calls `ccol_fatal_err()` on failure |
+| `cvec_sort(v)` | Sort in place using the default comparator for the element type; calls `ccol_fatal_err()` on failure |
+| `cvector_sort_with_comparison_proc(v, cmp)` | Sort in place using a caller-supplied comparator (`int cmp(const void *, const void *)`); calls `ccol_fatal_err()` on failure |
 
 ---
 
 ## 6. Dynamic String - `cstring`
 
-`cstring` is a heap-allocated string that grows automatically as you append to it. Unlike a fixed `char` array, you do not need to declare a maximum length in advance. Its internal buffer is always null-terminated, so you can pass it directly to any standard library function that expects a `const char *`. Capacity is always a power of two (minimum 16 bytes) and doubles when more space is needed.
+`cstring` is a heap-allocated string that grows automatically as you append to it. Unlike a fixed `char` array, you do not need to declare a maximum length in advance. Its internal buffer is always null-terminated, so you can pass it directly to any standard library function that expects a `const char *`. Capacity is always a power of two (minimum 16 bytes); when more space is needed the buffer grows to the smallest power of two that fits the result.
 
 **Header:** `#include <cstring.h>`
 
@@ -627,7 +658,12 @@ void load_config(const char *path, chmap config) {
 
         cvec parts = cstr_split(line, "=", NULL);
         cvec_redeclare(parts, cstr);
-        if (cvec_size(parts) < 2) { cvec_destroy(parts); continue; }
+        if (cvec_size(parts) < 2) {
+            for (size_t i = 0; i < cvec_size(parts); i++)
+                cstr_destroy(cvec_at(parts, i));
+            cvec_destroy(parts);
+            continue;
+        }
 
         cstr key = cvec_at(parts, 0);
         cstr val = cvec_at(parts, 1);
@@ -657,14 +693,14 @@ void load_config(const char *path, chmap config) {
 |---|---|
 | `cstr_declare(s)` | Declare the variable without initialising it |
 | `cstr_declare_scoped(s)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
-| `cstr_init(s, initial)` | Initialise a previously declared string; `initial` may be a C string or `NULL` for empty; calls `fatal_err()` on failure |
-| `cstr_init_mp(s, initial, mprocs)` | Initialise a previously declared string with a custom allocator; calls `fatal_err()` on failure |
+| `cstr_init(s, initial)` | Initialise a previously declared string; `initial` may be a C string or `NULL` for empty; calls `ccol_fatal_err()` on failure |
+| `cstr_init_mp(s, initial, mprocs)` | Initialise a previously declared string with a custom allocator; calls `ccol_fatal_err()` on failure |
 | `cstr_construct(s, initial)` | Declare and initialise in one step using the default allocator |
 | `cstr_construct_scoped(s, initial)` | Declare, initialise, and register auto-cleanup |
 | `cstr_construct_mp(s, initial, mprocs)` | Declare and initialise with a custom allocator |
 | `cstr_construct_mp_scoped(s, initial, mprocs)` | Declare, initialise with a custom allocator, and register auto-cleanup |
 | `cstring_new(initial)` | Allocate and return a new `cstr` using default allocators; returns `NULL` on failure with no error detail (equivalent to `cstring_create_full(initial, NULL, NULL)`) |
-| `cstr_reserve(s, cap)` | Pre-allocate at least `cap` bytes (rounded up to next power of two, minimum 16); calls `fatal_err()` on failure |
+| `cstr_reserve(s, cap)` | Pre-allocate at least `cap` bytes (rounded up to next power of two, minimum 16); calls `ccol_fatal_err()` on failure |
 | `cstr_reset(s)` | Clear all characters and shrink capacity back to the minimum |
 | `cstr_destroy(s)` | Destroy and set pointer to `NULL` |
 
@@ -681,14 +717,14 @@ void load_config(const char *path, chmap config) {
 
 | Macro / Function | Description |
 |---|---|
-| `cstr_append(s, str)` | Append C string `str` to the end; calls `fatal_err()` on failure |
-| `cstr_prepend(s, str)` | Prepend C string `str` to the beginning; calls `fatal_err()` on failure |
-| `cstr_insert(s, pos, str)` | Insert C string `str` at zero-based position `pos`; calls `fatal_err()` on failure |
-| `cstr_set(s, str)` | Replace the entire content with C string `str`; calls `fatal_err()` on failure |
+| `cstr_append(s, str)` | Append C string `str` to the end; calls `ccol_fatal_err()` on failure |
+| `cstr_prepend(s, str)` | Prepend C string `str` to the beginning; calls `ccol_fatal_err()` on failure |
+| `cstr_insert(s, pos, str)` | Insert C string `str` at zero-based position `pos`; calls `ccol_fatal_err()` on failure |
+| `cstr_set(s, str)` | Replace the entire content with C string `str`; calls `ccol_fatal_err()` on failure |
 | `cstr_to_upper(s)` | Convert all characters to uppercase in place |
 | `cstr_to_lower(s)` | Convert all characters to lowercase in place |
 | `cstr_trim(s)` | Strip leading and trailing whitespace in place (classified by `isspace()`) |
-| `cstr_replace(s, needle, replacement)` | Replace every non-overlapping occurrence of `needle` with `replacement`; calls `fatal_err()` on failure |
+| `cstr_replace(s, needle, replacement)` | Replace every non-overlapping occurrence of `needle` with `replacement`; calls `ccol_fatal_err()` on failure |
 
 **Search and Comparison**
 
@@ -705,7 +741,7 @@ void load_config(const char *path, chmap config) {
 
 | Macro / Function | Description |
 |---|---|
-| `cstr_substring(s, start, len)` | Create and return a new `cstr` containing `len` characters starting at `start`; range is clamped to string bounds; caller must destroy the result; calls `fatal_err()` on failure |
+| `cstr_substring(s, start, len)` | Create and return a new `cstr` containing `len` characters starting at `start`; range is clamped to string bounds; caller must destroy the result; calls `ccol_fatal_err()` on failure |
 | `cstr_copy(s, err)` | Create and return an independent copy of the string; caller must destroy the result |
 | `cstr_split(s, delim, err)` | Tokenise the string by `delim` and return a `cvec` of `cstr` values; caller must destroy each token and then the vector |
 
@@ -721,13 +757,13 @@ A hash map stores key-value pairs and answers "what value is associated with thi
 
 ### Implementation Selection
 
-**Open-addressing** is selected when both the key and the value are integral types no wider than eight bytes. It uses compact 24-byte slots (8-byte key, 8-byte value, 1-byte metadata, padded to a multiple of 8 so key/value storage stays naturally aligned for direct in-place access), Fibonacci hashing for integers, and linear probing. Load factor thresholds are 0.70 (grow) and 0.25 (shrink), with a 2x scale factor. There are zero per-entry heap allocations, and cache locality is quite good.
+**Open-addressing** is selected when both the key and the value are integral types no wider than eight bytes; `long double` is always excluded, whatever its width on the platform. It uses compact 24-byte slots (8-byte key, 8-byte value, 1-byte metadata, padded to a multiple of 8 so key/value storage stays naturally aligned for direct in-place access), Fibonacci hashing for integers, and linear probing. Load factor thresholds are 0.70 (grow) and 0.25 (shrink), with a 2x scale factor. There are zero per-entry heap allocations, and cache locality is quite good.
 
 **Separate chaining** is selected for all other type combinations. It uses a linked-list per bucket, Small String Optimisation (23-byte inline buffer for short strings), and a doubly-linked list that preserves reverse insertion order. The minimum bucket count is 16 (always a power of two), and the scale factor is 4x.
 
 The default hash function is selected by key type, not by which backend ends up chosen: Fibonacci hashing for integral/float/double/pointer keys, XXHash64 for string and other buffer-like keys. A separate-chaining map with an integral key type (for example a `double` key paired with a non-integral value) still gets Fibonacci hashing for that key.
 
-The selection happens transparently; the same macro interface is used in both cases. `chmap_get_ptr`/`chmap_get_elem_ref` always return a pointer that is correctly aligned for the value's type, regardless of which backend is in use. A reference returned by `chmap_get_elem_ref` stays valid until the map is actually modified (insert/delete/resize); looking up a different key never invalidates a reference already held for another key, so multiple references may be kept concurrently. A `key_pair` whose size does not match the byte size of the key type is rejected with `ccol_invalid_args` for any fixed-width key type (every integral type, `float`, `double`, and `long double`), regardless of which backend the map uses; a `val_pair` whose size does not match the byte size of the value type is rejected the same way, but only on a map using the open-addressing backend, since separate chaining accepts values of varying size.
+The selection happens transparently; the same macro interface is used in both cases. `chmap_get_ptr`/`chmap_get_elem_ref` always return a pointer that is correctly aligned for the value's type, regardless of which backend is in use. A reference returned by `chmap_get_elem_ref` stays valid until the map is actually modified (insert/delete/resize); looking up a different key never invalidates a reference already held for another key, so multiple references may be kept concurrently. A `key_pair` whose size does not match the byte size of the key type is rejected with `ccol_invalid_args` for any fixed-width key type (every integral type, `float`, `double`, `long double`, and any pointer type), regardless of which backend the map uses; a `val_pair` whose size does not match the byte size of the value type is rejected the same way, but only on a map using the open-addressing backend, since separate chaining accepts values of varying size.
 
 ### Basic Usage
 
@@ -781,7 +817,7 @@ for (it = ccol_begin(index); it != NULL; it = ccol_iter_next(it)) {
 }
 ```
 
-The unified iteration macros are provided by `citerators.h`, which is automatically included when you include `chashmap.h`. See [Section 9](#9-unified-iteration--citerators) for the full API reference.
+The unified iteration macros are provided by `citerators.h`, which is automatically included when you include `chashmap.h`. See [Section 9](#9-unified-iteration---citerators) for the full API reference.
 
 Iteration order differs by implementation: separate chaining iterates in reverse insertion order via its internal doubly-linked list; open-addressing iterates in slot order, which can be considered random.
 
@@ -929,10 +965,10 @@ The map copies each key string into its own storage (inline for strings up to 23
 | `chmap_declare(m, K, V)` | Declare the variable without initialising it |
 | `chmap_declare_scoped(m, K, V)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
 | `chmap_redeclare(m, K, V)` | Restore type information in a new scope after passing the map across a function boundary |
-| `chmap_init(m)` | Initialise a previously declared map using the default allocator and default hash; calls `fatal_err()` on failure |
-| `chmap_init_mp(m, mprocs)` | Initialise with a custom allocator and default hash; calls `fatal_err()` on failure |
-| `chmap_init_ch(m, hash_fn)` | Initialise with the default allocator and a custom hash function; calls `fatal_err()` on failure |
-| `chmap_init_full(m, mprocs, hash_fn)` | Initialise with a custom allocator and a custom hash function; calls `fatal_err()` on failure |
+| `chmap_init(m)` | Initialise a previously declared map using the default allocator and default hash; calls `ccol_fatal_err()` on failure |
+| `chmap_init_mp(m, mprocs)` | Initialise with a custom allocator and default hash; calls `ccol_fatal_err()` on failure |
+| `chmap_init_ch(m, hash_fn)` | Initialise with the default allocator and a custom hash function; calls `ccol_fatal_err()` on failure |
+| `chmap_init_full(m, mprocs, hash_fn)` | Initialise with a custom allocator and a custom hash function; calls `ccol_fatal_err()` on failure |
 | `chmap_construct(m, K, V)` | Declare and initialise in one step using the default allocator and default hash |
 | `chmap_construct_scoped(m, K, V)` | Declare, initialise, and register auto-cleanup |
 | `chmap_construct_mp(m, K, V, mprocs)` | Declare and initialise with a custom allocator |
@@ -948,21 +984,21 @@ The map copies each key string into its own storage (inline for strings up to 23
 
 | Macro / Function | Description |
 |---|---|
-| `chmap_insert(m, key, val)` | Insert or update (upsert); keys and values must be lvalues; calls `fatal_err()` on non-key-collision failure |
-| `chmap_get(m, key)` | Return the value associated with `key`; calls `fatal_err()` if the key is absent |
+| `chmap_insert(m, key, val)` | Insert or update (upsert); keys and values must be lvalues; calls `ccol_fatal_err()` on non-key-collision failure |
+| `chmap_get(m, key)` | Return the value associated with `key`; calls `ccol_fatal_err()` if the key is absent |
 | `chmap_get_ptr(m, key)` | Return a pointer to the value, or `NULL` if the key is absent; pointer is invalidated by any subsequent insert, remove, or resize |
 | `chmap_remove(m, key)` | Remove the entry for `key`; returns `ccol_success` or `ccol_key_not_found` |
 | `chmap_elem_count(m)` | Return the number of entries currently stored |
 
 **Iteration**
 
-These macros come from `citerators.h`, which `chashmap.h` includes automatically. See [Section 9](#9-unified-iteration--citerators) for the full reference.
+These macros come from `citerators.h`, which `chashmap.h` includes automatically. See [Section 9](#9-unified-iteration---citerators) for the full reference.
 
 | Macro | Description |
 |---|---|
 | `ccol_for_each(m, it, { })` | Recommended iteration pattern; declares the iterator in its own scope and traverses all entries |
 | `ccol_iter_declare(m, it)` | Declare a manual iterator variable with RAII cleanup; required before using `ccol_begin` in a `for` loop |
-| `ccol_begin(m)` | Return an iterator positioned at the first entry, or `NULL` if the map is empty; calls `fatal_err()` on allocation failure |
+| `ccol_begin(m)` | Return an iterator positioned at the first entry, or `NULL` if the map is empty; calls `ccol_fatal_err()` on allocation failure |
 | `ccol_iter_next(it)` | Advance to the next entry; returns `NULL` at the end and automatically destroys the iterator |
 | `ccol_iter_key_ptr(it)` | Return a typed const pointer to the current entry's key |
 | `ccol_iter_val_ptr(it)` | Return a typed pointer to the current entry's value; the value may be modified in place |
@@ -979,6 +1015,8 @@ An ordered map works like a hash map (you look up values by key) but it always k
 **Header:** `#include <cbstmap.h>`
 
 Automatic key comparison is provided for `char` keys (compared using this platform's own native `char` semantics, signed or unsigned), signed integer keys (`signed char`/`int8_t`, `short`, `int`, `long`, `long long`, always compared as genuinely signed regardless of this platform's own `char` signedness), unsigned integer keys, floating-point keys (`float`, `double`, `long double`, compared by numeric value), and `char *` keys (using `strcmp`). For other key types (structs, enums, and the like), a custom comparison function must be supplied, or the default falls back to a raw `memcmp` of the key's representation (see the callout below). A `NaN` floating-point key sorts as greater than every non-NaN key and equal to every other NaN key, so a `NaN` key can be inserted, looked up, and deleted like any other key.
+
+Keys of differing sizes are ordered by their common prefix first and then by size, shorter key first, which is what gives variable-width keys (`char *`, structs) a total order. A fixed-width key type is held to its own width: every key of such a type is exactly as wide as the type itself.
 
 ### Basic Usage
 
@@ -1105,10 +1143,10 @@ The AVL self-balancing property keeps the tree height bounded at O(log n) even u
 | `cbmap_declare(m, K, V)` | Declare the variable without initialising it |
 | `cbmap_declare_scoped(m, K, V)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
 | `cbmap_redeclare(m, K, V)` | Restore type information in a new scope after passing the map across a function boundary |
-| `cbmap_init(m)` | Initialise a previously declared map using the default allocator and automatic key comparison; calls `fatal_err()` on failure |
-| `cbmap_init_mp(m, mprocs)` | Initialise with a custom allocator and automatic key comparison; calls `fatal_err()` on failure |
-| `cbmap_init_cc(m, cmp_fn)` | Initialise with the default allocator and a custom comparison function; calls `fatal_err()` on failure |
-| `cbmap_init_full(m, mprocs, cmp_fn)` | Initialise with a custom allocator and a custom comparison function; calls `fatal_err()` on failure |
+| `cbmap_init(m)` | Initialise a previously declared map using the default allocator and automatic key comparison; calls `ccol_fatal_err()` on failure |
+| `cbmap_init_mp(m, mprocs)` | Initialise with a custom allocator and automatic key comparison; calls `ccol_fatal_err()` on failure |
+| `cbmap_init_cc(m, cmp_fn)` | Initialise with the default allocator and a custom comparison function; calls `ccol_fatal_err()` on failure |
+| `cbmap_init_full(m, mprocs, cmp_fn)` | Initialise with a custom allocator and a custom comparison function; calls `ccol_fatal_err()` on failure |
 | `cbmap_construct(m, K, V)` | Declare and initialise in one step; key comparison is selected automatically from the key type |
 | `cbmap_construct_scoped(m, K, V)` | Declare, initialise, and register auto-cleanup |
 | `cbmap_construct_mp(m, K, V, mprocs)` | Declare and initialise with a custom allocator |
@@ -1124,21 +1162,21 @@ The AVL self-balancing property keeps the tree height bounded at O(log n) even u
 
 | Macro / Function | Description |
 |---|---|
-| `cbmap_insert(m, key, val)` | Insert or update (upsert); keys and values must be lvalues; tree is rebalanced automatically; calls `fatal_err()` on non-key-collision failure |
-| `cbmap_get(m, key)` | Return the value associated with `key`; calls `fatal_err()` if the key is absent; O(log n) |
+| `cbmap_insert(m, key, val)` | Insert or update (upsert); keys and values must be lvalues; tree is rebalanced automatically; calls `ccol_fatal_err()` on non-key-collision failure |
+| `cbmap_get(m, key)` | Return the value associated with `key`; calls `ccol_fatal_err()` if the key is absent; O(log n) |
 | `cbmap_get_ptr(m, key)` | Return a pointer to the value, or `NULL` if the key is absent; pointer is invalidated by any subsequent insert or remove; O(log n) |
 | `cbmap_remove(m, key)` | Remove the entry for `key`; tree is rebalanced automatically; returns `ccol_success` or `ccol_key_not_found`; O(log n) |
 | `cbmap_elem_count(m)` | Return the number of entries currently stored |
 
 **Iteration**
 
-These macros come from `citerators.h`, which `cbstmap.h` includes automatically. See [Section 9](#9-unified-iteration--citerators) for the full reference.
+These macros come from `citerators.h`, which `cbstmap.h` includes automatically. See [Section 9](#9-unified-iteration---citerators) for the full reference.
 
 | Macro | Description |
 |---|---|
 | `ccol_for_each(m, it, { })` | Recommended iteration pattern; declares the iterator in its own scope and traverses all entries in ascending key order |
 | `ccol_iter_declare(m, it)` | Declare a manual iterator variable with RAII cleanup; required before using `ccol_begin` in a `for` loop |
-| `ccol_begin(m)` | Return an iterator positioned at the entry with the smallest key, or `NULL` if the map is empty |
+| `ccol_begin(m)` | Return an iterator positioned at the entry with the smallest key, or `NULL` if the map is empty; calls `ccol_fatal_err()` on allocation failure |
 | `ccol_iter_next(it)` | Advance to the next entry in sorted key order; returns `NULL` at the end and automatically destroys the iterator |
 | `ccol_iter_key_ptr(it)` | Return a typed const pointer to the current entry's key |
 | `ccol_iter_val_ptr(it)` | Return a typed pointer to the current entry's value; the value may be modified in place |
@@ -1258,7 +1296,7 @@ The same `ccol_for_each` / `ccol_iter_next` / `ccol_iter_key_ptr` / `ccol_iter_v
 
 | Macro | Header | Description |
 |---|---|---|
-| `ccol_begin(container)` | `citerators.h` | Return an iterator at the first element, or `NULL` if empty; calls `fatal_err()` on allocation failure |
+| `ccol_begin(container)` | `citerators.h` | Return an iterator at the first element, or `NULL` if empty; calls `ccol_fatal_err()` on allocation failure |
 | `ccol_end` | `citerators.h` | The end sentinel: `NULL` |
 | `ccol_for_each(container, it, { })` | `citerators.h` | Declare `it`, loop from `ccol_begin` to `ccol_end`, destroy on exit |
 | `ccol_iter_declare(container, it)` | `citerators.h` | Declare a typed iterator variable with RAII cleanup; required before using `ccol_begin` in a `for` loop |
@@ -1271,7 +1309,7 @@ The same `ccol_for_each` / `ccol_iter_next` / `ccol_iter_key_ptr` / `ccol_iter_v
 
 | Container | Key type returned by `ccol_iter_key_ptr` | Value type returned by `ccol_iter_val_ptr` |
 |---|---|---|
-| `cvec` | `const size_t *` (element index) | `const ElemT *` |
+| `cvec` | `const size_t *` (element index) | `ElemT *` |
 | `chmap` | `const KeyT *` | `ValT *` |
 | `cbmap` | `const KeyT *` | `ValT *` |
 
@@ -1285,9 +1323,9 @@ The same `ccol_for_each` / `ccol_iter_next` / `ccol_iter_key_ptr` / `ccol_iter_v
 
 *Stable* means that two elements that compare as equal always preserve their original relative order after sorting. If Alice and Bob both have score 85 and Alice appeared first in the input, she will still appear first in the sorted output. This matters whenever you sort by one field and want ties to remain in their original sequence.
 
-*Iterative* means the algorithm uses an explicit work buffer instead of function call recursion, so it never causes a stack overflow no matter how large the input is.
+*Iterative* means the algorithm uses bottom-up loops instead of function call recursion, so it never causes a stack overflow no matter how large the input is.
 
-In most cases you will reach `csort` indirectly through `cvec_sort` or `cvector_sort_with_comparison_proc`. The lower-level `csort_sort` function is available when you need to sort a plain C array directly.
+In most cases you will reach `csort` indirectly through `cvec_sort` or `cvector_sort_with_comparison_proc`. The lower-level `csort_sort` macro is available when you need to sort a plain C array directly.
 
 **Header:** `#include <csort.h>`
 
@@ -1332,7 +1370,7 @@ The default `float`, `double`, and `long double` comparators order a NaN value a
 
 **Complexity guarantees:** O(n log n) in all cases; O(n) auxiliary space; stable (equal elements preserve their original order); iterative (no recursion, no stack overflow risk for large inputs).
 
-`csort_sort` returns `true` on success (including the trivial cases of a NULL collection, a zero- or one-element length, or an `elem_size` of 0, none of which have anything to do) and `false` if `length` exceeds the library's own maximum element count, a non-NULL final argument does not have all four of `malloc`/`free`/`calloc`/`realloc` populated, its internal temporary merge buffer could not be allocated, or `length * elem_size` would overflow `size_t`, in which case the collection is left completely untouched. `cvec_sort` and `cvector_sort_with_comparison_proc` call `fatal_err()` instead of returning a value, matching every other mutating type-safe macro in `cvector.h`.
+`csort_sort` returns `true` on success (including the trivial cases of a NULL collection, a zero- or one-element length, or an `elem_size` of 0, none of which have anything to do) and `false` if `length` exceeds the library's own maximum element count, a non-NULL final argument does not have all four of `malloc`/`free`/`calloc`/`realloc` populated, its internal temporary merge buffer could not be allocated, or `length * elem_size` would overflow `size_t`, in which case the collection is left completely untouched. `cvec_sort` and `cvector_sort_with_comparison_proc` call `ccol_fatal_err()` instead of returning a value, matching every other mutating type-safe macro in `cvector.h`.
 
 `getter_proc` and `comparison_proc` must both be non-NULL whenever `collection` is non-NULL and `length` is 2 or greater; this holds even when `elem_size` is 0, a case where neither would actually be called. Only a NULL `collection` or a `length` of 0 or 1 exempts a call from needing genuine, non-NULL procs. A call that violates this aborts the process rather than returning `false`.
 
@@ -1374,26 +1412,26 @@ Because `csort` is a stable sort, two documents submitted at times `t1 < t2` wit
 
 A memory pool pre-allocates a large block of memory up front and hands out slices from it on demand. Compared to calling `malloc` for every object, pool allocation is faster (O(1) with no system calls for each request), produces no fragmentation, and makes peak memory usage predictable: the pool has a fixed capacity that cannot grow beyond what you set at creation.
 
-The library provides two pool allocators: a fixed-size pool (`mempool`) for objects of a single size, and a ranged pool (`r_mempool`) for objects across a range of sizes. Both offer optional thread safety and an optional fallback to the system allocator when the pool is exhausted.
+The library provides two pool allocators: a fixed-size pool (`ccol_mempool`) for objects of a single size, and a ranged pool (`ccol_r_mempool`) for objects across a range of sizes. Both offer optional thread safety and an optional fallback to the system allocator when the pool is exhausted.
 
 **Header:** `#include <cmempool.h>`
 
-### Fixed-Size Pool - `mempool`
+### Fixed-Size Pool - `ccol_mempool`
 
-A `mempool` holds a fixed number of elements of a fixed size. Allocation returns a slot from an internal free list; deallocation returns it. There is no fragmentation within the pool.
+A `ccol_mempool` holds a fixed number of elements of a fixed size. Allocation returns a slot from an internal free list; deallocation returns it. There is no fragmentation within the pool.
 
 ```c
 /* Create a pool of 128 elements, each 64 bytes, thread-safe, no malloc fallback */
-mempool *pool = mempool_create(128, 64, /*fallback=*/false, /*single_threaded=*/false, NULL, NULL);
+ccol_mempool *pool = ccol_mempool_create(128, 64, /*fallback=*/false, /*single_threaded=*/false, NULL, NULL);
 
-void *a = mempool_alloc_entry(pool);    /* Uninitialized */
-void *b = mempool_calloc_entry(pool);   /* Zero-initialized */
+void *a = ccol_mempool_alloc_entry(pool);    /* Uninitialized */
+void *b = ccol_mempool_calloc_entry(pool);   /* Zero-initialized */
 
 /* Use entries ... */
 
-mempool_free_entry(a);
-mempool_free_entry(b);
-mempool_destroy(pool);
+ccol_mempool_free_entry(a);
+ccol_mempool_free_entry(b);
+ccol_mempool_destroy(pool);
 ```
 
 #### Pre-allocated Buffer (Embedded and Real-Time Contexts)
@@ -1401,26 +1439,26 @@ mempool_destroy(pool);
 For contexts where heap allocation must be avoided entirely, a pool can be constructed from a statically declared buffer:
 
 ```c
-DECLARE_PREALLOCATED_MEMPOOL_BUFFER(static_buf, 128, 64);
+CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER(static_buf, 128, 64);
 
-mempool *pool = mempool_create_from_preallocated_buffer(
+ccol_mempool *pool = ccol_mempool_create_from_preallocated_buffer(
     static_buf, sizeof(static_buf), 64,
     /*fallback=*/false, /*single_threaded=*/true,
     NULL, NULL);
 
-void *slot = mempool_alloc_entry(pool);
+void *slot = ccol_mempool_alloc_entry(pool);
 /* ... */
-mempool_free_entry(slot);
-mempool_destroy(pool);  /* The buffer itself is not freed */
+ccol_mempool_free_entry(slot);
+ccol_mempool_destroy(pool);  /* The buffer itself is not freed */
 ```
 
-`DECLARE_PREALLOCATED_MEMPOOL_BUFFER` declares its buffer with the alignment the pool's internal per-element bookkeeping needs, so it can be handed straight to `mempool_create_from_preallocated_buffer()`. A hand-rolled buffer (not declared via the macro) must be aligned to at least `_Alignof(max_align_t)`, or creation fails with an error. `elem_size` smaller than `sizeof(uintptr_t)` is silently rounded up to fit the free-list pointer, the same way `mempool_create()` handles it; a genuine `elem_size` of `0` is rejected, and so is an `elem_count` of `0`. The per-element stride used to lay out the buffer (and, correspondingly, the pool's own heap-allocated buffer when not using a preallocated one) is further rounded up so that every element the pool hands out is correctly aligned, not just the first.
+`CCOL_DECLARE_PREALLOCATED_MEMPOOL_BUFFER` declares its buffer with the alignment the pool's internal per-element bookkeeping needs, so it can be handed straight to `ccol_mempool_create_from_preallocated_buffer()`. A hand-rolled buffer (not declared via the macro) must be aligned to at least `_Alignof(max_align_t)`, or creation fails with an error. `elem_size` smaller than `sizeof(uintptr_t)` is silently rounded up to fit the free-list pointer, the same way `ccol_mempool_create()` handles it; a genuine `elem_size` of `0` is rejected, and so is an `elem_count` of `0`. The per-element stride used to lay out the buffer (and, correspondingly, the pool's own heap-allocated buffer when not using a preallocated one) is further rounded up so that every element the pool hands out is correctly aligned, not just the first.
 
-### Ranged Pool - `r_mempool`
+### Ranged Pool - `ccol_r_mempool`
 
-A `r_mempool` covers allocation requests across a configurable range of power-of-two sizes. It maintains an internal sub-pool for each size class and selects the smallest fitting class for each request. Requests that exceed the largest class can fall back to the system allocator.
+A `ccol_r_mempool` covers allocation requests across a configurable range of power-of-two sizes. It maintains an internal sub-pool for each size class and selects the smallest fitting class for each request. Requests larger than the largest class are rejected; requests that no sub-pool can satisfy because the sub-pools are exhausted can fall back to the system allocator.
 
-The following table illustrates the structure produced by `r_mempool_create(4, 12, 9, ...)`:
+The following table illustrates the structure produced by `ccol_r_mempool_create(4, 12, 9, ...)`:
 
 | Element Size | Element Count |
 |---|---|
@@ -1435,26 +1473,26 @@ The following table illustrates the structure produced by `r_mempool_create(4, 1
 | 2^**`12`** : 4096 bytes | 2^1 : 2 entries   |
 
 ```c
-r_mempool *rpool = r_mempool_create(
+ccol_r_mempool *rpool = ccol_r_mempool_create(
     4,  /* smallest_size_power_of_two */
     12, /* largest_size_power_of_two */
     9,  /* number_of_smallest_size_elems_power_of_two */
-    fallback_at_last_exhaustion,  /* Fall back to malloc when a sub-pool is full */
+    fallback_at_last_exhaustion,  /* Fall back to malloc only after all sub-pools are exhausted */
     /*single_threaded=*/false,
     NULL,   /* Use default allocator */
     NULL);  /* No error string output */
 
-void *small  = r_mempool_alloc_entry(rpool, 20);   /* Served from the 32-byte sub-pool */
-void *medium = r_mempool_alloc_entry(rpool, 100);  /* Served from the 128-byte sub-pool */
-void *large  = r_mempool_alloc_entry(rpool, 500);  /* Served from the 512-byte sub-pool */
+void *small  = ccol_r_mempool_alloc_entry(rpool, 20);   /* Served from the 32-byte sub-pool */
+void *medium = ccol_r_mempool_alloc_entry(rpool, 100);  /* Served from the 128-byte sub-pool */
+void *large  = ccol_r_mempool_alloc_entry(rpool, 500);  /* Served from the 512-byte sub-pool */
 
-/* Resize in place; the entry is moved to the nearest fitting sub-pool if necessary */
-medium = r_mempool_realloc_entry(rpool, medium, 200);
+/* Resize; the entry is moved to the nearest fitting sub-pool if necessary */
+medium = ccol_r_mempool_realloc_entry(rpool, medium, 200);
 
-r_mempool_free_entry(small);
-r_mempool_free_entry(medium);
-r_mempool_free_entry(large);
-r_mempool_destroy(rpool);
+ccol_r_mempool_free_entry(small);
+ccol_r_mempool_free_entry(medium);
+ccol_r_mempool_free_entry(large);
+ccol_r_mempool_destroy(rpool);
 ```
 
 #### Pre-allocated Buffer (Embedded and Real-Time Contexts)
@@ -1462,23 +1500,23 @@ r_mempool_destroy(rpool);
 For contexts where heap allocation must be avoided entirely, a ranged pool, too, can be constructed from a statically declared buffer:
 
 ```c
-DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(rmempool_buf, /* pool buffer name */
+CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER(rmempool_buf, /* pool buffer name */
     4,  /* smallest_size_power_of_two */
     12, /* largest_size_power_of_two */
-    9,  /* number_of_smallest_size_elems_power_of_two */);
+    9   /* number_of_smallest_size_elems_power_of_two */);
 
-r_mempool *pool = r_mempool_create_from_preallocated_buffer(
+ccol_r_mempool *pool = ccol_r_mempool_create_from_preallocated_buffer(
     rmempool_buf, sizeof(rmempool_buf), 4, 12, 9,
     fallback_at_last_exhaustion, /*single_threaded=*/true,
     NULL, NULL);
 
-void *slot = r_mempool_alloc_entry(pool, 100);
+void *slot = ccol_r_mempool_alloc_entry(pool, 100);
 /* ... */
-r_mempool_free_entry(slot);
-r_mempool_destroy(pool);  /* The buffer itself is not freed */
+ccol_r_mempool_free_entry(slot);
+ccol_r_mempool_destroy(pool);  /* The buffer itself is not freed */
 ```
 
-The same alignment requirement applies here: `DECLARE_PREALLOCATED_RMEMPOOL_BUFFER` already declares a suitably aligned buffer (every sub-pool segment inside it stays correctly aligned as a consequence), while a hand-rolled buffer must be aligned to at least `_Alignof(max_align_t)`.
+The same alignment requirement applies here: `CCOL_DECLARE_PREALLOCATED_RMEMPOOL_BUFFER` already declares a suitably aligned buffer (every sub-pool segment inside it stays correctly aligned as a consequence), while a hand-rolled buffer must be aligned to at least `_Alignof(max_align_t)`.
 
 ### Real-World Use Case: A Fixed Pool of Bullets for a Game
 
@@ -1491,10 +1529,10 @@ typedef struct {
     int   lifetime_frames;
 } Bullet;
 
-static mempool *bullet_pool;
+static ccol_mempool *bullet_pool;
 
 void game_init(int max_bullets_on_screen) {
-    bullet_pool = mempool_create(
+    bullet_pool = ccol_mempool_create(
         (size_t)max_bullets_on_screen,
         sizeof(Bullet),
         /*fallback=*/false,      /* return NULL instead of calling malloc */
@@ -1503,7 +1541,7 @@ void game_init(int max_bullets_on_screen) {
 }
 
 Bullet *fire_bullet(float x, float y, float vx, float vy) {
-    Bullet *b = mempool_calloc_entry(bullet_pool);   /* zero-initialised */
+    Bullet *b = ccol_mempool_calloc_entry(bullet_pool);   /* zero-initialised */
     if (!b) return NULL;                              /* too many bullets already on screen */
     b->x = x; b->y = y; b->vx = vx; b->vy = vy;
     b->lifetime_frames = 120;
@@ -1511,7 +1549,7 @@ Bullet *fire_bullet(float x, float y, float vx, float vy) {
 }
 
 void bullet_expire(Bullet *b) {
-    mempool_free_entry(b);   /* O(1) - returned to the free list */
+    ccol_mempool_free_entry(b);   /* O(1) - returned to the free list */
 }
 ```
 
@@ -1519,7 +1557,7 @@ Because every slot is the same size as `Bullet`, there is no fragmentation withi
 
 ### Driving Other Containers from a Pool
 
-Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 20](#20-custom-memory-management) for the complete pattern.
+Any container that accepts a `ccol_memmgmt_procs_t *` can be directed to allocate from a pool. See [Section 21](#21-custom-memory-management) for the complete pattern.
 
 ---
 
@@ -1542,115 +1580,115 @@ typedef struct {
 
 ### Circular Queue - Bounded, Blocking
 
-`circular_queue` holds a fixed number of messages. A sender blocks when the queue is full; a receiver blocks when it is empty. This backpressure mechanism is the primary tool for rate-limiting producers.
+`ccol_circular_queue` holds a fixed number of messages. A sender blocks when the queue is full; a receiver blocks when it is empty. This backpressure mechanism is the primary tool for rate-limiting producers.
 
 ```c
-circular_queue *cq = circular_queue_create(16, NULL);
+ccol_circular_queue *cq = ccol_circular_queue_create(16, NULL);
 
 /* Producer */
 c_message_t msg = { .data = strdup("task payload"), .size = 13 };
-circq_send_zc(cq, &msg);
+ccol_circq_send_zc(cq, &msg);
 /* msg.data is now NULL - ownership has been transferred */
 
 /* Consumer */
 c_message_t received;
-circq_recv_zc(cq, &received);
+ccol_circq_recv_zc(cq, &received);
 printf("Received: %s\n", (char *)received.data);
 free(received.data);
 
 /* Non-blocking variants */
 c_message_t try_msg = { .data = strdup("non-blocking"), .size = 13 };
-ccol_retval_t rc = circq_try_send_zc(cq, &try_msg);
+ccol_retval_t rc = ccol_circq_try_send_zc(cq, &try_msg);
 if (rc == ccol_container_full) {
     free(try_msg.data);  /* Ownership was not transferred; caller must free */
 }
 
-circular_queue_destroy(cq);
+ccol_circular_queue_destroy(cq);
 ```
 
 ### Dynamic Queue - Unbounded
 
-`dynamic_queue` uses a linked list and never blocks a sender. It grows without bound as long as memory is available, making it appropriate when the producer must not stall under any circumstances and the consumer is expected to keep up over time.
+`ccol_dynamic_queue` uses a linked list and never blocks a sender. It grows without bound as long as memory is available, making it appropriate when the producer must not stall under any circumstances and the consumer is expected to keep up over time.
 
 ```c
-dynamic_queue *dq = dynamic_queue_create(NULL);
+ccol_dynamic_queue *dq = ccol_dynamic_queue_create(NULL);
 
 c_message_t msg = { .data = malloc(sizeof(int)), .size = sizeof(int) };
 *(int *)msg.data = 42;
-dynmq_send_zc(dq, &msg);
+ccol_dynmq_send_zc(dq, &msg);
 
 c_message_t received;
-dynmq_recv_zc(dq, &received);
+ccol_dynmq_recv_zc(dq, &received);
 printf("Value: %d\n", *(int *)received.data);
 free(received.data);
 
-dynamic_queue_destroy(dq);
+ccol_dynamic_queue_destroy(dq);
 ```
 
 ### Channel - Bidirectional, Owner-Worker Pattern
 
-A `channel` wraps two circular queues (one in each direction) and routes messages automatically based on the identity of the calling thread. The thread that calls `channel_create` is the owner; all other threads are workers. This removes the need for separate queue handles at the cost of a thread-identity check on each operation.
+A `ccol_channel` wraps two circular queues (one in each direction) and routes messages automatically based on the identity of the calling thread. The thread that calls `ccol_channel_create` is the owner; all other threads are workers. This removes the need for separate queue handles at the cost of a thread-identity check on each operation.
 
 ```c
-channel *ch = channel_create(16, NULL);
+ccol_channel *ch = ccol_channel_create(16, NULL);
 
 void *worker(void *arg) {
-    channel *ch = (channel *)arg;
+    ccol_channel *ch = (ccol_channel *)arg;
 
     /* Receive a task from the owner */
     c_message_t task;
-    chan_recv_zc(ch, &task);
+    ccol_chan_recv_zc(ch, &task);
     printf("Worker received: %s\n", (char *)task.data);
     free(task.data);
 
     /* Send a result back to the owner */
     c_message_t result = { .data = strdup("done"), .size = 5 };
-    chan_send_zc(ch, &result);
+    ccol_chan_send_zc(ch, &result);
 
     return NULL;
 }
 
 /* Owner sends a task */
 c_message_t task = { .data = strdup("process this"), .size = 13 };
-chan_send_zc(ch, &task);
+ccol_chan_send_zc(ch, &task);
 
 pthread_t t;
 pthread_create(&t, NULL, worker, ch);
 
 /* Owner receives the result */
 c_message_t result;
-chan_recv_zc(ch, &result);
+ccol_chan_recv_zc(ch, &result);
 printf("Owner received: %s\n", (char *)result.data);
 free(result.data);
 
 pthread_join(t, NULL);
-channel_destroy(ch);
+ccol_channel_destroy(ch);
 ```
 
-`fork(2)` is safe with respect to `circular_queue`/`dynamic_queue`/`channel`'s own internal locking: a `cq->mutex`/`dq->mutex` held by some other thread at the instant of the fork is never inherited by the child already locked, as a defense-in-depth measure (see "Compile-Time Configuration" above for the two supported fork(2) patterns this library asks a caller to follow, and why). Unlike `event_loop`/`cthreadpool`, a queue owns no worker thread of its own, so this measure has no thread-liveness caveat to observe on top of it. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
+`fork(2)` is safe with respect to `ccol_circular_queue`/`ccol_dynamic_queue`/`ccol_channel`'s own internal locking: an internal mutex held by some other thread at the instant of the fork is never inherited by the child already locked, as a defense-in-depth measure (see "Compile-Time Configuration" above for the two supported fork(2) patterns this library asks a caller to follow, and why). Unlike `ccol_event_loop`/`cthreadpool`, a queue owns no worker thread of its own, so this measure has no thread-liveness caveat to observe on top of it. This protection can be compiled out via `CCOL_FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
 
 ### Example: Producer-Consumer with Sentinel Termination
 
 ```c
-circular_queue *queue;
+ccol_circular_queue *queue;
 
 void *producer(void *arg) {
     for (int i = 0; i < 100; i++) {
         int *data = malloc(sizeof(int));
         *data = i;
         c_message_t msg = { .data = data, .size = sizeof(int) };
-        circq_send_zc(queue, &msg);
+        ccol_circq_send_zc(queue, &msg);
     }
     /* Send a NULL sentinel to signal completion */
     c_message_t sentinel = { .data = NULL, .size = 0 };
-    circq_send_zc(queue, &sentinel);
+    ccol_circq_send_zc(queue, &sentinel);
     return NULL;
 }
 
 void *consumer(void *arg) {
     for (;;) {
         c_message_t msg;
-        circq_recv_zc(queue, &msg);
+        ccol_circq_recv_zc(queue, &msg);
         if (!msg.data) break;
         printf("Consumed: %d\n", *(int *)msg.data);
         free(msg.data);
@@ -1659,20 +1697,20 @@ void *consumer(void *arg) {
 }
 
 int main(void) {
-    queue = circular_queue_create(8, NULL);
+    queue = ccol_circular_queue_create(8, NULL);
     pthread_t prod, cons;
     pthread_create(&prod, NULL, producer, NULL);
     pthread_create(&cons, NULL, consumer, NULL);
     pthread_join(prod, NULL);
     pthread_join(cons, NULL);
-    circular_queue_destroy(queue);
+    ccol_circular_queue_destroy(queue);
     return 0;
 }
 ```
 
 ### Real-World Use Case: Generating Photo Thumbnails in the Background
 
-A simple photo album application generates a small thumbnail for each photo the user imports. Doing this resizing work on a background thread keeps the main program (and its UI) responsive while the thumbnail is being created. The zero-copy ownership model means the heap-allocated job struct is never duplicated: `chan_send_zc` nulls the sender's pointer on success, and the worker becomes the sole owner:
+A simple photo album application generates a small thumbnail for each photo the user imports. Doing this resizing work on a background thread keeps the main program (and its UI) responsive while the thumbnail is being created. The zero-copy ownership model means the heap-allocated job struct is never duplicated: `ccol_chan_send_zc` nulls the sender's pointer on success, and the worker becomes the sole owner:
 
 ```c
 typedef struct {
@@ -1683,10 +1721,10 @@ typedef struct {
 } ThumbnailJob;
 
 void *thumbnail_worker(void *arg) {
-    channel *ch = (channel *)arg;
+    ccol_channel *ch = (ccol_channel *)arg;
     for (;;) {
         c_message_t msg;
-        chan_recv_zc(ch, &msg);
+        ccol_chan_recv_zc(ch, &msg);
         if (!msg.data) break;   /* NULL sentinel signals shutdown */
 
         ThumbnailJob *job = (ThumbnailJob *)msg.data;
@@ -1698,12 +1736,12 @@ void *thumbnail_worker(void *arg) {
             .size = strlen(job->thumb_path) + 1
         };
         free(job);
-        chan_send_zc(ch, &done);   /* hand the result back to the main thread */
+        ccol_chan_send_zc(ch, &done);   /* hand the result back to the main thread */
     }
     return NULL;
 }
 
-void make_thumbnail_async(channel *ch, const char *photo, int w, int h,
+void make_thumbnail_async(ccol_channel *ch, const char *photo, int w, int h,
                           const char *thumb_out) {
     ThumbnailJob *job = malloc(sizeof(ThumbnailJob));
     snprintf(job->photo_path, sizeof(job->photo_path), "%s", photo);
@@ -1712,33 +1750,33 @@ void make_thumbnail_async(channel *ch, const char *photo, int w, int h,
     job->thumb_height = h;
 
     c_message_t msg = { .data = job, .size = sizeof(*job) };
-    chan_send_zc(ch, &msg);   /* job is now NULL - the worker owns it */
+    ccol_chan_send_zc(ch, &msg);   /* msg.data is now NULL - the worker owns the job */
 
     c_message_t done;
-    chan_recv_zc(ch, &done);
+    ccol_chan_recv_zc(ch, &done);
     printf("thumbnail ready: %s\n", (char *)done.data);
     free(done.data);
 }
 ```
 
-The `channel` automatically routes sends and receives based on thread identity: the thread that called `channel_create` is the owner; all other threads are workers. No separate queue handles are required.
+The `ccol_channel` automatically routes sends and receives based on thread identity: the thread that called `ccol_channel_create` is the owner; all other threads are workers. No separate queue handles are required.
 
 ### Multiplexed Waiting - `ccol_select`
 
-`ccol_select` blocks until any one of a set of queue or file descriptor sources becomes ready, analogous to POSIX `select(2)` or `poll(2)` but integrated with the queue primitives. `ccol_select_timed` adds a millisecond deadline measured on `CLOCK_MONOTONIC`. `ccol_select` never performs the receive or send itself, for any selectable type: it only reports which selectable is ready, and the caller performs its own explicit `circq_try_recv_zc`/`dynmq_try_recv_zc`/`circq_try_send_zc`/`dynmq_try_send_zc` (for a queue selectable) or `read(2)`/`recv(2)`/`write(2)`/`send(2)` (for an fd selectable) immediately afterward.
+`ccol_select` blocks until any one of a set of queue or file descriptor sources becomes ready, analogous to POSIX `select(2)` or `poll(2)` but integrated with the queue primitives. `ccol_select_timed` adds a millisecond deadline measured on `CLOCK_MONOTONIC`. `ccol_select` never performs the receive or send itself, for any selectable type: it only reports which selectable is ready, and the caller performs its own explicit `ccol_circq_try_recv_zc`/`ccol_dynmq_try_recv_zc`/`ccol_circq_try_send_zc`/`ccol_dynmq_send_zc` (for a queue selectable) or `read(2)`/`recv(2)`/`write(2)`/`send(2)` (for an fd selectable) immediately afterward.
 
 ```c
-circular_queue *q0 = circular_queue_create(8, NULL);
-dynamic_queue  *dq  = dynamic_queue_create(NULL);
+ccol_circular_queue *q0 = ccol_circular_queue_create(8, NULL);
+ccol_dynamic_queue  *dq  = ccol_dynamic_queue_create(NULL);
 int pfd[2];
 pipe(pfd);
 
 size_t ready_index;
 
 ccol_retval_t rc = ccol_select_va(&ready_index,
-    selectable_from_circq(q0,    ccol_select_read),
-    selectable_from_dynq(dq,     ccol_select_read),
-    selectable_from_fd(pfd[0],   ccol_select_read));
+    ccol_selectable_from_circq(q0,    ccol_select_read),
+    ccol_selectable_from_dynq(dq,     ccol_select_read),
+    ccol_selectable_from_fd(pfd[0],   ccol_select_read));
 
 if (rc == ccol_success) {
     c_message_t msg;
@@ -1749,10 +1787,10 @@ if (rc == ccol_success) {
         (void)n;
     } else if (ready_index == 0) {
         /* q0 fired; claim the message ourselves (zero-copy). */
-        if (circq_try_recv_zc(q0, &msg) == ccol_success) free(msg.data);
+        if (ccol_circq_try_recv_zc(q0, &msg) == ccol_success) free(msg.data);
     } else {
         /* dq fired. */
-        if (dynmq_try_recv_zc(dq, &msg) == ccol_success) free(msg.data);
+        if (ccol_dynmq_try_recv_zc(dq, &msg) == ccol_success) free(msg.data);
     }
 }
 ```
@@ -1761,8 +1799,8 @@ The timed variant returns `ccol_timed_out` if the deadline expires before any so
 
 ```c
 ccol_retval_t rc = ccol_select_timed_va(&ready_index, /*timeout_ms=*/200,
-    selectable_from_circq(q0, ccol_select_read),
-    selectable_from_fd(pfd[0], ccol_select_read));
+    ccol_selectable_from_circq(q0, ccol_select_read),
+    ccol_selectable_from_fd(pfd[0], ccol_select_read));
 
 if (rc == ccol_timed_out) {
     /* No source was ready within 200 ms */
@@ -1771,71 +1809,71 @@ if (rc == ccol_timed_out) {
 
 **Key properties:**
 
-- Readiness only, for every selectable type: a queue win means a message is (probably) available to claim via `circq_try_recv_zc`/`dynmq_try_recv_zc`; a file descriptor read win means `read(2)`/`recv(2)` will (probably) return data. Either explicit call may still find nothing if a concurrent consumer/producer won the race first (TOCTOU, the same contract POSIX `select(2)` itself has); the call must be non-blocking and its result checked.
+- Readiness only, for every selectable type: a queue win means a message is (probably) available to claim via `ccol_circq_try_recv_zc`/`ccol_dynmq_try_recv_zc`; a file descriptor read win means `read(2)`/`recv(2)` will (probably) return data. Either explicit call may still find nothing if a concurrent consumer/producer won the race first (TOCTOU, the same contract POSIX `select(2)` itself has); the call must be non-blocking and its result checked.
 - Queue-only selectable sets use a condition variable path with no `epoll` overhead. Any file descriptor in the set switches the implementation to `epoll(7)` automatically.
 - The same fd may appear in more than one selectable within a single call, in any mix of directions, e.g. watching one connected socket for both readability and writability at once; the underlying registrations are combined automatically, and the returned index resolves to whichever one of the sharing selectables actually became ready.
 
 ---
 
-### Persistent Event Loop - `event_loop`
+### Persistent Event Loop - `ccol_event_loop`
 
-`ccol_select` creates a fresh `epoll(7)` instance on every call, waits for exactly one ready selectable, and tears everything down before returning. `event_loop` is the persistent counterpart: one `epoll` instance and one or more background reactor threads, created once and mutated incrementally (`event_loop_add` / `event_loop_modify` / `event_loop_remove`) as fds and queues come and go, dispatching readiness through callbacks for as long as the loop lives. It reuses the exact same `ccol_selectable` type `ccol_select` uses, so `selectable_from_fd`, `selectable_from_circq`, `selectable_from_dynq`, and `selectable_from_chan` all carry over unchanged. Like `ccol_select`, `event_loop` never performs the receive or send itself, for any selectable type: the callback always performs its own explicit `circq_try_recv_zc`/`dynmq_try_recv_zc` or `read(2)`/`recv(2)`.
+`ccol_select` creates a fresh `epoll(7)` instance on every call, waits for exactly one ready selectable, and tears everything down before returning. `ccol_event_loop` is the persistent counterpart: one `epoll` instance and one or more background reactor threads, created once and mutated incrementally (`ccol_event_loop_add` / `ccol_event_loop_modify` / `ccol_event_loop_remove`) as fds and queues come and go, dispatching readiness through callbacks for as long as the loop lives. It reuses the exact same `ccol_selectable` type `ccol_select` uses, so `ccol_selectable_from_fd`, `ccol_selectable_from_circq`, `ccol_selectable_from_dynq`, and `ccol_selectable_from_chan` all carry over unchanged. Like `ccol_select`, `ccol_event_loop` never performs the receive or send itself, for any selectable type: the callback always performs its own explicit `ccol_circq_try_recv_zc`/`ccol_dynmq_try_recv_zc` or `read(2)`/`recv(2)`.
 
-`event_loop` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `EVENT_LOOP_INVALID` (or use a truthiness check; `EVENT_LOOP_INVALID` is `0`, so `if (!loop)` works as expected). Internally, every use of an `event_loop` is resolved through a library-owned slot table before the underlying reactor object is touched, so a stale handle (one whose loop has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `event_loop_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free. Calling `event_loop_destroy` on a loop from within a callback currently dispatching on one of that loop's own threads (the poller thread, or a dispatch worker) is a fatal error too: that thread is the one destruction would otherwise need to join, and freeing live registrations and the loop itself out from under the still-running callback would be worse than the deadlock this same misuse would cause against `event_loop_shutdown` directly. Defer destruction to another thread, or to after the callback returns, instead.
+`ccol_event_loop` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CCOL_EVENT_LOOP_INVALID` (or use a truthiness check; `CCOL_EVENT_LOOP_INVALID` is `0`, so `if (!loop)` works as expected). Internally, every use of a `ccol_event_loop` is resolved through a library-owned slot table before the underlying reactor object is touched, so a stale handle (one whose loop has already been destroyed) is always detected rather than silently dereferencing freed memory; passing an already-destroyed or otherwise stale handle to `ccol_event_loop_destroy` specifically is a fatal error (`abort()`/`SIGABRT`), covering both a purely sequential double-destroy and a concurrent one, rather than risking a double-free. Calling `ccol_event_loop_destroy` on a loop from within a callback currently dispatching on one of that loop's own threads (the poller thread, or a dispatch worker) is a fatal error too: that thread is the one destruction would otherwise need to join, and freeing live registrations and the loop itself out from under the still-running callback would be worse than the deadlock this same misuse would cause against `ccol_event_loop_shutdown` directly. Defer destruction to another thread, or to after the callback returns, instead.
 
-The fd/registration registry is lock-striped: `num_lock_stripes` independent (mutex, chmap) pairs, each guarding a disjoint subset of registrations (one real fd, or one queue/channel registration's private bridge fd, is always handled by exactly one stripe). `1` means a single shared lock; passing a larger value lets `event_loop_add` / `event_loop_remove` / `event_loop_modify` calls for different fds/registrations proceed concurrently under high-churn multi-threaded use instead of serializing through one lock, at the cost of `num_lock_stripes` mutexes and chmaps allocated up front. Most callers should just pass `1`.
+The fd/registration registry is lock-striped: `num_lock_stripes` independent (mutex, chmap) pairs, each guarding a disjoint subset of registrations (one real fd, or one queue/ccol_channel registration's private bridge fd, is always handled by exactly one stripe). `1` means a single shared lock; passing a larger value lets `ccol_event_loop_add` / `ccol_event_loop_remove` / `ccol_event_loop_modify` calls for different fds/registrations proceed concurrently under high-churn multi-threaded use instead of serializing through one lock, at the cost of `num_lock_stripes` mutexes and chmaps allocated up front. Most callers should just pass `1`.
 
-`num_reactor_threads` (a separate constructor parameter from `num_lock_stripes`) is the total OS thread count devoted to this loop's own polling and dispatch. Exactly ONE dedicated thread ever calls `epoll_wait(2)`, regardless of how large `num_reactor_threads` is (this avoids a kernel-level thundering herd: `epoll`'s level-triggered semantics would otherwise wake every thread blocked on the same instance for a single ready event). With `num_reactor_threads == 1`, that one thread also runs every callback inline. With a larger value, that same one polling thread is joined by `num_reactor_threads - 1` separate dispatch worker threads that actually execute callbacks, so total thread count for a given `num_reactor_threads` is always exactly that value in both configurations. A single registration's callback is never invoked concurrently with itself, and a read registration and a write registration sharing the same fd are never invoked concurrently with each other either (stricter than "no self-concurrency" alone, so a callback pair sharing state across both directions of one fd, e.g. one TLS connection object, needs no locking of its own on that account); a second dispatch for the same registration is also never collected while an earlier one is still queued or executing, so application code calling `event_loop_modify` from within an in-flight callback (a supported, commonly used pattern) never races a concurrently-collected second dispatch for that same registration.
+`num_reactor_threads` (a separate constructor parameter from `num_lock_stripes`) is the total OS thread count devoted to this loop's own polling and dispatch. Exactly ONE dedicated thread ever calls `epoll_wait(2)`, regardless of how large `num_reactor_threads` is (this avoids a kernel-level thundering herd: `epoll`'s level-triggered semantics would otherwise wake every thread blocked on the same instance for a single ready event). With `num_reactor_threads == 1`, that one thread also runs every callback inline. With a larger value, that same one polling thread is joined by `num_reactor_threads - 1` separate dispatch worker threads that actually execute callbacks, so total thread count for a given `num_reactor_threads` is always exactly that value in both configurations. A single registration's callback is never invoked concurrently with itself, and a read registration and a write registration sharing the same fd are never invoked concurrently with each other either (stricter than "no self-concurrency" alone, so a callback pair sharing state across both directions of one fd, e.g. one TLS connection object, needs no locking of its own on that account); a second dispatch for the same registration is also never collected while an earlier one is still queued or executing, so application code calling `ccol_event_loop_modify` from within an in-flight callback (a supported, commonly used pattern) never races a concurrently-collected second dispatch for that same registration.
 
-`event_reg` (the handle `event_loop_add` returns, and the type every other `event_loop_*` registration function takes) is, like `event_loop` itself, an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `EVENT_REG_INVALID` (or use a truthiness check; `EVENT_REG_INVALID` is `0`). Every use of an `event_reg` is resolved through its own loop's registration table before anything is dereferenced, so a stale or already-removed handle is always detected and rejected cleanly (`ccol_invalid_args`, or generation `0`) rather than risking a use-after-free, even when two threads race each other calling `event_loop_modify`/`_pause`/`_resume`/`_remove`/`event_loop_reg_generation` on the very same registration.
+`ccol_event_reg` (the handle `ccol_event_loop_add` returns, and the type every other `ccol_event_loop_*` registration function takes) is, like `ccol_event_loop` itself, an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CCOL_EVENT_REG_INVALID` (or use a truthiness check; `CCOL_EVENT_REG_INVALID` is `0`). Every use of a `ccol_event_reg` is resolved through its own loop's registration table before anything is dereferenced, so a stale or already-removed handle is always detected and rejected cleanly (`ccol_invalid_args`, or generation `0`) rather than risking a use-after-free, even when two threads race each other calling `ccol_event_loop_modify`/`_pause`/`_resume`/`_remove`/`ccol_event_loop_reg_generation` on the very same registration.
 
-`event_loop_reg_generation(loop, reg)` returns a monotonically increasing, loop-wide-unique identity token minted once per fd when it is first registered (shared by both directions on the same fd, and preserved across `event_loop_modify`), for a caller's own defensive bookkeeping across fd reuse (e.g. detecting that an fd number has been closed and reused by an unrelated connection since a caller last read it). It is not required for basic correctness: dispatch already validates a registration's liveness before invoking any callback unconditionally, so a stale, already-fetched batch entry for an already-removed (or fd-reused) registration is always a safe no-op regardless of whether a caller ever inspects the generation itself.
+`ccol_event_loop_reg_generation(loop, reg)` returns a monotonically increasing, loop-wide-unique identity token minted once per fd when it is first registered (shared by both directions on the same fd, and preserved across `ccol_event_loop_modify`), for a caller's own defensive bookkeeping across fd reuse (e.g. detecting that an fd number has been closed and reused by an unrelated connection since a caller last read it). It is not required for basic correctness: dispatch already validates a registration's liveness before invoking any callback unconditionally, so a stale, already-fetched batch entry for an already-removed (or fd-reused) registration is always a safe no-op regardless of whether a caller ever inspects the generation itself.
 
-`max_events_per_wait` bounds how many ready events a single `epoll_wait(2)` call drains, not the number of registrations the loop can hold; it must be between 1 and `INT_MAX` inclusive, and small enough that `max_events_per_wait * sizeof(struct epoll_event)` does not overflow `size_t`, since the value is narrowed to `epoll_wait(2)`'s own `int` parameter and used to size the poller thread's own events buffer. `event_loop_create`/`event_loop_create_with_mprocs` reject a value outside that range with a `NULL` handle.
+`max_events_per_wait` bounds how many ready events a single `epoll_wait(2)` call drains, not the number of registrations the loop can hold; it must be between 1 and `INT_MAX` inclusive, and small enough that `max_events_per_wait * sizeof(struct epoll_event)` does not overflow `size_t`, since the value is narrowed to `epoll_wait(2)`'s own `int` parameter and used to size the poller thread's own events buffer. `ccol_event_loop_create`/`ccol_event_loop_create_with_mprocs` reject a value outside that range with `CCOL_EVENT_LOOP_INVALID`.
 
 ```c
-event_loop_construct(loop, /*max_events_per_wait=*/32, /*num_lock_stripes=*/1,
+ccol_event_loop_construct(loop, /*max_events_per_wait=*/32, /*num_lock_stripes=*/1,
                       /*num_reactor_threads=*/1);
 
-circular_queue *jobs = circular_queue_create(64, NULL);
+ccol_circular_queue *jobs = ccol_circular_queue_create(64, NULL);
 
-void on_job_ready(event_loop loop, ccol_selectable *sel, void *arg) {
+void on_job_ready(ccol_event_loop loop, ccol_selectable *sel, void *arg) {
     c_message_t msg;
-    if (circq_try_recv_zc(sel->cq, &msg) != ccol_success) return; /* lost the race */
+    if (ccol_circq_try_recv_zc(sel->cq, &msg) != ccol_success) return; /* lost the race */
     printf("job: %s\n", (char *)msg.data);
     free(msg.data);
 }
 
-event_handlers_t handlers = { .on_readable = on_job_ready };
-event_reg reg = event_loop_add(loop, selectable_from_circq(jobs, ccol_select_read),
+ccol_event_handlers_t handlers = { .on_readable = on_job_ready };
+ccol_event_reg reg = ccol_event_loop_add(loop, ccol_selectable_from_circq(jobs, ccol_select_read),
                                 handlers, NULL, NULL);
 
 c_message_t msg = { .data = strdup("build #42"), .size = 10 };
-circq_send_zc(jobs, &msg);   /* on_job_ready fires asynchronously, on the reactor thread */
+ccol_circq_send_zc(jobs, &msg);   /* on_job_ready fires asynchronously, on the reactor thread */
 
-/* event_loop_shutdown blocks until the reactor thread is joined, so no
+/* ccol_event_loop_shutdown blocks until the reactor thread is joined, so no
    dispatch can still be touching jobs/reg by the time it returns; tearing
-   these down immediately after circq_send_zc, with no such synchronization,
+   these down immediately after ccol_circq_send_zc, with no such synchronization,
    would race the callback that hasn't necessarily run yet. */
-event_loop_shutdown(loop);
-event_loop_remove(loop, reg);
-circular_queue_destroy(jobs);
-event_loop_destroy(loop);
+ccol_event_loop_shutdown(loop);
+ccol_event_loop_remove(loop, reg);
+ccol_circular_queue_destroy(jobs);
+ccol_event_loop_destroy(loop);
 ```
 
 A minimal single-connection echo handler over a raw socket shows the fd side:
 
 ```c
-typedef struct { event_loop loop; event_reg reg; } conn_ctx_t;
+typedef struct { ccol_event_loop loop; ccol_event_reg reg; } conn_ctx_t;
 
 void close_conn(conn_ctx_t *ctx, int fd) {
     /* Self-removal from within the callback that triggered it is safe */
-    event_loop_remove(ctx->loop, ctx->reg);
+    ccol_event_loop_remove(ctx->loop, ctx->reg);
     close(fd);
     free(ctx);
 }
 
-void on_client_readable(event_loop loop, ccol_selectable *sel, void *arg) {
+void on_client_readable(ccol_event_loop loop, ccol_selectable *sel, void *arg) {
     conn_ctx_t *ctx = (conn_ctx_t *)arg;
     char buf[512];
     ssize_t n = read(sel->fd, buf, sizeof(buf));
@@ -1843,7 +1881,7 @@ void on_client_readable(event_loop loop, ccol_selectable *sel, void *arg) {
     write(sel->fd, buf, (size_t)n);  /* echo back */
 }
 
-void on_client_error(event_loop loop, ccol_selectable *sel, void *arg) {
+void on_client_error(ccol_event_loop loop, ccol_selectable *sel, void *arg) {
     close_conn((conn_ctx_t *)arg, sel->fd);
 }
 
@@ -1851,35 +1889,35 @@ void on_client_error(event_loop loop, ccol_selectable *sel, void *arg) {
    listen-socket's own on_readable handler after accept(2): */
 conn_ctx_t *ctx = malloc(sizeof(*ctx));
 ctx->loop = loop;
-event_handlers_t client_handlers = { .on_readable = on_client_readable,
+ccol_event_handlers_t client_handlers = { .on_readable = on_client_readable,
                                       .on_error = on_client_error };
-ctx->reg = event_loop_add(loop, selectable_from_fd(client_fd, ccol_select_read),
+ctx->reg = ccol_event_loop_add(loop, ccol_selectable_from_fd(client_fd, ccol_select_read),
                            client_handlers, ctx, NULL);
 ```
 
-Both directions may be registered on the same fd at once (e.g. a full-duplex socket being read and written concurrently) by calling `event_loop_add` twice, once per direction; each call returns an independent `event_reg`. Flipping a single registration's direction over time instead (e.g. a non-blocking connect: write-interest until the connect completes, then read-interest afterward) uses one registration plus `event_loop_modify`.
+Both directions may be registered on the same fd at once (e.g. a full-duplex socket being read and written concurrently) by calling `ccol_event_loop_add` twice, once per direction; each call returns an independent `ccol_event_reg`. Flipping a single registration's direction over time instead (e.g. a non-blocking connect: write-interest until the connect completes, then read-interest afterward) uses one registration plus `ccol_event_loop_modify`.
 
-A queue or channel selectable has no such one-registration-per-direction limit: any number of `event_loop_add` calls for the same queue+direction (across one or more `event_loop` instances), and any mix of those with a concurrent `ccol_select()` call on the same queue+direction, are all live at once, and every one of them eventually gets a turn rather than the earliest-registered ones being starved by a later one. A message that arrives while more than one such listener is registered wakes exactly one of them at a time (never all of them, to avoid a thundering herd); whichever one is woken checks, once its own callback returns, whether the queue is still ready for its direction and, if so, hands the wake to the next listener in line. A backlog deeper than the number of live listeners on that queue+direction may still need a further, unrelated send/receive to fully drain, the same "a notification is not guaranteed to correspond to exactly one message" characteristic a single listener already has (a callback that must not leave messages stranded under bursty traffic should call `circq_try_recv_zc()`/`dynmq_try_recv_zc()` in a loop until it returns `ccol_container_empty`); what's guaranteed is that no live listener is ever passed over indefinitely.
+A queue or `ccol_channel` selectable has no such one-registration-per-direction limit: any number of `ccol_event_loop_add` calls for the same queue+direction (across one or more `ccol_event_loop` instances), and any mix of those with a concurrent `ccol_select()` call on the same queue+direction, are all live at once, and every one of them eventually gets a turn rather than the earliest-registered ones being starved by a later one. A message that arrives while more than one such listener is registered wakes exactly one of them at a time (never all of them, to avoid a thundering herd); whichever one is woken checks, once its own callback returns, whether the queue is still ready for its direction and, if so, hands the wake to the next listener in line. A backlog deeper than the number of live listeners on that queue+direction may still need a further, unrelated send/receive to fully drain, the same "a notification is not guaranteed to correspond to exactly one message" characteristic a single listener already has (a callback that must not leave messages stranded under bursty traffic should call `ccol_circq_try_recv_zc()`/`ccol_dynmq_try_recv_zc()` in a loop until it returns `ccol_container_empty`); what's guaranteed is that no live listener is ever passed over indefinitely.
 
-For a caller pattern where an fd registration needs to temporarily stop receiving events and later come back (e.g. a connection handed off to a worker thread for blocking body I/O, then handed back to the reactor for its next request), `event_loop_pause`/`event_loop_resume` are far cheaper than an `event_loop_remove` immediately followed by a later `event_loop_add`: the registration stays fully intact (no heap allocation/free, no fd-registry chmap churn) and only the fd's combined epoll interest mask is recomputed to exclude/include it. If every direction currently registered on the fd ends up paused, the fd is removed from the kernel's own epoll interest set entirely rather than merely narrowed to an empty mask, so it produces zero further wakeups of any kind while paused, including on its own error/hangup condition (which the kernel would otherwise keep reporting regardless of the requested interest mask):
+For a caller pattern where an fd registration needs to temporarily stop receiving events and later come back (e.g. a connection handed off to a worker thread for blocking body I/O, then handed back to the reactor for its next request), `ccol_event_loop_pause`/`ccol_event_loop_resume` are far cheaper than a `ccol_event_loop_remove` immediately followed by a later `ccol_event_loop_add`: the registration stays fully intact (no heap allocation/free, no fd-registry chmap churn) and only the fd's combined epoll interest mask is recomputed to exclude/include it. If every direction currently registered on the fd ends up paused, the fd is removed from the kernel's own epoll interest set entirely rather than merely narrowed to an empty mask, so it produces zero further wakeups of any kind while paused, including on its own error/hangup condition (which the kernel would otherwise keep reporting regardless of the requested interest mask):
 
 ```c
-event_loop_pause(loop, reg);    /* no more callbacks for reg until resumed */
+ccol_event_loop_pause(loop, reg);    /* no more callbacks for reg until resumed */
 /* ... a worker thread does its own blocking I/O on the fd directly ... */
-event_loop_resume(loop, reg);   /* interest restored; same reg, same generation */
+ccol_event_loop_resume(loop, reg);   /* interest restored; same reg, same generation */
 ```
 
 **Key properties:**
 
-- `num_reactor_threads` total background threads per `event_loop` (one dedicated polling thread, plus `num_reactor_threads - 1` dispatch worker threads when greater than 1), spawned at creation and all joined at `event_loop_shutdown` / `event_loop_destroy`; multiple independent instances share no global state.
+- `num_reactor_threads` total background threads per `ccol_event_loop` (one dedicated polling thread, plus `num_reactor_threads - 1` dispatch worker threads when greater than 1), spawned at creation and all joined at `ccol_event_loop_shutdown` / `ccol_event_loop_destroy`; multiple independent instances share no global state.
 - A single registration's callback is never invoked concurrently with itself, and a read and a write registration sharing the same fd are never invoked concurrently with each other, regardless of how many reactor threads are configured.
-- `event_loop_reg_generation` gives every fd registration a loop-wide-unique, monotonically increasing identity token, stable across `event_loop_modify` and shared by both directions on the same fd, for detecting fd reuse from application code; dispatch itself already validates a registration's liveness unconditionally, so this is for the caller's own bookkeeping, not required for internal correctness.
-- `event_loop_modify`/`_pause`/`_resume`/`_remove`/`event_loop_reg_generation` may all be called concurrently, from different threads, against the very same `event_reg`; the losing side of a race against a concurrent `event_loop_remove` always sees the registration as already removed, never a use-after-free.
-- `event_loop_pause`/`event_loop_resume` are fd-only (same restriction as `event_loop_modify`) and never change `event_loop_reg_count` or `event_loop_reg_generation`; pausing an already-paused registration, or resuming one that isn't paused, is a no-op success.
-- `event_loop_remove` is safe to call from within a registration's own callback (self-removal on error is a common pattern) as well as from any other thread, including concurrently with an in-flight dispatch for the same registration; it does not, however, wait for a dispatch that is already in flight at the moment of the call to finish. A registration whose `arg` must not be released while such a dispatch could still be using it should set `on_removed` in `event_handlers_t`: it fires exactly once, asynchronously (never from inside `event_loop_remove` or `event_loop_destroy` itself), only once no dispatch of that registration and no other `event_loop` call resolving it can still be in progress, making it safe for `on_removed` to release `arg` (or anything it points to) without racing a stale callback invocation. A registration that leaves `on_removed` NULL keeps the simpler contract every other callback field already had.
-- Removing an fd registration or destroying the loop never closes the fd itself, and never destroys a registered queue; ownership stays exactly where `selectable_from_fd`/`selectable_from_circq`/etc. already put it.
-- A queue registered via `selectable_from_circq`/`selectable_from_dynq`/`selectable_from_chan` must outlive its registration: `circular_queue_destroy`/`dynamic_queue_destroy`/`channel_destroy` assert if the queue still has a live `event_loop` registration or an in-progress `ccol_select`/`ccol_select_timed` call watching it, since the still-linked waiter would otherwise reference the queue's own, about-to-be-freed mutex. Call `event_loop_remove` (or let every watching `ccol_select`/`ccol_select_timed` call return) before destroying the queue; destroying the loop first is fine, since `event_loop_destroy`/`event_loop_remove` always unlink a queue's waiter before it is ever touched again.
-- The supported way to combine `fork(2)` with `event_loop` is one of the two patterns described under "Compile-Time Configuration" in section 4: `fork(2)` before creating a loop, or create one and `fork(2)` immediately followed by `exec(3)`. As a defense-in-depth measure on top of that, a fresh `event_loop_create`/`_destroy`/`_add`/`_remove`/`_modify`/`_pause`/`_resume` call, from any thread, in either the parent or a freshly forked child, never hangs waiting on a lock that some other (possibly no-longer-existing, since `fork()` duplicates only the calling thread) thread happened to hold at the instant of the fork. A loop that was already live across the fork is a different matter regardless of that measure: `fork()` does not duplicate its poller/dispatch threads, so an inherited loop can no longer dispatch anything in the child; treat such a loop as inert there (safe to `event_loop_destroy`, not usable for further dispatch) rather than keep registering against it. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
+- `ccol_event_loop_reg_generation` gives every fd registration a loop-wide-unique, monotonically increasing identity token, stable across `ccol_event_loop_modify` and shared by both directions on the same fd, for detecting fd reuse from application code; dispatch itself already validates a registration's liveness unconditionally, so this is for the caller's own bookkeeping, not required for internal correctness.
+- `ccol_event_loop_modify`/`_pause`/`_resume`/`_remove`/`ccol_event_loop_reg_generation` may all be called concurrently, from different threads, against the very same `ccol_event_reg`; the losing side of a race against a concurrent `ccol_event_loop_remove` always sees the registration as already removed, never a use-after-free.
+- `ccol_event_loop_pause`/`ccol_event_loop_resume` are fd-only (same restriction as `ccol_event_loop_modify`) and never change `ccol_event_loop_reg_count` or `ccol_event_loop_reg_generation`; pausing an already-paused registration, or resuming one that isn't paused, is a no-op success.
+- `ccol_event_loop_remove` is safe to call from within a registration's own callback (self-removal on error is a common pattern) as well as from any other thread, including concurrently with an in-flight dispatch for the same registration; it does not, however, wait for a dispatch that is already in flight at the moment of the call to finish. A registration whose `arg` must not be released while such a dispatch could still be using it should set `on_removed` in `ccol_event_handlers_t`: it fires exactly once, asynchronously (never from inside `ccol_event_loop_remove` or `ccol_event_loop_destroy` itself), only once no dispatch of that registration and no other `ccol_event_loop` call resolving it can still be in progress, making it safe for `on_removed` to release `arg` (or anything it points to) without racing a stale callback invocation. A registration that leaves `on_removed` NULL keeps the simpler contract every other callback field already had.
+- Removing an fd registration or destroying the loop never closes the fd itself, and never destroys a registered queue; ownership stays exactly where `ccol_selectable_from_fd`/`ccol_selectable_from_circq`/etc. already put it.
+- A queue registered via `ccol_selectable_from_circq`/`ccol_selectable_from_dynq`/`ccol_selectable_from_chan` must outlive its registration: `ccol_circular_queue_destroy`/`ccol_dynamic_queue_destroy`/`ccol_channel_destroy` assert if the queue still has a live `ccol_event_loop` registration or an in-progress `ccol_select`/`ccol_select_timed` call watching it, since the still-linked waiter would otherwise reference the queue's own, about-to-be-freed mutex. Call `ccol_event_loop_remove` (or let every watching `ccol_select`/`ccol_select_timed` call return) before destroying the queue; destroying the loop first is fine, since `ccol_event_loop_destroy`/`ccol_event_loop_remove` always unlink a queue's waiter before it is ever touched again.
+- The supported way to combine `fork(2)` with `ccol_event_loop` is one of the two patterns described under "Compile-Time Configuration" in section 4: `fork(2)` before creating a loop, or create one and `fork(2)` immediately followed by `exec(3)`. As a defense-in-depth measure on top of that, a fresh `ccol_event_loop_create`/`_destroy`/`_add`/`_remove`/`_modify`/`_pause`/`_resume` call, from any thread, in either the parent or a freshly forked child, never hangs waiting on a lock that some other (possibly no-longer-existing, since `fork()` duplicates only the calling thread) thread happened to hold at the instant of the fork. A loop that was already live across the fork is a different matter regardless of that measure: `fork()` does not duplicate its poller/dispatch threads, so an inherited loop can no longer dispatch anything in the child; treat such a loop as inert there (safe to `ccol_event_loop_destroy`, not usable for further dispatch) rather than keep registering against it. This protection can be compiled out via `CCOL_FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
 
 ---
 
@@ -2107,7 +2145,7 @@ void process(void) {
 | `clru_declare(name, KeyT, ValT)` | Declare the cache variable and companion type variables without initialising |
 | `clru_declare_scoped(name, KeyT, ValT)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initialising |
 | `clru_redeclare(name, KeyT, ValT)` | Restore type information in a new scope after passing the cache across a function boundary |
-| `clru_init(name, capacity, getter, setter, evict_cb)` | Initialise a previously declared cache; calls `fatal_err()` on failure |
+| `clru_init(name, capacity, getter, setter, evict_cb)` | Initialise a previously declared cache; calls `ccol_fatal_err()` on failure |
 | `clru_construct(name, KeyT, ValT, capacity, getter, setter, evict_cb)` | Declare and initialise in one step |
 | `clru_construct_scoped(name, KeyT, ValT, capacity, getter, setter, evict_cb)` | Declare, initialise, and register auto-cleanup |
 | `clru_destroy(name)` | Destroy the cache and set the handle to `CLRU_CACHE_INVALID`; fatal on an already-destroyed/stale handle |
@@ -2131,7 +2169,7 @@ Logging is how a running program records what it is doing and what went wrong. `
 
 A `clog` handle is an opaque value (not a pointer; never cast it to or from `void *`), returned by `clog_open_fd_mp`/`clog_open_file_mp`, or `CLOG_INVALID` on failure. Every function documented below expects a live logger handle; passing `CLOG_INVALID`, or a handle whose logger has already been closed, terminates the program rather than silently doing nothing.
 
-The supported way to combine `fork(2)` with `clogger` is one of the two patterns described under "Compile-Time Configuration" in section 4: `fork(2)` before opening a logger, or open one and `fork(2)` immediately followed by `exec(3)`. As a defense-in-depth measure on top of that, a logger handle open at the time of a `fork()` not followed by `exec(3)` remains technically usable in the child: logging, deriving, and closing it all continue to work correctly on both sides, with no risk of a lock inherited mid-operation leaving the child permanently stuck. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
+The supported way to combine `fork(2)` with `clogger` is one of the two patterns described under "Compile-Time Configuration" in section 4: `fork(2)` before opening a logger, or open one and `fork(2)` immediately followed by `exec(3)`. As a defense-in-depth measure on top of that, a logger handle open at the time of a `fork()` not followed by `exec(3)` remains technically usable in the child: logging, deriving, and closing it all continue to work correctly on both sides, with no risk of a lock inherited mid-operation leaving the child permanently stuck. This protection can be compiled out via `CCOL_FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
 
 ### Output Formats
 
@@ -2145,7 +2183,7 @@ Every log line follows the pattern:
 ts=<ISO-8601-UTC> level=<L> proc=<name>(<pid>):<tname>(<tid>) src=<file>:<line> func=<fn> [fields] msg=<text>
 ```
 
-`proc` identifies the executable basename and main PID in the first group, and the OS thread name and thread ID in the second. `log_error`, `log_alert`, and `log_fatal` append a backtrace as tab-indented continuation lines that do not start with `ts=`, allowing log aggregators to group them with their parent record:
+`proc` identifies the executable basename and main PID in the first group, and the OS thread name and thread ID in the second. `ccol_log_error`, `ccol_log_alert`, and `ccol_log_fatal` append a backtrace as tab-indented continuation lines that do not start with `ts=`, allowing log aggregators to group them with their parent record:
 
 ```
 ts=2026-05-29T21:52:39.096473Z level=ERROR proc=myapp(1234):main(1234) src=main.c:42 func=handle env=prod msg="db timeout"
@@ -2164,7 +2202,7 @@ When `CLOG_FMT_JSON` is selected, each log record is a single self-contained JSO
 {"ts":"2026-05-29T21:52:39.096642Z","level":"ERROR","proc":"myapp(1234):main(1234)","src":"main.c:10","func":"main","env":"prod","msg":"db failed","bt":["#0 main+0x16d","#1 libc.so.6+0x29ca8"]}
 ```
 
-Structured fields appear as top-level JSON keys (insertion order). For `log_error`, `log_alert`, and `log_fatal` the backtrace is embedded as a `"bt"` string array inside the same JSON object instead of being written as separate continuation lines. In the rare case that the backtrace itself cannot be embedded (a transient allocation failure, or the record is already near the internal buffer cap described below), the record is still closed normally with a `"bt_error":"unavailable"` key in place of `"bt"`, so a missing backtrace is always visible rather than silently absent from an otherwise ordinary-looking record.
+Structured fields appear as top-level JSON keys. For `ccol_log_error`, `ccol_log_alert`, and `ccol_log_fatal` the backtrace is embedded as a `"bt"` string array inside the same JSON object instead of being written as separate continuation lines. In the rare case that the backtrace itself cannot be embedded (a transient allocation failure, or the record is already near the internal buffer cap described below), the record is still closed normally with a `"bt_error":"unavailable"` key in place of `"bt"`, so a missing backtrace is always visible rather than silently absent from an otherwise ordinary-looking record.
 
 Every string value (the message, and every field key/value) is validated as UTF-8 before being embedded, since RFC 8259 requires JSON text to be valid Unicode. A well-formed multi-byte UTF-8 sequence is passed through unescaped; a byte or byte sequence that is not well-formed (a lone continuation byte, an overlong or otherwise out-of-range lead byte, an encoded UTF-16 surrogate half, or a multi-byte sequence truncated by the end of the string) is replaced, one invalid byte at a time, with the Unicode replacement character (U+FFFD). This means a message or field value built from arbitrary or binary data can never produce a JSON record with invalid Unicode content, even though `clogger`'s own API takes plain `char *` strings with no encoding of their own to declare.
 
@@ -2176,7 +2214,7 @@ When `CLOG_FMT_SYSLOG` is selected, each record is emitted as a single RFC 5424 
 <PRI>1 TIMESTAMP HOSTNAME APP-NAME PID MSGID [ccol proc="name(pid):tname(tid)" src="file:N" func="fn" [fields]] MSG
 ```
 
-The `PRI` field encodes both the facility (default `CLOG_SYSLOG_USER`; see `clog_set_facility`) and the severity level mapped from `clog_level_t` according to RFC 5424 (TRACE/DEBUG -> 7, INFO -> 6, WARN -> 4, ERROR -> 3, ALERT -> 1, FATAL -> 0). For `log_error`, `log_alert`, and `log_fatal` each backtrace frame is emitted as a separate syslog message carrying the same PRI, TIMESTAMP, and MSGID as the record it continues, with its own frame text backslash-escaped the same way the message text is (see below); the shared TIMESTAMP is what lets a reader correlate a record with its own backtrace frames rather than whichever frame a log collector happened to receive around the same time. If the backtrace itself cannot be captured, or none of its frames fit in a single syslog message, a single additional syslog message carrying the text `#error backtrace unavailable` is emitted in its place, the same visible-omission guarantee logfmt and JSON each provide in their own way.
+The `PRI` field encodes both the facility (default `CLOG_SYSLOG_USER`; see `clog_set_facility`) and the severity level mapped from `clog_level_t` according to RFC 5424 (TRACE/DEBUG -> 7, INFO -> 6, WARN -> 4, ERROR -> 3, ALERT -> 1, FATAL -> 0). For `ccol_log_error`, `ccol_log_alert`, and `ccol_log_fatal` each backtrace frame is emitted as a separate syslog message carrying the same PRI, TIMESTAMP, and MSGID as the record it continues, with its own frame text backslash-escaped the same way the message text is (see below); the shared TIMESTAMP is what lets a reader correlate a record with its own backtrace frames rather than whichever frame a log collector happened to receive around the same time. If the backtrace itself cannot be captured, or none of its frames fit in a single syslog message, a single additional syslog message carrying the text `#error backtrace unavailable` is emitted in its place, the same visible-omission guarantee logfmt and JSON each provide in their own way.
 
 Control characters (including a literal newline or carriage return) in the message text, in every structured-data value, and in each backtrace frame's own text are backslash-escaped (`\n`, `\r`, `\t`, or `\xNN`), the same way logfmt and JSON already escape them in their own message/field output. `HOSTNAME` and `APP-NAME` are filtered to RFC 5424 PRINTUSASCII (`0x21`-`0x7e`) when the logger is created, dropping any other byte rather than truncating at it, so neither field can contain a byte needing this same escaping in the first place; either falls back to `-` if filtering leaves no bytes at all. Together this guarantees a single syslog record can never be split across multiple lines by its own content.
 
@@ -2194,7 +2232,7 @@ clog lg = clog_open_fd(fd, CLOG_INFO, NULL);
 clog_set_format(lg, CLOG_FMT_SYSLOG);
 clog_set_facility(lg, CLOG_SYSLOG_DAEMON);
 
-log_info(lg, "service started");
+ccol_log_info(lg, "service started");
 clog_close(lg);
 close(fd);
 ```
@@ -2235,10 +2273,10 @@ clog lg = clog_open_fd_mp(2, CLOG_INFO, NULL, NULL);
 clog_set_field(lg, "env",     "prod");
 clog_set_field(lg, "service", "auth");
 
-log_info(lg,  "starting up");
-log_warn(lg,  "config missing: %s", "timeout");
-log_error(lg, "db failed: %s", "timeout");   /* also appends a backtrace; log_alert does too */
-/* log_fatal appends a backtrace AND terminates the process via exit(EXIT_FAILURE) */
+ccol_log_info(lg,  "starting up");
+ccol_log_warn(lg,  "config missing: %s", "timeout");
+ccol_log_error(lg, "db failed: %s", "timeout");   /* also appends a backtrace; ccol_log_alert does too */
+/* ccol_log_fatal appends a backtrace AND terminates the process via exit(EXIT_FAILURE) */
 
 clog_close(lg);
 ```
@@ -2246,8 +2284,8 @@ clog_close(lg);
 Sample output:
 
 ```
-ts=2026-05-29T21:52:39.096473Z level=INFO  proc=myapp(1234):main(1234) src=main.c:9  func=main env=prod service=auth msg="starting up"
-ts=2026-05-29T21:52:39.096512Z level=WARN  proc=myapp(1234):main(1234) src=main.c:10 func=main env=prod service=auth msg="config missing: timeout"
+ts=2026-05-29T21:52:39.096473Z level=INFO proc=myapp(1234):main(1234) src=main.c:9 func=main env=prod service=auth msg="starting up"
+ts=2026-05-29T21:52:39.096512Z level=WARN proc=myapp(1234):main(1234) src=main.c:10 func=main env=prod service=auth msg="config missing: timeout"
 ts=2026-05-29T21:52:39.096642Z level=ERROR proc=myapp(1234):main(1234) src=main.c:11 func=main env=prod service=auth msg="db failed: timeout"
 	#0 ./myapp(main+0x16d) [0x563b...]
 	#1 /lib/x86_64-linux-gnu/libc.so.6(+0x29ca8) [0x7f78...]
@@ -2307,7 +2345,7 @@ Unlike `clog_rotation_cfg_t`, a `NULL` `async_cfg` and a non-`NULL` pointer to a
 `queue_size` controls backpressure: `0` uses an unbounded queue that never blocks a caller on `log_*`; a positive value uses a fixed-capacity queue where a full queue blocks the calling thread until space frees up rather than dropping the message. `flush_buffer_size` and `flush_interval_ms` control how often the writer thread actually writes to disk: whichever threshold is reached first triggers a flush. The batching buffer's own growth ceiling follows `flush_buffer_size` itself whenever that is configured above the library's internal 16 MiB per-record default described above, so a larger configured value is genuinely honored, not silently capped at that default. Call `clog_flush` to block until everything queued as of that call has been durably written, without waiting for either threshold:
 
 ```c
-log_info(lg, "about to do something risky");
+ccol_log_info(lg, "about to do something risky");
 clog_flush(lg);   /* block until the line above is on disk */
 ```
 
@@ -2315,7 +2353,7 @@ clog_flush(lg);   /* block until the line above is on disk */
 
 Because a batch can span several records built moments apart, a batch that happens to straddle a rotation boundary is written to whichever file is current at flush time, not split precisely at each record's own logging moment.
 
-A logger's async writer thread does not exist in a forked child process; a `fork()`ed child not immediately followed by `exec(3)` transparently falls back to logging synchronously on any inherited async-enabled handle, so `log_*`/`clog_close` continue to work correctly on both sides with no risk of the child waiting on a thread that was never duplicated into it. This fallback is part of the same `FORK_SAFETY_REQUIRED` protection (see "Compile-Time Configuration" in section 4, which also describes the two supported fork(2) patterns) and is not performed when it is compiled out; a caller that disables it must not fork a process with a live async-enabled logger.
+A logger's async writer thread does not exist in a forked child process; a `fork()`ed child not immediately followed by `exec(3)` transparently falls back to logging synchronously on any inherited async-enabled handle, so `log_*`/`clog_close` continue to work correctly on both sides with no risk of the child waiting on a thread that was never duplicated into it. This fallback is part of the same `CCOL_FORK_SAFETY_REQUIRED` protection (see "Compile-Time Configuration" in section 4, which also describes the two supported fork(2) patterns) and is not performed when it is compiled out; a caller that disables it must not fork a process with a live async-enabled logger.
 
 ### Log Levels
 
@@ -2334,15 +2372,15 @@ The minimum level can be changed at any time with `clog_set_level`. Messages bel
 
 ### Structured Fields
 
-Fields are persistent key=value pairs that appear in every subsequent log line. `clog_set_field` updates an existing key in place or prepends a new one; both key and value are copied internally.
+Fields are persistent key=value pairs that appear in every subsequent log line. `clog_set_field` updates an existing key in place or adds a new one; both key and value are copied internally.
 
 ```c
 clog_set_field(lg, "request_id", "abc-123");
-log_info(lg, "processing");
+ccol_log_info(lg, "processing");
 /* -> ts=... request_id=abc-123 msg=processing */
 
 clog_remove_field(lg, "request_id");
-log_info(lg, "done");
+ccol_log_info(lg, "done");
 /* -> ts=... msg=done */
 
 clog_clear_fields(lg);   /* remove all fields */
@@ -2365,13 +2403,13 @@ void process_order(const char *order_id, const char *customer, const char *item)
     clog_set_field(order_log, "order_id", order_id);
     clog_set_field(order_log, "customer", customer);
 
-    log_info(order_log, "order received: %s", item);
+    ccol_log_info(order_log, "order received: %s", item);
 
     int rc = ship_item(item);
     if (rc != 0)
-        log_error(order_log, "shipping failed with code %d", rc);
+        ccol_log_error(order_log, "shipping failed with code %d", rc);
     else
-        log_info(order_log, "order shipped");
+        ccol_log_info(order_log, "order shipped");
 
     clog_close(order_log);   /* this handle is released; root logger is unaffected */
 }
@@ -2437,13 +2475,13 @@ Order-scoped fields (`order_id`, `customer`) appear in every line emitted by `or
 
 | Macro | Level | Backtrace |
 |---|---|---|
-| `log_trace(lg, fmt, ...)` | `CLOG_TRACE` | No |
-| `log_debug(lg, fmt, ...)` | `CLOG_DEBUG` | No |
-| `log_info(lg, fmt, ...)`  | `CLOG_INFO`  | No |
-| `log_warn(lg, fmt, ...)`  | `CLOG_WARN`  | No |
-| `log_error(lg, fmt, ...)` | `CLOG_ERROR` | Yes |
-| `log_alert(lg, fmt, ...)` | `CLOG_ALERT` | Yes - use for conditions requiring immediate operator action |
-| `log_fatal(lg, fmt, ...)` | `CLOG_FATAL` | Yes - terminates the process via `exit(EXIT_FAILURE)` after writing the log and backtrace; never returns; bypasses `min_level` so the cause is always recorded |
+| `ccol_log_trace(lg, fmt, ...)` | `CLOG_TRACE` | No |
+| `ccol_log_debug(lg, fmt, ...)` | `CLOG_DEBUG` | No |
+| `ccol_log_info(lg, fmt, ...)`  | `CLOG_INFO`  | No |
+| `ccol_log_warn(lg, fmt, ...)`  | `CLOG_WARN`  | No |
+| `ccol_log_error(lg, fmt, ...)` | `CLOG_ERROR` | Yes |
+| `ccol_log_alert(lg, fmt, ...)` | `CLOG_ALERT` | Yes - use for conditions requiring immediate operator action |
+| `ccol_log_fatal(lg, fmt, ...)` | `CLOG_FATAL` | Yes - terminates the process via `exit(EXIT_FAILURE)` after writing the log and backtrace; never returns; bypasses `min_level` so the cause is always recorded |
 
 ---
 
@@ -2517,7 +2555,7 @@ A subtree nested more than 500 levels deep (arrays and/or objects, in any combin
 
 ### Path navigation - `cjson_get` and `cjson_set`
 
-Paths are dot-separated component strings.  A component that begins with `#` followed by **one or more decimal digits** addresses **an array element by index when the current node is an array**; otherwise it is treated as a **literal object key**.  A bare `#` with no trailing digits, or an empty path component (a leading, trailing, or doubled `.`), is always a syntax error (`cjson_get` returns `NULL`; `cjson_set` and `cjson_delete` return `ccol_invalid_args`).
+Paths are dot-separated component strings.  A component that begins with `#` followed by **one or more decimal digits** addresses **an array element by index when the current node is an array**; otherwise it is treated as a **literal object key**.  A bare `#` with no trailing digits on an array node, or an empty path component (a leading, trailing, or doubled `.`), is always a syntax error (`cjson_get` returns `NULL`; `cjson_set` and `cjson_delete` return `ccol_invalid_args`).
 
 `cjson_set` creates a leaf that addresses an object key on demand.  A `#N` array-index leaf must already be in range: an array has no way to be auto-extended to fit an arbitrary index, so a syntactically valid but out-of-range one fails with `ccol_key_not_found` instead of being created (matching how a missing intermediate path component is reported).
 
@@ -2554,7 +2592,7 @@ cjson_set(doc, "users.#0.label",  "champion");
 cjson_set(doc, "users.#0.name", 42);  /* name is now an integer */
 ```
 
-`cjson_set` accepts: `bool`, any integer type, `float`, `double`, `char *`, `const char *`, and string literals.  It detects the C type at compile time via `_Generic` and routes to the correct storage path.  Passing `NULL` sets the leaf to `CJSON_NULL`; a typed null pointer such as `(const char *)NULL` also produces `CJSON_NULL` because a null C string pointer maps to JSON null.  A `void *` value that is not NULL (e.g. a `void *` variable holding a live pointer) is rejected with `ccol_invalid_args` rather than being silently written as `CJSON_NULL`: only a genuine NULL is treated as an intentional null.  Non-finite `double` values (`INFINITY`, `-INFINITY`, `NAN`) are rejected and `ccol_invalid_args` is returned; the existing node is left untouched.  Signed integer types (including plain `char` on platforms where `char` is signed, e.g. x86-64 Linux) are sign-extended correctly to `long long`.  Any C type outside this accepted list (`long double`, a struct, an enum, or any pointer type other than `char *` / `const char *`) is rejected the same way: `ccol_invalid_args` is returned and the target leaf is left untouched, rather than silently written as `CJSON_NULL`.
+`cjson_set` accepts: `bool`, any integer type, `float`, `double`, `char *`, `const char *`, and string literals.  It detects the C type at compile time via `_Generic` and routes to the correct storage path.  Passing `NULL` sets the leaf to `CJSON_NULL`; a typed null pointer such as `(const char *)NULL` also produces `CJSON_NULL` because a null C string pointer maps to JSON null.  A `void *` value that is not NULL (e.g. a `void *` variable holding a live pointer) is rejected with `ccol_invalid_args` rather than being silently written as `CJSON_NULL`: only a genuine NULL is treated as an intentional null.  Non-finite `double` values (`INFINITY`, `-INFINITY`, `NAN`) are rejected and `ccol_invalid_args` is returned; the existing node is left untouched.  Signed integer types (including plain `char` on platforms where `char` is signed, e.g. x86-64 Linux) are sign-extended correctly to `long long`.  Any C type outside this accepted list (`long double`, a struct, or any pointer type other than `char *` / `const char *`) is rejected the same way: `ccol_invalid_args` is returned and the target leaf is left untouched, rather than silently written as `CJSON_NULL`.
 
 Duplicate object keys set within the JSON object use **last-value-wins** semantics; the final occurrence of a key is retained and prior occurrences are deep-freed.
 
@@ -2914,7 +2952,7 @@ cyaml_set(doc, "users.#0.score",  99);
 
 `cyaml_set` creates a leaf that addresses a dictionary key on demand.  A `#N` list-index leaf must already be in range: a list has no way to be auto-extended to fit an arbitrary index, so an out-of-range one fails with `ccol_key_not_found` instead of being created.  Creating a new leaf dictionary key can also fail with `ccol_container_full` if the parent dictionary has reached its maximum representable element count (not reachable in practice).
 
-`cyaml_set` accepts: `bool`, any integer type, `float`, `double`, `char *`, `const char *`, and string literals.  It detects the C type at compile time via `_Generic` and routes to the correct storage path.  Passing an untyped `NULL` literal sets the leaf to `CYAML_NULL`.  Any C type outside this accepted list (`long double`, a struct, an enum, or any pointer type other than `char *` / `const char *`) is rejected: `ccol_invalid_args` is returned and the target leaf is left untouched, rather than silently written as `CYAML_NULL`.
+`cyaml_set` accepts: `bool`, any integer type, `float`, `double`, `char *`, `const char *`, and string literals.  It detects the C type at compile time via `_Generic` and routes to the correct storage path.  Passing a `void *` value, including an untyped `NULL` literal, sets the leaf to `CYAML_NULL`.  Any C type outside this accepted list (`long double`, a struct, or any pointer type other than `char *`, `const char *`, or `void *`) is rejected: `ccol_invalid_args` is returned and the target leaf is left untouched, rather than silently written as `CYAML_NULL`.
 
 ### Deleting nodes (`cyaml_delete`)
 
@@ -3004,9 +3042,9 @@ The queue mode is selected once at construction time by the `queue_capacity` par
 
 Calling `ctpool_destroy`/`__ctpool_destroy` on `pool` from within a task (or that task's `on_complete` callback) currently executing on one of `pool`'s own worker threads is likewise a fatal error, for the same reason a stale handle is: a worker thread cannot join itself, so destroying its own pool from inside it would free the pool's memory while that worker is still using it. `ctpool_wait`, `ctpool_shutdown_drain`, and `ctpool_shutdown_immediate` handle this same situation gracefully instead of aborting: called this way, `ctpool_wait` returns immediately (waiting for the calling task's own completion would deadlock it against itself) and the two shutdown functions are a complete no-op (neither stops accepting new tasks nor joins any worker), leaving the pool fully usable so that a later, legitimate external call can still shut it down cleanly.
 
-The supported way to combine `fork(2)` with `cthreadpool` is one of the two patterns described under "Compile-Time Configuration" in section 4: `fork(2)` before creating a pool, or create one and `fork(2)` immediately followed by `exec(3)`. As a defense-in-depth measure on top of that, a fresh `create_cthread_pool`/`_mp`/`ctpool_destroy`/`ctpool_submit`/`_try_submit`/`_timed_submit` (and the future/wait/shutdown variants) call, from any thread, in either the parent or a freshly forked child, never hangs waiting on a lock that some other (possibly no-longer-existing, since `fork()` duplicates only the calling thread) thread happened to hold at the instant of the fork. A pool that was already live across the fork is a different matter regardless of that measure: `fork()` does not duplicate its worker threads, so an inherited pool can no longer run any queued or future task in the child; treat such a pool as inert there (not usable for further submission) rather than keep submitting to it. `ctpool_wait` on such a pool in the child returns immediately rather than waiting for progress that can never happen, and `ctpool_destroy` still discards any work still queued at the moment of the fork exactly as `ctpool_shutdown_immediate` would (cancelling any queued futures, so a caller blocked in `ctpool_future_get` on one of them wakes up rather than hanging) before releasing the pool's own memory, even when called with no prior explicit shutdown call. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
+The supported way to combine `fork(2)` with `cthreadpool` is one of the two patterns described under "Compile-Time Configuration" in section 4: `fork(2)` before creating a pool, or create one and `fork(2)` immediately followed by `exec(3)`. As a defense-in-depth measure on top of that, a fresh `ccol_create_cthread_pool`/`_mp`/`ctpool_destroy`/`ctpool_submit`/`_try_submit`/`_timed_submit` (and the future/wait/shutdown variants) call, from any thread, in either the parent or a freshly forked child, never hangs waiting on a lock that some other (possibly no-longer-existing, since `fork()` duplicates only the calling thread) thread happened to hold at the instant of the fork. A pool that was already live across the fork is a different matter regardless of that measure: `fork()` does not duplicate its worker threads, so an inherited pool can no longer run any queued or future task in the child; treat such a pool as inert there (not usable for further submission) rather than keep submitting to it. `ctpool_wait` on such a pool in the child returns immediately rather than waiting for progress that can never happen, and `ctpool_destroy` still discards any work still queued at the moment of the fork exactly as `ctpool_shutdown_immediate` would (cancelling any queued futures, so a caller blocked in `ctpool_future_get` on one of them wakes up rather than hanging) before releasing the pool's own memory, even when called with no prior explicit shutdown call. This protection can be compiled out via `CCOL_FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
 
-With a custom allocator (`create_cthread_pool_mp`), the small internal bookkeeping node backing each submitted task is recycled through a bounded per-pool cache rather than allocated and freed on every single submission; a caller relying on the supplied allocator to observe exactly one allocation and one free per submitted task (for example a tracking or instrumenting allocator) will instead see calls only when the cache is empty or already full.
+With a custom allocator (`ccol_create_cthread_pool_mp`), the small internal bookkeeping node backing each submitted task is recycled through a bounded per-pool cache rather than allocated and freed on every single submission; a caller relying on the supplied allocator to observe exactly one allocation and one free per submitted task (for example a tracking or instrumenting allocator) will instead see calls only when the cache is empty or already full.
 
 **Header:** `#include <cthreadpool.h>`
 
@@ -3086,7 +3124,7 @@ Both functions set `*out` to the future handle on success and to `NULL` on any f
 
 The future carries a reference count of 2 at submission: one for the caller and one held by the queued task. Calling `ctpool_future_free` before `ctpool_future_get` gives fire-and-forget semantics: the future is freed automatically once the worker finishes, and the result is discarded.
 
-Multiple threads may each hold a pointer to the same future and call `ctpool_future_get` independently. Each must call `ctpool_future_free` exactly once.
+Multiple threads may each hold a pointer to the same future and call `ctpool_future_get` independently. The future carries exactly one caller reference, so `ctpool_future_free` must be called exactly once in total for that future, not once per thread.
 
 ### Detached Futures
 
@@ -3212,11 +3250,11 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 | Function / Macro | Description |
 |---|---|
 | `ctpool_declare(name)` | Declare an uninitialized `ctpool` variable |
-| `ctpool_declare_scoped(name)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, without initializing |
-| `ctpool_construct(name, num_threads, queue_cap)` | Declare and initialize in one step; calls `fatal_err()` on failure |
-| `ctpool_construct_scoped(name, num_threads, queue_cap)` | Declare, initialize, and register auto-cleanup; calls `fatal_err()` on failure |
-| `create_cthread_pool(num_threads, queue_cap, err_str)` | Allocate and return a pool using the default allocator; returns `CTPOOL_INVALID` on failure |
-| `create_cthread_pool_mp(num_threads, queue_cap, mprocs, err_str)` | Allocate and return a pool with a custom allocator; returns `CTPOOL_INVALID` on failure |
+| `ctpool_declare_scoped(name)` | Declare with auto-cleanup via `__attribute__((cleanup(...)))`, initialized to `CTPOOL_INVALID` |
+| `ctpool_construct(name, num_threads, queue_cap)` | Declare and initialize in one step; calls `ccol_fatal_err()` on failure |
+| `ctpool_construct_scoped(name, num_threads, queue_cap)` | Declare, initialize, and register auto-cleanup; calls `ccol_fatal_err()` on failure |
+| `ccol_create_cthread_pool(num_threads, queue_cap, err_str)` | Allocate and return a pool using the default allocator; returns `CTPOOL_INVALID` on failure |
+| `ccol_create_cthread_pool_mp(num_threads, queue_cap, mprocs, err_str)` | Allocate and return a pool with a custom allocator; returns `CTPOOL_INVALID` on failure |
 | `ctpool_destroy(pool)` | Drain-shutdown if needed, free all resources, and set the handle to `CTPOOL_INVALID`; fatal on an already-destroyed/stale handle |
 
 **Task Submission**
@@ -3232,10 +3270,12 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 | Function | Description |
 |---|---|
 | `ctpool_submit_future(pool, fn, arg)` | Submit a task returning `void *`; returns a future or `NULL` on OOM or shutdown |
+| `ctpool_try_submit_future(pool, fn, arg, out)` | Non-blocking future submit; returns `ccol_container_full` instead of blocking |
+| `ctpool_timed_submit_future(pool, fn, arg, timeout, out)` | Timed future submit; `timeout` is a relative `struct timespec`; `NULL` behaves as try-only |
 | `ctpool_future_get(f)` | Block until the result is ready and return it; returns `NULL` if cancelled |
 | `ctpool_future_done(f)` | Non-blocking poll: `true` if the result is ready or the future was cancelled |
 | `ctpool_future_cancelled(f)` | `true` if the task was discarded by `ctpool_shutdown_immediate` |
-| `ctpool_future_free(f)` | Release the caller's reference; must be called exactly once per `ctpool_submit_future` |
+| `ctpool_future_free(f)` | Release the caller's reference; must be called exactly once per created future |
 | `ctpool_future_create_detached(err_str)` | Create a standalone future with no pool/task, to be fulfilled by an external producer |
 | `ctpool_future_fulfill(f, result)` | Deliver a result to a detached future; `ccol_not_permitted` if already fulfilled |
 
@@ -3253,7 +3293,7 @@ The pool is created with `ccol_invalid_size` (unbounded queue) so that submittin
 
 ## 18. HTTP Client - `chttpclient`
 
-`chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: an internal `chttp1_parser` module drives request/response framing over raw sockets, TLS is provided by `ctls` (a reactor-agnostic OpenSSL wrapper), the reactor backing Tier 2/3's async engine is `event_loop` (from `cthreadcomm`), and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library. `chttpclient` has no dependency on any vendored third-party code.
+`chttpclient` lets your C program send HTTP requests (GET, POST, PUT, DELETE, PATCH) to any URL and receive the response. It is a hand-rolled HTTP/1.1 client: an internal `chttp1_parser` module drives request/response framing over raw sockets, TLS is provided by `ctls` (a reactor-agnostic OpenSSL wrapper), the reactor backing Tier 2/3's async engine is `ccol_event_loop` (from `cthreadcomm`), and this module adds a concurrency-limiting pool, a keep-alive connection cache, case-insensitive header maps, and an API that integrates with the rest of the library. `chttpclient` has no dependency on any vendored third-party code.
 
 `chttpcli` is an opaque VALUE handle, not a pointer: it must never be cast to/from `void *`, compared via a pointer cast, or treated as an address. Compare it against `CHTTPCLI_INVALID` (or use a truthiness check; `CHTTPCLI_INVALID` is `0`, so `if (!cli)` works as expected). Internally, every use of a `chttpcli` is resolved through a library-owned slot table before the underlying client object is touched, so a stale handle (one whose client has already been destroyed) is always detected rather than silently dereferencing freed memory.
 
@@ -3269,7 +3309,7 @@ The module is split across two headers: `chttp.h` declares shared types (`chttp_
 
 The simplest path uses the process-level default client via the `chttp_get`, `chttp_post`, `chttp_put`, `chttp_delete`, and `chttp_patch` convenience functions. The default client is lazily initialized on the first call, uses the CPU count as the pool size, and has TLS peer and host verification enabled.
 
-Do not pass the handle returned by `chttp_default_client()` to `chttpclient_destroy`: it is owned by the library, which destroys it automatically at process exit. Doing so anyway will not crash that specific call, but the default client is never rebuilt afterward, so every later call to `chttp_default_client()` or any of the convenience functions above fails cleanly for the remainder of the process. If you need a client with a lifetime you control, create your own with `create_chttpclient`/`create_chttpclient_mp` instead.
+Do not pass the handle returned by `chttp_default_client()` to `chttpclient_destroy`: it is owned by the library, which destroys it automatically at process exit. Doing so anyway will not crash that specific call, but the default client is never rebuilt afterward, so every later call to `chttp_default_client()` or any of the convenience functions above fails cleanly for the remainder of the process. If you need a client with a lifetime you control, create your own with `ccol_create_chttpclient`/`ccol_create_chttpclient_mp` instead.
 
 Every `resp_out`-taking entry point (`chttpclient_do`, `chttpclient_do_pooled`, `chttp_do`, `chttp_run_query`, and the convenience functions above) sets `*resp_out` to `NULL` immediately, before any other work begins, and leaves it `NULL` on every non-success return; combined with `chttpclient_resp_free`'s own "safe to call with NULL" contract, this means it is always safe to call `chttpclient_resp_free(resp)` unconditionally after one of these calls, regardless of the returned `ccol_retval_t`, without separately pre-initializing your own local pointer:
 
@@ -3278,10 +3318,18 @@ chttpcli_response *resp = NULL;
 
 if (chttp_get("https://api.example.com/users", &resp) == ccol_success) {
     printf("status=%d\n", resp->status_code);
-    printf("body=%s\n",   resp->body);
+    printf("body=%s\n",   resp->body ? resp->body : "");
     chttpclient_resp_free(resp);
 }
 ```
+
+On the buffered (non-streaming) paths, `resp->body` is a NUL-terminated
+heap buffer whenever the response carried at least one byte, and
+`resp->body_len` is its length. `resp->body` is `NULL`, with `body_len` 0,
+whenever the response genuinely carried a zero-length body (a 204, a `HEAD`
+response, an explicit `Content-Length: 0`), so check `resp->body != NULL`
+(or `resp->body_len > 0`) before dereferencing it even on a successful
+request.
 
 For methods that carry a body, use the body macros from `chttp.h`:
 
@@ -3321,14 +3369,14 @@ ccol_retval_t rc = chttpclient_do(cli, req, &resp);
 chttp_request_free(req);
 
 if (rc == ccol_success) {
-    printf("%d: %s\n", resp->status_code, resp->body);
+    printf("%d: %s\n", resp->status_code, resp->body ? resp->body : "");
     chttpclient_resp_free(resp);
 }
 
 chttpclient_destroy(cli);
 ```
 
-Calling `chttpclient_destroy`/`__chttpclient_destroy` again on a handle that has already been destroyed (whether sequentially, well after the first call completed, or concurrently, racing it from another thread) is a fatal error (`fatal_err()`, `abort()`/`SIGABRT`), not a silent double-free; see `chttpclient_destroy(3)` for the full contract.
+Calling `chttpclient_destroy`/`__chttpclient_destroy` again on a handle that has already been destroyed (whether sequentially, well after the first call completed, or concurrently, racing it from another thread) is a fatal error (`ccol_fatal_err()`, `abort()`/`SIGABRT`), not a silent double-free; see `chttpclient_destroy(3)` for the full contract.
 
 `chttpclient_do` blocks until a pool slot is free, executes the request synchronously, and returns the fully buffered response. Multiple threads may call `chttpclient_do` concurrently on the same handle.
 
@@ -3431,7 +3479,7 @@ chttp_request_free(req);
 fclose(out);
 ```
 
-Response headers are not accessible via the streaming path. Returning a value less than `len` from the write callback aborts the transfer.
+Response headers are not accessible via the streaming path. Returning anything other than `len` from the write callback aborts the transfer.
 
 ### Interim (1xx) Responses
 
@@ -3473,7 +3521,8 @@ chttp_request_free(req); /* req need not outlive this call, unlike chttpclient_d
 
 chttpcli_async_result_t *result = chttpclient_async_result_get(f); /* blocks */
 if (result->rv == ccol_success) {
-    printf("%d: %s\n", result->resp->status_code, result->resp->body);
+    printf("%d: %s\n", result->resp->status_code,
+           result->resp->body ? result->resp->body : "");
     chttpclient_resp_free(result->resp);
 }
 chttpclient_async_result_free(result);
@@ -3482,7 +3531,7 @@ ctpool_future_free(f);
 chttpclient_destroy(cli);
 ```
 
-The engine (a small pool of `event_loop` reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count by default) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. `chttpclient_destroy` blocks until every Tier 2/3 request still in flight for that client completes, exactly like it already does for Tier 1; it is safe to call even if a future returned by `chttpclient_do_async`/`_streaming` has not been waited on yet, though the future itself remains valid to use afterward (its result was already available by the time `chttpclient_destroy` returned). This engine owns its own static, process-wide `event_loop` instance, fully independent of `chttpserver`'s own (separate) `event_loop` instance; the two modules share no reactor, so stopping/starting one has no effect on the other. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`. `chttpcli_set_engine_logger`/`chttpcli_set_engine_mem_mgmt_procs`/`chttpcli_set_engine_num_reactor_threads` configure this reactor's diagnostics logger, allocator, and OS thread count respectively, and must be called before this engine's first lazy construction (mirroring `chttpserver`'s identical trio of functions for its own reactor).
+The engine (a small pool of `ccol_event_loop` reactor threads plus a companion DNS/connect worker pool, both sized to the CPU count by default) starts on the first call to `chttpclient_do_async`/`_streaming` anywhere in the process and stops automatically once no request is in flight and no connection remains pooled; it is entirely independent of `chttpclient_do`'s synchronous connection handling. `chttpclient_destroy` blocks until every Tier 2/3 request still in flight for that client completes, exactly like it already does for Tier 1; it is safe to call even if a future returned by `chttpclient_do_async`/`_streaming` has not been waited on yet, though the future itself remains valid to use afterward (its result was already available by the time `chttpclient_destroy` returned). This engine owns its own static, process-wide `ccol_event_loop` instance, fully independent of `chttpserver`'s own (separate) `ccol_event_loop` instance; the two modules share no reactor, so stopping/starting one has no effect on the other. `req` is fully copied/serialised before `chttpclient_do_async`/`_streaming` returns, so (unlike `chttpclient_do`) it never needs to outlive the call. `connect_timeout_ms`/`request_timeout_ms` (set via `chttpclient_set_connect_timeout`/`chttpclient_set_request_timeout`) and keep-alive connection reuse both apply identically to Tier 2 as they do to `chttpclient_do`. `chttpcli_set_engine_logger`/`chttpcli_set_engine_mem_mgmt_procs`/`chttpcli_set_engine_num_reactor_threads` configure this reactor's diagnostics logger, allocator, and OS thread count respectively, and must be called before this engine's first lazy construction (mirroring `chttpserver`'s identical trio of functions for its own reactor).
 
 `chttpclient_do_async_streaming` delivers the response body via a `chttpcli_write_fn` callback, exactly like `chttpclient_do_streaming`:
 
@@ -3490,7 +3539,7 @@ The engine (a small pool of `event_loop` reactor threads plus a companion DNS/co
 ctpool_future *f = chttpclient_do_async_streaming(cli, req, write_to_file, out);
 ```
 
-The callback runs on one of the engine's own reactor threads; **not** the calling thread. It must not block (no blocking I/O, no long-held locks) and must not call back into `chttpclient_do_async`/`_streaming` for any client sharing the engine, since doing so risks deadlocking against the very reactor thread it runs on. As with the synchronous streaming path, a return value less than `len` aborts the transfer (`ccol_http_transfer_aborted`), and response headers are not accessible.
+The callback runs on one of the engine's own reactor threads; **not** the calling thread. It must not block (no blocking I/O, no long-held locks) and must not call back into `chttpclient_do_async`/`_streaming` for any client sharing the engine, since doing so risks deadlocking against the very reactor thread it runs on. As with the synchronous streaming path, a return value other than `len` aborts the transfer (`ccol_http_transfer_aborted`), and response headers are not accessible.
 
 `chttpcli_async_result_t` (`rv`, `resp`) is obtained via `chttpclient_async_result_get` (a typed wrapper over `ctpool_future_get`) and released via `chttpclient_async_result_free`; do this before `ctpool_future_free`. `resp` is non-NULL only when `rv == ccol_success`; for the streaming variant, `resp` is still populated (so `status_code` is available) but `resp->body` stays NULL, matching `chttpclient_do_streaming`'s own convention.
 
@@ -3502,7 +3551,7 @@ The callback runs on one of the engine's own reactor threads; **not** the callin
 chttpcli_response *resp = NULL;
 ccol_retval_t rc = chttpclient_do_pooled(cli, req, &resp);
 if (rc == ccol_success) {
-    printf("%d: %s\n", resp->status_code, resp->body);
+    printf("%d: %s\n", resp->status_code, resp->body ? resp->body : "");
     chttpclient_resp_free(resp);
 }
 ```
@@ -3516,7 +3565,7 @@ clog logger = clog_open_fd(2, CLOG_INFO, NULL);
 chttpcli_set_engine_logger(logger);   /* derive engine sub-logger; optional */
 ```
 
-If no logger is ever configured, a fallback logger (fd 2, level `CLOG_FATAL`) is installed automatically the first time the engine starts; since the engine's own diagnostics are never logged above `CLOG_INFO`, that fallback logger is silent in practice unless `chttpcli_set_engine_logger` is used to install a more verbose one. To redirect the engine's own internal memory management (the `event_loop` instance itself, its DNS/connect worker pool, and its own connection-registration bookkeeping) to a custom allocator, call `chttpcli_set_engine_mem_mgmt_procs` before the engine's first start (or after it has fully stopped):
+If no logger is ever configured, a fallback logger (fd 2, level `CLOG_FATAL`) is installed automatically the first time the engine starts; since the engine's own diagnostics are never logged above `CLOG_INFO`, that fallback logger is silent in practice unless `chttpcli_set_engine_logger` is used to install a more verbose one. To redirect the engine's own internal memory management (the `ccol_event_loop` instance itself, its DNS/connect worker pool, and its own connection-registration bookkeeping) to a custom allocator, call `chttpcli_set_engine_mem_mgmt_procs` before the engine's first start (or after it has fully stopped):
 
 ```c
 ccol_memmgmt_procs_t mp = {
@@ -3526,7 +3575,7 @@ ccol_memmgmt_procs_t mp = {
 chttpcli_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default */
 ```
 
-This is independent of the allocator each individual `chttpcli` instance uses for its own requests/connections (configured via `create_chttpclient_mp`); this setter only affects the one shared engine's own construction. To override how many OS threads the shared reactor devotes to its own polling and dispatch (by default it auto-detects `sysconf(_SC_NPROCESSORS_ONLN)`, falling back to 1), call `chttpcli_set_engine_num_reactor_threads` under the same "before first start, or after a full stop" restriction:
+This is independent of the allocator each individual `chttpcli` instance uses for its own requests/connections (configured via `ccol_create_chttpclient_mp`); this setter only affects the one shared engine's own construction. To override how many OS threads the shared reactor devotes to its own polling and dispatch (by default it auto-detects `sysconf(_SC_NPROCESSORS_ONLN)`, falling back to 1), call `chttpcli_set_engine_num_reactor_threads` under the same "before first start, or after a full stop" restriction:
 
 ```c
 chttpcli_set_engine_num_reactor_threads(4);   /* optional; 0 restores auto-detected sizing */
@@ -3587,7 +3636,7 @@ chttpcli_response *resp = NULL;
 chttp_get("http+unix://%2Fvar%2Frun%2Fapp.sock/api/users", &resp);
 ```
 
-All three tiers (`chttpclient_do`, `chttpclient_do_async`/`_pooled`) support it identically to a network URL, including keep-alive connection pooling (Tier 2/3's idle pool keys pooled connections by a `"unix://<path>"` origin, distinct from any `"scheme://host:port"` origin). Since there is no real hostname for a Unix-socket target, the `Host:` header defaults to `localhost` (matching curl's `--unix-socket` behavior) unless the request sets its own `Host` header explicitly. `https+unix://` is not supported (TLS over a local socket has no real use case); `chttpclient_set_tls` has no effect on `http+unix://` requests. A socket path that does not fit in `sockaddr_un.sun_path` (108 bytes on Linux, including the terminating NUL) is rejected as `ccol_http_invalid_url` before any connection attempt.
+All three tiers (`chttpclient_do`, `chttpclient_do_async`/`_pooled`) support it identically to a network URL, including keep-alive connection pooling (the idle pool keys pooled connections by a `"unix://<path>"` origin, distinct from any `"scheme://host:port"` origin). Since there is no real hostname for a Unix-socket target, the `Host:` header defaults to `localhost` (matching curl's `--unix-socket` behavior) unless the request sets its own `Host` header explicitly. `https+unix://` is not supported (TLS over a local socket has no real use case); `chttpclient_set_tls` has no effect on `http+unix://` requests. A socket path that does not fit in `sockaddr_un.sun_path` (108 bytes on Linux, including the terminating NUL) is rejected as `ccol_http_invalid_url` before any connection attempt.
 
 ### Scoped Variant
 
@@ -3664,7 +3713,7 @@ If the pool size is smaller than the number of concurrent callers, excess thread
 | `ccol_http_tls_handshake_failed` | The TLS handshake failed for a reason other than certificate verification |
 | `ccol_http_tls_cert_verification_failed` | The peer certificate or hostname could not be verified |
 | `ccol_http_tls_cert_load_failed` | The configured client certificate, key, or CA bundle path was not readable, or ctls failed to load/parse it |
-| `ccol_http_transfer_aborted` | The connection failed mid-transfer, the server sent a malformed HTTP/1.1 response, or a streaming `chttpcli_write_fn` returned fewer bytes than it was given |
+| `ccol_http_transfer_aborted` | The connection failed mid-transfer, the server sent a malformed HTTP/1.1 response, or a streaming `chttpcli_write_fn` returned anything other than the number of bytes it was given |
 | `ccol_msg_too_large` | The response body exceeded `chttpclient_set_max_response_body_size`'s configured cap (never returned unless that cap has been set, and never returned for a streaming request) |
 | `ccol_timed_out` | `chttpclient_set_connect_timeout` or `chttpclient_set_request_timeout` elapsed before the operation completed |
 | `ccol_unexpected_failure` | Any other internal failure not covered above |
@@ -3734,12 +3783,12 @@ Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn
 
 | Function / Macro | Description |
 |---|---|
-| `chttpcli_construct(name)` | Declare and initialize a client; calls `fatal_err()` on failure |
-| `chttpcli_construct_scoped(name)` | Declare, initialize, and auto-destroy on scope exit; calls `fatal_err()` on failure |
+| `chttpcli_construct(name)` | Declare and initialize a client; calls `ccol_fatal_err()` on failure |
+| `chttpcli_construct_scoped(name)` | Declare, initialize, and auto-destroy on scope exit; calls `ccol_fatal_err()` on failure |
 | `chttpcli_declare(name)` | Declare an uninitialized client variable |
 | `chttpcli_declare_scoped(name)` | Declare with automatic destruction on scope exit, without initializing |
-| `create_chttpclient(err)` | Allocate and return a client using the default allocator; returns `CHTTPCLI_INVALID` on failure |
-| `create_chttpclient_mp(mprocs, err)` | Allocate and return a client with a custom allocator; returns `CHTTPCLI_INVALID` on failure |
+| `ccol_create_chttpclient(err)` | Allocate and return a client using the default allocator; returns `CHTTPCLI_INVALID` on failure |
+| `ccol_create_chttpclient_mp(mprocs, err)` | Allocate and return a client with a custom allocator; returns `CHTTPCLI_INVALID` on failure |
 | `chttpclient_destroy(cli)` | Block until all in-flight requests finish, then free the client and set `cli` to `CHTTPCLI_INVALID`. Fatal (`abort()`/`SIGABRT`) if `cli` is a stale or already-destroyed handle |
 
 **Client Configuration**
@@ -3819,7 +3868,7 @@ Internally, `chttpclient.c`'s own URL parser calls `chttp_basic_auth_mp` to turn
 
 `chttpserver` is an embedded HTTP/1.1 server. It provides a Go-style routing API: register handlers for method+pattern pairs, attach middleware chains, and create sub-routers with their own prefix and middleware. Multiple server instances may run simultaneously on different ports (or Unix domain sockets) within the same process, all sharing one process-wide reactor.
 
-The module is built entirely on c_collections' own primitives rather than a vendored networking library: a multi-threaded `event_loop` (from `cthreadcomm`) drives the reactor, `ctls` provides a reactor-agnostic OpenSSL wrapper for TLS, and `chttp1_parser` is a small, hand-written HTTP/1.1 request parser. Routing happens on the reactor thread as soon as headers are parsed; the connection is then handed off to the server's own `ctpool` worker pool, which reads the body and runs the handler, so a large or slow body never blocks the reactor.
+The module is built entirely on c_collections' own primitives rather than a vendored networking library: a multi-threaded `ccol_event_loop` (from `cthreadcomm`) drives the reactor, `ctls` provides a reactor-agnostic OpenSSL wrapper for TLS, and `chttp1_parser` is a small, hand-written HTTP/1.1 request parser. Routing happens on the reactor thread as soon as headers are parsed; the connection is then handed off to the server's own `ctpool` worker pool, which reads the body and runs the handler, so a large or slow body never blocks the reactor.
 
 The module is split across two headers: `chttp.h` declares shared types (`chttp_method_t`, `chttp_tls_config_t`, status-code constants, and body macros), and `chttpserver.h` declares the server API. Including `chttpserver.h` pulls in `chttp.h` automatically.
 
@@ -3829,7 +3878,7 @@ The module is split across two headers: `chttp.h` declares shared types (`chttp_
 
 ### Engine Lifecycle
 
-`chttpserver` maintains one static, process-wide `event_loop` reactor (a single dedicated thread by default; see `chttpsvr_set_engine_num_reactor_threads` below to configure more) shared by every `chttpsvr` instance in the process, plus one idle-connection-timeout sweep thread shared the same way. Both are lazily started on the first `chttpsvr_start` call and torn down once the last server releases its reference (i.e. every started `chttpsvr` has been destroyed); no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the reactor has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
+`chttpserver` maintains one static, process-wide `ccol_event_loop` reactor (a single dedicated thread by default; see `chttpsvr_set_engine_num_reactor_threads` below to configure more) shared by every `chttpsvr` instance in the process, plus one idle-connection-timeout sweep thread shared the same way. Both are lazily started on the first `chttpsvr_start` call and torn down once the last server releases its reference (i.e. every started `chttpsvr` has been destroyed); no explicit engine start or stop call is required for ordinary use. That stop is asynchronous: destroying the last server does not itself guarantee the reactor has fully stopped by the time the destroy call returns. Call `chttpsvr_engine_wait()` afterward when a synchronous guarantee is needed (e.g. immediately reusing the port a just-destroyed server was listening on).
 
 This reactor is entirely independent of `chttpclient`'s own engine (`chttpclient_do_async`/`_streaming`/`chttpclient_do_pooled`/`_streaming`); each module owns its own reactor, so stopping one never affects the other.
 
@@ -3862,9 +3911,9 @@ clog logger = clog_open_fd(2, CLOG_INFO, NULL);
 chttpsvr_set_engine_logger(logger);   /* derive engine sub-logger; optional */
 ```
 
-If no logger is ever configured, a fallback logger (fd 2, level `CLOG_FATAL`) is installed automatically the first time the engine starts, mirroring `create_chttpsvr`'s own internal stderr/FATAL-only logger; since the engine's own diagnostics (idle-timeout closures, TLS handshake failures, listen-socket setup failures) are all logged below `CLOG_FATAL`, that fallback logger's `min_level` filters every one of them out, so it is silent in practice unless `chttpsvr_set_engine_logger` is used to install a more verbose one.
+If no logger is ever configured, a fallback logger (fd 2, level `CLOG_FATAL`) is installed automatically the first time the engine starts, mirroring `ccol_create_chttpsvr`'s own internal stderr/FATAL-only logger; since the engine's own diagnostics (idle-timeout closures, TLS handshake failures, listen-socket setup failures) are all logged below `CLOG_FATAL`, that fallback logger's `min_level` filters every one of them out, so it is silent in practice unless `chttpsvr_set_engine_logger` is used to install a more verbose one.
 
-To redirect the reactor's own internal memory management (the `event_loop` instance itself, and its own connection-registration bookkeeping) to a custom allocator, call `chttpsvr_set_engine_mem_mgmt_procs` before the first `chttpsvr_start`:
+To redirect the reactor's own internal memory management (the `ccol_event_loop` instance itself, and its own connection-registration bookkeeping) to a custom allocator, call `chttpsvr_set_engine_mem_mgmt_procs` before the first `chttpsvr_start`:
 
 ```c
 ccol_memmgmt_procs_t mp = {
@@ -3874,7 +3923,7 @@ ccol_memmgmt_procs_t mp = {
 chttpsvr_set_engine_mem_mgmt_procs(&mp);   /* optional; NULL reverts to default */
 ```
 
-This may only be called before the first `chttpsvr_start` in the process (it returns `ccol_not_permitted` afterward): swapping allocators once the reactor has already allocated memory with the previous one would produce mismatched malloc/free pairs. Passing NULL later (also before the first start, or after the reactor has fully stopped) reverts to the default allocator. Note this is independent of the allocator each individual `chttpsvr` instance uses for its own connections/requests (configured via `create_chttpsvr_mp`, following the usual `_mp` convention); this setter only affects the one shared reactor's own construction.
+This may only be called before the first `chttpsvr_start` in the process (it returns `ccol_not_permitted` afterward): swapping allocators once the reactor has already allocated memory with the previous one would produce mismatched malloc/free pairs. Passing NULL later (also before the first start, or after the reactor has fully stopped) reverts to the default allocator. Note this is independent of the allocator each individual `chttpsvr` instance uses for its own connections/requests (configured via `ccol_create_chttpsvr_mp`, following the usual `_mp` convention); this setter only affects the one shared reactor's own construction.
 
 By default the reactor uses exactly 1 thread: a single dedicated thread that both polls and dispatches every callback inline. This is faster and more latency-consistent than multiple dispatch threads for both plain HTTP and TLS-with-connection-reuse traffic (the common case for a well-behaved client population). Multiple dispatch threads only pull ahead under sustained *connection churn* combined with TLS (many distinct clients each opening a connection for only one or a few requests, so a large fraction of traffic pays a fresh handshake's CPU cost instead of amortizing it away); real for some deployments (a public API absorbing many one-off anonymous clients, an IoT/device gateway with frequent reconnects, a webhook receiver) but not the typical shape, since most HTTP client software pools and reuses connections specifically to avoid this cost. See `chttpsvr_set_engine_num_reactor_threads(3)` for the full breakdown by traffic shape. To raise the thread count for a deployment that knows its own traffic is churn-heavy, call it under the same "before the first `chttpsvr_start`, or after a full stop" restriction as the allocator setter above:
 
@@ -3903,7 +3952,7 @@ int main(void) {
     clog logger = clog_open_fd(2, CLOG_INFO, NULL);
     chttpsvr_set_engine_logger(logger);   /* optional: route engine logs to logger */
 
-    chttpsvr srv = create_chttpsvr(logger, NULL);
+    chttpsvr srv = ccol_create_chttpsvr(logger, NULL);
 
     chttpsvr_register_handler(srv, CHTTP_GET, "/hello", hello, NULL);
 
@@ -3920,20 +3969,20 @@ int main(void) {
 
 ### Construction and Lifecycle
 
-`create_chttpsvr` / `create_chttpsvr_mp` always manage their own logger,
-separate from any handle the caller passes in: passing `NULL` for `cl`
-creates an internal logger that writes only FATAL messages to stderr;
+`ccol_create_chttpsvr` / `ccol_create_chttpsvr_mp` always manage their own logger,
+separate from any handle the caller passes in: passing `CLOG_INVALID` for
+`cl` creates an internal logger that writes only FATAL messages to stderr;
 passing a logger derives a new one from it (tagged `component=http-server`)
 that the server owns from then on. The server's own logger is closed
 automatically by `chttpsvr_destroy` / `__chttpsvr_destroy`; the caller's
-original `cl` handle (when non-NULL) is never touched and remains the
+original `cl` handle (when not `CLOG_INVALID`) is never touched and remains the
 caller's responsibility to close.
 
 ```c
 clog logger = clog_open_fd(2, CLOG_INFO, NULL);
-chttpsvr srv  = create_chttpsvr(logger, NULL);         /* default allocator; derives from logger */
-chttpsvr srv  = create_chttpsvr_mp(mp, logger, &err);  /* custom allocator; derives from logger */
-chttpsvr srv2 = create_chttpsvr(NULL, NULL);           /* internal stderr/FATAL-only logger */
+chttpsvr srv  = ccol_create_chttpsvr(logger, NULL);         /* default allocator; derives from logger */
+chttpsvr srv  = ccol_create_chttpsvr_mp(mp, logger, &err);  /* custom allocator; derives from logger */
+chttpsvr srv2 = ccol_create_chttpsvr(CLOG_INVALID, NULL);   /* internal stderr/FATAL-only logger */
 
 chttpsvr_config_t cfg = CHTTPSVR_CONFIG_DEFAULT; /* Has the values below that can be modified as needed */
 cfg.host                 = "0.0.0.0";            /* listen address; or "unix:///path/to/socket"
@@ -4001,8 +4050,8 @@ chttpsvr_destroy(srv);  /* drain in-flight requests; stop engine if last server 
 Multiple servers can listen on different ports simultaneously:
 
 ```c
-chttpsvr api  = create_chttpsvr(logger, NULL);
-chttpsvr mgmt = create_chttpsvr(logger, NULL);
+chttpsvr api  = ccol_create_chttpsvr(logger, NULL);
+chttpsvr mgmt = ccol_create_chttpsvr(logger, NULL);
 
 chttpsvr_config_t api_cfg  = CHTTPSVR_CONFIG_DEFAULT; api_cfg.port  = 8080;
 chttpsvr_config_t mgmt_cfg = CHTTPSVR_CONFIG_DEFAULT; mgmt_cfg.port = 9090;
@@ -4034,7 +4083,7 @@ A stale socket file already present at that path is removed automatically before
 The lifecycle macros follow the usual pattern:
 
 ```c
-chttpsvr_construct(name, cl);         /* declare + init; fatal_err on failure */
+chttpsvr_construct(name, cl);         /* declare + init; ccol_fatal_err on failure */
 chttpsvr_construct_scoped(name, cl);  /* same + auto-destroy on scope exit */
 chttpsvr_declare(name);               /* declare without init */
 chttpsvr_destroy(name);               /* destroy and set to CHTTPSVR_INVALID */
@@ -4067,7 +4116,7 @@ chttpsvr_register_handler(srv, CHTTP_GET,  "/users/{id}", get_user,     NULL);
 chttpsvr_register_handler(srv, CHTTP_PUT,  "/users/{id}", update_user,  NULL);
 ```
 
-**Trailing slashes:** A request path with a trailing slash does NOT match a pattern without one. For example, `GET /users/42/` returns 404 if only `/users/{id}` is registered. Register a separate pattern if you want to accept the trailing-slash form.
+**Trailing slashes:** A request path with a trailing slash does NOT match a pattern without one. For example, `GET /users/42/` returns 404 if only `/users/{id}` is registered. Because a route pattern may not itself end in `/` (see "Invalid patterns" below), the trailing-slash form cannot be registered as a route of its own; normalise such paths before they reach the server if they must be accepted.
 
 **Invalid patterns:** Route patterns must begin with `/`. Patterns that do not start with `/` (including the empty string) are rejected with `ccol_invalid_args`. Patterns containing consecutive slashes (e.g. `/foo//bar`) or a trailing slash (e.g. `/foo/`) are also rejected. Patterns whose `{name}` parameter segment contains characters outside `[A-Za-z0-9_]` are likewise rejected, as is a pattern that reuses the same `{name}` more than once (e.g. `/a/{id}/b/{id}`), since the second occurrence's captured value would otherwise be unreachable via `chttpsvr_req_param`. All of these cases would produce unreachable or misleading routes because incoming paths are never normalised; only an exact segment-by-segment match succeeds.
 
@@ -4075,9 +4124,9 @@ chttpsvr_register_handler(srv, CHTTP_PUT,  "/users/{id}", update_user,  NULL);
 
 **Shutting a server down from within its own handler:** a request handler or middleware that wants to shut its own server down (e.g. an admin/shutdown endpoint) should call `chttpsvr_engine_stop()` and simply return, which is safe there by design. Calling `chttpsvr_destroy()` directly on the server currently running that handler is a fatal error instead (`abort()`/`SIGABRT`, the same class of misuse as a double-destroy): that worker thread's own in-flight request can never finish while it is itself blocked waiting to destroy the server it belongs to. Calling `chttpsvr_stop()` immediately followed by `chttpsvr_start()` to restart the server from within one of its own handlers hits the identical problem on the `chttpsvr_start()` half (`chttpsvr_stop()` alone is always safe there); `chttpsvr_start()` reports it gracefully with `ccol_not_permitted` instead of aborting, leaving the server in a safe, recoverable state that a later restart from a different thread can still complete normally. Calling `chttpsvr_engine_wait()` from within a handler or middleware running on any server's own worker pool is likewise a fatal error, for the same underlying reason: it would block the shared engine's own shutdown drain on this exact in-flight request finishing, which can never happen while it is the one blocked waiting.
 
-The supported way to run more than one process serving traffic with `chttpserver` is one of the two patterns described under "Compile-Time Configuration" in section 4: `fork(2)` before any server in the process has been created and started, then have each resulting process (parent and child alike) call `create_chttpsvr_mp`/`chttpsvr_start` independently to build its own server from scratch; or `fork(2)` immediately followed by `exec(3)` (the pattern behind `popen`/`system`/launching a subprocess from within a request handler), which is fully supported regardless of whether any server is currently running, since the exec'd program replaces its process image entirely and never touches anything this library left behind.
+The supported way to run more than one process serving traffic with `chttpserver` is one of the two patterns described under "Compile-Time Configuration" in section 4: `fork(2)` before any server in the process has been created and started, then have each resulting process (parent and child alike) call `ccol_create_chttpsvr_mp`/`chttpsvr_start` independently to build its own server from scratch; or `fork(2)` immediately followed by `exec(3)` (the pattern behind `popen`/`system`/launching a subprocess from within a request handler), which is fully supported regardless of whether any server is currently running, since the exec'd program replaces its process image entirely and never touches anything this library left behind.
 
-As a defense-in-depth measure on top of that, a fresh `chttpsvr_start`/`_stop`/`_destroy`/`_register_handler`/`_register_streaming_handler`/`_use`/`_subrouter`/`chttpsvr_router_on`/`_on_stream`/`_use` call, from any thread, in either the parent or a freshly forked child not followed by `exec(3)`, never hangs waiting on a lock that some other (possibly no-longer-existing, since `fork()` duplicates only the calling thread) thread happened to hold at the instant of the fork; this also covers a fork landing mid-way through starting, stopping, or destroying that exact handle, or through a `chttpsvr_engine_stop()`-driven shutdown of the whole shared engine. Reviving a server that was already live and actively running work at the moment of such a fork is a different matter regardless of that measure, and is explicitly out of scope: `fork()` does not duplicate its reactor, worker-pool, or idle-timeout-sweep threads, so an inherited, already-started server can no longer accept new connections or process in-flight work in the child, and calling `chttpsvr_stop()` followed by `chttpsvr_start()` on that exact handle there does not bring it back either: the call reports `ccol_success`, but the server still cannot serve, since the engine reference it already held going into the fork is reused as-is rather than rebuilt. This mirrors how other HTTP servers treat the same situation: `net/http`'s own runtime documentation disclaims a bare, un-exec'd `fork()` for a multi-threaded/goroutine program entirely, and nginx/Apache's own prefork worker models only ever fork before any worker thread starts listening, never while one is already serving. This protection can be compiled out via `FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
+As a defense-in-depth measure on top of that, a fresh `chttpsvr_start`/`_stop`/`_destroy`/`_register_handler`/`_register_streaming_handler`/`_use`/`_subrouter`/`chttpsvr_router_on`/`_on_stream`/`_use` call, from any thread, in either the parent or a freshly forked child not followed by `exec(3)`, never hangs waiting on a lock that some other (possibly no-longer-existing, since `fork()` duplicates only the calling thread) thread happened to hold at the instant of the fork; this also covers a fork landing mid-way through starting, stopping, or destroying that exact handle, or through a `chttpsvr_engine_stop()`-driven shutdown of the whole shared engine. Reviving a server that was already live and actively running work at the moment of such a fork is a different matter regardless of that measure, and is explicitly out of scope: `fork()` does not duplicate its reactor, worker-pool, or idle-timeout-sweep threads, so an inherited, already-started server can no longer accept new connections or process in-flight work in the child, and calling `chttpsvr_stop()` followed by `chttpsvr_start()` on that exact handle there does not bring it back either: the call reports `ccol_success`, but the server still cannot serve, since the engine reference it already held going into the fork is reused as-is rather than rebuilt. This mirrors how other HTTP servers treat the same situation: `net/http`'s own runtime documentation disclaims a bare, un-exec'd `fork()` for a multi-threaded/goroutine program entirely, and nginx/Apache's own prefork worker models only ever fork before any worker thread starts listening, never while one is already serving. This protection can be compiled out via `CCOL_FORK_SAFETY_REQUIRED=0` for a caller that has no need for it.
 
 `chttpsvr_register_handler` and `chttpsvr_router_on` return `ccol_invalid_args` if `srv` is `CHTTPSVR_INVALID` or a stale/already-destroyed handle, if `fn` is NULL, `pattern` is NULL, `pattern` does not start with `/`, `pattern` contains consecutive or trailing slashes, a `{name}` segment contains characters outside `[A-Za-z0-9_]`, or the same `{name}` is used more than once. `chttpsvr_register_streaming_handler` and `chttpsvr_router_on_stream` apply the same guards. `chttpsvr_use` and `chttpsvr_router_use` likewise return `ccol_invalid_args` for a NULL `fn`. `chttpsvr_subrouter` returns NULL if `srv` is `CHTTPSVR_INVALID` or a stale/already-destroyed handle, `prefix` is NULL, `prefix` does not start with `/`, or `prefix` contains consecutive slashes (e.g. `"//api"` or `"/a//b"`). `chttpsvr_router_on`, `chttpsvr_router_on_stream`, and `chttpsvr_router_use` also return `ccol_invalid_args` if the sub-router's owning server has since been destroyed.
 
@@ -4166,7 +4215,7 @@ chttpsvr_router_on(api, CHTTP_POST, "/items",     create_item, NULL);
 
 The prefix must begin with `'/'`. A trailing slash is stripped automatically so `"/api/v1"` and `"/api/v1/"` are equivalent.
 
-**The `"/"` prefix edge case:** After trailing-slash normalisation the prefix `"/"` is stored with `prefix_len = 1`. A `"/"` sub-router matches only the exact request path `"/"`; any other path, including one starting with a second slash (e.g. `"//foo"`), does **not** match and receives 404. If you need to catch all requests regardless of path, register routes directly on the server with `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler` rather than using a sub-router with prefix `"/"`.
+**The `"/"` prefix edge case:** Trailing-slash stripping only applies to a prefix longer than one character, so the prefix `"/"` is stored as-is, with `prefix_len = 1`. A `"/"` sub-router matches only the exact request path `"/"`; any other path, including one starting with a second slash (e.g. `"//foo"`), does **not** match and receives 404. If you need to catch all requests regardless of path, register routes directly on the server with `chttpsvr_register_handler` / `chttpsvr_register_streaming_handler` rather than using a sub-router with prefix `"/"`.
 
 Global middleware (added via `chttpsvr_use`) runs before router middleware for all routes.
 
@@ -4235,7 +4284,7 @@ Common status code constants from `chttp.h`:
 | `CHTTP_STATUS_FORBIDDEN` | 403 |
 | `CHTTP_STATUS_NOT_FOUND` | 404 |
 | `CHTTP_STATUS_METHOD_NOT_ALLOWED` | 405 |
-| `CHTTP_STATUS_INTERNAL_SERVER_ERROR` | 500 |
+| `CHTTP_STATUS_INTERNAL_ERROR` | 500 |
 | `CHTTP_STATUS_SERVICE_UNAVAILABLE` | 503 |
 
 ### TLS
@@ -4246,12 +4295,12 @@ Pass a `chttp_tls_config_t` (from `chttp.h`) in the server config to enable TLS.
 chttp_tls_config_t tls = {
     .cert_path       = "/etc/certs/server.crt",
     .key_path        = "/etc/certs/server.key",
-    .ca_bundle_path  = NULL,   /* optional; enables mutual TLS when set */
+    .ca_bundle_path  = NULL,   /* optional; requests a client cert when set */
 };
 cfg.tls = &tls;
 ```
 
-`cert_path` and `key_path` are required together whenever `cfg.tls` is set: `chttpsvr_start` rejects any `cfg.tls` that does not have both non-NULL with `ccol_invalid_args`, rather than silently starting the server as plain, unencrypted HTTP. This covers a lone `cert_path`, a lone `key_path`, a `ca_bundle_path` set with the other two left NULL, and a `cfg.tls` left otherwise empty (for example `CHTTP_TLS_DEFAULT`, whose `cert_path`/`key_path` are both NULL, since that macro's verification-related fields are meant for the client side): a trust store, or a `chttp_tls_config_t` with no fields set at all, is never valid server-side configuration without a server identity certificate, unlike the client side (`chttpclient_set_tls`), where `ca_bundle_path` alone is the ordinary way to configure custom-CA verification with no client certificate involved. If the certificate/key pair, or `ca_bundle_path` when set, cannot actually be loaded (a missing/unreadable file or malformed contents), `chttpsvr_start` fails with `ccol_unexpected_failure` and no listener is registered; a `ca_bundle_path` that fails to load is never silently treated as "no mutual TLS configured", since a loaded CA bundle is what enables client-certificate verification on the resulting listener.
+`cert_path` and `key_path` are required together whenever `cfg.tls` is set: `chttpsvr_start` rejects any `cfg.tls` that does not have both non-NULL with `ccol_invalid_args`, rather than silently starting the server as plain, unencrypted HTTP. This covers a lone `cert_path`, a lone `key_path`, a `ca_bundle_path` set with the other two left NULL, and a `cfg.tls` left otherwise empty (for example `CHTTP_TLS_DEFAULT`, whose `cert_path`/`key_path` are both NULL, since that macro's verification-related fields are meant for the client side): a trust store, or a `chttp_tls_config_t` with no fields set at all, is never valid server-side configuration without a server identity certificate, unlike the client side (`chttpclient_set_tls`), where `ca_bundle_path` alone is the ordinary way to configure custom-CA verification with no client certificate involved. If the certificate/key pair, or `ca_bundle_path` when set, cannot actually be loaded (a missing/unreadable file or malformed contents), `chttpsvr_start` fails with `ccol_unexpected_failure` and no listener is registered; a `ca_bundle_path` that fails to load is never silently treated as "no mutual TLS configured", since a loaded CA bundle is what enables client-certificate verification on the resulting listener. That verification is request-and-verify, not require: a client that presents a certificate must have it verify successfully against the bundle or the handshake fails, but a client that presents no certificate at all is still accepted. A deployment that must reject anonymous clients has to enforce that above this library, which provides no stricter mode.
 
 ### API Reference
 
@@ -4259,8 +4308,8 @@ cfg.tls = &tls;
 
 | Function | Description |
 |---|---|
-| `create_chttpsvr(cl, err)` | Create a server with the default allocator; `cl` may be NULL (an internal stderr/FATAL-only logger is used) or a parent logger to derive this server's logger from (tagged `component=http-server`); returns `CHTTPSVR_INVALID` on failure |
-| `create_chttpsvr_mp(mp, cl, err)` | Create a server with a custom allocator; same `cl` semantics as `create_chttpsvr` |
+| `ccol_create_chttpsvr(cl, err)` | Create a server with the default allocator; `cl` may be `CLOG_INVALID` (an internal stderr/FATAL-only logger is used) or a parent logger to derive this server's logger from (tagged `component=http-server`); returns `CHTTPSVR_INVALID` on failure |
+| `ccol_create_chttpsvr_mp(mp, cl, err)` | Create a server with a custom allocator; same `cl` semantics as `ccol_create_chttpsvr` |
 | `__chttpsvr_destroy(srv)` | Destroy and free the server, including closing the server's own logger (`clog_close`); does not set the handle to `CHTTPSVR_INVALID`. Safe to call regardless of whether the shared engine is still running (releases this server's own reference, possibly triggering an asynchronous engine stop if it was the last one) or was already force-stopped via `chttpsvr_engine_stop()` while `srv` was still started (the server's own listener/connections/worker pool are quiesced exactly once either way). `srv` must be a currently-live handle: a stale handle (already destroyed, whether sequentially or concurrently), or a call made from within one of `srv`'s own request handlers/middleware, is a fatal error (`abort()`/`SIGABRT`), not a use-after-free/double-free; `CHTTPSVR_INVALID` itself remains a silent no-op |
 | `chttpsvr_destroy(srv)` | Macro: calls `__chttpsvr_destroy` then sets the handle to `CHTTPSVR_INVALID` |
 
@@ -4268,7 +4317,7 @@ cfg.tls = &tls;
 
 | Function | Description |
 |---|---|
-| `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-server-engine`) that receives the reactor's own diagnostics (TLS handshake failures, listen-socket bind failures, idle-timeout closures); may be called at any time, including after a full stop/restart cycle; returns `ccol_invalid_args` if `cl` is NULL |
+| `chttpsvr_set_engine_logger(cl)` | Derive an engine sub-logger from `cl` (adds `component=http-server-engine`) that receives the reactor's own diagnostics (TLS handshake failures, listen-socket bind failures, idle-timeout closures); may be called at any time, including after a full stop/restart cycle; returns `ccol_invalid_args` if `cl` is `CLOG_INVALID` |
 | `chttpsvr_set_engine_mem_mgmt_procs(mp)` | Redirect the reactor's own internal memory management to `mp`, or to the default allocator if `mp` is NULL; must be called before the first `chttpsvr_start` (may be called again once the reactor has fully stopped); returns `ccol_invalid_args` if `mp` is non-NULL but has a NULL function pointer, or `ccol_not_permitted` if the reactor is already running |
 | `chttpsvr_set_engine_num_reactor_threads(n)` | Pin the reactor to `n` OS threads, or restore the default (1) if `n` is 0; must be called before the first `chttpsvr_start` (may be called again once the reactor has fully stopped); returns `ccol_not_permitted` if the reactor is already running |
 | `chttpsvr_engine_stop()` | Signal the shared reactor to stop; non-blocking and async-signal-safe; safe to call from a SIGINT/SIGTERM handler, including more than once (a repeated or overlapping call is a no-op). Has no effect on `chttpclient`'s own, independent engine |
@@ -4351,7 +4400,7 @@ Even if each individual call were internally serialised, the window between `chm
 
 `cjson` follows the same rule.  Concurrent calls to `cjson_parse_mp()` and `cjson_parse_n_mp()` on **independent** DOM trees are fully safe: the `err_str` out-parameter is caller-supplied and per-call; there is no shared state between concurrent parsers.  Access to any single DOM tree from multiple threads still requires external synchronisation.
 
-`include/common.h` defines a set of thin, portable wrappers over pthreads (`mutex_t`, `cond_var_t`, `rw_lock_t`, `once_flag_t`, `thread_id_t`, `thread_ls_key_t`, their operation macros, and the thread creation/join, fork-handler, and thread-naming helpers built on `thread_id_t`). These exist purely as this library's own internal portability seam, so that a future port of the library to a pthread-less environment only requires retargeting `include/common.h`, not touching every module that needs synchronisation. They are not public API: callers guarding their own shared containers (per the previous section) should reach for whatever synchronisation primitive suits their application, such as raw pthreads or C11 `<threads.h>`, rather than these internal wrappers.
+`include/common.h` defines a set of thin, portable wrappers over pthreads (`ccol_mutex_t`, `ccol_cond_var_t`, `ccol_rw_lock_t`, `ccol_once_flag_t`, `ccol_thread_id_t`, `ccol_thread_ls_key_t`, their operation macros, and the thread creation/join, fork-handler, and thread-naming helpers built on `ccol_thread_id_t`). These exist purely as this library's own internal portability seam, so that a future port of the library to a pthread-less environment only requires retargeting `include/common.h`, not touching every module that needs synchronisation. They are not public API: callers guarding their own shared containers (per the previous section) should reach for whatever synchronisation primitive suits their application, such as raw pthreads or C11 `<threads.h>`, rather than these internal wrappers.
 
 ### Thread-Safe Components
 
@@ -4359,11 +4408,11 @@ The following components include their own internal synchronisation and are safe
 
 | Component | Synchronisation model |
 |---|---|
-| `mempool` | Internal mutex; disabled when created with `single_threaded = true` |
-| `r_mempool` | Internal mutex; disabled when created with `single_threaded = true` |
-| `circular_queue` | Internal mutex + condition variables |
-| `dynamic_queue` | Internal mutex + condition variable |
-| `channel` | Two internal circular queues (one per direction) |
+| `ccol_mempool` | Internal read-write lock; disabled when created with `single_threaded = true` |
+| `ccol_r_mempool` | Internal read-write lock (one per size tier); disabled when created with `single_threaded = true` |
+| `ccol_circular_queue` | Internal mutex + condition variables |
+| `ccol_dynamic_queue` | Internal mutex + condition variable |
+| `ccol_channel` | Two internal circular queues (one per direction) |
 | `clrucache` | Single mutex + per-entry condition variables; see constraints below |
 | `clogger` | Mutex on the shared backing store; all handles writing to the same fd are fully serialised; see constraints below |
 | `cthreadpool` | Internal mutex + condition variables; every public function, including `ctpool_shutdown_drain`, `ctpool_shutdown_immediate`, and `ctpool_destroy`, is safe to call concurrently with any other on the same handle; see constraints below |
@@ -4377,7 +4426,7 @@ The following components include their own internal synchronisation and are safe
 
 **`cthreadpool` self-calls from within a task.** Calling `ctpool_destroy` on a pool from within a task (or that task's `on_complete` callback) currently executing on one of that pool's own worker threads is a fatal error, exactly like a stale handle. `ctpool_wait` called this way returns immediately instead of deadlocking the calling task against itself; `ctpool_shutdown_drain`/`ctpool_shutdown_immediate` called this way are a complete no-op, leaving the pool fully usable for a later, external shutdown call.
 
-**`clogger` derived loggers.** `clog_derive` creates a sibling logger that shares the same fd, rotation state, and mutex as the root logger via the shared backing store. Writes from the root and all of its siblings are fully serialised with no additional locking required at the call site. The minimum-level check (`log_info`, `log_warn`, and similar macros) reads the per-logger level field without holding the mutex as a deliberate performance optimisation; a concurrent `clog_set_level` may therefore cause a single message near the boundary level to be inconsistently logged or dropped. This is intentional: the optimisation avoids mutex acquisition for every suppressed message, and the inconsistency window is not a data-corruption hazard.
+**`clogger` derived loggers.** `clog_derive` creates a sibling logger that shares the same fd, rotation state, and mutex as the root logger via the shared backing store. Writes from the root and all of its siblings are fully serialised with no additional locking required at the call site. The minimum-level check (`ccol_log_info`, `ccol_log_warn`, and similar macros) reads the per-logger level field without holding the mutex as a deliberate performance optimisation; a concurrent `clog_set_level` may therefore cause a single message near the boundary level to be inconsistently logged or dropped. This is intentional: the optimisation avoids mutex acquisition for every suppressed message, and the inconsistency window is not a data-corruption hazard.
 
 ---
 
@@ -4416,24 +4465,24 @@ chmap_construct_mp(map, char*, double, &arena_mprocs);
 ### Driving a Container from a Ranged Pool
 
 ```c
-r_mempool *node_pool = r_mempool_create(4, 10, 6,
+ccol_r_mempool *node_pool = ccol_r_mempool_create(4, 10, 6,
                                         fallback_at_last_exhaustion,
                                         false, NULL, NULL);
 
 void *pool_malloc(size_t size) {
-    return r_mempool_alloc_entry(node_pool, size);
+    return ccol_r_mempool_alloc_entry(node_pool, size);
 }
 
 void *pool_calloc(size_t n, size_t size) {
-    return r_mempool_calloc_entry(node_pool, n * size);
+    return ccol_r_mempool_calloc_entry(node_pool, n * size);
 }
 
 void *pool_realloc(void *p, size_t size) {
-    return r_mempool_realloc_entry(node_pool, p, size);
+    return ccol_r_mempool_realloc_entry(node_pool, p, size);
 }
 
 void  pool_free(void *p) {
-    r_mempool_free_entry(p);
+    ccol_r_mempool_free_entry(p);
 }
 
 ccol_memmgmt_procs_t pool_mprocs = {
@@ -4448,16 +4497,25 @@ chmap_construct_mp(map, int, int, &pool_mprocs);
 /* ... use map ... */
 
 chmap_destroy(map);
-r_mempool_destroy(node_pool);
+ccol_r_mempool_destroy(node_pool);
 ```
 
 ---
 
-## 22. License
+## 22. Authors
+
+This library started as a hobby project on Danis Ozdemir's PC and grew into its current shape over four years. As the license says, the authors are a bunch of nerds with deep respect for the legacy of Dennis Ritchie and Ken Thompson, whose work on C and Unix laid the foundations of modern computing.
+
+- [**Danis Ozdemir**](https://www.linkedin.com/in/danis-o-4a0a8841/)
+- [**Fikri Kahraman**](https://www.linkedin.com/in/fikrikahraman/)
+
+---
+
+## 23. License
 
 MIT License
 
-Copyright (c) 2026 - C Collections Contributors
+Copyright (c) 2026 - A bunch of nerds
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

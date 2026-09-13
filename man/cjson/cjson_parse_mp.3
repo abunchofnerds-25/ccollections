@@ -28,7 +28,7 @@ numbers that overflow IEEE 754 double (i.e. strtod returns infinity)
 produce a parse error.
 
 String escape sequences \e", \e\e, \e/, \eb, \ef, \en, \er, \et, and
-\euXXXX (including surrogate pairs) are decoded to UTF-8.  The
+\euXXXX (including surrogate pairs) are decoded to UTF-8.  The escape
 \eu0000 is explicitly rejected with a parse error: cjson
 stores strings as null-terminated char * values and cannot
 represent embedded null bytes.

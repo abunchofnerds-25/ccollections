@@ -11,8 +11,10 @@ bool chttpsvr_req_query_oom(const chttpsvr_req *req);
 .fi
 .SH DESCRIPTION
 .nf
-Returns true if chttpsvr_req_query could not grow its internal result
-array due to an allocation failure during the current request.
+Returns true if a query-string allocation for this request has failed
+under OOM: either chttpsvr_req_query's own result-array growth, or the
+one-time, shared query-string parse that chttpsvr_req_query and
+chttpsvr_req_query_one each lazily trigger on first use.
 
 chttpsvr_req_query returns (NULL, count=0) both when the requested key
 is absent and when an OOM condition prevents building the result array.
@@ -25,7 +27,7 @@ NULL.
 .fi
 .SH RETURN VALUE
 .nf
-true; chttpsvr_req_query failed with an allocation error.
+true; a query-string allocation for this request failed under OOM.
 false; no allocation error occurred (or req is NULL).
 .fi
 .SH "SEE ALSO"

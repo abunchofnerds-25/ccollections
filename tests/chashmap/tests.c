@@ -14,13 +14,13 @@ TAU_MAIN()  // sets up Tau (+ main function)
 
 // HASH_MAP TESTS
 
-extern size_t find_nearest_gte_power_of_two(size_t input);
+extern size_t ccol_find_nearest_gte_power_of_two(size_t input);
 
-TEST(chash_maps, find_nearest_gte_power_of_two) {
+TEST(chash_maps, ccol_find_nearest_gte_power_of_two) {
   // Hand-crafted the following input and expected output arrays, as we don't
   // want to depend on a math lib to do the testing.
   //
-  // find_nearest_gte_power_of_two's own doc comment (src/common.c) states
+  // ccol_find_nearest_gte_power_of_two's own doc comment (src/common.c) states
   // its result is architecture-dependent, capped at the pointer-size
   // maximum, returning ccol_invalid_size once the input exceeds the largest
   // power of two representable in size_t. The 64-bit table below tests all
@@ -357,7 +357,7 @@ TEST(chash_maps, find_nearest_gte_power_of_two) {
   REQUIRE_EQ(len, sizeof(expected_outputs) / sizeof(size_t));
 
   for (int i = 0; i < len; ++i) {
-    size_t r = find_nearest_gte_power_of_two(test_inputs[i]);
+    size_t r = ccol_find_nearest_gte_power_of_two(test_inputs[i]);
     REQUIRE_EQ(r, expected_outputs[i]);
   }
 }
@@ -1109,10 +1109,10 @@ TEST(chash_maps, scaling) {
   chmap_destroy(chmap);
 }
 
-// Regression: oa_insert used to check the map's load factor (and possibly
-// rehash) BEFORE ever checking whether the key already existed, so a pure
-// value update for an already-present key could trigger a full-table
-// rehash purely because the map happened to already sit above its growth
+// oa_insert must check whether the key is already present BEFORE it
+// consults the map's load factor (and possibly rehashes). Without that
+// ordering, a pure value update for an already-present key triggers a
+// full-table rehash purely because the map already sits above its growth
 // threshold from unrelated prior inserts, invalidating every other key's
 // already-held chmap_get_elem_ref pointer as an unwanted side effect. An
 // update of an existing key must never grow the table: growth is only
@@ -1743,9 +1743,9 @@ TEST(chash_maps, construct_scoped_lifecycle) {
   }
 }
 
-// Regression: chmap_get_elem_copy must validate its output buffer parameters
-// before dereferencing them. Before the fix, NULL target_buf and zero
-// target_buf_size were not checked, so callers had no way to detect the error.
+// chmap_get_elem_copy must validate its output buffer parameters
+// before dereferencing them. Unchecked, a NULL target_buf or a zero
+// target_buf_size leaves callers no way to detect the error.
 TEST(chash_maps, get_elem_copy_rejects_null_buf_and_zero_size) {
   chashmap *chmap = chmap_create(1, ccol_string, ccol_int, NULL);
   REQUIRE_NE((void *)chmap, NULL);
@@ -1766,10 +1766,11 @@ TEST(chash_maps, get_elem_copy_rejects_null_buf_and_zero_size) {
   chmap_destroy(chmap);
 }
 
-// Regression: chmap_iter_key_ptr and chmap_iter_val_ptr used a hardcoded
-// variable name 'it' inside the macro body instead of the macro parameter.
-// All existing tests happened to name their iterator 'it', masking the bug.
-// This test uses a different name to exercise the corrected macro expansion.
+// chmap_iter_key_ptr and chmap_iter_val_ptr must expand the iterator name
+// passed to them as a macro parameter, never a hardcoded 'it'. Every other
+// test in this file happens to name its iterator 'it', which cannot tell
+// the two apart; this test deliberately names it something else, so a macro
+// body reaching for 'it' directly fails to compile here.
 TEST(chash_maps, iterator_with_non_default_variable_name) {
   // SC backend (char* -> int)
   {
@@ -1861,11 +1862,11 @@ static void *force_moving_realloc(void *ptr, size_t size) {
   return new_block;
 }
 
-// Regression: oa_insert returned ccol_container_full when the probe wrapped
-// all the way around without finding a truly-empty slot, even though tombstone
-// (deleted) slots were available for reuse. The post-loop tombstone reuse path
-// is only reachable when all 16 slots are either live or tombstoned, which
-// requires the rehash calloc to fail (OOM). We simulate that here.
+// oa_insert must reuse an available tombstone (deleted) slot when the probe
+// wraps all the way around without finding a truly-empty slot, instead of
+// reporting ccol_container_full. That post-loop tombstone reuse path is only
+// reachable when all 16 slots are either live or tombstoned, which in turn
+// requires the rehash calloc to fail (OOM); this test simulates that.
 TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
                              .free = free,
@@ -1906,8 +1907,9 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
   // All 16 slots are now either live (6) or tombstoned (10). Inserting key 16
   // triggers the load check ((6+10)/16 == 1.0 > 0.70), which tries to rehash,
   // which calloc-fails, leaving the map unchanged. The probe then visits every
-  // slot without finding an empty one. The post-loop fix reuses the first
-  // tombstone slot it recorded instead of returning ccol_container_full.
+  // slot without finding an empty one, so the insert must land in the first
+  // tombstone slot the probe recorded instead of returning
+  // ccol_container_full.
   int new_key = 16, new_val = 160;
   REQUIRE_EQ(chmap_insert_elem(
                  hm, &(cmap_pair){.ptr = &new_key, .size = sizeof(new_key)},
@@ -1926,15 +1928,15 @@ TEST(chash_maps, oa_tombstone_reuse_after_full_probe_wrap) {
   chmap_destroy(hm);
 }
 
-// Regression: when an opportunistic grow-on-insert rehash fails (sustained
-// OOM: calloc never recovers) AND the probe subsequently finds the table
-// genuinely full (every slot live, no tombstones to reuse since nothing was
-// ever deleted), oa_insert used to unconditionally report
-// ccol_container_full - indistinguishable from having reached the map's
-// real, architectural max_elem_count - even though the true cause is a
-// failed allocation. It must report ccol_not_enough_memory instead, exactly
-// as chmap_insert_elem's own documented contract promises ("ccol_not_enough
-// _memory if allocation fails").
+// When an opportunistic grow-on-insert rehash fails (sustained OOM: calloc
+// never recovers) AND the probe subsequently finds the table genuinely full
+// (every slot live, no tombstones to reuse since nothing was ever deleted),
+// oa_insert must not unconditionally report ccol_container_full (which is
+// indistinguishable from having reached the map's real, architectural
+// ccol_max_elem_count) even though the true cause is a failed allocation. It
+// must report ccol_not_enough_memory instead, exactly as chmap_insert_elem's
+// own documented contract promises ("ccol_not_enough_memory if allocation
+// fails").
 TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
                              .free = free,
@@ -1990,11 +1992,11 @@ TEST(chash_maps, oa_insert_sustained_oom_reports_not_enough_memory) {
   chmap_destroy(hm);
 }
 
-// Regression guard: in the OA backend, map->val_size must stay the single,
-// immutable value fixed by oa_create() at map-creation time for the entire
-// lifetime of the map (never re-derived from a later insert), so that
-// emptying a map via repeated deletes and then repopulating it cannot
-// silently corrupt val_accessors' reported value size.
+// In the OA backend, map->val_size must stay the single, immutable value
+// fixed by oa_create() at map-creation time for the entire lifetime of the
+// map (never re-derived from a later insert), so that emptying a map via
+// repeated deletes and then repopulating it cannot silently corrupt
+// val_accessors' reported value size.
 TEST(chash_maps, oa_repopulate_after_full_delete) {
   chmap_construct(hm, int, int);
   REQUIRE_NE((void *)hm, NULL);
@@ -2133,10 +2135,9 @@ TEST(chash_maps, sc_inline_value_alignment) {
 // accessors that read inline storage without a memcpy (chmap_get_ptr,
 // chmap_get, and the iterator's ccol_iter_key_ptr/ccol_iter_val_ptr), since
 // each is a distinct code path capable of dereferencing a misaligned
-// pointer. Verified (before the fix that added _Alignas(max_align_t) to
-// chmap_entry's key_storage/val_storage) to fail under
-// -fsanitize=undefined with "load of misaligned address ... which requires
-// 16 byte alignment".
+// pointer. Without _Alignas(max_align_t) on chmap_entry's
+// key_storage/val_storage these fail under -fsanitize=undefined with "load
+// of misaligned address ... which requires 16 byte alignment".
 TEST(chash_maps, sc_inline_long_double_alignment) {
   // long double as a value (paired with a char* key -> separate chaining).
   {
@@ -2179,9 +2180,9 @@ TEST(chash_maps, sc_inline_long_double_alignment) {
     // bytes defined once optimized: the compiler is free to treat a later
     // whole-object assignment as making the prior memset dead, since the
     // padding bits are not part of the object's "value" from the abstract
-    // machine's point of view (confirmed empirically under valgrind at
-    // this Makefile's actual -O3 flags: memset-then-assign into an
-    // automatic-storage-duration long double still left padding bytes
+    // machine's point of view (valgrind reports exactly this at the root
+    // Makefile's actual -O3 flags: memset-then-assign into an
+    // automatic-storage-duration long double still leaves padding bytes
     // undefined). A static-storage-duration object with a compile-time-
     // constant initializer does not have this problem: the compiler
     // materializes its full, fixed-width byte representation once, so
@@ -2427,12 +2428,12 @@ TEST(chash_maps, get_elem_copy_partial_buffer) {
   chmap_destroy(hm);
 }
 
-// Regression: sc_reset_val_of_llist_node wrote NULL directly into the
-// val_storage union before checking the malloc return value.  Because
-// val_storage.ptr and val_storage.inline_data share the same memory, this
-// zeroed the first sizeof(void*) bytes of the old inline value, corrupting it
-// on OOM while leaving val_is_inline still true.  Verify that after a failed
-// inline-to-heap update the original inline value is intact.
+// sc_reset_val_of_llist_node must not write NULL into the val_storage union
+// before it has checked the malloc return value.  val_storage.ptr and
+// val_storage.inline_data share the same memory, so such a write zeroes the
+// first sizeof(void*) bytes of the old inline value, corrupting it on OOM
+// while leaving val_is_inline still true.  After a failed inline-to-heap
+// update the original inline value must be intact.
 TEST(chash_maps, sc_value_update_inline_to_heap_oom_resilience) {
   ccol_memmgmt_procs_t mp = {.malloc = controlled_malloc,
                              .free = free,
@@ -2623,13 +2624,13 @@ TEST(chash_maps, sc_value_update_heap_to_heap_oom) {
   chmap_destroy(hm);
 }
 
-// Regression: a value pointer that aliases the entry's own current
-// (heap-backed) storage - e.g. a caller re-inserting a value derived from a
-// pointer obtained via chmap_get_elem_ref/chmap_get_ptr/chmap_get for the
-// same key - must still be read correctly even though shrinking to an
-// inline-sized value frees that same heap buffer as part of the update.
-// Before the fix, sc_reset_val_of_llist_node freed the buffer and only then
-// copied from it, a use-after-free read (caught under valgrind/ASan; the
+// A value pointer that aliases the entry's own current (heap-backed)
+// storage - e.g. a caller re-inserting a value derived from a pointer
+// obtained via chmap_get_elem_ref/chmap_get_ptr/chmap_get for the same key -
+// must still be read correctly even though shrinking to an inline-sized
+// value frees that same heap buffer as part of the update.
+// sc_reset_val_of_llist_node must not free the buffer and only then copy
+// from it, which is a use-after-free read (reported under valgrind/ASan; the
 // value assertion below also fails whenever the freed block happens to be
 // altered before the read completes).
 TEST(chash_maps, sc_value_update_self_referential_heap_to_inline) {
@@ -2674,16 +2675,16 @@ TEST(chash_maps, sc_value_update_self_referential_heap_to_inline) {
   chmap_destroy(hm);
 }
 
-// Regression: growing an inline-backed value using the map's own current
-// inline storage as the source must not corrupt the source bytes before
-// they are read. Before the fix, sc_reset_val_of_llist_node wrote the new
-// heap pointer into the val_storage union - which physically overlaps the
-// inline byte array - before copying from it, corrupting the copied-out
-// value's leading bytes regardless of any sanitizer. Growing to exactly 24
-// bytes (INLINE_STORAGE_THRESHOLD + 1) keeps the read fully within the
-// inline array's own bounds, so the expected result is fully deterministic:
-// the original 4 bytes followed by the zero bytes the node was calloc'd
-// with and never overwrote.
+// Growing an inline-backed value using the map's own current inline storage
+// as the source must not corrupt the source bytes before they are read.
+// sc_reset_val_of_llist_node must not write the new heap pointer into the
+// val_storage union - which physically overlaps the inline byte array -
+// before copying from it, which corrupts the copied-out value's leading
+// bytes regardless of any sanitizer. Growing to exactly 24 bytes
+// (INLINE_STORAGE_THRESHOLD + 1) keeps the read fully within the inline
+// array's own bounds, so the expected result is fully deterministic: the
+// original 4 bytes followed by the zero bytes the node was calloc'd with
+// and never overwrote.
 TEST(chash_maps, sc_value_update_self_referential_inline_to_heap) {
   chashmap *hm = chmap_create(1, ccol_string, ccol_other_types, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -2721,12 +2722,12 @@ TEST(chash_maps, sc_value_update_self_referential_inline_to_heap) {
   chmap_destroy(hm);
 }
 
-// Regression: shrinking a heap-backed value using the map's own current
-// heap storage as the source, when realloc moves the block, must not read
-// from the just-freed original block. force_moving_realloc deterministically
-// frees the original allocation and returns a fresh one (unlike a real
-// realloc, which may shrink a block in place and mask the bug), turning a
-// stale read into a reliably-detectable use-after-free under valgrind/ASan.
+// Shrinking a heap-backed value using the map's own current heap storage as
+// the source, when realloc moves the block, must not read from the
+// just-freed original block. force_moving_realloc deterministically frees
+// the original allocation and returns a fresh one (unlike a real realloc,
+// which may shrink a block in place and mask the stale read), turning such a
+// read into a reliably-detectable use-after-free under valgrind/ASan.
 TEST(chash_maps, sc_value_update_self_referential_heap_to_heap) {
   ccol_memmgmt_procs_t mp = {.malloc = malloc,
                              .free = free,
@@ -2773,9 +2774,10 @@ TEST(chash_maps, sc_value_update_self_referential_heap_to_heap) {
   chmap_destroy(hm);
 }
 
-// Regression companion: an exact self-copy (same size, value pointer
-// aliases the entry's own current storage byte-for-byte) must also leave
-// the value correct, whether the entry is currently inline or heap-backed.
+// Companion to the three self-referential update tests above: an exact
+// self-copy (same size, value pointer aliases the entry's own current
+// storage byte-for-byte) must also leave the value correct, whether the
+// entry is currently inline or heap-backed.
 TEST(chash_maps, sc_value_update_self_referential_same_size) {
   chashmap *hm = chmap_create(1, ccol_string, ccol_other_types, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -2843,15 +2845,16 @@ TEST(chash_maps, sc_value_update_self_referential_same_size) {
   chmap_destroy(hm);
 }
 
-// Regression: re-inserting a value for an already-present key, using a
-// pointer obtained via chmap_get_elem_ref/chmap_get_ptr for that exact key
-// as the insert source, must not corrupt the stored value. This mirrors the
+// Re-inserting a value for an already-present key, using a pointer obtained
+// via chmap_get_elem_ref/chmap_get_ptr for that exact key as the insert
+// source, must not corrupt the stored value. This mirrors the
 // sc_value_update_self_referential_* group above, but for the
 // open-addressing backend's own existing-key update path (a plain in-place
-// mem_cpy into the slot's val_data field, with no aliasing guard before the
-// fix), reached through the raw chmap_insert_elem function layer rather
-// than the type-safe macros (which always copy through an on-stack local
-// and can never alias map-owned storage this way).
+// ccol_mem_cpy into the slot's val_data field, which needs an aliasing
+// guard to stay correct), reached through the raw chmap_insert_elem
+// function layer rather than the type-safe macros (which always copy
+// through an on-stack local and can never alias map-owned storage this
+// way).
 TEST(chash_maps, oa_value_update_self_referential_same_size) {
   chashmap *hm = chmap_create(1, ccol_int, ccol_long_long, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -3357,7 +3360,7 @@ TEST(chash_maps, float_double_nan_keys_bitwise_identity) {
 // native floating-point value comparison, not a byte-level canonicalization,
 // since long double's padding bits cannot be reliably zeroed by this
 // library in a portable way - see sc_inline_long_double_alignment's own
-// comment for the empirical finding behind that constraint).
+// comment for the empirical basis of that constraint).
 TEST(chash_maps, long_double_keys_padding_insensitive_equality) {
   chmap_construct(hm, long double, int);
 
@@ -3392,12 +3395,12 @@ TEST(chash_maps, long_double_keys_padding_insensitive_equality) {
   // at all. Poking bytes 10-15 there does not merely fail to prove the
   // padding-insensitivity this test wants to demonstrate; it corrupts the
   // value's own mantissa/exponent bits into an entirely different number (a
-  // NaN, confirmed directly: `poked_value` read back as -nan instead of
-  // 3.0), which is what a bare size check let through as a false failure
-  // before this fix, not a real defect in this library's own long-double key
-  // comparison (chashmap.c compares long double keys by numeric VALUE via a
-  // plain memcpy-then-== on the whole object, with no padding-byte
-  // inspection anywhere, so it never depended on this assumption itself).
+  // NaN: `poked_value` reads back as -nan instead of 3.0), which is what a
+  // bare size check would let through as a false failure; it is not a defect
+  // in this library's own long-double key comparison (chashmap.c compares
+  // long double keys by numeric VALUE via a plain memcpy-then-== on the
+  // whole object, with no padding-byte inspection anywhere, so it does not
+  // depend on this assumption).
   if (LDBL_MANT_DIG == 64) {
     unsigned char poked[sizeof(long double)];
     memcpy(poked, &a, sizeof(a));
@@ -3455,8 +3458,8 @@ TEST(chash_maps, long_double_keys_negative_zero_unified) {
 // double's padding bytes are routinely genuine uninitialized memory in
 // practice (a plain `long double n = NAN;` never writes them), so even
 // reading them via memcmp - not just hashing them - is a real hazard, not
-// merely a source of non-determinism (confirmed via valgrind while
-// developing this behavior). hash_long_double_value/long_double_keys_equal
+// merely a source of non-determinism (valgrind reports such a read as a use
+// of uninitialized memory). hash_long_double_value/long_double_keys_equal
 // both special-case isnan() before ever touching a raw byte, matching the
 // same collapse-every-NaN-into-one-key precedent this codebase already
 // established for the identical reason in cbstmap's own long double
@@ -3514,7 +3517,7 @@ TEST(chash_maps, long_double_infinity_keys) {
 }
 
 // Mirrors sc_float_key_size_mismatch_returns_invalid_args: long double keys
-// now also get exact-size validation through the raw chmap_insert_elem/
+// also get exact-size validation through the raw chmap_insert_elem/
 // _get_elem_ref/_delete_elem layer (key_size_matches_type_if_fixed_width),
 // since hash_long_double_value/long_double_keys_equal both trust key_size
 // to be exactly sizeof(long double) and read that many bytes unconditionally
@@ -4073,10 +4076,11 @@ TEST(chash_maps, oa_invariants_random_ops) {
     // the pre-insert count; a single insert can therefore legitimately push
     // elem_count one past the "would trigger a resize" threshold until the
     // next op's own pre-check fires, so the real invariant allows a
-    // one-element tolerance here, not a strict <=. Confirmed against
-    // src/chashmap.c's oa_insert directly, not assumed: an earlier, stricter
-    // version of this assertion (without the +1) failed, which is what
-    // surfaced this design detail rather than a real library bug.
+    // one-element tolerance here, not a strict <=. The tolerance is required
+    // by src/chashmap.c's oa_insert itself, not a hedge: a stricter form of
+    // this assertion (without the +1) fails against the current library,
+    // and that failure reflects the pre-insert load-factor check's own
+    // design, not a library defect.
     REQUIRE_TRUE(chmap_elem_count(hm) <=
                  chmap_get_elem_count_to_scale_up(hm) + 1);
   }
@@ -4146,11 +4150,11 @@ TEST(chash_maps, sc_invariants_random_ops) {
 // open-addressing size-mismatch validation)
 // ========================================================================
 
-// Regression: chmap_reset() must still destroy every existing element even
-// when the requested new_bucket_array_size is too large to honor (rounds,
-// via find_nearest_gte_power_of_two, above max_elem_count). Before the fix,
-// this path returned ccol_not_enough_memory immediately without ever
-// touching the map, contradicting chmap_reset's own documented contract
+// chmap_reset() must still destroy every existing element even when the
+// requested new_bucket_array_size is too large to honor (rounds, via
+// ccol_find_nearest_gte_power_of_two, above ccol_max_elem_count). This path
+// must not return ccol_not_enough_memory immediately without ever touching
+// the map, which would contradict chmap_reset's own documented contract
 // ("All elements are destroyed regardless of return value" /
 // "ccol_not_enough_memory if resize fails (elements still cleared)").
 TEST(chash_maps, reset_with_oversized_size_still_clears_elements) {
@@ -4220,14 +4224,13 @@ TEST(chash_maps, reset_with_oversized_size_still_clears_elements) {
   }
 }
 
-// Regression/coverage: chmap_insert_elem, chmap_get_elem_ref, and
-// chmap_delete_elem must reject a key/value whose size does not exactly
-// match the open-addressing backend's fixed key_size/val_size, even when
-// the pointer is non-NULL and the size is non-zero. The pre-existing
-// insert_and_ref_invalid_args test only covers the separate-chaining
-// backend (a char* key) and only NULL/zero-size cases, leaving
-// key_size_matches_type_if_fixed_width/oa_val_size_matches entirely
-// untested.
+// chmap_insert_elem, chmap_get_elem_ref, and chmap_delete_elem must reject
+// a key/value whose size does not exactly match the open-addressing
+// backend's fixed key_size/val_size, even when the pointer is non-NULL and
+// the size is non-zero. insert_and_ref_invalid_args covers only the
+// separate-chaining backend (a char* key) and only NULL/zero-size cases, so
+// key_size_matches_type_if_fixed_width/oa_val_size_matches are exercised
+// here and nowhere else.
 TEST(chash_maps, oa_size_mismatch_returns_invalid_args) {
   chmap_construct(hm, int, int);
   REQUIRE_NE((void *)hm, NULL);
@@ -4259,22 +4262,22 @@ TEST(chash_maps, oa_size_mismatch_returns_invalid_args) {
   chmap_destroy(hm);
 }
 
-// Regression: key-size validation used to be applied only for the
-// open-addressing backend (oa_key_size_matches). hash_key_data() dispatches
-// on key_type alone and reads a FIXED number of bytes (sizeof of the
+// Key-size validation must apply to every backend, not only the
+// open-addressing one (oa_key_size_matches). hash_key_data() dispatches on
+// key_type alone and reads a FIXED number of bytes (sizeof of the
 // corresponding C type) from the caller-supplied key pointer for any
 // fixed-width numeric key type, completely ignoring key_pair->size when
 // deciding how many bytes to read. A separate-chaining map with an
 // integral key type - reachable whenever that key type is paired with a
 // non-integral value type, e.g. int->char*, which forces separate chaining
-// regardless of the key type itself - had no way to reject a key_pair
-// whose declared size understates the true size of its own key type, so
-// chmap_insert_elem/_get_elem_ref/_delete_elem would silently read past
-// the end of a caller-supplied buffer smaller than that type's true size.
-// This test allocates an exactly-2-byte heap buffer for what the map
-// declares as an int (4-byte) key, so a regression reading even one byte
-// past it is caught directly by valgrind/ASan, not merely by an incorrect
-// return value.
+// regardless of the key type itself - therefore needs its own rejection of
+// a key_pair whose declared size understates the true size of its own key
+// type; without it, chmap_insert_elem/_get_elem_ref/_delete_elem silently
+// read past the end of a caller-supplied buffer smaller than that type's
+// true size. This test allocates an exactly-2-byte heap buffer for what the
+// map declares as an int (4-byte) key, so a read of even one byte past it
+// is caught directly by valgrind/ASan, not merely by an incorrect return
+// value.
 TEST(chash_maps, sc_integral_key_size_mismatch_returns_invalid_args) {
   // int key + char* value forces the separate-chaining backend even though
   // the key type itself is integral.
@@ -4307,12 +4310,13 @@ TEST(chash_maps, sc_integral_key_size_mismatch_returns_invalid_args) {
 }
 
 // Same hazard, but through canonicalize_key_pair_if_needed's float/double
-// canonicalization path, which trusted any key_pair->size <= 8 without
-// verifying it was exactly the true 4-byte float / 8-byte double size, and
-// then mem_cpy'd that many (caller-claimed) bytes out of the caller's
-// pointer. A float-keyed separate-chaining map, given a key_pair claiming
-// size 8 (as if it were a double) backed by an exactly-4-byte allocation,
-// used to read 4 bytes past the end of that allocation.
+// canonicalization path, which must verify that key_pair->size is exactly
+// the true 4-byte float / 8-byte double size rather than trusting any size
+// <= 8 and ccol_mem_cpy'ing that many (caller-claimed) bytes out of the
+// caller's pointer. Without that check, a float-keyed separate-chaining
+// map, given a key_pair claiming size 8 (as if it were a double) backed by
+// an exactly-4-byte allocation, reads 4 bytes past the end of that
+// allocation.
 TEST(chash_maps, sc_float_key_size_mismatch_returns_invalid_args) {
   // float key + char* value forces the separate-chaining backend even
   // though the key type itself is integral (fixed-width numeric).
@@ -4344,9 +4348,9 @@ TEST(chash_maps, sc_float_key_size_mismatch_returns_invalid_args) {
   chmap_destroy(hm);
 }
 
-// Regression: hash_key_data's ccol_short/ccol_int/ccol_long/ccol_long_long
-// branches used to read the key via a direct pointer-cast dereference (e.g.
-// *(uint32_t*)key_ptr) instead of a memcpy-based read, unlike the
+// hash_key_data's ccol_short/ccol_int/ccol_long/ccol_long_long branches must
+// read the key via a memcpy-based read, never a direct pointer-cast
+// dereference (e.g. *(uint32_t*)key_ptr), exactly like the
 // ccol_float/ccol_double/ccol_pointer branches in the very same function.
 // Dereferencing a multi-byte-typed pointer that is not naturally aligned
 // for that type is UB and can fault on strict-alignment architectures.
@@ -4486,11 +4490,11 @@ TEST(chash_maps, oa_misaligned_key_pointers_hash_correctly) {
   }
 }
 
-// Regression: sc_set_scaling_limits must compute the exact "(bucket_count +
-// 1) * 1.5" / "(bucket_count + 1) / 8" formulas chashmap.h documents for
-// the separate-chaining backend, not the (undocumented, off-by-a-fraction)
-// "bucket_count * 1.5" / "bucket_count / 8" the implementation previously
-// used.
+// sc_set_scaling_limits must compute the exact "(bucket_count + 1) * 1.5" /
+// "(bucket_count + 1) / 8" formulas chashmap.h documents for the
+// separate-chaining backend. The off-by-a-fraction "bucket_count * 1.5" /
+// "bucket_count / 8" pair is not what the header promises, and the exact
+// thresholds asserted below are the ones that tell the two apart.
 TEST(chash_maps, sc_scaling_thresholds_match_documented_formula) {
   chashmap *hm = chmap_create(16, ccol_string, ccol_int, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -4504,17 +4508,17 @@ TEST(chash_maps, sc_scaling_thresholds_match_documented_formula) {
   chmap_destroy(hm);
 }
 
-// Regression: sc_scale's down-shrink used to be gated on bucket_arr_size >=
-// (scale_factor * minimum_allowed_bucket_array_size) (64), so a bucket array
-// that ever landed off the "minimum_allowed_bucket_array_size * 4^k"
-// lineage - e.g. 32, directly reachable from any initial_bucket_array_size
-// in (16, 64) - could never shrink again, even after every element was
-// deleted: 32 / 4 == 8 is below the documented floor of 16, so the old
-// guard (32 >= 64) skipped the shrink entirely instead of clamping to 16,
-// permanently leaving the map at double the documented minimum bucket
-// count.
+// sc_scale's down-shrink must not be gated on bucket_arr_size >=
+// (scale_factor * minimum_allowed_bucket_array_size) (64). With such a
+// guard, a bucket array that lands off the
+// "minimum_allowed_bucket_array_size * 4^k" lineage - e.g. 32, directly
+// reachable from any initial_bucket_array_size in (16, 64) - can never
+// shrink again, even after every element is deleted: 32 / 4 == 8 is below
+// the documented floor of 16, so the guard (32 >= 64) skips the shrink
+// entirely instead of clamping to 16, permanently leaving the map at double
+// the documented minimum bucket count.
 TEST(chash_maps, sc_bucket_array_shrinks_to_minimum_from_off_lineage_size) {
-  // 20 rounds up to 32 via find_nearest_gte_power_of_two, which is not on
+  // 20 rounds up to 32 via ccol_find_nearest_gte_power_of_two, which is not on
   // the 16 * 4^k lineage the automatic 4x/0.25x scaling alone ever produces.
   chashmap *hm = chmap_create(20, ccol_string, ccol_int, NULL);
   REQUIRE_NE((void *)hm, NULL);
@@ -4534,8 +4538,8 @@ TEST(chash_maps, sc_bucket_array_shrinks_to_minimum_from_off_lineage_size) {
     REQUIRE_EQ(delete_int_from_string(hm, key_buf), ccol_success);
   }
   REQUIRE_EQ(chmap_elem_count(hm), (size_t)3);
-  // Before the fix this stayed at 32 forever; the fix clamps the 32 / 4 ==
-  // 8 undershoot up to the documented floor instead.
+  // Without the clamp this stays at 32 forever; the 32 / 4 == 8 undershoot
+  // is clamped up to the documented floor instead.
   REQUIRE_EQ(chmap_get_bucket_arr_size(hm), (size_t)16);
 
   // Deleting the rest must not misbehave at the floor, and the map must
@@ -4555,12 +4559,12 @@ TEST(chash_maps, sc_bucket_array_shrinks_to_minimum_from_off_lineage_size) {
   chmap_destroy(hm);
 }
 
-// Regression: oa_reset() used to return ccol_not_enough_memory without
-// touching the map at all when either of its two internal allocations
-// failed, leaving every pre-existing element completely intact - directly
-// contradicting chmap_reset's own documented contract ("All elements are
-// destroyed regardless of return value" / "ccol_not_enough_memory if resize
-// fails (elements still cleared)"). reset_with_oversized_size_still_clears_
+// oa_reset() must not return ccol_not_enough_memory without touching the
+// map at all when either of its two internal allocations fails, leaving
+// every pre-existing element intact; that would directly contradict
+// chmap_reset's own documented contract ("All elements are destroyed
+// regardless of return value" / "ccol_not_enough_memory if resize fails
+// (elements still cleared)"). reset_with_oversized_size_still_clears_
 // elements only exercises chmap_reset's own SIZE_MAX pre-check, which
 // degrades to "keep current capacity" and routes around oa_reset's real
 // allocation calls entirely, always succeeding; this test drives a genuine

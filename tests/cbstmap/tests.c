@@ -161,7 +161,10 @@ TEST(cbst_maps, basic_insertions_and_lookups_with_memmgmt_procs) {
 TEST(cbst_maps, insert_values_with_different_sizes) {
   cbinarymap *cbmap = cbmap_create(ccol_int, NULL);
 
-  short key1 = 3;
+  // Both keys are int, matching the map's own declared ccol_int key type:
+  // values may vary in size freely, keys of a fixed-width key type may not
+  // (see wrong_size_key_rejected_for_fixed_width_key_type below).
+  int key1 = 3;
   long val1 = 43;
   REQUIRE_EQ(
       cbmap_insert_elem(
@@ -953,16 +956,16 @@ static int collect_string_keys(cbmap bm, const char *out[], int max_out) {
 
 TEST(cbst_maps, string_keys_3_char_iteration_order) {
   // 3-char strings occupy exactly 4 bytes (including the null terminator).
-  // Before the fix, compare_keys fell through to cmp_unsigned_small which used
+  // compare_keys must not fall through to cmp_unsigned_small, which uses
   // uint32_t comparison for size-4 keys. On little-endian that compares bytes
   // from highest address to lowest, i.e. in reverse character order, yielding
   // wrong lexicographic ordering. This test inserts strings in an order whose
-  // pre-fix sorted sequence differs from the correct lexicographic sequence and
-  // then asserts the correct order is produced by in-order iteration.
+  // integer-compared sorted sequence differs from the correct lexicographic
+  // sequence, then asserts in-order iteration produces the correct order.
   //
   // Correct lexicographic order: "abc" < "acb" < "bac" < "bca" < "cab"
   //
-  // Pre-fix uint32_t order (little-endian): "bca" < "cab" < "acb" < "bac" <
+  // uint32_t order (little-endian): "bca" < "cab" < "acb" < "bac" <
   // "abc" (sorted by 0x00616362, 0x00626163, 0x00626361, 0x00636162,
   // 0x00636261)
   cbmap_construct(bm, char *, int);
@@ -994,7 +997,7 @@ TEST(cbst_maps, string_keys_3_char_iteration_order) {
 
 TEST(cbst_maps, string_keys_7_char_iteration_order) {
   // 7-char strings occupy exactly 8 bytes (including the null terminator).
-  // Before the fix, compare_keys used uint64_t comparison for size-8 keys. On
+  // compare_keys must not use uint64_t comparison for size-8 keys. On
   // little-endian that effectively reverses the character order: char[6] is
   // the most significant byte, so two strings differing only at char[0] are
   // ordered by their LAST character instead of their FIRST. This can flip the
@@ -1003,7 +1006,7 @@ TEST(cbst_maps, string_keys_7_char_iteration_order) {
   // Correct lexicographic order:
   //   "abcdefg" < "abcdefh" < "abcdegh" < "bacdefg" < "gfedcba"
   //
-  // Pre-fix uint64_t order (little-endian):
+  // uint64_t order (little-endian):
   //   "gfedcba" < "bacdefg" < "abcdefg" < "abcdefh" < "abcdegh"
   // (sorted by 0x0061..., 0x0067...62, 0x0067...61, 0x0068...61, 0x0068...61)
   cbmap_construct(bm, char *, int);
@@ -1203,15 +1206,15 @@ TEST(cbst_maps, float_double_long_double_keys_sort_numerically) {
 }
 
 TEST(cbst_maps, nan_key_does_not_corrupt_other_entries) {
-  // Regression test: the default float/double/long_double comparator relies
-  // on native `<`/`>`, which return false for ANY comparison involving a
-  // NaN operand, against ANY other key, not just other NaNs. Since every
+  // The default float/double/long_double comparator cannot rest on native
+  // `<`/`>` alone, which return false for ANY comparison involving a NaN
+  // operand, against ANY other key, not just other NaNs. Since every
   // insert/get/delete descent starts by comparing against the tree's root,
-  // an unguarded comparator made a NaN key silently "equal" whatever key
-  // happened to be at the root: inserting a NaN key never created a new
+  // an unguarded comparator makes a NaN key silently "equal" whatever key
+  // happens to be at the root: inserting a NaN key then never creates a new
   // node, instead overwriting the ROOT's value and reporting
-  // ccol_key_already_present for a key that was never actually present.
-  // cmp_float_small now gives NaN a well-defined position (greater than
+  // ccol_key_already_present for a key that is not actually present.
+  // cmp_float_small gives NaN a well-defined position instead (greater than
   // every non-NaN key, equal only to another NaN), so a NaN key is a
   // genuine, independent entry.
   cbmap_construct(bm, double, int);
@@ -1316,19 +1319,19 @@ TEST(cbst_maps, char_keys_use_native_char_comparison) {
 }
 
 TEST(cbst_maps, scalar_signed_char_keys_sort_by_genuine_signed_value) {
-  // Regression test: a scalar `signed char` (or its typedef, `int8_t`) key
-  // is a distinct C type from plain `char`, and must get a genuine,
-  // platform-independent signed comparison (matching short/int/long/
-  // long_long), NOT the native-`char` comparison ccol_char uses. Before
-  // ccol_signed_char existed, determine_ccol_data_type() collapsed both
-  // `char` and `signed char` into the same ccol_char bucket, so on a
+  // A scalar `signed char` (or its typedef, `int8_t`) key is a distinct C
+  // type from plain `char`, and must get a genuine, platform-independent
+  // signed comparison (matching short/int/long/long_long), NOT the
+  // native-`char` comparison ccol_char uses. ccol_determine_ccol_data_type()
+  // must therefore keep `signed char` in its own ccol_signed_char bucket
+  // rather than collapsing it into ccol_char with plain `char`: on a
   // platform where plain `char` is unsigned by default (e.g. the standard
-  // aarch64 AAPCS64 ABI), a negative signed char/int8_t key would have
-  // sorted as a large positive value instead of before every non-negative
-  // key. The expected order below is fixed (true two's-complement signed
-  // order), unlike char_keys_use_native_char_comparison's own
-  // platform-relative expectation, since ccol_signed_char's contract is to
-  // NOT depend on native `char` signedness.
+  // aarch64 AAPCS64 ABI), a collapsed negative signed char/int8_t key sorts
+  // as a large positive value instead of before every non-negative key. The
+  // expected order below is fixed (true two's-complement signed order),
+  // unlike char_keys_use_native_char_comparison's own platform-relative
+  // expectation, since ccol_signed_char's contract is to NOT depend on
+  // native `char` signedness.
   cbmap_construct(bm, signed char, int);
 
   signed char keys[] = {(signed char)-128, (signed char)-5,  0,
@@ -1348,7 +1351,7 @@ TEST(cbst_maps, scalar_signed_char_keys_sort_by_genuine_signed_value) {
   // Cast to `int` for REQUIRE_EQ: tau's own printer (tests/tau/tau.h) has no
   // `_Generic` case for `signed char`, only `char`, and this key type is
   // deliberately a distinct C type from `char` (that distinction is exactly
-  // what this test is regression-testing).
+  // what this test pins).
   int idx = 0;
   ccol_iter_declare(bm, it);
   for (it = ccol_begin(bm); it != NULL; it = ccol_iter_next(it)) {
@@ -1368,7 +1371,7 @@ TEST(cbst_maps, scalar_signed_char_keys_sort_by_genuine_signed_value) {
 
 TEST(cbst_maps, int8_t_keys_sort_by_genuine_signed_value) {
   // int8_t is a typedef for signed char on every mainstream platform this
-  // library targets; confirm the same fix applies through that spelling too.
+  // library targets; the same contract must hold through that spelling too.
   cbmap_construct(bm, int8_t, int);
 
   int8_t keys[] = {-100, -1, 0, 1, 100};
@@ -1544,9 +1547,9 @@ TEST(cbst_maps, get_elem_copy_size_mismatch) {
 
   // Wrong buffer size: stored sizeof(int) but asking for sizeof(double).
   // Deliberately not `long`: on an ILP32 platform (e.g. i386), sizeof(long)
-  // == sizeof(int) (both 4 bytes), so that comparison silently stopped
-  // being a real size mismatch there at all; `double` is 8 bytes on every
-  // mainstream platform this library targets, LP64 or ILP32 alike.
+  // == sizeof(int) (both 4 bytes), so that pairing is not a real size
+  // mismatch there at all; `double` is 8 bytes on every mainstream platform
+  // this library targets, LP64 or ILP32 alike.
   double wrong_buf = 0;
   REQUIRE_EQ(
       cbmap_get_elem_copy(cbm, &(cmap_pair){.ptr = &key, .size = sizeof(key)},
@@ -1701,13 +1704,13 @@ TEST(cbst_maps, update_value_with_different_size) {
 }
 
 TEST(cbst_maps, update_value_to_zero_size_does_not_corrupt) {
-  // Regression test: shrinking an existing key's value to zero bytes used to
-  // call realloc(ptr, 0) directly. glibc defines that as freeing ptr and
+  // Regression test: shrinking an existing key's value to zero bytes must
+  // not call realloc(ptr, 0) directly. glibc defines that as freeing ptr and
   // returning NULL, indistinguishable via the return value alone from a
-  // genuine allocation failure, so the old code path left the node's value
-  // pointer dangling while still reporting ccol_not_enough_memory and
-  // leaving the (already-freed) old value reachable through further reads,
-  // and double-freed at map destruction.
+  // genuine allocation failure, which leaves the node's value pointer
+  // dangling while still reporting ccol_not_enough_memory, keeps the
+  // already-freed old value reachable through further reads, and
+  // double-frees at map destruction.
   cbmap cbm = cbmap_create(ccol_int, NULL);
   REQUIRE_NE((void *)cbm, NULL);
 
@@ -1803,6 +1806,162 @@ TEST(cbst_maps, insert_and_retrieve_zero_size_value_for_new_key) {
   REQUIRE_EQ(cbmap_elem_count(cbm), 1);
 
   cbmap_destroy(cbm);
+}
+
+TEST(cbst_maps, wrong_size_key_rejected_for_fixed_width_key_type) {
+  // A key whose size disagrees with a fixed-width declared key type is
+  // rejected with ccol_invalid_args on every raw-layer entry point that takes
+  // a key_pair, rather than being stored as a genuinely distinct key that no
+  // correctly typed lookup could ever reach.
+  //
+  // The oversized key below is sized from sizeof(int) itself, never from some
+  // other type that merely happens to be wider on this machine: long is the
+  // same width as int on an ILP32 ABI (armhf, i386), so a long key there is a
+  // perfectly valid int-sized key and would prove nothing.
+  //
+  // Every call's result is captured into a local and asserted on only after
+  // the map is destroyed. Tau evaluates the expression handed to REQUIRE_EQ a
+  // second time to print it when the assertion fails, so a mutating call
+  // written inline runs twice and reports the second run's value; and a
+  // REQUIRE_* that fails returns immediately, skipping any cleanup below it.
+  //
+  // This test is non-vacuous: without the size check, insert_r is
+  // ccol_success, count_after_reject is 1, and the three lookups report
+  // ccol_key_not_found rather than ccol_invalid_args.
+  cbmap cbm = cbmap_create(ccol_int, NULL);
+  REQUIRE_NE((void *)cbm, NULL);
+
+  unsigned char too_wide[sizeof(int) + 1] = {0};
+  int val = 42;
+
+  const ccol_retval_t insert_r = cbmap_insert_elem(
+      cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)},
+      &(cmap_pair){.ptr = &val, .size = sizeof(val)});
+  const size_t count_after_reject = cbmap_elem_count(cbm);
+
+  int readback = -1;
+  const ccol_retval_t copy_r = cbmap_get_elem_copy(
+      cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)}, &readback,
+      sizeof(readback));
+
+  cmap_pair *val_pair = NULL;
+  const ccol_retval_t ref_r = cbmap_get_elem_ref(
+      cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)}, &val_pair);
+
+  const ccol_retval_t delete_r = cbmap_delete_elem(
+      cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)});
+
+  // A correctly sized key of the same declared type still works throughout,
+  // so the check rejects only the mismatch and nothing else.
+  int good_key = 5;
+  const ccol_retval_t good_insert_r = cbmap_insert_elem(
+      cbm, &(cmap_pair){.ptr = &good_key, .size = sizeof(good_key)},
+      &(cmap_pair){.ptr = &val, .size = sizeof(val)});
+  const size_t count_after_good = cbmap_elem_count(cbm);
+  const ccol_retval_t good_copy_r = cbmap_get_elem_copy(
+      cbm, &(cmap_pair){.ptr = &good_key, .size = sizeof(good_key)}, &readback,
+      sizeof(readback));
+
+  cbmap_destroy(cbm);
+
+  REQUIRE_EQ(insert_r, ccol_invalid_args);
+  REQUIRE_EQ(count_after_reject, (size_t)0);
+  REQUIRE_EQ(copy_r, ccol_invalid_args);
+  REQUIRE_EQ(ref_r, ccol_invalid_args);
+  REQUIRE_EQ(delete_r, ccol_invalid_args);
+  REQUIRE_EQ(good_insert_r, ccol_success);
+  REQUIRE_EQ(count_after_good, (size_t)1);
+  REQUIRE_EQ(good_copy_r, ccol_success);
+  REQUIRE_EQ(readback, 42);
+}
+
+TEST(cbst_maps,
+     wrong_size_key_rejected_matches_chashmap_for_every_fixed_width_type) {
+  // Every key type that ccol_fixed_width_data_type_size() reports a width for
+  // enforces that width; a key one byte short of it is rejected. Covers the
+  // float/long double/pointer types too, not just the integer ones, since
+  // those reach different branches of compare_keys().
+  const ccol_data_type fixed_width_types[] = {ccol_char,
+                                              ccol_signed_char,
+                                              ccol_unsigned_char,
+                                              ccol_short,
+                                              ccol_unsigned_short,
+                                              ccol_int,
+                                              ccol_unsigned_int,
+                                              ccol_long,
+                                              ccol_unsigned_long,
+                                              ccol_long_long,
+                                              ccol_unsigned_long_long,
+                                              ccol_float,
+                                              ccol_double,
+                                              ccol_long_double,
+                                              ccol_pointer};
+
+  for (size_t i = 0;
+       i < sizeof(fixed_width_types) / sizeof(fixed_width_types[0]); i++) {
+    const ccol_data_type type = fixed_width_types[i];
+    const size_t width = ccol_fixed_width_data_type_size(type);
+    REQUIRE_NE(width, (size_t)0);
+
+    cbmap cbm = cbmap_create(type, NULL);
+    REQUIRE_NE((void *)cbm, NULL);
+
+    // A buffer large enough for the widest key type, so the deliberately
+    // undersized key_pair below never points at less memory than it claims.
+    unsigned char key_buf[sizeof(long double) + sizeof(uintptr_t)] = {0};
+    int val = 7;
+
+    const ccol_retval_t short_r =
+        cbmap_insert_elem(cbm, &(cmap_pair){.ptr = key_buf, .size = width - 1},
+                          &(cmap_pair){.ptr = &val, .size = sizeof(val)});
+    const size_t count_after_short = cbmap_elem_count(cbm);
+
+    const ccol_retval_t exact_r =
+        cbmap_insert_elem(cbm, &(cmap_pair){.ptr = key_buf, .size = width},
+                          &(cmap_pair){.ptr = &val, .size = sizeof(val)});
+    const size_t count_after_exact = cbmap_elem_count(cbm);
+
+    cbmap_destroy(cbm);
+
+    REQUIRE_EQ(short_r, ccol_invalid_args);
+    REQUIRE_EQ(count_after_short, (size_t)0);
+    REQUIRE_EQ(exact_r, ccol_success);
+    REQUIRE_EQ(count_after_exact, (size_t)1);
+  }
+}
+
+TEST(cbst_maps, variable_width_key_types_still_accept_any_key_size) {
+  // ccol_string and ccol_other_types have no fixed width, so keys of
+  // differing sizes stay an ordinary, supported case for them: they are
+  // ordered by common prefix and then by size, and never rejected. Without
+  // this staying true, every string key not exactly as long as some other
+  // type would start failing.
+  const ccol_data_type variable_width_types[] = {ccol_string, ccol_other_types};
+
+  for (size_t i = 0;
+       i < sizeof(variable_width_types) / sizeof(variable_width_types[0]);
+       i++) {
+    REQUIRE_EQ(ccol_fixed_width_data_type_size(variable_width_types[i]),
+               (size_t)0);
+
+    cbmap cbm = cbmap_create(variable_width_types[i], NULL);
+    REQUIRE_NE((void *)cbm, NULL);
+
+    int val = 1;
+    const ccol_retval_t short_r =
+        cbmap_insert_elem(cbm, &(cmap_pair){.ptr = (void *)"ab", .size = 3},
+                          &(cmap_pair){.ptr = &val, .size = sizeof(val)});
+    const ccol_retval_t long_r = cbmap_insert_elem(
+        cbm, &(cmap_pair){.ptr = (void *)"abcdefghij", .size = 11},
+        &(cmap_pair){.ptr = &val, .size = sizeof(val)});
+    const size_t count = cbmap_elem_count(cbm);
+
+    cbmap_destroy(cbm);
+
+    REQUIRE_EQ(short_r, ccol_success);
+    REQUIRE_EQ(long_r, ccol_success);
+    REQUIRE_EQ(count, (size_t)2);
+  }
 }
 
 TEST(cbst_maps, zero_size_key_roundtrips) {

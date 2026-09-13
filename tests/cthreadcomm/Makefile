@@ -2,10 +2,10 @@ CC = gcc
 INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 SRC_FILE_PREFIX = cthreadcomm
-# chashmap.c is a transitive dependency: event_loop's internal fd registry
+# chashmap.c is a transitive dependency: ccol_event_loop's internal fd registry
 # (int fd -> event_entry*) is backed by chmap. cthreadpool.c is a transitive
-# dependency too: event_loop's dispatch_pool (num_reactor_threads > 1) is a
-# ctpool. cvector.c is needed for event_loop's own generation-tagged handle
+# dependency too: ccol_event_loop's dispatch_pool (num_reactor_threads > 1) is a
+# ctpool. cvector.c is needed for ccol_event_loop's own generation-tagged handle
 # slot table (a cvec of slots plus a cvec free-index stack).
 SRC_FILES = ../../src/$(SRC_FILE_PREFIX).c \
             ../../src/chashmap.c ../../src/cthreadpool.c \
@@ -33,13 +33,13 @@ build_tsan:
 test: build
 	./tests
 
-# die_after_fork=0: this suite's own event_loop_handle_lifecycle tests fork
+# die_after_fork=0: this suite's own ccol_event_loop_handle_lifecycle tests fork
 # and create new pthreads in the child (see tests/chttpclient/Makefile's
 # fuller comment on its own test_tsan target for the exact TSan mechanism).
-# This module's event_loop instances are torn down between tests, keeping
-# the parent single-threaded at fork() time in practice, so this has not
-# been observed to matter here the way it does for chttpclient/chttpserver's
-# own persistent, process-wide reactors; set for consistency across all
+# This module's ccol_event_loop instances are torn down between tests, which
+# keeps the parent single-threaded at fork() time, so the option is not
+# load-bearing here the way it is for chttpclient/chttpserver's own
+# persistent, process-wide reactors; set for consistency across all
 # three fork-and-spawn-new-threads suites, and as a safeguard against a
 # future test addition making this parent multi-threaded at fork time too.
 # suppressions=tsan_rwlock_reinit.supp: a known, confirmed-non-bug
@@ -55,10 +55,10 @@ memtest: build
 
 # --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
 # increments, which can race under concurrently-executed instrumented code and
-# has been observed producing a spurious negative hit count (reproduced on
-# more than one module, including a glibc header, not this library's own
-# logic); see tests/chttpclient/Makefile's identical flag for the full
-# rationale and reproduction notes.
+# produce a spurious negative hit count. This affects more than one module,
+# including inside a glibc header, and is a limitation of gcov's own
+# instrumentation rather than a defect in this library's logic; see
+# tests/chttpclient/Makefile's identical flag for the full rationale.
 generate_coverage_report:
 	$(CC) $(COVERAGE_FLAGS) $(CFLAGS) $(ALL_SRC_FILES) -o tests $(LFLAGS) && \
 	./tests && \
@@ -66,7 +66,7 @@ generate_coverage_report:
 	lcov --ignore-errors mismatch --ignore-errors inconsistent --ignore-errors negative --capture --directory . \
 	--output-file $(SRC_FILE_PREFIX).c.info && \
 	genhtml --ignore-errors inconsistent $(SRC_FILE_PREFIX).c.info --output-directory coverage && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info
 
 all: build build_tsan test test_tsan memtest generate_coverage_report
 

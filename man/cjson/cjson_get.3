@@ -17,8 +17,8 @@ path is a dot-separated sequence of component strings.  A component
 that begins with '#' followed by one or more decimal digits addresses
 an array element by zero-based index when the current node is
 CJSON_LIST; otherwise the component is used as a literal object key
-(including the '#' prefix).  A bare '#' with no trailing digits is
-always treated as an error and causes NULL to be returned.
+(including the '#' prefix).  A bare '#' with no trailing digits on a
+CJSON_LIST node is treated as an error and causes NULL to be returned.
 
 An empty path string returns root unchanged.
 

@@ -39,12 +39,12 @@ deadlock:_cthreadcomm_atfork_prepare
 # Second symptom of the exact same root cause above, not a separate issue:
 # ThreadSanitizer's own "thread leak" check can misattribute a leak to a
 # thread that held event_loop_slot_table.rwlock pre-fork and was correctly,
-# unconditionally joined by the PARENT process afterward -- fork_safety.
+# unconditionally joined by the PARENT process afterward; fork_safety.
 # fork_does_not_inherit_a_write_locked_event_loop_slot_table's own "holder"
 # thread genuinely is joined every time (verified by reading the test: the
 # join is unconditional, before every REQUIRE_* that could return early),
 # and TSan's own reported exit-status override on the CHILD process (whose
-# code path never joins holder at all -- fork() duplicates only the calling
+# code path never joins holder at all; fork() duplicates only the calling
 # thread, so holder never existed there to begin with) is the only place
 # the false "leak" is ever reported, never from the parent's own, correct
 # join.

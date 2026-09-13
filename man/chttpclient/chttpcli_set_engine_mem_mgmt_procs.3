@@ -11,7 +11,7 @@ ccol_retval_t chttpcli_set_engine_mem_mgmt_procs(ccol_memmgmt_procs_t *mp);
 .fi
 .SH DESCRIPTION
 .nf
-Redirects every allocation made by the event_loop reactor shared by
+Redirects every allocation made by the ccol_event_loop reactor shared by
 every chttpcli instance's Tier 2/3 work in this process (the
 registration table, per-connection dispatch state, the DNS/connect
 worker pool, and so on) to the malloc/free/calloc/realloc supplied in
@@ -20,7 +20,7 @@ module in this library.  Passing NULL reverts to the default allocator.
 
 This is independent of the allocator each individual chttpcli instance
 uses for its own requests/connections (configured via
-create_chttpclient_mp, following the usual _mp convention); this
+ccol_create_chttpclient_mp, following the usual _mp convention); this
 function only affects the one shared reactor's own construction.
 
 May only be called before the reactor has ever started in this process

@@ -4,15 +4,15 @@ INCLUDES = -I.. -I../../include
 DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 
 # Our source files (compiled with strict flags + -Werror). chttpserver.c and
-# chttpclient.c each own a fully independent static event_loop reactor.
+# chttpclient.c each own a fully independent static ccol_event_loop reactor.
 #
 # Four binaries are built from this shared source set:
 #   tests            (tests.c) - the main suite.
 #   tests_tls        (tests_tls.c) - drives a real TLS handshake against a
 #                     genuine self-signed cert generated at test-startup via
-#                     the `openssl` CLI. Kept as a SEPARATE BINARY matching
-#                     tests/chttpclient/tests_tls.c's own precedent for a
-#                     TLS-handshake-focused suite.
+#                     the `openssl` CLI. Kept as a SEPARATE BINARY purely as
+#                     a test-layout choice, keeping the handshake-focused
+#                     cases together and out of the main suite.
 #   tests_mem_mgmt   (tests_mem_mgmt.c) - calls
 #                     chttpsvr_set_engine_mem_mgmt_procs() before the first
 #                     chttpsvr_start() in the process, a process-wide,
@@ -24,7 +24,7 @@ DEFINITIONS = -DRUNNING_UNIT_TESTS -D_FILE_OFFSET_BITS=64
 #   tests_engine_stop (tests_engine_stop.c) - exercises chttpsvr_engine_stop()
 #                     (the forced, signal-handler-driven engine shutdown
 #                     path), which tears down the one shared, process-wide
-#                     event_loop reactor out from under every currently
+#                     ccol_event_loop reactor out from under every currently
 #                     started chttpsvr instance. tests.c's own g_srv/g_srv2/...
 #                     stay started across its entire run, so force-stopping
 #                     the shared engine there would yank the reactor out from
@@ -64,7 +64,7 @@ build_tsan:
 
 # die_after_fork=0: see tests/chttpclient/Makefile's identical comment on
 # its own test_tsan target; the same root cause (a persistent, process-wide
-# multi-threaded event_loop reactor alive at fork() time, tripping TSan's own
+# multi-threaded ccol_event_loop reactor alive at fork() time, tripping TSan's own
 # die_after_fork=1 default the moment concurrent_double_destroy_is_fatal's
 # forked child creates its own two racing pthreads) applies here too,
 # verified the same way.
@@ -78,7 +78,7 @@ test_tsan: build_tsan
 # by dedicated white-box arm/wait/release hooks built specifically to
 # manufacture data races deterministically), so it is exactly the suite most
 # worth running under the one tool best suited to catch the class of bug it
-# is designed to reproduce; previously had no TSan coverage of its own at all.
+# is designed to reproduce.
 build_engine_stop_tsan:
 	$(CC) $(TSAN_CFLAGS) tests_engine_stop.c $(COMMON_SRC_FILES) -o tests_engine_stop_tsan $(LFLAGS) -fsanitize=thread
 
@@ -112,10 +112,10 @@ memtest: build build_tls build_mem_mgmt build_engine_stop
 
 # --ignore-errors negative: gcov's own coverage counters are plain (non-atomic)
 # increments, which can race under concurrently-executed instrumented code and
-# has been observed producing a spurious negative hit count (reproduced on
-# more than one module, including a glibc header, not this library's own
-# logic); see tests/chttpclient/Makefile's identical flag for the full
-# rationale and reproduction notes.
+# produce a spurious negative hit count. This affects more than one module,
+# including inside a glibc header, and is a limitation of gcov's own
+# instrumentation rather than a defect in this library's logic; see
+# tests/chttpclient/Makefile's identical flag for the full rationale.
 generate_coverage_report:
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests.c $(COMMON_SRC_FILES) \
 		-o tests $(LFLAGS) && \
@@ -125,7 +125,7 @@ generate_coverage_report:
 		--capture --directory . --output-file chttpserver.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpserver.c.info \
 		--output-directory coverage/tests && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info tests
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_tls.c $(COMMON_SRC_FILES) \
 		-o tests_tls $(LFLAGS) && \
 	./tests_tls && \
@@ -134,7 +134,7 @@ generate_coverage_report:
 		--capture --directory . --output-file chttpserver_tls.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpserver_tls.c.info \
 		--output-directory coverage/tests_tls && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info tests_tls
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests_tls
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_mem_mgmt.c $(COMMON_SRC_FILES) \
 		-o tests_mem_mgmt $(LFLAGS) && \
 	./tests_mem_mgmt && \
@@ -143,7 +143,7 @@ generate_coverage_report:
 		--capture --directory . --output-file chttpserver_mem_mgmt.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpserver_mem_mgmt.c.info \
 		--output-directory coverage/tests_mem_mgmt && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info tests_mem_mgmt
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests_mem_mgmt
 	$(CC) -fprofile-arcs -ftest-coverage $(CFLAGS) tests_engine_stop.c $(COMMON_SRC_FILES) \
 		-o tests_engine_stop $(LFLAGS) && \
 	./tests_engine_stop && \
@@ -152,7 +152,7 @@ generate_coverage_report:
 		--capture --directory . --output-file chttpserver_engine_stop.c.info && \
 	genhtml --ignore-errors inconsistent -s chttpserver_engine_stop.c.info \
 		--output-directory coverage/tests_engine_stop && \
-	rm -rf *.gcno *.gcda *.gcov *.c.info tests_engine_stop
+	cp -f *.c.info coverage/ && rm -rf *.gcno *.gcda *.gcov *.c.info tests_engine_stop
 
 all: build build_tls build_mem_mgmt build_engine_stop build_tsan test test_tsan build_engine_stop_tsan test_engine_stop_tsan memtest generate_coverage_report
 

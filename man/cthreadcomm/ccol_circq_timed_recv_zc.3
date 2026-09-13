@@ -1,0 +1,40 @@
+.TH CCOL_CIRCQ_TIMED_RECV_ZC 3 "2026-07-10" "c_collections" "C Collections Library - Functions"
+.SH NAME
+ccol_circq_timed_recv_zc \- receive with timeout
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_retval_t ccol_circq_timed_recv_zc(ccol_circular_queue *cq,
+                                   c_message_t *target_buf,
+                                   struct timespec *timeout);
+.fi
+.SH DESCRIPTION
+.nf
+Blocks up to the specified timeout waiting for a message. If a message
+arrives, receives it and transfers ownership.
+.fi
+.SH PARAMETERS
+.nf
+cq          Circular queue to receive from
+target_buf  Buffer to receive the message
+timeout     Relative timeout duration
+.fi
+.SH RETURN VALUE
+.nf
+ccol_success              - Message received
+ccol_invalid_args         - cq, target_buf, or timeout is NULL
+ccol_timed_out            - Timeout expired
+ccol_unexpected_failure   - System error (check errno)
+.fi
+.SH NOTES
+.nf
+Blocks up to timeout duration
+On success, caller receives ownership and must free target_buf->data
+Uses CLOCK_REALTIME for timeout calculations
+.fi
+.SH "SEE ALSO"
+.BR ccol_circq_recv_zc (3),
+.BR ccol_circq_try_recv_zc (3)

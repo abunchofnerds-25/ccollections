@@ -1,0 +1,61 @@
+.TH CCOL_EVENT_LOOP_CONSTRUCT_SCOPED 3 "2026-07-12" "c_collections" "C Collections Library - Macros"
+.SH NAME
+ccol_event_loop_construct_scoped \- declare, initialise, and auto-destroy a ccol_event_loop on scope exit
+.SH LIBRARY
+C Collections (libccollections, \-lccollections)
+.SH SYNOPSIS
+.nf
+#include <cthreadcomm.h>
+
+ccol_event_loop_construct_scoped(name, max_events_per_wait, num_lock_stripes,
+                            num_reactor_threads);
+.fi
+.SH DESCRIPTION
+.nf
+Declares a ccol_event_loop variable named name tagged with a GCC/Clang
+cleanup attribute, calls ccol_event_loop_create() to initialise it, and calls
+ccol_fatal_err() if creation fails.  The variable is automatically destroyed
+(every reactor thread shut down and joined, all registrations freed)
+when it goes out of scope, without an explicit ccol_event_loop_destroy()
+call.
+.fi
+.SH PARAMETERS
+.nf
+name                  Variable name for the ccol_event_loop handle.
+max_events_per_wait   Size of the epoll_wait batch buffer the polling
+                      thread uses (must be between 1 and INT_MAX
+                      inclusive, and small enough that
+                      max_events_per_wait * sizeof(struct epoll_event)
+                      does not overflow size_t).
+num_lock_stripes      Number of independent lock stripes for the fd/entry
+                      registry (must be >= 1).  1 means a single
+                      shared lock.
+num_reactor_threads   Number of background reactor threads (must be
+                      >= 1; 1 means a single thread that both polls
+                      and dispatches inline).
+.fi
+.SH NOTES
+.nf
+Calls ccol_fatal_err() on failure.  A caller relying on no callback still
+being able to reference anything reachable through this loop's scope
+(e.g. a mutex or buffer a callback's arg points at) must ensure that
+reliance holds up to and including the scope-exit join, not just an
+explicit ccol_event_loop_remove(3) call beforehand; see
+ccol_event_loop_remove(3)'s own notes on a callback outliving that call's
+return, which this scope's implicit shutdown is equally subject to.
+.fi
+.SH EXAMPLES
+.nf
+{
+    ccol_event_loop_construct_scoped(loop, 32, 1, 1);
+    ccol_event_reg reg = ccol_event_loop_add(loop, ccol_selectable_from_fd(fd, ccol_select_read),
+                                    handlers, NULL, NULL);
+    /* ... */
+}  /* loop is automatically shut down (every reactor thread joined) and
+      destroyed here */
+.fi
+.SH "SEE ALSO"
+.BR ccol_event_loop_construct (3),
+.BR ccol_event_loop_declare_scoped (3),
+.BR ccol_event_loop_create (3),
+.BR ccol_event_loop_remove (3)

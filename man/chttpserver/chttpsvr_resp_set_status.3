@@ -13,9 +13,10 @@ void chttpsvr_resp_set_status(chttpsvr_resp *resp, int status_code);
 .nf
 Sets the HTTP status code for the response.  The default is 200.
 
-status_code must be in the range 100-999 (inclusive).  Values outside
-this range are clamped to 500 Internal Server Error when the response
-is sent; the stored value itself is not altered.
+status_code is stored verbatim, with no validation here.  A value
+outside the valid HTTP status-code range 100-999 is sent as 500
+Internal Server Error instead when the response is sent; the stored
+value itself is not altered.
 .fi
 .SH NOTES
 .nf

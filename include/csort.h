@@ -26,6 +26,15 @@ SOFTWARE.
 
 #include <common.h>
 
+/* Everything declared from here to the end of this header is part of the
+ * public ABI of libccollections and is exported from the shared library.
+ * The library itself is built with -fvisibility=hidden, so any function or
+ * object that is not covered by one of these blocks stays internal to the
+ * library, is absent from its dynamic symbol table, and cannot be
+ * interposed by, or collide with, a symbol of the same name in the
+ * application that links against it. */
+#pragma GCC visibility push(default)
+
 /**
  * @file csort.h
  * @brief Generic sorting library with iterative mergesort implementation
@@ -127,7 +136,7 @@ int csort_default_string_comparison_proc(const void *first, const void *second);
  *
  * @return true if the collection was fully sorted (including the trivial
  * col == NULL / length 0 or 1 / elem_size == 0 cases, which have nothing to
- * do); false if length exceeds max_elem_count, mprocs is non-NULL but does
+ * do); false if length exceeds ccol_max_elem_count, mprocs is non-NULL but does
  * not have all four function pointers populated, the temporary merge buffer
  * could not be allocated, or length * elem_size would overflow size_t, in
  * which case the collection is left completely untouched (no merge pass had
@@ -142,9 +151,9 @@ int csort_default_string_comparison_proc(const void *first, const void *second);
  * getter_proc, comparison_proc, or allocating a temporary buffer: a
  * zero-sized element has no bytes for either of those to read or for a merge
  * pass to move
- * @note Rejects length > max_elem_count (2^63 on a 64-bit size_t); this cap
- * matches every other container in this library (cvector, chashmap, ...) and
- * exists so the internal bottom-up merge pass count can never overflow
+ * @note Rejects length > ccol_max_elem_count (2^63 on a 64-bit size_t); this
+ * cap matches every other container in this library (cvector, chashmap, ...)
+ * and exists so the internal bottom-up merge pass count can never overflow
  * @note A non-NULL mprocs must have malloc, free, calloc, and realloc all
  * populated, the same contract ccol_memmgmt_procs_t itself documents; an
  * incomplete mprocs is rejected (false) immediately before the temporary
@@ -180,7 +189,7 @@ bool ___csort_merge_sort(void *col, size_t length, size_t elem_size,
  *
  * @return true on success (including a zero- or one-element length, or an
  * elem_size of 0, none of which have anything to do), false if length
- * exceeds max_elem_count, mprocs is non-NULL but incomplete, the temporary
+ * exceeds ccol_max_elem_count, mprocs is non-NULL but incomplete, the temporary
  * merge buffer could not be allocated, or length * elem_size would overflow
  * size_t (the collection is left completely untouched in that case)
  *
@@ -364,10 +373,10 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
  * variables/expressions only)
  * @note Returns NULL for unsupported types, including a fixed-size char
  * array (char[N]); see the implementation note below for why this needs an
- * explicit check rather than falling out of is_char_ptr() on its own
+ * explicit check rather than falling out of ccol_is_char_ptr() on its own
  * @note All const and non-const variants are supported
- * @note Uses is_integral_type(), is_char_ptr(), and is_char_array() macros
- * from common.h
+ * @note Uses ccol_is_integral_type(), ccol_is_char_ptr(), and
+ * ccol_is_char_array() macros from common.h
  *
  * Example usage:
  * @code
@@ -392,67 +401,65 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
  */
 /* The result-holding local below is deliberately named
  * __csort_gdcp_result rather than something a caller might plausibly also
- * name their own argument variable (e.g. "comparison_proc", the name this
- * temporary used to carry): per C's declarator-scope rules, a caller
- * invoking csort_get_default_comparison_proc(comparison_proc) with an
- * argument variable of that exact name would otherwise have every use of
- * (x) inside this statement expression silently resolve to this macro's own
+ * name their own argument variable (e.g. "comparison_proc"): per C's
+ * declarator-scope rules, a caller invoking
+ * csort_get_default_comparison_proc(comparison_proc) with an argument
+ * variable of that exact name would otherwise have every use of (x) inside
+ * this statement expression silently resolve to this macro's own
  * freshly-declared, always-NULL local instead of the caller's real
  * variable, since this local's scope begins immediately after its own
- * declarator, before (x) is ever expanded; the same class of bug already
- * found and fixed for cvec_push/cvec_push_rvalue's own internal locals (see
- * the cvector module's own history). A name this specific to this one
- * macro's own internal result is the standard mitigation for this
- * non-hygienic-macro footgun, matching how common.h's own
- * ccol_scoped_ptr_release names its internal temporary
- * __ccol_released_ptr for the identical reason.
+ * declarator, before (x) is ever expanded; the same hazard that drives the
+ * internal-local naming in cvec_push/cvec_push_rvalue. A name this specific
+ * to this one macro's own internal result is the standard mitigation for
+ * this non-hygienic-macro footgun, matching how common.h's own
+ * ccol_scoped_ptr_release names its internal temporary __ccol_released_ptr
+ * for the identical reason.
  *
- * The is_char_ptr((x)) branch below additionally checks
- * is_char_array(__csort_gdcp_arr_probe), not is_char_ptr((x)) alone. Per
- * C11 6.5.1.1p2/6.3.2.1p3, the controlling expression of a _Generic
+ * The ccol_is_char_ptr((x)) branch below additionally checks
+ * ccol_is_char_array(__csort_gdcp_arr_probe), not ccol_is_char_ptr((x)) alone.
+ * Per C11 6.5.1.1p2/6.3.2.1p3, the controlling expression of a _Generic
  * selection undergoes the ordinary array-to-pointer decay applied to any
- * expression used as an rvalue, so a genuine fixed-size array x (e.g. a
- * `char name[64]` field) also matches is_char_ptr's own
- * `char *:`/`const char *:` associations after decaying; is_char_ptr(x)
- * alone cannot tell "x is really a char* variable" apart from "x is a char
- * array that merely decayed to look like one for this one comparison."
- * Left unguarded, such an array was silently classified as a string and
- * handed csort_default_string_comparison_proc, a comparator whose contract
- * requires first/second to point at a stored char* VALUE (it dereferences
- * one pointer indirection via *(const char **)first), not at the array's
- * own inline byte content. Reproduced directly: this macro used to return a
- * non-NULL comparator for a `char name[64]` array that, when later invoked
- * by csort_merge on the array's real 64 bytes of string content, read the
- * first sizeof(char*) of those bytes as if they were a pointer value and
- * dereferenced it; undefined behavior, not merely a wrong sort order.
- * common.h's own is_char_array() macro already exists to draw this exact
- * distinction (see determine_ccol_data_type(), which checks it before
- * is_char_ptr() for the identical reason), but it needs to evaluate
- * &(data), so it requires an addressable lvalue; x itself is documented to
- * be any expression (including a bare rvalue like a cast, matching e.g.
- * this file's own signed_char_default_comparator_is_not_null_and_sorts_
- * signed test), so is_char_array((x)) cannot be applied to x directly
- * without breaking every rvalue caller. __csort_gdcp_arr_probe sidesteps
- * this: typeof(x), like sizeof and _Generic's own controlling expression,
- * only inspects x's type at compile time (never its value, and critically
- * never its address either), so declaring a fresh local of that same type
- * needs no addressability from x at all; the probe itself is then a
- * genuine, always-addressable local variable that is_char_array() can
- * safely operate on in x's place, faithfully preserving whether x's own
- * true (undecayed) type was an array. Excluding an array here correctly
- * falls through to the NULL, unsupported-type result this macro already
- * documents for every other type it does not recognize, rather than
- * inventing new comparator semantics: this module's default comparators
- * are for elements that ARE a scalar, char pointer, or numeric value, not
- * for elements whose content IS a byte buffer; a caller with fixed-size
- * string fields is still fully served by cvector_sort_with_comparison_proc()
+ * expression used as an rvalue, so a genuine fixed-size array x (e.g. a `char
+ * name[64]` field) also matches ccol_is_char_ptr's own `char *:`/`const char
+ * *:` associations after decaying; ccol_is_char_ptr(x) alone cannot tell "x is
+ * really a char* variable" apart from "x is a char array that merely decayed to
+ * look like one for this one comparison." Left unguarded, such an array is
+ * silently classified as a string and handed
+ * csort_default_string_comparison_proc, a comparator whose contract requires
+ * first/second to point at a stored char* VALUE (it dereferences one pointer
+ * indirection via *(const char **)first), not at the array's own inline byte
+ * content. The concrete consequence is a non-NULL comparator returned for a
+ * `char name[64]` array which, when later invoked by csort_merge on the array's
+ * real 64 bytes of string content, reads the first sizeof(char*) of those bytes
+ * as if they were a pointer value and dereferences it: undefined behavior, not
+ * merely a wrong sort order. common.h's own ccol_is_char_array() macro already
+ * exists to draw this exact distinction (see ccol_determine_ccol_data_type(),
+ * which checks it before ccol_is_char_ptr() for the identical reason), but it
+ * needs to evaluate &(data), so it requires an addressable lvalue; x itself is
+ * documented to be any expression (including a bare rvalue like a cast,
+ * matching e.g. this file's own
+ * signed_char_default_comparator_is_not_null_and_sorts_ signed test), so
+ * ccol_is_char_array((x)) cannot be applied to x directly without breaking
+ * every rvalue caller. __csort_gdcp_arr_probe sidesteps this: typeof(x), like
+ * sizeof and _Generic's own controlling expression, only inspects x's type at
+ * compile time (never its value, and critically never its address either), so
+ * declaring a fresh local of that same type needs no addressability from x at
+ * all; the probe itself is then a genuine, always-addressable local variable
+ * that ccol_is_char_array() can safely operate on in x's place, faithfully
+ * preserving whether x's own true (undecayed) type was an array. Excluding an
+ * array here correctly falls through to the NULL, unsupported-type result this
+ * macro already documents for every other type it does not recognize, rather
+ * than inventing new comparator semantics: this module's default comparators
+ * are for elements that ARE a scalar, char pointer, or numeric value, not for
+ * elements whose content IS a byte buffer; a caller with fixed-size string
+ * fields is still fully served by cvector_sort_with_comparison_proc()
  * / csort_sort() with an explicit, hand-written comparator (exactly how
  * README.md's own char[N]-field examples are written already). */
 #if defined __clang__
 #define csort_get_default_comparison_proc(x)                                             \
   ({                                                                                     \
     ccol_comparison_proc_t __csort_gdcp_result = NULL;                                   \
-    if (is_integral_type((x))) {                                                         \
+    if (ccol_is_integral_type((x))) {                                                    \
       _Pragma("GCC diagnostic push");                                                    \
       _Pragma("GCC diagnostic ignored \"-Wunreachable-code-generic-assoc\"");            \
       __csort_gdcp_result = _Generic((x),                                                \
@@ -507,9 +514,9 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
                                          long_double),                                   \
           default: NULL);                                                                \
       _Pragma("GCC diagnostic pop");                                                     \
-    } else if (is_char_ptr((x))) {                                                       \
+    } else if (ccol_is_char_ptr((x))) {                                                  \
       typeof(x) __csort_gdcp_arr_probe = {0};                                            \
-      if (!is_char_array(__csort_gdcp_arr_probe)) {                                      \
+      if (!ccol_is_char_array(__csort_gdcp_arr_probe)) {                                 \
         __csort_gdcp_result = csort_default_string_comparison_proc;                      \
       }                                                                                  \
     }                                                                                    \
@@ -519,7 +526,7 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
 #define csort_get_default_comparison_proc(x)                                             \
   ({                                                                                     \
     ccol_comparison_proc_t __csort_gdcp_result = NULL;                                   \
-    if (is_integral_type((x))) {                                                         \
+    if (ccol_is_integral_type((x))) {                                                    \
       __csort_gdcp_result = _Generic((x),                                                \
           char: ___csort__get_default_integral_comparison_proc_name(char),               \
           signed char: ___csort__get_default_integral_comparison_proc_name(              \
@@ -571,12 +578,14 @@ ___csort__declare_default_integral_comparison_proc(long double, long_double);
           const long double: ___csort__get_default_integral_comparison_proc_name(        \
                                          long_double),                                   \
           default: NULL);                                                                \
-    } else if (is_char_ptr((x))) {                                                       \
+    } else if (ccol_is_char_ptr((x))) {                                                  \
       typeof(x) __csort_gdcp_arr_probe = {0};                                            \
-      if (!is_char_array(__csort_gdcp_arr_probe)) {                                      \
+      if (!ccol_is_char_array(__csort_gdcp_arr_probe)) {                                 \
         __csort_gdcp_result = csort_default_string_comparison_proc;                      \
       }                                                                                  \
     }                                                                                    \
     __csort_gdcp_result;                                                                 \
   })
 #endif
+
+#pragma GCC visibility pop

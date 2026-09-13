@@ -18,7 +18,7 @@ logger is closed.
 
 chttpclient_do_async/_streaming and the pooled-sync wrappers built on
 top of them (chttpclient_do_pooled/_streaming) share one lazily-started,
-process-wide event_loop reactor across every chttpcli instance in the
+process-wide ccol_event_loop reactor across every chttpcli instance in the
 process, including the default client.  This function captures that
 reactor's own diagnostics (TLS handshake failures, connect errors); it
 is separate from the per-client logger, and separate from
@@ -34,13 +34,13 @@ this engine's own diagnostics are never logged above CLOG_INFO, that
 fallback logger is silent in practice unless this function is used
 to install a more verbose one.
 
-cl must not be NULL; the derived child logger is owned by the engine
-and must not be closed by the caller.
+cl must not be CLOG_INVALID; the derived child logger is owned by the
+engine and must not be closed by the caller.
 .fi
 .SH RETURN VALUE
 .nf
 ccol_success on success.
-ccol_invalid_args if cl is NULL.
+ccol_invalid_args if cl is CLOG_INVALID.
 ccol_not_enough_memory if the child logger cannot be allocated.
 .fi
 .SH "SEE ALSO"

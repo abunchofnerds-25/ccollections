@@ -8,11 +8,11 @@ C Collections (libccollections, \-lccollections)
 #include <chttpserver.h>
 
 ccol_retval_t chttpsvr_resp_printf(chttpsvr_resp *resp,
-                                    const char *format, ...);
+                                    const char *fmt, ...);
 .fi
 .SH DESCRIPTION
 .nf
-Formats format and the variadic arguments using printf semantics and
+Formats fmt and the variadic arguments using printf semantics and
 appends the result to the response body, equivalent to formatting into
 a temporary string and passing it to chttpsvr_resp_write_str.  A small
 internal stack buffer is used for short output; longer output falls
@@ -26,7 +26,7 @@ __attribute__((format(printf, 2, 3))).
 .SH RETURN VALUE
 .nf
 ccol_success           - Formatted output appended to the body.
-ccol_invalid_args      - resp or format is NULL, or the underlying
+ccol_invalid_args      - resp or fmt is NULL, or the underlying
                           vsnprintf call reports an encoding error.
 ccol_not_enough_memory - The body buffer or the temporary heap
                           fallback buffer could not be allocated.

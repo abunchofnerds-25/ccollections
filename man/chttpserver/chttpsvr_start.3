@@ -22,7 +22,7 @@ socket file already at that path is removed automatically before
 binding).  A single chttpsvr instance listens on either TCP or a Unix
 socket, never both; create two instances for both.
 
-If the shared, process-wide event_loop reactor (and its companion
+If the shared, process-wide ccol_event_loop reactor (and its companion
 idle-timeout sweep thread) is not yet running in this process, it is
 started implicitly on this call and this call blocks until it is
 confirmed running before proceeding.  This reactor is independent of
@@ -111,7 +111,7 @@ freeing and the listener noticing.
 
 Transient resource exhaustion (the process or system temporarily out
 of file descriptors, or a custom allocator supplied via
-create_chttpsvr_mp temporarily unable to satisfy a per-connection
+ccol_create_chttpsvr_mp temporarily unable to satisfy a per-connection
 allocation) pauses this listener the same way: new connections are
 left pending until a periodic sweep resumes the listener, with the
 same worst-case one-second latency. This keeps a transient shortage on
@@ -155,11 +155,14 @@ If cert_path/key_path are both set but the certificate/key pair cannot
 be loaded (a missing/unreadable file or malformed contents),
 chttpsvr_start fails with ccol_unexpected_failure and no listener is
 registered.  If cfg->tls->ca_bundle_path is also set, it must load
-successfully too (this is what enables mutual-TLS client-certificate
-verification on the resulting listener); a failure to load it is
-likewise reported as ccol_unexpected_failure rather than silently
-starting the server without the client-certificate enforcement that
-was requested.
+successfully too (this is what enables client-certificate verification
+on the resulting listener); a failure to load it is likewise reported
+as ccol_unexpected_failure rather than silently starting the server
+without the client-certificate verification that was requested.
+That verification is request-and-verify, not require: a client
+presenting a certificate must have it verify against the bundle or the
+handshake fails, while a client presenting none is still accepted.
+Rejecting anonymous clients must be enforced above this library.
 .fi
 .SH RETURN VALUE
 .nf

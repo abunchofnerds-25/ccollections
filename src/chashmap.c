@@ -107,16 +107,16 @@ typedef struct {
 // drop-in inline substitute for that heap allocation, so it must satisfy
 // the same alignment contract for whatever type-erased bytes a caller
 // stores here, not just the common <=8-byte-aligned case (int/long/double/
-// pointer). A plain 8-byte bound (this struct's own alignment before this
-// fix, since no member other than key_storage/val_storage required more)
-// left val_storage at absolute offset 72 within llist_node, 8 bytes short
-// of the 16-byte alignment `long double` requires on this platform, one
-// of the two built-in types (see chashmap.h's own "excludes long double
-// from open-addressing" note) that is guaranteed to be stored inline via
-// this exact path for any chashmap value; reproduced directly with
-// -fsanitize=undefined ("load of misaligned address ... which requires 16
-// byte alignment") on chmap_get_ptr of a plain `char* -> long double` map,
-// not merely inferred from the struct layout. The same root cause (a
+// pointer). A plain 8-byte bound (which is all any member other than
+// key_storage/val_storage requires) would leave val_storage at absolute
+// offset 72 within llist_node, 8 bytes short of the 16-byte alignment
+// `long double` requires on this platform, one of the two built-in types
+// (see chashmap.h's own "excludes long double from open-addressing" note)
+// that is guaranteed to be stored inline via this exact path for any
+// chashmap value. UndefinedBehaviorSanitizer reports it directly ("load
+// of misaligned address ... which requires 16 byte alignment") on
+// chmap_get_ptr of a plain `char* -> long double` map; it is not merely
+// inferred from the struct layout. The same root cause (a
 // direct-cast read of a pointer to insufficiently-aligned storage, as
 // opposed to a memcpy-based read) as the packed-struct hazard documented
 // in cjson.c/cyaml.c/clrucache.c/cthreadcomm.c/chttpclient.c, just reached
@@ -473,11 +473,11 @@ static inline size_t hash_int_fast(size_t key) {
  * x87 extended precision stored in a 16-byte slot) contains padding bits
  * the C standard leaves completely unspecified; two variables holding the
  * exact same mathematical value can differ in those padding bits depending
- * on how each was computed and stored (empirically confirmed elsewhere in
- * this codebase: an automatic-storage-duration long double's padding is
- * not reliably reproducible across separate constructions of the same
- * value, even after an explicit memset, once the compiler treats the
- * whole-object assignment as making that memset dead). A raw byte hash
+ * on how each was computed and stored (an automatic-storage-duration long
+ * double's padding is not reliably reproducible across separate
+ * constructions of the same value, even after an explicit memset, once the
+ * compiler treats the whole-object assignment as making that memset
+ * dead). A raw byte hash
  * (the strategy used for every other >8-byte / non-integral key type)
  * would therefore make two numerically-identical long double keys land in
  * different buckets, silently defeating any lookup that doesn't reuse the
@@ -495,9 +495,9 @@ static inline size_t hash_int_fast(size_t key) {
  *   uninitialized memory in practice, not merely unspecified-but-stable
  *   content: a plain `long double n = NAN;` writes only the significant
  *   NaN bits, never the padding, so reading those padding bytes at all
- *   (even just to hash or memcmp them) is a real, valgrind/MSan-flagged
- *   use of uninitialized memory, confirmed empirically while developing
- *   this function. Every NaN long double therefore hashes to one fixed,
+ *   (even just to hash or memcmp them) is a real use of uninitialized
+ *   memory, which valgrind and MemorySanitizer both report. Every NaN
+ *   long double therefore hashes to one fixed,
  *   dedicated constant, touching no padding byte at all; this necessarily
  *   means every NaN long double collapses into a single key (see
  *   long_double_keys_equal's matching NaN branch below), unlike float/
@@ -551,15 +551,15 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
   }
 
   // Use fast Fibonacci hashing for all integral types. Every multi-byte
-  // read below goes through mem_cpy rather than a direct pointer-cast
+  // read below goes through ccol_mem_cpy rather than a direct pointer-cast
   // dereference: key_ptr may come straight from a caller-supplied cmap_pair
   // (the raw chmap_insert_elem/_get_elem_ref/_delete_elem function layer),
   // which carries no alignment guarantee the way a type-safe macro's own
   // local variable address does. A direct `*(uint32_t*)key_ptr`-style read
   // of a misaligned pointer is UB and can fault on strict-alignment
   // architectures; see this file's own chmap_entry _Alignas(max_align_t)
-  // comment for the identical hazard class already fixed elsewhere in this
-  // module.
+  // comment for the identical hazard class guarded against elsewhere in
+  // this module.
   switch (key_type) {
     case ccol_char:
     case ccol_signed_char:
@@ -568,24 +568,24 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
     case ccol_short:
     case ccol_unsigned_short: {
       uint16_t bits;
-      mem_cpy(&bits, key_ptr, sizeof(bits));
+      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
     }
     case ccol_int:
     case ccol_unsigned_int: {
       uint32_t bits;
-      mem_cpy(&bits, key_ptr, sizeof(bits));
+      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
     }
     case ccol_long:
     case ccol_unsigned_long: {
 #if SIZE_MAX == UINT64_MAX
       uint64_t bits;
-      mem_cpy(&bits, key_ptr, sizeof(bits));
+      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
 #else
       uint32_t bits;
-      mem_cpy(&bits, key_ptr, sizeof(bits));
+      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
 #endif
     }
@@ -593,12 +593,12 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
     case ccol_unsigned_long_long: {
 #if SIZE_MAX == UINT64_MAX
       uint64_t bits;
-      mem_cpy(&bits, key_ptr, sizeof(bits));
+      ccol_mem_cpy(&bits, key_ptr, sizeof(bits));
       return hash_int_fast((size_t)bits);
 #else
       // On 32-bit, hash the 64-bit value by combining high and low parts
       uint64_t val;
-      mem_cpy(&val, key_ptr, sizeof(val));
+      ccol_mem_cpy(&val, key_ptr, sizeof(val));
       uint32_t low = (uint32_t)val;
       uint32_t high = (uint32_t)(val >> 32);
       return hash_int_fast((size_t)(low ^ high));
@@ -606,18 +606,18 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
     }
     case ccol_float: {
       uint32_t bits;
-      mem_cpy(&bits, key_ptr, 4);
+      ccol_mem_cpy(&bits, key_ptr, 4);
       return hash_int_fast((size_t)bits);
     }
     case ccol_double: {
 #if SIZE_MAX == UINT64_MAX
       uint64_t bits;
-      mem_cpy(&bits, key_ptr, 8);
+      ccol_mem_cpy(&bits, key_ptr, 8);
       return hash_int_fast((size_t)bits);
 #else
       // On 32-bit, hash the 64-bit double by combining parts
       uint64_t bits;
-      mem_cpy(&bits, key_ptr, 8);
+      ccol_mem_cpy(&bits, key_ptr, 8);
       uint32_t low = (uint32_t)bits;
       uint32_t high = (uint32_t)(bits >> 32);
       return hash_int_fast((size_t)(low ^ high));
@@ -625,12 +625,12 @@ static inline size_t hash_key_data(const void* key_ptr, size_t key_size,
     }
     case ccol_pointer: {
       uintptr_t bits;
-      mem_cpy(&bits, key_ptr, sizeof(uintptr_t));
+      ccol_mem_cpy(&bits, key_ptr, sizeof(uintptr_t));
       return hash_int_fast((size_t)bits);
     }
     case ccol_long_double: {
       long double v;
-      mem_cpy(&v, key_ptr, sizeof(v));
+      ccol_mem_cpy(&v, key_ptr, sizeof(v));
       return hash_long_double_value(v);
     }
     default:
@@ -673,20 +673,20 @@ static open_addr_map* oa_create(size_t capacity, ccol_data_type key_type,
                                 size_t val_size, ccol_memmgmt_procs_t* m_procs,
                                 ccol_hashing_proc_t custom_hashing_proc) {
   open_addr_map* map =
-      (open_addr_map*)_mem_alloc(m_procs, sizeof(open_addr_map));
+      (open_addr_map*)_ccol_mem_alloc(m_procs, sizeof(open_addr_map));
   if (!map) return NULL;
 
-  map->slots = (oa_slot*)_mem_calloc(m_procs, capacity, sizeof(oa_slot));
+  map->slots = (oa_slot*)_ccol_mem_calloc(m_procs, capacity, sizeof(oa_slot));
   if (!map->slots) {
-    _mem_free(m_procs, map);
+    _ccol_mem_free(m_procs, map);
     return NULL;
   }
 
   map->val_accessors =
-      (cmap_pair*)_mem_calloc(m_procs, capacity, sizeof(cmap_pair));
+      (cmap_pair*)_ccol_mem_calloc(m_procs, capacity, sizeof(cmap_pair));
   if (!map->val_accessors) {
-    _mem_free(m_procs, map->slots);
-    _mem_free(m_procs, map);
+    _ccol_mem_free(m_procs, map->slots);
+    _ccol_mem_free(m_procs, map);
     return NULL;
   }
 
@@ -722,16 +722,16 @@ static ccol_retval_t oa_rehash(open_addr_map* map, size_t new_capacity) {
   size_t old_capacity = map->capacity;
 
   map->slots =
-      (oa_slot*)_mem_calloc(map->m_procs, new_capacity, sizeof(oa_slot));
+      (oa_slot*)_ccol_mem_calloc(map->m_procs, new_capacity, sizeof(oa_slot));
   if (!map->slots) {
     map->slots = old_slots;
     return ccol_not_enough_memory;
   }
 
-  map->val_accessors =
-      (cmap_pair*)_mem_calloc(map->m_procs, new_capacity, sizeof(cmap_pair));
+  map->val_accessors = (cmap_pair*)_ccol_mem_calloc(map->m_procs, new_capacity,
+                                                    sizeof(cmap_pair));
   if (!map->val_accessors) {
-    _mem_free(map->m_procs, map->slots);
+    _ccol_mem_free(map->m_procs, map->slots);
     map->slots = old_slots;
     map->val_accessors = old_val_accessors;
     return ccol_not_enough_memory;
@@ -769,8 +769,8 @@ static ccol_retval_t oa_rehash(open_addr_map* map, size_t new_capacity) {
     }
   }
 
-  _mem_free(map->m_procs, old_slots);
-  _mem_free(map->m_procs, old_val_accessors);
+  _ccol_mem_free(map->m_procs, old_slots);
+  _ccol_mem_free(map->m_procs, old_val_accessors);
   return ccol_success;
 }
 
@@ -846,7 +846,7 @@ static void oa_find_insertion_slot(const open_addr_map* map, size_t hash_val,
  *
  * Callers (chmap_insert_elem) have already rejected any key_pair/val_pair
  * whose size does not exactly match map->key_size/map->val_size, so both
- * mem_cpy calls below are always bounded by the 8-byte key_data/val_data
+ * ccol_mem_cpy calls below are always bounded by the 8-byte key_data/val_data
  * fields they target; nothing here can spill into a neighbouring slot. */
 static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
                                const cmap_pair* val_pair) {
@@ -879,7 +879,7 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
       // val_pair->ptr may alias this slot's own val_data (e.g. a caller
       // re-inserting a value derived from a pointer previously obtained via
       // chmap_get_elem_ref/chmap_get_ptr for this exact key, through the raw
-      // chmap_insert_elem function layer). mem_cpy's underlying memcpy
+      // chmap_insert_elem function layer). ccol_mem_cpy's underlying memcpy
       // requires src/dst to never overlap; snapshot into a small stack
       // buffer first when they do (val_pair->size is always <= 8 bytes for
       // this backend), mirroring sc_reset_val_of_llist_node's identical
@@ -888,10 +888,10 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
       uint64_t snapshot;
       if (ranges_overlap(src, val_pair->size, &map->slots[index].val_data,
                          map->val_size)) {
-        mem_cpy(&snapshot, src, val_pair->size);
+        ccol_mem_cpy(&snapshot, src, val_pair->size);
         src = &snapshot;
       }
-      mem_cpy(&map->slots[index].val_data, src, val_pair->size);
+      ccol_mem_cpy(&map->slots[index].val_data, src, val_pair->size);
       return ccol_key_already_present;
     }
 
@@ -899,16 +899,16 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
   } while (index != start_index);
 
   // The key genuinely does not exist: this is where sc_insert's own
-  // max_elem_count check lives too (see its own comment for why the
-  // existing-key lookup must run first), stated explicitly here for the
-  // same reason rather than left to fall out only implicitly from capacity
-  // being physically capped at max_power_of_two_size_t (== max_elem_count):
+  // ccol_max_elem_count check lives too (see its own comment for why the
+  // existing-key lookup must run first), stated explicitly here for the same
+  // reason rather than left to fall out only implicitly from capacity being
+  // physically capped at ccol_max_power_of_two_size_t (== ccol_max_elem_count):
   // a table already at that architectural limit, fully occupied with no
   // reusable tombstone, would otherwise reach the exact same
   // ccol_container_full outcome several lines further down, but only after
   // needlessly computing a load factor and confirming growth is impossible
   // first.
-  if (map->count == max_elem_count) {
+  if (map->count == ccol_max_elem_count) {
     return ccol_container_full;
   }
 
@@ -918,7 +918,7 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
   double load_factor =
       (double)(map->count + map->deleted_count) / map->capacity;
   if (load_factor > OPEN_ADDR_MAX_LOAD_FACTOR &&
-      map->capacity < max_power_of_two_size_t) {
+      map->capacity < ccol_max_power_of_two_size_t) {
     if (oa_rehash(map, map->capacity * 2) == ccol_success) {
       // Capacity (and therefore the index mask) changed underneath the
       // probe above; the slot(s) it located are meaningless now, so a fresh
@@ -936,10 +936,10 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
       map->deleted_count--;
     }
 
-    mem_zero(&map->slots[index].key_data, sizeof(uint64_t));
-    mem_zero(&map->slots[index].val_data, sizeof(uint64_t));
-    mem_cpy(&map->slots[index].key_data, key_pair->ptr, key_pair->size);
-    mem_cpy(&map->slots[index].val_data, val_pair->ptr, val_pair->size);
+    ccol_mem_zero(&map->slots[index].key_data, sizeof(uint64_t));
+    ccol_mem_zero(&map->slots[index].val_data, sizeof(uint64_t));
+    ccol_mem_cpy(&map->slots[index].key_data, key_pair->ptr, key_pair->size);
+    ccol_mem_cpy(&map->slots[index].val_data, val_pair->ptr, val_pair->size);
     map->slots[index].metadata = SLOT_OCCUPIED;
     map->val_accessors[index].ptr = &map->slots[index].val_data;
     map->val_accessors[index].size = map->val_size;
@@ -949,10 +949,12 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
 
   if (first_deleted < map->capacity) {
     map->deleted_count--;
-    mem_zero(&map->slots[first_deleted].key_data, sizeof(uint64_t));
-    mem_zero(&map->slots[first_deleted].val_data, sizeof(uint64_t));
-    mem_cpy(&map->slots[first_deleted].key_data, key_pair->ptr, key_pair->size);
-    mem_cpy(&map->slots[first_deleted].val_data, val_pair->ptr, val_pair->size);
+    ccol_mem_zero(&map->slots[first_deleted].key_data, sizeof(uint64_t));
+    ccol_mem_zero(&map->slots[first_deleted].val_data, sizeof(uint64_t));
+    ccol_mem_cpy(&map->slots[first_deleted].key_data, key_pair->ptr,
+                 key_pair->size);
+    ccol_mem_cpy(&map->slots[first_deleted].val_data, val_pair->ptr,
+                 val_pair->size);
     map->slots[first_deleted].metadata = SLOT_OCCUPIED;
     map->val_accessors[first_deleted].ptr = &map->slots[first_deleted].val_data;
     map->val_accessors[first_deleted].size = map->val_size;
@@ -962,7 +964,7 @@ static ccol_retval_t oa_insert(open_addr_map* map, const cmap_pair* key_pair,
 
   // No room anywhere in the table: distinguish a genuine, architectural
   // capacity limit (growth was never even attempted, since the table was
-  // already at max_power_of_two_size_t) from growth having been needed but
+  // already at ccol_max_power_of_two_size_t) from growth having been needed but
   // failing due to an allocation failure, which is a resource-exhaustion
   // condition, not "this map has reached its real element cap".
   return rehash_oom_failed ? ccol_not_enough_memory : ccol_container_full;
@@ -1052,9 +1054,9 @@ static ccol_retval_t oa_delete(open_addr_map* map, const cmap_pair* key_pair) {
  * copy is shared between the map struct and its fields. */
 static void oa_destroy(open_addr_map* map) {
   if (map) {
-    _mem_free(map->m_procs, map->slots);
-    _mem_free(map->m_procs, map->val_accessors);
-    _mem_free(map->m_procs, map);
+    _ccol_mem_free(map->m_procs, map->slots);
+    _ccol_mem_free(map->m_procs, map->val_accessors);
+    _ccol_mem_free(map->m_procs, map);
   }
 }
 
@@ -1069,8 +1071,8 @@ static void oa_destroy(open_addr_map* map) {
  * rather than leaving the old table (and all its data) completely
  * untouched. */
 static void oa_clear_in_place(open_addr_map* map) {
-  mem_zero(map->slots, map->capacity * sizeof(oa_slot));
-  mem_zero(map->val_accessors, map->capacity * sizeof(cmap_pair));
+  ccol_mem_zero(map->slots, map->capacity * sizeof(oa_slot));
+  ccol_mem_zero(map->val_accessors, map->capacity * sizeof(cmap_pair));
   map->count = 0;
   map->deleted_count = 0;
 }
@@ -1094,23 +1096,23 @@ static ccol_retval_t oa_reset(open_addr_map* map, size_t new_capacity) {
   }
 
   oa_slot* new_slots =
-      (oa_slot*)_mem_calloc(map->m_procs, new_capacity, sizeof(oa_slot));
+      (oa_slot*)_ccol_mem_calloc(map->m_procs, new_capacity, sizeof(oa_slot));
   if (!new_slots) {
     oa_clear_in_place(map);
     return ccol_not_enough_memory;
   }
 
-  cmap_pair* new_val_accessors =
-      (cmap_pair*)_mem_calloc(map->m_procs, new_capacity, sizeof(cmap_pair));
+  cmap_pair* new_val_accessors = (cmap_pair*)_ccol_mem_calloc(
+      map->m_procs, new_capacity, sizeof(cmap_pair));
   if (!new_val_accessors) {
-    _mem_free(map->m_procs, new_slots);
+    _ccol_mem_free(map->m_procs, new_slots);
     oa_clear_in_place(map);
     return ccol_not_enough_memory;
   }
 
-  _mem_free(map->m_procs, map->slots);
+  _ccol_mem_free(map->m_procs, map->slots);
   map->slots = new_slots;
-  _mem_free(map->m_procs, map->val_accessors);
+  _ccol_mem_free(map->m_procs, map->val_accessors);
   map->val_accessors = new_val_accessors;
 
   map->capacity = new_capacity;
@@ -1166,10 +1168,10 @@ static void sc_destroy_llist_node(dllist_ref_node** head_of_all_elems,
                                   llist_node* elem) {
   if (elem) {
     if (!elem->data.key_is_inline && elem->data.key_storage.ptr) {
-      _mem_free(elem->m_procs, elem->data.key_storage.ptr);
+      _ccol_mem_free(elem->m_procs, elem->data.key_storage.ptr);
     }
     if (!elem->data.val_is_inline && elem->data.val_storage.ptr) {
-      _mem_free(elem->m_procs, elem->data.val_storage.ptr);
+      _ccol_mem_free(elem->m_procs, elem->data.val_storage.ptr);
     }
     if (head_of_all_elems) {
       detach_node_from_dllist(head_of_all_elems, &elem->dllist_refs);
@@ -1178,7 +1180,7 @@ static void sc_destroy_llist_node(dllist_ref_node** head_of_all_elems,
       ccol_free_t free_func = elem->m_procs->free;
       free_func(elem);
     } else {
-      mem_free(elem);
+      ccol_mem_free(elem);
     }
   }
 }
@@ -1192,7 +1194,7 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
                                         chmap_entry* data, const void* key_ptr,
                                         const void* val_ptr) {
   llist_node* new_elem =
-      (llist_node*)_mem_calloc(data->m_procs, 1, sizeof(llist_node));
+      (llist_node*)_ccol_mem_calloc(data->m_procs, 1, sizeof(llist_node));
   if (!new_elem) return NULL;
 
   new_elem->m_procs = data->m_procs;
@@ -1202,17 +1204,19 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
 
   if (data->key_size <= INLINE_STORAGE_THRESHOLD) {
     new_elem->data.key_is_inline = true;
-    mem_cpy(&new_elem->data.key_storage.inline_data, key_ptr, data->key_size);
+    ccol_mem_cpy(&new_elem->data.key_storage.inline_data, key_ptr,
+                 data->key_size);
     new_elem->key_pair_accessor.ptr = &new_elem->data.key_storage.inline_data;
     new_elem->key_pair_accessor.size = data->key_size;
   } else {
     new_elem->data.key_is_inline = false;
-    new_elem->data.key_storage.ptr = _mem_alloc(data->m_procs, data->key_size);
+    new_elem->data.key_storage.ptr =
+        _ccol_mem_alloc(data->m_procs, data->key_size);
     if (!new_elem->data.key_storage.ptr) {
       sc_destroy_llist_node(NULL, new_elem);
       return NULL;
     }
-    mem_cpy(new_elem->data.key_storage.ptr, key_ptr, data->key_size);
+    ccol_mem_cpy(new_elem->data.key_storage.ptr, key_ptr, data->key_size);
     new_elem->key_pair_accessor.ptr = new_elem->data.key_storage.ptr;
     new_elem->key_pair_accessor.size = data->key_size;
   }
@@ -1220,17 +1224,19 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
   new_elem->data.val_size = data->val_size;
   if (data->val_size <= INLINE_STORAGE_THRESHOLD) {
     new_elem->data.val_is_inline = true;
-    mem_cpy(&new_elem->data.val_storage.inline_data, val_ptr, data->val_size);
+    ccol_mem_cpy(&new_elem->data.val_storage.inline_data, val_ptr,
+                 data->val_size);
     new_elem->val_pair_accessor.ptr = &new_elem->data.val_storage.inline_data;
     new_elem->val_pair_accessor.size = data->val_size;
   } else {
     new_elem->data.val_is_inline = false;
-    new_elem->data.val_storage.ptr = _mem_alloc(data->m_procs, data->val_size);
+    new_elem->data.val_storage.ptr =
+        _ccol_mem_alloc(data->m_procs, data->val_size);
     if (!new_elem->data.val_storage.ptr) {
       sc_destroy_llist_node(NULL, new_elem);
       return NULL;
     }
-    mem_cpy(new_elem->data.val_storage.ptr, val_ptr, data->val_size);
+    ccol_mem_cpy(new_elem->data.val_storage.ptr, val_ptr, data->val_size);
     new_elem->val_pair_accessor.ptr = new_elem->data.val_storage.ptr;
     new_elem->val_pair_accessor.size = data->val_size;
   }
@@ -1257,8 +1263,8 @@ static llist_node* sc_create_llist_node(dllist_ref_node** head_of_all_elems,
 static inline bool long_double_keys_equal(const void* a_ptr,
                                           const void* b_ptr) {
   long double a, b;
-  mem_cpy(&a, a_ptr, sizeof(a));
-  mem_cpy(&b, b_ptr, sizeof(b));
+  ccol_mem_cpy(&a, a_ptr, sizeof(a));
+  ccol_mem_cpy(&b, b_ptr, sizeof(b));
 
   bool a_nan = isnan(a);
   bool b_nan = isnan(b);
@@ -1358,7 +1364,7 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
       memcpy(snapshot_buf, val_ptr, val_size);
       val_ptr = snapshot_buf;
     } else {
-      heap_snapshot = _mem_alloc(elem->m_procs, val_size);
+      heap_snapshot = _ccol_mem_alloc(elem->m_procs, val_size);
       if (!heap_snapshot) return false;
       memcpy(heap_snapshot, val_ptr, val_size);
       val_ptr = heap_snapshot;
@@ -1368,22 +1374,22 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
   bool ok = true;
   if (val_size == elem->data.val_size) {
     if (elem->data.val_is_inline) {
-      mem_cpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
+      ccol_mem_cpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
     } else {
-      mem_cpy(elem->data.val_storage.ptr, val_ptr, val_size);
+      ccol_mem_cpy(elem->data.val_storage.ptr, val_ptr, val_size);
     }
   } else if (val_size <= INLINE_STORAGE_THRESHOLD) {
     if (!elem->data.val_is_inline) {
-      _mem_free(elem->m_procs, elem->data.val_storage.ptr);
+      _ccol_mem_free(elem->m_procs, elem->data.val_storage.ptr);
     }
     elem->data.val_is_inline = true;
     elem->data.val_size = val_size;
-    mem_cpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
+    ccol_mem_cpy(&elem->data.val_storage.inline_data, val_ptr, val_size);
     elem->val_pair_accessor.ptr = &elem->data.val_storage.inline_data;
     elem->val_pair_accessor.size = val_size;
   } else {
     if (elem->data.val_is_inline) {
-      void* new_ptr = _mem_alloc(elem->m_procs, val_size);
+      void* new_ptr = _ccol_mem_alloc(elem->m_procs, val_size);
       if (!new_ptr) {
         ok = false;
       } else {
@@ -1392,8 +1398,8 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
       }
     } else {
       void* orig = elem->data.val_storage.ptr;
-      elem->data.val_storage.ptr =
-          _mem_realloc(elem->m_procs, elem->data.val_storage.ptr, val_size);
+      elem->data.val_storage.ptr = _ccol_mem_realloc(
+          elem->m_procs, elem->data.val_storage.ptr, val_size);
       if (!elem->data.val_storage.ptr) {
         elem->data.val_storage.ptr = orig;
         ok = false;
@@ -1401,7 +1407,7 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
     }
 
     if (ok) {
-      mem_cpy(elem->data.val_storage.ptr, val_ptr, val_size);
+      ccol_mem_cpy(elem->data.val_storage.ptr, val_ptr, val_size);
       elem->data.val_size = val_size;
       elem->val_pair_accessor.ptr = elem->data.val_storage.ptr;
       elem->val_pair_accessor.size = val_size;
@@ -1409,7 +1415,7 @@ static bool sc_reset_val_of_llist_node(llist_node* elem, const void* val_ptr,
   }
 
   if (heap_snapshot) {
-    _mem_free(elem->m_procs, heap_snapshot);
+    _ccol_mem_free(elem->m_procs, heap_snapshot);
   }
   return ok;
 }
@@ -1467,12 +1473,12 @@ static llist_node* sc_destroy_the_whole_llist(
  * + 1) / 8" formulas exactly, computed without ever overflowing size_t: the
  * scale-up threshold is floor(3 * bucket_arr_size / 2) (the same
  * bucket_arr_size + bucket_arr_size / 2 expression used below, which cannot
- * overflow since bucket_arr_size is capped at max_power_of_two_size_t) plus a
- * parity-dependent +1 (even bucket_arr_size) or +2 (odd) correction, derived
- * algebraically from floor((n+1)*3/2) in terms of floor(3n/2) rather than by
- * computing (bucket_arr_size + 1) * 3 directly, which would overflow size_t
- * at that same upper bound. The scale-down threshold has no such risk, since
- * bucket_arr_size + 1 alone never overflows. */
+ * overflow since bucket_arr_size is capped at ccol_max_power_of_two_size_t)
+ * plus a parity-dependent +1 (even bucket_arr_size) or +2 (odd) correction,
+ * derived algebraically from floor((n+1)*3/2) in terms of floor(3n/2) rather
+ * than by computing (bucket_arr_size + 1) * 3 directly, which would overflow
+ * size_t at that same upper bound. The scale-down threshold has no such risk,
+ * since bucket_arr_size + 1 alone never overflows. */
 static void sc_set_scaling_limits(sep_chain_map* map) {
   size_t base_up = map->bucket_arr_size + map->bucket_arr_size / 2;
   map->elem_count_to_scale_up =
@@ -1484,7 +1490,8 @@ static void sc_set_scaling_limits(sep_chain_map* map) {
  * existing nodes into their new bucket positions. Scaling uses & (new_size-1)
  * rather than modulo, which is why all sizes are kept as powers of two. */
 static void sc_scale(sep_chain_map* map, bool up) {
-  if (up && (map->bucket_arr_size > max_power_of_two_size_t / scale_factor)) {
+  if (up &&
+      (map->bucket_arr_size > ccol_max_power_of_two_size_t / scale_factor)) {
     // That's beyond the scale-up limit
     return;
   }
@@ -1505,8 +1512,8 @@ static void sc_scale(sep_chain_map* map, bool up) {
     new_size = minimum_allowed_bucket_array_size;
   }
 
-  llist_node** new_arr =
-      (llist_node**)_mem_calloc(map->m_procs, new_size, sizeof(llist_node*));
+  llist_node** new_arr = (llist_node**)_ccol_mem_calloc(map->m_procs, new_size,
+                                                        sizeof(llist_node*));
   if (!new_arr) return;
 
   for (size_t i = 0; i < map->bucket_arr_size; i++) {
@@ -1520,7 +1527,7 @@ static void sc_scale(sep_chain_map* map, bool up) {
     }
   }
 
-  _mem_free(map->m_procs, map->bucket_arr);
+  _ccol_mem_free(map->m_procs, map->bucket_arr);
   map->bucket_arr = new_arr;
   map->bucket_arr_size = new_size;
   sc_set_scaling_limits(map);
@@ -1533,13 +1540,13 @@ static sep_chain_map* sc_create(size_t bucket_arr_size, ccol_data_type key_type,
                                 ccol_memmgmt_procs_t* m_procs,
                                 ccol_hashing_proc_t custom_hashing_proc) {
   sep_chain_map* map =
-      (sep_chain_map*)_mem_alloc(m_procs, sizeof(sep_chain_map));
+      (sep_chain_map*)_ccol_mem_alloc(m_procs, sizeof(sep_chain_map));
   if (!map) return NULL;
 
-  map->bucket_arr =
-      (llist_node**)_mem_calloc(m_procs, bucket_arr_size, sizeof(llist_node*));
+  map->bucket_arr = (llist_node**)_ccol_mem_calloc(m_procs, bucket_arr_size,
+                                                   sizeof(llist_node*));
   if (!map->bucket_arr) {
-    _mem_free(m_procs, map);
+    _ccol_mem_free(m_procs, map);
     return NULL;
   }
 
@@ -1560,13 +1567,12 @@ static sep_chain_map* sc_create(size_t bucket_arr_size, ccol_data_type key_type,
  * key triggers node creation; the node is prepended to the bucket's chain.
  * Scales up the bucket array after insertion if elem_count_to_scale_up is hit.
  *
- * The existing-key lookup runs before the max_elem_count check, not after
- * it: the fullness check only makes sense for "insert a genuinely new
- * key", since an update of an already-present key never changes
- * elem_count at all. Checking fullness first would mean a map that had,
- * at some point, actually reached max_elem_count incorrectly rejects a
- * plain value update for a key it already holds with ccol_container_full
- * instead of updating it.
+ * The existing-key lookup runs before the ccol_max_elem_count check, not
+ * after it: the fullness check only makes sense for "insert a genuinely
+ * new key", since an update of an already-present key never changes
+ * elem_count at all. Checking fullness first would make a map that has
+ * reached ccol_max_elem_count reject a plain value update for a key it
+ * already holds with ccol_container_full instead of updating it.
  */
 static ccol_retval_t sc_insert(sep_chain_map* map, const cmap_pair* key_pair,
                                const cmap_pair* val_pair) {
@@ -1588,7 +1594,7 @@ static ccol_retval_t sc_insert(sep_chain_map* map, const cmap_pair* key_pair,
                : ccol_not_enough_memory;
   }
 
-  if (map->elem_count == max_elem_count) {
+  if (map->elem_count == ccol_max_elem_count) {
     return ccol_container_full;
   }
 
@@ -1659,8 +1665,8 @@ static void sc_destroy(sep_chain_map* map) {
     for (size_t i = 0; i < map->bucket_arr_size; i++) {
       sc_destroy_the_whole_llist(map->bucket_arr[i], &map->head_of_all_elems);
     }
-    _mem_free(map->m_procs, map->bucket_arr);
-    _mem_free(map->m_procs, map);
+    _ccol_mem_free(map->m_procs, map->bucket_arr);
+    _ccol_mem_free(map->m_procs, map);
   }
 }
 
@@ -1676,11 +1682,13 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
   if (new_bucket_array_size > 0 &&
       new_bucket_array_size != map->bucket_arr_size) {
     llist_node** orig = map->bucket_arr;
-    map->bucket_arr = _mem_realloc(map->m_procs, map->bucket_arr,
-                                   new_bucket_array_size * sizeof(llist_node*));
+    map->bucket_arr =
+        _ccol_mem_realloc(map->m_procs, map->bucket_arr,
+                          new_bucket_array_size * sizeof(llist_node*));
     if (!map->bucket_arr) {
       map->bucket_arr = orig;
-      mem_zero(map->bucket_arr, map->bucket_arr_size * sizeof(llist_node*));
+      ccol_mem_zero(map->bucket_arr,
+                    map->bucket_arr_size * sizeof(llist_node*));
       map->elem_count = 0;
       sc_set_scaling_limits(map);
       return ccol_not_enough_memory;
@@ -1688,7 +1696,7 @@ static ccol_retval_t sc_reset(sep_chain_map* map,
     map->bucket_arr_size = new_bucket_array_size;
   }
 
-  mem_zero(map->bucket_arr, map->bucket_arr_size * sizeof(llist_node*));
+  ccol_mem_zero(map->bucket_arr, map->bucket_arr_size * sizeof(llist_node*));
   map->elem_count = 0;
   sc_set_scaling_limits(map);
 
@@ -1735,7 +1743,7 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
     return NULL;
   }
 
-  chmap chm = (chmap)_mem_alloc(mmgmt_procs, sizeof(struct chashmap));
+  chmap chm = (chmap)_ccol_mem_alloc(mmgmt_procs, sizeof(struct chashmap));
   if (!chm) {
     if (err) *err = CCOL_ERR_STR("Failed to allocate chashmap");
     return NULL;
@@ -1745,9 +1753,9 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
     initial_bucket_array_size = minimum_allowed_bucket_array_size;
   } else {
     initial_bucket_array_size =
-        find_nearest_gte_power_of_two(initial_bucket_array_size);
-    if (initial_bucket_array_size > max_elem_count) {
-      _mem_free(mmgmt_procs, chm);
+        ccol_find_nearest_gte_power_of_two(initial_bucket_array_size);
+    if (initial_bucket_array_size > ccol_max_elem_count) {
+      _ccol_mem_free(mmgmt_procs, chm);
       if (err) {
         *err = CCOL_ERR_STR("Initial bucket array size is too big");
       }
@@ -1763,14 +1771,14 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
 
     ccol_memmgmt_procs_t* procs_copy = NULL;
     if (mmgmt_procs) {
-      procs_copy = (ccol_memmgmt_procs_t*)_mem_alloc(
+      procs_copy = (ccol_memmgmt_procs_t*)_ccol_mem_alloc(
           mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
       if (!procs_copy) {
         if (err) *err = CCOL_ERR_STR("Failed to allocate m_procs");
-        _mem_free(mmgmt_procs, chm);
+        _ccol_mem_free(mmgmt_procs, chm);
         return NULL;
       }
-      mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      ccol_mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
     }
 
     chm->impl.oa_map =
@@ -1778,8 +1786,8 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
                   val_size, procs_copy, custom_hashing_proc);
     if (!chm->impl.oa_map) {
       if (err) *err = CCOL_ERR_STR("Failed to create open addressing map");
-      if (procs_copy) _mem_free(mmgmt_procs, procs_copy);
-      _mem_free(mmgmt_procs, chm);
+      if (procs_copy) _ccol_mem_free(mmgmt_procs, procs_copy);
+      _ccol_mem_free(mmgmt_procs, chm);
       return NULL;
     }
   } else {
@@ -1787,22 +1795,22 @@ chmap chmap_create_full(size_t initial_bucket_array_size,
 
     ccol_memmgmt_procs_t* procs_copy = NULL;
     if (mmgmt_procs) {
-      procs_copy = (ccol_memmgmt_procs_t*)_mem_alloc(
+      procs_copy = (ccol_memmgmt_procs_t*)_ccol_mem_alloc(
           mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
       if (!procs_copy) {
         if (err) *err = CCOL_ERR_STR("Failed to allocate m_procs");
-        _mem_free(mmgmt_procs, chm);
+        _ccol_mem_free(mmgmt_procs, chm);
         return NULL;
       }
-      mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
+      ccol_mem_cpy(procs_copy, mmgmt_procs, sizeof(ccol_memmgmt_procs_t));
     }
 
     chm->impl.sc_map = sc_create(initial_bucket_array_size, key_type, val_type,
                                  procs_copy, custom_hashing_proc);
     if (!chm->impl.sc_map) {
       if (err) *err = CCOL_ERR_STR("Failed to create separate chaining map");
-      if (procs_copy) _mem_free(mmgmt_procs, procs_copy);
-      _mem_free(mmgmt_procs, chm);
+      if (procs_copy) _ccol_mem_free(mmgmt_procs, procs_copy);
+      _ccol_mem_free(mmgmt_procs, chm);
       return NULL;
     }
   }
@@ -1841,13 +1849,13 @@ static inline const cmap_pair* canonicalize_key_pair_if_needed(
   }
 
   *out_canon_buf = 0;
-  mem_cpy(out_canon_buf, key_pair->ptr, key_pair->size);
+  ccol_mem_cpy(out_canon_buf, key_pair->ptr, key_pair->size);
 
   if (key_type == ccol_float) {
     uint32_t bits;
-    mem_cpy(&bits, out_canon_buf, sizeof(bits));
+    ccol_mem_cpy(&bits, out_canon_buf, sizeof(bits));
     if (bits == 0x80000000u) {
-      mem_zero(out_canon_buf, sizeof(bits));
+      ccol_mem_zero(out_canon_buf, sizeof(bits));
     }
   } else if (*out_canon_buf == 0x8000000000000000ULL) {
     *out_canon_buf = 0;
@@ -1859,7 +1867,7 @@ static inline const cmap_pair* canonicalize_key_pair_if_needed(
 }
 
 /* The open-addressing backend stores a key/value pair inline in a slot's
- * fixed 8-byte key_data/val_data fields (see oa_slot); oa_insert's mem_cpy
+ * fixed 8-byte key_data/val_data fields (see oa_slot); oa_insert's ccol_mem_cpy
  * calls trust key_pair->size/val_pair->size completely and have no bounds
  * check of their own. A caller-supplied size that does not match what this
  * particular map was created for (map->key_size/map->val_size, both fixed
@@ -1905,14 +1913,23 @@ static inline bool oa_val_size_matches(const open_addr_map* map,
  * chaining on its own), not merely a theoretical open-addressing-only
  * concern. The open-addressing backend always has an is_type_integral()
  * key_type by construction (see should_use_open_addressing), so this one
- * check also covers the pre-existing "don't let a mismatched size corrupt
- * a neighbouring slot" hazard a narrower, open-addressing-only version of
- * this check used to guard on its own. */
+ * check also covers that backend's own "don't let a mismatched size
+ * corrupt a neighbouring slot" hazard, with no separate,
+ * open-addressing-only check needed alongside it.
+ *
+ * The set of fixed-width key types, and each one's expected size, comes from
+ * ccol_fixed_width_data_type_size() in common.h rather than from
+ * is_type_integral()/get_type_size() above, because cbstmap enforces the
+ * identical rule on its own key_pairs and the two modules must agree on
+ * exactly which types it covers. The local get_type_size() is not a
+ * substitute: it answers a different question (how wide an open-addressing
+ * slot must be) and deliberately reports 8 for a type with no fixed width at
+ * all, which would turn every ccol_string key that happens not to be 8 bytes
+ * long into a spurious rejection. */
 static inline bool key_size_matches_type_if_fixed_width(ccol_data_type key_type,
                                                         size_t key_size) {
-  bool is_fixed_width =
-      is_type_integral(key_type) || key_type == ccol_long_double;
-  return !is_fixed_width || key_size == get_type_size(key_type);
+  size_t fixed_width = ccol_fixed_width_data_type_size(key_type);
+  return fixed_width == 0 || key_size == fixed_width;
 }
 
 /* Public insert/update dispatch: validates inputs then delegates to the
@@ -1984,10 +2001,10 @@ ccol_retval_t chmap_get_elem_copy(chmap chm, const cmap_pair* key_pair,
   if (ret == ccol_success && val_pair) {
     size_t copy_size =
         val_pair->size < target_buf_size ? val_pair->size : target_buf_size;
-    mem_cpy(target_buf, val_pair->ptr, copy_size);
+    ccol_mem_cpy(target_buf, val_pair->ptr, copy_size);
     if (val_pair->size < target_buf_size) {
-      mem_zero((uint8_t*)target_buf + val_pair->size,
-               target_buf_size - val_pair->size);
+      ccol_mem_zero((uint8_t*)target_buf + val_pair->size,
+                    target_buf_size - val_pair->size);
     }
   }
   return ret;
@@ -2043,8 +2060,8 @@ ccol_retval_t chmap_reset(chmap chm, size_t new_bucket_array_size) {
     new_bucket_array_size = minimum_allowed_bucket_array_size;
   } else if (new_bucket_array_size > 0) {
     new_bucket_array_size =
-        find_nearest_gte_power_of_two(new_bucket_array_size);
-    if (new_bucket_array_size > max_elem_count) {
+        ccol_find_nearest_gte_power_of_two(new_bucket_array_size);
+    if (new_bucket_array_size > ccol_max_elem_count) {
       // The requested size is too big: fall back to "keep the current
       // capacity" (0) rather than skipping the reset entirely, so this
       // failure path still honors the documented "all elements are
@@ -2077,26 +2094,21 @@ static cmap_iterator* chmap_iter_next(cmap_iterator* iter);
 #ifdef RUNNING_UNIT_TESTS
 /* White-box regression guard: tracks the NET count of chashmap_cmap_iterator
  * allocations made by chashmap_begin_iter() that have not yet been released
- * via __chmap_iterator_destroy(), across every chmap in the process. Added
- * (2026-09-03) after a `make memtest` run of tests/ctls under heavy
- * concurrent system load reported one such iterator as "possibly lost"
- * (valgrind's own classification for an interior-pointer live reference,
- * not a genuine leak in itself; see chashmap_begin_iter()'s own
- * return-a-pointer-to-an-embedded-field shape) and the finding could not be
- * reproduced afterward across 35 further runs (10 native, 25 under
- * valgrind, several deliberately concurrent) once this exact counter was
- * checked directly: never once found nonzero at the one call site under
- * suspicion (tests/ctls/tests.c's own
- * ctls_sni.cert_add_race_during_live_handshake_does_not_crash, via
- * ctls_ctx_cert_add -> _ctls_ctx_rebuild_locked, which reads/frees this
- * exact iterator type while ctx->lock is held for the call's entire
- * duration, confirmed by direct code tracing). Kept as a permanent,
- * always-available accessor (not deleted once that investigation
- * concluded) so any FUTURE genuine regression in ANY chashmap iterator's
- * own alloc/free balance, anywhere in the process, is caught by a loud,
- * immediate abort() the moment it happens (see
- * tests/ctls/tests.c's own _check_chmap_iter_balance_at_exit) rather than
- * relying on a rare, hard-to-reproduce valgrind report alone. */
+ * via __chmap_iterator_destroy(), across every chmap in the process.
+ *
+ * valgrind on its own is not a dependable guard for this balance.
+ * chashmap_begin_iter() hands back a pointer to a field embedded inside
+ * the iterator struct rather than the struct's own base address, so a
+ * live, perfectly valid iterator is reported as "possibly lost"
+ * (valgrind's classification for an interior-pointer live reference)
+ * rather than as a genuine leak, and that report is both noisy under
+ * concurrent load and absent on most runs.
+ *
+ * This counter is the always-on, deterministic alternative: any regression
+ * in ANY chashmap iterator's own alloc/free balance, anywhere in the
+ * process, produces a loud, immediate abort() the moment it happens (see
+ * tests/ctls/tests.c's own _check_chmap_iter_balance_at_exit) instead of a
+ * rare, hard-to-reproduce valgrind report. */
 static long g_chmap_iter_outstanding_for_tests = 0;
 long chashmap_iter_outstanding_count_for_tests(void) {
   return __atomic_load_n(&g_chmap_iter_outstanding_for_tests, __ATOMIC_SEQ_CST);
@@ -2119,7 +2131,7 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
 
     ccol_memmgmt_procs_t* m_procs = chm->impl.sc_map->m_procs;
     chmap_cmap_iterator* real_iter =
-        _mem_calloc(m_procs, 1, sizeof(chmap_cmap_iterator));
+        _ccol_mem_calloc(m_procs, 1, sizeof(chmap_cmap_iterator));
     if (!real_iter) {
       if (err) {
         *err = CCOL_ERR_STR("Failed to allocate iterator");
@@ -2158,7 +2170,7 @@ cmap_iterator* chashmap_begin_iter(chmap chm, char** err) {
     }
 
     chmap_cmap_iterator* real_iter =
-        _mem_calloc(map->m_procs, 1, sizeof(chmap_cmap_iterator));
+        _ccol_mem_calloc(map->m_procs, 1, sizeof(chmap_cmap_iterator));
     if (!real_iter) {
       if (err) {
         *err = CCOL_ERR_STR("Failed to allocate iterator");
@@ -2199,9 +2211,9 @@ void __chmap_iterator_destroy(cmap_iterator* iter) {
                        __ATOMIC_SEQ_CST);
 #endif /* RUNNING_UNIT_TESTS */
     if (real_iter->parent_map->impl_type == IMPL_OPEN_ADDRESSING) {
-      _mem_free(real_iter->parent_map->impl.oa_map->m_procs, real_iter);
+      _ccol_mem_free(real_iter->parent_map->impl.oa_map->m_procs, real_iter);
     } else {
-      _mem_free(real_iter->parent_map->impl.sc_map->m_procs, real_iter);
+      _ccol_mem_free(real_iter->parent_map->impl.sc_map->m_procs, real_iter);
     }
   }
 }
@@ -2285,7 +2297,7 @@ void __chmap_destroy(chmap chm) {
         }
       }
     }
-    mem_free(chm);
+    ccol_mem_free(chm);
   }
 }
 
@@ -2294,10 +2306,9 @@ void __chmap_destroy(chmap chm) {
  * the same underlying, already-allocation-free walk each backend's own
  * oa_destroy()/sc_destroy() would otherwise perform silently. The two
  * walks below are deliberately NOT extracted into oa_destroy()/
- * sc_destroy() themselves (which stay exactly as they were): duplicating
- * the loop here keeps this function's own only-when-val_dtor-is-non-NULL
- * cost isolated from the hot, no-destructor path every other map user
- * still takes. */
+ * sc_destroy() themselves: duplicating the loop here keeps this function's
+ * own only-when-val_dtor-is-non-NULL cost isolated from the hot,
+ * no-destructor path every other map user takes. */
 void chmap_destroy_with_dtor(chmap chm,
                              void (*val_dtor)(cmap_pair* val_pair,
                                               void* dtor_ctx),

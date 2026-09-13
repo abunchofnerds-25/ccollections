@@ -28,8 +28,8 @@ SOFTWARE.
  * not with cyaml itself, so this suite has no circular dependency on the
  * parser it is testing) and checks whether cyaml_parse_n's success/failure
  * matches the case's own fail=0/fail=1 expectation. A full event-stream-level
- * comparison against the suite's own expected tree is out of scope for this
- * pass; accept/reject agreement is the slice implemented here.
+ * comparison against the suite's own expected tree is out of scope here;
+ * accept/reject agreement is the slice this suite implements.
  *
  * A small number of cases are known, individually investigated deviations
  * and are listed explicitly in KNOWN_DEVIATIONS below rather than silently
@@ -103,11 +103,10 @@ static const known_deviation_t KNOWN_DEVIATIONS[] = {
     {"6HB6",
      "reference-parser disagreement: a tab used as leading "
      "indentation is rejected, matching PyYAML (Psych disagrees "
-     "and accepts it, but PyYAML's judgment is the one this "
-     "parser's own full tab-as-indentation audit was verified "
-     "against throughout, having matched the vendored suite's own "
+     "and accepts it; PyYAML is the reference this parser follows "
+     "for tab handling, since it matches the vendored suite's own "
      "expectation far more consistently than Psych across every "
-     "other case checked)"},
+     "other tab case)"},
     {"DC7X",
      "reference-parser disagreement: a tab immediately after a "
      "block mapping's ':' value indicator, before further content "

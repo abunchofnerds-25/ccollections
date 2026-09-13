@@ -19,8 +19,8 @@ handler for every request.
 fn receives a next callback; calling it continues the chain.  Omitting
 the call short-circuits the chain and sends the response as-is.
 
-This function is thread-safe and may be called before or after
-chttpsvr_start is running.
+This function is thread-safe and may be called before or after the
+server is started.
 .fi
 .SH NOTES
 .nf

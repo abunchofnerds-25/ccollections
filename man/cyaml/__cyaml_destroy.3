@@ -15,8 +15,9 @@ Recursively frees node and all of its descendants using each node's
 stored allocator.  Does NOT null the caller's handle.  Prefer the
 cyaml_destroy() macro, which nulls the handle after freeing.
 
-This function is also used as the RAII cleanup target registered by
-cyaml_declare_scoped() via the GCC cleanup attribute.
+___cyaml_destroy(), the RAII cleanup target that
+cyaml_declare_scoped() registers via the GCC cleanup attribute, calls
+this function and then nulls the caller's handle.
 .fi
 .SH "SEE ALSO"
 .BR cyaml_destroy (macro) (3),

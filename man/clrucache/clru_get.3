@@ -25,8 +25,9 @@ that cannot be implicitly converted from the cache's declared ValT is a
 compile error at this point, not a silently reinterpreted value.
 
 char* val types: ownership of the heap-allocated string is transferred
-directly to the caller via *(char **)val_ptr. The caller must free()
-that pointer when done.
+directly to the caller via *(char **)val_ptr. The caller must free that
+pointer when done, using the cache's custom free function if a custom
+allocator was configured at construction, or free() otherwise.
 
 Use clrucache_get_full() directly only if you need the raw cmap_pair
 output; clru_get() hides that entirely.
@@ -48,7 +49,7 @@ val_ptr  Pointer to the value type, NOT cmap_pair *.
          return ccol_success.
          For char* val types: pointer to a char* variable; on success
          it is set to the heap-allocated string and the caller must
-         free() it.
+         free it with the matching allocator.
 .fi
 .SH RETURN VALUE
 .nf
@@ -102,10 +103,12 @@ clru_destroy(str_cache);
 .nf
 For char* val types: the string placed in *(char **)val_ptr is a
 heap-allocated copy whose ownership is transferred to the caller.
-The caller MUST call free() on it when done; failing to do so is a
-memory leak.  Each call to clru_get for a char* value produces an
-independent allocation, so two successive calls for the same key
-yield two independent pointers that must each be freed separately.
+The caller MUST free it when done (with the cache's custom free
+function if a custom allocator was configured, or free() otherwise);
+failing to do so is a memory leak.  Each call to clru_get for a char*
+value produces an independent allocation, so two successive calls for
+the same key yield two independent pointers that must each be freed
+separately.
 
 For non-char* val types: no heap allocation occurs.  The value is
 converted into *val_ptr; the caller must NOT call free() on it.

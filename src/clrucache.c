@@ -113,7 +113,20 @@ typedef struct clru_entry {
  * alias a later, unrelated cache occupying the same slot index. Mirrors
  * chttpcli_slot_table/chttpsvr_slot_table/event_loop_slot_table exactly;
  * see src/chttpclient.c's own copy of this comment for the full design
- * rationale. */
+ * rationale.
+ *
+ * The table's own lock is a read-write lock, not a plain mutex: _clrucache_
+ * resolve (read-only: bounds-check idx, compare generation, read slot->ptr)
+ * runs on every single clru_cache get/set/delete call; _clrucache_handle_
+ * slot_acquire/__clrucache_destroy (the only mutators) each run once per
+ * cache's entire lifetime, not once per operation. Mirrors cthreadcomm.c's/
+ * cthreadpool.c's/chttpclient.c's own identical slot-table rwlock
+ * conversions. Like chttpclient.c's chttpcli_slot_table, this table has no
+ * pthread_atfork() protection of its own at all (clrucache.c registers
+ * none), so this conversion carries none of cthreadcomm.c's/cthreadpool.c's
+ * own TID-tracked-write-lock reinit-in-child subtlety: there being nothing
+ * to preserve doesn't change what fork() safety this table already did or
+ * didn't have. */
 typedef struct {
   struct clrucache *ptr; /* NULL when slot is free */
   uint32_t generation;   /* minted fresh on every acquire; monotonic per
@@ -123,7 +136,7 @@ typedef struct {
 } clrucache_slot_t;
 
 static struct {
-  mutex_t mutex;
+  rw_lock_t rwlock;
   once_flag_t once;
   cvec slots;        /* cvec of clrucache_slot_t; grows via push_back only,
                          indices permanent once allocated */
@@ -131,7 +144,8 @@ static struct {
 } clrucache_slot_table = {0};
 
 static void _clrucache_slot_table_init_globals(void) {
-  mutex_init(clrucache_slot_table.mutex);
+  if (rw_lock_init(clrucache_slot_table.rwlock) != 0)
+    fatal_err("clru_cache slot table: failed to initialize rwlock");
   clrucache_slot_table.slots = cvector_create(sizeof(clrucache_slot_t), NULL);
   if (!clrucache_slot_table.slots)
     fatal_err("clru_cache slot table: failed to allocate slots vector");
@@ -189,22 +203,22 @@ static struct clrucache *_clrucache_resolve(clru_cache h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(clrucache_slot_table.mutex);
+  rw_lock_rdlock(clrucache_slot_table.rwlock);
   struct clrucache *raw = NULL;
   if (idx < cvector_elem_count(clrucache_slot_table.slots)) {
     clrucache_slot_t *slot =
         (clrucache_slot_t *)cvector_at(clrucache_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  /* Lock-free: no raw->mutex acquisition here at all, so nothing can ever
-   * block while clrucache_slot_table.mutex is held; matches chttpcli's own
+  /* No raw->mutex acquisition here at all, so nothing can ever block while
+   * clrucache_slot_table.rwlock is held; matches chttpcli's own
    * _chttpcli_resolve reasoning exactly. Safe because raw is guaranteed
    * still-allocated here regardless: the only thing that could make it
    * unsafe to touch, __clrucache_destroy's slot-release step, also
-   * requires clrucache_slot_table.mutex, which we still hold at this exact
-   * point. */
+   * requires clrucache_slot_table.rwlock's write side, which cannot run
+   * concurrently with this read side regardless. */
   if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  mutex_unlock(clrucache_slot_table.mutex);
+  rw_lock_unlock(clrucache_slot_table.rwlock);
   return raw;
 }
 
@@ -225,7 +239,7 @@ static void _clrucache_resolve_unpin(struct clrucache *raw) {
  * after the object is otherwise fully constructed. */
 static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache) {
   call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
-  mutex_lock(clrucache_slot_table.mutex);
+  rw_lock_wrlock(clrucache_slot_table.rwlock);
   uint32_t idx;
   clrucache_slot_t *slot;
   if (cvector_elem_count(clrucache_slot_table.free_indices) > 0) {
@@ -234,7 +248,7 @@ static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache) {
   } else {
     clrucache_slot_t fresh = {0};
     if (cvector_push_back(clrucache_slot_table.slots, &fresh) != ccol_success) {
-      mutex_unlock(clrucache_slot_table.mutex);
+      rw_lock_unlock(clrucache_slot_table.rwlock);
       return 0; /* ordinary, non-fatal OOM */
     }
     idx = (uint32_t)cvector_elem_count(clrucache_slot_table.slots) - 1;
@@ -249,7 +263,7 @@ static clru_cache _clrucache_handle_slot_acquire(struct clrucache *cache) {
   slot->ptr = cache;
   slot->in_use = true;
   clru_cache h = ((clru_cache)idx << 32) | (clru_cache)slot->generation;
-  mutex_unlock(clrucache_slot_table.mutex);
+  rw_lock_unlock(clrucache_slot_table.rwlock);
   return h;
 }
 
@@ -522,7 +536,7 @@ void __clrucache_destroy(clru_cache cache) {
   call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
   uint32_t idx = (uint32_t)(cache >> 32);
   uint32_t gen = (uint32_t)(cache & 0xFFFFFFFFu);
-  mutex_lock(clrucache_slot_table.mutex);
+  rw_lock_wrlock(clrucache_slot_table.rwlock);
   clrucache_slot_t *slot = NULL;
   struct clrucache *raw = NULL;
   if (idx < cvector_elem_count(clrucache_slot_table.slots)) {
@@ -534,7 +548,7 @@ void __clrucache_destroy(clru_cache cache) {
     }
   }
   if (!raw) {
-    mutex_unlock(clrucache_slot_table.mutex);
+    rw_lock_unlock(clrucache_slot_table.rwlock);
     fatal_err(
         "clrucache_destroy: handle is stale or already destroyed "
         "(double-destroy / use-after-destroy of a clru_cache handle)");
@@ -542,7 +556,7 @@ void __clrucache_destroy(clru_cache cache) {
   slot->in_use = false; /* blocks ALL future resolves for this handle from
                             this instant, including a second concurrent
                             destroy attempt */
-  mutex_unlock(clrucache_slot_table.mutex);
+  rw_lock_unlock(clrucache_slot_table.rwlock);
 
   /* Wait for pending_resolve_count to reach 0 BEFORE running any teardown
    * logic at all (not just before freeing memory); mirrors chttpcli's own
@@ -579,7 +593,7 @@ void __clrucache_destroy(clru_cache cache) {
    * between may have reallocated slots' backing array via
    * cvector_push_back, invalidating any pointer into it taken before this
    * second lock acquisition; idx itself is stable. */
-  mutex_lock(clrucache_slot_table.mutex);
+  rw_lock_wrlock(clrucache_slot_table.rwlock);
   clrucache_slot_t *slot2 =
       (clrucache_slot_t *)cvector_at(clrucache_slot_table.slots, idx);
   slot2->ptr = NULL;
@@ -587,7 +601,7 @@ void __clrucache_destroy(clru_cache cache) {
       the just-freed cache's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(clrucache_slot_table.free_indices, &idx);
-  mutex_unlock(clrucache_slot_table.mutex);
+  rw_lock_unlock(clrucache_slot_table.rwlock);
 }
 
 #ifdef RUNNING_UNIT_TESTS
@@ -605,14 +619,14 @@ struct clrucache *_clrucache_resolve_for_tests(clru_cache h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(clrucache_slot_table.mutex);
+  rw_lock_rdlock(clrucache_slot_table.rwlock);
   struct clrucache *raw = NULL;
   if (idx < cvector_elem_count(clrucache_slot_table.slots)) {
     clrucache_slot_t *slot =
         (clrucache_slot_t *)cvector_at(clrucache_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  mutex_unlock(clrucache_slot_table.mutex);
+  rw_lock_unlock(clrucache_slot_table.rwlock);
   return raw;
 }
 
@@ -622,9 +636,9 @@ struct clrucache *_clrucache_resolve_for_tests(clru_cache h) {
  * table without bound. */
 size_t _clrucache_slot_table_capacity_for_tests(void) {
   call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
-  mutex_lock(clrucache_slot_table.mutex);
+  rw_lock_rdlock(clrucache_slot_table.rwlock);
   size_t n = cvector_elem_count(clrucache_slot_table.slots);
-  mutex_unlock(clrucache_slot_table.mutex);
+  rw_lock_unlock(clrucache_slot_table.rwlock);
   return n;
 }
 
@@ -690,10 +704,10 @@ static void _clru_test_maybe_delay_post_publish(void) {
  * never-pthread_mutex_init'd mutex here. */
 __attribute__((destructor)) static void _cleanup_clrucache_slot_table(void) {
   call_once(clrucache_slot_table.once, _clrucache_slot_table_init_globals);
-  mutex_lock(clrucache_slot_table.mutex);
+  rw_lock_wrlock(clrucache_slot_table.rwlock);
   __cvector_destroy(clrucache_slot_table.slots);
   __cvector_destroy(clrucache_slot_table.free_indices);
-  mutex_unlock(clrucache_slot_table.mutex);
+  rw_lock_unlock(clrucache_slot_table.rwlock);
 }
 
 /* ========================================================================== */

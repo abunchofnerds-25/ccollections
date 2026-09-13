@@ -1478,7 +1478,7 @@ static bool expect_char(parse_ctx_t *ctx, char expected) {
   return true;
 }
 
-/* ------------------------------------------------------------------ null */
+/* null */
 /* Consume the literal "null" token and return a CJSON_NULL node. */
 static cjson_node_t *parse_null(parse_ctx_t *ctx) {
   if (ctx->pos + 4 > ctx->len || memcmp(ctx->src + ctx->pos, "null", 4) != 0) {
@@ -1489,7 +1489,7 @@ static cjson_node_t *parse_null(parse_ctx_t *ctx) {
   return node_alloc(CJSON_NULL, ctx->mp);
 }
 
-/* ------------------------------------------------------------------ bool */
+/* bool */
 /* Consume "true" or "false" and return the corresponding CJSON_BOOL node. */
 static cjson_node_t *parse_bool(parse_ctx_t *ctx) {
   if (ctx->pos + 4 <= ctx->len && memcmp(ctx->src + ctx->pos, "true", 4) == 0) {
@@ -1509,7 +1509,7 @@ static cjson_node_t *parse_bool(parse_ctx_t *ctx) {
   return NULL;
 }
 
-/* ---------------------------------------------------------------- number */
+/* number */
 /*
  * Parse a JSON number according to RFC 8259 section 6.
  *
@@ -1633,7 +1633,7 @@ static cjson_node_t *parse_number(parse_ctx_t *ctx) {
   return result;
 }
 
-/* --------------------- UTF-8 encode a Unicode code point into sbuf_t ----- */
+/* UTF-8 encode a Unicode code point into sbuf_t */
 static void encode_utf8(sbuf_t *sb, uint32_t cp) {
   char buf[4];
   int n;
@@ -1878,7 +1878,7 @@ static cjson_node_t *parse_string(parse_ctx_t *ctx) {
   return n;
 }
 
-/* ----------------------------------------------------------------- list */
+/* list */
 /* Parse a JSON list ('[' value* ']') and return a CJSON_LIST node whose
  * backing cvec holds cjson_node_t * child pointers. */
 static cjson_node_t *parse_list(parse_ctx_t *ctx) {
@@ -1926,7 +1926,7 @@ fail:
   return NULL;
 }
 
-/* ------------------------------------------------------------ dictionary */
+/* dictionary */
 /*
  * Parse a JSON dictionary ('{' (string ':' value)* '}') and return a
  * CJSON_DICTIONARY node backed by a chmap of char* -> cjson_node_t*.
@@ -2011,7 +2011,7 @@ fail:
   return NULL;
 }
 
-/* --------------------------------------------------------- value dispatch */
+/* value dispatch */
 /* Skip whitespace then branch on the first character to call the appropriate
  * sub-parser.  Handles all seven JSON value types. */
 static cjson_node_t *parse_value_dispatch(parse_ctx_t *ctx) {
@@ -2071,7 +2071,7 @@ static cjson_node_t *parse_value(parse_ctx_t *ctx) {
   return r;
 }
 
-/* ---------------------------------------------------- public parse entry */
+/* public parse entry */
 /*
  * Shared implementation for the public parse entry points.
  *

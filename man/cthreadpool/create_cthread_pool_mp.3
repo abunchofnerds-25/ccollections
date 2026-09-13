@@ -63,22 +63,27 @@ to finish before freeing anything, so the caller does not need to
 independently prove no other thread is still using the pool; see
 __ctpool_destroy(3).
 
-A fresh create_cthread_pool_mp/ctpool_submit/_try_submit/_timed_submit/
+The supported way to combine fork(2) with cthreadpool is to fork(2)
+before creating a pool, or create one and fork(2) immediately followed
+by exec(3); continuing to run without an intervening exec(3) while a
+pool created before the fork is still live is not a supported pattern.
+As a defense-in-depth measure on top of that, a fresh
+create_cthread_pool_mp/ctpool_submit/_try_submit/_timed_submit/
 ctpool_destroy (and the future/wait/shutdown variants) call, from any
 thread, in either the parent or a freshly forked child, never hangs on
 a lock some other (possibly no-longer-existing, since fork(2)
 duplicates only the calling thread) thread happened to hold at the
 instant of the fork. A pool already live across the fork is a
-different matter: its worker threads are not duplicated into the
-child, so an inherited pool can no longer run any queued or future
-task there regardless of this guarantee; treat such a pool as inert in
-the child (not usable for further submission). ctpool_wait on such a
-pool in the child returns immediately rather than waiting for progress
-that can never happen, and ctpool_destroy still discards any work
-still queued at the moment of the fork (cancelling any queued futures,
-so a caller blocked in ctpool_future_get on one of them wakes up
-rather than hanging) before releasing the pool's own memory, even with
-no prior explicit shutdown call.
+different matter regardless of that measure: its worker threads are
+not duplicated into the child, so an inherited pool can no longer run
+any queued or future task there; treat such a pool as inert in the
+child (not usable for further submission). ctpool_wait on such a pool
+in the child returns immediately rather than waiting for progress that
+can never happen, and ctpool_destroy still discards any work still
+queued at the moment of the fork (cancelling any queued futures, so a
+caller blocked in ctpool_future_get on one of them wakes up rather
+than hanging) before releasing the pool's own memory, even with no
+prior explicit shutdown call.
 .fi
 .SH "SEE ALSO"
 .BR create_cthread_pool (3),

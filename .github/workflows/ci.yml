@@ -1,7 +1,7 @@
 name: CI
 
 on:
-  pull_request:
+  push:
 
 jobs:
   linux-x86_64-gcc:
@@ -42,7 +42,7 @@ jobs:
         #
         # -fno-sanitize-recover=undefined: without it, UBSan reports a
         # detected UB to stderr and keeps running, so a real, live UB finding
-        # here would not fail this job at all -- the process still exits 0.
+        # here would not fail this job at all; the process still exits 0.
         run: make CC=clang EXTRA_CFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=undefined" test
 
   linux-x86_64-tsan:
@@ -77,9 +77,49 @@ jobs:
         # (libc6-dbg:i386) that this job does not install.
         run: make CC="gcc -m32" test
 
+  linux-i386-clang:
+    name: Linux i386 (Clang, clang -m32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        # gcc-multilib is still required even though gcc is not the compiler
+        # used here: clang -m32 relies on the same 32-bit crt objects/libgcc
+        # that a native gcc installation's own multilib support provides
+        # (found automatically under /usr/lib/gcc/x86_64-linux-gnu/<ver>/32/,
+        # unlike the aarch64/arm32 Clang jobs' cross-compiled targets, this
+        # needs no explicit -B: it is the same host gcc installation clang
+        # already detects, just building for its 32-bit multilib variant).
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y clang gcc-multilib libssl-dev:i386 zlib1g-dev:i386
+      - name: make test
+        # Same rationale as the i386 GCC job above for omitting `make
+        # memtest`.
+        run: make CC="clang -m32" test
+
   linux-aarch64-gcc:
     name: Linux aarch64 (cross-compile + QEMU)
     runs-on: ubuntu-latest
+    # qemu-user's own fork()-plus-multithreaded-guest handling has a known,
+    # timing-dependent deadlock class: at least one confirmed, external,
+    # already-filed cause is linux-user's own internal fd_trans_lock, a
+    # process-wide pthread mutex left permanently locked in a forked child
+    # if another thread in the parent was holding it at the instant of
+    # fork() (gitlab.com/qemu-project/qemu/-/issues/2846, confirmed there on
+    # exactly the qemu-user 8.2.2 this distribution installs; see
+    # tests/cthreadcomm/tests.c's own CCOL_QEMU_FD_TRANS_LOCK_BUG comment,
+    # which this job's own "Detect a known-affected qemu-user version" step
+    # feeds, for the one test suite known to hit it reliably enough to skip
+    # outright). When this class triggers on some OTHER test this project has
+    # not identified and skipped this same way, no in-process timeout
+    # (including this suite's own `alarm(10)` safety nets around fork()-based
+    # tests) can save the job, since the itimer that alarm() relies on is
+    # itself stuck inside the same deadlock. A one-time occurrence ran for
+    # over 3 hours with zero output before being cancelled; this bound keeps
+    # a recurrence cheap instead of silently burning runner time.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -102,11 +142,26 @@ jobs:
           EOF
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user libssl-dev:arm64 zlib1g-dev:arm64
+      - name: Detect a known-affected qemu-user version
+        # See tests/cthreadcomm/tests.c's own comment on
+        # CCOL_QEMU_FD_TRANS_LOCK_BUG for the full rationale: qemu-user's
+        # linux-user fd_trans_lock can be left permanently locked in a
+        # forked child (gitlab.com/qemu-project/qemu/-/issues/2846),
+        # confirmed there on exactly the qemu-user 8.2.2 this distribution
+        # installs. Detected here, not inside the test binary itself: a
+        # guest program running under qemu-user has no way to query the
+        # host's own qemu-user version from inside the emulated process.
+        run: |
+          QEMU_VER=$(qemu-aarch64 --version | head -1)
+          echo "Installed: $QEMU_VER"
+          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
+            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
+          fi
       - name: Cross-build and run each module's test suite under qemu-aarch64
         # The per-module test/memtest targets hardcode a bare `./tests`
         # invocation with no prefix-injection point, so an aarch64 binary
         # built via CC=aarch64-linux-gnu-gcc cannot simply be run through
-        # `make test` on this x86_64 runner -- it would try to execute an
+        # `make test` on this x86_64 runner; it would try to execute an
         # ARM binary directly and fail immediately with "cannot execute
         # binary file". Each module is instead built via the existing
         # `build` target (unmodified) and its resulting `./tests` binary run
@@ -124,9 +179,81 @@ jobs:
             echo "::endgroup::"
           done
 
+  linux-aarch64-clang:
+    name: Linux aarch64 (Clang cross-compile + QEMU)
+    runs-on: ubuntu-latest
+    # See linux-aarch64-gcc's own comment above for the full rationale: this
+    # job runs the identical qemu-aarch64-based fork() test under the same
+    # emulator, so it carries the identical deadlock risk (confirmed directly
+    # on this job: a run hung for over 3 hours at
+    # circular_queues.destroy_while_ccol_select_is_watching_is_fatal with zero
+    # output before being cancelled).
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        # Same arm64-ports setup as the aarch64 GCC job above (see its own
+        # comment for why); additionally installs clang itself, and keeps
+        # gcc-aarch64-linux-gnu even though it is not the compiler used here,
+        # since clang has no crt objects/libgcc of its own for this target
+        # and needs gcc-aarch64-linux-gnu's to link against.
+        run: |
+          sudo dpkg --add-architecture arm64
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          sudo tee /etc/apt/sources.list.d/arm64-ports.list > /dev/null <<'EOF'
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y clang gcc-aarch64-linux-gnu qemu-user libssl-dev:arm64 zlib1g-dev:arm64
+      - name: Detect a known-affected qemu-user version
+        # See linux-aarch64-gcc's own identical step above for the full
+        # rationale.
+        run: |
+          QEMU_VER=$(qemu-aarch64 --version | head -1)
+          echo "Installed: $QEMU_VER"
+          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
+            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
+          fi
+      - name: Cross-build and run each module's test suite under qemu-aarch64
+        # Same shape as the aarch64 GCC job above (bare ./tests invocation,
+        # no memtest leg; see its own comment for the full rationale on
+        # both). The one real difference is how CC cross-compiles:
+        #
+        # -B points clang at gcc-aarch64-linux-gnu's own crtbeginS.o/libgcc/
+        # libgcc_s, which clang has no equivalent of on its own; the exact
+        # path is discovered at run time (not hardcoded), since it names the
+        # specific GCC version this runner's own gcc-aarch64-linux-gnu
+        # package happens to ship, not a fixed version this workflow should
+        # assume. An explicit --sysroot= is deliberately NOT passed:
+        # Debian/Ubuntu's aarch64-linux-gnu-ld already has the correct
+        # sysroot (/usr/aarch64-linux-gnu) built into it at package-build
+        # time, and passing --sysroot= again on top of that double-prefixes
+        # every path ld resolves and breaks the link (reproduced directly:
+        # "cannot find /usr/aarch64-linux-gnu/lib/libc.so.6 inside
+        # /usr/aarch64-linux-gnu" with --sysroot= present, gone once removed).
+        run: |
+          set -e
+          AARCH64_GCC_CROSS_DIR=$(find /usr/lib/gcc-cross/aarch64-linux-gnu -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          for dir in tests/*/; do
+            mod=$(basename "$dir")
+            [ "$mod" = "tau" ] && continue
+            echo "::group::$mod"
+            (cd "$dir" && make CC="clang --target=aarch64-linux-gnu -B$AARCH64_GCC_CROSS_DIR" build)
+            qemu-aarch64 -L /usr/aarch64-linux-gnu "$dir/tests"
+            echo "::endgroup::"
+          done
+
   linux-arm32-gcc:
     name: Linux arm32 (cross-compile + QEMU)
     runs-on: ubuntu-latest
+    # See linux-aarch64-gcc's own comment above for the full rationale: this
+    # job runs the identical fork() test under qemu-arm, so it carries the
+    # identical qemu-user fork()-plus-multithreaded-guest deadlock risk.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -148,6 +275,21 @@ jobs:
           EOF
           sudo apt-get update
           sudo apt-get install -y gcc-arm-linux-gnueabihf qemu-user libssl-dev:armhf zlib1g-dev:armhf
+      - name: Detect a known-affected qemu-user version
+        # See tests/cthreadcomm/tests.c's own comment on
+        # CCOL_QEMU_FD_TRANS_LOCK_BUG for the full rationale: qemu-user's
+        # linux-user fd_trans_lock can be left permanently locked in a
+        # forked child (gitlab.com/qemu-project/qemu/-/issues/2846),
+        # confirmed there on exactly the qemu-user 8.2.2 this distribution
+        # installs. Detected here, not inside the test binary itself: a
+        # guest program running under qemu-user has no way to query the
+        # host's own qemu-user version from inside the emulated process.
+        run: |
+          QEMU_VER=$(qemu-arm --version | head -1)
+          echo "Installed: $QEMU_VER"
+          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
+            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
+          fi
       - name: Cross-build and run each module's test suite under qemu-arm
         # Same shape as the aarch64 job above: build each module via the
         # existing `build` target with CC=arm-linux-gnueabihf-gcc and run the
@@ -163,6 +305,80 @@ jobs:
             [ "$mod" = "tau" ] && continue
             echo "::group::$mod"
             (cd "$dir" && make CC=arm-linux-gnueabihf-gcc build)
+            qemu-arm -L /usr/arm-linux-gnueabihf "$dir/tests"
+            echo "::endgroup::"
+          done
+
+  linux-arm32-clang:
+    name: Linux arm32 (Clang cross-compile + QEMU)
+    runs-on: ubuntu-latest
+    # See linux-aarch64-gcc's own comment above for the full rationale: this
+    # job runs the identical fork() test under qemu-arm, so it carries the
+    # identical qemu-user fork()-plus-multithreaded-guest deadlock risk.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        # Same armhf-ports setup as the arm32 GCC job above (see its own
+        # comment for why); additionally installs clang itself, and keeps
+        # gcc-arm-linux-gnueabihf even though it is not the compiler used
+        # here, since clang has no crt objects/libgcc of its own for this
+        # target and needs gcc-arm-linux-gnueabihf's to link against.
+        run: |
+          sudo dpkg --add-architecture armhf
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i '/^Types: deb$/a Architectures: amd64' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          sudo tee /etc/apt/sources.list.d/armhf-ports.list > /dev/null <<'EOF'
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y clang gcc-arm-linux-gnueabihf qemu-user libssl-dev:armhf zlib1g-dev:armhf
+      - name: Detect a known-affected qemu-user version
+        # See linux-arm32-gcc's own identical step above for the full
+        # rationale.
+        run: |
+          QEMU_VER=$(qemu-arm --version | head -1)
+          echo "Installed: $QEMU_VER"
+          if echo "$QEMU_VER" | grep -qE 'version 8\.2\.2([^0-9]|$)'; then
+            echo "CCOL_QEMU_FD_TRANS_LOCK_BUG=1" >> "$GITHUB_ENV"
+          fi
+      - name: Cross-build and run each module's test suite under qemu-arm
+        # Same shape as the arm32 GCC job above (bare ./tests invocation, no
+        # memtest leg; see its own comment for the full rationale on both),
+        # and the same cross-linking approach (-B, no explicit --sysroot=)
+        # as the aarch64 Clang job above; see that job's own comment for the
+        # full rationale (gcc-arm-linux-gnueabihf-ld has its own correct
+        # sysroot built in, and passing --sysroot= again on top of that
+        # double-prefixes every path ld resolves and breaks the link).
+        #
+        # EXTRA_CFLAGS="-Wno-error=unused-command-line-argument": Clang does
+        # not implement -fstack-clash-protection's actual codegen for this
+        # target at all (confirmed empirically: a binary built with the flag
+        # is byte-identical to one built without it, on both clang-18 and
+        # clang-19; GCC's own arm-linux-gnueabihf cross-compiler DOES
+        # implement it, genuinely differing binaries, so linux-arm32-gcc
+        # above still provides real protection for this architecture).
+        # Whether Clang's driver actually WARNS about this is, separately,
+        # its own genuine driver quirk: "argument unused during compilation"
+        # fires only when the link step has no -l flag at all, so a
+        # module's own LFLAGS being empty or not is what silently decided
+        # whether -Werror caught it, not anything about the module's source.
+        # Downgrading only this one, fully-understood diagnostic class from
+        # fatal to a visible warning (never silencing it outright, e.g. via
+        # a decoy -l flag) keeps the CI log honestly showing that this one
+        # compiler/target combination cannot provide this specific hardening
+        # flag, rather than hiding it.
+        run: |
+          set -e
+          ARM_GCC_CROSS_DIR=$(find /usr/lib/gcc-cross/arm-linux-gnueabihf -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          for dir in tests/*/; do
+            mod=$(basename "$dir")
+            [ "$mod" = "tau" ] && continue
+            echo "::group::$mod"
+            (cd "$dir" && make CC="clang --target=arm-linux-gnueabihf -B$ARM_GCC_CROSS_DIR" EXTRA_CFLAGS="-Wno-error=unused-command-line-argument" build)
             qemu-arm -L /usr/arm-linux-gnueabihf "$dir/tests"
             echo "::endgroup::"
           done

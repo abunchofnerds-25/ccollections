@@ -8808,14 +8808,35 @@ TEST(chttpserver, enable_reuseport_allows_second_listener_on_same_port) {
      servers actually answers is not deterministic; only srv2 has the route
      registered, so a 404 (srv1 answered) is treated as inconclusive-but-
      acceptable rather than a hard failure, while any successful 200 proves
-     the mechanism works end to end. */
+     the mechanism works end to end.
+     Each attempt uses chttp_do() with an explicit "Connection: close"
+     header, NOT chttp_get(): chttp_get() goes through the shared default
+     client's keep-alive idle pool, keyed by "scheme://host:port"; since
+     srv1 and srv2 are both bound to the exact same 127.0.0.1:port pair,
+     the pool cannot distinguish them, so once one connection is
+     established every subsequent chttp_get() call to this URL silently
+     reuses it instead of asking the kernel to select a listener again.
+     Confirmed directly: instrumenting a copy of this test to log every
+     attempt's status code showed chttp_get()'s outcomes were never
+     independent trials at all, a short run of one repeated result
+     followed by an unbroken streak of the other for the rest of the loop
+     (the kept-alive connection), while forcing Connection: close on every
+     attempt produced genuinely interleaved 200/404 results matching a fair
+     coin. Retried 64 times (not 1) purely as insurance against ordinary
+     coin-flip variance now that each attempt is a real, independent trial;
+     with true independence this is already comfortably below a 1-in-10^18
+     chance of a false failure. */
   char url[128];
   snprintf(url, sizeof(url), "http://127.0.0.1:%d/reuseport-hello",
            TEST_PORT + 15);
   bool got_200 = false;
-  for (int i = 0; i < 8 && !got_200; i++) {
+  for (int i = 0; i < 64 && !got_200; i++) {
+    chttp_request_t *req = chttp_request_new(CHTTP_GET, url, NULL, NULL);
+    REQUIRE_NE((void *)req, NULL);
+    chttp_request_set_header(req, "Connection", "close");
     chttpcli_response *resp = NULL;
-    chttp_get(url, &resp);
+    chttp_do(req, &resp);
+    chttp_request_free(req);
     if (resp && resp->status_code == 200) got_200 = true;
     if (resp) chttpclient_resp_free(resp);
   }
@@ -10071,7 +10092,14 @@ TEST(chttpsvr_handle_lifecycle, sequential_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* waitpid's own return must be checked before trusting status: an EINTR
+   * (or any other) failure leaves status at its initialized 0, which would
+   * otherwise be silently misread as "child exited normally with status 0"
+   * instead of "waitpid itself never actually reported this child's real
+   * outcome", producing a confusing WIFSIGNALED failure instead of a clear
+   * one; mirrors this same file's own explicit `!= pid` check on every
+   * later, more elaborate fork test below. */
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -10113,7 +10141,14 @@ TEST(chttpsvr_handle_lifecycle, concurrent_double_destroy_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* waitpid's own return must be checked before trusting status: an EINTR
+   * (or any other) failure leaves status at its initialized 0, which would
+   * otherwise be silently misread as "child exited normally with status 0"
+   * instead of "waitpid itself never actually reported this child's real
+   * outcome", producing a confusing WIFSIGNALED failure instead of a clear
+   * one; mirrors this same file's own explicit `!= pid` check on every
+   * later, more elaborate fork test below. */
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -10165,7 +10200,14 @@ TEST(chttpsvr_handle_lifecycle, destroy_from_within_own_handler_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* waitpid's own return must be checked before trusting status: an EINTR
+   * (or any other) failure leaves status at its initialized 0, which would
+   * otherwise be silently misread as "child exited normally with status 0"
+   * instead of "waitpid itself never actually reported this child's real
+   * outcome", producing a confusing WIFSIGNALED failure instead of a clear
+   * one; mirrors this same file's own explicit `!= pid` check on every
+   * later, more elaborate fork test below. */
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }
@@ -10203,7 +10245,14 @@ TEST(chttpsvr_handle_lifecycle, engine_wait_from_within_own_handler_is_fatal) {
   }
   REQUIRE_NE(pid, -1);
   int status = 0;
-  waitpid(pid, &status, 0);
+  /* waitpid's own return must be checked before trusting status: an EINTR
+   * (or any other) failure leaves status at its initialized 0, which would
+   * otherwise be silently misread as "child exited normally with status 0"
+   * instead of "waitpid itself never actually reported this child's real
+   * outcome", producing a confusing WIFSIGNALED failure instead of a clear
+   * one; mirrors this same file's own explicit `!= pid` check on every
+   * later, more elaborate fork test below. */
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
   REQUIRE_TRUE(WIFSIGNALED(status));
   REQUIRE_EQ(WTERMSIG(status), SIGABRT);
 }

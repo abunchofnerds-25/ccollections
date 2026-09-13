@@ -209,7 +209,20 @@ typedef struct {
  * earlier, already-completed destroy) as a fatal_err rather than a
  * use-after-free/double-free: a slot is marked not-in-use the instant it is
  * released, and its generation is bumped on every reuse, so a stale handle
- * can never alias a later, unrelated client occupying the same slot index. */
+ * can never alias a later, unrelated client occupying the same slot index.
+ *
+ * The table's own lock is a read-write lock, not a plain mutex: _chttpcli_
+ * resolve (read-only: bounds-check idx, compare generation, read slot->ptr)
+ * runs once per outbound request across every API tier (chttpclient_do,
+ * _do_async, _do_pooled, ...); _chttpcli_handle_slot_acquire/
+ * __chttpclient_destroy (the only mutators) each run once per client's
+ * entire lifetime, not once per request. Mirrors cthreadcomm.c's/
+ * cthreadpool.c's own identical slot-table rwlock conversions. Unlike
+ * those two, this table has no pthread_atfork() protection of its own at
+ * all (chttpclient.c registers none), so this conversion carries none of
+ * their own TID-tracked-write-lock reinit-in-child subtlety: there being
+ * nothing to preserve doesn't change what fork() safety this table already
+ * did or didn't have. */
 typedef struct {
   struct chttpclient *ptr; /* NULL when slot is free */
   uint32_t generation;     /* minted fresh on every acquire; monotonic per
@@ -219,7 +232,7 @@ typedef struct {
 } chttpcli_slot_t;
 
 static struct {
-  mutex_t mutex;
+  rw_lock_t rwlock;
   once_flag_t once;
   cvec slots;        /* cvec of chttpcli_slot_t; grows via push_back only,
                          indices permanent once allocated */
@@ -227,7 +240,8 @@ static struct {
 } chttpcli_slot_table = {0};
 
 static void _chttpcli_slot_table_init_globals(void) {
-  mutex_init(chttpcli_slot_table.mutex);
+  if (rw_lock_init(chttpcli_slot_table.rwlock) != 0)
+    fatal_err("chttpcli slot table: failed to initialize rwlock");
   chttpcli_slot_table.slots = cvector_create(sizeof(chttpcli_slot_t), NULL);
   if (!chttpcli_slot_table.slots)
     fatal_err("chttpcli slot table: failed to allocate slots vector");
@@ -336,24 +350,24 @@ static struct chttpclient *_chttpcli_resolve(chttpcli h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_rdlock(chttpcli_slot_table.rwlock);
   struct chttpclient *raw = NULL;
   if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
     chttpcli_slot_t *slot =
         (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  /* Lock-free: no raw->lock acquisition here at all, so nothing can ever
-   * block while chttpcli_slot_table.mutex is held; a nested-lock version
-   * would let a slow, per-client operation holding raw->lock (e.g.
-   * chttpclient_set_tls's blocking disk I/O in _rebuild_tls_ctx_locked)
-   * transiently stall every other client's resolve calls process-wide.
-   * Safe because raw is guaranteed still-allocated here regardless: the
-   * only thing that could make it unsafe to touch, __chttpclient_destroy's
-   * slot-release step, also requires chttpcli_slot_table.mutex, which we
-   * still hold at this exact point. */
+  /* No raw->lock acquisition here at all, so nothing can ever block while
+   * chttpcli_slot_table.rwlock is held; a nested-lock version would let a
+   * slow, per-client operation holding raw->lock (e.g. chttpclient_set_
+   * tls's blocking disk I/O in _rebuild_tls_ctx_locked) transiently stall
+   * every other client's resolve calls process-wide. Safe because raw is
+   * guaranteed still-allocated here regardless: the only thing that could
+   * make it unsafe to touch, __chttpclient_destroy's slot-release step,
+   * also requires chttpcli_slot_table.rwlock's write side, which cannot
+   * run concurrently with this read side regardless. */
   if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
   return raw;
 }
 
@@ -380,8 +394,8 @@ static void _chttpcli_resolve_unpin(struct chttpclient *raw) {
    * makes the wait predicate MORE true, never flips it from true to false),
    * so it has no need to synchronize with a sleeper. This function is
    * always called standalone, after _chttpcli_resolve has already released
-   * chttpcli_slot_table.mutex, so this raw->lock acquisition is never
-   * nested inside the slot table's global mutex; an entirely ordinary
+   * chttpcli_slot_table.rwlock, so this raw->lock acquisition is never
+   * nested inside the slot table's global lock; an entirely ordinary
    * per-object lock use, identical in shape to every other
    * mutex_lock(cli->lock) call already in this file. */
 }
@@ -391,7 +405,7 @@ static void _chttpcli_resolve_unpin(struct chttpclient *raw) {
  * after the object is otherwise fully constructed. */
 static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
   call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_wrlock(chttpcli_slot_table.rwlock);
   uint32_t idx;
   chttpcli_slot_t *slot;
   if (cvector_elem_count(chttpcli_slot_table.free_indices) > 0) {
@@ -400,7 +414,7 @@ static chttpcli _chttpcli_handle_slot_acquire(struct chttpclient *cli) {
   } else {
     chttpcli_slot_t fresh = {0};
     if (cvector_push_back(chttpcli_slot_table.slots, &fresh) != ccol_success) {
-      mutex_unlock(chttpcli_slot_table.mutex);
+      rw_lock_unlock(chttpcli_slot_table.rwlock);
       return 0; /* ordinary, non-fatal OOM */
     }
     idx = (uint32_t)cvector_elem_count(chttpcli_slot_table.slots) - 1;
@@ -415,7 +429,7 @@ why this is closed outright rather than left as residual risk */
   slot->ptr = cli;
   slot->in_use = true;
   chttpcli h = ((chttpcli)idx << 32) | (chttpcli)slot->generation;
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
   return h;
 }
 
@@ -1700,15 +1714,15 @@ static chttp_deadline_t _deadline_earlier(chttp_deadline_t a,
  * deadline at all; see client_deadline_bundle's own identical fix
  * (_client_deadline_init_globals) for the first place this exact mistake was
  * caught in this codebase. */
-static void _cond_var_init_monotonic(cond_var_t *cv) {
+static int _cond_var_init_monotonic(cond_var_t *cv) {
   cond_var_attr_t cv_attr;
   if (cond_var_attr_init(cv_attr) == 0) {
     cond_var_attr_setclock(cv_attr, CLOCK_MONOTONIC);
-    cond_var_init_ca(*cv, cv_attr);
+    int rv = cond_var_init_ca(*cv, cv_attr);
     cond_var_attr_destroy(cv_attr);
-  } else {
-    cond_var_init(*cv);
+    return rv;
   }
+  return cond_var_init(*cv);
 }
 
 /* ========================================================================== */
@@ -3438,7 +3452,22 @@ static ccol_retval_t _rebuild_tls_ctx_locked(struct chttpclient *cli) {
      * field comments now warn against) got a false sense of security: the
      * hostname check would run and "pass" against literally any
      * self-signed certificate for that hostname. */
-    ctls_ctx_trust_system(ctx);
+    if (ctls_ctx_trust_system(ctx) != ccol_success) {
+      /* Unlike a plain missing/unreadable CA-bundle file (checked with
+       * access() before ctls is ever touched, above), this failure is not
+       * pre-checkable: it means the platform's own default CA store
+       * couldn't be loaded inside ctls. Discarding ctx entirely here
+       * (rather than falling through to install it) matters: ctx's
+       * verify_peer flag was already committed to SSL_VERIFY_PEER before
+       * this rebuild failed, but the rebuild that would have loaded any
+       * trust anchors never committed, so the PREVIOUS, pre-verify_peer
+       * ctx_default from ctls_ctx_new_mp's own initial build would remain
+       * installed with no certificate verification at all if this ctx were
+       * kept; every other failure in this function already discards ctx
+       * for the identical reason. */
+      ctls_ctx_release(ctx);
+      return ccol_success; /* deferred failure, see comment above */
+    }
   }
 
   cli->tls_ctx = ctx;
@@ -3518,8 +3547,10 @@ static ccol_retval_t _client_deadline_sweep_start(void);
 static void _client_deadline_sweep_stop_and_join(void);
 
 static void _client_engine_globals_init(void) {
-  mutex_init(cli_engine_bundler.mutex);
-  cond_var_init(cli_engine_bundler.stopped_cv);
+  if (mutex_init(cli_engine_bundler.mutex) != 0)
+    fatal_err("chttpclient engine: failed to initialize mutex");
+  if (cond_var_init(cli_engine_bundler.stopped_cv) != 0)
+    fatal_err("chttpclient engine: failed to initialize condition variable");
   /* Belt-and-suspenders: Tier 1 already passes MSG_NOSIGNAL to every send(),
    * and Tier 2/3's own raw writes do the same (see _async_on_writable), so
    * this is not load-bearing the way chttpserver.c's identical call is for
@@ -4754,9 +4785,12 @@ static size_t _deadline_stripe_index_for_ctx(const chttp_async_ctx_t *ctx) {
 }
 
 static void _client_deadline_init_globals(void) {
-  mutex_init(client_deadline_bundle.mutex);
+  if (mutex_init(client_deadline_bundle.mutex) != 0)
+    fatal_err("chttpclient deadline sweep: failed to initialize mutex");
   for (size_t i = 0; i < CHTTP_DEADLINE_SWEEP_STRIPES; i++) {
-    mutex_init(client_deadline_bundle.stripes[i].mutex);
+    if (mutex_init(client_deadline_bundle.stripes[i].mutex) != 0)
+      fatal_err(
+          "chttpclient deadline sweep: failed to initialize stripe mutex");
   }
   /* CLOCK_MONOTONIC to match _client_deadline_sweep_fn's own
    * clock_gettime(CLOCK_MONOTONIC, ...)-based wake deadline;
@@ -4770,7 +4804,10 @@ static void _client_deadline_init_globals(void) {
    * for the exact same fix, applied there first; see _cond_var_init_monotonic
    * (this file's shared helper for this exact pattern) for the full
    * rationale. */
-  _cond_var_init_monotonic(&client_deadline_bundle.cond_var);
+  if (_cond_var_init_monotonic(&client_deadline_bundle.cond_var) != 0)
+    fatal_err(
+        "chttpclient deadline sweep: failed to initialize condition "
+        "variable");
 }
 
 #define CHTTP_DEADLINE_SWEEP_INTERVAL_MS 100
@@ -8316,14 +8353,14 @@ struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_rdlock(chttpcli_slot_table.rwlock);
   struct chttpclient *raw = NULL;
   if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
     chttpcli_slot_t *slot =
         (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
   return raw;
 }
 
@@ -8333,9 +8370,9 @@ struct chttpclient *_chttpcli_resolve_for_tests(chttpcli h) {
  * table without bound. */
 size_t _chttpcli_slot_table_capacity_for_tests(void) {
   call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_rdlock(chttpcli_slot_table.rwlock);
   size_t n = cvector_elem_count(chttpcli_slot_table.slots);
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
   return n;
 }
 
@@ -8538,14 +8575,52 @@ chttpcli create_chttpclient_mp(ccol_memmgmt_procs_t *mprocs, char **err_str) {
 
   cli->m_procs = mp;
   cli->tls = CHTTP_TLS_DEFAULT;
-  mutex_init(cli->lock);
+  if (mutex_init(cli->lock) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("failed to initialize mutex");
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
   /* CLOCK_MONOTONIC: _slot_acquire hands this condvar a CLOCK_MONOTONIC
    * timespec (from _deadline_make) via cond_var_timedwait; see
    * _cond_var_init_monotonic's own comment for why the clock must match. */
-  _cond_var_init_monotonic(&cli->available);
-  cond_var_init(cli->idle_async_drained);
-  mutex_init(cli->async_count_lock);
-  cond_var_init(cli->async_count_drained);
+  if (_cond_var_init_monotonic(&cli->available) != 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("failed to initialize condition variable");
+    mutex_destroy(cli->lock);
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
+  if (cond_var_init(cli->idle_async_drained) != 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("failed to initialize condition variable");
+    mutex_destroy(cli->lock);
+    cond_var_destroy(cli->available);
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
+  if (mutex_init(cli->async_count_lock) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("failed to initialize mutex");
+    mutex_destroy(cli->lock);
+    cond_var_destroy(cli->available);
+    cond_var_destroy(cli->idle_async_drained);
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
+  if (cond_var_init(cli->async_count_drained) != 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("failed to initialize condition variable");
+    mutex_destroy(cli->lock);
+    cond_var_destroy(cli->available);
+    cond_var_destroy(cli->idle_async_drained);
+    mutex_destroy(cli->async_count_lock);
+    _mem_free(mp, cli);
+    if (mp) mp->free(mp);
+    return CHTTPCLI_INVALID;
+  }
 
   char *herr = NULL;
   cli->idle_pools =
@@ -8777,7 +8852,7 @@ void __chttpclient_destroy(chttpcli cli) {
   call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
   uint32_t idx = (uint32_t)(cli >> 32);
   uint32_t gen = (uint32_t)(cli & 0xFFFFFFFFu);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_wrlock(chttpcli_slot_table.rwlock);
   chttpcli_slot_t *slot = NULL;
   struct chttpclient *raw = NULL;
   if (idx < cvector_elem_count(chttpcli_slot_table.slots)) {
@@ -8789,7 +8864,7 @@ void __chttpclient_destroy(chttpcli cli) {
     }
   }
   if (!raw) {
-    mutex_unlock(chttpcli_slot_table.mutex);
+    rw_lock_unlock(chttpcli_slot_table.rwlock);
     fatal_err(
         "chttpclient_destroy: handle is stale or already destroyed "
         "(double-destroy / use-after-destroy of a chttpcli handle)");
@@ -8797,7 +8872,7 @@ void __chttpclient_destroy(chttpcli cli) {
   slot->in_use = false; /* blocks ALL future resolves for this handle from
                             this instant, including a second concurrent
                             destroy attempt */
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
 
   mutex_lock(raw->lock);
   raw->destroying = true;
@@ -8920,7 +8995,7 @@ void __chttpclient_destroy(chttpcli cli) {
    * slots' backing array via cvector_push_back, invalidating any pointer
    * into it taken before this second lock acquisition; idx itself is
    * stable. */
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_wrlock(chttpcli_slot_table.rwlock);
   chttpcli_slot_t *slot2 =
       (chttpcli_slot_t *)cvector_at(chttpcli_slot_table.slots, idx);
   slot2->ptr = NULL;
@@ -8928,7 +9003,7 @@ void __chttpclient_destroy(chttpcli cli) {
       the just-freed cli's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(chttpcli_slot_table.free_indices, &idx);
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
 }
 
 /* ========================================================================== */
@@ -9541,7 +9616,7 @@ __attribute__((destructor)) static void _cleanup_default_client(void) {
    * __attribute__((destructor)) functions run unconditionally for the whole
    * shared object regardless of which parts of it were actually used. */
   call_once(chttpcli_slot_table.once, _chttpcli_slot_table_init_globals);
-  mutex_lock(chttpcli_slot_table.mutex);
+  rw_lock_wrlock(chttpcli_slot_table.rwlock);
   bool any_slot_in_use = false;
   size_t slot_count = cvector_elem_count(chttpcli_slot_table.slots);
   for (size_t i = 0; i < slot_count; i++) {
@@ -9556,7 +9631,7 @@ __attribute__((destructor)) static void _cleanup_default_client(void) {
     __cvector_destroy(chttpcli_slot_table.slots);
     __cvector_destroy(chttpcli_slot_table.free_indices);
   }
-  mutex_unlock(chttpcli_slot_table.mutex);
+  rw_lock_unlock(chttpcli_slot_table.rwlock);
 }
 
 /* ========================================================================== */

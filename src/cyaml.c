@@ -1316,7 +1316,7 @@ static void parse_err(parse_ctx_t *ctx, const char *fmt, ...) {
   va_end(ap);
 }
 
-/* ----- Position helpers -------------------------------------------------- */
+/* Position helpers */
 
 /* at_end: true when all input has been consumed.
  * cur:    return the current character without advancing; '\0' at end. */
@@ -1704,7 +1704,7 @@ static bool at_doc_marker(parse_ctx_t *ctx) {
   return nx == ' ' || nx == '\t' || nx == '\n' || nx == '\r';
 }
 
-/* ----- Anchor / alias helpers -------------------------------------------- */
+/* Anchor / alias helpers */
 
 /*
  * Anchor table management.
@@ -1794,7 +1794,7 @@ static void anchors_destroy(parse_ctx_t *ctx) {
   ctx->anchors = NULL;
 }
 
-/* ----- %TAG handle table -------------------------------------------------- */
+/* %TAG handle table */
 
 /*
  * tag_handles_ensure/_set/_lookup/_destroy: a %TAG handle -> prefix table,
@@ -1851,7 +1851,7 @@ static void tag_handles_destroy(parse_ctx_t *ctx) {
   ctx->tag_handles = NULL;
 }
 
-/* ----- Anchor / alias name parsing --------------------------------------- */
+/* Anchor / alias name parsing */
 
 /* Read the anchor or alias name that follows '&' or '*'.  A name is any
  * non-empty list of characters that are not whitespace, flow indicators,
@@ -1910,7 +1910,7 @@ static bool parse_anchor_name(parse_ctx_t *ctx, char **name_out) {
   return true;
 }
 
-/* ----- Implicit type resolution ------------------------------------------ */
+/* Implicit type resolution */
 
 /*
  * try_parse_null_scalar/_bool_/_int_/_float_scalar: the individual
@@ -2239,7 +2239,7 @@ static cyaml_node_t *make_typed_scalar(parse_ctx_t *ctx, const char *s) {
   return n;
 }
 
-/* ----- Tag-driven scalar type resolution ---------------------------------- */
+/* Tag-driven scalar type resolution */
 
 /*
  * Strip all trailing whitespace/newlines from text in place, before a
@@ -2448,7 +2448,7 @@ static cyaml_node_t *finalize_collection_node(parse_ctx_t *ctx,
   return coll;
 }
 
-/* ----- Double-quoted scalar ---------------------------------------------- */
+/* Double-quoted scalar */
 
 /* UTF-8 encode a codepoint into yb. */
 static void encode_utf8(ybuf_t *b, uint32_t cp) {
@@ -2888,7 +2888,7 @@ fail:
   return false;
 }
 
-/* ----- Single-quoted scalar ---------------------------------------------- */
+/* Single-quoted scalar */
 
 /*
  * Parse a single-quoted YAML scalar.  The only escape list is '' (two
@@ -2955,7 +2955,7 @@ done:
   return true;
 }
 
-/* ----- Block scalar (literal | and folded >) ----------------------------- */
+/* Block scalar (literal | and folded >) */
 
 typedef enum { CHOMP_CLIP, CHOMP_STRIP, CHOMP_KEEP } chomp_t;
 
@@ -3606,7 +3606,7 @@ static bool parse_folded_scalar_content(parse_ctx_t *ctx, int parent_indent,
   return true;
 }
 
-/* ----- Plain scalar (block and flow context) ------------------------------ */
+/* Plain scalar (block and flow context) */
 
 /*
  * Scan one physical line's worth of plain-scalar content from the current
@@ -5445,7 +5445,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
 
   char c = cur(ctx);
 
-  /* --- Anchor --- */
+  /* Anchor */
   if (c == '&') {
     /* In block context, "&anchor key: value" anchors just the key scalar,
      * not the entire dictionary that key turns out to introduce; check
@@ -5653,7 +5653,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     return n;
   }
 
-  /* --- Alias --- */
+  /* Alias */
   if (c == '*') {
     /* "*alias : value" uses the alias directly as an implicit key (see
      * try_parse_scalar_dict_key's own identical handling, needed here too
@@ -5721,7 +5721,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     return clone;
   }
 
-  /* --- Tag (ignored) --- */
+  /* Tag (ignored) */
   if (c == '!') {
     /* Mirrors the '&' branch's identical check just above: "!!tag key:
      * value" tags just the key scalar, not the entire dictionary that key
@@ -5906,8 +5906,8 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     return n;
   }
 
-  /* --- Flow list --- */
-  /* --- Flow dictionary --- */
+  /* Flow list */
+  /* Flow dictionary */
   if (c == '[' || c == '{') {
     int col = current_col(ctx);
     size_t coll_start = ctx->pos;
@@ -5961,7 +5961,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     return finalize_collection_node(ctx, coll, resolved_tag);
   }
 
-  /* --- Literal block scalar --- */
+  /* Literal block scalar */
   if (c == '|' && !in_flow) {
     ctx->pos++;
     chomp_t chomp;
@@ -5973,7 +5973,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     return finalize_scalar_node(ctx, s, resolved_tag, false);
   }
 
-  /* --- Folded block scalar --- */
+  /* Folded block scalar */
   if (c == '>' && !in_flow) {
     ctx->pos++;
     chomp_t chomp;
@@ -5985,7 +5985,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     return finalize_scalar_node(ctx, s, resolved_tag, false);
   }
 
-  /* --- Block list (- item) --- */
+  /* Block list (- item) */
   if (c == '-' && !in_flow) {
     if (ctx->pos + 1 < ctx->len) {
       char next = ctx->src[ctx->pos + 1];
@@ -6016,7 +6016,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     }
   }
 
-  /* --- Block mapping (explicit "? key" / ": value") --- */
+  /* Block mapping (explicit "? key" / ": value") */
   if (c == '?' && !in_flow) {
     bool is_explicit_key = false;
     if (ctx->pos + 1 < ctx->len) {
@@ -6059,7 +6059,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     }
   }
 
-  /* --- Double-quoted scalar --- */
+  /* Double-quoted scalar */
   if (c == '"') {
     int col = current_col(ctx);
     size_t quote_start = ctx->pos;
@@ -6118,7 +6118,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     return finalize_scalar_node(ctx, s, resolved_tag, false);
   }
 
-  /* --- Single-quoted scalar --- */
+  /* Single-quoted scalar */
   if (c == '\'') {
     int col = current_col(ctx);
     size_t quote_start = ctx->pos;
@@ -6206,7 +6206,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
     return NULL;
   }
 
-  /* --- Plain scalar (or block dictionary key) --- */
+  /* Plain scalar (or block dictionary key) */
   {
     int col = current_col(ctx);
     char *s = NULL;
@@ -6297,7 +6297,7 @@ static cyaml_node_t *parse_node_inner(parse_ctx_t *ctx, int indent,
   }
 }
 
-/* ----- Block list ---------------------------------------------------- */
+/* Block list */
 
 static cyaml_node_t *parse_block_list(parse_ctx_t *ctx, int seq_indent) {
   cyaml_node_t *seq = (cyaml_node_t *)cyaml_create_list_mp(ctx->mp);
@@ -6421,8 +6421,7 @@ fail:
   return NULL;
 }
 
-/* ----- Block dictionary -----------------------------------------------------
- */
+/* Block dictionary */
 
 /*
  * Parse the node occupying a block dictionary key or value position: either

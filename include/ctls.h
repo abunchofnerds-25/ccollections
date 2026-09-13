@@ -250,8 +250,12 @@ ccol_retval_t ctls_ctx_trust(ctls_ctx_t *ctx, const char *ca_bundle_path,
  * @brief Marks ctx as trusting the operating system's default CA store, in
  *        addition to (or instead of) anything added via ctls_ctx_trust().
  *        Also enables SSL_VERIFY_PEER, same as ctls_ctx_trust().
+ *
+ * @param ctx Context to modify.
+ * @return ccol_success, ccol_invalid_args, or ccol_http_tls_cert_load_failed
+ *         (e.g. the platform has no default CA store configured).
  */
-void ctls_ctx_trust_system(ctls_ctx_t *ctx);
+ccol_retval_t ctls_ctx_trust_system(ctls_ctx_t *ctx);
 
 /**
  * @brief Registers an ALPN protocol on ctx.

@@ -25,6 +25,8 @@ extern struct cthread_pool *_ctpool_resolve_for_tests(ctpool h);
 extern size_t _ctpool_slot_table_capacity_for_tests(void);
 extern size_t _ctpool_task_free_list_size_for_tests(struct cthread_pool *pool);
 extern size_t _ctpool_task_free_list_cap_for_tests(struct cthread_pool *pool);
+extern void ctpool_test_wrlock_slot_table_for_tests(void);
+extern void ctpool_test_wrunlock_slot_table_for_tests(void);
 
 /* ========================================================================== */
 /*                    FORK-HANG DIAGNOSTIC CAPTURE                            */
@@ -101,7 +103,7 @@ static void _diag_arm(int write_fd) {
 
 /* Parent-side: reads whatever raw addresses _diag_alarm_handler wrote (a
  * plain unhandled-signal kill, or a clean exit, leaves the pipe empty,
- * which is fine -- got <= 0 below) and prints them resolved via
+ * which is fine; got <= 0 below) and prints them resolved via
  * backtrace_symbols(), safe here since the parent is a completely
  * ordinary, unstuck process. */
 static void _diag_report(int read_fd) {
@@ -1322,7 +1324,7 @@ TEST(wait, concurrent_shutdown_immediate_unblocks_wait) {
   }
 
   pthread_t waiter;
-  pthread_create(&waiter, NULL, pool_wait_thread, &pool);
+  REQUIRE_EQ(pthread_create(&waiter, NULL, pool_wait_thread, &pool), 0);
   sleep_ms(10); /* let waiter enter cond_var_wait inside ctpool_wait */
 
   /* Release the gate, then poll until active_count drops to 0.  The moment
@@ -1359,14 +1361,14 @@ TEST(wait, concurrent_shutdown_drain_unblocks_wait) {
   }
 
   pthread_t waiter;
-  pthread_create(&waiter, NULL, pool_wait_thread, &pool);
+  REQUIRE_EQ(pthread_create(&waiter, NULL, pool_wait_thread, &pool), 0);
   sleep_ms(10); /* let waiter block inside ctpool_wait */
 
   /* A helper thread releases the gate after a delay so the worker exits
    * blocker_fn and drains the queued tasks while shutdown_drain is already
    * in progress. */
   pthread_t releaser;
-  pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
 
   ctpool_shutdown_drain(pool);
   pthread_join(releaser, NULL);
@@ -1443,7 +1445,7 @@ TEST(shutdown_immediate, queued_tasks_discarded) {
   }
 
   pthread_t releaser;
-  pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
 
   /* Queue is discarded here (worker is in blocker_fn, not dequeuing).
    * Internally blocks until the worker joins; the helper thread releases
@@ -1476,7 +1478,7 @@ TEST(shutdown_immediate, futures_become_cancelled) {
   REQUIRE_NE((void *)f2, NULL);
 
   pthread_t releaser;
-  pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
 
   ctpool_shutdown_immediate(pool); /* discards f1 and f2 while gate==0 */
   pthread_join(releaser, NULL);
@@ -1519,7 +1521,7 @@ TEST(shutdown_immediate, on_complete_not_called_for_discarded) {
   }
 
   pthread_t releaser;
-  pthread_create(&releaser, NULL, release_gate_fn, &gate);
+  REQUIRE_EQ(pthread_create(&releaser, NULL, release_gate_fn, &gate), 0);
   ctpool_shutdown_immediate(pool); /* discards all 5 queued tasks */
   pthread_join(releaser, NULL);
 
@@ -1768,12 +1770,20 @@ TEST(load, concurrent_producers) {
 
   producer_arg_t args[NPRODUCERS];
   pthread_t threads[NPRODUCERS];
+  int created = 0;
   for (int i = 0; i < NPRODUCERS; i++) {
     args[i] =
         (producer_arg_t){.pool = pool, .counter = &counter, .n = TASKS_PER};
-    pthread_create(&threads[i], NULL, producer_thread, &args[i]);
+    /* A partial failure here must not leave the join loop below joining an
+     * uninitialized threads[i] slot (undefined behavior, possibly hanging
+     * on garbage pthread_t data), so only the threads actually created are
+     * joined. */
+    if (pthread_create(&threads[i], NULL, producer_thread, &args[i]) != 0)
+      break;
+    created++;
   }
-  for (int i = 0; i < NPRODUCERS; i++) {
+  REQUIRE_EQ(created, (int)NPRODUCERS);
+  for (int i = 0; i < created; i++) {
     pthread_join(threads[i], NULL);
   }
 
@@ -1859,8 +1869,16 @@ TEST(ctpool_handle_lifecycle, concurrent_double_destroy_is_fatal) {
     ctp_concurrent_destroy_arg_t a1 = {.h = pool};
     ctp_concurrent_destroy_arg_t a2 = {.h = pool};
     pthread_t t1, t2;
-    pthread_create(&t1, NULL, ctp_concurrent_destroy_thread, &a1);
-    pthread_create(&t2, NULL, ctp_concurrent_destroy_thread, &a2);
+    /* Inside a forked child: REQUIRE_* would be unsafe here (its early
+     * return would skip this branch's own _exit() and fall back into the
+     * harness's test loop a second time), so a create failure instead
+     * falls through to a distinct, non-SIGABRT exit the parent's
+     * WIFSIGNALED/SIGABRT check below already turns into a clean test
+     * failure, rather than joining a garbage, never-created pthread_t. */
+    if (pthread_create(&t1, NULL, ctp_concurrent_destroy_thread, &a1) != 0)
+      _exit(2);
+    if (pthread_create(&t2, NULL, ctp_concurrent_destroy_thread, &a2) != 0)
+      _exit(2);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
     _exit(0); /* unreachable: whichever of the two destroy calls loses the
@@ -2628,8 +2646,9 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
       fprintf(stderr,
               "trial %d: hang detected (WIFEXITED=%d WEXITSTATUS=%d "
               "WIFSIGNALED=%d WTERMSIG=%d)\n",
-              i, WIFEXITED(status), WIFEXITED(status) ? WEXITSTATUS(status) : -1,
-              WIFSIGNALED(status), WIFSIGNALED(status) ? WTERMSIG(status) : -1);
+              i, WIFEXITED(status),
+              WIFEXITED(status) ? WEXITSTATUS(status) : -1, WIFSIGNALED(status),
+              WIFSIGNALED(status) ? WTERMSIG(status) : -1);
       if (diag_fired) _diag_report(diagfd[0]);
     }
     close(diagfd[0]);
@@ -2641,6 +2660,136 @@ TEST(fork_safety, fork_does_not_inherit_a_locked_ctpool_mutex) {
   pthread_join(feeder_tid, NULL);
   atomic_store(&churn.stop, 1);
   pthread_join(churn_tid, NULL);
+
+  ctpool_shutdown_drain(pool);
+  ctpool_destroy(pool);
+}
+
+typedef struct {
+  _Atomic bool locked;
+  int hold_ms;
+} ctpool_slot_table_fork_lock_arg_t;
+
+static void *ctpool_slot_table_fork_lock_thread(void *arg) {
+  ctpool_slot_table_fork_lock_arg_t *a =
+      (ctpool_slot_table_fork_lock_arg_t *)arg;
+  ctpool_test_wrlock_slot_table_for_tests();
+  atomic_store(&a->locked, true);
+  /* Releases on its own fixed schedule, entirely independent of anything
+   * the forking thread does below; see tests/cthreadcomm/tests.c's own
+   * queue_fork_lock_thread for the identical reasoning (the forking thread
+   * must never be the one signalling this thread to let go, or the two
+   * would wait on each other in a genuine cycle). */
+  struct timespec ts = {.tv_sec = a->hold_ms / 1000,
+                        .tv_nsec = (long)(a->hold_ms % 1000) * 1000000L};
+  nanosleep(&ts, NULL);
+  ctpool_test_wrunlock_slot_table_for_tests();
+  return NULL;
+}
+
+/* Regression test for the ctpool_slot_table.rwlock TID-tracked write-lock
+ * hazard described in _ctpool_atfork_release_impl's own comment on its
+ * in_child branch: converting ctpool_slot_table.mutex to a rw_lock_t (so
+ * concurrent _ctpool_resolve calls, this module's own hottest path under a
+ * per-task-submit caller like chttpserver, no longer serialize behind one
+ * lock) means the write side can now be acquired by any thread calling
+ * create_cthread_pool_mp/__ctpool_destroy, not necessarily the thread that
+ * later calls fork(); glibc's rwlock write-lock tracks ownership by TID, so
+ * a plain rw_lock_unlock from the child's own differently-TID'd surviving
+ * thread would silently fail to release a lock a different, now-vanished
+ * thread actually locked, hanging every subsequent _ctpool_resolve in that
+ * child. Mirrors event_loop's own fork_does_not_inherit_a_write_locked_
+ * reg_slot_rwlock in tests/cthreadcomm/tests.c exactly, substituting
+ * ctpool_slot_table.rwlock for event_loop's reg_slot_rwlock. */
+TEST(fork_safety, fork_does_not_inherit_a_write_locked_ctpool_slot_table) {
+  char *err = NULL;
+  ctpool pool = create_cthread_pool(2, 0, &err);
+  REQUIRE_NE(pool, CTPOOL_INVALID);
+
+  enum { HOLD_MS = 300 };
+  ctpool_slot_table_fork_lock_arg_t arg = {.locked = false, .hold_ms = HOLD_MS};
+  pthread_t holder;
+  REQUIRE_EQ(
+      pthread_create(&holder, NULL, ctpool_slot_table_fork_lock_thread, &arg),
+      0);
+
+  while (!atomic_load(&arg.locked)) {
+    /* See fork_does_not_inherit_a_locked_ctpool_mutex's own identical
+     * spin-wait reasoning for why sched_yield(), not a bare spin, matters
+     * under valgrind. */
+    sched_yield();
+  }
+
+  int result_pipe[2];
+  REQUIRE_EQ(pipe(result_pipe), 0);
+
+  struct timespec t0, t1;
+  clock_gettime(CLOCK_MONOTONIC, &t0);
+
+  pid_t pid = fork();
+  REQUIRE_NE(pid, -1);
+  if (pid == 0) {
+    /* `holder` does not exist here (fork() duplicates only the calling
+     * thread). This child could only come into existence once the parent's
+     * own fork() call returned, which requires _ctpool_atfork_prepare's own
+     * rw_lock_wrlock(ctpool_slot_table.rwlock) to have already succeeded,
+     * i.e. the (vanished, in this process) holder thread must have already
+     * released it. Without the fix (a plain rw_lock_unlock in the child
+     * instead of a reinit), this process would inherit ctpool_slot_table.
+     * rwlock in a write-locked state with no thread that could ever release
+     * it, hanging the resolve inside ctpool_try_submit below until alarm(3)
+     * kills this child. */
+    close(result_pipe[0]);
+    int dn = open("/dev/null", O_WRONLY);
+    if (dn >= 0) {
+      dup2(dn, STDOUT_FILENO);
+      dup2(dn, STDERR_FILENO);
+      close(dn);
+    }
+    alarm(3);
+    atomic_int local_counter = 0;
+    ccol_retval_t rv =
+        ctpool_try_submit(pool, inc_counter, &local_counter, NULL);
+    char byte = (rv == ccol_success) ? 1 : 0;
+    ssize_t written = write(result_pipe[1], &byte, 1);
+    (void)written;
+    close(result_pipe[1]);
+    _exit(0);
+  }
+  close(result_pipe[1]);
+
+  clock_gettime(CLOCK_MONOTONIC, &t1);
+  long long elapsed_ms =
+      (t1.tv_sec - t0.tv_sec) * 1000LL + (t1.tv_nsec - t0.tv_nsec) / 1000000LL;
+  /* Proves the fix's own blocking behaviour actually engaged: fork() must
+   * have waited for close to the holder's own HOLD_MS before returning,
+   * not returned near-instantly while the lock was still genuinely held. */
+  REQUIRE_GE(elapsed_ms, (long long)(HOLD_MS / 2));
+
+  /* A short, bounded read: if the child hung past alarm(3) and was killed
+   * without ever writing, its copy of the write end closes with it, and
+   * this read returns 0 (EOF) rather than blocking forever, since the
+   * parent already closed its own write-end copy above. */
+  char byte = 0;
+  ssize_t n = read(result_pipe[0], &byte, 1);
+  close(result_pipe[0]);
+  REQUIRE_EQ((int)n, 1);
+  REQUIRE_EQ((int)byte, 1);
+
+  int status = 0;
+  REQUIRE_EQ(waitpid(pid, &status, 0), pid);
+  REQUIRE_TRUE(WIFEXITED(status));
+
+  pthread_join(holder, NULL);
+
+  /* The parent's own ctpool_slot_table.rwlock must still be genuinely
+   * usable after all of the above: a plain rw_lock_unlock (the parent's
+   * own release path, unlike the child's reinit) on a lock this same
+   * thread's fork() call validly released is exactly what is expected to
+   * work. */
+  atomic_int counter_after = 0;
+  REQUIRE_EQ(ctpool_try_submit(pool, inc_counter, &counter_after, NULL),
+             ccol_success);
 
   ctpool_shutdown_drain(pool);
   ctpool_destroy(pool);

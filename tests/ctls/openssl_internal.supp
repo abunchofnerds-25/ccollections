@@ -1,6 +1,6 @@
 # Suppressions for reachable memory held by OpenSSL's own internal RSA/BN
 # caches (RSA blinding state, BN_MONT_CTX Montgomery contexts, and similar
-# lazily-computed values populated during RSA key generation and signing --
+# lazily-computed values populated during RSA key generation and signing;
 # both heavily exercised by this suite's own self-signed certificate
 # generation, ctls_ctx_cert_add()'s self-signed path).
 #
@@ -46,7 +46,7 @@
 # DIFFERENT lazily-initialized OpenSSL 3 provider/algorithm/OSSL_LIB_CTX
 # cache the first time that particular internal code path is reached)
 # reproduced dozens of further "still reachable" reports through OTHER
-# libcrypto.so.3/libssl.so.3-internal call chains entirely -- OPENSSL_LH_
+# libcrypto.so.3/libssl.so.3-internal call chains entirely; OPENSSL_LH_
 # insert via OSSL_LIB_CTX_get0_global_default, OPENSSL_sk_insert via
 # OSSL_DECODER_do_all_provided/OSSL_ENCODER_do_all_provided, EVP_MD_fetch,
 # CRYPTO_aligned_alloc, and several more, each confirmed by direct backtrace

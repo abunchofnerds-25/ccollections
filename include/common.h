@@ -777,25 +777,27 @@ typedef int (*ccol_comparison_proc_t)(const void *first, const void *second);
  * given data. Good hash functions distribute values uniformly.
  *
  * @param ptr Pointer to data to hash
+ * @param size Size in bytes of the data at ptr
  * @return Hash value (unsigned long)
  *
- * @note The callback receives only ptr, not the key's size; a hash map
- * already knows its own fixed key size internally (from the key type the
- * map was constructed with) and does not need to pass it through, but a
- * hash function meant to work over a genuinely variable-length binary key
- * (as opposed to a fixed-size key type) must determine its own extent by
- * some external convention (e.g. a length-prefixed or NUL-terminated
- * buffer), since it cannot safely infer it from ptr alone.
+ * @note size is the map's own fixed key size for a fixed-size key type
+ * (determined by the key type the map was constructed with), or the
+ * caller-supplied byte length for a genuinely variable-length binary key
+ * (a string or other buffer-like key), so a hash function can always hash
+ * exactly ptr[0..size) without needing an external convention (a length
+ * prefix, a NUL terminator) to determine its own extent.
  *
  * Example:
  * @code
- * unsigned long hash_int(const void *p) {
- *   int val = *(const int*)p;
- *   return (unsigned long)val * 2654435761UL;
+ * unsigned long hash_bytes(const void *p, size_t size) {
+ *   const unsigned char *b = (const unsigned char *)p;
+ *   unsigned long h = 2166136261UL;
+ *   for (size_t i = 0; i < size; i++) h = (h ^ b[i]) * 16777619UL;
+ *   return h;
  * }
  * @endcode
  */
-typedef unsigned long (*ccol_hashing_proc_t)(const void *ptr);
+typedef unsigned long (*ccol_hashing_proc_t)(const void *ptr, size_t size);
 
 /* ========================================================================== */
 /*                         MAP KEY-VALUE TYPES                                */

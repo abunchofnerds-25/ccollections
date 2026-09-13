@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
 
+#include <cdebuglog.h>
 #include <chashmap.h>
 #include <cthreadcomm.h>
 #include <cthreadpool.h>
@@ -58,7 +59,15 @@ void add_duration_to_timespec(struct timespec *target,
     target->tv_sec += target->tv_nsec / max_nsecs;
     target->tv_nsec = target->tv_nsec % max_nsecs;
   } else if (target->tv_nsec < 0) {
-    long int borrow = (-target->tv_nsec + max_nsecs - 1) / max_nsecs;
+    /* Computed in long long, not long: a tv_nsec magnitude spanning more
+     * than one whole second (e.g. -1500000000) makes
+     * (-tv_nsec + max_nsecs - 1) itself exceed LONG_MAX on an ILP32 target
+     * (i386, armhf, where long is 4 bytes), signed integer overflow
+     * (undefined behaviour) confirmed to actually miscompute this borrow
+     * count under a real -O3 build rather than merely being a theoretical
+     * risk. */
+    long long borrow =
+        (-(long long)target->tv_nsec + max_nsecs - 1) / max_nsecs;
     target->tv_sec -= borrow;
     target->tv_nsec += borrow * max_nsecs;
   }
@@ -69,7 +78,7 @@ void add_duration_to_timespec(struct timespec *target,
     dur.tv_sec += dur.tv_nsec / max_nsecs;
     dur.tv_nsec = dur.tv_nsec % max_nsecs;
   } else if (dur.tv_nsec < 0) {
-    long int borrow = (-dur.tv_nsec + max_nsecs - 1) / max_nsecs;
+    long long borrow = (-(long long)dur.tv_nsec + max_nsecs - 1) / max_nsecs;
     dur.tv_sec -= borrow;
     dur.tv_nsec += borrow * max_nsecs;
   }
@@ -341,7 +350,7 @@ static once_flag_t g_cthreadcomm_atfork_once = ONCE_INIT;
 /* Forward declaration: registers the merged at_fork() triple; body defined
  * further below, once struct event_loop_s is fully declared (the merged
  * prepare/release functions it wires up dereference loop->shutdown_lock/
- * reg_slot_mutex/stripes[]). Internally also lazily initialises
+ * reg_slot_rwlock/stripes[]). Internally also lazily initialises
  * event_loop_slot_table's own plain data (mutex + both cvecs) via its own
  * call_once, exactly mirroring how this function's own caller already
  * lazily initialises queue_mutex_registry's, so whichever subsystem is
@@ -351,7 +360,8 @@ static void _cthreadcomm_register_atfork_once(void);
 
 #if FORK_SAFETY_REQUIRED
 static void _queue_mutex_registry_init_globals(void) {
-  mutex_init(queue_mutex_registry.mutex);
+  if (mutex_init(queue_mutex_registry.mutex) != 0)
+    fatal_err("queue mutex registry: failed to initialize mutex");
   queue_mutex_registry.addrs = cvector_create(sizeof(mutex_t *), NULL);
   if (!queue_mutex_registry.addrs)
     fatal_err("queue mutex registry: failed to allocate address vector");
@@ -522,9 +532,30 @@ circular_queue *circular_queue_create_with_mprocs(
     return NULL;
   }
 
-  mutex_init(cq->mutex);
-  cond_var_init(cq->read_cond);
-  cond_var_init(cq->write_cond);
+  if (mutex_init(cq->mutex) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize cq mutex");
+    _mem_free(mmgmt_procs, cq->msg_array);
+    _mem_free(mmgmt_procs, cq->m_procs);
+    _mem_free(mmgmt_procs, cq);
+    return NULL;
+  }
+  if (cond_var_init(cq->read_cond) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize cq read_cond");
+    mutex_destroy(cq->mutex);
+    _mem_free(mmgmt_procs, cq->msg_array);
+    _mem_free(mmgmt_procs, cq->m_procs);
+    _mem_free(mmgmt_procs, cq);
+    return NULL;
+  }
+  if (cond_var_init(cq->write_cond) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize cq write_cond");
+    mutex_destroy(cq->mutex);
+    cond_var_destroy(cq->read_cond);
+    _mem_free(mmgmt_procs, cq->msg_array);
+    _mem_free(mmgmt_procs, cq->m_procs);
+    _mem_free(mmgmt_procs, cq);
+    return NULL;
+  }
   cq->read_index = 0;
   cq->write_index = 0;
   cq->max_size = max_size;
@@ -584,10 +615,23 @@ void __circular_queue_destroy(circular_queue *cq) {
      * unlinking a node in either list at this exact moment, so this must be
      * a genuine, race-free read, not an unlocked peek at fields a different
      * thread might be updating. */
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_DESTROY] pid=%d about to mutex_lock(cq->mutex) cq=%p\n",
+        (int)getpid(), (void *)cq);
+#endif
     mutex_lock(cq->mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d acquired cq->mutex\n",
+                    (int)getpid());
+#endif
     bool has_sel_waiters = (cq->sel_read_waiters_head != NULL) ||
                            (cq->sel_write_waiters_head != NULL);
     mutex_unlock(cq->mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d has_sel_waiters=%d\n",
+                    (int)getpid(), (int)has_sel_waiters);
+#endif
     if (has_sel_waiters) {
       ccol_assert(false);
     }
@@ -596,16 +640,49 @@ void __circular_queue_destroy(circular_queue *cq) {
       _mem_free(cq->m_procs, cq->msg_array);
       cq->msg_array = NULL;
     }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d msg_array freed\n", (int)getpid());
+#endif
 
 #if FORK_SAFETY_REQUIRED
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d about to registry_remove\n",
+                    (int)getpid());
+#endif
     /* Unregister before destroying the mutex: once destroyed, &cq->mutex
      * must never again be a candidate for _queue_atfork_prepare to lock. */
     _queue_mutex_registry_remove(&cq->mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d registry_remove done\n",
+                    (int)getpid());
+#endif
 #endif
 
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d about to mutex_destroy\n",
+                    (int)getpid());
+#endif
     mutex_destroy(cq->mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_DESTROY] pid=%d mutex_destroy done, about to "
+        "cond_var_destroy(read_cond)\n",
+        (int)getpid());
+#endif
     cond_var_destroy(cq->read_cond);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_DESTROY] pid=%d read_cond destroyed, about to "
+        "cond_var_destroy(write_cond)\n",
+        (int)getpid());
+#endif
     cond_var_destroy(cq->write_cond);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_DESTROY] pid=%d write_cond destroyed, about to "
+        "free cq itself\n",
+        (int)getpid());
+#endif
 
     if (cq->m_procs) {
       ccol_free_t free_func = cq->m_procs->free;
@@ -614,6 +691,10 @@ void __circular_queue_destroy(circular_queue *cq) {
     } else {
       mem_free(cq);
     }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write("[DEBUG_DESTROY] pid=%d __circular_queue_destroy EXIT\n",
+                    (int)getpid());
+#endif
   }
 }
 
@@ -640,7 +721,7 @@ void circq_test_unlock_mutex_for_tests(circular_queue *cq) {
  * destroying cq, to deterministically exercise the has_sel_waiters misuse
  * check in __circular_queue_destroy) can poll this in a bounded loop instead
  * of guessing a fixed sleep is "comfortably enough" margin for the OS to
- * have scheduled a brand-new thread all the way to that point -- pthread_
+ * have scheduled a brand-new thread all the way to that point; pthread_
  * create() returning gives no such guarantee, and a sleep-based guess that
  * loses this race lets destroy() proceed as if no one were watching, then
  * frees cq out from under the late-arriving waiter the instant it finally
@@ -1197,8 +1278,19 @@ dynamic_queue *dynamic_queue_create_with_mprocs(
     return NULL;
   }
 
-  mutex_init(dq->mutex);
-  cond_var_init(dq->read_cond);
+  if (mutex_init(dq->mutex) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize dq mutex");
+    _mem_free(mmgmt_procs, dq->m_procs);
+    _mem_free(mmgmt_procs, dq);
+    return NULL;
+  }
+  if (cond_var_init(dq->read_cond) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize dq read_cond");
+    mutex_destroy(dq->mutex);
+    _mem_free(mmgmt_procs, dq->m_procs);
+    _mem_free(mmgmt_procs, dq);
+    return NULL;
+  }
   dq->msg_count = 0;
   dq->head = NULL;
   dq->tail = NULL;
@@ -2439,7 +2531,10 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
   mutex_t sel_mtx;
   cond_var_t sel_cond;
   bool ready = false;
-  mutex_init(sel_mtx);
+  if (mutex_init(sel_mtx) != 0) {
+    free(nodes);
+    return ccol_unexpected_failure;
+  }
   /* Always initialise with CLOCK_MONOTONIC so timed waits are immune to
    * wall-clock adjustments.  Infinite waits ignore the clock attribute so
    * this is safe even when no timeout is used. */
@@ -2447,7 +2542,12 @@ ccol_retval_t ccol_select_timed(size_t *ready_index, size_t n,
     cond_var_attr_t cond_attr;
     cond_var_attr_init(cond_attr);
     cond_var_attr_setclock(cond_attr, CLOCK_MONOTONIC);
-    cond_var_init_ca(sel_cond, cond_attr);
+    if (cond_var_init_ca(sel_cond, cond_attr) != 0) {
+      cond_var_attr_destroy(cond_attr);
+      mutex_destroy(sel_mtx);
+      free(nodes);
+      return ccol_unexpected_failure;
+    }
     cond_var_attr_destroy(cond_attr);
   }
 
@@ -2594,9 +2694,10 @@ struct event_reg_s {
    * the public event_reg handle value, never through this raw struct. */
   uint32_t self_slot_idx;
 
-  /* Pinned by _event_reg_resolve (mutex-protected increment, under
-   * loop->reg_slot_mutex) for as long as some caller holds a just-resolved
-   * event_reg_s* it hasn't yet released via _event_reg_resolve_unpin.
+  /* Pinned by _event_reg_resolve (an atomic increment performed while
+   * holding loop->reg_slot_rwlock's read side) for as long as some caller
+   * holds a just-resolved event_reg_s* it hasn't yet released via
+   * _event_reg_resolve_unpin.
    * _event_loop_reclaim_pending_frees will not actually free a reg while
    * this is nonzero, regardless of its refcount; this is what makes
    * freeing a reg concurrently with an in-flight event_loop_modify/
@@ -2794,7 +2895,20 @@ typedef struct event_loop_stripe {
  * can never alias a later, unrelated loop occupying the same slot index.
  * Mirrors chttpcli_slot_table/chttpsvr_slot_table exactly; see
  * src/chttpclient.c's own copy of this comment for the full design
- * rationale. */
+ * rationale.
+ *
+ * The table's own lock is a read-write lock, not a plain mutex: _event_
+ * loop_resolve (read-only: bounds-check idx, compare generation, read
+ * slot->ptr) is the very first thing event_loop_pause/_resume/_modify/
+ * _remove/event_loop_reg_generation do, i.e. at full request rate for a
+ * caller like chttpserver that pauses/resumes a connection's registration
+ * once per request; _event_loop_handle_slot_acquire/__event_loop_destroy
+ * (the only mutators) each run once per loop's entire lifetime, not once
+ * per request. Mirrors this same file's own reg_slot_rwlock conversion
+ * (see that field's own comment on struct event_loop_s) and carries the
+ * identical fork-safety subtlety: see _cthreadcomm_atfork_prepare's own doc
+ * comment for the TID-tracked-write-lock hazard this introduces and how it
+ * is handled. */
 typedef struct {
   struct event_loop_s *ptr; /* NULL when slot is free */
   uint32_t generation;      /* minted fresh on every acquire; monotonic per
@@ -2804,7 +2918,7 @@ typedef struct {
 } event_loop_slot_t;
 
 static struct {
-  mutex_t mutex;
+  rw_lock_t rwlock;
   once_flag_t once;
   cvec slots;        /* cvec of event_loop_slot_t; grows via push_back only,
                          indices permanent once allocated */
@@ -2813,7 +2927,7 @@ static struct {
 
 /* Forward declarations: bodies defined further below, once struct
  * event_loop_s itself is declared (they dereference a live loop's own
- * shutdown_lock/reg_slot_mutex/stripes[]); registered by
+ * shutdown_lock/reg_slot_rwlock/stripes[]); registered by
  * _cthreadcomm_register_atfork_once (see queue_mutex_registry's own doc
  * comment for why this is now ONE merged at_fork() triple covering both
  * event_loop_slot_table's own locks and queue_mutex_registry's own queue
@@ -2825,7 +2939,8 @@ static void _cthreadcomm_atfork_child_release(void);
 #endif
 
 static void _event_loop_slot_table_init_globals(void) {
-  mutex_init(event_loop_slot_table.mutex);
+  if (rw_lock_init(event_loop_slot_table.rwlock) != 0)
+    fatal_err("event_loop slot table: failed to initialize rwlock");
   event_loop_slot_table.slots = cvector_create(sizeof(event_loop_slot_t), NULL);
   if (!event_loop_slot_table.slots)
     fatal_err("event_loop slot table: failed to allocate slots vector");
@@ -2878,7 +2993,7 @@ static void _cthreadcomm_register_atfork_once(void) {
  * prepare-handler ordering makes the CALLER's own prepare handler run
  * FIRST at every future fork() (i.e. before this module's own prepare
  * handler, _cthreadcomm_atfork_prepare, ever gets a chance to lock
- * event_loop_slot_table.mutex or any live event_loop's own locks). Not
+ * event_loop_slot_table.rwlock or any live event_loop's own locks). Not
  * declared in cthreadcomm.h: this is not part of the public API, only a
  * narrow, deliberate escape hatch for a caller that has already read (and
  * must satisfy) this exact ordering requirement; see chttpserver.c's own
@@ -2894,6 +3009,34 @@ void _cthreadcomm_ensure_atfork_registered_before_caller(void) {
 struct event_loop_s {
   int epfd;
   int shutdown_efd;
+
+  /* Registered in epfd exactly like shutdown_efd, but drained (see
+   * _event_loop_thread_fn's own per-event loop) and re-armable, unlike
+   * shutdown_efd's deliberate one-shot "never drain, never look back"
+   * design: this fd exists to be pinged again on every future occasion
+   * poller_thread needs waking promptly, not just once. Pinged by
+   * event_loop_remove whenever the reg it just removed has a non-NULL
+   * on_removed handler, so that registration's callback fires with small,
+   * genuinely bounded latency (poller_thread's own next between-batches
+   * point) rather than only whenever some unrelated fd next happens to
+   * become ready; without this, a registration removed on an otherwise
+   * idle loop (nothing else registered, or nothing else due to fire again
+   * soon) could have its on_removed notification, and the memory reclaim
+   * that triggers it, delayed for as long as epoll_wait's own -1 (infinite)
+   * timeout keeps blocking, up to the loop's own eventual destruction; a
+   * real, reproduced gap (this test suite's own on_removed_fires_for_an_
+   * ordinary_removal test hung under ThreadSanitizer, whose slowdown
+   * widened what an unloaded/fast run's own thread-creation-vs-epoll_wait
+   * scheduling race usually raced past unnoticed, into a reliable timeout),
+   * not merely a theoretical latency concern. A ping through this fd is a
+   * latency optimization only, not the correctness mechanism: EVENT_LOOP_
+   * RECLAIM_RETRY_MS's own bounded epoll_wait retry (see
+   * _event_loop_reclaim_pending_frees and _event_loop_thread_fn) is what
+   * actually guarantees a still-pending reclaim is retried, since a ping
+   * emitted from _event_reg_resolve_unpin can be based on a stale snapshot
+   * of reg->removed against a concurrent event_loop_remove (see that
+   * function's own comment). */
+  int reclaim_wake_efd;
 
   /* Exactly one dedicated thread ever calls epoll_wait on epfd, for every
    * configuration; eliminating the thundering-herd cost multiple threads
@@ -2979,8 +3122,22 @@ struct event_loop_s {
    * invalidating every future resolve of that handle value, regardless of
    * whether the underlying event_reg_s has actually been freed yet (see
    * _event_loop_reclaim_pending_frees's own comment for when that happens).
-   */
-  mutex_t reg_slot_mutex;
+   *
+   * A read-write lock, not a plain mutex: _event_reg_resolve (read-only:
+   * bounds-check idx, compare generation, read slot->ptr) runs on every
+   * event_loop_pause/_resume/_modify call, i.e. at full request rate for a
+   * caller like chttpserver that pauses/resumes a connection's registration
+   * once per request; _event_reg_slot_acquire/_release (the only mutators,
+   * each running once per registration's entire lifetime, not once per
+   * request) are comparatively rare. A plain mutex serialized every
+   * concurrent resolve across every connection in the process behind one
+   * lock; rw_lock_rdlock lets concurrent resolves proceed together, only
+   * excluding (and being excluded by) the rare acquire/release mutations
+   * that can reallocate reg_slots's own backing storage. See
+   * _cthreadcomm_atfork_prepare's own doc comment for the one hazard this
+   * introduces (glibc's rwlock write-lock is TID-tracked, unlike this
+   * module's plain mutexes) and how it is handled. */
+  rw_lock_t reg_slot_rwlock;
   cvec reg_slots;        /* cvec of event_reg_slot_t; grows via push_back
                              only, indices permanent once allocated */
   cvec reg_free_indices; /* cvec of uint32_t; LIFO free list, O(1) reuse */
@@ -3120,31 +3277,45 @@ struct event_loop_s {
  * at that instant is inherited by the child in a permanently locked state,
  * since no thread survives in the child that could ever unlock it. Every
  * lock this module could plausibly be holding at an arbitrary instant:
- * event_loop_slot_table.mutex (process-wide, taken by every
+ * event_loop_slot_table.rwlock (process-wide, taken by every
  * event_loop_create/_destroy/_add/_remove/_modify/_pause/_resume call via
  * _event_loop_resolve/_event_loop_handle_slot_acquire), each still-live
- * loop's own shutdown_lock/reg_slot_mutex/stripes[].lock, and every live
+ * loop's own shutdown_lock/reg_slot_rwlock/stripes[].lock, and every live
  * circular_queue's/dynamic_queue's own mutex (queue_mutex_registry, see its
  * own doc comment above). All of it is therefore taken here, in prepare(),
  * before fork() is allowed to proceed (so fork() only ever completes once no
  * thread is transiently holding one of them), and released again in both
- * parent() and child() via the same function: every mutex in this module
- * uses the default ("normal") pthread mutex type, which does no owner/TID
- * tracking on Linux glibc, so a plain pthread_mutex_unlock is well-defined
- * even when called by a thread other than whichever one originally locked
- * it (which, for anything the forking thread itself did not hold, no
- * longer exists in the child at all). Contrast clogger.c's own atfork
- * history, where the analogous fix for its rwlock needed a real reinit in
- * the child rather than a plain unlock, specifically because glibc's
- * rwlock write-lock tracks ownership by TID; that hazard does not apply to
- * a plain mutex.
+ * parent() and child() via the same function: every PLAIN mutex in this
+ * module uses the default ("normal") pthread mutex type, which does no
+ * owner/TID tracking on Linux glibc, so a plain pthread_mutex_unlock is
+ * well-defined even when called by a thread other than whichever one
+ * originally locked it (which, for anything the forking thread itself did
+ * not hold, no longer exists in the child at all).
+ *
+ * event_loop_slot_table.rwlock and reg_slot_rwlock are the two exceptions,
+ * and both need the child-side reinit fix (see _cthreadcomm_atfork_
+ * release_impl's own comment at each one's own in_child branch): glibc's
+ * rwlock write-lock tracks ownership by TID, and each lock's write side
+ * (taken by prepare() above, at its outer scope for event_loop_slot_table.
+ * rwlock and within Phase 1's per-loop walk for reg_slot_rwlock) can
+ * genuinely be acquired by any thread calling event_loop_create/_destroy
+ * (for the table) or event_loop_pause/_resume/_modify (for a given loop's
+ * own reg_slot_rwlock), not only the thread that happens to call fork(); a
+ * plain rw_lock_unlock from the child's own surviving (forking) thread
+ * would then be released by a different TID than the one that locked it
+ * whenever those two threads differ, exactly the hazard clogger.c's own
+ * atfork history already discovered and fixed for its own, analogous
+ * rwlock (see clog_slot_table.rwlock's own atfork handling in clogger.c
+ * for the original repro and fix this mirrors). That hazard does not apply
+ * to any plain mutex this function also takes, which is why only these two
+ * rwlocks, among every lock this function touches, need it.
  *
  * Confirmed as a real, reproducible hang via two standalone repros before
  * the event_loop-only version of this fix, not assumed: a thread
  * continuously creating/destroying unrelated event_loop instances raced
  * against repeated fork() calls left roughly 1 in 1000 forked children
  * permanently hung the moment they tried their own, brand-new
- * event_loop_create_with_mprocs call (event_loop_slot_table.mutex
+ * event_loop_create_with_mprocs call (event_loop_slot_table's own lock
  * inherited already locked); a single, continuously-busy, multi-threaded
  * reactor (mirroring chttpserver.c's/chttpclient.c's own long-lived,
  * process-wide reactors) forked while busy left roughly half of all forked
@@ -3186,8 +3357,8 @@ struct event_loop_s {
  * order, matching every real nested-locking pattern found elsewhere in
  * this file:
  *
- *   1. Every live loop's own shutdown_lock, reg_slot_mutex, and every
- *      stripe's own lock (matching _event_loop_add_queue's/
+ *   1. Every live loop's own shutdown_lock, reg_slot_rwlock (write side),
+ *      and every stripe's own lock (matching _event_loop_add_queue's/
  *      _event_loop_remove_unlink's own stripe->lock-then-cq->mutex
  *      nesting: both are called with the owning stripe's lock already
  *      held, so that lock must already be held here before any of that
@@ -3229,9 +3400,10 @@ struct event_loop_s {
  * Only ever walks slots with in_use == true, mirroring the exact
  * condition _event_loop_resolve itself already trusts as the sole
  * indicator that slot->ptr is safe to dereference: __event_loop_destroy
- * clears in_use (under this same event_loop_slot_table.mutex) BEFORE
- * doing any of its own, possibly slow, teardown work (joining the poller
- * thread, draining dispatch_pool, freeing every entry/registration), and
+ * clears in_use (under this same event_loop_slot_table.rwlock's write
+ * side) BEFORE doing any of its own, possibly slow, teardown work
+ * (joining the poller thread, draining dispatch_pool, freeing every
+ * entry/registration), and
  * only actually frees the loop struct itself, then finally clears
  * slot->ptr, well after that teardown has completed; a loop already past
  * that first step is therefore, by this file's own established
@@ -3239,26 +3411,78 @@ struct event_loop_s {
  * for the remainder of its teardown, not a new gap this fix
  * introduces. */
 static void _cthreadcomm_atfork_prepare(void) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] prepare() ENTER pid=%d\n", (int)getpid());
+#endif
   mutex_lock(queue_mutex_registry.mutex);
-  mutex_lock(event_loop_slot_table.mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d acquired queue_mutex_registry.mutex\n",
+                  (int)getpid());
+#endif
+  rw_lock_wrlock(event_loop_slot_table.rwlock);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write(
+      "[DEBUG_ATFORK] pid=%d acquired event_loop_slot_table.rwlock (wr)\n",
+      (int)getpid());
+#endif
 
   size_t n_loops = cvector_elem_count(event_loop_slot_table.slots);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  size_t n_addrs_dbg = cvector_elem_count(queue_mutex_registry.addrs);
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d n_loops=%zu n_queue_addrs=%zu\n",
+                  (int)getpid(), n_loops, n_addrs_dbg);
+#endif
 
-  /* Phase 1: every live loop's own shutdown_lock/reg_slot_mutex/stripe
+  /* Phase 1: every live loop's own shutdown_lock/reg_slot_rwlock/stripe
    * locks. Deliberately does NOT touch wait_mtx or any queue's own mutex
    * yet; see this function's own doc comment for why those must wait for
-   * phases 2 and 3. */
+   * phases 2 and 3.
+   *
+   * reg_slot_rwlock takes its WRITE side here, not read: fork() must see
+   * this table as fully quiesced (no in-flight resolve, acquire, or
+   * release anywhere), which only the write side guarantees exclusively
+   * against every other locker, readers included. See that field's own
+   * comment for why it is a rwlock at all, and _cthreadcomm_atfork_
+   * release_impl's own comment for the resulting child-side release
+   * hazard this specific lock (and no other lock this function takes) is
+   * subject to. */
   for (size_t i = 0; i < n_loops; i++) {
     event_loop_slot_t *slot =
         (event_loop_slot_t *)cvector_at(event_loop_slot_table.slots, i);
     if (!slot->in_use) continue;
     struct event_loop_s *loop = slot->ptr;
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ATFORK] pid=%d phase1 loop[%zu]=%p about to lock "
+        "shutdown_lock\n",
+        (int)getpid(), i, (void *)loop);
+#endif
     mutex_lock(loop->shutdown_lock);
-    mutex_lock(loop->reg_slot_mutex);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ATFORK] pid=%d phase1 loop[%zu]=%p about to wrlock "
+        "reg_slot_rwlock\n",
+        (int)getpid(), i, (void *)loop);
+#endif
+    rw_lock_wrlock(loop->reg_slot_rwlock);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+    cdebuglog_write(
+        "[DEBUG_ATFORK] pid=%d phase1 loop[%zu]=%p num_stripes=%zu about to "
+        "lock stripes\n",
+        (int)getpid(), i, (void *)loop, loop->num_stripes);
+#endif
     for (size_t s = 0; s < loop->num_stripes; s++) {
       mutex_lock(loop->stripes[s].lock);
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+      cdebuglog_write(
+          "[DEBUG_ATFORK] pid=%d phase1 loop[%zu]=%p locked stripe %zu/%zu\n",
+          (int)getpid(), i, (void *)loop, s, loop->num_stripes);
+#endif
     }
   }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d phase1 COMPLETE\n", (int)getpid());
+#endif
 
   /* Phase 2: every live queue's own mutex, exactly once each, now that
    * every stripe lock (phase 1) is already held. */
@@ -3267,6 +3491,10 @@ static void _cthreadcomm_atfork_prepare(void) {
     mutex_t *m = *(mutex_t **)cvector_at(queue_mutex_registry.addrs, k);
     mutex_lock(*m);
   }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d phase2 COMPLETE n_addrs=%zu\n",
+                  (int)getpid(), n_addrs);
+#endif
 
   /* Phase 3: every queue-backed registration's own wait_mtx, now that
    * every queue's own mutex (phase 2) is already held. */
@@ -3282,6 +3510,17 @@ static void _cthreadcomm_atfork_prepare(void) {
       }
     }
   }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d phase3 COMPLETE\n", (int)getpid());
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d prepare() EXIT (all locked)\n",
+                  (int)getpid());
+  /* Flush as the LAST action before returning: pthread_atfork's prepare
+   * handlers run synchronously as the final step before the actual fork()
+   * syscall, so this guarantees the buffer is empty at the instant fork()
+   * executes, for every fork() anywhere in this process; see this buffer's
+   * own doc comment above for why that eliminates cross-fork duplication. */
+  cdebuglog_flush();
+#endif
 }
 
 /* Shared by both parent() and child(); see _cthreadcomm_atfork_prepare's own
@@ -3339,6 +3578,10 @@ static void _cthreadcomm_atfork_prepare(void) {
  *    fork(); nothing else this function does depends on it having
  *    succeeded. */
 static void _cthreadcomm_atfork_release_impl(bool is_child) {
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d release_impl(is_child=%d) ENTER\n",
+                  (int)getpid(), (int)is_child);
+#endif
   size_t n_loops = cvector_elem_count(event_loop_slot_table.slots);
 
   for (size_t i = 0; i < n_loops; i++) {
@@ -3366,6 +3609,12 @@ static void _cthreadcomm_atfork_release_impl(bool is_child) {
       }
     }
   }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write(
+      "[DEBUG_ATFORK] pid=%d release_impl(is_child=%d) wait_mtx pass "
+      "COMPLETE\n",
+      (int)getpid(), (int)is_child);
+#endif
 
   /* Every live queue's own mutex, exactly once each: unlocked here, in one
    * self-contained pass, mirroring phase 2 of prepare() exactly; not
@@ -3378,6 +3627,12 @@ static void _cthreadcomm_atfork_release_impl(bool is_child) {
     mutex_t *m = *(mutex_t **)cvector_at(queue_mutex_registry.addrs, k);
     mutex_unlock(*m);
   }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write(
+      "[DEBUG_ATFORK] pid=%d release_impl(is_child=%d) queue mutex pass "
+      "COMPLETE n_addrs=%zu\n",
+      (int)getpid(), (int)is_child, n_addrs);
+#endif
 
   for (size_t i = 0; i < n_loops; i++) {
     event_loop_slot_t *slot =
@@ -3387,12 +3642,74 @@ static void _cthreadcomm_atfork_release_impl(bool is_child) {
     for (size_t s = 0; s < loop->num_stripes; s++) {
       mutex_unlock(loop->stripes[s].lock);
     }
-    mutex_unlock(loop->reg_slot_mutex);
+    /* reg_slot_rwlock's write side, taken by Phase 1 above, may have been
+     * acquired by any worker thread calling event_loop_pause/_resume/
+     * _modify, not necessarily this forking thread. In the parent, that
+     * thread (whichever it was) still exists and a plain rw_lock_unlock
+     * from HERE is still correct: pthread_atfork's own contract runs
+     * prepare()/parent() on the SAME thread that called fork(), but glibc's
+     * rwlock unlock only cares that the calling thread matches the
+     * recorded writer TID at the time of THIS unlock call, and no other
+     * thread can have re-locked it between prepare() and here (every
+     * other locker is blocked behind this same lock). In the child,
+     * fork() duplicates only the calling thread, so if some OTHER thread
+     * was the one that actually locked it, the child's surviving thread
+     * has a different TID than the one glibc recorded as the writer, and
+     * a plain unlock silently fails to release it, permanently hanging
+     * every subsequent resolve in this child (verified via the identical
+     * failure mode clogger.c's own atfork history already hit and fixed
+     * for clog_slot_table.rwlock). Re-initializing instead is the
+     * standard fix (mirroring clogger.c's own _clog_atfork_release):
+     * safe specifically because the child has exactly one thread at this
+     * point and no one else can possibly be waiting on it. */
+    if (is_child) {
+      if (rw_lock_init(loop->reg_slot_rwlock) != 0)
+        fatal_err(
+            "event_loop atfork release: failed to reinit reg_slot_rwlock");
+    } else {
+      rw_lock_unlock(loop->reg_slot_rwlock);
+    }
     mutex_unlock(loop->shutdown_lock);
   }
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write(
+      "[DEBUG_ATFORK] pid=%d release_impl(is_child=%d) stripe/reg_slot_"
+      "rwlock/shutdown_lock pass COMPLETE\n",
+      (int)getpid(), (int)is_child);
+#endif
 
-  mutex_unlock(event_loop_slot_table.mutex);
+  /* event_loop_slot_table.rwlock's write side, taken by prepare() above,
+   * may have been acquired by any thread calling event_loop_create/
+   * _destroy, not necessarily this forking thread. See reg_slot_rwlock's
+   * own identical in_child/else treatment just above (and _ctpool_atfork_
+   * release_impl's own copy of this exact fix in src/cthreadpool.c) for
+   * the full TID-tracked-write-lock reasoning; this is the process-wide
+   * loop table's own copy of the identical hazard, not a new one. */
+  if (is_child) {
+    if (rw_lock_init(event_loop_slot_table.rwlock) != 0)
+      fatal_err(
+          "event_loop atfork release: failed to reinit event_loop_slot_table "
+          "rwlock");
+  } else {
+    rw_lock_unlock(event_loop_slot_table.rwlock);
+  }
   mutex_unlock(queue_mutex_registry.mutex);
+
+#if defined(RUNNING_UNIT_TESTS) && defined(CDEBUGLOG_ENABLED)
+  cdebuglog_write("[DEBUG_ATFORK] pid=%d release_impl(is_child=%d) EXIT\n",
+                  (int)getpid(), (int)is_child);
+  /* Flush as the LAST action, in BOTH the parent and the child: this runs
+   * synchronously immediately after fork() returns, strictly before any
+   * application code in either process, and a great many of this codebase's
+   * own forked-child test paths go on to call _exit() directly rather than
+   * exit() (which would silently skip this file's atexit()-registered
+   * flush) and lose everything logged since the last flush point, including
+   * this exact release_impl() call's own is_child=1 line. Flushing here
+   * unconditionally means the atfork machinery's own diagnostic trail is
+   * never lost to that, regardless of how either process goes on to
+   * terminate. */
+  cdebuglog_flush();
+#endif
 }
 
 static void _cthreadcomm_atfork_release(void) {
@@ -3426,23 +3743,24 @@ static struct event_loop_s *_event_loop_resolve(event_loop h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(event_loop_slot_table.mutex);
+  rw_lock_rdlock(event_loop_slot_table.rwlock);
   struct event_loop_s *raw = NULL;
   if (idx < cvector_elem_count(event_loop_slot_table.slots)) {
     event_loop_slot_t *slot =
         (event_loop_slot_t *)cvector_at(event_loop_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  /* Lock-free: no raw-level lock acquisition here at all, matching this
-   * loop's own field comment on pending_resolve_count; event_loop's own
-   * lock striping exists specifically to keep every hot per-registration
-   * call free of any single global lock, and this resolve step must not
-   * reintroduce one. Safe because raw is guaranteed still-allocated here
-   * regardless: the only thing that could make it unsafe to touch,
-   * __event_loop_destroy's slot-release step, also requires
-   * event_loop_slot_table.mutex, which we still hold at this exact point. */
+  /* No raw-level lock acquisition here at all, matching this loop's own
+   * field comment on pending_resolve_count; event_loop's own lock striping
+   * exists specifically to keep every hot per-registration call free of
+   * any single global lock, and this resolve step must not reintroduce
+   * one. Safe because raw is guaranteed still-allocated here regardless:
+   * the only thing that could make it unsafe to touch, __event_loop_
+   * destroy's slot-release step, also requires event_loop_slot_table.
+   * rwlock's write side, which cannot run concurrently with this read side
+   * regardless. */
   if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  mutex_unlock(event_loop_slot_table.mutex);
+  rw_lock_unlock(event_loop_slot_table.rwlock);
   return raw;
 }
 
@@ -3465,7 +3783,7 @@ static void _event_loop_resolve_unpin(struct event_loop_s *raw) {
 static event_loop _event_loop_handle_slot_acquire(struct event_loop_s *loop) {
   call_once(event_loop_slot_table.once, _event_loop_slot_table_init_globals);
   call_once(g_cthreadcomm_atfork_once, _cthreadcomm_register_atfork_once);
-  mutex_lock(event_loop_slot_table.mutex);
+  rw_lock_wrlock(event_loop_slot_table.rwlock);
   uint32_t idx;
   event_loop_slot_t *slot;
   if (cvector_elem_count(event_loop_slot_table.free_indices) > 0) {
@@ -3475,7 +3793,7 @@ static event_loop _event_loop_handle_slot_acquire(struct event_loop_s *loop) {
     event_loop_slot_t fresh = {0};
     if (cvector_push_back(event_loop_slot_table.slots, &fresh) !=
         ccol_success) {
-      mutex_unlock(event_loop_slot_table.mutex);
+      rw_lock_unlock(event_loop_slot_table.rwlock);
       return 0; /* ordinary, non-fatal OOM */
     }
     idx = (uint32_t)cvector_elem_count(event_loop_slot_table.slots) - 1;
@@ -3490,7 +3808,7 @@ static event_loop _event_loop_handle_slot_acquire(struct event_loop_s *loop) {
   slot->ptr = loop;
   slot->in_use = true;
   event_loop h = ((event_loop)idx << 32) | (event_loop)slot->generation;
-  mutex_unlock(event_loop_slot_table.mutex);
+  rw_lock_unlock(event_loop_slot_table.rwlock);
   return h;
 }
 
@@ -3642,6 +3960,49 @@ void event_loop_test_force_next_reg_slot_acquire_failure(void) {
 size_t event_loop_test_last_forced_slot_acquire_failure_reg_count(void) {
   return atomic_load(&g_forced_slot_acquire_failure_reg_count_snapshot);
 }
+
+/* Test-only: locks/unlocks loop's own reg_slot_rwlock write side directly,
+ * bypassing every public API function, mirroring circq_test_lock_mutex_
+ * for_tests's own established pattern. Lets a test hold this rwlock's write
+ * side locked, from a thread OTHER than the one that will call fork(), for
+ * an arbitrarily long, precisely controlled window: the specific scenario
+ * needed to deterministically exercise the TID-tracked write-lock reinit
+ * fix in _cthreadcomm_atfork_release_impl's own in_child branch for
+ * reg_slot_rwlock (a plain rw_lock_unlock from the child's differently-TID'd
+ * surviving thread would otherwise silently fail to release a write lock
+ * actually acquired by a different, now-vanished thread).
+ *
+ * Deliberately resolves loop exactly ONCE, in the lock call, and keeps that
+ * resolve's own pin held (not released) for as long as the write lock stays
+ * held, rather than having the later unlock call independently re-resolve
+ * loop: a second _event_loop_resolve call from the unlock side would need
+ * event_loop_slot_table's own process-wide mutex, which the forking thread
+ * already holds (locked before Phase 1 of _cthreadcomm_atfork_prepare) for
+ * as long as it is itself blocked waiting for THIS write lock to be
+ * released; a real, reproduced AB-BA deadlock in an earlier version of
+ * this exact test hook (confirmed via gdb: the forking thread stuck in
+ * _cthreadcomm_atfork_prepare's rw_lock_wrlock, the holder thread stuck
+ * resolving loop for its own unlock call), not merely a theoretical
+ * concern. Passing the resolved struct event_loop_s* through as an opaque
+ * pointer from lock to unlock avoids the second resolve entirely, exactly
+ * as every real public API function here already does by resolving once
+ * per call and holding raw for that call's entire duration; the difference
+ * is only that this test hook's own "one logical operation" (hold the lock
+ * across an externally-timed window) is deliberately split across two
+ * separate calls for the test's own convenience. */
+void *event_loop_test_wrlock_reg_slot_for_tests(event_loop loop) {
+  struct event_loop_s *raw = _event_loop_resolve(loop);
+  if (!raw) return NULL;
+  rw_lock_wrlock(raw->reg_slot_rwlock);
+  return raw;
+}
+
+void event_loop_test_wrunlock_reg_slot_for_tests(void *resolved_loop) {
+  struct event_loop_s *raw = (struct event_loop_s *)resolved_loop;
+  if (!raw) return;
+  rw_lock_unlock(raw->reg_slot_rwlock);
+  _event_loop_resolve_unpin(raw);
+}
 #endif
 
 /* Allocates a fresh slot (or reuses a freed one) in loop->reg_slots for reg
@@ -3652,7 +4013,10 @@ size_t event_loop_test_last_forced_slot_acquire_failure_reg_count(void) {
  * constructor, where a slot-acquire failure has to unwind an
  * already-running poller thread, a reg that has not yet been wired into
  * any registry has nothing else to unwind). Sets reg->self_slot_idx.
- * Caller must not hold loop->reg_slot_mutex. */
+ * Caller must not hold loop->reg_slot_rwlock. Takes the write side: this
+ * mutates reg_slots/reg_free_indices, and cvector_push_back below can
+ * reallocate reg_slots's own backing storage, which a concurrent
+ * _event_reg_resolve reader must never observe mid-move. */
 static event_reg _event_reg_slot_acquire(struct event_loop_s *loop,
                                          event_reg_s *reg) {
 #ifdef RUNNING_UNIT_TESTS
@@ -3663,7 +4027,7 @@ static event_reg _event_reg_slot_acquire(struct event_loop_s *loop,
     return 0;
   }
 #endif
-  mutex_lock(loop->reg_slot_mutex);
+  rw_lock_wrlock(loop->reg_slot_rwlock);
   uint32_t idx;
   event_reg_slot_t *slot;
   if (cvector_elem_count(loop->reg_free_indices) > 0) {
@@ -3672,7 +4036,7 @@ static event_reg _event_reg_slot_acquire(struct event_loop_s *loop,
   } else {
     event_reg_slot_t fresh = {0};
     if (cvector_push_back(loop->reg_slots, &fresh) != ccol_success) {
-      mutex_unlock(loop->reg_slot_mutex);
+      rw_lock_unlock(loop->reg_slot_rwlock);
       return 0; /* ordinary, non-fatal OOM */
     }
     idx = (uint32_t)cvector_elem_count(loop->reg_slots) - 1;
@@ -3688,7 +4052,7 @@ static event_reg _event_reg_slot_acquire(struct event_loop_s *loop,
   slot->in_use = true;
   reg->self_slot_idx = idx;
   event_reg h = ((event_reg)idx << 32) | (event_reg)slot->generation;
-  mutex_unlock(loop->reg_slot_mutex);
+  rw_lock_unlock(loop->reg_slot_rwlock);
   return h;
 }
 
@@ -3698,34 +4062,120 @@ static event_reg _event_reg_slot_acquire(struct event_loop_s *loop,
  * the caller MUST call _event_reg_resolve_unpin(result) exactly once, as
  * soon as it is done touching the resolved event_reg_s*. Mirrors
  * _event_loop_resolve exactly, scoped to one loop's own table instead of
- * the process-wide one. */
+ * the process-wide one.
+ *
+ * Takes the read side of reg_slot_rwlock: this only reads idx/generation/
+ * ptr, never mutates the table, so concurrent resolves (the hot path,
+ * called from event_loop_pause/_resume/_modify at full request rate) can
+ * run together rather than serializing behind one lock; see reg_slot_
+ * rwlock's own field comment for why this matters. Still mutually
+ * exclusive with _event_reg_slot_acquire/_release (the write side), which
+ * is what keeps a concurrent cvector_push_back-triggered reallocation of
+ * reg_slots from ever being observed mid-move by a reader here. */
 static event_reg_s *_event_reg_resolve(struct event_loop_s *loop, event_reg h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(loop->reg_slot_mutex);
+  rw_lock_rdlock(loop->reg_slot_rwlock);
   event_reg_s *raw = NULL;
   if (idx < cvector_elem_count(loop->reg_slots)) {
     event_reg_slot_t *slot =
         (event_reg_slot_t *)cvector_at(loop->reg_slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  /* The increment happens while STILL holding reg_slot_mutex, exactly like
-   * _event_loop_resolve's own pending_resolve_count increment: the only
-   * thing that could make touching raw unsafe here is the slot having
-   * already been marked not-in-use (event_loop_remove, under this same
-   * mutex), which we have just confirmed is not the case. */
+  /* The increment happens while STILL holding reg_slot_rwlock (read side),
+   * exactly like _event_loop_resolve's own pending_resolve_count
+   * increment: the only thing that could make touching raw unsafe here is
+   * the slot having already been marked not-in-use (event_loop_remove,
+   * under this same rwlock's write side), which we have just confirmed is
+   * not the case, and the write side cannot run concurrently with this
+   * read side regardless. */
   if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  mutex_unlock(loop->reg_slot_mutex);
+  rw_lock_unlock(loop->reg_slot_rwlock);
   return raw;
 }
 
-static void _event_reg_resolve_unpin(event_reg_s *raw) {
+#ifdef RUNNING_UNIT_TESTS
+/* Test-only: forces the very next _event_reg_resolve_unpin call to sleep for
+ * a caller-specified duration between reading removed/handlers.on_removed
+ * (while its own still-held resolve pin guarantees raw is safe to touch) and
+ * decrementing pending_resolve_count, then auto-disarms. Lets a test
+ * deterministically hold a resolve pin open long enough for a concurrent
+ * event_loop_remove on a different thread to mark the same reg removed and
+ * defer its free first: this widens maybe_needs_wake's own read-before-
+ * decrement window (see that variable's comment inside
+ * _event_reg_resolve_unpin) from its real, ordinarily tiny size to
+ * something a test can reliably land a concurrent event_loop_remove call
+ * inside of, deterministically exercising the case where that snapshot goes
+ * stale and EVENT_LOOP_RECLAIM_RETRY_MS's own bounded retry, not this
+ * unpin's own ping, is what actually reclaims the reg and fires
+ * on_removed. */
+static _Atomic uint32_t g_delay_next_reg_resolve_unpin_ms = 0;
+
+void event_loop_test_delay_next_reg_resolve_unpin_ms(uint32_t ms) {
+  atomic_store(&g_delay_next_reg_resolve_unpin_ms, ms);
+}
+#endif
+
+static void _event_reg_resolve_unpin(struct event_loop_s *loop,
+                                     event_reg_s *raw) {
+  /* Read before the decrement below, while this call's own still-held pin
+   * unconditionally guarantees raw is safe to touch: removed and
+   * handlers.on_removed only matter for deciding whether to ping
+   * reclaim_wake_efd afterward (see that decision's own comment below),
+   * but by the time the decrement below could make raw eligible for a
+   * concurrent free, reading either field would no longer be safe. removed
+   * being false here is what keeps this a single cheap load (no syscall)
+   * on the overwhelmingly common case of an unpin for a still-live
+   * registration -- event_loop_modify/_pause/_resume/event_loop_reg_
+   * generation, all far hotter call paths than event_loop_remove in
+   * practice, unpin a raw that is essentially always still live. */
+  bool maybe_needs_wake =
+      atomic_load(&raw->removed) && raw->handlers.on_removed;
+
+#ifdef RUNNING_UNIT_TESTS
+  /* See g_delay_next_reg_resolve_unpin_ms's own comment. Placed after the
+   * read above (this call's pin is still held either way) and before the
+   * decrement below, matching exactly what a real, unusually slow caller
+   * of event_loop_modify/_pause/_resume/event_loop_reg_generation would
+   * look like from this function's own point of view. */
+  uint32_t delay_ms = atomic_exchange(&g_delay_next_reg_resolve_unpin_ms, 0u);
+  if (delay_ms > 0) {
+    struct timespec ts = {.tv_sec = delay_ms / 1000,
+                          .tv_nsec = (long)(delay_ms % 1000) * 1000000L};
+    nanosleep(&ts, NULL);
+  }
+#endif
+
   /* Bare atomic decrement, no lock: _event_loop_reclaim_pending_frees polls
    * this value rather than waiting on a condvar, so there is no
    * lost-wakeup hazard to guard against; mirrors
    * _event_loop_resolve_unpin's identical reasoning exactly. */
-  atomic_fetch_sub(&raw->pending_resolve_count, 1);
+  int prev = atomic_fetch_sub(&raw->pending_resolve_count, 1);
+
+  /* Best-effort latency optimization only, not the correctness mechanism:
+   * pings reclaim_wake_efd (see its own field comment) when this unpin
+   * LOOKS, from maybe_needs_wake's necessarily-early snapshot, like it may
+   * have just made an already-removed, on_removed-bearing reg newly
+   * eligible for reclaim. maybe_needs_wake is read before the decrement
+   * above specifically because raw is only guaranteed safe to touch until
+   * that point (see this function's own comment above); a concurrent
+   * event_loop_remove landing strictly between that read and the decrement
+   * (a real possibility for event_loop_modify/_pause/_resume, which all do
+   * genuine work, not just a couple of instructions, between resolving and
+   * unpinning) makes this snapshot stale, so this condition can miss the
+   * one case where a ping would matter most. Reading raw's fields AFTER
+   * the decrement instead would close that staleness but reopen the exact
+   * use-after-free this pin exists to prevent (a concurrently-woken
+   * poller_thread, already running from event_loop_remove's own
+   * unconditional ping in _event_loop_remove_finish, could free raw between
+   * this call's decrement and any read of it that followed). Correctness
+   * for the case this ping misses is instead guaranteed by
+   * EVENT_LOOP_RECLAIM_RETRY_MS's own bounded epoll_wait retry (see
+   * _event_loop_reclaim_pending_frees and _event_loop_thread_fn), which
+   * needs no snapshot of raw at all: a stale miss here just costs up to one
+   * retry interval of extra latency, never an indefinite hang. */
+  if (prev == 1 && maybe_needs_wake) _eventfd_notify(loop->reclaim_wake_efd);
 }
 
 /* Marks reg's own slot not-in-use and bumps its generation, immediately
@@ -3740,13 +4190,13 @@ static void _event_reg_resolve_unpin(event_reg_s *raw) {
  * can never race the original reg's own still-pending deferred free. */
 static void _event_reg_slot_release(struct event_loop_s *loop,
                                     event_reg_s *reg) {
-  mutex_lock(loop->reg_slot_mutex);
+  rw_lock_wrlock(loop->reg_slot_rwlock);
   event_reg_slot_t *slot =
       (event_reg_slot_t *)cvector_at(loop->reg_slots, reg->self_slot_idx);
   slot->in_use = false;
   slot->ptr = NULL;
   cvector_push_back(loop->reg_free_indices, &reg->self_slot_idx);
-  mutex_unlock(loop->reg_slot_mutex);
+  rw_lock_unlock(loop->reg_slot_rwlock);
 }
 
 static event_reg_s *_event_reg_create(struct event_loop_s *loop,
@@ -3773,8 +4223,21 @@ static event_reg_s *_event_reg_create(struct event_loop_s *loop,
    * pthread_cond_destroy (undefined behaviour per POSIX) or a destroy of
    * never-initialized memory; see _event_reg_free's own comment. */
   if (sel.type != ccol_selectable_fd) {
-    mutex_init(reg->wait_mtx);
-    cond_var_init(reg->wait_cond);
+    /* On either failure, reg is freed directly rather than through
+     * _event_reg_free: wait_mtx/wait_cond were never validly initialized,
+     * so that function's own mutex_destroy/cond_var_destroy on them would
+     * be undefined behavior; see this function's own doc comment above for
+     * why _event_reg_free must be the sole, exclusive owner of tearing
+     * them down on every OTHER path. */
+    if (mutex_init(reg->wait_mtx) != 0) {
+      _mem_free(loop->m_procs, reg);
+      return NULL;
+    }
+    if (cond_var_init(reg->wait_cond) != 0) {
+      mutex_destroy(reg->wait_mtx);
+      _mem_free(loop->m_procs, reg);
+      return NULL;
+    }
   }
   return reg;
 }
@@ -3790,7 +4253,29 @@ static event_reg_s *_event_reg_create(struct event_loop_s *loop,
  * double-destroy that resulted from _event_loop_add_queue tearing them down
  * on its own failure paths AND this function tearing them down again right
  * after. */
+/* reg->owning_entry is set exactly once, only on the success path of
+ * _event_loop_add_fd/_event_loop_add_queue (see either function's own tail),
+ * and never cleared afterward; it is still NULL at every one of this
+ * function's call sites that tear down a reg event_loop_add itself failed
+ * to ever wire live (no dispatch could ever have observed such a reg, so
+ * there is nothing for arg's owner to be notified about), and non-NULL at
+ * every call site freeing a reg that WAS live at some point (an ordinary
+ * removal reaching _event_loop_reclaim_pending_frees once its refcount and
+ * pending_resolve_count both reach 0, or a still-registered reg swept up by
+ * __event_loop_destroy's own teardown walk). This is what lets on_removed
+ * fire exactly once per registration that ever became real, and never for
+ * one that didn't, with a single check right here rather than needing every
+ * call site to know which category it is. Every call site reaches this
+ * function with none of this module's own locks held (collection/dispatch
+ * locks are entry-scoped and never touched here; reg's own bookkeeping,
+ * wait_mtx/wait_cond, is only ever destroyed, never locked, below), so
+ * on_removed is free to take an application-level lock of its own,
+ * including one also taken by this same registration's other callbacks,
+ * without risking a lock-ordering cycle against anything in this module. */
 static void _event_reg_free(struct event_loop_s *loop, event_reg_s *reg) {
+  if (reg->owning_entry && reg->handlers.on_removed)
+    reg->handlers.on_removed(reg->arg);
+
   if (reg->sel.type != ccol_selectable_fd) {
     mutex_destroy(reg->wait_mtx);
     cond_var_destroy(reg->wait_cond);
@@ -3822,7 +4307,10 @@ static ccol_retval_t _event_loop_add_fd(struct event_loop_s *loop, size_t idx,
     entry->stripe_idx = idx;
     entry->as.fd.read_reg = NULL;
     entry->as.fd.write_reg = NULL;
-    mutex_init(entry->dispatch_lock);
+    if (mutex_init(entry->dispatch_lock) != 0) {
+      _mem_free(loop->m_procs, entry);
+      return ccol_unexpected_failure;
+    }
     atomic_init(&entry->removed, false);
     atomic_init(&entry->refcount, (size_t)0);
     /* Minted once per NEW entry, never for a second direction joining an
@@ -4189,13 +4677,14 @@ event_reg event_loop_add(event_loop loop, ccol_selectable sel,
    *
    * This ordering also has to match the only other place these two locks
    * ever nest: _cthreadcomm_atfork_prepare locks every live loop's own
-   * reg_slot_mutex (via _event_reg_slot_acquire below) before any of that
-   * loop's stripe locks (its own Phase 1, before stripe->lock is ever taken
-   * here). Acquiring the slot before locking the stripe keeps this function
-   * consistent with that existing reg_slot_mutex-then-stripe->lock order;
-   * doing it the other way around would be a new stripe->lock-then-
-   * reg_slot_mutex edge racing that pre-existing edge, an AB-BA deadlock
-   * risk against a concurrent fork(), not merely a style choice. */
+   * reg_slot_rwlock (write side; via _event_reg_slot_acquire below) before
+   * any of that loop's stripe locks (its own Phase 1, before stripe->lock
+   * is ever taken here). Acquiring the slot before locking the stripe keeps
+   * this function consistent with that existing reg_slot_rwlock-then-
+   * stripe->lock order; doing it the other way around would be a new
+   * stripe->lock-then-reg_slot_rwlock edge racing that pre-existing edge,
+   * an AB-BA deadlock risk against a concurrent fork(), not merely a style
+   * choice. */
   event_reg h = _event_reg_slot_acquire(raw, reg);
   if (h == 0) {
     if (err_str)
@@ -4232,23 +4721,28 @@ event_reg event_loop_add(event_loop loop, ccol_selectable sel,
       entry->fd = -1;
       entry->stripe_idx = idx;
       entry->as.reg = reg;
-      mutex_init(entry->dispatch_lock);
-      atomic_init(&entry->removed, false);
-      atomic_init(&entry->refcount, (size_t)0);
-      /* Queue/channel selectables never share an entry (1:1, no combining),
-       * so every event_loop_add call here mints a fresh generation;
-       * unlike the fd path, there is no "second direction joins the
-       * existing entry" case to special-case. */
-      entry->generation = atomic_fetch_add(&raw->fd_generation_counter, 1) + 1;
-      rv = _event_loop_add_queue(raw, entry, reg);
-      if (rv == ccol_success) {
-        reg->owning_entry = entry;
-        reg->stripe_idx = idx;
-        reg->generation = entry->generation;
-        _loop_queue_list_add(stripe, reg);
-      } else {
-        mutex_destroy(entry->dispatch_lock);
+      if (mutex_init(entry->dispatch_lock) != 0) {
         _mem_free(raw->m_procs, entry);
+        rv = ccol_unexpected_failure;
+      } else {
+        atomic_init(&entry->removed, false);
+        atomic_init(&entry->refcount, (size_t)0);
+        /* Queue/channel selectables never share an entry (1:1, no
+         * combining), so every event_loop_add call here mints a fresh
+         * generation; unlike the fd path, there is no "second direction
+         * joins the existing entry" case to special-case. */
+        entry->generation =
+            atomic_fetch_add(&raw->fd_generation_counter, 1) + 1;
+        rv = _event_loop_add_queue(raw, entry, reg);
+        if (rv == ccol_success) {
+          reg->owning_entry = entry;
+          reg->stripe_idx = idx;
+          reg->generation = entry->generation;
+          _loop_queue_list_add(stripe, reg);
+        } else {
+          mutex_destroy(entry->dispatch_lock);
+          _mem_free(raw->m_procs, entry);
+        }
       }
     }
   }
@@ -4292,7 +4786,7 @@ uint64_t event_loop_reg_generation(event_loop loop, event_reg reg) {
     return 0;
   }
   uint64_t gen = raw_reg->generation;
-  _event_reg_resolve_unpin(raw_reg);
+  _event_reg_resolve_unpin(raw, raw_reg);
   _event_loop_resolve_unpin(raw);
   return gen;
 }
@@ -4416,7 +4910,7 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg reg_h,
   }
 
   if (reg->sel.type != ccol_selectable_fd) {
-    _event_reg_resolve_unpin(reg);
+    _event_reg_resolve_unpin(raw, reg);
     _event_loop_resolve_unpin(raw);
     return ccol_invalid_args;
   }
@@ -4426,14 +4920,14 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg reg_h,
 
   if (atomic_load(&reg->removed)) {
     mutex_unlock(stripe->lock);
-    _event_reg_resolve_unpin(reg);
+    _event_reg_resolve_unpin(raw, reg);
     _event_loop_resolve_unpin(raw);
     return ccol_invalid_args;
   }
 
   if (reg->sel.dir == new_dir) {
     mutex_unlock(stripe->lock);
-    _event_reg_resolve_unpin(reg);
+    _event_reg_resolve_unpin(raw, reg);
     _event_loop_resolve_unpin(raw);
     return ccol_success;
   }
@@ -4447,7 +4941,7 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg reg_h,
                                   : &entry->as.fd.write_reg;
   if (*target_slot != NULL) {
     mutex_unlock(stripe->lock);
-    _event_reg_resolve_unpin(reg);
+    _event_reg_resolve_unpin(raw, reg);
     _event_loop_resolve_unpin(raw);
     return ccol_not_permitted;
   }
@@ -4462,7 +4956,7 @@ ccol_retval_t event_loop_modify(event_loop loop, event_reg reg_h,
   _event_loop_rearm_entry_locked(raw, entry);
 
   mutex_unlock(stripe->lock);
-  _event_reg_resolve_unpin(reg);
+  _event_reg_resolve_unpin(raw, reg);
   _event_loop_resolve_unpin(raw);
   return ccol_success;
 }
@@ -4536,7 +5030,7 @@ ccol_retval_t event_loop_pause(event_loop loop, event_reg reg_h) {
   ccol_retval_t rv = _event_loop_pause_resume_validate_locked(raw, reg, &entry);
   if (rv != ccol_success) {
     mutex_unlock(stripe->lock);
-    _event_reg_resolve_unpin(reg);
+    _event_reg_resolve_unpin(raw, reg);
     _event_loop_resolve_unpin(raw);
     return rv;
   }
@@ -4547,7 +5041,7 @@ ccol_retval_t event_loop_pause(event_loop loop, event_reg reg_h) {
   }
 
   mutex_unlock(stripe->lock);
-  _event_reg_resolve_unpin(reg);
+  _event_reg_resolve_unpin(raw, reg);
   _event_loop_resolve_unpin(raw);
   return ccol_success;
 }
@@ -4595,7 +5089,7 @@ ccol_retval_t event_loop_resume(event_loop loop, event_reg reg_h) {
   ccol_retval_t rv = _event_loop_pause_resume_validate_locked(raw, reg, &entry);
   if (rv != ccol_success) {
     mutex_unlock(stripe->lock);
-    _event_reg_resolve_unpin(reg);
+    _event_reg_resolve_unpin(raw, reg);
     _event_loop_resolve_unpin(raw);
     return rv;
   }
@@ -4606,7 +5100,7 @@ ccol_retval_t event_loop_resume(event_loop loop, event_reg reg_h) {
   }
 
   mutex_unlock(stripe->lock);
-  _event_reg_resolve_unpin(reg);
+  _event_reg_resolve_unpin(raw, reg);
   _event_loop_resolve_unpin(raw);
   return ccol_success;
 }
@@ -4726,8 +5220,21 @@ static void _event_loop_defer_reg_free(struct event_loop_s *loop,
  * unconditional form (see _event_loop_free_all_pending), by
  * __event_loop_destroy after poller_thread (and dispatch_pool, if any) has
  * been fully joined/drained, where no epoch or refcount check is needed at
- * all since no thread can reference anything any more. */
-static void _event_loop_reclaim_pending_frees(struct event_loop_s *loop) {
+ * all since no thread can reference anything any more.
+ *
+ * Returns true if anything at all was left pending (re-pushed to either
+ * list) rather than freed. _event_loop_thread_fn uses this to decide its
+ * NEXT epoll_wait timeout: a still-pending reg with a non-NULL on_removed
+ * handler needs a bounded retry, not an indefinite one, because no ping
+ * emitted by whichever call eventually drops its pending_resolve_count to
+ * 0 can be relied on to always fire (see _event_reg_resolve_unpin's own
+ * comment for why that snapshot can go stale against a concurrent
+ * event_loop_remove, and why fixing that by reading raw's fields AFTER this
+ * function's own reclaim would just reintroduce the use-after-free this
+ * epoch/refcount scheme exists to prevent). A bounded retry here is the
+ * correctness backstop; the pings stay as a latency optimization for the
+ * common case where they do happen to fire correctly. */
+static bool _event_loop_reclaim_pending_frees(struct event_loop_s *loop) {
   size_t reached = atomic_load(&loop->poller_batch_gen);
 
   event_entry *e = atomic_exchange(&loop->pending_entry_frees, NULL);
@@ -4743,6 +5250,7 @@ static void _event_loop_reclaim_pending_frees(struct event_loop_s *loop) {
     }
     e = next;
   }
+  bool entries_still_pending = (e_keep != NULL);
   while (e_keep) {
     event_entry *next = e_keep->pending_free_next;
     _event_loop_push_entry_free_node(loop, e_keep);
@@ -4752,7 +5260,7 @@ static void _event_loop_reclaim_pending_frees(struct event_loop_s *loop) {
   /* reg's own eligibility condition is pending_resolve_count == 0, not an
    * epoch comparison: see struct event_loop_s's own reg_slots field
    * comment. Its slot (if it had one) was already released, under
-   * loop->reg_slot_mutex, at the exact point it was deferred (see
+   * loop->reg_slot_rwlock's write side, at the exact point it was deferred (see
    * event_loop_remove's own two-phase call site), so no NEW resolve of it
    * can ever succeed from that point onward; pending_resolve_count == 0
    * therefore means no thread, anywhere, still holds a pointer to this reg
@@ -4771,11 +5279,14 @@ static void _event_loop_reclaim_pending_frees(struct event_loop_s *loop) {
     }
     r = next;
   }
+  bool regs_still_pending = (r_keep != NULL);
   while (r_keep) {
     event_reg_s *next = r_keep->pending_free_next;
     _event_loop_push_reg_free_node(loop, r_keep);
     r_keep = next;
   }
+
+  return entries_still_pending || regs_still_pending;
 }
 
 /* Unconditional variant for use after every reactor thread has already been
@@ -4934,6 +5445,20 @@ static void _event_loop_remove_finish(struct event_loop_s *raw,
                                       event_reg_s *reg) {
   atomic_fetch_sub(&raw->reg_count, 1);
 
+  /* Cached before the possible defer call below, on the same defensive
+   * principle _event_loop_release_after_dispatch's own identical-looking
+   * check now follows (see that function's own comment for the real,
+   * ThreadSanitizer-caught use-after-free reading this same field AFTER
+   * deferring caused there): reg is unconditionally safe to read right
+   * here (this call's own _event_reg_resolve pin, still held until
+   * event_loop_remove's own caller unpins strictly after this function
+   * returns, already rules out a concurrent free at this exact point), but
+   * caching it up front means that safety no longer needs to be re-proven
+   * by whoever next touches this function; it holds regardless of whether
+   * the resolve-pin invariant this specific call site happens to enjoy
+   * today still holds after some future change. */
+  bool needs_wake = (reg->handlers.on_removed != NULL);
+
   int prev = atomic_fetch_sub(&reg->refcount, 1);
   /* Deferred, not freed here directly: an in-flight callback (if any) may
    * still need reg; see _event_loop_defer_reg_free's own comment and
@@ -4941,6 +5466,21 @@ static void _event_loop_remove_finish(struct event_loop_s *raw,
    * gated on reg->pending_resolve_count reaching 0 (see struct
    * event_loop_s's own reg_slots field comment). */
   if (prev == 1) _event_loop_defer_reg_free(raw, reg);
+
+  /* Pings poller_thread's own reclaim_wake_efd (see its field comment)
+   * whenever this registration has an on_removed handler, regardless of
+   * prev above: if prev == 1 (no dispatch was in flight), poller_thread may
+   * currently be blocked in its own epoll_wait(-1) with nothing else
+   * registered to wake it, and this ping is what gives on_removed a small,
+   * genuinely bounded latency instead of an unbounded one. If prev != 1 (a
+   * dispatch is still in flight), poller_thread is, by construction,
+   * already running (not blocked in epoll_wait) and will reach its own
+   * reclaim point on its own the moment that dispatch finishes; this ping
+   * is then a harmless, cheap no-op it drains on its very next epoll_wait
+   * return. Skipped entirely for the overwhelmingly common case of a
+   * registration with no on_removed handler, so this costs nothing for a
+   * caller that never uses the feature. */
+  if (needs_wake) _eventfd_notify(raw->reclaim_wake_efd);
 }
 
 ccol_retval_t event_loop_remove(event_loop loop, event_reg reg_h) {
@@ -4967,7 +5507,7 @@ ccol_retval_t event_loop_remove(event_loop loop, event_reg reg_h) {
    * call's own still-held pin (from the successful resolve above) is
    * exactly what guarantees _event_loop_reclaim_pending_frees cannot have
    * freed it yet. */
-  _event_reg_resolve_unpin(reg);
+  _event_reg_resolve_unpin(raw, reg);
   _event_loop_resolve_unpin(raw);
   return ccol_success;
 }
@@ -5080,12 +5620,46 @@ static void _event_loop_run_callback(event_loop loop, _dispatch_item *item) {
  * been removed (see _event_loop_defer_reg_free's comment for why this
  * can't be a synchronous free here). refcount is _Atomic and
  * _event_loop_defer_reg_free is lock-free, so no lock is needed here at
- * all; not even a stripe lock, since nothing here touches entry state. */
+ * all; not even a stripe lock, since nothing here touches entry state.
+ *
+ * Pings reclaim_wake_efd on the exact same condition, and for the identical
+ * reason, as _event_loop_remove_finish's own call to it: with
+ * num_reactor_threads > 1, this function's own call site inside
+ * _event_loop_dispatch_job_fn runs on a ctpool WORKER thread, not
+ * poller_thread; if THIS call (not event_loop_remove's own decrement) is
+ * the one that actually defers reg here, poller_thread has no other way to
+ * learn that promptly, and could otherwise be blocked in its own
+ * epoll_wait(-1) indefinitely with nothing else to wake it, exactly the
+ * unbounded-latency gap reclaim_wake_efd exists to close. Harmless to also
+ * ping from this function's other two call sites (both already running on
+ * poller_thread itself, num_reactor_threads == 1 dispatch and the
+ * ctpool_submit-failure unwind in _event_loop_poller_collect), which will
+ * reach their own next reclaim point on their own regardless; a redundant
+ * self-ping there costs one cheap eventfd write, drained on the very next
+ * iteration.
+ *
+ * needs_wake is read BEFORE _event_loop_defer_reg_free, not after: unlike
+ * _event_loop_remove_finish's own identical-looking check, this function's
+ * caller holds no resolve pin on reg (dispatch collection reads reg
+ * directly off the entry's own read_reg/write_reg slot, never through
+ * _event_reg_resolve), so nothing here keeps poller_thread's own
+ * _event_loop_reclaim_pending_frees from concurrently freeing reg the
+ * instant _event_loop_defer_reg_free makes it eligible (pending_resolve_
+ * count for a reg with no in-flight resolve call is already 0). Reading
+ * reg->handlers.on_removed after that call raced exactly that free -- a
+ * real, ThreadSanitizer-caught use-after-free against tests/chttpclient's
+ * own async_idle_pool suite, not a theoretical one. Caching it into a local
+ * first, while reg is still unconditionally safe to read (this thread is
+ * the one that just proved, via prev == 1, that no one else could have
+ * deferred or freed it yet), closes this without weakening the check
+ * itself. */
 static void _event_loop_release_after_dispatch(struct event_loop_s *loop,
                                                event_reg_s *reg) {
   int prev = atomic_fetch_sub(&reg->refcount, 1);
   if (prev == 1 && atomic_load(&reg->removed)) {
+    bool needs_wake = (reg->handlers.on_removed != NULL);
     _event_loop_defer_reg_free(loop, reg);
+    if (needs_wake) _eventfd_notify(loop->reclaim_wake_efd);
   }
 }
 
@@ -5567,6 +6141,18 @@ static void _event_loop_dispatch_job_fn(void *arg) {
   _mem_free(loop->m_procs, job);
 }
 
+/* Retry interval for the next epoll_wait when _event_loop_reclaim_pending_
+ * frees leaves anything still pending: this is a correctness backstop (see
+ * that function's own comment for why a ping alone cannot be relied on),
+ * not a latency target this module is otherwise tuned around, so 50ms is
+ * chosen only to be comfortably smaller than every existing on_removed-
+ * latency test's own timeout budget while staying large enough that a
+ * registration genuinely stuck for a long time (an application bug
+ * elsewhere, not this module's) does not turn into a meaningful busy-poll
+ * cost: one epoll_wait return plus a lock-free list scan every 50ms, paid
+ * only while at least one entry/reg is actually still pending. */
+#define EVENT_LOOP_RECLAIM_RETRY_MS 50
+
 static void *_event_loop_thread_fn(void *arg) {
   struct event_loop_s *loop = (struct event_loop_s *)arg;
 
@@ -5589,9 +6175,16 @@ static void *_event_loop_thread_fn(void *arg) {
      * comment above _event_loop_reclaim_pending_frees for the full
      * design. */
     atomic_fetch_add(&loop->poller_batch_gen, 1);
-    _event_loop_reclaim_pending_frees(loop);
+    bool reclaim_still_pending = _event_loop_reclaim_pending_frees(loop);
 
-    int n = epoll_wait(loop->epfd, events, (int)loop->max_events_per_wait, -1);
+    /* EVENT_LOOP_RECLAIM_RETRY_MS instead of -1 whenever anything is still
+     * pending: see _event_loop_reclaim_pending_frees's own comment for why
+     * this bounded retry, not a perfectly-timed ping, is what actually
+     * guarantees forward progress here. */
+    int wait_timeout_ms =
+        reclaim_still_pending ? EVENT_LOOP_RECLAIM_RETRY_MS : -1;
+    int n = epoll_wait(loop->epfd, events, (int)loop->max_events_per_wait,
+                       wait_timeout_ms);
 #ifdef RUNNING_UNIT_TESTS
     atomic_fetch_add(&loop->poller_iterations_for_tests, (uint64_t)1);
 #endif
@@ -5600,6 +6193,18 @@ static void *_event_loop_thread_fn(void *arg) {
       break;
     }
     for (int i = 0; i < n; i++) {
+      /* reclaim_wake_efd's own sentinel (see its field comment): nothing to
+       * dispatch, just drain it so it can be pinged again for a future
+       * wakeup, then let this loop iteration's own top-of-loop reclaim
+       * (already run above, unconditionally, before this epoll_wait call)
+       * pick up whatever this ping was for on the NEXT iteration. Checked
+       * before the shutdown-sentinel (ev.data.ptr == NULL) branch inside
+       * _event_loop_handle_event/_event_loop_poller_collect, since this
+       * fd's own ev.data.ptr is never NULL. */
+      if (events[i].data.ptr == &loop->reclaim_wake_efd) {
+        _eventfd_drain(loop->reclaim_wake_efd);
+        continue;
+      }
       if (loop->dispatch_pool) {
         _event_loop_poller_collect(loop, &events[i]);
       } else {
@@ -5728,16 +6333,69 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
     return EVENT_LOOP_INVALID;
   }
 
-  mutex_init(loop->shutdown_lock);
-  cond_var_init(loop->joined_cv);
-  mutex_init(loop->reg_slot_mutex);
+  loop->reclaim_wake_efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+  if (loop->reclaim_wake_efd < 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("eventfd failed");
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return EVENT_LOOP_INVALID;
+  }
+
+  ev.data.ptr = &loop->reclaim_wake_efd;
+  ev.events = EPOLLIN;
+  if (epoll_ctl(loop->epfd, EPOLL_CTL_ADD, loop->reclaim_wake_efd, &ev) < 0) {
+    if (err_str)
+      *err_str =
+          CCOL_ERR_STR("epoll_ctl failed registering reclaim-wake eventfd");
+    close(loop->reclaim_wake_efd);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return EVENT_LOOP_INVALID;
+  }
+
+  if (mutex_init(loop->shutdown_lock) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize shutdown_lock");
+    close(loop->reclaim_wake_efd);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return EVENT_LOOP_INVALID;
+  }
+  if (cond_var_init(loop->joined_cv) != 0) {
+    if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize joined_cv");
+    mutex_destroy(loop->shutdown_lock);
+    close(loop->reclaim_wake_efd);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return EVENT_LOOP_INVALID;
+  }
+  if (rw_lock_init(loop->reg_slot_rwlock) != 0) {
+    if (err_str)
+      *err_str = CCOL_ERR_STR("Failed to initialize reg_slot_rwlock");
+    cond_var_destroy(loop->joined_cv);
+    mutex_destroy(loop->shutdown_lock);
+    close(loop->reclaim_wake_efd);
+    close(loop->shutdown_efd);
+    close(loop->epfd);
+    _mem_free(mmgmt_procs, loop->m_procs);
+    _mem_free(mmgmt_procs, loop);
+    return EVENT_LOOP_INVALID;
+  }
   loop->reg_slots =
       cvector_create_full(sizeof(event_reg_slot_t), mmgmt_procs, NULL);
   if (!loop->reg_slots) {
     if (err_str) *err_str = CCOL_ERR_STR("Failed to allocate reg slot array");
-    mutex_destroy(loop->reg_slot_mutex);
+    rw_lock_destroy(loop->reg_slot_rwlock);
     cond_var_destroy(loop->joined_cv);
     mutex_destroy(loop->shutdown_lock);
+    close(loop->reclaim_wake_efd);
     close(loop->shutdown_efd);
     close(loop->epfd);
     _mem_free(mmgmt_procs, loop->m_procs);
@@ -5750,9 +6408,10 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
     if (err_str)
       *err_str = CCOL_ERR_STR("Failed to allocate reg free-index array");
     __cvector_destroy(loop->reg_slots);
-    mutex_destroy(loop->reg_slot_mutex);
+    rw_lock_destroy(loop->reg_slot_rwlock);
     cond_var_destroy(loop->joined_cv);
     mutex_destroy(loop->shutdown_lock);
+    close(loop->reclaim_wake_efd);
     close(loop->shutdown_efd);
     close(loop->epfd);
     _mem_free(mmgmt_procs, loop->m_procs);
@@ -5789,9 +6448,10 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
       *err_str = CCOL_ERR_STR("Failed to allocate lock stripe array");
     cvector_destroy(loop->reg_free_indices);
     cvector_destroy(loop->reg_slots);
-    mutex_destroy(loop->reg_slot_mutex);
+    rw_lock_destroy(loop->reg_slot_rwlock);
     cond_var_destroy(loop->joined_cv);
     mutex_destroy(loop->shutdown_lock);
+    close(loop->reclaim_wake_efd);
     close(loop->shutdown_efd);
     close(loop->epfd);
     _mem_free(mmgmt_procs, loop->m_procs);
@@ -5812,16 +6472,38 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
       _destroy_stripes(loop, mmgmt_procs, stripes_created);
       cvector_destroy(loop->reg_free_indices);
       cvector_destroy(loop->reg_slots);
-      mutex_destroy(loop->reg_slot_mutex);
+      rw_lock_destroy(loop->reg_slot_rwlock);
       cond_var_destroy(loop->joined_cv);
       mutex_destroy(loop->shutdown_lock);
+      close(loop->reclaim_wake_efd);
       close(loop->shutdown_efd);
       close(loop->epfd);
       _mem_free(mmgmt_procs, loop->m_procs);
       _mem_free(mmgmt_procs, loop);
       return EVENT_LOOP_INVALID;
     }
-    mutex_init(loop->stripes[stripes_created].lock);
+    if (mutex_init(loop->stripes[stripes_created].lock) != 0) {
+      if (err_str) *err_str = CCOL_ERR_STR("Failed to initialize stripe lock");
+      /* _destroy_stripes(loop, mmgmt_procs, stripes_created) below only
+       * destroys stripes [0, stripes_created), so this current stripe's
+       * own already-created fd_index (its .lock never having been validly
+       * initialized) is torn down explicitly first, exactly like the
+       * sibling !fd_index failure block just above handles its own current
+       * stripe. */
+      chmap_destroy(loop->stripes[stripes_created].fd_index);
+      _destroy_stripes(loop, mmgmt_procs, stripes_created);
+      cvector_destroy(loop->reg_free_indices);
+      cvector_destroy(loop->reg_slots);
+      rw_lock_destroy(loop->reg_slot_rwlock);
+      cond_var_destroy(loop->joined_cv);
+      mutex_destroy(loop->shutdown_lock);
+      close(loop->reclaim_wake_efd);
+      close(loop->shutdown_efd);
+      close(loop->epfd);
+      _mem_free(mmgmt_procs, loop->m_procs);
+      _mem_free(mmgmt_procs, loop);
+      return EVENT_LOOP_INVALID;
+    }
     loop->stripes[stripes_created].queue_regs_head = NULL;
   }
 
@@ -5845,9 +6527,10 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
       _destroy_stripes(loop, mmgmt_procs, num_lock_stripes);
       cvector_destroy(loop->reg_free_indices);
       cvector_destroy(loop->reg_slots);
-      mutex_destroy(loop->reg_slot_mutex);
+      rw_lock_destroy(loop->reg_slot_rwlock);
       cond_var_destroy(loop->joined_cv);
       mutex_destroy(loop->shutdown_lock);
+      close(loop->reclaim_wake_efd);
       close(loop->shutdown_efd);
       close(loop->epfd);
       _mem_free(mmgmt_procs, loop->m_procs);
@@ -5862,9 +6545,10 @@ event_loop event_loop_create_with_mprocs(size_t max_events_per_wait,
     _destroy_stripes(loop, mmgmt_procs, num_lock_stripes);
     cvector_destroy(loop->reg_free_indices);
     cvector_destroy(loop->reg_slots);
-    mutex_destroy(loop->reg_slot_mutex);
+    rw_lock_destroy(loop->reg_slot_rwlock);
     cond_var_destroy(loop->joined_cv);
     mutex_destroy(loop->shutdown_lock);
+    close(loop->reclaim_wake_efd);
     close(loop->shutdown_efd);
     close(loop->epfd);
     _mem_free(mmgmt_procs, loop->m_procs);
@@ -6115,9 +6799,10 @@ static void _event_loop_teardown_raw(struct event_loop_s *loop) {
 
   cvector_destroy(loop->reg_free_indices);
   cvector_destroy(loop->reg_slots);
-  mutex_destroy(loop->reg_slot_mutex);
+  rw_lock_destroy(loop->reg_slot_rwlock);
   cond_var_destroy(loop->joined_cv);
   mutex_destroy(loop->shutdown_lock);
+  close(loop->reclaim_wake_efd);
   close(loop->shutdown_efd);
   close(loop->epfd);
 
@@ -6145,7 +6830,7 @@ void __event_loop_destroy(event_loop loop) {
   call_once(g_cthreadcomm_atfork_once, _cthreadcomm_register_atfork_once);
   uint32_t idx = (uint32_t)(loop >> 32);
   uint32_t gen = (uint32_t)(loop & 0xFFFFFFFFu);
-  mutex_lock(event_loop_slot_table.mutex);
+  rw_lock_wrlock(event_loop_slot_table.rwlock);
   event_loop_slot_t *slot = NULL;
   struct event_loop_s *raw = NULL;
   if (idx < cvector_elem_count(event_loop_slot_table.slots)) {
@@ -6157,7 +6842,7 @@ void __event_loop_destroy(event_loop loop) {
     }
   }
   if (!raw) {
-    mutex_unlock(event_loop_slot_table.mutex);
+    rw_lock_unlock(event_loop_slot_table.rwlock);
     fatal_err(
         "event_loop_destroy: handle is stale or already destroyed "
         "(double-destroy / use-after-destroy of an event_loop handle)");
@@ -6184,7 +6869,7 @@ void __event_loop_destroy(event_loop loop) {
       (get_thread_id() == raw->poller_thread) ||
       (thread_ls_get(event_loop_job_key_bundle.key) == (void *)raw);
   if (is_self_call) {
-    mutex_unlock(event_loop_slot_table.mutex);
+    rw_lock_unlock(event_loop_slot_table.rwlock);
     fatal_err(
         "event_loop_destroy: called from within a callback running on this "
         "loop's own reactor/dispatch thread (self-destroy hazard); defer "
@@ -6195,7 +6880,7 @@ void __event_loop_destroy(event_loop loop) {
   slot->in_use = false; /* blocks ALL future resolves for this handle from
                             this instant, including a second concurrent
                             destroy attempt */
-  mutex_unlock(event_loop_slot_table.mutex);
+  rw_lock_unlock(event_loop_slot_table.rwlock);
 
   /* Wait for pending_resolve_count to reach 0 BEFORE running any teardown
    * logic at all (not just before freeing memory); see this field's own
@@ -6224,7 +6909,7 @@ void __event_loop_destroy(event_loop loop) {
    * call in between may have reallocated slots' backing array via
    * cvector_push_back, invalidating any pointer into it taken before this
    * second lock acquisition; idx itself is stable. */
-  mutex_lock(event_loop_slot_table.mutex);
+  rw_lock_wrlock(event_loop_slot_table.rwlock);
   event_loop_slot_t *slot2 =
       (event_loop_slot_t *)cvector_at(event_loop_slot_table.slots, idx);
   slot2->ptr = NULL;
@@ -6232,7 +6917,7 @@ void __event_loop_destroy(event_loop loop) {
       the just-freed loop's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(event_loop_slot_table.free_indices, &idx);
-  mutex_unlock(event_loop_slot_table.mutex);
+  rw_lock_unlock(event_loop_slot_table.rwlock);
 }
 
 #ifdef RUNNING_UNIT_TESTS
@@ -6276,14 +6961,14 @@ struct event_loop_s *_event_loop_resolve_for_tests(event_loop h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(event_loop_slot_table.mutex);
+  rw_lock_rdlock(event_loop_slot_table.rwlock);
   struct event_loop_s *raw = NULL;
   if (idx < cvector_elem_count(event_loop_slot_table.slots)) {
     event_loop_slot_t *slot =
         (event_loop_slot_t *)cvector_at(event_loop_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  mutex_unlock(event_loop_slot_table.mutex);
+  rw_lock_unlock(event_loop_slot_table.rwlock);
   return raw;
 }
 
@@ -6294,9 +6979,9 @@ struct event_loop_s *_event_loop_resolve_for_tests(event_loop h) {
 size_t _event_loop_slot_table_capacity_for_tests(void) {
   call_once(event_loop_slot_table.once, _event_loop_slot_table_init_globals);
   call_once(g_cthreadcomm_atfork_once, _cthreadcomm_register_atfork_once);
-  mutex_lock(event_loop_slot_table.mutex);
+  rw_lock_rdlock(event_loop_slot_table.rwlock);
   size_t n = cvector_elem_count(event_loop_slot_table.slots);
-  mutex_unlock(event_loop_slot_table.mutex);
+  rw_lock_unlock(event_loop_slot_table.rwlock);
   return n;
 }
 
@@ -6318,6 +7003,34 @@ bool _event_loop_resolve_pin_and_sleep_for_tests(event_loop h, int ms) {
   _event_loop_resolve_unpin(raw);
   return true;
 }
+
+/* Test-only: locks/unlocks event_loop_slot_table's own rwlock write side
+ * directly, bypassing every public API function, mirroring both this same
+ * file's own event_loop_test_wrlock_reg_slot_for_tests/_wrunlock pair (for
+ * a single loop's own reg_slot_rwlock) and cthreadpool.c's identical
+ * ctpool_test_wrlock_slot_table_for_tests/_wrunlock pair (for that
+ * module's own process-wide slot table). Lets a test hold this rwlock's
+ * write side locked, from a thread OTHER than the one that will call
+ * fork(), for an arbitrarily long, precisely controlled window: the
+ * specific scenario needed to deterministically exercise the TID-tracked
+ * write-lock reinit fix in _cthreadcomm_atfork_release_impl's own in_child
+ * branch for event_loop_slot_table.rwlock.
+ *
+ * Deliberately has no "resolve" step (there is no per-instance handle to
+ * resolve here, only the process-wide slot table itself), so, like
+ * cthreadpool's own analogous pair and unlike this file's own reg_slot
+ * pair, this returns void and the matching unlock call takes no argument;
+ * no AB-BA hazard analogous to reg_slot's own applies here since neither
+ * call touches anything else that could itself be contended by a
+ * concurrent fork(). */
+void event_loop_test_wrlock_slot_table_for_tests(void) {
+  call_once(event_loop_slot_table.once, _event_loop_slot_table_init_globals);
+  rw_lock_wrlock(event_loop_slot_table.rwlock);
+}
+
+void event_loop_test_wrunlock_slot_table_for_tests(void) {
+  rw_lock_unlock(event_loop_slot_table.rwlock);
+}
 #endif
 
 /* Frees the slot table's own bookkeeping arrays at process exit, so
@@ -6333,8 +7046,8 @@ bool _event_loop_resolve_pin_and_sleep_for_tests(event_loop h, int ms) {
  * would otherwise lock a never-pthread_mutex_init'd mutex here. */
 __attribute__((destructor)) static void _cleanup_event_loop_slot_table(void) {
   call_once(event_loop_slot_table.once, _event_loop_slot_table_init_globals);
-  mutex_lock(event_loop_slot_table.mutex);
+  rw_lock_wrlock(event_loop_slot_table.rwlock);
   __cvector_destroy(event_loop_slot_table.slots);
   __cvector_destroy(event_loop_slot_table.free_indices);
-  mutex_unlock(event_loop_slot_table.mutex);
+  rw_lock_unlock(event_loop_slot_table.rwlock);
 }

@@ -45,7 +45,18 @@ SOFTWARE.
  * alias a later, unrelated pool occupying the same slot index. Mirrors
  * chttpcli_slot_table/chttpsvr_slot_table/event_loop_slot_table/
  * clrucache_slot_table exactly; see src/chttpclient.c's own copy of this
- * comment for the full design rationale. */
+ * comment for the full design rationale.
+ *
+ * The table's own lock is a read-write lock, not a plain mutex: _ctpool_
+ * resolve (read-only: bounds-check idx, compare generation, read slot->ptr)
+ * runs on every ctpool_submit/_try_submit/_timed_submit/_wait/... call,
+ * i.e. at full request rate for a caller like chttpserver that submits one
+ * task per request; _ctpool_handle_slot_acquire/__ctpool_destroy (the only
+ * mutators) each run once per pool's entire lifetime, not once per task.
+ * Mirrors event_loop's own identical reg_slot_rwlock conversion and carries
+ * the identical fork-safety subtlety: see _ctpool_atfork_prepare's own doc
+ * comment for the TID-tracked-write-lock hazard this introduces and how it
+ * is handled. */
 typedef struct {
   cthread_pool *ptr;   /* NULL when slot is free */
   uint32_t generation; /* minted fresh on every acquire; monotonic per
@@ -71,14 +82,14 @@ typedef struct {
    * true while in_use is true (the two are set at different points, never
    * both together); ptr is guaranteed non-NULL and safe to dereference
    * for as long as this is true, since it is cleared (under this same
-   * ctpool_slot_table.mutex) strictly before the struct it points to
-   * becomes unsafe to touch. */
+   * ctpool_slot_table.rwlock's write side) strictly before the struct it
+   * points to becomes unsafe to touch. */
   bool torn_down;
 #endif
 } ctpool_slot_t;
 
 static struct {
-  mutex_t mutex;
+  rw_lock_t rwlock;
   once_flag_t once;
   cvec slots;        /* cvec of ctpool_slot_t; grows via push_back only,
                          indices permanent once allocated */
@@ -104,7 +115,8 @@ static void _ctpool_atfork_child_release(void);
 #endif
 
 static void _ctpool_slot_table_init_globals(void) {
-  mutex_init(ctpool_slot_table.mutex);
+  if (rw_lock_init(ctpool_slot_table.rwlock) != 0)
+    fatal_err("ctpool slot table: failed to initialize rwlock");
   ctpool_slot_table.slots = cvector_create(sizeof(ctpool_slot_t), NULL);
   if (!ctpool_slot_table.slots)
     fatal_err("ctpool slot table: failed to allocate slots vector");
@@ -268,19 +280,33 @@ struct cthread_pool {
 /* fork() duplicates only the calling thread; any lock some OTHER thread held
  * at that instant is inherited by the child in a permanently locked state,
  * since no thread survives in the child that could ever unlock it.
- * ctpool_slot_table.mutex (process-wide, taken by every
+ * ctpool_slot_table.rwlock (process-wide, taken by every
  * create_cthread_pool_mp/__ctpool_destroy/ctpool_submit/.../_ctpool_resolve
  * call) and each still-live pool's own mu (taken by every submit/dequeue/
  * shutdown/wait call, including by a worker thread picking up or finishing a
  * task) are therefore both taken here, in prepare(), before fork() is
  * allowed to proceed (so fork() only ever completes once no thread is
  * transiently holding one of them), and released again in both parent() and
- * child() via the same function: every mutex in this module uses the
- * default ("normal") pthread mutex type, which does no owner/TID tracking on
- * Linux glibc, so a plain pthread_mutex_unlock is well-defined even when
- * called by a thread other than whichever one originally locked it (which,
- * for anything the forking thread itself did not hold, no longer exists in
- * the child at all).
+ * child() via the same function: every PLAIN mutex in this module (every
+ * pool's own mu included) uses the default ("normal") pthread mutex type,
+ * which does no owner/TID tracking on Linux glibc, so a plain
+ * pthread_mutex_unlock is well-defined even when called by a thread other
+ * than whichever one originally locked it (which, for anything the forking
+ * thread itself did not hold, no longer exists in the child at all).
+ *
+ * ctpool_slot_table.rwlock is the one exception: it is a read-write lock
+ * (see ctpool_slot_t's own doc comment for why), and glibc's rwlock write
+ * side, unlike a plain mutex, tracks ownership by TID. Its write side (taken
+ * by prepare() below) can be acquired by any thread calling
+ * create_cthread_pool_mp/__ctpool_destroy, not only the thread that happens
+ * to call fork(); a plain rw_lock_unlock from the child's own differently-
+ * TID'd surviving thread would then silently fail to release a lock a
+ * different, now-vanished thread actually locked, hanging every subsequent
+ * _ctpool_resolve in that child -- the identical hazard event_loop's own
+ * reg_slot_rwlock atfork handling already documents and fixes, and clogger.c's
+ * clog_slot_table.rwlock before it. See _ctpool_atfork_release_impl's own
+ * in_child branch for the fix (reinit instead of unlock), mirrored from
+ * both of those.
  *
  * Mirrors event_loop's own identical atfork fix in src/cthreadcomm.c
  * exactly (see that module's own comment for the full account of two real,
@@ -301,8 +327,9 @@ struct cthread_pool {
  * _ctpool_resolve itself already trusts as the sole indicator that
  * slot->ptr is safe to dereference for ordinary resolve purposes) AND every
  * slot with torn_down == true: __ctpool_destroy clears in_use (under this
- * same ctpool_slot_table.mutex) BEFORE doing any of its own, possibly slow,
- * teardown work (joining every worker thread, freeing the task queue), so a
+ * same ctpool_slot_table.rwlock's write side) BEFORE doing any of its own,
+ * possibly slow, teardown work (joining every worker thread, freeing the
+ * task queue), so a
  * pool's own worker threads are not actually gone the instant in_use goes
  * false, only once that join phase completes; torn_down stays true for
  * exactly that window (see ctpool_slot_t's own field comment), so a fork()
@@ -331,7 +358,7 @@ struct cthread_pool {
  * instructions, never held across a callback or a blocking wait), low-
  * probability gap, left open rather than silently declared fixed. */
 static void _ctpool_atfork_prepare(void) {
-  mutex_lock(ctpool_slot_table.mutex);
+  rw_lock_wrlock(ctpool_slot_table.rwlock);
 
   size_t n = cvector_elem_count(ctpool_slot_table.slots);
   for (size_t i = 0; i < n; i++) {
@@ -343,12 +370,13 @@ static void _ctpool_atfork_prepare(void) {
 }
 
 /* Shared by both parent() and child(); see _ctpool_atfork_prepare's own doc
- * comment for why a plain unlock (not a reinit) is correct in both branches
- * for this module's mutexes. Safe to re-walk the identical structure
- * prepare() just walked and release every lock symmetrically: nothing could
- * have mutated the slot table or any live pool's own state in between,
- * since every lock that would be needed to do so is still held at this
- * exact point.
+ * comment for why a plain unlock is correct for this module's PLAIN mutexes
+ * in both branches, and why ctpool_slot_table.rwlock specifically needs a
+ * reinit instead in the child (handled below, at this function's own end).
+ * Safe to re-walk the identical structure prepare() just walked and release
+ * every lock symmetrically: nothing could have mutated the slot table or
+ * any live pool's own state in between, since every lock that would be
+ * needed to do so is still held at this exact point.
  *
  * is_child additionally marks every still-live pool as foreign_since_fork
  * and resets its own pending_resolve_count; see
@@ -398,8 +426,8 @@ static void _ctpool_atfork_release_impl(bool is_child) {
 
       /* The real, previously-missing fix: a live pool's own worker threads
        * spend most of their lives blocked in cond_var_wait(pool->not_empty,
-       * pool->mu) (see worker_thread_fn's main loop), which -- unlike a
-       * plain mutex_lock -- releases pool->mu for the duration of the wait.
+       * pool->mu) (see worker_thread_fn's main loop), which (unlike a
+       * plain mutex_lock) releases pool->mu for the duration of the wait.
        * _ctpool_atfork_prepare locking pool->mu therefore proves nothing
        * about whether some OTHER, vanished-in-the-child thread was, at the
        * exact instant of fork(), sitting inside pthread_cond_wait's own
@@ -414,7 +442,7 @@ static void _ctpool_atfork_release_impl(bool is_child) {
        * internal state (confirmed directly: this test's own diagnostic
        * capture caught a hung child stuck inside pthread_cond_signal,
        * called from submit_internal's ordinary cond_var_signal(pool->
-       * not_empty) after enqueueing a task -- not inside pool->mu at all).
+       * not_empty) after enqueueing a task; not inside pool->mu at all).
        * Unlike a plain "normal" pthread mutex (no owner tracking, so a bare
        * unlock from a different thread fully and correctly clears it, per
        * this function's own header comment), a condition variable has no
@@ -432,16 +460,41 @@ static void _ctpool_atfork_release_impl(bool is_child) {
        * pool, whose real worker threads (the only ones that could ever have
        * been genuine waiters) are all, unconditionally, gone in this
        * process regardless of what fork() caught them doing. */
-      cond_var_init(pool->not_empty);
-      cond_var_init(pool->not_full);
-      cond_var_init(pool->idle_cv);
-      cond_var_init(pool->pin_cv);
+      if (cond_var_init(pool->not_empty) != 0)
+        fatal_err("ctpool atfork release: failed to reinit not_empty");
+      if (cond_var_init(pool->not_full) != 0)
+        fatal_err("ctpool atfork release: failed to reinit not_full");
+      if (cond_var_init(pool->idle_cv) != 0)
+        fatal_err("ctpool atfork release: failed to reinit idle_cv");
+      if (cond_var_init(pool->pin_cv) != 0)
+        fatal_err("ctpool atfork release: failed to reinit pin_cv");
     }
 
     mutex_unlock(pool->mu);
   }
 
-  mutex_unlock(ctpool_slot_table.mutex);
+  /* ctpool_slot_table.rwlock's write side, taken by prepare() above, may
+   * have been acquired by any thread calling create_cthread_pool_mp/
+   * __ctpool_destroy, not necessarily this forking thread. In the parent,
+   * that thread (whichever it was) still exists and a plain rw_lock_unlock
+   * from here is still correct (see event_loop's own _cthreadcomm_atfork_
+   * release_impl for the identical reasoning: no other thread can have
+   * re-locked it between prepare() and here). In the child, fork()
+   * duplicates only the calling thread, so if some OTHER thread was the
+   * one that actually locked it, the child's surviving thread has a
+   * different TID than the one glibc recorded as the writer, and a plain
+   * unlock silently fails to release it, permanently hanging every
+   * subsequent _ctpool_resolve in this child. Re-initializing instead is
+   * the standard fix (mirroring clogger.c's own _clog_atfork_release and
+   * event_loop's own _cthreadcomm_atfork_release_impl): safe specifically
+   * because the child has exactly one thread at this point and no one else
+   * can possibly be waiting on it. */
+  if (is_child) {
+    if (rw_lock_init(ctpool_slot_table.rwlock) != 0)
+      fatal_err("ctpool atfork release: failed to reinit slot table rwlock");
+  } else {
+    rw_lock_unlock(ctpool_slot_table.rwlock);
+  }
 }
 
 static void _ctpool_atfork_release(void) { _ctpool_atfork_release_impl(false); }
@@ -473,7 +526,7 @@ static cthread_pool *_ctpool_resolve(ctpool h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(ctpool_slot_table.mutex);
+  rw_lock_rdlock(ctpool_slot_table.rwlock);
   cthread_pool *raw = NULL;
   if (idx < cvector_elem_count(ctpool_slot_table.slots)) {
     ctpool_slot_t *slot =
@@ -481,13 +534,14 @@ static cthread_pool *_ctpool_resolve(ctpool h) {
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
   /* Lock-free: no raw->mu acquisition here at all, so nothing can ever
-   * block while ctpool_slot_table.mutex is held; matches chttpcli's own
+   * block while ctpool_slot_table.rwlock is held; matches chttpcli's own
    * _chttpcli_resolve reasoning exactly. Safe because raw is guaranteed
    * still-allocated here regardless: the only thing that could make it
    * unsafe to touch, __ctpool_destroy's slot-release step, also requires
-   * ctpool_slot_table.mutex, which we still hold at this exact point. */
+   * ctpool_slot_table.rwlock's write side, which cannot run concurrently
+   * with this read side regardless. */
   if (raw) atomic_fetch_add(&raw->pending_resolve_count, 1);
-  mutex_unlock(ctpool_slot_table.mutex);
+  rw_lock_unlock(ctpool_slot_table.rwlock);
   return raw;
 }
 
@@ -509,7 +563,7 @@ static void _ctpool_resolve_unpin(cthread_pool *raw) {
  * thread already running). */
 static ctpool _ctpool_handle_slot_acquire(cthread_pool *pool) {
   call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
-  mutex_lock(ctpool_slot_table.mutex);
+  rw_lock_wrlock(ctpool_slot_table.rwlock);
   uint32_t idx;
   ctpool_slot_t *slot;
   if (cvector_elem_count(ctpool_slot_table.free_indices) > 0) {
@@ -518,7 +572,7 @@ static ctpool _ctpool_handle_slot_acquire(cthread_pool *pool) {
   } else {
     ctpool_slot_t fresh = {0};
     if (cvector_push_back(ctpool_slot_table.slots, &fresh) != ccol_success) {
-      mutex_unlock(ctpool_slot_table.mutex);
+      rw_lock_unlock(ctpool_slot_table.rwlock);
       return 0; /* ordinary, non-fatal OOM */
     }
     idx = (uint32_t)cvector_elem_count(ctpool_slot_table.slots) - 1;
@@ -539,7 +593,7 @@ static ctpool _ctpool_handle_slot_acquire(cthread_pool *pool) {
                                rather than relying on that invariant alone */
 #endif
   ctpool h = ((ctpool)idx << 32) | (ctpool)slot->generation;
-  mutex_unlock(ctpool_slot_table.mutex);
+  rw_lock_unlock(ctpool_slot_table.rwlock);
   return h;
 }
 
@@ -722,6 +776,44 @@ static ccol_retval_t try_precheck(cthread_pool *pool) {
     r = ccol_success;
   }
   mutex_unlock(pool->mu);
+  return r;
+}
+
+/* Combines try_precheck's shutdown/capacity check and task_alloc's free-list
+ * pop into a single pool->mu critical section, for the try-submit (block ==
+ * 0) path specifically. Both operations read/write the same pool state under
+ * the same lock and previously ran as two entirely separate lock/unlock
+ * round trips back-to-back on every ctpool_try_submit call; under a caller
+ * that drives one submit per unit of external work at a high rate (e.g.
+ * chttpsvr's own per-request reactor-to-worker-pool handoff), this lock is
+ * shared with every worker thread's own dequeue/completion critical
+ * sections, so halving the submit side's own round trips measurably cuts
+ * contention. On ccol_success, *task_out is either a popped, still-dirty
+ * free-list node (caller must still memset it, matching task_alloc's own
+ * contract) or NULL if the free list was empty (caller must heap-allocate
+ * via the pool's own allocator, outside the lock, exactly as task_alloc
+ * already did). On any non-success return, *task_out is always NULL. */
+static ccol_retval_t try_precheck_and_pop_free_list(cthread_pool *pool,
+                                                    ctpool_task **task_out) {
+  mutex_lock(pool->mu);
+  ccol_retval_t r;
+  if (pool->shutdown_drain || pool->shutdown_immediate) {
+    r = ccol_not_permitted;
+  } else if (pool->queue_cap > 0 && pool->queue_size >= pool->queue_cap) {
+    r = ccol_container_full;
+  } else {
+    r = ccol_success;
+  }
+  ctpool_task *task = NULL;
+  if (r == ccol_success) {
+    task = pool->task_free_list;
+    if (task) {
+      pool->task_free_list = task->next;
+      pool->task_free_list_size--;
+    }
+  }
+  mutex_unlock(pool->mu);
+  *task_out = task;
   return r;
 }
 
@@ -1177,21 +1269,30 @@ static ccol_retval_t submit_generic(ctpool pool, void (*fn)(void *), void *arg,
 
   struct timespec deadline;
   const struct timespec *abs_deadline = NULL;
+  ctpool_task *task;
   if (block == 2) {
     if (!make_abs_deadline(rel_timeout, &deadline)) {
       _ctpool_resolve_unpin(raw);
       return ccol_unexpected_failure;
     }
     abs_deadline = &deadline;
+    task = task_alloc(raw);
   } else if (block == 0) {
-    ccol_retval_t pre = try_precheck(raw);
+    ccol_retval_t pre = try_precheck_and_pop_free_list(raw, &task);
     if (pre != ccol_success) {
       _ctpool_resolve_unpin(raw);
       return pre;
     }
+    /* try_precheck_and_pop_free_list only pops an already-recycled node
+     * (never touches the allocator itself); a NULL task here means the free
+     * list was empty, matching task_alloc's own identical fallback. */
+    if (task)
+      memset(task, 0, sizeof(*task));
+    else
+      task = (ctpool_task *)_mem_calloc(raw->m_procs, 1, sizeof(ctpool_task));
+  } else {
+    task = task_alloc(raw);
   }
-
-  ctpool_task *task = task_alloc(raw);
   if (!task) {
     _ctpool_resolve_unpin(raw);
     return ccol_not_enough_memory;
@@ -1663,11 +1764,11 @@ size_t ctpool_active_count(ctpool pool) {
  * foreign_since_fork path, by the struct that embeds it being freed. */
 static void _ctpool_teardown_clear_torn_down(uint32_t idx) {
   if (idx == CTPOOL_TEARDOWN_NO_SLOT) return;
-  mutex_lock(ctpool_slot_table.mutex);
+  rw_lock_wrlock(ctpool_slot_table.rwlock);
   ctpool_slot_t *slot =
       (ctpool_slot_t *)cvector_at(ctpool_slot_table.slots, idx);
   slot->torn_down = false;
-  mutex_unlock(ctpool_slot_table.mutex);
+  rw_lock_unlock(ctpool_slot_table.rwlock);
 }
 #endif
 
@@ -1814,7 +1915,7 @@ void __ctpool_destroy(ctpool pool) {
   call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
   uint32_t idx = (uint32_t)(pool >> 32);
   uint32_t gen = (uint32_t)(pool & 0xFFFFFFFFu);
-  mutex_lock(ctpool_slot_table.mutex);
+  rw_lock_wrlock(ctpool_slot_table.rwlock);
   ctpool_slot_t *slot = NULL;
   cthread_pool *raw = NULL;
   if (idx < cvector_elem_count(ctpool_slot_table.slots)) {
@@ -1826,7 +1927,7 @@ void __ctpool_destroy(ctpool pool) {
     }
   }
   if (!raw) {
-    mutex_unlock(ctpool_slot_table.mutex);
+    rw_lock_unlock(ctpool_slot_table.rwlock);
     fatal_err(
         "ctpool_destroy: handle is stale or already destroyed "
         "(double-destroy / use-after-destroy of a ctpool handle)");
@@ -1846,7 +1947,7 @@ void __ctpool_destroy(ctpool pool) {
    * mirroring __event_loop_destroy's own identical self-destroy guard in
    * cthreadcomm.c. */
   if (_ctpool_is_self_call(raw)) {
-    mutex_unlock(ctpool_slot_table.mutex);
+    rw_lock_unlock(ctpool_slot_table.rwlock);
     fatal_err(
         "ctpool_destroy: called from within a task (or its on_complete "
         "callback) running on this very pool's own worker thread; "
@@ -1864,7 +1965,7 @@ void __ctpool_destroy(ctpool pool) {
    * becomes unsafe to touch. */
   slot->torn_down = true;
 #endif
-  mutex_unlock(ctpool_slot_table.mutex);
+  rw_lock_unlock(ctpool_slot_table.rwlock);
 
   _ctpool_teardown_raw(raw, idx);
 
@@ -1876,7 +1977,7 @@ void __ctpool_destroy(ctpool pool) {
    * slots' backing array via cvector_push_back, invalidating any pointer
    * into it taken before this second lock acquisition; idx itself is
    * stable. */
-  mutex_lock(ctpool_slot_table.mutex);
+  rw_lock_wrlock(ctpool_slot_table.rwlock);
   ctpool_slot_t *slot2 =
       (ctpool_slot_t *)cvector_at(ctpool_slot_table.slots, idx);
   slot2->ptr = NULL;
@@ -1884,7 +1985,7 @@ void __ctpool_destroy(ctpool pool) {
       the just-freed pool's handle carried, so that stale handle can never
       again match a FUTURE acquire's generation for this same index */
   cvector_push_back(ctpool_slot_table.free_indices, &idx);
-  mutex_unlock(ctpool_slot_table.mutex);
+  rw_lock_unlock(ctpool_slot_table.rwlock);
 }
 
 #ifdef RUNNING_UNIT_TESTS
@@ -1902,14 +2003,14 @@ cthread_pool *_ctpool_resolve_for_tests(ctpool h) {
   if (h == 0) return NULL;
   uint32_t idx = (uint32_t)(h >> 32);
   uint32_t gen = (uint32_t)(h & 0xFFFFFFFFu);
-  mutex_lock(ctpool_slot_table.mutex);
+  rw_lock_rdlock(ctpool_slot_table.rwlock);
   cthread_pool *raw = NULL;
   if (idx < cvector_elem_count(ctpool_slot_table.slots)) {
     ctpool_slot_t *slot =
         (ctpool_slot_t *)cvector_at(ctpool_slot_table.slots, idx);
     if (slot->in_use && slot->generation == gen) raw = slot->ptr;
   }
-  mutex_unlock(ctpool_slot_table.mutex);
+  rw_lock_unlock(ctpool_slot_table.rwlock);
   return raw;
 }
 
@@ -1919,9 +2020,9 @@ cthread_pool *_ctpool_resolve_for_tests(ctpool h) {
  * table without bound. */
 size_t _ctpool_slot_table_capacity_for_tests(void) {
   call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
-  mutex_lock(ctpool_slot_table.mutex);
+  rw_lock_rdlock(ctpool_slot_table.rwlock);
   size_t n = cvector_elem_count(ctpool_slot_table.slots);
-  mutex_unlock(ctpool_slot_table.mutex);
+  rw_lock_unlock(ctpool_slot_table.rwlock);
   return n;
 }
 
@@ -1949,6 +2050,32 @@ size_t _ctpool_task_free_list_cap_for_tests(cthread_pool *pool) {
   mutex_unlock(pool->mu);
   return n;
 }
+
+/* Test-only: locks/unlocks ctpool_slot_table's own rwlock write side
+ * directly, bypassing every public API function, mirroring event_loop's
+ * identical event_loop_test_wrlock_reg_slot_for_tests/_wrunlock pair in
+ * src/cthreadcomm.c (see that pair's own doc comment for the full
+ * rationale, including the real, reproduced AB-BA deadlock an earlier
+ * version of that exact hook had). Lets a test hold this rwlock's write
+ * side locked, from a thread OTHER than the one that will call fork(), for
+ * an arbitrarily long, precisely controlled window: the specific scenario
+ * needed to deterministically exercise the TID-tracked write-lock reinit
+ * fix in _ctpool_atfork_release_impl's own in_child branch.
+ *
+ * Deliberately has no "resolve" step to mirror event_loop's own pair
+ * (there is no per-instance handle to resolve here, only the process-wide
+ * slot table itself), so, unlike that pair, this returns void and the
+ * matching unlock call takes no argument; nothing analogous to
+ * event_loop's own AB-BA hazard applies here since neither call touches
+ * anything else that could itself be contended by a concurrent fork(). */
+void ctpool_test_wrlock_slot_table_for_tests(void) {
+  call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
+  rw_lock_wrlock(ctpool_slot_table.rwlock);
+}
+
+void ctpool_test_wrunlock_slot_table_for_tests(void) {
+  rw_lock_unlock(ctpool_slot_table.rwlock);
+}
 #endif
 
 /* Frees the slot table's own bookkeeping arrays at process exit, so make
@@ -1964,8 +2091,8 @@ size_t _ctpool_task_free_list_cap_for_tests(cthread_pool *pool) {
  * otherwise lock a never-pthread_mutex_init'd mutex here. */
 __attribute__((destructor)) static void _cleanup_ctpool_slot_table(void) {
   call_once(ctpool_slot_table.once, _ctpool_slot_table_init_globals);
-  mutex_lock(ctpool_slot_table.mutex);
+  rw_lock_wrlock(ctpool_slot_table.rwlock);
   __cvector_destroy(ctpool_slot_table.slots);
   __cvector_destroy(ctpool_slot_table.free_indices);
-  mutex_unlock(ctpool_slot_table.mutex);
+  rw_lock_unlock(ctpool_slot_table.rwlock);
 }

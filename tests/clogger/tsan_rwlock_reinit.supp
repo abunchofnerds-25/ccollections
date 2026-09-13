@@ -13,7 +13,7 @@
 # write-locked" shadow state across fork() + pthread_rwlock_init(): confirmed
 # via an independent, clogger.c-free reproduction (a single global
 # PTHREAD_RWLOCK_INITIALIZER-statically-initialized rwlock, write-locked in
-# the parent, fork()ed, then re-initialized and read-locked in the child --
+# the parent, fork()ed, then re-initialized and read-locked in the child;
 # no c_collections code involved at all) that reproduces the identical
 # "read lock of a write locked mutex" report. The underlying rwlock is
 # genuinely safe post-fork (POSIX explicitly permits it, and a plain unlock

@@ -428,7 +428,8 @@ static inline bool _clog_test_consume_forced_fresh_slot_reg_failure(void) {
 #endif
 
 static void _clog_slot_table_init_globals(void) {
-  rw_lock_init(clog_slot_table.rwlock);
+  if (rw_lock_init(clog_slot_table.rwlock) != 0)
+    fatal_err("clog slot table: failed to initialize rwlock");
   clog_slot_table.slots = cvector_create(sizeof(clog_slot_t), NULL);
   if (!clog_slot_table.slots)
     fatal_err("clog slot table: failed to allocate slots vector");
@@ -934,7 +935,8 @@ static void _clog_atfork_release(bool in_child) {
   }
 
   if (in_child) {
-    rw_lock_init(clog_slot_table.rwlock);
+    if (rw_lock_init(clog_slot_table.rwlock) != 0)
+      fatal_err("clog atfork release: failed to reinit slot table rwlock");
   } else {
     rw_lock_unlock(clog_slot_table.rwlock);
   }
@@ -1668,7 +1670,8 @@ void clog_test_set_pending_compress_delay_us(unsigned int delay_us) {
 }
 
 bool clog_test_gz_dest_opened(void) {
-  return atomic_load(&_clog_test_gz_dest_opened);
+  bool opened = atomic_load(&_clog_test_gz_dest_opened);
+  return opened;
 }
 
 /*
@@ -1962,7 +1965,9 @@ static void _prune_rotated(const char *file_path, int max_keep,
 
   /* Delete oldest entries that exceed the quota */
   int to_del = mc - max_keep;
-  for (int i = 0; i < to_del; i++) unlink(matches[i]);
+  for (int i = 0; i < to_del; i++) {
+    unlink(matches[i]);
+  }
 
   for (int i = 0; i < mc; i++) _mem_free(m_procs, matches[i]);
   _mem_free(m_procs, matches);
@@ -2012,7 +2017,9 @@ static int _rotate(clog_shared_t *sh) {
   atomic_fetch_add(&_clog_test_rotate_attempt_count, 1);
 #endif
 
-  if (!sh->file_path || sh->fd < 0) return 0;
+  if (!sh->file_path || sh->fd < 0) {
+    return 0;
+  }
 
   time_t now = time(NULL);
   struct tm tm;
@@ -2021,13 +2028,16 @@ static int _rotate(clog_shared_t *sh) {
   size_t plen = strlen(sh->file_path);
   char rotated[PATH_MAX];
 
-  if (plen + CLOG_ROTATION_FMT_LEN + CLOG_ROTATION_EXTRA + 1 > sizeof rotated)
+  if (plen + CLOG_ROTATION_FMT_LEN + CLOG_ROTATION_EXTRA + 1 > sizeof rotated) {
     return -1;
+  }
 
   memcpy(rotated, sh->file_path, plen);
   size_t slen =
       strftime(rotated + plen, sizeof(rotated) - plen, CLOG_ROTATION_FMT, &tm);
-  if (slen == 0) return -1;
+  if (slen == 0) {
+    return -1;
+  }
 
   /* Resolve collisions: append _0001, _0002, ... until the name is free.
    * Zero-padded so alphabetical sort in _prune_rotated matches creation order.
@@ -2043,13 +2053,17 @@ static int _rotate(clog_shared_t *sh) {
     bool found = false;
     for (int n = 1; n < 10000; n++) {
       int w = snprintf(rotated + base, sizeof(rotated) - base, "_%04d", n);
-      if (w < 0) return -1;
+      if (w < 0) {
+        return -1;
+      }
       if (!_rotated_name_taken(rotated, check_gz)) {
         found = true;
         break;
       }
     }
-    if (!found) return -1;
+    if (!found) {
+      return -1;
+    }
   }
 
   /* Rename while the old fd is still open (POSIX allows renaming open files).
@@ -2059,7 +2073,9 @@ static int _rotate(clog_shared_t *sh) {
    * (O_CREAT below will create a fresh file).  Any other rename error is a
    * hard failure; leave the logger writing to the still-open original fd. */
   int rename_rv = rename(sh->file_path, rotated);
-  if (rename_rv != 0 && errno != ENOENT) return -1;
+  if (rename_rv != 0 && errno != ENOENT) {
+    return -1;
+  }
   /* `rotated` only actually exists on disk when the rename above genuinely
    * succeeded; on the ENOENT "clean slate" path there is nothing at that
    * path to prune or compress. */
@@ -2086,9 +2102,10 @@ static int _rotate(clog_shared_t *sh) {
    * concurrent _rotate() call is still busy compressing (sh->pending_compress)
    * is excluded from deletion, so this prune pass can never race that other
    * call's own not-yet-finished read of it. */
-  if (sh->rotation.max_rotated_files > 0)
+  if (sh->rotation.max_rotated_files > 0) {
     _prune_rotated(sh->file_path, sh->rotation.max_rotated_files, sh->m_procs,
                    sh->pending_compress);
+  }
 
   /*
    * Compress the rotated file outside the mutex so log writers are not stalled
@@ -2150,8 +2167,10 @@ static void _clog_time_rotate_if_due(clog_shared_t *sh) {
   if (!(sh->rotation_enabled && sh->rotation.time_rotation_enabled)) return;
   time_t now = time(NULL);
   if (now - sh->last_rotation >= sh->rotation.rotation_interval_secs &&
-      now >= sh->rotate_retry_after && _rotate(sh) != 0)
-    sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
+      now >= sh->rotate_retry_after) {
+    int rrv = _rotate(sh);
+    if (rrv != 0) sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
+  }
 }
 
 /*
@@ -2166,8 +2185,10 @@ static void _clog_size_rotate_if_due(clog_shared_t *sh) {
         sh->bytes_written >= sh->rotation.max_file_size))
     return;
   time_t now = time(NULL);
-  if (now >= sh->rotate_retry_after && _rotate(sh) != 0)
-    sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
+  if (now >= sh->rotate_retry_after) {
+    int rrv = _rotate(sh);
+    if (rrv != 0) sh->rotate_retry_after = now + CLOG_ROTATE_RETRY_BACKOFF_SECS;
+  }
 }
 
 /* ========================================================================== */

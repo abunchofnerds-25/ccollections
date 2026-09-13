@@ -28,7 +28,7 @@ SOFTWARE.
 #include <tau/tau.h>
 TAU_MAIN()  // sets up Tau (+ main function)
 
-/* ---- counting allocator ---- */
+/* Counting allocator */
 
 static size_t g_malloc_count = 0;
 static size_t g_free_count = 0;

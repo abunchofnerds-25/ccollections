@@ -1814,53 +1814,65 @@ TEST(cbst_maps, wrong_size_key_rejected_for_fixed_width_key_type) {
   // a key_pair, rather than being stored as a genuinely distinct key that no
   // correctly typed lookup could ever reach.
   //
-  // This test is non-vacuous: without the size check, every REQUIRE_EQ below
-  // that expects ccol_invalid_args sees ccol_success (or ccol_key_not_found
-  // for the lookups, since the long-sized key is ordered apart from the
-  // int-sized one), and elem_count reaches 1 instead of staying 0.
+  // The oversized key below is sized from sizeof(int) itself, never from some
+  // other type that merely happens to be wider on this machine: long is the
+  // same width as int on an ILP32 ABI (armhf, i386), so a long key there is a
+  // perfectly valid int-sized key and would prove nothing.
+  //
+  // Every call's result is captured into a local and asserted on only after
+  // the map is destroyed. Tau evaluates the expression handed to REQUIRE_EQ a
+  // second time to print it when the assertion fails, so a mutating call
+  // written inline runs twice and reports the second run's value; and a
+  // REQUIRE_* that fails returns immediately, skipping any cleanup below it.
+  //
+  // This test is non-vacuous: without the size check, insert_r is
+  // ccol_success, count_after_reject is 1, and the three lookups report
+  // ccol_key_not_found rather than ccol_invalid_args.
   cbmap cbm = cbmap_create(ccol_int, NULL);
   REQUIRE_NE((void *)cbm, NULL);
 
-  long wide_key = 5;
+  unsigned char too_wide[sizeof(int) + 1] = {0};
   int val = 42;
 
-  REQUIRE_EQ(cbmap_insert_elem(
-                 cbm, &(cmap_pair){.ptr = &wide_key, .size = sizeof(wide_key)},
-                 &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
-             ccol_invalid_args);
-  REQUIRE_EQ(cbmap_elem_count(cbm), 0);
+  const ccol_retval_t insert_r = cbmap_insert_elem(
+      cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)},
+      &(cmap_pair){.ptr = &val, .size = sizeof(val)});
+  const size_t count_after_reject = cbmap_elem_count(cbm);
 
   int readback = -1;
-  REQUIRE_EQ(cbmap_get_elem_copy(
-                 cbm, &(cmap_pair){.ptr = &wide_key, .size = sizeof(wide_key)},
-                 &readback, sizeof(readback)),
-             ccol_invalid_args);
+  const ccol_retval_t copy_r = cbmap_get_elem_copy(
+      cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)}, &readback,
+      sizeof(readback));
 
   cmap_pair *val_pair = NULL;
-  REQUIRE_EQ(cbmap_get_elem_ref(
-                 cbm, &(cmap_pair){.ptr = &wide_key, .size = sizeof(wide_key)},
-                 &val_pair),
-             ccol_invalid_args);
+  const ccol_retval_t ref_r = cbmap_get_elem_ref(
+      cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)}, &val_pair);
 
-  REQUIRE_EQ(cbmap_delete_elem(
-                 cbm, &(cmap_pair){.ptr = &wide_key, .size = sizeof(wide_key)}),
-             ccol_invalid_args);
+  const ccol_retval_t delete_r = cbmap_delete_elem(
+      cbm, &(cmap_pair){.ptr = too_wide, .size = sizeof(too_wide)});
 
   // A correctly sized key of the same declared type still works throughout,
   // so the check rejects only the mismatch and nothing else.
   int good_key = 5;
-  REQUIRE_EQ(cbmap_insert_elem(
-                 cbm, &(cmap_pair){.ptr = &good_key, .size = sizeof(good_key)},
-                 &(cmap_pair){.ptr = &val, .size = sizeof(val)}),
-             ccol_success);
-  REQUIRE_EQ(cbmap_elem_count(cbm), 1);
-  REQUIRE_EQ(cbmap_get_elem_copy(
-                 cbm, &(cmap_pair){.ptr = &good_key, .size = sizeof(good_key)},
-                 &readback, sizeof(readback)),
-             ccol_success);
-  REQUIRE_EQ(readback, 42);
+  const ccol_retval_t good_insert_r = cbmap_insert_elem(
+      cbm, &(cmap_pair){.ptr = &good_key, .size = sizeof(good_key)},
+      &(cmap_pair){.ptr = &val, .size = sizeof(val)});
+  const size_t count_after_good = cbmap_elem_count(cbm);
+  const ccol_retval_t good_copy_r = cbmap_get_elem_copy(
+      cbm, &(cmap_pair){.ptr = &good_key, .size = sizeof(good_key)}, &readback,
+      sizeof(readback));
 
   cbmap_destroy(cbm);
+
+  REQUIRE_EQ(insert_r, ccol_invalid_args);
+  REQUIRE_EQ(count_after_reject, (size_t)0);
+  REQUIRE_EQ(copy_r, ccol_invalid_args);
+  REQUIRE_EQ(ref_r, ccol_invalid_args);
+  REQUIRE_EQ(delete_r, ccol_invalid_args);
+  REQUIRE_EQ(good_insert_r, ccol_success);
+  REQUIRE_EQ(count_after_good, (size_t)1);
+  REQUIRE_EQ(good_copy_r, ccol_success);
+  REQUIRE_EQ(readback, 42);
 }
 
 TEST(cbst_maps,

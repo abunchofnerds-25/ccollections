@@ -1,6 +1,7 @@
 #include <clogger.h>
 #include <common.h>
 #include <dirent.h>
+#include <errno.h>
 #include <execinfo.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -187,6 +188,95 @@ static int count_open_fds(void) {
   }
   closedir(d);
   return count;
+}
+
+/* Reads /proc/<pid>/<name> (a single-line-ish pseudo-file) into buf, NUL-
+ * terminated, returning true on success. Best-effort diagnostic-only: false
+ * on any failure (process already fully reaped, permission, etc.), which the
+ * caller reports as part of the dump rather than treating as fatal; this
+ * runs only after a bounded wait has already timed out, so it must never
+ * itself introduce a new way to hang or crash the test binary. Mirrors
+ * tests/cthreadcomm/tests.c's own identically-named/-shaped helper (see that
+ * file's own _dump_stuck_child_diagnostics for the precedent this is copied
+ * from); kept as its own copy here rather than shared, since these are two
+ * independent test binaries with no shared test-only header between them. */
+static bool _clog_test_read_proc_file(pid_t pid, const char *name, char *buf,
+                                      size_t buf_cap) {
+  char path[64];
+  snprintf(path, sizeof path, "/proc/%d/%s", (int)pid, name);
+  int fd = open(path, O_RDONLY);
+  if (fd < 0) return false;
+  ssize_t n = read(fd, buf, buf_cap - 1);
+  close(fd);
+  if (n < 0) return false;
+  buf[n] = '\0';
+  return true;
+}
+
+/* Diagnostic-only: dumps whatever the host kernel's /proc still says about
+ * pid (and each of its own threads, if any) after a bounded wait for it has
+ * already timed out. Added specifically for async.fatal_drains_queue_
+ * before_writing_and_terminating (see that test's own comment): a real CI
+ * failure there was investigated and, unlike two confirmed-affected
+ * cthreadcomm fork_safety tests, did NOT reproduce in 15 direct attempts
+ * against the exact same qemu-user version, leaving the actual cause still
+ * open. If this recurs, THIS dump is what should finally answer it: a
+ * State: S with a real /proc/<pid>/syscall entry (a genuine futex/nanosleep/
+ * whatever wait, not a placeholder) and a broad SigBlk mask blocking nearly
+ * every signal would match the confirmed qemu-user fd_trans_lock signature
+ * after all (qemu-user's own linux-user fd_trans_lock, a process-wide
+ * pthread mutex left permanently locked in a forked child if another thread
+ * in the parent was holding it at the instant of fork(); gitlab.com/qemu-
+ * project/qemu/-/issues/2846, confirmed there on exactly the qemu-user 8.2.2
+ * this distribution's CI jobs install); that broad SigBlk mask is
+ * qemu-user's own baseline thread-management behavior, present regardless
+ * of whether this specific test's own child ever calls alarm() itself
+ * (it does not), so do not expect a specific pending signal in ShdPnd the
+ * way the two confirmed cthreadcomm cases show; the mask itself, not a
+ * particular pending bit, is the signal to look for here. State: R with
+ * high CPU and an empty wchan would instead point at a genuine spin; a
+ * State: Z (zombie) would point at a waitpid()-observation bug under
+ * emulation rather than anything the child was actually doing. status/wchan/
+ * syscall/stat are each read independently so one missing/unreadable file
+ * does not suppress the others. */
+static void _clog_test_dump_stuck_child_diagnostics(pid_t pid) {
+  char buf[4096];
+  fprintf(stderr,
+          "[STUCK_CHILD_DIAG] parent pid=%d timed out waiting for child "
+          "pid=%d; dumping /proc diagnostics\n",
+          (int)getpid(), (int)pid);
+
+  static const char *const files[] = {"status", "wchan", "syscall", "stat"};
+  for (size_t i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
+    if (_clog_test_read_proc_file(pid, files[i], buf, sizeof buf)) {
+      fprintf(stderr, "[STUCK_CHILD_DIAG] /proc/%d/%s:\n%s\n", (int)pid,
+              files[i], buf);
+    } else {
+      fprintf(stderr,
+              "[STUCK_CHILD_DIAG] /proc/%d/%s: unreadable (errno=%d %s)\n",
+              (int)pid, files[i], errno, strerror(errno));
+    }
+  }
+
+  char task_dir[64];
+  snprintf(task_dir, sizeof task_dir, "/proc/%d/task", (int)pid);
+  DIR *td = opendir(task_dir);
+  if (!td) {
+    fprintf(stderr, "[STUCK_CHILD_DIAG] /proc/%d/task: unreadable\n", (int)pid);
+  } else {
+    struct dirent *ent;
+    while ((ent = readdir(td)) != NULL) {
+      if (ent->d_name[0] == '.') continue;
+      char rel[16 + sizeof(ent->d_name)];
+      snprintf(rel, sizeof rel, "task/%s/status", ent->d_name);
+      if (_clog_test_read_proc_file(pid, rel, buf, sizeof buf)) {
+        fprintf(stderr, "[STUCK_CHILD_DIAG] /proc/%d/%s:\n%s\n", (int)pid, rel,
+                buf);
+      }
+    }
+    closedir(td);
+  }
+  fflush(stderr);
 }
 
 /* ========================================================================== */
@@ -5059,7 +5149,7 @@ TEST(fork_safety,
      * immediately on failure. Leaving this knob armed past that early
      * return previously left every later test's own gzip compression
      * calls, for the rest of this binary's entire run, paying an extra
-     * full second each -- confirmed as the actual root cause of a CI
+     * full second each; confirmed as the actual root cause of a CI
      * failure cascade (this test's own REQUIRE_NE below failing
      * intermittently under qemu-arm's scheduling variance, then silently
      * corrupting roughly a dozen further, otherwise-unrelated compression
@@ -5800,20 +5890,51 @@ TEST(async, format_switch_to_syslog_does_not_drop_buffered_batch) {
 
 /* CLOG_FATAL must drain everything already queued before writing (and
  * exiting after) the fatal record itself; otherwise messages logged
- * moments before a crash, still sitting unflushed, would be silently lost. */
+ * moments before a crash, still sitting unflushed, would be silently lost.
+ *
+ * A real CI failure was seen here once (linux-aarch64-gcc, under real
+ * qemu-user 8.2.2): the child was never reaped within the 30s bound below.
+ * Investigated directly: this specific failure does NOT match the
+ * confirmed, external, already-filed qemu-user fd_trans_lock bug that two
+ * cthreadcomm fork_safety tests are known to hit (linux-user's own internal
+ * fd_trans_lock, a process-wide pthread mutex left permanently locked in a
+ * forked child if another thread in the parent was holding it at the
+ * instant of fork(); gitlab.com/qemu-project/qemu/-/issues/2846). 15 direct
+ * reproduction attempts of THIS test, against the identical real
+ * qemu-aarch64 8.2.2 environment, all passed cleanly in ~22ms each; an
+ * adjacent, otherwise-trivial test in that same CI run showed an elevated
+ * ~2.3s duration, consistent with ordinary CI-runner contention/slowness
+ * rather than a deterministic race. The actual cause is still open. The
+ * instrumentation below (checkpoints plus a /proc dump on timeout, mirroring
+ * tests/cthreadcomm/tests.c's own established pattern for exactly this
+ * class of qemu-only mystery) exists so that if this recurs, there is
+ * enough information to actually diagnose it rather than only a bare
+ * "REQUIRE_TRUE(false), reason unknown": a State: S child with a real
+ * /proc/<pid>/syscall entry and a broad SigBlk mask blocking nearly every
+ * signal would match the confirmed fd_trans_lock signature after all (this
+ * child never calls alarm() itself, so, unlike the two confirmed cthreadcomm
+ * cases, do not expect any particular pending signal in ShdPnd; the mask
+ * itself is qemu-user's own baseline thread-management behavior and is what
+ * to look for here); a State: R child spinning at high CPU with an empty
+ * wchan would instead point at a genuine busy loop; and which [DEBUG_TEST]
+ * checkpoint was the last one printed narrows down where inside the child
+ * it actually got stuck. */
 TEST(async, fatal_drains_queue_before_writing_and_terminating) {
   char dir[256];
   REQUIRE_EQ(make_tmpdir(dir, sizeof dir), 0);
   char path[512];
   snprintf(path, sizeof path, "%s/app.log", dir);
 
-  int dn = open("/dev/null", O_WRONLY);
   pid_t pid = fork();
   if (pid == 0) {
-    if (dn >= 0) {
-      dup2(dn, STDOUT_FILENO);
-      dup2(dn, STDERR_FILENO);
-    }
+    /* Deliberately does NOT redirect STDOUT_FILENO/STDERR_FILENO to
+     * /dev/null (this test's own former design did): silencing them here
+     * would defeat the entire purpose of the checkpoints below, exactly the
+     * lesson tests/cthreadcomm/tests.c's own identical hang-chasing tests
+     * already document: a silenced child that hangs leaves nothing to show
+     * how far it got. */
+    fprintf(stderr, "[DEBUG_TEST] child pid=%d about to clog_open_file_mp\n",
+            (int)getpid());
     /* Long interval and large buffer: none of the non-fatal messages below
      * can have been auto-flushed by the timer or the size threshold before
      * log_fatal() runs a few lines later. */
@@ -5821,13 +5942,28 @@ TEST(async, fatal_drains_queue_before_writing_and_terminating) {
                             .flush_interval_ms = 60000};
     clog lg = clog_open_file_mp(path, CLOG_INFO, NULL, &cfg, NULL);
     if (lg == CLOG_INVALID) _exit(2);
+    fprintf(stderr,
+            "[DEBUG_TEST] child pid=%d opened, about to log queued "
+            "message one\n",
+            (int)getpid());
     log_info(lg, "queued message one");
+    fprintf(stderr,
+            "[DEBUG_TEST] child pid=%d logged message one, about to log "
+            "queued message two\n",
+            (int)getpid());
     log_info(lg, "queued message two");
+    fprintf(stderr,
+            "[DEBUG_TEST] child pid=%d logged message two, about to "
+            "log_fatal\n",
+            (int)getpid());
     log_fatal(lg, "the fatal record itself");
+    fprintf(stderr,
+            "[DEBUG_TEST] child pid=%d log_fatal returned (should be "
+            "unreachable!)\n",
+            (int)getpid());
     _exit(0); /* unreachable */
   }
   REQUIRE_NE(pid, -1);
-  if (dn >= 0) close(dn);
 
   int status;
   bool reaped = false;
@@ -5840,6 +5976,7 @@ TEST(async, fatal_drains_queue_before_writing_and_terminating) {
     usleep(20000);
   }
   if (!reaped) {
+    _clog_test_dump_stuck_child_diagnostics(pid);
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
     REQUIRE_TRUE(false);

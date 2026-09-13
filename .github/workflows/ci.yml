@@ -111,7 +111,7 @@ jobs:
     # exactly the qemu-user 8.2.2 this distribution installs; see
     # tests/cthreadcomm/tests.c's own CCOL_QEMU_FD_TRANS_LOCK_BUG comment,
     # which this job's own "Detect a known-affected qemu-user version" step
-    # feeds, for the one test suite known to hit it reliably enough to skip
+    # feeds, for the two test suites known to hit it reliably enough to skip
     # outright). When this class triggers on some OTHER test this project has
     # not identified and skipped this same way, no in-process timeout
     # (including this suite's own `alarm(10)` safety nets around fork()-based

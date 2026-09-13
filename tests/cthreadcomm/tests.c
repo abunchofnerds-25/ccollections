@@ -27,14 +27,16 @@
  * define their own main() function..."). */
 TAU_NO_MAIN()
 
-/* Marks fork_safety.fork_does_not_inherit_a_write_locked_event_loop_slot_
- * table ignored when CCOL_QEMU_FD_TRANS_LOCK_BUG is set in the environment,
- * rather than letting it run and intermittently fail.
+/* Marks every test named in affected_tests below ignored when
+ * CCOL_QEMU_FD_TRANS_LOCK_BUG is set in the environment, rather than letting
+ * it run and intermittently fail.
  *
- * That one test deliberately keeps a second thread genuinely alive and
- * scheduled at the exact instant of fork() (it is what proves this
- * project's own atfork handler correctly resets an actually write-locked
- * rwlock), which is precisely the condition that triggers a real, external,
+ * Both listed tests deliberately keep a second thread genuinely alive and
+ * scheduled at the exact instant of a fork() call (that is what each of
+ * them is actually testing: this project's own atfork handler correctly
+ * resetting an actually write-locked rwlock, or correctly closing a real
+ * lock-ordering cycle between two independently-registered atfork handler
+ * sets), which is precisely the condition that triggers a real, external,
  * already-filed QEMU bug: linux-user's own internal fd_trans_lock, a
  * process-wide pthread mutex QEMU uses to translate guest file descriptors,
  * can be left permanently locked in a forked child if any other thread in
@@ -44,15 +46,25 @@ TAU_NO_MAIN()
  * 8.2.2, the exact version Ubuntu 24.04 ships and this test suite's own CI
  * jobs install). event_loop_create() immediately after fork() does exactly
  * that (epoll_create1, two eventfds, two epoll_ctls, then pthread_create for
- * the poller thread), so the child can hang inside it with no participation
- * from any of this project's own code. Reproduced directly against real
- * qemu-user 8.2.2 (not merely inferred): 12 of 15 attempts failed, every one
- * at this test's own already-bounded ~20 second timeout, with an identical
- * /proc signature each time (SIGALRM genuinely raised but blocked on every
- * thread, a real futex sleep, never a busy spin); intermittent, not
- * deterministic, which is also why separate CI job runs can each show 100%
- * failure across their own few attempts without the underlying rate
- * actually being 100%.
+ * the poller thread), so a forked child can hang inside it with no
+ * participation from any of this project's own code.
+ *
+ * fork_does_not_inherit_a_write_locked_event_loop_slot_table: reproduced
+ * directly against real qemu-user 8.2.2 (not merely inferred), 12 of 15
+ * attempts failed, every one at this test's own already-bounded ~20 second
+ * timeout, with an identical /proc signature each time (SIGALRM genuinely
+ * raised but blocked on every thread, a real futex sleep, never a busy
+ * spin); intermittent, not deterministic, which is also why separate CI job
+ * runs can each show 100% failure across their own few attempts without the
+ * underlying rate actually being 100%.
+ *
+ * fork_does_not_deadlock_with_queue_registered_before_event_loop: confirmed
+ * via an identical /proc signature (same SigBlk/ShdPnd/wchan/syscall values)
+ * captured directly in real CI failures on both qemu-arm and qemu-aarch64,
+ * rather than a fresh local reproduction; this test's own construction
+ * (creating cq/loop/reg, then a sender thread deliberately held inside a
+ * widened _notify_waiter critical section across a second, "risky" fork())
+ * matches the same triggering shape.
  *
  * There is no reliable way for a guest program running under qemu-user to
  * query the host's own qemu-user version from inside the emulated process;
@@ -65,30 +77,42 @@ TAU_NO_MAIN()
  * an intermittent failure. */
 static void _ccl_skip_tests_affected_by_known_qemu_fd_trans_lock_bug(void) {
   if (!getenv("CCOL_QEMU_FD_TRANS_LOCK_BUG")) return;
-  const char *const affected_test =
-      "fork_safety.fork_does_not_inherit_a_write_locked_event_loop_slot_table";
-  for (tau_ull i = 0; i < tauTestContext.numTestSuites; i++) {
-    if (strcmp(tauTestContext.tests[i].name, affected_test) == 0) {
-      tauTestContext.tests[i].ignored = 1;
+  static const char *const affected_tests[] = {
+      "fork_safety.fork_does_not_inherit_a_write_locked_event_loop_slot_table",
+      "fork_safety."
+      "fork_does_not_deadlock_with_queue_registered_before_event_loop",
+  };
+  for (size_t a = 0; a < sizeof(affected_tests) / sizeof(affected_tests[0]);
+       a++) {
+    bool found = false;
+    for (tau_ull i = 0; i < tauTestContext.numTestSuites; i++) {
+      if (strcmp(tauTestContext.tests[i].name, affected_tests[a]) == 0) {
+        tauTestContext.tests[i].ignored = 1;
+        fprintf(stderr,
+                "[SKIP] %s: known, external, already-filed QEMU linux-user "
+                "fd_trans_lock bug on this qemu-user version (see this "
+                "function's own comment); not this project's own code.\n",
+                affected_tests[a]);
+        found = true;
+        break;
+      }
+    }
+    /* CCOL_QEMU_FD_TRANS_LOCK_BUG was set but this one entry of
+     * affected_tests was not found by name: a rename or removal of that
+     * test has silently disarmed its own skip (the loop above matched
+     * nothing for it, so nothing was marked ignored). Loud, not silent, so
+     * a future intermittent failure on this qemu version is immediately
+     * traceable back to this exact mismatch rather than reappearing as an
+     * unexplained mystery. Every other entry in affected_tests is still
+     * processed regardless: one stale name must never disarm the rest. */
+    if (!found) {
       fprintf(stderr,
-              "[SKIP] %s: known, external, already-filed QEMU linux-user "
-              "fd_trans_lock bug on this qemu-user version (see this "
-              "test's own comment); not this project's own code.\n",
-              affected_test);
-      return;
+              "[WARNING] CCOL_QEMU_FD_TRANS_LOCK_BUG is set but no test "
+              "named '%s' exists; this known-affected-qemu skip is disarmed "
+              "for it until that name is fixed.\n",
+              affected_tests[a]);
     }
   }
-  /* CCOL_QEMU_FD_TRANS_LOCK_BUG was set but affected_test was not found by
-   * name: a rename or removal of that test has silently disarmed this skip
-   * (the loop above matched nothing, so nothing was marked ignored). Loud,
-   * not silent, so a future intermittent failure on this qemu version is
-   * immediately traceable back to this exact mismatch rather than
-   * reappearing as an unexplained mystery. */
-  fprintf(stderr,
-          "[WARNING] CCOL_QEMU_FD_TRANS_LOCK_BUG is set but no test named "
-          "'%s' exists; this known-affected-qemu skip is disarmed until "
-          "that name is fixed.\n",
-          affected_test);
 }
 
 int main(const int argc, const char *const *const argv) {
